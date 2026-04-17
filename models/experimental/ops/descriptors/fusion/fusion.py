@@ -68,9 +68,9 @@ _BUILD_CACHE: Dict[tuple, "_CacheEntry"] = {}
 
 @dataclass
 class _CacheEntry:
-    """Stored in ``_BUILD_CACHE``.  Immutable after construction.
+    """Stored in ``_BUILD_CACHE``.  Fully initialized at construction, immutable thereafter.
 
-    Contains everything needed to reconstruct a :class:`FusedOp` on cache hit
+    Contains everything needed to dispatch a fused program on cache hit
     without re-running codegen/merge.  No tensor references are held.
 
     The cached ``ProgramDescriptor`` may have stale buffer addresses (CB buffer
@@ -97,12 +97,11 @@ class _CacheEntry:
     # Stored as a list (not tuple) for zero-conversion C++ consumption.
     result_reorder: List[int] = field(default_factory=list)
     # Cached output TensorSpecs (output_sources order) and shared_output_map
-    # for the allocating fusion_dispatch_op overload.  Populated on the cold path.
+    # for the allocating fusion_dispatch_op overload.  Computed eagerly at build time.
     output_specs: Optional[List] = None
     shared_output_map: List = field(default_factory=list)
-    # C++ FusionDispatchState — created once after output_specs populated,
-    # shared across all containers with the same cache key.  Persistent
-    # containers reach it via _cached_entry; inline containers never use it.
+    # C++ FusionDispatchState — created eagerly at build time when output_specs
+    # and device are available.  Used by both persistent and inline dispatch paths.
     dispatch_state: Any = None
 
 
@@ -137,11 +136,6 @@ def _build_cache_surface_key(items, container_prefix: str) -> str:
     return f"{container_prefix}({_topology_fingerprint(items)})"
 
 
-def _branch_program_cache_key(op) -> int:
-    """Stable branch identity for cache lookup. Never touches ``OpDescriptor.descriptor``."""
-    return op.program_cache_key
-
-
 def _fusion_mesh_runtime_id(device) -> int:
     """Process-local mesh identity for fusion cache keys.
 
@@ -156,30 +150,6 @@ def _fusion_mesh_runtime_id(device) -> int:
         except (TypeError, ValueError):
             pass
     return id(device)
-
-
-def _build_cache_device_id(items, build_device) -> int:
-    """Metal mesh runtime id, or 0 if unknown (no device / no device tensors yet)."""
-    if build_device is not None:
-        return _fusion_mesh_runtime_id(build_device)
-    try:
-        return _fusion_mesh_runtime_id(_extract_device(items))
-    except ValueError:
-        return 0
-
-
-def _fusion_cache_key_from_ops(items, container_prefix: str, ops: List, device_id: int) -> tuple:
-    """Process-local fusion build-cache key from already-flattened ``ops``."""
-    surface = _build_cache_surface_key(items, container_prefix)
-    return (surface, tuple(_branch_program_cache_key(op) for op in ops), device_id)
-
-
-def _fusion_cache_key_and_ops(items, container_prefix: str, build_device=None) -> Tuple[tuple, List]:
-    """Return ``(fusion_cache_key, flattened_ops)`` for ``Sequential``/``Parallel`` ``._items``."""
-    ops = _flatten_ops(items)
-    dev_id = _build_cache_device_id(items, build_device)
-    cache_key = _fusion_cache_key_from_ops(items, container_prefix, ops, dev_id)
-    return cache_key, ops
 
 
 def _make_rebind_output_sources(ops: List, output_source_map) -> Optional[Tuple[Tuple[int, int], ...]]:
@@ -236,15 +206,24 @@ def _compute_address_slots(desc, io_tensors):
     return ttnn._ttnn.operations.experimental.compute_address_slots(desc, io_tensors)
 
 
-def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], output_source_map, address_slots) -> _CacheEntry:
-    """Record a slim cache entry from a freshly-built FusedOp (no tensor refs).
+def _cache_build_result(
+    fused_op: "FusedOp",
+    ops: List[OpDescriptor],
+    output_source_map,
+    address_slots,
+    default_results: List,
+    device,
+) -> _CacheEntry:
+    """Record a fully-initialized cache entry from a freshly-built FusedOp.
+
+    All fields — including ``output_specs``, ``shared_output_map``,
+    ``result_reorder``, and ``dispatch_state`` — are computed eagerly so the
+    entry is immutable after construction.
 
     ``address_slots`` must be pre-computed (while addresses are valid) and
     already set on *fused_op*.  Stored in the cache so ``fusion_dispatch_op``
     can refresh all stale addresses from live IO tensors before dispatch.
     """
-    # Memoize the descriptor hash so fusion_dispatch_op skips the full
-    # kernel/CB/semaphore walk on every launch (O(1) instead of O(descriptor)).
     desc = fused_op.descriptor
     if desc.custom_program_hash is None:
         desc.custom_program_hash = ttnn.compute_program_descriptor_hash(desc)
@@ -259,6 +238,44 @@ def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], output_sou
     else:
         output_sources = None
 
+    output_specs = None
+    shared_output_map: List = []
+    result_reorder: List[int] = []
+
+    if output_sources:
+        src_outputs = [ops[pi].output_tensors[ti] for pi, ti in output_sources]
+        if src_outputs and src_outputs[0] is not None:
+            output_specs = [t.spec for t in src_outputs]
+
+            seen_srcs: Dict[Tuple[int, int], int] = {}
+            dedup: List[int] = []
+            for i, src in enumerate(output_sources):
+                if src in seen_srcs:
+                    dedup.append(seen_srcs[src])
+                else:
+                    seen_srcs[src] = i
+                    dedup.append(i)
+            if any(d != i for i, d in enumerate(dedup)):
+                shared_output_map = dedup
+
+            src_id_to_idx: Dict[int, int] = {}
+            for src_i, (pi, _ti) in enumerate(output_sources):
+                src_id_to_idx[id(ops[pi])] = src_i
+            result_reorder = [src_id_to_idx[id(d)] for d in default_results if id(d) in src_id_to_idx]
+    elif fused_op.output_tensors:
+        output_specs = [t.spec for t in fused_op.output_tensors if t is not None]
+
+    dispatch_state = None
+    if output_specs is not None and device is not None:
+        dispatch_state = ttnn._ttnn.operations.experimental.FusionDispatchState(
+            output_specs,
+            shared_output_map,
+            result_reorder,
+            desc,
+            address_slots,
+            device,
+        )
+
     return _CacheEntry(
         cached_descriptor=desc,
         semaphores=fused_op.semaphores,
@@ -266,6 +283,10 @@ def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], output_sou
         output_sources=output_sources,
         merged_input_len=len(fused_op.input_tensors),
         address_slots=address_slots,
+        result_reorder=result_reorder,
+        output_specs=output_specs,
+        shared_output_map=shared_output_map,
+        dispatch_state=dispatch_state,
     )
 
 
@@ -430,49 +451,21 @@ def _materialize_chain(items, edges: List[Tuple[int, int, int, int]], ops=None) 
                 ops[consumer_i].input_tensors[inp_j] = ops[i].output_tensors[out_j]
 
 
-def _container_run(container: Any, results, device=None, kernel_dir: Optional[str] = None):
-    """Shared implementation for :meth:`Sequential.run` / :meth:`Parallel.run`.
+def _gather_inputs(ops) -> List:
+    """Deduplicate input tensors across ops by identity."""
+    seen: Set[int] = set()
+    inputs: List = []
+    for op in ops:
+        for t in op.input_tensors:
+            tid = id(t)
+            if tid not in seen:
+                inputs.append(t)
+                seen.add(tid)
+    return inputs
 
-    Two dispatch paths:
 
-    **Persistent hot path** (call 2+ on the same container): ``_cached_entry``
-    points to the shared ``_CacheEntry`` whose ``dispatch_state`` allocates
-    ephemeral outputs, patches, and dispatches in C++.  Skips cache-key
-    computation entirely.  After dispatch, updated activation slots are cleared
-    (zero L1 pinning between calls).
-
-    **Cache-lookup path** (inline warm, first persistent call, or cold miss):
-    computes the cache key from ``container._topo_fp`` and
-    ``container._cached_ops`` (avoids re-flattening and re-computing the
-    topology fingerprint).  On hit with ``dispatch_state``, dispatches
-    directly.  On first warm hit, does a 3-arg dispatch.  On miss, does a
-    full ``build()`` + ``launch()``.  Sets ``_cached_entry`` so the next
-    call on the same container goes hot.
-    """
-    # ── Persistent hot path ──
-    entry = getattr(container, "_cached_entry", None)
-    if entry is not None and entry.dispatch_state is not None:
-        seen: Set[int] = set()
-        inputs: List = []
-        for op in container._cached_ops:
-            for t in op.input_tensors:
-                tid = id(t)
-                if tid not in seen:
-                    inputs.append(t)
-                    seen.add(tid)
-        outputs = entry.dispatch_state.dispatch(inputs)
-        for op in container._cached_ops:
-            updated = op._updated_indices
-            if updated:
-                for idx in updated:
-                    op.input_tensors[idx] = None
-                updated.clear()
-                if op.output_tensors:
-                    op.output_tensors = []
-        return _filter_results(outputs, container._default_results, results)
-
-    # ── Cache lookup (inline warm OR first persistent call) ──
-    ops = container._cached_ops
+def _build_run_cache_key(container, ops, device):
+    """Build fusion cache key from precomputed container values."""
     branch_keys = tuple(op.program_cache_key for op in ops)
     if device is not None:
         dev_id = _fusion_mesh_runtime_id(device)
@@ -480,34 +473,62 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
         dev_id = _fusion_mesh_runtime_id(ops[0].input_tensors[0].device())
     else:
         dev_id = 0
-    cache_key = (container._topo_fp, branch_keys, dev_id)
+    return (container._topo_fp, branch_keys, dev_id)
+
+
+def _cleanup_persistent_ops(ops) -> None:
+    """Clear updated activation slots after persistent dispatch."""
+    for op in ops:
+        updated = op._updated_indices
+        if updated:
+            for idx in updated:
+                op.input_tensors[idx] = None
+            updated.clear()
+            if op.output_tensors:
+                op.output_tensors = []
+
+
+def _container_run(container: Any, results, device=None, kernel_dir: Optional[str] = None):
+    """Shared implementation for :meth:`Sequential.run` / :meth:`Parallel.run`.
+
+    Three dispatch paths:
+
+    **Persistent hot path** (call 2+ on the same container): ``_cached_entry``
+    points to the shared ``_CacheEntry`` whose ``dispatch_state`` allocates
+    ephemeral outputs, patches, and dispatches in C++.  Skips cache-key
+    computation entirely.  After dispatch, updated activation slots are cleared
+    (zero L1 pinning between calls).
+
+    **Inline warm path** (cache hit, first call on this container instance):
+    computes the cache key from ``container._topo_fp`` and
+    ``container._cached_ops``.  On hit, dispatches via ``dispatch_state``
+    and sets ``_cached_entry`` for subsequent hot-path calls.
+
+    **Cold path** (cache miss): full ``build()`` + ``launch()``.
+    """
+    # ── Persistent hot path ──
+    entry = getattr(container, "_cached_entry", None)
+    if entry is not None and entry.dispatch_state is not None:
+        inputs = _gather_inputs(container._cached_ops)
+        outputs = entry.dispatch_state.dispatch(inputs)
+        _cleanup_persistent_ops(container._cached_ops)
+        return _filter_results(outputs, container._default_results, results)
+
+    # ── Cache lookup (inline warm OR first persistent call) ──
+    ops = container._cached_ops
+    cache_key = _build_run_cache_key(container, ops, device)
 
     entry = _BUILD_CACHE.get(cache_key)
     if entry is not None:
-        # ── Fast warm path: reuse FusionDispatchState if available ──
         if entry.dispatch_state is not None:
-            seen: Set[int] = set()
-            inputs: List = []
-            for op in ops:
-                for t in op.input_tensors:
-                    tid = id(t)
-                    if tid not in seen:
-                        inputs.append(t)
-                        seen.add(tid)
+            inputs = _gather_inputs(ops)
             outputs = entry.dispatch_state.dispatch(inputs)
             container._cached_entry = entry
             return _filter_results(outputs, container._default_results, results)
 
-        # Warm path (first warm hit — no dispatch_state yet): parent-style
-        # dispatch, reuses output tensors from ops, no allocation.
-        seen: Set[int] = set()
-        inputs: List = []
-        for op in ops:
-            for t in op.input_tensors:
-                tid = id(t)
-                if tid not in seen:
-                    inputs.append(t)
-                    seen.add(tid)
+        # Fallback warm path (no dispatch_state — e.g. no device at build
+        # time): 3-arg dispatch reusing output tensors from branch ops.
+        inputs = _gather_inputs(ops)
         if entry.output_sources:
             outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
         else:
@@ -523,48 +544,8 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
     if results is None:
         results = container._default_results
 
-    ret = [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
-
-    # Cache output specs in **output_sources order** (matching io_tensors /
-    # address_slots) and compute the reorder mapping to default_results order.
-    # Then create FusionDispatchState once — shared across all containers
-    # with the same cache key.
-    if entry is not None and entry.output_specs is None:
-        if entry.output_sources and ret and ret[0] is not None:
-            src_outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
-            if src_outputs and src_outputs[0] is not None:
-                entry.output_specs = [t.spec for t in src_outputs]
-                seen_srcs_cold: Dict[Tuple[int, int], int] = {}
-                dedup_cold: List[int] = []
-                for i, src in enumerate(entry.output_sources):
-                    if src in seen_srcs_cold:
-                        dedup_cold.append(seen_srcs_cold[src])
-                    else:
-                        seen_srcs_cold[src] = i
-                        dedup_cold.append(i)
-                if any(d != i for i, d in enumerate(dedup_cold)):
-                    entry.shared_output_map = dedup_cold
-                src_id_to_idx = {}
-                for src_i, (pi, ti) in enumerate(entry.output_sources):
-                    src_id_to_idx[id(ops[pi])] = src_i
-                entry.result_reorder = list(src_id_to_idx[id(desc)] for desc in results if id(desc) in src_id_to_idx)
-        elif ret and ret[0] is not None:
-            entry.output_specs = [t.spec for t in ret if t is not None]
-
-    if entry is not None and entry.dispatch_state is None and entry.output_specs is not None:
-        first_tensor = next((t for op in ops for t in op.input_tensors if t is not None), None)
-        if first_tensor is not None:
-            entry.dispatch_state = ttnn._ttnn.operations.experimental.FusionDispatchState(
-                entry.output_specs,
-                entry.shared_output_map,
-                entry.result_reorder,
-                entry.cached_descriptor,
-                entry.address_slots,
-                first_tensor.device(),
-            )
-
     container._cached_entry = entry
-    return ret
+    return [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
 
 
 def _filter_results(outputs, default_results, results):
@@ -839,7 +820,8 @@ class Sequential:
             except ValueError:
                 cache_device = None
         _materialize_chain(self._items, self._internal_edges, self._cached_ops)
-        cache_key, ops = _fusion_cache_key_and_ops(self._items, "S", cache_device)
+        ops = self._cached_ops
+        cache_key = _build_run_cache_key(self, ops, cache_device)
         entry = _BUILD_CACHE.get(cache_key)
         if entry is not None:
             result = _fused_op_from_cache_entry(entry, ops)
@@ -862,7 +844,14 @@ class Sequential:
         io_tensors = list(fused.input_tensors) + list(fused.output_tensors)
         fused._address_slots = _compute_address_slots(fused.descriptor, io_tensors)
 
-        _BUILD_CACHE[cache_key] = _cache_build_result(fused, ops, r.output_source_map, fused._address_slots)
+        _BUILD_CACHE[cache_key] = _cache_build_result(
+            fused,
+            ops,
+            r.output_source_map,
+            fused._address_slots,
+            self._default_results,
+            cache_device,
+        )
 
         if kernel_dir is not None:
             fused._apply_kernel_dir(kernel_dir)
@@ -999,7 +988,8 @@ class Parallel:
             except ValueError:
                 cache_device = None
         _materialize_chain(self._items, self._internal_edges, self._cached_ops)
-        cache_key, ops = _fusion_cache_key_and_ops(self._items, "P", cache_device)
+        ops = self._cached_ops
+        cache_key = _build_run_cache_key(self, ops, cache_device)
         entry = _BUILD_CACHE.get(cache_key)
         if entry is not None:
             result = _fused_op_from_cache_entry(entry, ops)
@@ -1024,7 +1014,14 @@ class Parallel:
         io_tensors = list(fused.input_tensors) + list(fused.output_tensors)
         fused._address_slots = _compute_address_slots(fused.descriptor, io_tensors)
 
-        _BUILD_CACHE[cache_key] = _cache_build_result(fused, ops, r.output_source_map, fused._address_slots)
+        _BUILD_CACHE[cache_key] = _cache_build_result(
+            fused,
+            ops,
+            r.output_source_map,
+            fused._address_slots,
+            self._default_results,
+            cache_device,
+        )
 
         if kernel_dir is not None:
             fused._apply_kernel_dir(kernel_dir)

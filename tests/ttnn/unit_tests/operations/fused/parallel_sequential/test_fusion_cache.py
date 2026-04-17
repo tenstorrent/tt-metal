@@ -20,7 +20,7 @@ from models.experimental.ops.descriptors.fusion.fusion import (
     _BUILD_CACHE,
     _CacheEntry,
     _build_cache_surface_key,
-    _fusion_cache_key_and_ops,
+    _build_run_cache_key,
     _topology_fingerprint,
 )
 from models.experimental.ops.descriptors.normalization.rms_norm import rms_norm
@@ -379,8 +379,10 @@ class TestTopologyDifferentiation:
         assert topo_par != topo_seq, f"expected different topology strings, got {topo_par!r} vs {topo_seq!r}"
         assert topo_par.startswith("P(") and topo_seq.startswith("S(")
 
-        id_par, _ = _fusion_cache_key_and_ops([Parallel(q1, kv1)], "")
-        id_seq, _ = _fusion_cache_key_and_ops([Sequential(q2, kv2)], "")
+        par = Parallel(q1, kv1)
+        seq = Sequential(q2, kv2)
+        id_par = _build_run_cache_key(par, par._cached_ops, None)
+        id_seq = _build_run_cache_key(seq, seq._cached_ops, None)
         assert id_par != id_seq
 
 

@@ -113,7 +113,7 @@ class _DeferredOutput:
 class OpDescriptor:
     """Operation descriptor with optional deferred ``ProgramDescriptor`` materialization.
 
-    Three construction patterns:
+    Two user-facing construction patterns:
 
     **Eager** (descriptor already materialized)::
 
@@ -129,11 +129,10 @@ class OpDescriptor:
             program_cache_key=hash_value,
         )
 
-    **Persistent** (created by ``@OpDescriptor.create`` decorator when required
-    tensors are missing; materializes on first :meth:`update`)::
-
-        desc = rms_norm(weight=qw, ...)   # input_tensor omitted → persistent
-        desc.update(tt_q)                  # materializes hash + factory
+    A third **persistent** mode is used internally by the ``@OpDescriptor.create``
+    decorator when required tensors are missing at construction time.  It is
+    created via the internal ``_persistent()`` classmethod and materializes on
+    first :meth:`update`.
 
     ``program_cache_key`` is always available for fusion build-cache lookup
     without touching ``.descriptor``. For eager ops it is computed from the
@@ -166,19 +165,14 @@ class OpDescriptor:
         factory_fn: Optional[Callable] = None,
         program_cache_key: Optional[int] = None,
         input_names: Optional[tuple] = None,
-        complete_fn: Optional[Callable] = None,
     ):
-        if complete_fn is not None:
-            # Partial descriptor: hash computed lazily on first update().
-            self._factory_fn = None
-            self._descriptor = None
-        elif descriptor is not None and factory_fn is not None:
+        if descriptor is not None and factory_fn is not None:
             raise ValueError("Pass descriptor or factory_fn, not both")
-        elif descriptor is None and factory_fn is None:
+        if descriptor is None and factory_fn is None:
             raise ValueError("Pass descriptor or factory_fn")
-        else:
-            self._factory_fn = factory_fn
-            self._descriptor = descriptor
+        self._factory_fn = factory_fn
+        self._descriptor = descriptor
+        self._complete_fn = None
 
         if isinstance(input_tensors, dict):
             self._input_names = {k: i for i, k in enumerate(input_tensors)}
@@ -188,18 +182,36 @@ class OpDescriptor:
             self._input_names = dict(input_names) if input_names else None
         self.output_tensors = output_tensors if output_tensors is not None else []
         self.name = name
-        self._complete_fn = complete_fn
 
         if program_cache_key is not None:
             self.program_cache_key = program_cache_key
         elif descriptor is not None:
             self.program_cache_key = ttnn.compute_program_descriptor_hash(descriptor)
-        elif complete_fn is not None:
-            self.program_cache_key = None  # computed on first update()
         else:
             raise ValueError("Deferred OpDescriptor requires program_cache_key")
 
         self._updated_indices = []
+
+    @classmethod
+    def _persistent(cls, input_tensors, output_tensors, name, complete_fn, input_names):
+        """Internal: construct a partial descriptor that materializes on first :meth:`update`."""
+        if complete_fn is None:
+            raise ValueError("_persistent() requires a complete_fn")
+        obj = cls.__new__(cls)
+        obj._descriptor = None
+        obj._factory_fn = None
+        obj._complete_fn = complete_fn
+        if isinstance(input_tensors, dict):
+            obj._input_names = {k: i for i, k in enumerate(input_tensors)}
+            obj.input_tensors = list(input_tensors.values())
+        else:
+            obj.input_tensors = input_tensors if input_tensors is not None else []
+            obj._input_names = dict(input_names) if input_names else None
+        obj.output_tensors = output_tensors if output_tensors is not None else []
+        obj.name = name
+        obj.program_cache_key = None
+        obj._updated_indices = []
+        return obj
 
     def update(self, *args, **kwargs):
         """Replace input tensors by name or position.
@@ -471,7 +483,7 @@ class OpDescriptor:
                         kw[pname] = tensor
                     return wrapper(**kw)
 
-                return OpDescriptor(
+                return OpDescriptor._persistent(
                     input_tensors=inputs,
                     output_tensors=[_DeferredOutput()],
                     name=name,
