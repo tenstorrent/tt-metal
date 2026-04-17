@@ -21,15 +21,6 @@ from ttml.common.utils import create_optimizer, no_grad
 from .callback import TrainerCallback
 
 
-@dataclass
-class GRPOMeshCtx:
-    """Distributed-mesh handles for tensor creation and reading."""
-
-    dp_mapper: object = None
-    dp_composer: object = None
-    total_devices: int = 1
-
-
 class GRPOCompleter(ABC):
     """Abstract base for model-specific completion engines used in GRPO training.
 
@@ -43,8 +34,13 @@ class GRPOCompleter(ABC):
 
     @property
     @abstractmethod
-    def mesh(self) -> "GRPOMeshCtx":
-        """Distributed-mesh handles for tensor placement and gradient sync."""
+    def dp_mapper(self):
+        """Mesh mapper for sharding tensors across devices (None for single-device)."""
+
+    @property
+    @abstractmethod
+    def dp_composer(self):
+        """Mesh composer for gathering tensors from devices (None for single-device)."""
 
     @property
     @abstractmethod
@@ -275,11 +271,10 @@ class GRPOTrainer:
         adv_tt: ttml.autograd.Tensor,
         completions_batch_len: int,
         eps: float,
-        mesh: GRPOMeshCtx = None,
+        dp_mapper=None,
+        dp_composer=None,
     ) -> ttml.autograd.Tensor:
         """Compute the clipped GRPO surrogate loss."""
-        if mesh is None:
-            mesh = GRPOMeshCtx()
         B_local, Tp = nlog_probs_old.shape()
         ratio = ttml.ops.unary.exp(nlog_probs_old - nlog_probs_new)
         clipped_ratio = ttml.ops.unary.clip(ratio, 1.0 - eps, 1.0 + eps)
@@ -288,12 +283,10 @@ class GRPOTrainer:
         surr2 = clipped_ratio * adv_tt
         surr = ttml.ops.binary.min(surr1, surr2)
 
-        mask_np = mask.to_numpy(composer=mesh.dp_composer)
+        mask_np = mask.to_numpy(composer=dp_composer)
         tokens_per_completion = np.maximum(mask_np.sum(axis=1, keepdims=True), 1.0)
         weight_np = (mask_np / tokens_per_completion).astype(np.float32)
-        weight_tt = ttml.autograd.Tensor.from_numpy(
-            weight_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, mesh.dp_mapper
-        )
+        weight_tt = ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, dp_mapper)
 
         weighted_surr = surr * weight_tt
         weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B_local, Tp])
@@ -304,7 +297,8 @@ class GRPOTrainer:
         completer = self.completer
         tt_model = completer.model
         tokenizer = completer.tokenizer
-        mesh = completer.mesh
+        dp_mapper = completer.dp_mapper
+        dp_composer = completer.dp_composer
         self.model = tt_model
 
         optimizer = create_optimizer(tt_model, self.optimizer_config_dict)
@@ -362,7 +356,7 @@ class GRPOTrainer:
                         adv_slice.reshape((B, 1)),
                         ttnn.Layout.ROW_MAJOR,
                         ttnn.DataType.BFLOAT16,
-                        mesh.dp_mapper,
+                        dp_mapper,
                     )
                     adv_tt.set_requires_grad(False)
 
@@ -376,7 +370,8 @@ class GRPOTrainer:
                         adv_tt,
                         len(prompts_batch) * grad_accum,
                         grpo_cfg.epsilon,
-                        mesh=mesh,
+                        dp_mapper=dp_mapper,
+                        dp_composer=dp_composer,
                     )
 
                     loss.backward(retain_graph=False)
@@ -392,7 +387,7 @@ class GRPOTrainer:
                     )
                     optimizer.set_lr(base_lr * warmup_factor)
 
-                    if mesh.dp_mapper is not None:
+                    if dp_mapper is not None:
                         ttml.core.distributed.synchronize_gradients(tt_model.parameters())
 
                     for cb in self.callbacks:
@@ -425,7 +420,7 @@ class GRPOTrainer:
                             tt_model,
                             num_steps,
                             grpo_cfg.output_dir,
-                            dp_composer=mesh.dp_composer,
+                            dp_composer=dp_composer,
                             tokenizer=tokenizer,
                             grpo_config=grpo_cfg,
                             optimizer=optimizer,
