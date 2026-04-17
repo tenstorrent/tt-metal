@@ -3,9 +3,9 @@
 Prints `inference_speed`, `accuracy`, `peak_dram` on stdout so the autoresearch loop
 can `grep` for them after a run.
 
-Current stage: end-to-end trunk (CPU patch_embed + tt-nn 24-layer encoder +
-tt-nn 24-layer decoder). PCC is computed against the torch reference trunk.
-DPT head is still a follow-up.
+Current stage: end-to-end trunk (encoder + decoder) benchmarked with trace capture
+to eliminate host-side op dispatch overhead. PCC is computed against the torch
+reference trunk.
 """
 from __future__ import annotations
 
@@ -60,6 +60,7 @@ def _torch_trunk_output(cfg: Fast3RConfig, img: torch.Tensor) -> torch.Tensor:
         return model(img)
 
 
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 30_000_000}], indirect=True)
 def test_fast3r_trunk_pcc_and_speed(device):
     cfg = Fast3RConfig()
     g = torch.Generator().manual_seed(0)
@@ -71,20 +72,27 @@ def test_fast3r_trunk_pcc_and_speed(device):
     trunk = TtFast3RTrunk(device, cfg, WEIGHTS)
     x_tt = ttnn.from_torch(tokens.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
+    # Warm-up compiles kernels; program cache lets the trace reuse them.
     y_warm = trunk(x_tt)
     ttnn.synchronize_device(device)
     y_warm.deallocate(True)
 
-    iters = int(os.environ.get("FAST3R_BENCH_ITERS", "5"))
+    # Capture trace. x_tt stays at the same address across iterations so we can replay.
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    y_out = trunk(x_tt)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+    iters = int(os.environ.get("FAST3R_BENCH_ITERS", "10"))
     t0 = time.perf_counter()
     for _ in range(iters):
-        y_tt = trunk(x_tt)
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
     ttnn.synchronize_device(device)
     dt = (time.perf_counter() - t0) / iters
     fps = 1.0 / dt if dt > 0 else 0.0
 
-    y_tt_torch = ttnn.to_torch(y_tt).squeeze(0)
-    y_tt.deallocate(True)
+    y_tt_torch = ttnn.to_torch(y_out).squeeze(0)
+    ttnn.release_trace(device, trace_id)
+    y_out.deallocate(True)
 
     acc = _pcc(y_torch, y_tt_torch) * 100.0
 
