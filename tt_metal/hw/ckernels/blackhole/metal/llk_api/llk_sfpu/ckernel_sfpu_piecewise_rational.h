@@ -90,7 +90,7 @@ inline sfpi::vFloat piecewise_log_expand(sfpi::vFloat poly_result, sfpi::vInt e_
 #endif
     v_if(e_int < 0) { e_int = sfpi::setsgn(~e_int + 1, 1); }
     v_endif;
-    return sfpi::int32_to_float(e_int, 0) * EXPAND_C + poly_result;
+    return sfpi::int32_to_float(e_int, sfpi::RoundMode::NearestEven) * EXPAND_C + poly_result;
 }
 #endif
 

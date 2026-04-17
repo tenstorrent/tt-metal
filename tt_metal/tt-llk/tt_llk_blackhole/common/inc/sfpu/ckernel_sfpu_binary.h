@@ -22,8 +22,8 @@ sfpi_inline sfpi::vFloat _calculate_sfpu_binary_power_(sfpi::vFloat base, sfpi::
     sfpi::vFloat original_base = base;
 
     // Check for integer power
-    sfpi::vInt pow_int       = sfpi::float_to_int16(pow, 0); // int16 should be plenty, since large powers will approach 0/Inf
-    sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, 0);
+    sfpi::vInt pow_int       = sfpi::float_to_int16(pow, sfpi::RoundMode::NearestEven); // int16 should be plenty, since large powers will approach 0/Inf
+    sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, sfpi::RoundMode::NearestEven);
     v_if (pow_rounded == pow)
     {
         // if pow is integer, set base to positive
@@ -44,7 +44,7 @@ sfpi_inline sfpi::vFloat _calculate_sfpu_binary_power_(sfpi::vFloat base, sfpi::
         exp = sfpi::setsgn(~exp + 1, 1);
     }
     v_endif;
-    sfpi::vFloat expf = sfpi::int32_to_float(exp, 0);
+    sfpi::vFloat expf = sfpi::int32_to_float(exp, sfpi::RoundMode::NearestEven);
 
     // De-normalize to original range
     sfpi::vFloat vConstLn2  = 0.692871f;
@@ -78,8 +78,8 @@ sfpi_inline sfpi::vFloat _calculate_sfpu_binary_power_(sfpi::vFloat base, sfpi::
             // if pow is odd integer, set result to negative
             // Check if odd by dividing by 2 and comparing with floor
             sfpi::vFloat half_pow         = pow_rounded * 0.5f;
-            sfpi::vInt half_pow_int       = sfpi::float_to_int16(half_pow, 0);
-            sfpi::vFloat half_pow_floored = sfpi::int32_to_float(half_pow_int, 0);
+            sfpi::vInt half_pow_int       = sfpi::float_to_int16(half_pow, sfpi::RoundMode::NearestEven);
+            sfpi::vFloat half_pow_floored = sfpi::int32_to_float(half_pow_int, sfpi::RoundMode::NearestEven);
             v_if (half_pow != half_pow_floored)
             {
                 result = sfpi::setsgn(result, 1);

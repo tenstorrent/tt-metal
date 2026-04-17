@@ -101,7 +101,7 @@ inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, c
 
         // Round to bf16 if not in fp32 dest accumulation mode
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, RoundMode::NearestEven));
         }
 
         sfpi::dst_reg[out_tile_idx * dst_tile_size] = result;
