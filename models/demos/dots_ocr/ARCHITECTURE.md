@@ -58,10 +58,14 @@ vision_tower() → [N_img_tokens, hidden]
 inputs_embeds [B, S, D] with vision tokens inserted
 ```
 
-## WHLB Optimizations
-- Single chip: `MeshShape(1, 1)` (N150/N300)
-- DRAM heavy: `DRAM_MEMORY_CONFIG` for weights/activations
-- Chunked prefill for long sequences (already in `generator.py`)
+## Wormhole topology notes
+- **N150** (1x1 mesh, TP=1) — default single-chip target.
+- **N300** (1x2 mesh, TP=2) — supported; text decoder shards 12 heads / 2 KV heads over 2 chips.
+- **T3K** (physical LLMBox hardware) — `MESH_DEVICE=T3K` is auto-clamped to a 1x2 submesh because `dots.mocr` has `num_key_value_heads=2` (pure TP=8 would violate `n_kv_heads % cluster_shape[1] == 0`). 6 of 8 chips stay idle.
+- DRAM heavy: `DRAM_MEMORY_CONFIG` for weights/activations.
+- Chunked prefill for long sequences (already in `generator.py`).
+
+Use `models.demos.dots_ocr.tt.mesh.open_mesh_device()` to open the mesh — it honors `MESH_DEVICE` and applies the clamp automatically.
 - Tile layout compatibility via existing transformer stack
 
 ## Next Steps (after approval)

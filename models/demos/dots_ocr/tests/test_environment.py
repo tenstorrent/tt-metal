@@ -51,7 +51,7 @@ def diagnose_environment():
         print(f"   {status_symbol} {dep:12} : {status}")
 
     print("\n3. Environment Variables:")
-    relevant_vars = ["MESH_DEVICE", "HF_MODEL", "DOTS_MAX_SEQ_LEN_WH_LB", "RUN_DOTS_REAL_WEIGHTS"]
+    relevant_vars = ["MESH_DEVICE", "HF_MODEL", "DOTS_MAX_SEQ_LEN", "DOTS_MAX_SEQ_LEN_WH_LB", "RUN_DOTS_REAL_WEIGHTS"]
     for var in relevant_vars:
         value = os.environ.get(var, "NOT SET")
         print(f"   {var:20} : {value}")

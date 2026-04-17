@@ -26,18 +26,16 @@ def test_vision_encoder_pcc_gt_0_99(tmp_path):
     if not hasattr(ttnn, "open_mesh_device"):
         pytest.skip("TTNN runtime has no open_mesh_device (mesh API missing)")
 
+    from models.demos.dots_ocr.tt.mesh import open_mesh_device
     from models.demos.dots_ocr.tt.vision import VisionEncoder
 
     torch.manual_seed(0)
 
     def _open_device():
-        """Open 1x1 mesh for WHLB testing (N150/N300 compatible)."""
-        mesh_device = os.environ.get("MESH_DEVICE", None)
-        if mesh_device is None:
+        """Open a mesh per ``MESH_DEVICE`` (N150/N300/T3K); ``None`` if unset."""
+        if os.environ.get("MESH_DEVICE") is None:
             return None
-        # Use 1x1 mesh for Wormhole LB (single chip)
-        device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
-        return device
+        return open_mesh_device()
 
     device = _open_device()
     try:

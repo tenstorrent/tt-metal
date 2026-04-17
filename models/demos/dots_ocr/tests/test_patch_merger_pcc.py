@@ -23,12 +23,27 @@ from models.demos.dots_ocr.tt.patch_merger import PatchMerger as PatchMergerTT
 
 
 def _open_device():
-    mesh_device = os.environ.get("MESH_DEVICE", None)
-    if mesh_device is None:
+    if os.environ.get("MESH_DEVICE") is None:
         return None
-    # Minimal: assume 1x1 mesh for unit test
-    device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
-    return device
+    from models.demos.dots_ocr.tt.mesh import open_mesh_device as _open
+
+    return _open()
+
+
+def _tt_to_torch(device, y_tt):
+    """Gather a potentially-replicated tensor back to torch without concatenating replicas.
+
+    On a 1x1 mesh we can safely use ``ConcatMeshToTensor(dim=0)``. On multi-chip
+    meshes where the weights are replicated, we instead slice off one replica
+    so shape stays ``[B, 1, S, D]``.
+    """
+    composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    out = ttnn.to_torch(y_tt, mesh_composer=composer).to(torch.float32)
+    num_devices = device.get_num_devices()
+    if num_devices > 1 and out.shape[0] % num_devices == 0:
+        per = out.shape[0] // num_devices
+        out = out[:per]
+    return out
 
 
 @pytest.mark.skipif(os.environ.get("MESH_DEVICE") is None, reason="Requires TT device (set MESH_DEVICE)")
@@ -73,7 +88,7 @@ def test_patch_merger_pcc_gt_0_99(tmp_path):
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
         y_tt = tt(x_tt)
-        y_tt_torch = ttnn.to_torch(y_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)).to(torch.float32)
+        y_tt_torch = _tt_to_torch(device, y_tt)
 
         # PCC
         ref_flat = y_ref.flatten()
