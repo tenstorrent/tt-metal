@@ -21,7 +21,7 @@ ALWI void relu_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(relu_min, APPROX)); }
 /**
  * Performs element-wise computation of relu(x) = (0 if x is negative else x) on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -37,7 +37,7 @@ ALWI void relu_tile(uint32_t idst) { MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(_
 /**
  * Performs element-wise computation of relu max (relu(max(x, upper_limit))) on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -67,7 +67,7 @@ ALWI void relu_max_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(relu_max, APPROX));
 /**
  * Performs element-wise computation of relu min (relu(min(x, lower_limit))) on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -101,7 +101,7 @@ ALWI void relu_tile_int32(uint32_t idst) { MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_I
 /**
  * Performs element-wise computation of leaky relu (relu(x) + slope*-relu(-x)) on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
