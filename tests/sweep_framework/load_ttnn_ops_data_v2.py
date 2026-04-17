@@ -1655,6 +1655,12 @@ def _resolve_manifest_with_models(manifest_path=None, scope=None, model_filter=N
     # trace_id -> set of model_names to include (None = all models)
     trace_model_map = {}
 
+    # Build a lookup of which models each trace contains (from registry metadata).
+    # Used to skip pinned traces that don't contain filtered models.
+    registry_models_by_tid = {}
+    for r in registry:
+        registry_models_by_tid[r.get("trace_id")] = set(r.get("models", []))
+
     for entries in groups.values():
         for entry in entries or []:
             model_val = entry.get("model")
@@ -1680,7 +1686,16 @@ def _resolve_manifest_with_models(manifest_path=None, scope=None, model_filter=N
             if pinned_trace is not None:
                 tids = [int(pinned_trace)] if not isinstance(pinned_trace, list) else [int(t) for t in pinned_trace]
                 for tid in tids:
-                    _add(tid, models)
+                    if model_filter:
+                        # Only add this trace if the registry confirms it contains at least
+                        # one of the filtered models.  This avoids hitting the DB for traces
+                        # that clearly don't have the requested model.
+                        registry_models_for_tid = registry_models_by_tid.get(tid, set())
+                        trace_models = [m for m in models if m in registry_models_for_tid]
+                        if trace_models:
+                            _add(tid, trace_models)
+                    else:
+                        _add(tid, models)
                 continue
 
             # Registry-resolved: each model resolves to latest active trace per device_series
