@@ -148,11 +148,6 @@ public:
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
-    // Metal 2.0: set DFB local accessor handles after construction.
-    // (Setting it up at construction time is better, but it's done this way for WH/BH to keep from leaking
-    // anything about "DFB handles" into the legacy public APIs for kernel creation.)
-    void set_dataflow_buffer_local_accessor_handles(const DataflowBufferLocalAccessorHandleMap& handles);
-
     void validate_runtime_args_size(
         size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const;
     void set_runtime_args(const CoreCoord& logical_core, stl::Span<const uint32_t> runtime_args);
@@ -213,9 +208,7 @@ protected:
     CoreRangeSet core_range_set_;
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
-    // Populated at construction time, or via set_dataflow_buffer_local_accessor_handles().
-    // Must not be modified after JIT compilation begins (JIT may read concurrently).
-    DataflowBufferLocalAccessorHandleMap dataflow_buffer_local_accessor_handles_;
+    const DataflowBufferLocalAccessorHandleMap dataflow_buffer_local_accessor_handles_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
@@ -243,7 +236,11 @@ private:
 
 class DataMovementKernel : public Kernel {
 public:
-    DataMovementKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const DataMovementConfig& config) :
+    DataMovementKernel(
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const DataMovementConfig& config,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -251,7 +248,8 @@ public:
             cr_set,
             config.compile_args,
             config.defines,
-            config.named_compile_args),
+            config.named_compile_args,
+            dataflow_buffer_local_accessor_handles),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
@@ -361,7 +359,11 @@ private:
 
 class ComputeKernel : public Kernel {
 public:
-    ComputeKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const ComputeConfig& config) :
+    ComputeKernel(
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const ComputeConfig& config,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -369,7 +371,8 @@ public:
             cr_set,
             config.compile_args,
             config.defines,
-            config.named_compile_args),
+            config.named_compile_args,
+            dataflow_buffer_local_accessor_handles),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,

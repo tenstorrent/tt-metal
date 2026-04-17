@@ -1375,14 +1375,10 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         } else {  // gen1
             if (kernel_spec.is_dm_kernel()) {
                 auto config = MakeGen1DataMovementConfig(kernel_spec);
-                kernel = std::make_shared<DataMovementKernel>(kernel_src, node_ranges, config);
+                kernel = std::make_shared<DataMovementKernel>(kernel_src, node_ranges, config, dfb_handles);
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
-                kernel = std::make_shared<ComputeKernel>(kernel_src, node_ranges, config);
-            }
-            // Set DFB local accessor handles after construction (gen1 constructors don't take them)
-            if (!dfb_handles.empty()) {
-                kernel->set_dataflow_buffer_local_accessor_handles(dfb_handles);
+                kernel = std::make_shared<ComputeKernel>(kernel_src, node_ranges, config, dfb_handles);
             }
         }
 
