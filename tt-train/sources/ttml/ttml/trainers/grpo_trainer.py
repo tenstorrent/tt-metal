@@ -292,12 +292,10 @@ class GRPOTrainer:
         surr2 = clipped_ratio * adv_tt
         surr = ttml.ops.binary.min(surr1, surr2)
 
-        mask_np = mask.to_numpy(composer=_get_dp_composer())
-        tokens_per_completion = np.maximum(mask_np.sum(axis=1, keepdims=True), 1.0)
-        weight_np = (mask_np / tokens_per_completion).astype(np.float32)
-        weight_tt = ttml.autograd.Tensor.from_numpy(
-            weight_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, _get_dp_mapper()
-        )
+        # Per-completion normalised weight: w[i,t] = mask[i,t] / max(sum_t(mask[i,t]), 1)
+        mask_val = mask.get_value()
+        tokens_per_completion = ttnn.maximum(ttnn.sum(mask_val, dim=1, keepdim=True), 1.0)
+        weight_tt = ttml.autograd.create_tensor(ttnn.div(mask_val, tokens_per_completion), requires_grad=False)
 
         weighted_surr = surr * weight_tt
         weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B_local, Tp])
