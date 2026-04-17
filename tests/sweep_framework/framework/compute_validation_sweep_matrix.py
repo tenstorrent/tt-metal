@@ -47,7 +47,7 @@ def _get_mesh_device_shape(hardware_group) -> str:
     if device_series == "n300" and card_count == 4:
         return "2x4"
     if device_series == "n300" and card_count == 1:
-        return "1x2"
+        return "1x1"
     if device_series == "p150b":
         return "1x1"
     return "1x1"
