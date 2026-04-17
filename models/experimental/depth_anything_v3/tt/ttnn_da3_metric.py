@@ -181,6 +181,10 @@ def _setup(pixel_values: torch.Tensor):
         return
     img_size = pixel_values.shape[-1]
     cpu_model = build_da3_metric(load_weights=True, img_size=img_size).eval()
+    # Backbone stays fp32 on CPU (only used for the cheap patch_embed). The DPT
+    # head is the dominant CPU cost (~283ms vs ~112ms chip backbone), so cast
+    # it to bfloat16 — same AVX512_BF16 win as iter 1 on conv2d.
+    cpu_model.head = cpu_model.head.to(torch.bfloat16)
     device = ttnn.open_device(device_id=_DEVICE_ID)
     blocks = [_upload_block(b, device) for b in cpu_model.backbone.blocks]
     seq_len = (img_size // PATCH_SIZE) ** 2 + 1  # +1 for cls token
@@ -224,7 +228,8 @@ def run(pixel_values: torch.Tensor):
             x_tt = _ttnn_block(x_tt, p, attention_mask)
             if i in OUT_LAYERS:
                 t = ttnn.to_torch(x_tt)
-                intermediates_cpu.append(t[..., :N, :].to(torch.float32))
+                # Keep as bfloat16 — the head was cast to bfloat16 in setup.
+                intermediates_cpu.append(t[..., :N, :])
 
         ttnn.deallocate(x_tt)
 
