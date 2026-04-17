@@ -588,6 +588,14 @@ FORCE_INLINE void send_next_data(
 
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
+            // If the ETH TX queue is congested (e.g. flow-control deadlock between ERISCs),
+            // spinning here indefinitely prevents close_finish() from completing on the host.
+            // Yield to teardown so the connection can be cleanly closed.
+            if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
+                if (sender_worker_interface.has_worker_teardown_request()) {
+                    return;
+                }
+            }
         };
     }
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
@@ -605,6 +613,14 @@ FORCE_INLINE void send_next_data(
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
+        // Same as above: yield to teardown rather than spinning indefinitely waiting for the
+        // post-send TXQ drain. The remote credit update (remote_update_ptr_val) is skipped
+        // intentionally — the connection is being torn down and state will be reset.
+        if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
+            if (sender_worker_interface.has_worker_teardown_request()) {
+                return;
+            }
+        }
     };
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
 }

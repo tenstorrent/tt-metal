@@ -51,6 +51,16 @@ protected:
     }
 };
 
+// T3K fixture: 2x4 mesh with FABRIC_1D.  Exercises non-MMIO ERISC forwarding
+// nodes (devices 1,3,4,5) that sit in the interior of the mesh and are most
+// susceptible to ETH TXQ flow-control deadlock during fabric teardown.
+class MeshDevice2x4Fabric1DFixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice2x4Fabric1DFixture() :
+        MeshDeviceFixtureBase(Config{
+            .mesh_shape = MeshShape{2, 4}, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}) {}
+};
+
 TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
@@ -292,6 +302,77 @@ TEST_F(MeshDevice1x4Fixture, DISABLED_AllGatherReturnedTensorNoHang) {
         { auto tmp = std::move(all_gathered_tensor); }
 
         log_info(tt::LogMetal, "[AllGatherReturnedTensorNoHang] iteration {}/{} completed", iter + 1, kIterations);
+    }
+}
+
+// REGRESSION TEST: ETH TXQ spin-loop blocks close_finish() on non-MMIO ERISCs
+//
+// Scenario: during AllGather teardown the ERISC fabric router was caught spinning
+// inside send_next_data() / run_sender_channel_step_speedy() waiting for
+// eth_txq_is_busy() to clear (ETH flow-control backpressure from the downstream
+// router).  Because has_worker_teardown_request() was never checked inside those
+// loops, close_finish() on the host would wait forever for the ACK that the ERISC
+// could not send.
+//
+// The bug is most reproducible on non-MMIO devices (1,3,4,5) in a 2x4 T3K mesh
+// because those ERISCs act as pure forwarding nodes: every packet they relay must
+// traverse two ETH hops, doubling the probability that the TX queue is busy when
+// teardown is requested.
+//
+// Fix (Option B, fabric_erisc_router.cpp + fabric_erisc_router_speedy_path.hpp):
+//   Both ETH TXQ spin loops in send_next_data() and run_sender_channel_step_speedy()
+//   now call has_worker_teardown_request() and return early if teardown is pending,
+//   intentionally skipping the remote_update_ptr_val() call (safe: the connection
+//   is being torn down and state is reset on re-init).
+//
+// Without the fix, this test hangs on iteration 1 or 2 with a T3K mesh.
+TEST_F(MeshDevice2x4Fabric1DFixture, AllGatherEthTxqTeardownRace) {
+    constexpr int kIterations = 5;
+
+    // Small tensor: enough data to keep all ERISCs busy, small enough to iterate fast.
+    TensorSpec tensor_spec(
+        ttnn::Shape({1, 1, 32, 128}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+
+    for (int iter = 0; iter < kIterations; iter++) {
+        log_info(tt::LogMetal, "[AllGatherEthTxqTeardownRace] iteration {}/{}", iter + 1, kIterations);
+
+        // Build per-device input tensors across the full 2x4 mesh (8 devices).
+        std::vector<std::shared_ptr<distributed::MeshDevice>> submeshes;
+        std::vector<ttnn::Tensor> tensors;
+        for (int row = 0; row < 2; row++) {
+            for (int col = 0; col < 4; col++) {
+                submeshes.push_back(
+                    mesh_device_->create_submesh(MeshShape(1, 1), distributed::MeshCoordinate(row, col)));
+                int dev_idx = row * 4 + col;
+                std::vector<bfloat16> data(
+                    tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
+                tensors.push_back(
+                    Tensor::from_vector(std::move(data), tensor_spec).to_device(submeshes.back().get()));
+            }
+        }
+
+        auto aggregated = tt::tt_metal::experimental::unit_mesh::aggregate(tensors);
+        mesh_device_->quiesce_devices();
+
+        // AllGather across all 8 devices — routes through non-MMIO forwarding ERISCs.
+        auto gathered = ttnn::all_gather(aggregated, /* dim */ 0);
+
+        // Quiesce triggers fabric teardown.  Interior ERISCs that were mid-send
+        // must unblock from their ETH TXQ spin to process the close ACK.
+        mesh_device_->quiesce_devices();
+
+        // Verify correctness on each submesh.
+        auto disaggregated = tt::tt_metal::experimental::unit_mesh::disaggregate(gathered);
+        for (int dev_idx = 0; dev_idx < static_cast<int>(submeshes.size()); dev_idx++) {
+            auto data = disaggregated[dev_idx].to_vector<bfloat16>();
+            ASSERT_FALSE(data.empty()) << "Empty readback at dev_idx=" << dev_idx << " iter=" << iter;
+        }
+
+        // Destroy gathered tensor — exercises wait_for_pending_events() path.
+        disaggregated.clear();
+        { auto tmp = std::move(gathered); }
+
+        log_info(tt::LogMetal, "[AllGatherEthTxqTeardownRace] iteration {}/{} passed", iter + 1, kIterations);
     }
 }
 

@@ -120,6 +120,12 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
                 while (busy) {
                     busy = internal_::eth_txq_is_busy(sender_txq_id);
+                    // Yield to teardown: spinning indefinitely on a congested ETH TX queue
+                    // (e.g. flow-control deadlock) prevents close_finish() from completing.
+                    // Speedy mode is always ch0 (worker channel), so teardown check is safe.
+                    if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
+                        return progress;
+                    }
                 }
             }
             internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
@@ -138,6 +144,12 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
             while (busy) {
                 busy = internal_::eth_txq_is_busy(sender_txq_id);
+                // Post-send: packet already enqueued in ETH HW. Yield to teardown if TXQ
+                // remains busy — remote_update_ptr_val is intentionally skipped; the
+                // connection is being torn down and state will be reset on re-init.
+                if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
+                    return progress;
+                }
             };
             remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
         }
