@@ -2238,10 +2238,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         tokens = tokens.view(1, 1, -1)
         seq_len = tokens.shape[-1]
 
-        from models.demos.deepseek_v3.utils.debug_utils import _print_memory_stats
-
-        _print_memory_stats(self.mesh_device, "before tokens to device")
-
         # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
         tt_tokens = ttnn.from_torch(
             tokens,
@@ -2276,7 +2272,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                 return_hidden=True,
             )
         else:
-            _print_memory_stats(self.mesh_device, "RowBatchedModel.forward_prefill")
             # Pass prompt_len so only the logit at prompt_len-1 is computed,
             # skipping LMHead for every other transformer chunk.
             # _forward_prefill now handles multi-row meshes via a post-LMHead

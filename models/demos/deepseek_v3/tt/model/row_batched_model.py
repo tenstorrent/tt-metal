@@ -378,12 +378,6 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         converges on the target token's logits.
         """
         CHUNK_SIZE = 1024
-        # CHUNK_SIZE = 2048
-        # CHUNK_SIZE = 4096
-        # CHUNK_SIZE = 8192
-        # CHUNK_SIZE = 16384
-        # CHUNK_SIZE = 32768
-        # CHUNK_SIZE = 65536
         cos_dim = rope_tensors["cos_matrix"].shape[3]
         sin_dim = rope_tensors["sin_matrix"].shape[3]
         logits = []
@@ -470,7 +464,6 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
 
         x = Embedding2D.forward_prefill(x, cfg["embedding"])
 
-        i = 0
         for (block_cfg, BlockClass), page_table in zip(
             itertools.chain(
                 zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
@@ -479,16 +472,12 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             page_tables,
             strict=True,
         ):
-            logger.info(f"{BlockClass} ({i}) started")
             x = BlockClass.forward_prefill(x, user_id, block_cfg, rope_tensors, page_table)
-            logger.info(f"{BlockClass} ({i}) finished")
-            i += 1
 
         # Capture pre-norm hidden states for MTP; MTP applies its own hnorm.
         hidden_for_mtp = x if return_hidden else None
 
         x = DistributedRMSNorm.forward_prefill(x, cfg["norm"])  # no resharding needed for prefill
-        logger.debug(f"DistributedRMSNorm finished")
 
         ccl = cfg["lm_head"]["ccl"]
 
@@ -512,17 +501,13 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             x = x_sliced
 
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
-        logger.debug(f"all_gather_async finished")
         if return_hidden:
             lm_head_in = ttnn.clone(x)
             ttnn.deallocate(x)
             logits = LMHead1D.forward_prefill(lm_head_in, cfg["lm_head"])
             return logits, hidden_for_mtp
 
-        logger.debug(f"LMHead1D.forward_prefill x: {x.shape}")
         logits = LMHead1D.forward_prefill(x, cfg["lm_head"])
-        logger.debug(f"LMHead1D.forward_prefill logits: {logits.shape}")
-        logger.debug(f"LMHead1D finished")
 
         # In a multi-row mesh every row computed logits for its own local token
         # (at row_local_idx within its 64-token slice).  All-gather across rows
