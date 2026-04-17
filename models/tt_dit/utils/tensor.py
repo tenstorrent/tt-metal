@@ -35,14 +35,19 @@ def typed_tensor(
         mapper_dims[mesh_axis] = shard_dim
         mesh_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=mapper_dims)
 
-    return ttnn.from_torch(
+    result = ttnn.from_torch(
         x,
         layout=layout,
         dtype=dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=None if on_host else device,
+        device=None,
         mesh_mapper=mesh_mapper,
     )
+
+    if device is not None and not on_host:
+        result = ttnn.to_device(result, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    return result
 
 
 def bf16_tensor(
@@ -102,14 +107,19 @@ def typed_tensor_2dshard(
     for k, v in shard_mapping.items():
         mapper_dims[k] = v
     mesh_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=mapper_dims)
-    return ttnn.from_torch(
+    result = ttnn.from_torch(
         x,
         layout=layout,
         dtype=dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=None if on_host else device,
+        device=None,
         mesh_mapper=mesh_mapper,
     )
+
+    if device is not None and not on_host:
+        result = ttnn.to_device(result, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    return result
 
 
 def bf16_tensor_2dshard(
@@ -149,15 +159,20 @@ def from_torch(
     else:
         mesh_mapper = None
 
-    return ttnn.from_torch(
+    result = ttnn.from_torch(
         x,
         layout=layout,
         dtype=dtype,
         memory_config=memory_config,
-        device=None if on_host else device,
+        device=None,
         mesh_mapper=mesh_mapper,
         pad_value=pad_value,
     )
+
+    if device is not None and not on_host:
+        result = ttnn.to_device(result, device, memory_config=memory_config)
+
+    return result
 
 
 def to_torch(
