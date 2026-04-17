@@ -288,7 +288,8 @@ jobs:
               --manifest-path "$MANIFEST_PATH" \
               --master-json-path "$MASTER_JSON_PATH" \
               --vectors-root "$VECTORS_ROOT" \
-              --scope-target "$SCOPE_TARGET"
+              --scope-target "$SCOPE_TARGET" \
+              --write-to-file
           )
           echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
 
@@ -318,6 +319,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
         TRACY_NO_INVARIANT_CHECK: 1
+        MESH_DEVICE_SHAPE: ${{ matrix.mesh_device_shape }}
         LEAD_MODELS_RUN: ${{ matrix.validation_scope == 'lead_models' && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -452,7 +454,14 @@ jobs:
         if: always()
         run: |
           if [[ -f validation_summary.md ]]; then
-            cat validation_summary.md >> "$GITHUB_STEP_SUMMARY"
+            # Guard against exceeding the 1MB GitHub step summary limit
+            file_size=$(stat -c%s validation_summary.md 2>/dev/null || echo 0)
+            if (( file_size > 900000 )); then
+              head -c 890000 validation_summary.md >> "$GITHUB_STEP_SUMMARY"
+              echo -e "\n\n---\n⚠️ Report truncated (${file_size} bytes exceeded 1MB step summary limit)." >> "$GITHUB_STEP_SUMMARY"
+            else
+              cat validation_summary.md >> "$GITHUB_STEP_SUMMARY"
+            fi
           else
             cat <<'EOF' > validation_summary.md
           # Sweep Validation Summary

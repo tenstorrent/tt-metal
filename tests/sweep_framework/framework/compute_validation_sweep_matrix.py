@@ -25,6 +25,7 @@ from constants import format_hardware_suffix, parse_hardware_suffix, strip_group
 from matrix_runner_config import (
     GENERATION_MANIFEST_FILENAME,
     get_lead_models_test_group_name_for_hardware_group,
+    get_mesh_device_shape_for_hardware_group,
     get_runner_config,
     get_test_group_name_for_hardware_group,
 )
@@ -149,6 +150,11 @@ def compute_validation_matrix(
     if unmatched_modules:
         grouped_items.append((None, unmatched_modules))
 
+    # Read mesh shapes per hardware group from the generation manifest.
+    # This enables sub-grouping: each hw group spawns one CI job per mesh shape,
+    # so MESH_DEVICE_SHAPE is set correctly and vectors are filtered at runtime.
+    manifest_mesh_shapes = generation_manifest.get("mesh_shapes_by_hardware_group", {})
+
     for hardware_group, grouped_modules in grouped_items:
         base_modules = sorted({strip_grouping_suffix(module) for module in grouped_modules})
         if not base_modules:
@@ -160,25 +166,37 @@ def compute_validation_matrix(
         else:
             test_group_name = get_test_group_name_for_hardware_group(hardware_group)
         runner_config = get_runner_config(test_group_name)
-        runner_batches = chunk_modules(base_modules, batch_size)
-        total_batches = len(runner_batches)
         trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
 
-        for index, batch in enumerate(runner_batches, start=1):
-            include.append(
-                {
-                    **runner_config,
-                    "batch_display": f"{validation_scope}:{hardware_label}:{batch}",
-                    "batch_ordinal": f"{index}/{total_batches}",
-                    "batch_index": index,
-                    "module_selector": batch,
-                    "suite_name": "model_traced",
-                    "validation_scope": validation_scope,
-                    "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
-                    "trace_ids": trace_id_list,
-                    "hardware_group": hardware_label,
-                }
-            )
+        # Determine mesh shapes for this hardware group.
+        # Use manifest data if available (dynamic, from actual vector data),
+        # otherwise fall back to the static hardware-based mapping.
+        mesh_shapes = manifest_mesh_shapes.get(hardware_label, [])
+        if not mesh_shapes:
+            fallback = get_mesh_device_shape_for_hardware_group(hardware_group)
+            mesh_shapes = [fallback] if fallback else [""]
+
+        for mesh_shape in sorted(mesh_shapes):
+            mesh_label = f"mesh_{mesh_shape}" if mesh_shape else "default"
+            runner_batches = chunk_modules(base_modules, batch_size)
+            total_batches = len(runner_batches)
+
+            for index, batch in enumerate(runner_batches, start=1):
+                include.append(
+                    {
+                        **runner_config,
+                        "batch_display": f"{validation_scope}:{hardware_label}:{mesh_label}:{batch}",
+                        "batch_ordinal": f"{index}/{total_batches}",
+                        "batch_index": index,
+                        "module_selector": batch,
+                        "suite_name": "model_traced",
+                        "validation_scope": validation_scope,
+                        "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
+                        "trace_ids": trace_id_list,
+                        "hardware_group": hardware_label,
+                        "mesh_device_shape": mesh_shape,
+                    }
+                )
 
     return {"include": include}
 

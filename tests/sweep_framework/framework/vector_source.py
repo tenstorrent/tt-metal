@@ -488,17 +488,21 @@ class VectorExportSource(VectorSource):
                 f"card_count={current_machine_info.get('card_count', 'unknown')}"
             )
 
+        mesh_env_override = bool(os.environ.get("MESH_DEVICE_SHAPE", "").strip())
         allowed_mesh_shapes = set()
-        if filter_policy["enforce_mesh_capability"]:
+        if filter_policy["enforce_mesh_capability"] or mesh_env_override:
             allowed_mesh_shapes = self._resolve_allowed_mesh_shapes(capability_profile, current_machine_info)
             if allowed_mesh_shapes:
                 mesh_labels = sorted(f"{rows}x{cols}" for rows, cols in allowed_mesh_shapes)
-                mode_label = "CI ownership" if explicit_test_group_name else "local hardware capability"
+                mode_label = (
+                    "MESH_DEVICE_SHAPE env override" if mesh_env_override
+                    else ("CI ownership" if explicit_test_group_name else "local hardware capability")
+                )
                 logger.info(
-                    f"Manifest-selected mesh filtering enabled for module '{module_name}' via {mode_label}: "
+                    f"Mesh filtering enabled for module '{module_name}' via {mode_label}: "
                     f"{mesh_labels}"
                 )
-            else:
+            elif not mesh_env_override:
                 logger.warning(
                     f"Manifest grouping mode is 'mesh' for module '{module_name}', but no mesh capability was "
                     "derived. Set TEST_GROUP_NAME for strict CI ownership or MESH_DEVICE_SHAPE for a manual override."
@@ -580,10 +584,10 @@ class VectorExportSource(VectorSource):
                                     machine_mismatch_count += 1
                                     continue
 
-                            # Apply mesh filtering when manifest grouping mode says ownership is by mesh.
-                            if filter_policy["enforce_mesh_capability"] and (
-                                allowed_mesh_shapes or strict_ci_mesh_ownership
-                            ):
+                            # Apply mesh filtering when we have allowed shapes to filter against.
+                            # allowed_mesh_shapes is populated when enforce_mesh_capability is True
+                            # OR when MESH_DEVICE_SHAPE env var is set (hw-grouped validation jobs).
+                            if allowed_mesh_shapes:
                                 # If mesh shape is missing in JSON, do not filter out.
                                 # Otherwise, accept when ANY traced entry matches an allowed mesh.
                                 traced_mesh_entries = []
