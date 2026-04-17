@@ -78,10 +78,14 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     // Activation mcast receiver args
     using ActMcastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
-    deepseek_b1_ops::Mcast::ReceiverArgs act_mcast_args{
-        get_semaphore(get_named_compile_time_arg_val("act_mcast_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("act_mcast_dst_cb"),
-        get_named_compile_time_arg_val("act_mcast_dst_num_pages"),
+    deepseek_b1_ops::Mcast::DMArgs act_mcast_args{
+        .sender = {},
+        .receiver =
+            {
+                get_semaphore(get_named_compile_time_arg_val("act_mcast_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("act_mcast_dst_cb"),
+                get_named_compile_time_arg_val("act_mcast_dst_num_pages"),
+            },
     };
 
     // Gated reduce reader args (NCRISC no-op)
@@ -105,6 +109,7 @@ void kernel_main() {
                 1,  // row_major
                 get_named_compile_time_arg_val("ag_receiver_data_addr"),
                 get_named_compile_time_arg_val("ag_sender_idx"),
+                noc_index,
             },
         .receiver = {},
     };
@@ -126,23 +131,32 @@ void kernel_main() {
                 1,  // row_major
                 get_named_compile_time_arg_val("bg_receiver_data_addr"),
                 get_named_compile_time_arg_val("bg_sender_idx"),
+                noc_index,
             },
         .receiver = {},
     };
 
     // Mcast1 receiver args (down proj activation)
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast_dst_cb"),
-        get_named_compile_time_arg_val("mcast_dst_num_pages"),
+    deepseek_b1_ops::Mcast::DMArgs mcast_args{
+        .sender = {},
+        .receiver =
+            {
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast_dst_cb"),
+                get_named_compile_time_arg_val("mcast_dst_num_pages"),
+            },
     };
 
     // Mcast2 receiver args (residual, shares init/teardown with mcast1)
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast2_args{
-        get_semaphore(get_named_compile_time_arg_val("mcast2_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast2_dst_cb"),
-        get_named_compile_time_arg_val("mcast2_dst_num_pages"),
+    deepseek_b1_ops::Mcast::DMArgs mcast2_args{
+        .sender = {},
+        .receiver =
+            {
+                get_semaphore(get_named_compile_time_arg_val("mcast2_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast2_dst_cb"),
+                get_named_compile_time_arg_val("mcast2_dst_num_pages"),
+            },
     };
 
     // Gate/Up sliced matmul reader args (NCRISC no-op)
@@ -170,6 +184,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather_row_major"),
                 get_named_compile_time_arg_val("gather_receiver_data_addr"),
                 get_named_compile_time_arg_val("gather_sender_idx"),
+                noc_index,
             },
         .receiver = {},
     };
@@ -186,18 +201,22 @@ void kernel_main() {
 
     constexpr uint32_t act_mcast_src_cb = get_named_compile_time_arg_val("act_mcast_src_cb");
     constexpr uint32_t act_mcast_dst_cb = get_named_compile_time_arg_val("act_mcast_dst_cb");
-    deepseek_b1_ops::Mcast::SenderArgs act_mcast_args{
-        get_named_compile_time_arg_val("act_mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("act_mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("act_mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("act_mcast_dest_noc_end_y"),
-        get_semaphore(get_named_compile_time_arg_val("act_mcast_data_sender_semaphore")),
-        get_semaphore(get_named_compile_time_arg_val("act_mcast_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("act_mcast_data_size_bytes"),
-        act_mcast_src_cb,
-        get_named_compile_time_arg_val("act_mcast_src_num_pages"),
-        get_read_ptr(act_mcast_src_cb),
-        get_write_ptr(act_mcast_dst_cb),
+    deepseek_b1_ops::Mcast::DMArgs act_mcast_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("act_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("act_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("act_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("act_mcast_dest_noc_end_y"),
+                get_semaphore(get_named_compile_time_arg_val("act_mcast_data_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("act_mcast_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("act_mcast_data_size_bytes"),
+                act_mcast_src_cb,
+                get_named_compile_time_arg_val("act_mcast_src_num_pages"),
+                get_read_ptr(act_mcast_src_cb),
+                get_write_ptr(act_mcast_dst_cb),
+            },
+        .receiver = {},
     };
 
     // Gated reduce writer args (BRISC no-op)
@@ -240,35 +259,43 @@ void kernel_main() {
 
     constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
     constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
-    deepseek_b1_ops::Mcast::SenderArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast_data_size_bytes"),
-        mcast_src_cb,
-        get_named_compile_time_arg_val("mcast_src_num_pages"),
-        get_read_ptr(mcast_src_cb),
-        get_write_ptr(mcast_dst_cb),
+    deepseek_b1_ops::Mcast::DMArgs mcast_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast_data_size_bytes"),
+                mcast_src_cb,
+                get_named_compile_time_arg_val("mcast_src_num_pages"),
+                get_read_ptr(mcast_src_cb),
+                get_write_ptr(mcast_dst_cb),
+            },
+        .receiver = {},
     };
 
     // Mcast2 sender args (residual, shares init/teardown with mcast1)
     constexpr uint32_t mcast2_src_cb = get_named_compile_time_arg_val("mcast2_src_cb");
     constexpr uint32_t mcast2_dst_cb = get_named_compile_time_arg_val("mcast2_dst_cb");
-    deepseek_b1_ops::Mcast::SenderArgs mcast2_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_semaphore(get_named_compile_time_arg_val("mcast2_data_sender_semaphore")),
-        get_semaphore(get_named_compile_time_arg_val("mcast2_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast2_data_size_bytes"),
-        mcast2_src_cb,
-        get_named_compile_time_arg_val("mcast2_src_num_pages"),
-        get_read_ptr(mcast2_src_cb),
-        get_write_ptr(mcast2_dst_cb),
+    deepseek_b1_ops::Mcast::DMArgs mcast2_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_semaphore(get_named_compile_time_arg_val("mcast2_data_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("mcast2_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast2_data_size_bytes"),
+                mcast2_src_cb,
+                get_named_compile_time_arg_val("mcast2_src_num_pages"),
+                get_read_ptr(mcast2_src_cb),
+                get_write_ptr(mcast2_dst_cb),
+            },
+        .receiver = {},
     };
 
     // Gate/Up sliced matmul writer args (BRISC no-op)

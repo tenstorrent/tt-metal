@@ -6,8 +6,9 @@
 
 #include <fmt/core.h>
 
+#include <cmath>
+#include <limits>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal.hpp>
 #include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -22,7 +23,6 @@
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -68,18 +68,13 @@ autograd::TensorPtr ring_attention_sdpa(
     // output_accum: weighted sum of outputs from all steps
     ttnn::Tensor output_accum = ttnn::zeros_like(query_tensor);
 
-    // global_sum_exp: running sum of exp(qk - max) across all steps
-    ttnn::Tensor global_sum_exp = ttnn::zeros(
+    // global_lse: running logsumexp across all steps
+    // lse = log(sum(exp(scale * score_i))) — the log of the softmax normalizer
+    // Initialized to -inf (no contribution: exp(-inf) = 0)
+    ttnn::Tensor global_lse = ttnn::full(
         ttnn::Shape{batch_num, heads, seq_len_local, 1U},
-        ttnn::DataType::BFLOAT16,
-        ttnn::Layout::TILE,
-        std::ref(*mesh_device));
-
-    // global_max: running maximum attention score across all steps
-    ttnn::Tensor global_max = ttnn::full(
-        ttnn::Shape{batch_num, heads, seq_len_local, 1U},
-        std::bit_cast<float>(0xF8000000U),  // -inf in bfloat16
-        ttnn::DataType::BFLOAT16,
+        -std::numeric_limits<float>::infinity(),
+        ttnn::DataType::FLOAT32,
         ttnn::Layout::TILE,
         std::ref(*mesh_device));
 
@@ -87,42 +82,27 @@ autograd::TensorPtr ring_attention_sdpa(
     // These will be reused each step
     ttnn::Tensor output_tensor = ttnn::empty_like(query_tensor);
     ttnn::Tensor intermediate_tensor = ttnn::empty(
-        ttnn::Shape{batch_num, heads, seq_len_local, 64U},
-        ttnn::DataType::BFLOAT16,
+        ttnn::Shape{batch_num, heads, seq_len_local, 32U},
+        ttnn::DataType::FLOAT32,
         ttnn::Layout::TILE,
         mesh_device,
         ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
 
-    // Create "no contribution" intermediate tensor on device
-    // Shape: (B, H, S, 64), mostly zeros except:
-    // - Column 0: -inf (max_val, so any real max will dominate)
-    // - Column 32: +inf (recip_sum_exp, so sum_exp = 1/inf = 0)
+    // "no contribution" intermediate: logsumexp = -inf (col 0), rest zeros
+    // exp(-inf) = 0, so this chunk contributes nothing to the combined softmax
     ttnn::Tensor col0_neg_inf = ttnn::full(
         ttnn::Shape{batch_num, heads, seq_len_local, 1U},
-        -tt::tt_metal::hal::get_inf(),  // -inf in bfloat16
-        ttnn::DataType::BFLOAT16,
+        -std::numeric_limits<float>::infinity(),
+        ttnn::DataType::FLOAT32,
         ttnn::Layout::TILE,
         std::ref(*mesh_device));
-
-    ttnn::Tensor col32_pos_inf = ttnn::full(
-        ttnn::Shape{batch_num, heads, seq_len_local, 1U},
-        tt::tt_metal::hal::get_inf(),  // +inf
-        ttnn::DataType::BFLOAT16,
-        ttnn::Layout::TILE,
-        std::ref(*mesh_device));
-
-    // Pad to 32 columns each (adds 31 zeros on the right of last dim)
     ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec = {
         {0, 0},  // batch
         {0, 0},  // heads
         {0, 0},  // seq_len
         {0, 31}  // width: pad 31 zeros on the right (1 -> 32)
     };
-    ttnn::Tensor first_32_cols = ttnn::pad(col0_neg_inf, padding_spec, 0.0F, false, std::nullopt);
-    ttnn::Tensor last_32_cols = ttnn::pad(col32_pos_inf, padding_spec, 0.0F, false, std::nullopt);
-
-    // Concat to get full 64 columns
-    ttnn::Tensor no_contrib_intermediate = ttnn::concat(std::vector<ttnn::Tensor>{first_32_cols, last_32_cols}, 3);
+    ttnn::Tensor no_contrib_intermediate = ttnn::pad(col0_neg_inf, padding_spec, 0.0F, false, std::nullopt);
 
     for (uint32_t step = 0; step < ring_size; ++step) {
         // For causal masking, initialize intermediate_tensor to "no contribution" values
@@ -143,64 +123,28 @@ autograd::TensorPtr ring_attention_sdpa(
             output_tensor,
             intermediate_tensor);
 
-        // Extract intermediates for online softmax combination
-        // Intermediate shape: (B, H, S, 64)
-        // - Column 0: max_val (maximum attention score for this chunk)
-        // - Column 32: recip_sum_exp (1 / sum(exp(qk - max)))
-
-        // Extract max_val from column 0
-        // Slice: [0:B, 0:H, 0:S, 0:1]
+        // Extract logsumexp from column 0 of intermediate
+        // Intermediate shape: (B, H, S, 32) FP32, logsumexp in column 0
         const ttsl::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
-        const ttsl::SmallVector<uint32_t> max_start = {0, 0, 0, 0};
-        const ttsl::SmallVector<uint32_t> max_end = {batch_num, heads, seq_len_local, 1};
-        ttnn::Tensor max_val_chunk = ttnn::slice(intermediate_tensor, max_start, max_end, slice_step);
+        const ttsl::SmallVector<uint32_t> lse_start = {0, 0, 0, 0};
+        const ttsl::SmallVector<uint32_t> lse_end = {batch_num, heads, seq_len_local, 1};
+        ttnn::Tensor lse_chunk = ttnn::slice(intermediate_tensor, lse_start, lse_end, slice_step);
 
-        // Extract recip_sum_exp from column 32
-        // Slice: [0:B, 0:H, 0:S, 32:33]
-        const ttsl::SmallVector<uint32_t> recip_start = {0, 0, 0, 32};
-        const ttsl::SmallVector<uint32_t> recip_end = {batch_num, heads, seq_len_local, 33};
-        ttnn::Tensor recip_sum_exp_chunk = ttnn::slice(intermediate_tensor, recip_start, recip_end, slice_step);
+        // Combine via logaddexp: new_lse = log(exp(global_lse) + exp(lse_chunk))
+        // Numerically stable form: m = max(a,b); result = m + log(exp(a-m) + exp(b-m))
+        ttnn::Tensor m = ttnn::maximum(global_lse, lse_chunk);
+        ttnn::Tensor exp_global = ttnn::exp(ttnn::subtract(global_lse, m));
+        ttnn::Tensor exp_chunk = ttnn::exp(ttnn::subtract(lse_chunk, m));
+        ttnn::Tensor new_lse = ttnn::add(m, ttnn::log(ttnn::add(exp_global, exp_chunk)));
 
-        // Step 1: Compute sum_exp_chunk = 1 / recip_sum_exp
-        // This is sum(exp(qk - max_chunk)) for this chunk
-        ttnn::Tensor sum_exp_chunk = ttnn::reciprocal(recip_sum_exp_chunk);
+        // Weights for combining outputs: w = exp(lse - new_lse) = Z_i / Z_combined
+        ttnn::Tensor old_weight = ttnn::exp(ttnn::subtract(global_lse, new_lse));
+        ttnn::Tensor new_weight = ttnn::exp(ttnn::subtract(lse_chunk, new_lse));
 
-        // Step 2: Update global_max = max(global_max, max_val_chunk)
-        ttnn::Tensor new_global_max = ttnn::maximum(global_max, max_val_chunk);
+        // Weighted combination of accumulated output and this step's output
+        output_accum = ttnn::add(ttnn::multiply(output_accum, old_weight), ttnn::multiply(output_tensor, new_weight));
 
-        // Step 3: Compute rescaling factors
-        // rescale_global = exp(global_max - new_global_max)  [to downscale old accumulator]
-        // rescale_chunk = exp(max_val_chunk - new_global_max) [to align chunk with new max]
-        ttnn::Tensor global_max_diff = ttnn::subtract(global_max, new_global_max);
-        ttnn::Tensor chunk_max_diff = ttnn::subtract(max_val_chunk, new_global_max);
-
-        ttnn::Tensor rescale_global = ttnn::exp(global_max_diff);
-        ttnn::Tensor rescale_chunk = ttnn::exp(chunk_max_diff);
-
-        // Step 4: Rescale and combine sum_exp
-        // global_sum_exp tracks sum(exp(qk - current_global_max)) across all chunks seen so far
-        // new_sum_exp = global_sum_exp * rescale_global + sum_exp_chunk * rescale_chunk
-        //             = sum(exp(qk - new_global_max)) for all chunks
-        ttnn::Tensor rescaled_global_sum = ttnn::multiply(global_sum_exp, rescale_global);
-        ttnn::Tensor rescaled_chunk_sum = ttnn::multiply(sum_exp_chunk, rescale_chunk);
-        ttnn::Tensor new_global_sum_exp = ttnn::add(rescaled_global_sum, rescaled_chunk_sum);
-
-        // Step 5: Compute weights for weighted combination
-        // old_weight = rescaled_global_sum / new_global_sum_exp
-        // new_weight = rescaled_chunk_sum / new_global_sum_exp
-        ttnn::Tensor reciprocal_new_sum = ttnn::reciprocal(new_global_sum_exp);
-        ttnn::Tensor old_weight = ttnn::multiply(rescaled_global_sum, reciprocal_new_sum);
-        ttnn::Tensor new_weight = ttnn::multiply(rescaled_chunk_sum, reciprocal_new_sum);
-
-        // Step 6: Rescale and combine outputs
-        // new_output = output_accum * old_weight + chunk_output * new_weight
-        ttnn::Tensor scaled_old = ttnn::multiply(output_accum, old_weight);
-        ttnn::Tensor scaled_new = ttnn::multiply(output_tensor, new_weight);
-        output_accum = ttnn::add(scaled_old, scaled_new);
-
-        // Step 7: Update global state
-        global_max = new_global_max;
-        global_sum_exp = new_global_sum_exp;
+        global_lse = new_lse;
 
         if (step < ring_size - 1) {
             k_current = ttnn_fixed::distributed::ring_shift(
@@ -211,15 +155,13 @@ autograd::TensorPtr ring_attention_sdpa(
     }
 
     auto out = autograd::create_tensor(output_accum);
-    ttnn::Tensor final_global_max = global_max;
-    ttnn::Tensor final_global_sum_exp = global_sum_exp;
+    ttnn::Tensor final_lse = global_lse;
 
     autograd::GradFunction grad_fn = [query,
                                       key,
                                       value,
                                       out,
-                                      final_global_max,
-                                      final_global_sum_exp,
+                                      final_lse,
                                       k_current,  // K at end of forward (position k1)
                                       v_current,  // V at end of forward (position v1)
                                       ring_size,
@@ -238,8 +180,8 @@ autograd::TensorPtr ring_attention_sdpa(
 
         ttnn::Tensor recomputed_output = ttnn::empty_like(query_tensor);
         ttnn::Tensor recomputed_intermediate = ttnn::empty(
-            ttnn::Shape{batch_num, heads, seq_len_local, 64U},
-            ttnn::DataType::BFLOAT16,
+            ttnn::Shape{batch_num, heads, seq_len_local, 32U},
+            ttnn::DataType::FLOAT32,
             ttnn::Layout::TILE,
             mesh_device,
             ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
@@ -247,14 +189,10 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::Tensor grad_K_step = ttnn::zeros_like(key->get_value());
         ttnn::Tensor grad_V_step = ttnn::zeros_like(value->get_value());
 
-        ttnn::Tensor recip_final_sum = ttnn::reciprocal(final_global_sum_exp);
-
-        // Slice parameters for extracting max and sum_exp from intermediate
+        // Slice parameters for extracting logsumexp from intermediate column 0
         const ttsl::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
-        const ttsl::SmallVector<uint32_t> max_start = {0, 0, 0, 0};
-        const ttsl::SmallVector<uint32_t> max_end = {batch_num, heads, seq_len_local, 1};
-        const ttsl::SmallVector<uint32_t> recip_start = {0, 0, 0, 32};
-        const ttsl::SmallVector<uint32_t> recip_end = {batch_num, heads, seq_len_local, 33};
+        const ttsl::SmallVector<uint32_t> lse_start = {0, 0, 0, 0};
+        const ttsl::SmallVector<uint32_t> lse_end = {batch_num, heads, seq_len_local, 1};
 
         // Loop over ring steps in reverse order (from last to first)
         for (int step = ring_size - 1; step >= 0; --step) {
@@ -284,15 +222,10 @@ autograd::TensorPtr ring_attention_sdpa(
                 recomputed_output,
                 recomputed_intermediate);
 
-            // RECOMPUTE: Calculate effective weight from recomputed intermediate and final global stats
-            // eff_weight = sum_exp_j * exp(max_j - global_max_final) / global_sum_exp_final
-            ttnn::Tensor max_j = ttnn::slice(step_intermediate, max_start, max_end, slice_step);
-            ttnn::Tensor recip_sum_exp_j = ttnn::slice(step_intermediate, recip_start, recip_end, slice_step);
-            ttnn::Tensor sum_exp_j = ttnn::reciprocal(recip_sum_exp_j);
-            ttnn::Tensor max_diff = ttnn::subtract(max_j, final_global_max);
-            ttnn::Tensor exp_diff = ttnn::exp(max_diff);
-            ttnn::Tensor numerator = ttnn::multiply(sum_exp_j, exp_diff);
-            ttnn::Tensor step_weight = ttnn::multiply(numerator, recip_final_sum);
+            // RECOMPUTE: Calculate effective weight from recomputed logsumexp and final global lse
+            // step_weight = exp(lse_j - final_lse) = Z_j / Z_total
+            ttnn::Tensor lse_j = ttnn::slice(step_intermediate, lse_start, lse_end, slice_step);
+            ttnn::Tensor step_weight = ttnn::exp(ttnn::subtract(lse_j, final_lse));
 
             // Scale grad_output by the weight applied to this chunk in forward
             // d(chunk_output_j) = weight_j * d(final_output)
