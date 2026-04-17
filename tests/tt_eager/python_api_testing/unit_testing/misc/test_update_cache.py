@@ -267,12 +267,11 @@ class TestUpdateCacheFP32:
         ((8, 4), 1024, 128, "HEIGHT_SHARDED"),  # 128/32 = 4 shards across 8 banks → ≤1 shard/bank → HEIGHT_SHARDED
     ],
 )
-@pytest.mark.parametrize("num_heads", [128])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("op_type", ["fill", "fill_cache_for_user", "update"])
 class TestUpdateCacheWithKVPE:
     def test_kvpe_cache_op(
-        self, op_type, mesh_shape, seq_len, expected_seq_len_local, expected_layout, num_heads, input_dtype, device
+        self, op_type, mesh_shape, seq_len, expected_seq_len_local, expected_layout, input_dtype, device
     ):
         """Test fill/update cache operations with KVPE cache created by init_kvpe_cache.
 
