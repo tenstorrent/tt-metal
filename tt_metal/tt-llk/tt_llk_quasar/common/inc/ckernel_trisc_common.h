@@ -47,7 +47,7 @@ static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE
 constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 4;
 // Mask to extract data format bits
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
-
+constexpr std::uint32_t NUM_ROWS_PER_TILE_FRD_8 = 16;
 // Points to the config space
 std::uint32_t volatile* const cfg = (std::uint32_t volatile*)TENSIX_CFG_BASE;
 // Points to the buffer table

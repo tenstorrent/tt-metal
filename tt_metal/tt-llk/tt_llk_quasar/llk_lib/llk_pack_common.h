@@ -9,6 +9,7 @@
 #include "ckernel_trisc_common.h"
 #include "cpack_common.h"
 #include "llk_defs.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 using namespace ckernel::trisc;
@@ -84,7 +85,7 @@ inline void _llk_pack_dest_dvalid_section_done_()
  * @tparam REDUCE_DIMENSION: The reduce op dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
  **/
 template <ReduceDim REDUCE_DIMENSION>
-inline void _llk_pack_reduce_mask_config_()
+inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
 {
     // Wait for packer to finish to avoid breaking its current configuration
     TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
@@ -92,6 +93,7 @@ inline void _llk_pack_reduce_mask_config_()
     // This register specifies edge masking mode.
     //  0x0 -> mask to 0
     //  0x1 -> mask to -inf
+    cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK_MODE_RMW, 0x0);
 
     // TODO: (RT) Clean this up using pack edge struct to match addresses
     //  Make it unified
@@ -100,25 +102,37 @@ inline void _llk_pack_reduce_mask_config_()
         // This register specifies which datums will not have the mask applied
         // The register is 16 bits, each bit corresponds to a datum in the 1x16 row in dest
         // 0xFFFE below means datum[0] preserves its values, datums[1:15] = 0
+        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, 0xFFFF);
         cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0xFFFE);
 
         // The registers below are 32 bits each, each 2 bits correspond to a row in a face
         // each 2 bits specify the mask that will be applied (there are 4 masks possible)
         // the registers below will have mask 01 applied to every row in the face
         cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x55555555);
+        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x55555555);
         cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x55555555);
+        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, 0x55555555);
     }
     else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
     {
         // The below mask mean all datums in a row preserve their value
-        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0x0000);
         cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, 0xFFFF);
+        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0x0000);
 
-        // For face 0 & face 1, only row 0 will have mask1 applied
-        // Mask1 is configured to keep all datums in a row
-        // rows[1-16] will have all of their datums masked to 0
-        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x1);
-        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x1);
+        if (tensor_shape.face_r_dim <= (FACE_R_DIM >> 1))
+        {
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x00010001);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x00010001);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x00010001);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, 0x00010001);
+        }
+        else
+        {
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, 0x1);
+        }
     }
     else
     {
@@ -129,7 +143,20 @@ inline void _llk_pack_reduce_mask_config_()
         // For face 0, only row 0 will have mask1 applied
         // Mask1 is configured to only have datum[0] preserved
         // rows[1-16] will have all of their datums masked to 0
-        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x1);
+        if (tensor_shape.face_r_dim <= (FACE_R_DIM >> 1))
+        {
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x00010001);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x00010001);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x00010001);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, 0x00010001);
+        }
+        else
+        {
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, 0x1);
+        }
     }
 
     // Stall until all config instructions are done
