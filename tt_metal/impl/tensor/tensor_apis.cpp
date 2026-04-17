@@ -128,8 +128,7 @@ void enqueue_read_tensor(
                 host_buffer->view_bytes().size(),
                 expected_size_bytes);
 
-            auto coord_range =
-                distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
+            auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
             if (auto pinned = experimental::PinnedMemoryCache::instance().try_pin(
                     *device, coord_range, *host_buffer, /*map_to_noc=*/true)) {
                 experimental::HostBufferSetPinnedMemory(*host_buffer, std::move(pinned));
