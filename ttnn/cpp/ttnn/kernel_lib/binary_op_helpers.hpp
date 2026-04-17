@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_chain.hpp"
 
 /**
  * @file binary_op_helpers.hpp

@@ -12,6 +12,7 @@
  */
 
 #include <type_traits>
+#include <utility>
 
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
@@ -91,6 +92,94 @@ ALWI constexpr uint32_t get_binary_dst_index(AccumT accum) {
         return 0;
     }
 }
+
+namespace detail {
+
+// is_sfpu_chain_v<T>: true iff T is a specialization of SfpuChain.
+template <typename T>
+struct is_sfpu_chain : std::false_type {};
+template <typename... Ops>
+struct is_sfpu_chain<SfpuChain<Ops...>> : std::true_type {};
+template <typename T>
+inline constexpr bool is_sfpu_chain_v =
+    is_sfpu_chain<std::remove_cv_t<std::remove_reference_t<T>>>::value;
+
+// has_dst_idx_v<T>: SFINAE probe. UnaryOp CRTP and Load expose dst_idx;
+// BinaryOp, TernaryOp, and CompactLoad do not.
+template <typename, typename = void>
+struct has_dst_idx : std::false_type {};
+template <typename T>
+struct has_dst_idx<T, std::void_t<decltype(T::dst_idx)>> : std::true_type {};
+template <typename T>
+inline constexpr bool has_dst_idx_v = has_dst_idx<T>::value;
+
+// dst_idx_value_v<T>: value-fetch with fallback. Needed because
+// `has_dst_idx_v<T> && (T::dst_idx == 0u)` in a constexpr expression does NOT
+// short-circuit for SFINAE purposes: the subexpression T::dst_idx is evaluated
+// even when has_dst_idx_v<T> is false, yielding a hard error for types that
+// lack dst_idx (e.g. CompactLoad). This indirection guards the member access.
+template <typename T, bool HasIdx = has_dst_idx_v<T>>
+struct dst_idx_value {
+    static constexpr uint32_t value = static_cast<uint32_t>(-1);
+};
+template <typename T>
+struct dst_idx_value<T, true> {
+    static constexpr uint32_t value = T::dst_idx;
+};
+template <typename T>
+inline constexpr uint32_t dst_idx_value_v = dst_idx_value<T>::value;
+
+// A valid binary_op post-chain element: unary compute op on Dst::D0, not a load.
+template <typename T>
+inline constexpr bool is_valid_post_op_v =
+    has_dst_idx_v<T> && (dst_idx_value_v<T> == 0u) && !is_load_op_v<T>;
+
+// Retrieve the I-th element of an SfpuChain by instance (preserves runtime fields).
+template <std::size_t I, typename First, typename... Rest>
+ALWI constexpr auto& chain_get(const SfpuChain<First, Rest...>& c) {
+    if constexpr (I == 0) {
+        return c.first;
+    } else {
+        return chain_get<I - 1>(c.rest);
+    }
+}
+
+// Strict compile-time validation for binary_op post-chains. Called from the chain
+// branch only; non-chain PostOp types never reach here.
+template <typename... Ops>
+ALWI constexpr void post_chain_validate() {
+    static_assert(
+        (is_valid_post_op_v<Ops> && ...),
+        "binary_op post-chain must contain only UnaryOp-derived ops on Dst::D0. "
+        "Forbidden: Load<>/CompactLoad<> (binary helper owns input CBs); "
+        "BinaryOp/TernaryOp (multi-slot addressing is ambiguous here); "
+        "slots other than Dst::D0 (binary helper controls DEST layout).");
+}
+
+// One-init, k-exec over DEST slots [base_dst, base_dst + chunk_size).
+template <typename... Ops, std::size_t... I>
+ALWI void apply_post_chain_batched_impl(
+    const SfpuChain<Ops...>& chain,
+    uint32_t base_dst,
+    uint32_t chunk_size,
+    std::index_sequence<I...>) {
+    auto run_one = [&](const auto& op) {
+        op.init();
+        for (uint32_t k = 0; k < chunk_size; ++k) {
+            op.exec(base_dst + k);
+        }
+    };
+    (run_one(chain_get<I>(chain)), ...);
+}
+
+template <typename... Ops>
+ALWI void apply_post_chain_batched(
+    const SfpuChain<Ops...>& chain, uint32_t base_dst, uint32_t chunk_size) {
+    post_chain_validate<Ops...>();
+    apply_post_chain_batched_impl(chain, base_dst, chunk_size, std::index_sequence_for<Ops...>{});
+}
+
+}  // namespace detail
 
 // =============================================================================
 // Unified LLK Calls - Single Init and Exec for All Broadcast Modes
@@ -280,8 +369,15 @@ ALWI void binary_op(
                 // Execute (unified LLK call)
                 binary_exec<op_type, bcast_dim>(icb_a, icb_b, tile_a, tile_b, dst_idx);
 
-                // Post-operation callback (e.g., rsqrt, recip)
-                post_op(dst_idx);
+                // Post-operation dispatch:
+                //   non-chain PostOp  -> call per tile (existing behavior, every policy)
+                //   chain + per-tile  -> once-init, 1-exec per tile (chunk_size == 1)
+                //   chain + per-chunk -> handled below the wt loop, not here
+                if constexpr (!detail::is_sfpu_chain_v<PostOp>) {
+                    post_op(dst_idx);
+                } else if constexpr (waits_per_tile(input_a_policy)) {
+                    detail::apply_post_chain_batched(post_op, dst_idx, 1u);
+                }
 
                 // Per-tile input_b pop — decoupled from input_a's policy.
                 // For NONE broadcast, pop B after each tile regardless of A's streaming mode.
@@ -314,6 +410,12 @@ ALWI void binary_op(
                     tile_regs_release();
                     tiles_processed++;
                 }
+            }
+
+            // Chunk-scoped chain post-op: once-init, chunk_size-exec over [base_dst, base_dst + chunk_size).
+            // Fires only for chain PostOp in per-chunk / bulk / upfront / caller-managed policies.
+            if constexpr (detail::is_sfpu_chain_v<PostOp> && !waits_per_tile(input_a_policy)) {
+                detail::apply_post_chain_batched(post_op, base_dst, chunk_size);
             }
 
             // Per-chunk commit/pack/pop
