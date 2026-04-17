@@ -1011,7 +1011,7 @@ class TestConfig:
 
             if self.variant_stimuli:
                 header_content.extend(
-                    self.variant_stimuli.generate_stimuli_ONLY_header_addresses()
+                    self.variant_stimuli.generate_stimuli_header_addresses()
                 )
 
         for parameter in self.templates:
