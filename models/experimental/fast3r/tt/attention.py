@@ -1,0 +1,47 @@
+"""tt-nn attention for Fast3R encoder/decoder blocks.
+
+This iteration implements self-attention WITHOUT RoPE (decoder path uses no RoPE
+anyway). RoPE for the encoder is a follow-up change so we can isolate bugs.
+
+Layout conventions:
+- activation tensor: (1, 1, N, C) in TILE_LAYOUT
+- qkv_weight stored transposed as (1, 1, C, 3C)
+- qkv_bias stored as (1, 1, 1, 3C)
+"""
+from __future__ import annotations
+
+import torch
+import ttnn
+
+from .mlp import to_device_bias, to_device_weight
+
+
+class TtAttention:
+    def __init__(
+        self,
+        device,
+        num_heads: int,
+        qkv_w: torch.Tensor,
+        qkv_b: torch.Tensor,
+        proj_w: torch.Tensor,
+        proj_b: torch.Tensor,
+    ):
+        self.num_heads = num_heads
+        self.qkv_w = to_device_weight(device, qkv_w)
+        self.qkv_b = to_device_bias(device, qkv_b)
+        self.proj_w = to_device_weight(device, proj_w)
+        self.proj_b = to_device_bias(device, proj_b)
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        qkv = ttnn.linear(x, self.qkv_w, bias=self.qkv_b)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv, num_heads=self.num_heads, transpose_k_heads=False
+        )
+        ttnn.deallocate(qkv)
+        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+        out = ttnn.experimental.nlp_concat_heads(attn)
+        ttnn.deallocate(attn)
+        return ttnn.linear(out, self.proj_w, bias=self.proj_b)

@@ -3,8 +3,9 @@
 Prints `inference_speed`, `accuracy`, `peak_dram` on stdout so the autoresearch loop
 can `grep` for them after a run.
 
-Current stage: tt-nn (LayerNorm + MLP) fragment of one encoder block.
-Subsequent iterations will add attention, stack N blocks, add patch_embed, etc.
+Current stage: tt-nn attention (no RoPE) + norm2 + MLP — i.e. one full decoder
+block (decoder has no RoPE). Subsequent iterations will add encoder RoPE,
+patch_embed, decoder_embed, and stack 24 blocks.
 """
 from __future__ import annotations
 
@@ -18,8 +19,9 @@ from safetensors import safe_open
 
 import ttnn
 
-from models.experimental.fast3r.reference.model import Fast3RConfig, Mlp
-from models.experimental.fast3r.tt.block import TtNormMlp
+from models.experimental.fast3r.reference.model import Attention, Fast3RConfig, Mlp
+from models.experimental.fast3r.tt.attention import TtAttention
+from models.experimental.fast3r.tt.block import TtLayerNorm, TtNormMlp
 
 
 WEIGHTS = os.environ.get(
@@ -37,7 +39,7 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return float(((a * b).sum() / (a.norm() * b.norm()).clamp_min(1e-12)).item())
 
 
-def _load_block_weights(block_idx: int = 0, branch: str = "encoder.enc_blocks") -> Dict[str, torch.Tensor]:
+def _load_block_weights(block_idx: int = 0, branch: str = "decoder.dec_blocks") -> Dict[str, torch.Tensor]:
     with safe_open(WEIGHTS, framework="pt") as f:
         prefix = f"{branch}.{block_idx}."
         keys = [
@@ -58,48 +60,71 @@ def _peak_dram_bytes(device) -> int:
         return 0
 
 
-def _torch_norm_mlp(cfg: Fast3RConfig, sd: Dict[str, torch.Tensor], x: torch.Tensor) -> torch.Tensor:
+def _torch_decoder_block(cfg: Fast3RConfig, sd: Dict[str, torch.Tensor], x: torch.Tensor) -> torch.Tensor:
+    """Full pre-norm transformer block with no RoPE (decoder uses no positional encoding)."""
+    norm1 = torch.nn.LayerNorm(cfg.embed_dim, eps=1e-6)
+    norm1.weight.data.copy_(sd["norm1.weight"]); norm1.bias.data.copy_(sd["norm1.bias"])
+    norm2 = torch.nn.LayerNorm(cfg.embed_dim, eps=1e-6)
+    norm2.weight.data.copy_(sd["norm2.weight"]); norm2.bias.data.copy_(sd["norm2.bias"])
+    attn = Attention(cfg).eval()
+    attn.qkv.weight.data.copy_(sd["attn.qkv.weight"]); attn.qkv.bias.data.copy_(sd["attn.qkv.bias"])
+    attn.proj.weight.data.copy_(sd["attn.proj.weight"]); attn.proj.bias.data.copy_(sd["attn.proj.bias"])
     mlp = Mlp(cfg).eval()
-    mlp.fc1.weight.data.copy_(sd["mlp.fc1.weight"])
-    mlp.fc1.bias.data.copy_(sd["mlp.fc1.bias"])
-    mlp.fc2.weight.data.copy_(sd["mlp.fc2.weight"])
-    mlp.fc2.bias.data.copy_(sd["mlp.fc2.bias"])
-    norm = torch.nn.LayerNorm(cfg.embed_dim, eps=1e-6)
-    norm.weight.data.copy_(sd["norm2.weight"])
-    norm.bias.data.copy_(sd["norm2.bias"])
+    mlp.fc1.weight.data.copy_(sd["mlp.fc1.weight"]); mlp.fc1.bias.data.copy_(sd["mlp.fc1.bias"])
+    mlp.fc2.weight.data.copy_(sd["mlp.fc2.weight"]); mlp.fc2.bias.data.copy_(sd["mlp.fc2.bias"])
     with torch.inference_mode():
-        return mlp(norm(x))
+        x = x + attn(norm1(x), cos=None, sin=None)
+        x = x + mlp(norm2(x))
+    return x
 
 
-def test_fast3r_norm_mlp_pcc_and_speed(device):
+class TtDecoderBlock:
+    """norm1 → attn → (+residual) → norm2 → mlp → (+residual). No RoPE."""
+
+    def __init__(self, device, cfg: Fast3RConfig, sd: Dict[str, torch.Tensor]):
+        self.norm1 = TtLayerNorm(device, sd["norm1.weight"], sd["norm1.bias"])
+        self.attn = TtAttention(
+            device, cfg.num_heads,
+            sd["attn.qkv.weight"], sd["attn.qkv.bias"],
+            sd["attn.proj.weight"], sd["attn.proj.bias"],
+        )
+        self.norm_mlp = TtNormMlp(
+            device,
+            sd["norm2.weight"], sd["norm2.bias"],
+            sd["mlp.fc1.weight"], sd["mlp.fc1.bias"],
+            sd["mlp.fc2.weight"], sd["mlp.fc2.bias"],
+        )
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        x = ttnn.add(x, self.attn(self.norm1(x)))
+        x = ttnn.add(x, self.norm_mlp(x))
+        return x
+
+
+def test_fast3r_decoder_block_pcc_and_speed(device):
     cfg = Fast3RConfig()
-    sd = _load_block_weights(0)
+    sd = _load_block_weights(0, branch="decoder.dec_blocks")
 
-    N = (cfg.img_size // cfg.patch_size) ** 2  # 1024
+    N = (cfg.img_size // cfg.patch_size) ** 2  # 1024 tokens per view (decoder sees N_views concatenated)
     g = torch.Generator().manual_seed(0)
     x_torch = torch.randn(1, N, cfg.embed_dim, generator=g)
 
-    y_torch = _torch_norm_mlp(cfg, sd, x_torch)
+    y_torch = _torch_decoder_block(cfg, sd, x_torch)
 
-    tt_mod = TtNormMlp(
-        device,
-        sd["norm2.weight"], sd["norm2.bias"],
-        sd["mlp.fc1.weight"], sd["mlp.fc1.bias"],
-        sd["mlp.fc2.weight"], sd["mlp.fc2.bias"],
-    )
+    block = TtDecoderBlock(device, cfg, sd)
     x_tt = ttnn.from_torch(
         x_torch.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
 
     # Warm-up (program cache + kernel JIT)
-    y_warm = tt_mod(x_tt)
+    y_warm = block(x_tt)
     ttnn.synchronize_device(device)
     y_warm.deallocate(True)
 
     iters = int(os.environ.get("FAST3R_BENCH_ITERS", "20"))
     t0 = time.perf_counter()
     for _ in range(iters):
-        y_tt = tt_mod(x_tt)
+        y_tt = block(x_tt)
     ttnn.synchronize_device(device)
     dt = (time.perf_counter() - t0) / iters
     fps = 1.0 / dt if dt > 0 else 0.0
@@ -109,7 +134,7 @@ def test_fast3r_norm_mlp_pcc_and_speed(device):
 
     acc = _pcc(y_torch, y_tt_torch) * 100.0
 
-    print(f"inference_speed: {fps:.4f} norm_mlp_fwd/sec")
+    print(f"inference_speed: {fps:.4f} dec_block_fwd/sec")
     print(f"accuracy: {acc:.2f}")
     print(f"peak_dram: {_peak_dram_bytes(device)}")
 
