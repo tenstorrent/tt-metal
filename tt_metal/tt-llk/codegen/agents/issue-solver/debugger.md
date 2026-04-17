@@ -22,7 +22,7 @@ Diagnose and fix errors in LLK code, iterating until the code compiles and/or te
 You will receive:
 - **Issue number** (e.g., 1153)
 - **Error type**: `compilation` or `runtime`
-- **Error description** from `bh-fixer` or `bh-tester`
+- **Error description** from `fixer` or `tester`
 - **File path(s)** of the affected code
 - **Fix plan** (optional): `codegen/artifacts/bh_issue_{number}_fix_plan.md`
 

@@ -177,7 +177,7 @@ Create `codegen/artifacts/bh_issue_{number}_analysis.md`:
 2. [Alternative theory]
 
 ## Cross-Architecture Comparison
-[How does Wormhole handle this? Any relevant differences?]
+[How does the reference arch ($REF_LLK_DIR) handle this? Any relevant differences?]
 
 ## Test Coverage
 - Existing tests: [list test files that cover this code]
