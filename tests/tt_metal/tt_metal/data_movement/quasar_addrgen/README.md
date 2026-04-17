@@ -4,126 +4,74 @@ Three example kernels demonstrating the hardware address generator loop hierarch
 
 ## Loop Hierarchy
 
-The hardware implements nested loops from innermost to outermost:
+```mermaid
+flowchart TD
+    F["face loop\nbase += face_size\n(infinite, no end)"]
+    O["outer loop\nouter += outer_stride\nuntil outer_end"]
+    I["inner loop\ninner += inner_stride\nuntil inner_end"]
+    Y["yield\nbase + outer + inner"]
 
+    F --> O --> I --> Y --> I
+    I -->|"inner wraps"| O
+    O -->|"outer wraps"| F
 ```
-for (base = base_start; ; base += face_size) {       // face loop (infinite)
-  for (outer = 0; outer < outer_end; outer += outer_stride) {
-    for (inner = 0; inner < inner_end; inner += inner_stride) {
-      yield  base + outer + inner
-    }
-  }
-}
-```
-
-Each call to `pop` advances to the next address in the sequence.
 
 ---
 
 ## 1D Strided — `addrgen_1d_example.cpp`
 
-Only the inner loop is active. Addresses increment linearly from the base.
+Only the **inner loop** is active. Addresses step linearly from base.
 
-**Src config:** base=`0x10000`, stride=2048, n=10
-**Dst config:** base=`0x20000`, stride=2048, n=10
+**Src:** `base=0x10000`, stride=2048 &nbsp;|&nbsp; **Dst:** `base=0x20000`, stride=2048
 
-```mermaid
-flowchart LR
-    s0("0x10000") --> s1("0x10800") --> s2("0x11000") --> s3("0x11800") --> s4("0x12000")
-    s4 --> s5("0x12800") --> s6("0x13000") --> s7("0x13800") --> s8("0x14000") --> s9("0x14800")
-```
+| step | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+|------|---|---|---|---|---|---|---|---|---|---|
+| **src** | `0x10000` | `0x10800` | `0x11000` | `0x11800` | `0x12000` | `0x12800` | `0x13000` | `0x13800` | `0x14000` | `0x14800` |
+| **dst** | `0x20000` | `0x20800` | `0x21000` | `0x21800` | `0x22000` | `0x22800` | `0x23000` | `0x23800` | `0x24000` | `0x24800` |
 
 ---
 
 ## 2D Strided — `addrgen_2d_example.cpp`
 
-Inner loop iterates over columns, outer loop iterates over rows.
-Traverses a 4×4 matrix row by row.
+**Inner loop** = columns (stride 128B), **outer loop** = rows (stride 1024B).
+Numbers show traversal order.
 
-**Src config:** base=`0x30000`, inner stride=128 (4 cols), outer stride=1024 (4 rows)
-**Dst config:** base=`0x40000`, same strides
+**Src:** `base=0x30000` &nbsp;|&nbsp; **Dst:** `base=0x40000`
 
-```mermaid
-flowchart TD
-    subgraph r0["outer = 0x000 (row 0)"]
-        direction LR
-        a0("0x30000") --> a1("0x30080") --> a2("0x30100") --> a3("0x30180")
-    end
-    subgraph r1["outer = 0x400 (row 1)"]
-        direction LR
-        b0("0x30400") --> b1("0x30480") --> b2("0x30500") --> b3("0x30580")
-    end
-    subgraph r2["outer = 0x800 (row 2)"]
-        direction LR
-        c0("0x30800") --> c1("0x30880") --> c2("0x30900") --> c3("0x30980")
-    end
-    subgraph r3["outer = 0xC00 (row 3)"]
-        direction LR
-        d0("0x30C00") --> d1("0x30C80") --> d2("0x30D00") --> d3("0x30D80")
-    end
-    a3 --> b0
-    b3 --> c0
-    c3 --> d0
-```
+| | col 0 | col 1 | col 2 | col 3 |
+|---|---|---|---|---|
+| **row 0** | `0x30000` ①  | `0x30080` ②  | `0x30100` ③  | `0x30180` ④  |
+| **row 1** | `0x30400` ⑤  | `0x30480` ⑥  | `0x30500` ⑦  | `0x30580` ⑧  |
+| **row 2** | `0x30800` ⑨  | `0x30880` ⑩  | `0x30900` ⑪  | `0x30980` ⑫  |
+| **row 3** | `0x30C00` ⑬  | `0x30C80` ⑭  | `0x30D00` ⑮  | `0x30D80` ⑯  |
 
 ---
 
 ## Face Loop — `addrgen_face_example.cpp`
 
-Adds a face dimension on top of 2D. After completing one full outer×inner tile,
-`base` advances by `face_size` to the next tile.
+After completing one full 4×4 tile, **base advances by face_size** (0x1000) to the next tile.
 
-**Src config:** base=`0x10000`, face_size=4096, inner=128×4, outer=1024×4, 2 faces
-**Dst config:** base=`0x20000`, same strides
+**Src:** `base=0x10000`, face_size=0x1000 &nbsp;|&nbsp; **Dst:** `base=0x20000`, face_size=0x1000
 
-```mermaid
-flowchart TD
-    subgraph face0["Face 0 — base = 0x10000"]
-        subgraph f0r0["row 0"]
-            direction LR
-            f0a0("0x10000") --> f0a1("0x10080") --> f0a2("0x10100") --> f0a3("0x10180")
-        end
-        subgraph f0r1["row 1"]
-            direction LR
-            f0b0("0x10400") --> f0b1("0x10480") --> f0b2("0x10500") --> f0b3("0x10580")
-        end
-        subgraph f0r2["row 2"]
-            direction LR
-            f0c0("0x10800") --> f0c1("0x10880") --> f0c2("0x10900") --> f0c3("0x10980")
-        end
-        subgraph f0r3["row 3"]
-            direction LR
-            f0d0("0x10C00") --> f0d1("0x10C80") --> f0d2("0x10D00") --> f0d3("0x10D80")
-        end
-        f0a3 --> f0b0
-        f0b3 --> f0c0
-        f0c3 --> f0d0
-    end
+**Face 0** (base = `0x10000`):
 
-    subgraph face1["Face 1 — base = 0x11000  (base += face_size 0x1000)"]
-        subgraph f1r0["row 0"]
-            direction LR
-            f1a0("0x11000") --> f1a1("0x11080") --> f1a2("0x11100") --> f1a3("0x11180")
-        end
-        subgraph f1r1["row 1"]
-            direction LR
-            f1b0("0x11400") --> f1b1("0x11480") --> f1b2("0x11500") --> f1b3("0x11580")
-        end
-        subgraph f1r2["row 2"]
-            direction LR
-            f1c0("0x11800") --> f1c1("0x11880") --> f1c2("0x11900") --> f1c3("0x11980")
-        end
-        subgraph f1r3["row 3"]
-            direction LR
-            f1d0("0x11C00") --> f1d1("0x11C80") --> f1d2("0x11D00") --> f1d3("0x11D80")
-        end
-        f1a3 --> f1b0
-        f1b3 --> f1c0
-        f1c3 --> f1d0
-    end
+| | col 0 | col 1 | col 2 | col 3 |
+|---|---|---|---|---|
+| **row 0** | `0x10000` ①  | `0x10080` ②  | `0x10100` ③  | `0x10180` ④  |
+| **row 1** | `0x10400` ⑤  | `0x10480` ⑥  | `0x10500` ⑦  | `0x10580` ⑧  |
+| **row 2** | `0x10800` ⑨  | `0x10880` ⑩  | `0x10900` ⑪  | `0x10980` ⑫  |
+| **row 3** | `0x10C00` ⑬  | `0x10C80` ⑭  | `0x10D00` ⑮  | `0x10D80` ⑯  |
 
-    f0d3 -->|"base += 0x1000"| f1a0
-```
+↓ `base += face_size (0x1000)`
+
+**Face 1** (base = `0x11000`):
+
+| | col 0 | col 1 | col 2 | col 3 |
+|---|---|---|---|---|
+| **row 0** | `0x11000` ⑰  | `0x11080` ⑱  | `0x11100` ⑲  | `0x11180` ⑳  |
+| **row 1** | `0x11400` ㉑  | `0x11480` ㉒  | `0x11500` ㉓  | `0x11580` ㉔  |
+| **row 2** | `0x11800` ㉕  | `0x11880` ㉖  | `0x11900` ㉗  | `0x11980` ㉘  |
+| **row 3** | `0x11C00` ㉙  | `0x11C80` ㉚  | `0x11D00` ㉛  | `0x11D80` ㉜  |
 
 ---
 
@@ -131,12 +79,12 @@ flowchart TD
 
 | Test | Kernel | `src_stride_en` | `dst_stride_en` | `num_of_addresses` |
 |------|--------|:-:|:-:|:-:|
-| `Strided1D_SrcOnly` | `addrgen_1d_example.cpp` | 1 | 0 | 10 |
-| `Strided1D_DstOnly` | `addrgen_1d_example.cpp` | 0 | 1 | 10 |
-| `Strided1D_Both`    | `addrgen_1d_example.cpp` | 1 | 1 | 10 |
-| `Strided2D_SrcOnly` | `addrgen_2d_example.cpp` | 1 | 0 | 16 |
-| `Strided2D_DstOnly` | `addrgen_2d_example.cpp` | 0 | 1 | 16 |
-| `Strided2D_Both`    | `addrgen_2d_example.cpp` | 1 | 1 | 16 |
+| `Strided1D_SrcOnly` | `addrgen_1d_example.cpp`   | 1 | 0 | 10 |
+| `Strided1D_DstOnly` | `addrgen_1d_example.cpp`   | 0 | 1 | 10 |
+| `Strided1D_Both`    | `addrgen_1d_example.cpp`   | 1 | 1 | 10 |
+| `Strided2D_SrcOnly` | `addrgen_2d_example.cpp`   | 1 | 0 | 16 |
+| `Strided2D_DstOnly` | `addrgen_2d_example.cpp`   | 0 | 1 | 16 |
+| `Strided2D_Both`    | `addrgen_2d_example.cpp`   | 1 | 1 | 16 |
 | `Face_SrcOnly`      | `addrgen_face_example.cpp` | 1 | 0 | 32 |
 | `Face_DstOnly`      | `addrgen_face_example.cpp` | 0 | 1 | 32 |
 | `Face_Both`         | `addrgen_face_example.cpp` | 1 | 1 | 32 |
