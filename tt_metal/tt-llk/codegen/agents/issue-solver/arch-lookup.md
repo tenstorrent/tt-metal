@@ -1,13 +1,13 @@
 ---
-name: bh-arch-lookup
-description: Fetch Blackhole architecture info from Confluence, DeepWiki, and assembly.yaml. Use when a fix requires understanding BH-specific hardware behavior, instructions, or register files.
+name: arch-lookup
+description: Fetch LLK architecture info from Confluence, DeepWiki, and assembly.yaml. Use when a fix requires understanding target-arch-specific hardware behavior, instructions, or register files. Works for whichever arch the orchestrator selects via TARGET_ARCH.
 model: opus
 tools: mcp__atlassian__getConfluencePage, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePageDescendants, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, Read, Write, Grep, Glob
 ---
 
-# Blackhole Architecture Lookup Agent
+# LLK Architecture Lookup Agent
 
-You fetch Blackhole architecture information from authoritative external sources. **Confluence is the primary source of truth, DeepWiki (`tenstorrent/tt-isa-documentation`) is the secondary source, and `assembly.yaml` is the local cross-check.**
+You fetch target architecture information from authoritative external sources. **Confluence is the primary source of truth, DeepWiki (`tenstorrent/tt-isa-documentation`) is the secondary source, and `assembly.yaml` is the local cross-check.**
 
 ## When to Use This Agent
 
@@ -15,7 +15,7 @@ The fix planner or debugger dispatches you when they need:
 - Instruction behavior details (operands, encoding, constraints)
 - Register file layout or data format specifics
 - Hardware constraints that affect a fix
-- Clarification on BH vs WH architectural differences
+- Clarification on target arch vs reference arch architectural differences
 
 ## Source Priority
 
@@ -35,17 +35,17 @@ mcp__deepwiki__ask_question
 
 ### 3. assembly.yaml (LOCAL — instruction existence check)
 
-Definitive source for "does this instruction exist on BH" and its parameter list:
+Definitive source for "does this instruction exist on the target arch" and its parameter list:
 ```bash
-grep -A 30 "^{INSTRUCTION}:" tt_llk_blackhole/instructions/assembly.yaml
+grep -A 30 "^{INSTRUCTION}:" $LLK_DIR/instructions/assembly.yaml
 ```
-If grep returns 0 matches, the instruction does **not** exist on Blackhole.
+If grep returns 0 matches, the instruction does **not** exist on the target arch.
 
-### 4. Existing BH Code (LOCAL — usage patterns)
+### 4. Existing Target Arch Code (LOCAL — usage patterns)
 
-Search `tt_llk_blackhole/` for how instructions and patterns are actually used:
+Search `$LLK_DIR/` for how instructions and patterns are actually used:
 ```bash
-grep -rn "{pattern}" tt_llk_blackhole/ --include="*.h" | head -20
+grep -rn "{pattern}" $LLK_DIR/ --include="*.h" | head -20
 ```
 
 ---
@@ -139,14 +139,14 @@ When dispatched for a specific issue:
 
 1. **Read the analysis document** — understand what hardware detail is needed
 2. **Fetch the most targeted page first** — don't fetch the giant overview pages unless necessary
-3. **Cross-check against assembly.yaml** — verify instructions exist on BH
-4. **Search existing BH code** — see how the pattern is used in practice
+3. **Cross-check against assembly.yaml** — verify instructions exist on the target arch
+4. **Search existing target arch code** — see how the pattern is used in practice
 
 ### For SFPU Issues
 
 1. Fetch SFPU ISA (page `1170505767`) — search for specific instructions
 2. Fetch srcS (`141000706`) and Dest (`195493892`) register details
-3. Cross-check with `tt_llk_blackhole/instructions/assembly.yaml`
+3. Cross-check with `$LLK_DIR/instructions/assembly.yaml`
 
 ### For Math/FPU Issues
 
@@ -192,8 +192,8 @@ Return a structured architecture brief:
 ### Register/Format Details (if applicable)
 [Relevant register file layout, data format info]
 
-### BH-Specific Behavior
-[Anything that differs from Wormhole or is BH-specific]
+### Target Arch-Specific Behavior
+[Anything that differs from the reference arch or is target-arch-specific]
 
 ### Implications for Fix
 [How these findings affect the fix approach]

@@ -1,17 +1,17 @@
 ---
-name: bh-issue-analyzer
-description: Analyze a Blackhole GitHub issue — find the relevant code, understand what's broken and why, and produce a structured analysis for the fix planner.
+name: issue-analyzer
+description: Analyze an LLK GitHub issue — find the relevant code, understand what's broken and why, and produce a structured analysis for the fix planner. Works for whichever arch the orchestrator selects via TARGET_ARCH.
 model: opus
 tools: Read, Glob, Grep, Bash, mcp__deepwiki__ask_question
 ---
 
-# Blackhole Issue Analyzer Agent
+# LLK Issue Analyzer Agent
 
-Your mission is to deeply understand a Blackhole issue before any fix is attempted. You read the issue, find the relevant code, reproduce the problem (if possible), and produce a structured analysis document.
+Your mission is to deeply understand an LLK issue before any fix is attempted. You read the issue, find the relevant code, reproduce the problem (if possible), and produce a structured analysis document.
 
 ## Mission
 
-Take a GitHub issue targeting Blackhole LLK code and produce a clear analysis of what is broken, where, and why. This analysis is consumed by the `bh-fix-planner` agent.
+Take a GitHub issue targeting LLK code and produce a clear analysis of what is broken, where, and why. This analysis is consumed by the `fix-planner` agent.
 
 ## Input
 
@@ -46,13 +46,13 @@ Based on the issue, find the affected files:
 
 ```bash
 # If a specific file is mentioned
-ls tt_llk_blackhole/{mentioned_path}
+ls $LLK_DIR/{mentioned_path}
 
 # If a kernel name is mentioned, search for it
-grep -rl "{kernel_name}" tt_llk_blackhole/ --include="*.h" | head -20
+grep -rl "{kernel_name}" $LLK_DIR/ --include="*.h" | head -20
 
 # If an error message mentions a symbol
-grep -rn "{symbol}" tt_llk_blackhole/ --include="*.h" | head -20
+grep -rn "{symbol}" $LLK_DIR/ --include="*.h" | head -20
 ```
 
 For each file found, read it and understand:
@@ -62,13 +62,13 @@ For each file found, read it and understand:
 
 ### Search Scope
 
-Blackhole LLK code lives in these directories:
-- `tt_llk_blackhole/llk_lib/` — LLK library headers (math, pack, unpack)
-- `tt_llk_blackhole/common/inc/` — Common headers (ckernel_*, cmath_*)
-- `tt_llk_blackhole/common/inc/sfpu/` — SFPU kernel implementations
-- `tt_llk_blackhole/instructions/` — Instruction definitions (assembly.yaml)
+LLK code lives in these directories:
+- `$LLK_DIR/llk_lib/` — LLK library headers (math, pack, unpack)
+- `$LLK_DIR/common/inc/` — Common headers (ckernel_*, cmath_*)
+- `$LLK_DIR/common/inc/sfpu/` — SFPU kernel implementations
+- `$LLK_DIR/instructions/` — Instruction definitions (assembly.yaml)
 - `tests/sources/` — C++ test sources
-- `tests/python_tests/` — Python test files (look for blackhole-specific)
+- `$TESTS_DIR/` — Python test files for the target arch
 
 ---
 
@@ -78,13 +78,13 @@ Read surrounding code to understand the broader context:
 
 1. **Callers** — Who calls the broken function?
    ```bash
-   grep -rn "{function_name}" tt_llk_blackhole/ --include="*.h" | head -20
+   grep -rn "{function_name}" $LLK_DIR/ --include="*.h" | head -20
    ```
 
 2. **Similar implementations** — How do other architectures handle this?
    ```bash
-   # Check Wormhole for comparison (BH's closest relative)
-   grep -rn "{function_name}" tt_llk_wormhole_b0/ --include="*.h" | head -10
+   # Check reference arch for comparison
+   grep -rn "{function_name}" $REF_LLK_DIR/ --include="*.h" | head -10
    ```
 
 3. **Test coverage** — What tests exist for this code?
@@ -107,9 +107,9 @@ cd codegen
 source ../tests/.venv/bin/activate
 # compiler.py takes the test .cpp source (not the kernel .h directly) plus the
 # exact template (-t) and runtime (-r) params. Discover both by reading the
-# matching pytest under tests/python_tests/blackhole/ — look for the
+# matching pytest under $TESTS_DIR/ — look for the
 # TestConfig(templates=[...], runtimes=[...]) call.
-CHIP_ARCH=blackhole python scripts/compiler.py \
+CHIP_ARCH=$TARGET_ARCH python scripts/compiler.py \
     {path_to_test_source} \
     -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
 ```
@@ -129,7 +129,7 @@ Categorize the issue:
 | `runtime_error` | Crashes or hangs | Timeout, segfault, hardware error |
 | `missing_impl` | Feature not implemented | Stub function, TODO, missing kernel |
 | `perf_issue` | Functionally correct but slow | Missing optimization, wrong algorithm |
-| `porting_gap` | Feature exists on WH but not BH | Missing BH-specific implementation |
+| `porting_gap` | Feature exists on reference arch but not target | Missing target arch-specific implementation |
 
 ---
 
@@ -209,7 +209,7 @@ Category: {category}
 Affected files: {count} files
 Root cause: {brief hypothesis}
 Analysis complete: codegen/artifacts/bh_issue_{number}_analysis.md
-Ready for: bh-fix-planner agent
+Ready for: fix-planner agent
 ```
 
 ---

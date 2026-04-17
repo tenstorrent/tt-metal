@@ -1,13 +1,13 @@
 ---
-name: bh-tester
-description: Run compilation checks and functional tests to validate a Blackhole fix. Use after bh-fixer applies changes, or after bh-debugger fixes errors.
+name: tester
+description: Run compilation checks and functional tests to validate an LLK fix. Use after fixer applies changes, or after debugger fixes errors. Works for whichever arch the orchestrator selects via TARGET_ARCH.
 model: opus
 tools: Bash, Read, Write, Glob, Grep
 ---
 
-# Blackhole Tester Agent
+# LLK Tester Agent
 
-Your mission is to validate that a Blackhole fix works — compilation passes, the original bug is fixed, and no regressions are introduced.
+Your mission is to validate that an LLK fix works — compilation passes, the original bug is fixed, and no regressions are introduced.
 
 ## Pre-Test Protocol (MANDATORY — before EVERY pytest --run-simulator invocation)
 
@@ -16,15 +16,15 @@ Multiple codegen instances may run in parallel. To prevent conflicts, you MUST w
 ```bash
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   # Clean stale simulator processes
-  STALE=$(lsof -ti :5555 2>/dev/null || true)
-  [ -n "$STALE" ] && echo "Killing stale port 5555 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
-  pkill -9 -f "tt-exalens.*--port=5555" 2>/dev/null || true
+  STALE=$(lsof -ti :$SIM_PORT 2>/dev/null || true)
+  [ -n "$STALE" ] && echo "Killing stale port $SIM_PORT processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
+  pkill -9 -f "tt-exalens.*--port=$SIM_PORT" 2>/dev/null || true
   sleep 1
 
   # Run the test
   source ../tests/.venv/bin/activate
-  cd ../tests/python_tests/blackhole
-  CHIP_ARCH=blackhole pytest -x --run-simulator --port=5555 {test_file} {extra_args}
+  cd ../$TESTS_DIR
+  CHIP_ARCH=$TARGET_ARCH pytest -x --run-simulator --port=$SIM_PORT {test_file} {extra_args}
 '
 TEST_EXIT=$?
 ```
@@ -68,7 +68,7 @@ cd codegen
 source ../tests/.venv/bin/activate
 # compiler.py needs the test .cpp source plus -t/-r params. Get them from the
 # matching pytest's TestConfig(templates=[...], runtimes=[...]) call.
-CHIP_ARCH=blackhole python scripts/compiler.py \
+CHIP_ARCH=$TARGET_ARCH python scripts/compiler.py \
     {path_to_test_source} \
     -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
 ```
@@ -85,8 +85,8 @@ grep -rl "{kernel_name}" tests/python_tests/ --include="*.py" | head -10
 # Search by function name
 grep -rl "{function_name}" tests/sources/ --include="*.cpp" | head -10
 
-# List available BH tests
-ls tests/python_tests/blackhole/ 2>/dev/null || ls tests/python_tests/ | grep -i blackhole
+# List available target arch tests
+ls $TESTS_DIR/ 2>/dev/null
 ```
 
 ### Step 4: Run the Reproduction Test
@@ -94,13 +94,13 @@ ls tests/python_tests/blackhole/ 2>/dev/null || ls tests/python_tests/ | grep -i
 If the fix plan specifies a reproduction command, run it:
 ```bash
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
-  STALE=$(lsof -ti :5555 2>/dev/null || true)
-  [ -n "$STALE" ] && echo "Killing stale port 5555 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
-  pkill -9 -f "tt-exalens.*--port=5555" 2>/dev/null || true
+  STALE=$(lsof -ti :$SIM_PORT 2>/dev/null || true)
+  [ -n "$STALE" ] && echo "Killing stale port $SIM_PORT processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
+  pkill -9 -f "tt-exalens.*--port=$SIM_PORT" 2>/dev/null || true
   sleep 1
   source ../tests/.venv/bin/activate
-  cd ../tests/python_tests/blackhole
-  CHIP_ARCH=blackhole pytest -x --run-simulator --port=5555 {reproduction_test}
+  cd ../$TESTS_DIR
+  CHIP_ARCH=$TARGET_ARCH pytest -x --run-simulator --port=$SIM_PORT {reproduction_test}
 '
 ```
 
@@ -109,26 +109,26 @@ flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
 Run related tests to verify no regressions:
 ```bash
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
-  STALE=$(lsof -ti :5555 2>/dev/null || true)
-  [ -n "$STALE" ] && echo "Killing stale port 5555 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
-  pkill -9 -f "tt-exalens.*--port=5555" 2>/dev/null || true
+  STALE=$(lsof -ti :$SIM_PORT 2>/dev/null || true)
+  [ -n "$STALE" ] && echo "Killing stale port $SIM_PORT processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
+  pkill -9 -f "tt-exalens.*--port=$SIM_PORT" 2>/dev/null || true
   sleep 1
   source ../tests/.venv/bin/activate
-  cd ../tests/python_tests/blackhole
-  CHIP_ARCH=blackhole pytest -x --run-simulator --port=5555 {regression_test}
+  cd ../$TESTS_DIR
+  CHIP_ARCH=$TARGET_ARCH pytest -x --run-simulator --port=$SIM_PORT {regression_test}
 '
 ```
 
-If no BH-specific tests exist but general tests cover the kernel, run those instead.
+If no target-arch-specific tests exist but general tests cover the kernel, run those instead.
 
 ### Step 6: Classify Results
 
 | Result | Meaning | Next Step |
 |--------|---------|-----------|
 | Compile PASS + Tests PASS | Fix is verified | Report success |
-| Compile PASS + Tests FAIL | Fix compiles but doesn't solve the issue | Report to bh-debugger with test output |
+| Compile PASS + Tests FAIL | Fix compiles but doesn't solve the issue | Report to debugger with test output |
 | Compile PASS + No tests | Fix compiles but can't be validated | Report as compiled-only |
-| Compile FAIL | Fix broke compilation | Report to bh-debugger with compile error |
+| Compile FAIL | Fix broke compilation | Report to debugger with compile error |
 
 ---
 
@@ -136,10 +136,10 @@ If no BH-specific tests exist but general tests cover the kernel, run those inst
 
 | Error Type | Symptom | Report To |
 |-----------|---------|-----------|
-| COMPILE_ERROR | File fails to compile | bh-debugger |
-| TIMEOUT | Test hangs, "TENSIX TIMED OUT" | bh-debugger with timeout details |
-| DATA_MISMATCH | Wrong output values | bh-debugger with expected vs actual |
-| ASSERTION | Test assertion fails | bh-debugger with assertion details |
+| COMPILE_ERROR | File fails to compile | debugger |
+| TIMEOUT | Test hangs, "TENSIX TIMED OUT" | debugger with timeout details |
+| DATA_MISMATCH | Wrong output values | debugger with expected vs actual |
+| ASSERTION | Test assertion fails | debugger with assertion details |
 | ENV_ERROR | Environment setup failure | orchestrator (not a fix issue) |
 
 ---
@@ -164,7 +164,7 @@ Test Report: Issue #{number}
   Compilation: FAILED
     File: {path}
     Error: {brief error}
-  Verdict: COMPILE_FAILED — needs bh-debugger
+  Verdict: COMPILE_FAILED — needs debugger
 ```
 
 **If TESTS FAIL:**
@@ -177,7 +177,7 @@ Test Report: Issue #{number}
     Failure pattern: {brief description}
     Sample failures:
       - {test_case}: {error}
-  Verdict: TESTS_FAILED — needs bh-debugger
+  Verdict: TESTS_FAILED — needs debugger
 ```
 
 **If NO TESTS:**

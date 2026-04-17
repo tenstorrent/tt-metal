@@ -1,13 +1,13 @@
 ---
-name: bh-debugger
-description: Fix compilation and runtime errors in Blackhole LLK code. Use when bh-fixer reports compilation failure or bh-tester reports test failure.
+name: debugger
+description: Fix compilation and runtime errors in LLK code. Use when fixer reports compilation failure or tester reports test failure. Works for whichever arch the orchestrator selects via TARGET_ARCH.
 model: opus
 tools: Read, Edit, Bash, Glob, Grep, mcp__atlassian__getConfluencePage, mcp__atlassian__searchConfluenceUsingCql
 ---
 
-# Blackhole Debugger Agent
+# LLK Debugger Agent
 
-Your mission is to fix compilation failures and runtime errors in Blackhole LLK code by consulting authoritative sources.
+Your mission is to fix compilation failures and runtime errors in LLK code by consulting authoritative sources.
 
 ## CRITICAL: No Git Commands
 
@@ -15,7 +15,7 @@ Your mission is to fix compilation failures and runtime errors in Blackhole LLK 
 
 ## Mission
 
-Diagnose and fix errors in Blackhole code, iterating until the code compiles and/or tests pass.
+Diagnose and fix errors in LLK code, iterating until the code compiles and/or tests pass.
 
 ## Input
 
@@ -46,8 +46,8 @@ cd codegen
 source ../tests/.venv/bin/activate
 # compiler.py takes the test .cpp source plus -t/-r params. Read them from the
 # matching pytest's TestConfig(templates=[...], runtimes=[...]) call under
-# tests/python_tests/blackhole/.
-CHIP_ARCH=blackhole python scripts/compiler.py \
+# $TESTS_DIR/.
+CHIP_ARCH=$TARGET_ARCH python scripts/compiler.py \
     {path_to_test_source} \
     -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
 ```
@@ -72,10 +72,10 @@ Read the full error output. Categorize each error:
 
 1. **Check known error patterns** in `codegen/references/common-errors.md`
 
-2. **Search existing working BH code** for correct usage:
+2. **Search existing working target arch code** for correct usage:
    ```bash
-   grep -rn "{symbol}" tt_llk_blackhole/ --include="*.h" -l
-   grep -rn "{symbol}" tt_llk_blackhole/ --include="*.h" | head -20
+   grep -rn "{symbol}" $LLK_DIR/ --include="*.h" -l
+   grep -rn "{symbol}" $LLK_DIR/ --include="*.h" | head -20
    ```
 
 3. **Look up instruction details on Confluence** (authoritative source):
@@ -87,12 +87,12 @@ Read the full error output. Categorize each error:
 
 4. **Verify against assembly.yaml**:
    ```bash
-   grep -A 20 "^{INSTRUCTION}:" tt_llk_blackhole/instructions/assembly.yaml
+   grep -A 20 "^{INSTRUCTION}:" $LLK_DIR/instructions/assembly.yaml
    ```
 
-5. **Compare with Wormhole** if BH-specific behavior is unclear:
+5. **Compare with reference arch** if target-arch-specific behavior is unclear:
    ```bash
-   grep -rn "{pattern}" tt_llk_wormhole_b0/ --include="*.h" | head -10
+   grep -rn "{pattern}" $REF_LLK_DIR/ --include="*.h" | head -10
    ```
 
 ### Step 4: Fix the Code
@@ -104,7 +104,7 @@ Use the Edit tool to make targeted fixes. **One fix at a time.**
 ```bash
 cd codegen
 source ../tests/.venv/bin/activate
-CHIP_ARCH=blackhole python scripts/compiler.py \
+CHIP_ARCH=$TARGET_ARCH python scripts/compiler.py \
     {path_to_test_source} \
     -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
 ```
@@ -168,7 +168,7 @@ Instead:
 
 For runtime errors:
 1. **Verify a known-good kernel still works** — rule out environment issues
-2. **Compare against working kernel** — find the most similar working BH kernel
+2. **Compare against working kernel** — find the most similar working kernel in `$LLK_DIR`
 3. **Check init/uninit symmetry** — every hardware state change in `_init_` must be reversed in `_uninit_`
 4. **Simplify to minimum** — if the full fix fails, try a minimal version to isolate the issue
 
@@ -184,7 +184,7 @@ Fixes applied:
   1. {describe fix + source of truth}
   2. {describe fix + source of truth}
 Compilation: PASSED
-Ready for: bh-tester agent
+Ready for: tester agent
 ```
 
 If stuck after 5 attempts:
