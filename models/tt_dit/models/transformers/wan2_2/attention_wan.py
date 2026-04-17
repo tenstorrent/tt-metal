@@ -232,6 +232,7 @@ class WanAttention(Module):
         addcmul_gate: ttnn.Tensor,
         compute_kernel_config=None,
         parallel_config=None,
+        dtype=None,
     ) -> ttnn.Tensor:
         """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
         to_out = self.to_out
@@ -276,6 +277,7 @@ class WanAttention(Module):
                 scalar=1.0,
                 addcmul_input_tensor1=addcmul_residual,
                 addcmul_input_tensor2=addcmul_gate,
+                dtype=dtype,
             )[0]
         else:
             M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
@@ -291,6 +293,7 @@ class WanAttention(Module):
                 bias_tensor=to_out.bias.data if to_out.bias is not None else None,
                 config=matmul_config,
                 compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                dtype=dtype,
             )
         return output
 
