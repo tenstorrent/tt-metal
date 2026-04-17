@@ -158,8 +158,15 @@ class _TtDeltaWeightHeads:
         pre_w = ttnn.slice(pre, [0, 0, 0, 128], [1, 1, n_last, 256])
         delta_raw, dh, dw = self.delta_tail(pre_d, device, batch_size, ph, pw)
         weight_raw, wh, ww = self.weight_tail(pre_w, device, batch_size, ph, pw)
-        weight = ttnn.sigmoid(weight_raw)
-        return delta_raw, dh, dw, weight, wh, ww
+        # Slice both heads to the two consumed output channels on device
+        # so CPU only sees 2-channel data after download.
+        dn = delta_raw.shape[-2]
+        delta = ttnn.slice(delta_raw, [0, 0, 0, 0], [1, 1, dn, 2])
+        wn = weight_raw.shape[-2]
+        weight = ttnn.sigmoid(
+            ttnn.slice(weight_raw, [0, 0, 0, 0], [1, 1, wn, 2])
+        )
+        return delta, dh, dw, weight, wh, ww
 
 
 class TtUpdateModule:

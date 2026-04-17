@@ -123,17 +123,18 @@ class TtDroidNet:
             net_tt, inp_tt, corr_tt, flow_tt, batch_size=bn, h=h, w=w
         )
 
-        # delta/weight tails emit 3 channels; the benchmark uses [..., :2].
+        # delta/weight tails already sliced to 2 channels on device.
+        # Download in NHWC (which is what the benchmark's permute produces).
         net_o = _unpack_tile_nhwc_to_nchw(net_o_tt, bn, h, w, 128).view(b, n_edges, 128, h, w)
-        delta = _unpack_tile_nhwc_to_nchw(delta_tt, bn, h, w, 3).view(b, n_edges, 3, h, w)
-        weight = _unpack_tile_nhwc_to_nchw(weight_tt, bn, h, w, 3).view(b, n_edges, 3, h, w)
-        eta = _unpack_tile_nhwc_to_nchw(eta_tt, bn, h, w, 1).view(b, n_edges, h, w)
+        delta_nhwc = ttnn.to_torch(delta_tt).float().reshape(bn, h, w, 2)
+        delta = delta_nhwc.view(b, n_edges, h, w, 2)
+        weight_nhwc = ttnn.to_torch(weight_tt).float().reshape(bn, h, w, 2)
+        weight = weight_nhwc.view(b, n_edges, h, w, 2)
+        # Fold the 0.01 scale into eta on device (reference does
+        # `return 0.01 * eta, upmask`).
+        eta_scaled = ttnn.multiply(eta_tt, 0.01)
+        eta = _unpack_tile_nhwc_to_nchw(eta_scaled, bn, h, w, 1).view(b, n_edges, h, w)
         upmask = _unpack_tile_nhwc_to_nchw(upmask_tt, bn, h, w, 8 * 8 * 9).view(
             b, n_edges, 8 * 8 * 9, h, w
         )
-        # match ref .permute(0,1,3,4,2)[..., :2].contiguous() on delta/weight
-        delta = delta.permute(0, 1, 3, 4, 2)[..., :2].contiguous()
-        weight = weight.permute(0, 1, 3, 4, 2)[..., :2].contiguous()
-        # eta is *0.01 in the reference — fold that constant in here to match.
-        eta = 0.01 * eta
         return net_o, delta, weight, eta, upmask
