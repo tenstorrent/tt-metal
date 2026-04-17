@@ -101,38 +101,39 @@ class PixelShuffleConnectorTTNN:
             self.proj3_weight = preprocess_linear_weight(w3, device)
             self.proj3_bias = preprocess_linear_bias(b3, device) if b3 is not None else None
 
-    def pixel_shuffle_downsample(self, vision_features: torch.Tensor, h: int, w: int) -> torch.Tensor:
+    def pixel_shuffle_downsample_tt(self, vision_features_tt: "ttnn.Tensor", h: int, w: int) -> "ttnn.Tensor":
         """
-        Pixel shuffle on CPU: [B, h*w, dim] -> [B, h/2 * w/2, 4*dim]
+        On-device pixel shuffle: [B, h*w, dim] -> [B, h/2 * w/2, 4*dim].
 
-        This is done on CPU since it's a reshape operation before the MLP.
+        6D reshape+permute requires ROW_MAJOR layout; we bracket the pixel-shuffle in
+        layout conversions so the surrounding ops stay in TILE.
         """
-        batch_size, seq_len, dim = vision_features.shape
-        # Reshape to spatial: [B, h, w, dim]
-        x = vision_features.reshape(batch_size, h, w, dim)
-        # Downsample 2x2: [B, h/2, 2, w/2, 2, dim] -> [B, h/2, w/2, 4*dim]
-        x = x.reshape(batch_size, h // 2, 2, w // 2, 2, dim)
-        x = x.permute(0, 1, 3, 2, 4, 5).contiguous()
-        x = x.reshape(batch_size, h // 2 * w // 2, 4 * dim)
-        return x
+        batch_size, seq_len, dim = vision_features_tt.shape
+        rm = ttnn.to_layout(vision_features_tt, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(vision_features_tt)
+        x = ttnn.reshape(rm, (batch_size, h // 2, 2, w // 2, 2, dim))
+        ttnn.deallocate(rm)
+        x = ttnn.permute(x, (0, 1, 3, 2, 4, 5))
+        x = ttnn.reshape(x, (batch_size, (h // 2) * (w // 2), 4 * dim))
+        out = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(x)
+        return out
 
-    def __call__(self, vision_features: torch.Tensor, h: int, w: int) -> ttnn.Tensor:
+    def __call__(self, vision_features, h: int, w: int) -> ttnn.Tensor:
         """
-        Pixel shuffle + MLP projection.
+        On-device pixel shuffle + MLP projection. Accepts either a CPU torch.Tensor
+        (uploaded first) or an on-device ttnn.Tensor (preferred — no round trip).
 
         Args:
-            vision_features: [batch, num_patches, vision_dim] on CPU
+            vision_features: [batch, num_patches, vision_dim]
             h, w: spatial dimensions of patches (e.g., 16x16 for 256 patches)
 
         Returns:
             [batch, num_patches/4, language_dim] on device
         """
-        # Pixel shuffle on CPU
-        shuffled = self.pixel_shuffle_downsample(vision_features, h, w)
-        # [batch, num_patches/4, 4*vision_dim]
-
-        # Transfer to device
-        shuffled_tt = to_tt_tensor(shuffled, self.device)
+        if isinstance(vision_features, torch.Tensor):
+            vision_features = to_tt_tensor(vision_features, self.device)
+        shuffled_tt = self.pixel_shuffle_downsample_tt(vision_features, h, w)
 
         # Layer 0: LayerNorm over pixel-shuffled features
         h = ttnn.layer_norm(
@@ -290,16 +291,12 @@ class Gr00tN16ModelTTNN:
         # SigLIP2 forward
         vision_features_tt = self.vision_encoder(pixel_values)
 
-        # Transfer back to CPU for pixel shuffle
-        vision_features_cpu = ttnn.to_torch(vision_features_tt)
-        ttnn.deallocate(vision_features_tt)
-
         # Compute spatial dims
         num_patches = self.config.backbone.vision.num_patches
         h = w = int(num_patches**0.5)
 
-        # Pixel shuffle + MLP connector
-        image_tokens = self.connector(vision_features_cpu, h, w)
+        # Pixel shuffle + MLP connector — fully on-device (no host round trip)
+        image_tokens = self.connector(vision_features_tt, h, w)
 
         return image_tokens
 
