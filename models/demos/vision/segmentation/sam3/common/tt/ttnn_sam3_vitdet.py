@@ -252,56 +252,38 @@ def tt_vit_block(
     window_size,
     device,
 ):
-    """Single ViT transformer block.
+    """Single ViT transformer block — fully on-device.
 
-    Implements: x = x + Attention(LayerNorm(x))
-                x = x + MLP(LayerNorm(x))
-
-    With window partition/unpartition for windowed attention blocks.
-
-    Args:
-        x: ttnn tensor (B, H, W, C) in TILE_LAYOUT on device.
-        block_params: dict with preprocessed weights (from preprocess_vit_block_weights).
-        num_heads: int, number of attention heads.
-        window_size: int, window size (0 for global attention).
-        device: ttnn device.
-
-    Returns:
-        torch tensor (B, H, W, C) on CPU.
+    Flow: block input (torch B,H,W,C) → from_torch → LN1 → window partition →
+    attention → window unpartition → residual1 → LN2 → MLP → residual2 → to_torch.
+    Two host↔device transfers total; all compute is on-device.
     """
-    x_torch = x
-    B, H, W, C = x_torch.shape
-    shortcut = x_torch
-
-    # LayerNorm operates on last dim
-    ln1_w = block_params["norm1_weight"]
-    ln1_b = block_params["norm1_bias"]
-    normed = torch.nn.functional.layer_norm(x_torch, [C], ln1_w, ln1_b, eps=1e-5)
-
-    # --- Window partition (if windowed attention) ---
-    if window_size > 0:
-        # Window partition on CPU
-        pad_h = (window_size - H % window_size) % window_size
-        pad_w = (window_size - W % window_size) % window_size
-        if pad_h > 0 or pad_w > 0:
-            normed = F.pad(normed, (0, 0, 0, pad_w, 0, pad_h))
-        Hp, Wp = H + pad_h, W + pad_w
-
-        normed = normed.view(B, Hp // window_size, window_size, Wp // window_size, window_size, C)
-        normed = normed.permute(0, 1, 3, 2, 4, 5).reshape(-1, window_size, window_size, C)
-        # Flatten spatial dims for attention: (B*nW, ws*ws, C)
-        attn_input = normed.reshape(normed.shape[0], window_size * window_size, C)
-    else:
-        Hp, Wp = H, W
-        # Flatten spatial dims for attention: (B, H*W, C)
-        attn_input = normed.reshape(B, H * W, C)
-
-    # Move to ttnn for linear projections in attention
-    tt_attn_input = ttnn.from_torch(
-        attn_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    B, H, W, C = x.shape
+    assert window_size == 0 or (H % window_size == 0 and W % window_size == 0), (
+        "on-device window partition requires H,W divisible by window_size"
     )
 
-    # --- Attention ---
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # LN1 on last dim (C)
+    tt_normed = ttnn.layer_norm(
+        tt_x,
+        weight=block_params["norm1_weight_tt"],
+        bias=block_params["norm1_bias_tt"],
+        epsilon=1e-5,
+    )
+
+    # Window partition → (B', L, C)
+    if window_size > 0:
+        nW_h, nW_w = H // window_size, W // window_size
+        tt_attn_input = ttnn.reshape(tt_normed, [B, nW_h, window_size, nW_w, window_size, C])
+        tt_attn_input = ttnn.permute(tt_attn_input, [0, 1, 3, 2, 4, 5])
+        tt_attn_input = ttnn.reshape(
+            tt_attn_input, [B * nW_h * nW_w, window_size * window_size, C]
+        )
+    else:
+        tt_attn_input = ttnn.reshape(tt_normed, [B, H * W, C])
+
     tt_attn_out = tt_vit_attention(
         tt_attn_input,
         block_params["attn_qkv_weight"],
@@ -314,43 +296,29 @@ def tt_vit_block(
         device=device,
     )
 
-    # Convert attention output back to torch
-    attn_out = ttnn.to_torch(tt_attn_out).float()
-
-    # --- Window unpartition ---
+    # Window unpartition → (B, H, W, C)
     if window_size > 0:
-        # Reshape back to windowed spatial
-        attn_out = attn_out.reshape(-1, window_size, window_size, C)
-        # Unpartition
-        nW_h = Hp // window_size
-        nW_w = Wp // window_size
-        attn_out = attn_out.reshape(B, nW_h, nW_w, window_size, window_size, C)
-        attn_out = attn_out.permute(0, 1, 3, 2, 4, 5).reshape(B, Hp, Wp, C)
-        if Hp > H or Wp > W:
-            attn_out = attn_out[:, :H, :W, :].contiguous()
+        nW_h, nW_w = H // window_size, W // window_size
+        tt_attn_out = ttnn.reshape(
+            tt_attn_out, [B, nW_h, nW_w, window_size, window_size, C]
+        )
+        tt_attn_out = ttnn.permute(tt_attn_out, [0, 1, 3, 2, 4, 5])
+        tt_attn_out = ttnn.reshape(tt_attn_out, [B, H, W, C])
     else:
-        attn_out = attn_out.reshape(B, H, W, C)
+        tt_attn_out = ttnn.reshape(tt_attn_out, [B, H, W, C])
 
-    # --- Residual connection ---
-    x_torch = shortcut + attn_out
+    tt_residual1 = ttnn.add(tt_x, tt_attn_out)
+    tt_residual1_flat = ttnn.reshape(tt_residual1, [B, H * W, C])
 
-    # --- LN2 + MLP + residual2 fully on device ---
-    tt_x = ttnn.from_torch(
-        x_torch.reshape(B, H * W, C),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-    )
-
-    tt_normed = ttnn.layer_norm(
-        tt_x,
+    tt_normed2 = ttnn.layer_norm(
+        tt_residual1_flat,
         weight=block_params["norm2_weight_tt"],
         bias=block_params["norm2_bias_tt"],
         epsilon=1e-5,
     )
 
     tt_mlp_out = tt_vit_mlp(
-        tt_normed,
+        tt_normed2,
         block_params["mlp_fc1_weight"],
         block_params["mlp_fc1_bias"],
         block_params["mlp_fc2_weight"],
@@ -358,8 +326,7 @@ def tt_vit_block(
         device=device,
     )
 
-    tt_output = ttnn.add(tt_x, tt_mlp_out)
-
+    tt_output = ttnn.add(tt_residual1_flat, tt_mlp_out)
     output = ttnn.to_torch(tt_output).float().reshape(B, H, W, C)
     return output
 
@@ -536,6 +503,12 @@ def preprocess_vit_block_weights(block):
     fc2_b = preprocess_linear_bias(block.mlp.fc2.bias.data)
 
     # LN params as ttnn tensors for on-device LN.
+    norm1_w_tt = ttnn.from_torch(
+        block.norm1.weight.data.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    norm1_b_tt = ttnn.from_torch(
+        block.norm1.bias.data.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
     norm2_w_tt = ttnn.from_torch(
         block.norm2.weight.data.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
@@ -551,10 +524,8 @@ def preprocess_vit_block_weights(block):
         "attn_proj_bias": attn_params["proj_bias"],
         "rope_cos": attn_params["rope_cos"],
         "rope_sin": attn_params["rope_sin"],
-        # LayerNorms (kept as torch tensors for CPU LN1)
-        "norm1_weight": block.norm1.weight.data.clone(),
-        "norm1_bias": block.norm1.bias.data.clone(),
-        # LN2 as ttnn tensors (on-device LN2 fused with MLP residual).
+        "norm1_weight_tt": norm1_w_tt,
+        "norm1_bias_tt": norm1_b_tt,
         "norm2_weight_tt": norm2_w_tt,
         "norm2_bias_tt": norm2_b_tt,
         # MLP (ttnn tensors, not on device yet)
@@ -585,6 +556,7 @@ def move_block_params_to_device(block_params, device):
         "attn_qkv_weight", "attn_qkv_bias",
         "attn_proj_weight", "attn_proj_bias",
         "rope_cos", "rope_sin",
+        "norm1_weight_tt", "norm1_bias_tt",
         "norm2_weight_tt", "norm2_bias_tt",
         "mlp_fc1_weight", "mlp_fc1_bias",
         "mlp_fc2_weight", "mlp_fc2_bias",
