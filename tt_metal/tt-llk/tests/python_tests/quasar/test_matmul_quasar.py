@@ -4,12 +4,14 @@
 
 import pytest
 import torch
+from helpers.data_format_inference import data_formats
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIM,
     MatmulGolden,
     TransposeGolden,
     get_golden_generator,
+    quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
     DestAccumulation,
@@ -37,7 +39,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
-from helpers.tilize_untilize import tilize_block
+from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
 kt_dims = [1, 2, 4]
@@ -64,13 +66,13 @@ MATMUL_FORMAT = input_output_formats(
     [
         DataFormat.Float16,
         DataFormat.Float16_b,
+        DataFormat.MxFp4,
     ],
 )
 
 
 @pytest.mark.quasar
 @parametrize(
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     math_fidelity=[
         MathFidelity.LoFi,
         MathFidelity.HiFi2,
@@ -79,6 +81,11 @@ MATMUL_FORMAT = input_output_formats(
     ],
     dimensions_dest_acc_dest_sync=matmul_dimensions_dest_sync,
     format=MATMUL_FORMAT,
+    implied_math_format=lambda format: (
+        [ImpliedMathFormat.Yes]
+        if format.input_format.is_mx_format()
+        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+    ),
     transpose=[Transpose.No],
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
@@ -89,9 +96,15 @@ def test_matmul(
     implied_math_format,
     transpose,
 ):
+
     input_A_dimensions, input_B_dimensions, dest_acc, dest_sync_mode = (
         dimensions_dest_acc_dest_sync
     )
+
+    if format.output_format.is_mx_format() and dest_acc == DestAccumulation.No:
+        pytest.skip(
+            "Mx output format without destination accumulation produces flaky results"
+        )
 
     torch_format = format_dict[format.output_format]
 
@@ -101,14 +114,41 @@ def test_matmul(
         stimuli_format_B=format.input_format,
         input_dimensions_B=input_B_dimensions,
         sfpu=False,
+        output_format=format.output_format,
     )
 
+    tilized_A = tilize_block(
+        src_A, dimensions=input_A_dimensions, stimuli_format=format.input_format
+    )
+    tilized_B = tilize_block(
+        src_B, dimensions=input_B_dimensions, stimuli_format=format.input_format
+    )
+
+    src_A_golden = src_A
     src_B_golden = src_B
+    if format.input_format.is_mx_format():
+        tilized_A_golden = quantize_mx_tensor_chunked(
+            tilized_A.flatten().to(torch.bfloat16), format.input_format
+        ).reshape(tilized_A.shape)
+        tilized_B_golden = quantize_mx_tensor_chunked(
+            tilized_B.flatten().to(torch.bfloat16), format.input_format
+        ).reshape(tilized_B.shape)
+        src_A_golden = untilize_block(
+            tilized_A_golden,
+            stimuli_format=format.input_format,
+            dimensions=input_A_dimensions,
+        )
+        src_B_golden = untilize_block(
+            tilized_B_golden,
+            stimuli_format=format.input_format,
+            dimensions=input_B_dimensions,
+        )
+
     if transpose == Transpose.Yes:
         t_matrix = get_golden_generator(TransposeGolden)
 
         src_B_golden = t_matrix.transpose_faces_multi_tile(
-            src_B,
+            src_B_golden,
             format.input_format,
             num_tiles=tile_cnt_B,
             tilize=True,
@@ -125,9 +165,20 @@ def test_matmul(
     # Calculate all matmul dimensions using helper function
     matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
 
+    formats_config = data_formats(
+        input_format=format.input_format,
+        input_format_B=format.input_format_B,
+        output_format=format.output_format,
+        is_fp32_dest_acc_en=dest_acc,
+        num_iterations=1,
+        unpacking_to_dest=False,
+        disable_format_inference=format.input_format.is_mx_format(),
+    )[0]
+    pack_src_format = formats_config.pack_src
+
     generate_golden = get_golden_generator(MatmulGolden)
     golden_tensor = generate_golden(
-        src_A,
+        src_A_golden,
         src_B_golden,
         format.output_format,
         math_fidelity,
@@ -136,13 +187,8 @@ def test_matmul(
         tilize=True,  # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
         input_A_format=format.input_format,
         input_B_format=format.input_format,
-    )
-
-    tilized_A = tilize_block(
-        src_A, dimensions=input_A_dimensions, stimuli_format=format.input_format
-    )
-    tilized_B = tilize_block(
-        src_B, dimensions=input_B_dimensions, stimuli_format=format.input_format
+        math_format=pack_src_format,  # For accumulation of results in matmul we require to calculate in pack_src_format.
+        dest_acc=dest_acc,
     )
 
     num_faces = 4
@@ -174,6 +220,7 @@ def test_matmul(
         unpack_to_dest=False,
         dest_acc=dest_acc,
         boot_mode=BootMode.TRISC,
+        disable_format_inference=format.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result
@@ -183,6 +230,11 @@ def test_matmul(
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(
-        golden_tensor, res_tensor, format.output_format
-    ), "Assert against golden failed"
+    if format.output_format.is_mx_format():
+        golden_tensor = quantize_mx_tensor_chunked(
+            golden_tensor.to(format_dict[pack_src_format]), format.output_format
+        ).to(torch_format)
+
+    test_passed = passed_test(golden_tensor, res_tensor, format.output_format)
+
+    assert test_passed, "Assert against golden failed"

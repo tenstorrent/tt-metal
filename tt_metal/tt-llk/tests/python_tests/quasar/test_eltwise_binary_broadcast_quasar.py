@@ -47,6 +47,7 @@ from helpers.utils import passed_test
         [
             DataFormat.Float16_b,
             DataFormat.Float16,
+            DataFormat.MxFp4,
         ],
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
@@ -61,10 +62,11 @@ from helpers.utils import passed_test
         BroadcastType.Scalar,
     ],
     math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
-    implied_math_format=[
-        ImpliedMathFormat.No,
-        ImpliedMathFormat.Yes,
-    ],
+    implied_math_format=lambda formats: (
+        [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+        if not formats.input_format.is_mx_format()
+        else [ImpliedMathFormat.Yes]
+    ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
     input_dimensions=lambda dest_acc, dest_sync_mode: generate_unary_input_dimensions(
         dest_acc, dest_sync_mode
@@ -97,15 +99,24 @@ def test_eltwise_binary_broadcast_quasar(
         num_faces=4,
         tile_cnt=tile_cnt_A,
         face_r_dim=16,
+        input_format=formats.input_format,
     )
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
+    input_format = formats.input_format
+    input_format_B = (
+        DataFormat.Float16_b
+        if formats.input_format.is_mx_format()
+        else formats.input_format
+    )
     golden_tensor = generate_golden(
         mathop,
         src_A,
         bcast_src_B_tensor,
         formats.output_format,
         math_fidelity,
+        input_format=input_format,
+        input_format_B=input_format_B,
     )
 
     configuration = TestConfig(
@@ -137,6 +148,8 @@ def test_eltwise_binary_broadcast_quasar(
         unpack_to_dest=False,
         dest_acc=dest_acc,
         boot_mode=boot_mode,
+        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
+        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result
@@ -149,5 +162,5 @@ def test_eltwise_binary_broadcast_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor, res_tensor, formats.output_format, print_errors=False
     ), "Assert against golden failed"
