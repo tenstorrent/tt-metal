@@ -58,9 +58,12 @@ def get_patch_embed_params(vit_model):
 
 
 def _apply_rope_ttnn(q, cos, sin):
-    """Apply half-half RoPE on device: q * cos + rotate_half(q) * sin."""
-    rh = ttnn.experimental.rotate_half(q)
-    return ttnn.add(ttnn.multiply(q, cos), ttnn.multiply(rh, sin))
+    """Apply half-half (HF-style) RoPE in a single fused op.
+
+    `ttnn.experimental.rotary_embedding` does q*cos + rotate_half(q)*sin in one
+    kernel, replacing 4 dispatch ops with 1.
+    """
+    return ttnn.experimental.rotary_embedding(q, cos, sin)
 
 
 def tt_vit_attention(
