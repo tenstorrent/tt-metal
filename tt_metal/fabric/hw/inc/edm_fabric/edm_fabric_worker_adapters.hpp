@@ -484,8 +484,18 @@ struct WorkerToFabricEdmSenderBase {
     // Must be called alongside (after) close_start().
     void close_finish() {
         WAYPOINT("FCFW");
-        // Need to wait for the ack to teardown notice, from edm
-        while (*this->worker_teardown_addr != 1) {
+        // Wait for the ETH router to ACK teardown by writing 1 to worker_teardown_addr.
+        // Bounded by kCloseFinishMaxIter to prevent an indefinite spin if the ETH router
+        // never ACKs (e.g. ARC flagged an unsafe NOC access from close_start() and the
+        // write to edm_connection_handshake_l1_addr was aborted).  On timeout the mux
+        // kernel still exits cleanly — its dispatch completion fires, the host unblocks,
+        // and teardown_fabric_config() force-resets the unresponsive ERISC.
+        // See: https://github.com/tenstorrent/tt-metal/issues/42429
+        constexpr uint32_t kCloseFinishMaxIter = 5'000'000;
+        for (uint32_t i = 0; i < kCloseFinishMaxIter; ++i) {
+            if (*this->worker_teardown_addr == 1) {
+                break;
+            }
             invalidate_l1_cache();
         }
         WAYPOINT("FCFD");
