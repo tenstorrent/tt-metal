@@ -772,7 +772,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                  sbt == SubtileBroadcastType::ROW_A || sbt == SubtileBroadcastType::ROW_B ||
                  sbt == SubtileBroadcastType::ROW_A_COL_B || sbt == SubtileBroadcastType::ROW_B_COL_A);
             if (uses_movb2d) {
-                // use_llk_bcast = false;
+                // blackhole
+                // tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py::test_binary_w_typecast[layout=Layout.TILE-out_dtype=bfloat16-in_dtype=DataType.FLOAT32-ttnn_fn=ge-input_shapes=(torch.Size([5,
+                // 1, 64, 1]), torch.Size([1, 3, 1, 128]))]
+                // device hang
+                // tt-sim ERROR: UnsupportedFunctionality:
+                // tensix_execute_zeroacc: clear 32b 16 rows: clear_zero_flags=1 dst=0 row=1 dst_row_valid not already
+                // set
+                use_llk_bcast = false;
             }
         }
     }
