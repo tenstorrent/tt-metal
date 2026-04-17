@@ -88,3 +88,51 @@ All identifiers verified successfully:
 - `_calculate_hardtanh_` -- found in both WH (`ckernel_sfpu_hardtanh.h:17`) and BH (`ckernel_sfpu_hardtanh.h:17`)
 - All 10 file paths cited in the Abstraction Layers and Local Knowledge Sources tables -- confirmed to exist
 - SFPI constructs (`sfpi::s2vFloat16b`, `sfpi::vFloat`, `sfpi::dst_reg`, `v_if`/`v_endif`) -- confirmed present in kernel source
+
+---
+
+## Session Summary (3)
+- **Operation**: threshold
+- **Status**: SUCCESS
+- **Output file**: `.claude-analysis/rrelu-1/threshold_analysis.md`
+
+## Key Decisions (threshold)
+
+1. **Disconnected operation**: The `threshold` operation has a working core SFPU kernel (`_calculate_threshold_`) but is NOT connected to the TTNN unary dispatch chain. `UnaryOpType::THRESHOLD` exists in the enum but is never referenced. No `threshold_tile()` API function exists. `ttnn.threshold` is not a valid Python attribute.
+
+2. **Kernel style determination**: The core SFPU kernel (`ckernel_sfpu_threshold.h`) uses SFPI abstractions (`sfpi::vFloat`, `sfpi::dst_reg`, `v_if`/`v_endif`), so Style A was selected.
+
+3. **Approximation mode**: `APPROXIMATION_MODE` is a template parameter of `_calculate_threshold_` but is completely unused by the implementation -- no `if constexpr` branch checks it.
+
+4. **Architecture differences**: The WH and BH core SFPU implementations are identical.
+
+5. **Address mode**: Would use `ADDR_MOD_7` with all-zero increments (default for all unary SFPU ops not special-cased).
+
+## Files Read (threshold)
+- `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_types.hpp`
+- `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`
+- `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.hpp`
+- `ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp`
+- `ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp`
+- `ttnn/cpp/ttnn/operations/eltwise/unary/unary_nanobind.cpp`
+- `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_threshold.h`
+- `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_threshold.h`
+- `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_converter.h`
+- `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h`
+- `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu.h`
+- `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+- `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+- `tt_metal/third_party/tt_llk/tests/helpers/include/sfpu_operations.h`
+- `tt_metal/third_party/tt_llk/tests/helpers/include/llk_sfpu_types.h`
+- `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu_types.h`
+- `runtime/sfpi/include/sfpi.h`
+- `runtime/sfpi/include/sfpi_constants.h`
+- `.claude/references/sfpu-hardware-model.md`
+- `.claude/references/logging/sfpu-operation-analyzer.md`
+
+## Verification Results (threshold)
+All identifiers verified successfully:
+- `_calculate_threshold_` -- found in both WH (`ckernel_sfpu_threshold.h`) and BH (`ckernel_sfpu_threshold.h`)
+- `Converter::as_float` -- found in `ckernel_sfpu_converter.h` for both WH and BH
+- All file paths confirmed to exist
+- SFPI constructs (`sfpi::vFloat`, `sfpi::dst_reg`, `v_if`/`v_endif`) -- confirmed in kernel source
