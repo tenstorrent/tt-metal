@@ -106,8 +106,9 @@ def run_test(device):
     print(f"  sin: {rotary_data['sin'].shape}")
 
     # Convert MROPE to TTNN format
-    cos_mrope = rotary_data["cos"]  # [3, 1, 111, 128]
+    cos_mrope = rotary_data["cos"]  # [3, 1, seq, head_dim]
     sin_mrope = rotary_data["sin"]
+    seq_len = cos_mrope.shape[2]
 
     cos_ttnn_format, sin_ttnn_format = convert_mrope_for_ttnn(cos_mrope, sin_mrope)
     print(f"  Converted cos: {cos_ttnn_format.shape}")
@@ -126,13 +127,12 @@ def run_test(device):
         "rope_theta": 1000000.0,
     }
 
-    seq_len = 111
     pad_seq = ((seq_len + 31) // 32) * 32
 
     # Standard RoPE
     cos_std, sin_std = compute_rope_frequencies(config["head_dim"], pad_seq, config["rope_theta"])
     position_ids = torch.arange(seq_len)
-    cos_std_gathered = cos_std[position_ids].unsqueeze(0).unsqueeze(0)  # [1, 1, 111, 128]
+    cos_std_gathered = cos_std[position_ids].unsqueeze(0).unsqueeze(0)  # [1, 1, seq, 128]
     sin_std_gathered = sin_std[position_ids].unsqueeze(0).unsqueeze(0)
 
     # Compare standard RoPE vs official MROPE
@@ -209,7 +209,7 @@ def run_test(device):
         weight_dtype=ttnn.bfloat16,
     )
 
-    output_tt = layer(input_tt, cos_tt, sin_tt, trans_mat, attention_mask=None)
+    output_tt, _kv_cache = layer(input_tt, cos_tt, sin_tt, trans_mat, attention_mask=None, kv_cache=None)
     output_torch = ttnn.to_torch(output_tt).squeeze(1)[:, :seq_len, :]
 
     pcc_layer0_mrope = compute_pcc(layer_output, output_torch)
@@ -229,7 +229,7 @@ def run_test(device):
     ttnn.deallocate(input_tt)
 
     input_tt = ttnn.from_torch(input_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output_std_tt = layer(input_tt, cos_std_tt, sin_std_tt, trans_mat, attention_mask=None)
+    output_std_tt, _kv_cache = layer(input_tt, cos_std_tt, sin_std_tt, trans_mat, attention_mask=None, kv_cache=None)
     output_std_torch = ttnn.to_torch(output_std_tt).squeeze(1)[:, :seq_len, :]
 
     pcc_layer0_std = compute_pcc(layer_output, output_std_torch)
@@ -272,7 +272,7 @@ def run_test(device):
             weight_dtype=ttnn.bfloat16,
         )
 
-        hidden_tt = layer(hidden_tt, cos_tt, sin_tt, trans_mat, attention_mask=None)
+        hidden_tt, _kv_cache = layer(hidden_tt, cos_tt, sin_tt, trans_mat, attention_mask=None, kv_cache=None)
 
         if i in [0, 1, 5, 10, 15, 20, 27]:
             temp_torch = ttnn.to_torch(hidden_tt).squeeze(1)[:, :seq_len, :]

@@ -112,9 +112,10 @@ class TestTextProjection:
             h = F.silu(h)
             return F.linear(h, fc2_w, fc2_b)
 
-        # Create input
+        # Create input (match checkpoint dtype so F.linear is valid; weights are often bfloat16)
         batch, seq_len, hidden = 1, 10, 2048
-        text_embeds = torch.randn(batch, seq_len, hidden)
+        w_dtype = fc1_w.dtype
+        text_embeds = torch.randn(batch, seq_len, hidden, dtype=w_dtype, device=fc1_w.device)
 
         # Reference output
         ref_output = ref_project_text(text_embeds)
@@ -131,8 +132,8 @@ class TestTextProjection:
         output_tt = talker.project_text(text_embeds_tt)
         ttnn_output = ttnn.to_torch(output_tt).squeeze(1).float()
 
-        # Compute PCC
-        pcc = torch.corrcoef(torch.stack([ref_output.flatten(), ttnn_output.flatten()]))[0, 1].item()
+        # Compute PCC (float32 for corrcoef)
+        pcc = torch.corrcoef(torch.stack([ref_output.flatten().float(), ttnn_output.flatten()]))[0, 1].item()
         print(f"text_projection PCC: {pcc:.6f}")
 
         assert pcc > 0.99, f"PCC {pcc} is below threshold 0.99"
