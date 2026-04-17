@@ -114,6 +114,40 @@ jobs:
             # not a tt-metal issue. Since this CI only needs one representative test to verify
             # inter-container isolation, we narrow down to a single test combination to avoid the problem.
             test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and 2_links and not DRAM'"
+          # ETH isolation reset tests: verify that resetting one tray/ASIC does not disrupt
+          # other containers still running their workloads (per-tray and per-ASIC granularity).
+          - arch: wormhole_b0
+            scenario: tray_reset
+            num_containers: 4
+            chips_per_container: 8
+            container_prefix: tray_reset
+            mesh_descriptor: t3k_mesh_graph_descriptor.textproto
+            test_path: tests/nightly/t3000/ccl/test_minimal_all_gather_async.py
+            test_args: "-k 'not fabric_ring'"
+          - arch: blackhole
+            scenario: tray_reset
+            num_containers: 4
+            chips_per_container: 8
+            container_prefix: bh_tray_reset
+            mesh_descriptor: p150_x8_mesh_graph_descriptor.textproto
+            test_path: tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_gather_nightly.py
+            test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and 2_links and not DRAM'"
+          - arch: wormhole_b0
+            scenario: asic_reset
+            num_containers: 32
+            chips_per_container: 1
+            container_prefix: chip_reset
+            mesh_descriptor: n150_mesh_graph_descriptor.textproto
+            test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
+            test_args: "-k test_fill"
+          - arch: blackhole
+            scenario: asic_reset
+            num_containers: 32
+            chips_per_container: 1
+            container_prefix: bh_chip_reset
+            mesh_descriptor: p150_mesh_graph_descriptor.textproto
+            test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
+            test_args: "-k test_fill"
     runs-on:
       - topology-6u
       - arch-${{ matrix.arch }}
@@ -149,7 +183,7 @@ jobs:
       - name: Create Docker Compose file
         run: |
           TRAY_MAPPING_ARG=""
-          if [ "${{ matrix.scenario }}" = "tray" ] || [ "${{ matrix.scenario }}" = "tp2" ]; then
+          if [ "${{ matrix.scenario }}" = "tray" ] || [ "${{ matrix.scenario }}" = "tp2" ] || [ "${{ matrix.scenario }}" = "tray_reset" ]; then
             TRAY_MAPPING_ARG="--tray-mapping-file tray_to_pcie_device_mapping.yaml"
           fi
           python3 .github/scripts/utils/multi-user-create-files.py \
@@ -192,6 +226,7 @@ jobs:
           echo "All $REQUIRED_CONTAINERS docker containers have started (found $count)."
 
       - name: Run the tests
+        if: matrix.scenario != 'tray_reset' && matrix.scenario != 'asic_reset'
         timeout-minutes: 15
         run: |
           NUM_CONTAINERS=${{ matrix.num_containers }}
@@ -238,6 +273,29 @@ jobs:
           TEST_NAME=$(basename "${TEST_PATH}" .py)
           # Output: ">>> Running single/test_fill in chip-0" etc.
           run_test "${{ matrix.scenario }}/${TEST_NAME}" "pytest -v ${TEST_PATH} ${TEST_ARGS}" || true
+
+      - name: Run reset isolation test
+        if: matrix.scenario == 'tray_reset' || matrix.scenario == 'asic_reset'
+        timeout-minutes: 15
+        run: |
+          if [ "${{ matrix.scenario }}" = "tray_reset" ]; then
+            RESET_DEVICE_IDS=$(python3 -c "
+          import yaml
+          with open('tray_to_pcie_device_mapping.yaml') as f:
+              m = yaml.safe_load(f)
+          devices = m['device_mapping']['1']
+          print(','.join(str(d) for d in devices))
+          ")
+          else
+            # asic_reset: reset device 0 only (used by chip_reset-0 / bh_chip_reset-0)
+            RESET_DEVICE_IDS="0"
+          fi
+          bash .github/scripts/utils/run-reset-isolation-test.sh \
+            ${{ matrix.num_containers }} \
+            "${{ matrix.container_prefix }}" \
+            "${{ matrix.test_path }}" \
+            "${{ matrix.test_args }}" \
+            "$RESET_DEVICE_IDS"
 
       - name: Check test results
         run: |
