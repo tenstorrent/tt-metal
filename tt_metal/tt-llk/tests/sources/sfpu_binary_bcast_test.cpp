@@ -48,7 +48,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary_sfpu.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "sfpu/ckernel_sfpu_binary_bcast.h"
 
 using namespace ckernel;
 using namespace ckernel::sfpu;
@@ -83,9 +82,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_binary_sfpu_start_<DST_SYNC>(0);
 
-    _sfpu_binary_bcast_init_<BCAST_DIM>();
+    _sfpu_binary_bcast_init_<APPROX_MODE, SFPU_BINARY_OPERATION, BCAST_DIM>();
 
-    _calculate_sfpu_binary_bcast_full_tile_<SFPU_BINARY_OPERATION, BCAST_DIM>(INPUT_TILE_A, INPUT_TILE_B, RESULT_TILE);
+    _calculate_sfpu_binary_bcast_full_tile_<APPROX_MODE, SFPU_BINARY_OPERATION, BCAST_DIM>(INPUT_TILE_A, INPUT_TILE_B, RESULT_TILE);
 
     _llk_math_eltwise_binary_sfpu_done_();
 
