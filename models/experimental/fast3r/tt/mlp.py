@@ -51,16 +51,36 @@ class TtMlp:
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
+    FC1_PROG = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=4,
+        out_subblock_h=2,
+        out_subblock_w=4,
+        per_core_M=4,
+        per_core_N=16,
+        transpose_mcast=False,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+    )
+    FC2_PROG = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=4,
+        out_subblock_h=4,
+        out_subblock_w=2,
+        per_core_M=4,
+        per_core_N=4,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         y = ttnn.linear(
-            x, self.fc1_w, bias=self.fc1_b, activation="gelu",
-            core_grid=self.CORE_GRID, compute_kernel_config=self.FAST_COMPUTE,
+            x, self.fc1_w, bias=self.fc1_b,
+            program_config=self.FC1_PROG, compute_kernel_config=self.FAST_COMPUTE,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         out = ttnn.linear(
             y, self.fc2_w, bias=self.fc2_b,
-            core_grid=self.CORE_GRID, compute_kernel_config=self.FAST_COMPUTE,
+            program_config=self.FC2_PROG, compute_kernel_config=self.FAST_COMPUTE,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         y.deallocate(True)
