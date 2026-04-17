@@ -6,8 +6,19 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/common.h"
 
+namespace {
+// Type holder to extract config type at compile time
+template <uint32_t ConfigTypeValue>
+struct ConfigTypeHolder {
+    static constexpr auto config_type = static_cast<moe_ring::MoEConfigType>(ConfigTypeValue);
+    using type = moe_ring::ConfigType_t<config_type>;
+};
+}  // namespace
+
 void kernel_main() {
-    using config_t = moe_ring::DeepSeekRingConfig;
+    // Extract config type from compile-time argument
+    constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
+    using config_t = typename ConfigTypeHolder<moe_config_type_value>::type;
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");

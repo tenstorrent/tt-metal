@@ -28,6 +28,9 @@ enum class MoEActivationFunction : uint8_t { SILU = 0, SWIGLU = 1 };
 
 namespace moe_ring {
 
+// Enum for selecting MoE configuration type
+enum class MoEConfigType : uint32_t { DEEPSEEK = 0, GPT = 1 };
+
 constexpr uint32_t NUM_CORES = 12;
 
 constexpr uint32_t W0_W1_TXNS_PER_BLOCK = 2;
@@ -193,5 +196,25 @@ struct GptRingConfig {
     static constexpr uint32_t COMBINE_SHARD_WIDTH_TILES = 90 / OUTPUT_WIDTH_SHARD_DIM;          // 30
     static constexpr uint32_t RING_CORES_PER_COMBINE_COL = NUM_CORES / OUTPUT_WIDTH_SHARD_DIM;  // 4
 };
+
+// Template trait for config type selection
+template <MoEConfigType ConfigType>
+struct ConfigTypeSelector;
+
+// Template specialization for DeepSeek
+template <>
+struct ConfigTypeSelector<MoEConfigType::DEEPSEEK> {
+    using type = DeepSeekRingConfig;
+};
+
+// Template specialization for GPT
+template <>
+struct ConfigTypeSelector<MoEConfigType::GPT> {
+    using type = GptRingConfig;
+};
+
+// Helper alias template
+template <MoEConfigType ConfigType>
+using ConfigType_t = typename ConfigTypeSelector<ConfigType>::type;
 
 }  // namespace moe_ring
