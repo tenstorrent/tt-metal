@@ -409,6 +409,9 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     lm_head_local_idx = (prompt_len - 1) - start
                 else:
                     skip_lm_head = True
+            logger.info(
+                f"{x.shape} of ({start}, {end}) get {prompt_len} -> {lm_head_local_idx} with skip_lm_head={skip_lm_head}"
+            )
 
             logits_chunk, *hidden_for_mtp_chunk = cls._forward_prefill(
                 x_chunk,
@@ -505,7 +508,6 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             row_local_idx = lm_head_local_idx % local_seq_len
             target_row = lm_head_local_idx // local_seq_len
             x_sliced = ttnn.slice(x, [0, 0, row_local_idx, 0], [1, 1, row_local_idx + 1, x.shape[-1]])
-            x_sliced = ttnn.slice(x, [0, 0, lm_head_local_idx, 0], [1, 1, lm_head_local_idx + 1, x.shape[-1]])
             ttnn.deallocate(x)
             x = x_sliced
 
@@ -517,7 +519,9 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             logits = LMHead1D.forward_prefill(lm_head_in, cfg["lm_head"])
             return logits, hidden_for_mtp
 
+        logger.debug(f"LMHead1D.forward_prefill x: {x.shape}")
         logits = LMHead1D.forward_prefill(x, cfg["lm_head"])
+        logger.debug(f"LMHead1D.forward_prefill logits: {logits.shape}")
         logger.debug(f"LMHead1D finished")
 
         # In a multi-row mesh every row computed logits for its own local token
