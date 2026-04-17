@@ -70,9 +70,6 @@ void BM_FrobeniusNormalize_Fused(benchmark::State& state) {
     const ttnn::Shape shape(frobenius_shape.shape);
     const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(frobenius_shape.name));
 
-    const uint64_t tensor_bytes = shape.volume() * sizeof(uint16_t);
-    const uint64_t total_dram_bytes = 2ULL * tensor_bytes;  // 1 read + 1 write
-
     auto input = make_random_tensor(shape, dtype, device.get(), seed);
 
     for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
@@ -94,14 +91,9 @@ void BM_FrobeniusNormalize_Fused(benchmark::State& state) {
         }
 
         const double avg_time_s = total_time.count() / test_config.num_measurement_iterations;
-        const double time_us = avg_time_s * 1e6;
-        const double gb_per_s = static_cast<double>(total_dram_bytes) / avg_time_s / 1e9;
-
         state.SetIterationTime(avg_time_s);
         state.SetLabel(frobenius_shape.name);
-        state.counters["Time_us"] = time_us;
-        state.counters["GB_per_s"] = gb_per_s;
-        state.counters["Tensor_MB"] = static_cast<double>(tensor_bytes) / 1e6;
+        state.counters["Time_us"] = avg_time_s * 1e6;
     }
 
     input.deallocate();
@@ -119,9 +111,6 @@ void BM_FrobeniusNormalize_Composite(benchmark::State& state) {
     const auto dtype = ttnn::DataType::BFLOAT16;
     const ttnn::Shape shape(frobenius_shape.shape);
     const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(frobenius_shape.name));
-
-    const uint64_t tensor_bytes = shape.volume() * sizeof(uint16_t);
-    const uint64_t total_dram_bytes = 2ULL * tensor_bytes;
 
     auto input = make_random_tensor(shape, dtype, device.get(), seed);
 
@@ -144,14 +133,9 @@ void BM_FrobeniusNormalize_Composite(benchmark::State& state) {
         }
 
         const double avg_time_s = total_time.count() / test_config.num_measurement_iterations;
-        const double time_us = avg_time_s * 1e6;
-        const double gb_per_s = static_cast<double>(total_dram_bytes) / avg_time_s / 1e9;
-
         state.SetIterationTime(avg_time_s);
         state.SetLabel(frobenius_shape.name);
-        state.counters["Time_us"] = time_us;
-        state.counters["GB_per_s"] = gb_per_s;
-        state.counters["Tensor_MB"] = static_cast<double>(tensor_bytes) / 1e6;
+        state.counters["Time_us"] = avg_time_s * 1e6;
     }
 
     input.deallocate();
