@@ -438,11 +438,22 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     bool had_unresponsive_eth_cores = false;
 
     for (auto& id_and_cores : device_to_early_exit_cores) {
-        const int timeout_ms = 10000;
+        // Use a short timeout: healthy GO-state cores respond to exit signals in <1ms.
+        // Cores stuck in RUN_MSG_INIT (killed mid-init) will never respond regardless of
+        // how long we wait. 500ms gives healthy cores plenty of margin while avoiding a
+        // 10-second hang for the stale-INIT case.
+        // skip_dispatch_alert=true: this is an internal reset path — if cores don't
+        // respond it's expected and handled by force-reset below. Do NOT trigger
+        // on_dispatch_timeout_detected() / tt-triage here.
+        const int timeout_ms = 500;
         if (!id_and_cores.second.empty()) {
             try {
                 llrt::internal_::wait_until_cores_done(
-                    id_and_cores.first, dev_msgs::RUN_MSG_GO, id_and_cores.second, timeout_ms);
+                    id_and_cores.first,
+                    dev_msgs::RUN_MSG_GO,
+                    id_and_cores.second,
+                    timeout_ms,
+                    /*skip_dispatch_alert=*/true);
             } catch (std::runtime_error&) {
                 had_unresponsive_eth_cores = true;
                 log_warning(

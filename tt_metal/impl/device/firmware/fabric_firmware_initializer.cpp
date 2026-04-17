@@ -364,7 +364,17 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
             }
         }
 
-        if (!terminated_ok) {
+        const auto stale_elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stale_start)
+                .count();
+        if (terminated_ok) {
+            log_info(
+                tt::LogMetal,
+                "terminate_stale_erisc_routers: Device {} chan={} responded to TERMINATE in {}ms",
+                dev->id(),
+                eth_chan_id,
+                stale_elapsed);
+        } else {
             // Do NOT assert_risc_reset_at_core here: on WH, resetting an ERISC takes the
             // ETH PHY link down and breaks non-MMIO L1 access for the rest of the mesh.
             // The ERISC is almost certainly running base firmware (stale L1 value from a
@@ -373,10 +383,11 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
             log_warning(
                 tt::LogMetal,
                 "terminate_stale_erisc_routers: Device {} chan={} did not respond to TERMINATE "
-                "within {}ms — likely base firmware with stale L1; continuing without reset",
+                "within {}ms (elapsed {}ms) — likely base firmware with stale L1; continuing without reset",
                 dev->id(),
                 eth_chan_id,
-                stale_timeout_ms);
+                stale_timeout_ms,
+                stale_elapsed);
         }
     }
 }

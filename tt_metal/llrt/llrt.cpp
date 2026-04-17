@@ -323,7 +323,11 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
 }  // namespace
 
 void wait_until_cores_done(
-    tt::ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms) {
+    tt::ChipId device_id,
+    int run_state,
+    std::unordered_set<CoreCoord>& not_done_phys_cores,
+    int timeout_ms,
+    bool skip_dispatch_alert) {
     // poll the cores until the set of not done cores is empty
     [[maybe_unused]] int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
@@ -349,7 +353,9 @@ void wait_until_cores_done(
                 }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
 
-                tt::tt_metal::MetalContext::instance().on_dispatch_timeout_detected();
+                if (!skip_dispatch_alert) {
+                    tt::tt_metal::MetalContext::instance().on_dispatch_timeout_detected();
+                }
 
                 TT_THROW(
                     "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",
