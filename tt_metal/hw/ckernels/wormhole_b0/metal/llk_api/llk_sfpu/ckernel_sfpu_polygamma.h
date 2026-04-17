@@ -120,7 +120,7 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
         sfpi::vFloat result = sum * scale;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
