@@ -53,110 +53,6 @@ def get_patch_embed_params(vit_model):
 
 
 # ---------------------------------------------------------------------------
-# Window partition / unpartition (torch fallback)
-# ---------------------------------------------------------------------------
-
-
-def tt_window_partition(x, window_size):
-    """Partition a (B, H, W, C) ttnn tensor into non-overlapping windows.
-
-    Falls back to torch for the reshape/pad logic, then converts back.
-
-    # TODO: Implement natively in ttnn to avoid device round-trip.
-
-    Args:
-        x: ttnn tensor of shape (B, H, W, C) in TILE_LAYOUT on device.
-        window_size: int, window side length.
-
-    Returns:
-        windows: ttnn tensor (B*num_windows, window_size, window_size, C) in TILE_LAYOUT on device.
-        (Hp, Wp): padded height and width before partition.
-    """
-    device = x.device()
-    x_torch = ttnn.to_torch(x).float()
-    B, H, W, C = x_torch.shape
-
-    pad_h = (window_size - H % window_size) % window_size
-    pad_w = (window_size - W % window_size) % window_size
-    if pad_h > 0 or pad_w > 0:
-        x_torch = F.pad(x_torch, (0, 0, 0, pad_w, 0, pad_h))
-    Hp, Wp = H + pad_h, W + pad_w
-
-    x_torch = x_torch.view(B, Hp // window_size, window_size, Wp // window_size, window_size, C)
-    windows = x_torch.permute(0, 1, 3, 2, 4, 5).reshape(-1, window_size, window_size, C)
-
-    tt_windows = ttnn.from_torch(windows, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    return tt_windows, (Hp, Wp)
-
-
-def tt_window_unpartition(windows, window_size, pad_hw, hw):
-    """Reverse window partition and remove padding.
-
-    Falls back to torch for the reshape logic, then converts back.
-
-    # TODO: Implement natively in ttnn to avoid device round-trip.
-
-    Args:
-        windows: ttnn tensor (B*num_windows, window_size, window_size, C) in TILE_LAYOUT.
-        window_size: int, window side length.
-        pad_hw: tuple (Hp, Wp), padded height and width.
-        hw: tuple (H, W), original height and width before padding.
-
-    Returns:
-        x: ttnn tensor (B, H, W, C) in TILE_LAYOUT on device.
-    """
-    device = windows.device()
-    w_torch = ttnn.to_torch(windows).float()
-
-    Hp, Wp = pad_hw
-    H, W = hw
-    C = w_torch.shape[-1]
-    B = w_torch.shape[0] // (Hp * Wp // window_size // window_size)
-
-    x = w_torch.reshape(B, Hp // window_size, Wp // window_size, window_size, window_size, C)
-    x = x.permute(0, 1, 3, 2, 4, 5).reshape(B, Hp, Wp, C)
-
-    if Hp > H or Wp > W:
-        x = x[:, :H, :W, :].contiguous()
-
-    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    return tt_x
-
-
-# ---------------------------------------------------------------------------
-# RoPE helper (torch fallback)
-# ---------------------------------------------------------------------------
-
-
-def _apply_rope_torch(q, k, freqs_cis):
-    """Apply 2D axial rotary position encoding to Q and K tensors.
-
-    Uses torch complex arithmetic, matching the reference apply_rotary_enc.
-
-    # TODO: Implement RoPE natively in ttnn.
-
-    Args:
-        q: torch tensor (B, num_heads, L, head_dim).
-        k: torch tensor (B, num_heads, L, head_dim).
-        freqs_cis: torch complex tensor (L, head_dim//2).
-
-    Returns:
-        (q_out, k_out): torch tensors with RoPE applied, same shape as input.
-    """
-    xq_ = torch.view_as_complex(q.float().reshape(*q.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(k.float().reshape(*k.shape[:-1], -1, 2))
-
-    # Broadcast freqs_cis to match (B, num_heads, L, head_dim//2)
-    ndim = xq_.ndim
-    shape = [1] * (ndim - 2) + list(freqs_cis.shape)
-    freqs = freqs_cis.view(*shape)
-
-    xq_out = torch.view_as_real(xq_ * freqs).flatten(-2)
-    xk_out = torch.view_as_real(xk_ * freqs).flatten(-2)
-    return xq_out.to(q.dtype), xk_out.to(k.dtype)
-
-
-# ---------------------------------------------------------------------------
 # ViT Attention
 # ---------------------------------------------------------------------------
 
@@ -343,48 +239,28 @@ def tt_vit_backbone(pixel_values, backbone_params, device):
     Returns:
         List of torch tensors [feats] where feats is (B, 1024, 72, 72) in NCHW format.
     """
-    import math
-
-    # --- Patch embedding (CPU) ---
-    patch_out = tt_patch_embed(
+    # Patch embed + pos_embed + ln_pre + all 32 blocks all run on-device.
+    # Single host→device hop (pixel_values in tt_patch_embed), single device→host
+    # hop (final to_torch). No intermediate roundtrips.
+    tt_x = tt_patch_embed(
         pixel_values,
         backbone_params["patch_embed"]["weight"],
         backbone_params["patch_embed"]["bias"],
         device,
-    )
-    # Convert to torch for pos embed and block processing
-    x = ttnn.to_torch(patch_out).float()  # (B, 72, 72, 1024)
-    B, H, W, C = x.shape
+    )  # (1, 72, 72, 1024) ttnn TILE_LAYOUT
 
-    # --- Absolute position embeddings ---
-    if backbone_params.get("pos_embed") is not None:
-        # Use the reference get_abs_pos function for correct tiling/interpolation
-        from sam3.model.vitdet import get_abs_pos
-        pos_embed_2d = get_abs_pos(
-            backbone_params["pos_embed"],
-            backbone_params.get("pretrain_use_cls_token", True),
-            (H, W),
-            retain_cls_token=False,
-            tiling=backbone_params.get("tile_abs_pos", True),
-        )
-        x = x + pos_embed_2d
+    if backbone_params.get("pos_embed_tt") is not None:
+        tt_x = ttnn.add(tt_x, backbone_params["pos_embed_tt"])
 
-    # --- Pre-LayerNorm ---
-    if backbone_params.get("ln_pre_weight") is not None:
-        x = torch.nn.functional.layer_norm(
-            x, [C], backbone_params["ln_pre_weight"], backbone_params["ln_pre_bias"], eps=1e-5
+    if backbone_params.get("ln_pre_weight_tt") is not None:
+        tt_x = ttnn.layer_norm(
+            tt_x,
+            weight=backbone_params["ln_pre_weight_tt"],
+            bias=backbone_params["ln_pre_bias_tt"],
+            epsilon=1e-5,
         )
 
-    # --- Transformer blocks ---
-    num_blocks = len(backbone_params["blocks"])
-    global_att_blocks = {7, 15, 23, 31}
-    last_global = max(global_att_blocks)
-
-    # Move to device once; each block stays on-device. to_torch once after loop.
-    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    for i in range(num_blocks):
-        block_params = backbone_params["blocks"][i]
+    for block_params in backbone_params["blocks"]:
         tt_x = tt_vit_block(
             tt_x,
             block_params["tt_params"],
@@ -393,12 +269,9 @@ def tt_vit_backbone(pixel_values, backbone_params, device):
             device=device,
         )
 
+    # Single device→host hop; return NCHW feature map.
     x = ttnn.to_torch(tt_x).float()
-
-    # --- Output: convert to NCHW ---
-    # x is (B, H, W, C) -> permute to (B, C, H, W)
-    feats = x.permute(0, 3, 1, 2)
-
+    feats = x.permute(0, 3, 1, 2)  # NHWC → NCHW
     return [feats]
 
 
@@ -612,16 +485,44 @@ def preprocess_vit_backbone_weights(vit_model):
     return params
 
 
-def move_backbone_params_to_device(backbone_params, device):
-    """Move all ttnn tensors in backbone params to device.
+def move_backbone_params_to_device(backbone_params, device, grid_hw=(72, 72)):
+    """Move backbone params to device and precompute fused per-position tensors.
 
-    Args:
-        backbone_params: dict from preprocess_vit_backbone_weights().
-        device: ttnn device.
-
-    Returns:
-        Updated backbone_params with ttnn tensors on device.
+    - pos_embed is interpolated once for the fixed grid_hw via get_abs_pos and
+      uploaded as a ttnn tensor so the runtime add happens on device.
+    - ln_pre weight/bias are uploaded as ttnn tensors for on-device LN.
+    - All per-block tensors are uploaded via move_block_params_to_device.
     """
+    # Precompute pos_embed_2d (fixed grid_hw) and upload.
+    if backbone_params.get("pos_embed") is not None:
+        from sam3.model.vitdet import get_abs_pos
+        pe = get_abs_pos(
+            backbone_params["pos_embed"],
+            backbone_params.get("pretrain_use_cls_token", True),
+            grid_hw,
+            retain_cls_token=False,
+            tiling=backbone_params.get("tile_abs_pos", True),
+        )  # (1, H, W, C) torch
+        backbone_params["pos_embed_tt"] = ttnn.from_torch(
+            pe, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+    else:
+        backbone_params["pos_embed_tt"] = None
+
+    # Upload ln_pre weights.
+    if backbone_params.get("ln_pre_weight") is not None:
+        backbone_params["ln_pre_weight_tt"] = ttnn.from_torch(
+            backbone_params["ln_pre_weight"].reshape(1, -1),
+            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        )
+        backbone_params["ln_pre_bias_tt"] = ttnn.from_torch(
+            backbone_params["ln_pre_bias"].reshape(1, -1),
+            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        )
+    else:
+        backbone_params["ln_pre_weight_tt"] = None
+        backbone_params["ln_pre_bias_tt"] = None
+
     for block_params in backbone_params["blocks"]:
         move_block_params_to_device(block_params, device)
     return backbone_params
