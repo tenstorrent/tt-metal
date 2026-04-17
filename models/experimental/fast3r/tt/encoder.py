@@ -109,7 +109,7 @@ class TtEncoderAttention:
         return ttnn.linear(
             out, self.proj_w, bias=self.proj_b,
             core_grid=TtMlp.CORE_GRID, compute_kernel_config=TtMlp.COMPUTE,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b,
         )
 
 
