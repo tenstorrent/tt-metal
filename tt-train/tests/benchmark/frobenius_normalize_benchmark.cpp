@@ -6,16 +6,14 @@
 
 #include <chrono>
 
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/types.hpp"
 
 namespace {
 
@@ -38,18 +36,6 @@ const std::vector<FrobeniusShape> frobenius_shapes = {
 
 constexpr float kEps = 1e-7f;
 
-ttnn::Tensor make_random_tensor(
-    const ttnn::Shape& shape, ttnn::DataType dtype, ttnn::distributed::MeshDevice* device, uint32_t seed) {
-    std::vector<float> data(shape.volume());
-    ttml::core::parallel_generate(
-        std::span{data.data(), data.size()}, []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); }, seed);
-    return ttnn::Tensor::from_vector(
-        data,
-        ttnn::TensorSpec(
-            shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
-        device);
-}
-
 ttnn::Tensor composite_frobenius_normalize(const ttnn::Tensor& input, float eps) {
     auto squares = ttnn::square(input);
     auto sum_squares = ttnn::sum(squares, ttsl::SmallVector<int>{-2, -1}, true);
@@ -66,11 +52,11 @@ void BM_FrobeniusNormalize_Fused(benchmark::State& state) {
     auto device = ttnn::device::open_mesh_device(device_id);
     device->enable_program_cache();
 
-    const auto dtype = ttnn::DataType::BFLOAT16;
     const ttnn::Shape shape(frobenius_shape.shape);
     const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(frobenius_shape.name));
 
-    auto input = make_random_tensor(shape, dtype, device.get(), seed);
+    auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0f, 1.0f, seed);
+    auto input = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(data, shape, device.get());
 
     for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
         auto result = ttml::metal::frobenius_normalize(input, kEps);
@@ -108,11 +94,11 @@ void BM_FrobeniusNormalize_Composite(benchmark::State& state) {
     auto device = ttnn::device::open_mesh_device(device_id);
     device->enable_program_cache();
 
-    const auto dtype = ttnn::DataType::BFLOAT16;
     const ttnn::Shape shape(frobenius_shape.shape);
     const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(frobenius_shape.name));
 
-    auto input = make_random_tensor(shape, dtype, device.get(), seed);
+    auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0f, 1.0f, seed);
+    auto input = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(data, shape, device.get());
 
     for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
         auto result = composite_frobenius_normalize(input, kEps);
