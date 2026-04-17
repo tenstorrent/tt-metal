@@ -160,41 +160,6 @@ def _ttnn_block(x, p, attention_mask):
     return x
 
 
-def _upload_projects(head, device):
-    """Prepare the 4 DPT 1x1 `projects` convs as on-chip ttnn.linear weights.
-    Each is Conv2d(1024, out_ch, kernel_size=1) — applied per spatial position,
-    equivalent to a linear on the (B, N, 1024) sequence-shaped tensor."""
-    out = []
-    for i in range(len(OUT_LAYERS)):
-        proj = head.projects[i]
-        # Conv2d weight shape (out_ch, 1024, 1, 1) -> linear weight (1024, out_ch).
-        w = proj.weight.squeeze(-1).squeeze(-1).T.contiguous()
-        b = proj.bias
-        out.append({"weight": _to_dev(w, device), "bias": _to_dev(b.unsqueeze(0), device)})
-    return out
-
-
-def _cpu_head_post_projects(head, projected, img_hw):
-    """DPT head starting from post-project features. `projected[i]` is shaped
-    (B, 1+N, ch_i) — projects[i] was already applied on chip."""
-    H, W = img_hw
-    Hp, Wp = H // PATCH_SIZE, W // PATCH_SIZE
-    feats = []
-    for i, x in enumerate(projected):
-        x = x[:, 1:, :].transpose(1, 2).reshape(x.shape[0], -1, Hp, Wp)
-        feats.append(head.resize_layers[i](x))
-    layer_rns = [head.scratch.layer1_rn, head.scratch.layer2_rn,
-                 head.scratch.layer3_rn, head.scratch.layer4_rn]
-    rn = [layer_rns[i](feats[i]) for i in range(4)]
-    path = head.scratch.refinenet4(rn[3])
-    path = head.scratch.refinenet3(path, rn[2])
-    path = head.scratch.refinenet2(path, rn[1])
-    path = head.scratch.refinenet1(path, rn[0])
-    path = head.scratch.output_conv1(path)
-    path = F.interpolate(path, size=(H, W), mode="bilinear", align_corners=True)
-    return head.scratch.output_conv2(path)
-
-
 def _cpu_head_channels_last(head, intermediates, img_hw):
     """DPT head with explicit channels_last activation layout. The head's weights
     are converted to channels_last in setup; we need to convert each intermediate
@@ -260,13 +225,11 @@ def _setup(pixel_values: torch.Tensor):
     seq_len = (img_size // PATCH_SIZE) ** 2 + 1  # +1 for cls token
     padded = _next_tile(seq_len)
     attention_mask = _build_attention_mask(seq_len, padded, device)
-    projects = _upload_projects(cpu_model.head, device)
     _state.update(
         cpu_model=cpu_model,
         device=device,
         blocks=blocks,
         attention_mask=attention_mask,
-        projects=projects,
     )
 
 
@@ -278,7 +241,6 @@ def run(pixel_values: torch.Tensor):
     device = _state["device"]
     blocks = _state["blocks"]
     attention_mask = _state["attention_mask"]
-    projects = _state["projects"]
 
     with torch.inference_mode():
         # Backbone is bfloat16; match dtype on input to avoid an in-conv cast.
@@ -297,35 +259,27 @@ def run(pixel_values: torch.Tensor):
             device=device,
         )
 
-        # Apply the DPT 1x1 `projects` on chip as ttnn.linears, right after
-        # the matching backbone block produces the intermediate. Keeps chip
-        # pipelining (the project is queued alongside the next block) and
-        # shrinks each intermediate from 1024 channels down to 256/512/1024.
-        projected_handles: List = []
+        # Save the ttnn handles for the intermediate stages without syncing,
+        # so chip can pipeline all 24 blocks back-to-back. We sync them once
+        # at the end via a single batched download loop.
+        intermediate_handles: List = []
         out_layer_set = set(OUT_LAYERS)
         for i, p in enumerate(blocks):
             x_tt = _ttnn_block(x_tt, p, attention_mask)
             if i in out_layer_set:
-                proj = projects[OUT_LAYERS.index(i)]
-                projected_handles.append(
-                    ttnn.linear(
-                        x_tt, proj["weight"], bias=proj["bias"],
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
-                        compute_kernel_config=_hifi4_kernel_config(),
-                    )
-                )
+                # Clone so the next block can reassign x_tt without freeing this.
+                intermediate_handles.append(ttnn.clone(x_tt))
+
+        intermediates_cpu: List[torch.Tensor] = [
+            ttnn.to_torch(h)[..., :N, :] for h in intermediate_handles
+        ]
+        for h in intermediate_handles:
+            ttnn.deallocate(h)
         ttnn.deallocate(x_tt)
 
-        projected_cpu: List[torch.Tensor] = [
-            ttnn.to_torch(h)[..., :N, :] for h in projected_handles
-        ]
-        for h in projected_handles:
-            ttnn.deallocate(h)
-
-        # CPU DPT head picks up from post-projects; the head was cast to
-        # bfloat16 + channels_last in setup so NHWC kernels dispatch.
-        depth = _cpu_head_post_projects(
-            cpu_model.head, projected_cpu, img_hw=pixel_values.shape[-2:]
+        # DPT head with explicit channels_last activation layout.
+        depth = _cpu_head_channels_last(
+            cpu_model.head, intermediates_cpu, img_hw=pixel_values.shape[-2:]
         )
 
     return depth, 0.0
