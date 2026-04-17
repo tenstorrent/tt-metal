@@ -282,8 +282,11 @@ static std::vector<Tensor> pool2d_L1(
     //      channels=290, num_cores_c=1:  ceil(290/1)=290, 290%32=2 → tile pad needed.
     uint32_t channels_per_shard = tt::div_up(output_c, num_cores_c);
     uint32_t cps_mod_tile = channels_per_shard % tt::constants::TILE_WIDTH;
-    bool needs_tile_pad = cps_mod_tile > 0 && cps_mod_tile < tt::constants::FACE_WIDTH;
-    uint32_t base_alignment = needs_tile_pad ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2;
+    // For TILE output the shard width must be TILE_WIDTH-aligned regardless; for ROW_MAJOR
+    // we only round up to TILE_WIDTH when channels_per_shard is strictly partial (< FACE_WIDTH).
+    bool needs_tile_pad = !is_out_tiled && cps_mod_tile > 0 && cps_mod_tile < tt::constants::FACE_WIDTH;
+    uint32_t base_alignment =
+        (is_out_tiled || needs_tile_pad) ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2;
     uint32_t output_c_padded = tt::round_up(output_c, num_cores_c * base_alignment);
     uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(
