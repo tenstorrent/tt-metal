@@ -1977,6 +1977,17 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         IDevice* device = this->get_device(coord);
         auto device_id = device->id();
 
+        // D2H sockets require the sender core to reside on a PCIe-connected (MMIO)
+        // device.  Remote devices (e.g. device 1 on N300) are reachable only via
+        // ethernet and cannot map pinned host memory, so skip them.
+        if (!device->is_mmio_capable()) {
+            log_info(
+                tt::LogMetal,
+                "Device {} is not MMIO-capable (remote) — skipping RT profiler for this device",
+                device_id);
+            continue;
+        }
+
         // Find the closest available dispatch core to PCIe for real-time profiler.
         // On heavily-harvested setups the dispatch core descriptor may return a
         // coordinate outside the device's TENSIX logical grid.  When that happens
