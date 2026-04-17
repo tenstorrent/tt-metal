@@ -15,14 +15,22 @@ Description:
     that the mailbox value may be an `EncodePerDeviceProgramID`-encoded form
     of the raw runtime_id.
 
-    Encoding rules (mirrored from detail::EncodePerDeviceProgramID in
+    Encoding rules (mirrors detail::EncodePerDeviceProgramID in
     tt_metal/impl/profiler/tt_metal_profiler.cpp):
-      - Slow dispatch: mailbox host_assigned_id == EncodePerDeviceProgramID(runtime_id, device_id).
-      - Fast dispatch (no Tracy): mailbox host_assigned_id == raw runtime_id.
-      - Fast dispatch (TRACY_ENABLE builds): mailbox host_assigned_id is also encoded
-        (see fd_mesh_command_queue.cpp writing kernel_config.host_assigned_id()).
-    Since dispatch_mode alone can't distinguish the last two cases, `lookup` tries
-    the raw value first and falls back to the decoded form as decoded form is lower in value
+
+    Slow dispatch (LaunchProgram path in tt_metal/tt_metal.cpp):
+        host_assigned_id is always EncodePerDeviceProgramID(runtime_id, device_id).
+
+    Fast dispatch — non-traced workloads (FDMeshCommandQueue::
+    update_launch_messages_for_device_profiler):
+        Encoded only when rtoptions().get_profiler_enabled() is true
+        (TT_METAL_DEVICE_PROFILER env var). Otherwise raw runtime_id.
+
+    Fast dispatch — traced workloads (FDMeshCommandQueue::record_end):
+        Encoded whenever the build defines TRACY_ENABLE (default for
+        build_metal.sh). No runtime gate.
+
+    Lookup tries the raw value first and falls back to the decoded form as decoded form is lower in value
     and more likely to hit collision.
 
     This is intentionally cached with @triage_singleton so the mapping is computed once per
