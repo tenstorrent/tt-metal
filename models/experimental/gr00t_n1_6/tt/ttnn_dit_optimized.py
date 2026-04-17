@@ -184,21 +184,18 @@ class DiTAttentionOptimizedTTNN:
         v = ttnn.reshape(v, (batch_size, kv_seq, self.num_heads, self.padded_head_dim))
         v = ttnn.permute(v, (0, 2, 1, 3))
 
-        # Scaled dot-product attention: Q @ K^T / sqrt(head_dim)
-        scale = 1.0 / math.sqrt(self.head_dim)
-        q = ttnn.mul(q, scale)
-
-        # Transpose K: [B, heads, kv_seq, padded_hd] -> [B, heads, padded_hd, kv_seq]
-        k = ttnn.permute(k, (0, 1, 3, 2))
-
-        attn = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        # Fused SDPA (FlashAttention-2) — replaces manual matmul+softmax+matmul.
+        # Pass the true head_dim scale (1/sqrt(48)), not the padded 64, to preserve PCC.
+        context = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=False,
+            scale=1.0 / math.sqrt(self.head_dim),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
-
-        attn = ttnn.softmax_in_place(attn, numeric_stable=True)
-
-        context = ttnn.matmul(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
-        ttnn.deallocate(attn)
         ttnn.deallocate(v)
 
         # Reshape back: [B, heads, q_seq, padded_hd] -> [B, q_seq, heads*padded_hd]
