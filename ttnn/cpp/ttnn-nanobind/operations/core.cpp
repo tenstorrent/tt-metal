@@ -52,7 +52,8 @@ void py_module_types(nb::module_& mod) {
     // Primary config class (ComputeKernelConfig is the canonical name, but we expose as WormholeComputeKernelConfig
     // for backward compatibility)
     nb::class_<ComputeKernelConfig>(mod, "WormholeComputeKernelConfig", R"doc(
-        Compute kernel configuration for Wormhole devices and also valid for Blackhole devices.
+        Compute kernel configuration for Wormhole devices. Note that ``BlackholeComputeKernelConfig``
+        is a type alias for the same class (``WormholeComputeKernelConfig``).
 
         Controls the precision/throughput trade-offs of the on-chip matrix engine and SFPU.
         Pass an instance of this class as the ``compute_kernel_config`` argument to ops such as

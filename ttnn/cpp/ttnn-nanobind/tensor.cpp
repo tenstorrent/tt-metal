@@ -60,6 +60,11 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
         accurate results, at the cost of proportionally lower throughput. The matrix engine uses
         5 bits (1 hidden + 4) from SrcA and 7 bits (1 hidden + 6) from SrcB per pass:
 
+        - ``LoFi``  (1 pass):  SrcA uses the 4 MSB mantissa bits; SrcB uses the 6 MSB mantissa bits.
+        - ``HiFi2`` (2 passes): SrcA adds the next 4 LSB bits; SrcB keeps the 6 MSB bits.
+        - ``HiFi3`` (3 passes): SrcA keeps the 4 MSB bits; SrcB adds the next 6 LSB bits.
+        - ``HiFi4`` (4 passes): SrcA adds the next 4 LSB bits; SrcB keeps both 6 MSB and 6 LSB bits.
+
         Note: ``reduce_max`` and elementwise ``add``/``sub`` are unaffected by this setting.
         Elementwise ``mul`` and ``reduce_average``/``sum`` do respect this setting.
     )doc");

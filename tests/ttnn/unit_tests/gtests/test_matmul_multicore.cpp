@@ -57,14 +57,14 @@ class MatmulMulticoreFixture : public TTNNFixtureWithSuiteDevice<MatmulMulticore
                                public testing::WithParamInterface<MatmulMulticoreParam> {};
 
 // Verify that MatmulMultiCoreProgramFactory produces accurate results.
-TEST_P(MatmulMulticoreFixture, ComputeKernelConfigIsForwarded) {
+TEST_P(MatmulMulticoreFixture, MatmulMulticoreAccuracy) {
     auto param = GetParam();
     const int M = param.M;
     const int K = param.K;
     const int N = param.N;
 
-    // Generate random float32 inputs using a fixed seed (matches torch.manual_seed(0)
-    // + torch.randn behaviour from Python regtests).
+    // Generate random float32 inputs using a fixed seed (similar to torch.randn behaviour
+    // from Python regtests).
     std::mt19937 rng(0);
     std::normal_distribution<float> dist(0.0f, 1.0f);
 
@@ -84,22 +84,21 @@ TEST_P(MatmulMulticoreFixture, ComputeKernelConfigIsForwarded) {
     // --- Device matmul ---
     auto& device = *device_;
 
-    const MemoryConfig l1_mem_cfg{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::L1};
-    const TensorLayout float32_l1_tile(DataType::FLOAT32, PageConfig(Layout::TILE), l1_mem_cfg);
+    const MemoryConfig mem_cfg{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    const TensorLayout layout(DataType::FLOAT32, PageConfig(Layout::TILE), mem_cfg);
     const ttnn::QueueId cq = ttnn::QueueId(0);
 
     // Create input tensors on device via the host → device path used in other gtests.
-    const Tensor host_a = Tensor::from_vector(data_a, TensorSpec(ttnn::Shape({M, K}), float32_l1_tile));
-    const Tensor host_b = Tensor::from_vector(data_b, TensorSpec(ttnn::Shape({K, N}), float32_l1_tile));
-    const Tensor input_a = host_a.to_device(&device, l1_mem_cfg, cq);
-    const Tensor input_b = host_b.to_device(&device, l1_mem_cfg, cq);
+    const Tensor host_a = Tensor::from_vector(data_a, TensorSpec(ttnn::Shape({M, K}), layout));
+    const Tensor host_b = Tensor::from_vector(data_b, TensorSpec(ttnn::Shape({K, N}), layout));
+    const Tensor input_a = host_a.to_device(&device, mem_cfg, cq);
+    const Tensor input_b = host_b.to_device(&device, mem_cfg, cq);
 
     // HiFi3 + fp32_dest_acc_en to avoid known Wormhole HW bug #38306.
     const ttnn::ComputeKernelConfig compute_cfg{
         .math_fidelity = tt::tt_metal::MathFidelity::HiFi3,
         .math_approx_mode = false,
         .fp32_dest_acc_en = true,
-        .packer_l1_acc = true,
     };
 
     // Bypass the auto-selection logic and force MatmulMultiCoreProgramFactory,
@@ -111,7 +110,7 @@ TEST_P(MatmulMulticoreFixture, ComputeKernelConfigIsForwarded) {
         input_b,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
-        l1_mem_cfg,
+        mem_cfg,
         /*dtype=*/std::nullopt,
         program_cfg,
         /*activation=*/std::nullopt,
