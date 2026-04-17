@@ -408,7 +408,12 @@ class CompressedTensor:
             return [desc]
 
     def buffer_address(self) -> int:
-        """Return the DRAM buffer address of the packed data tensor."""
+        """Return the DRAM buffer address of the packed data tensor (lockstep mode only)."""
+        assert (
+            not self._per_core_allocation
+        ), "buffer_address() not available in per_core_allocation mode; use get_data_l1_address_per_core()"
+        assert self.data is not None, "Data tensor not created"
+        assert ttnn.is_tensor_storage_on_device(self.data), "Data tensor not on device"
         return self.data.buffer_address()
 
     def get_data_l1_address(self) -> int:

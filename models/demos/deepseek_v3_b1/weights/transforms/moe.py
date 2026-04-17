@@ -90,6 +90,11 @@ def shuffle_dram_assignment(assignment: np.ndarray, num_banks: int) -> np.ndarra
         ``(tiles_h, tiles_w)`` int8 array in DRAM-shuffled order — same counts, reordered.
     """
     tiles_h, tiles_w = assignment.shape
+    if tiles_w % num_banks != 0:
+        raise ValueError(
+            f"shuffle_dram_assignment requires tiles_w ({tiles_w}) to be evenly divisible "
+            f"by num_banks ({num_banks})"
+        )
     per_N_tiles = tiles_w // num_banks
     K_tiles = tiles_h
     num_tiles_per_shard = K_tiles * per_N_tiles

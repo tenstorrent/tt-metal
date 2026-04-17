@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Protocol, Union, runtime_checkable
 
 if TYPE_CHECKING:
+    from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
     from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
 
 import numpy as np
@@ -92,7 +93,7 @@ class TensorCacheProtocol(Protocol):
         *,
         preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
-    ) -> ttnn.Tensor | dict[str, "OverlappedTensor"]:
+    ) -> "ttnn.Tensor | dict[str, OverlappedTensor] | CompressedTensor":
         ...
 
 
@@ -389,7 +390,7 @@ class TensorCache:
         *,
         preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
-    ) -> ttnn.Tensor | dict[str, "OverlappedTensor"]:
+    ) -> "ttnn.Tensor | dict[str, OverlappedTensor] | CompressedTensor":
         """Load from cache or build, then return a device tensor or overlapped views."""
         target = fingerprint.target
         if not isinstance(target, (TensorTarget, FusionGroupSpec, CompressedTensorTarget)):
@@ -502,7 +503,7 @@ class EphemeralTensorCache:
         *,
         preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
-    ) -> ttnn.Tensor | dict[str, "OverlappedTensor"]:
+    ) -> "ttnn.Tensor | dict[str, OverlappedTensor] | CompressedTensor":
         target = fingerprint.target
         if not isinstance(target, (TensorTarget, FusionGroupSpec, CompressedTensorTarget)):
             raise TypeError(

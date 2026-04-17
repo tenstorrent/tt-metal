@@ -55,13 +55,18 @@ def pack_compact_tiles(
     Returns:
         Flat ``bytes``, variable-length per tile, logical row-major order.
     """
+    if tile_hw != DEFAULT_TILE_HW:
+        raise ValueError(f"tile_hw={tile_hw} is not supported; underlying BFP primitives require {DEFAULT_TILE_HW}")
     K, N = w_kn.shape
+    if K % tile_hw != 0 or N % tile_hw != 0:
+        raise ValueError(
+            f"w_kn shape {w_kn.shape} must be divisible by tile_hw={tile_hw}; "
+            f"got remainders K%tile_hw={K % tile_hw}, N%tile_hw={N % tile_hw}"
+        )
     tiles_h = K // tile_hw
     tiles_w = N // tile_hw
-    assert assignment_2d.shape == (
-        tiles_h,
-        tiles_w,
-    ), f"assignment_2d {assignment_2d.shape} does not match tile grid ({tiles_h}, {tiles_w})"
+    if assignment_2d.shape != (tiles_h, tiles_w):
+        raise ValueError(f"assignment_2d {assignment_2d.shape} does not match tile grid ({tiles_h}, {tiles_w})")
     buf = io.BytesIO()
     for r in range(tiles_h):
         for c in range(tiles_w):
@@ -92,7 +97,15 @@ def unpack_compact_tiles(
     Returns:
         ``(K, N)`` float32 numpy array in logical tile order.
     """
+    if tile_hw != DEFAULT_TILE_HW:
+        raise ValueError(f"tile_hw={tile_hw} is not supported; underlying BFP primitives require {DEFAULT_TILE_HW}")
     tiles_h, tiles_w = int(assignment_2d.shape[0]), int(assignment_2d.shape[1])
+    expected_bytes = compact_tile_byte_count(assignment_2d, tile_hw)
+    if len(stream) != expected_bytes:
+        raise ValueError(
+            f"stream length {len(stream)} does not match assignment-implied size {expected_bytes}; "
+            "stream may be truncated or corrupt"
+        )
     K = tiles_h * tile_hw
     N = tiles_w * tile_hw
     w_out = np.zeros((K, N), dtype=np.float32)

@@ -1139,7 +1139,7 @@ def test_prepare_moe_routed_experts_bspm_output_types_4x2(bh_2d_mesh_device, tmp
 
     cache_config = CacheConfig(
         cache=TensorCache(tmp_path),
-        context=_test_cache_context(mesh_shape=(1, 1)),
+        context=_test_cache_context(mesh_shape=(4, 2)),
     )
 
     routed = prepare_moe_routed_experts_bspm(
@@ -1255,7 +1255,7 @@ def test_prepare_moe_routed_experts_bspm_tile_assignment_4x2(bh_2d_mesh_device, 
 
     cache_config = CacheConfig(
         cache=TensorCache(tmp_path),
-        context=_test_cache_context(mesh_shape=(1, 1)),
+        context=_test_cache_context(mesh_shape=(4, 2)),
     )
 
     routed = prepare_moe_routed_experts_bspm(
@@ -1314,7 +1314,7 @@ def test_prepare_moe_routed_experts_bspm_footprint_4x2(bh_2d_mesh_device, tmp_pa
 
     cache_config = CacheConfig(
         cache=TensorCache(tmp_path),
-        context=_test_cache_context(mesh_shape=(1, 1)),
+        context=_test_cache_context(mesh_shape=(4, 2)),
     )
     prepare_moe_routed_experts_bspm(
         submesh,
@@ -1370,7 +1370,7 @@ def test_prepare_moe_layer_bspm_cache_roundtrip_4x2(bh_2d_mesh_device, tmp_path)
 
     cache_config = CacheConfig(
         cache=TensorCache(tmp_path),
-        context=_test_cache_context(mesh_shape=(1, 1)),
+        context=_test_cache_context(mesh_shape=(4, 2)),
     )
 
     # Cold miss

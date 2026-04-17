@@ -88,7 +88,6 @@ def test_pack_unpack_mixed_formats():
     for r in range(tiles_h):
         for c in range(tiles_w):
             code = int(assignment[r, c])
-            tile_orig = w[r * TILE_HW : (r + 1) * TILE_HW, c * TILE_HW : (c + 1) * TILE_HW]
             tile_out = reconstructed[r * TILE_HW : (r + 1) * TILE_HW, c * TILE_HW : (c + 1) * TILE_HW]
 
             if code == 3:  # zero tile — should be all zeros
@@ -142,7 +141,6 @@ def test_compact_smaller_than_bfp4_for_mixed_assignment():
     """Compact format is strictly smaller than uniform BFP4 when assignment contains BFP2/zero tiles."""
     tiles_h, tiles_w = 8, 8
     rng = np.random.default_rng(99)
-    w = _random_weight(tiles_h, tiles_w, seed=99)
     # 50% BFP4, 30% BFP2, 20% zero
     assignment = rng.choice([1, 2, 3], size=(tiles_h, tiles_w), p=[0.50, 0.30, 0.20]).astype(np.int8)
 
