@@ -257,6 +257,8 @@ class OpDescriptor:
         self._descriptor = full._descriptor
         self.output_tensors = full.output_tensors
         self._complete_fn = None
+        if self._descriptor is None and self._factory_fn is not None:
+            _ = self.descriptor
 
     @property
     def descriptor(self):
@@ -327,35 +329,48 @@ class OpDescriptor:
             param_names = list(params.keys())
             required_positions = {t: param_names.index(t) for t in required}
 
-            # Per-factory cache: maps a cheap identity key to a previously
-            # computed (program_cache_key, input_name_map) pair.  Avoids
-            # rebuilding C++ param structs and calling compute_program_hash
-            # on repeated inline calls with equivalent arguments.
+            # Per-factory cache: maps a cheap argument fingerprint to a
+            # previously computed (program_cache_key, input_name_map) pair.
+            # Avoids rebuilding C++ param structs and calling
+            # compute_program_hash on repeated inline calls with equivalent
+            # arguments.
+            #
+            # Cache key strategy:
+            #   - Tensors use ``hash(tensor.spec)`` — a fast, content-based
+            #     C++ hash of shape/dtype/layout/memory_config.  Safe across
+            #     GC cycles (no id-reuse risk).
+            #   - All other arguments use ``id()``.  This is safe for
+            #     long-lived objects (configs, core ranges) that are typically
+            #     created once and reused.  If a caller creates fresh config
+            #     objects each call, the cache misses (safe, just slower).
+            #
+            # MAINTENANCE NOTE: id() for non-tensor C++ binding types
+            # (CoreRangeSet, ComputeKernelConfig, etc.) means the cache
+            # only helps when callers reuse the same Python objects.  If a
+            # binding type gains a content-based __hash__, it can replace
+            # id() here for better hit rates with freshly-constructed objects.
             _program_key_cache: dict = {}
 
             def _is_pending(val):
                 return val is None or isinstance(val, _DeferredOutput)
 
-            _VALUE_TYPES = (int, float, str, bool, type(None))
-
             def _inline_cache_key(args, kwargs):
-                """Cheap identity key from argument metadata.
+                """Cheap fingerprint from argument metadata.
 
-                Tensors: ``id()`` — stable for the same object (decode loop).
-                Value types (int, float, str, bool, None): value itself, since
-                Python may create new objects for literals like ``1e-6``.
-                C++ binding objects (configs, etc.): ``id()`` — stable for
-                module-level constants held by the model.
+                Tensors use ``hash(tensor.spec)`` (content-based, safe from
+                ``id()`` recycling).  Everything else uses ``id()`` (safe for
+                long-lived config objects; causes harmless cache misses if
+                objects are recreated each call).
                 """
                 parts = []
                 for i, a in enumerate(args):
-                    if isinstance(a, _VALUE_TYPES):
-                        parts.append((i, a))
+                    if isinstance(a, ttnn.Tensor):
+                        parts.append((i, hash(a.spec)))
                     else:
                         parts.append((i, id(a)))
                 for k, v in sorted(kwargs.items()):
-                    if isinstance(v, _VALUE_TYPES):
-                        parts.append((k, v))
+                    if isinstance(v, ttnn.Tensor):
+                        parts.append((k, hash(v.spec)))
                     else:
                         parts.append((k, id(v)))
                 return tuple(parts)
