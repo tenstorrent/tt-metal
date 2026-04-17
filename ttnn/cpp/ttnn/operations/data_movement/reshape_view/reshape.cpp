@@ -116,6 +116,7 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     const ttnn::Shape& padded_shape,
     const MemoryConfig& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    // RM kernel assumes linear page ordering; use s2i/i2s for sharded buffers.
     auto temp_tensor = tensor;
     auto intermediate_out_memory_config = memory_config;
 
@@ -128,17 +129,13 @@ ttnn::Tensor perform_reshape_on_2D_RM(
         intermediate_out_memory_config =
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, intermediate_out_memory_config.buffer_type()};
     }
-    // Guaranteed to be interleaved
-    // We are guaranteed to be working 2D->2D in this function
+
     auto temp_tensor2 = ttnn::prim::reshape_view(
         temp_tensor, logical_shape, padded_shape, intermediate_out_memory_config, false, sub_core_grid);
 
     if (memory_config.is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
-
-        // Recompute the shard spec for the output tensor shape
         auto output_mem_config = recompute_shard_spec_for_output(memory_config, temp_tensor2.tensor_spec());
-
         return ttnn::interleaved_to_sharded(temp_tensor2, output_mem_config, std::nullopt);
     }
     return temp_tensor2;
