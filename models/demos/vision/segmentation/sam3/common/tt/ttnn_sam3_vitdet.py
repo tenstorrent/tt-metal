@@ -95,7 +95,7 @@ def tt_vit_attention(
     L = tt_q.shape[-2]
     scale = head_dim ** -0.5
 
-    if L >= 1024 and (L % 32) == 0:
+    if L >= 512 and (L % 32) == 0:
         tt_attn_out = ttnn.transformer.scaled_dot_product_attention(
             tt_q, tt_k, tt_v, is_causal=False, scale=scale,
         )
