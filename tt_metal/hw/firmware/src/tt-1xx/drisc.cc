@@ -7,7 +7,7 @@
 #include "risc_common.h"
 #include "noc.h"
 #include "noc_nonblocking_api.h"
-#include "drisc_mode.h"
+#include "experimental/drisc_mode.h"
 #include "internal/firmware_common.h"
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
