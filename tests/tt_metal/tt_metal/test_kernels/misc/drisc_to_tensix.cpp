@@ -6,7 +6,7 @@
 // reads from the Tensix's L1.
 
 #include "api/compile_time_args.h"
-#include "drisc_mode.h"
+#include "experimental/drisc_mode.h"
 #include "experimental/endpoints.h"
 #include "experimental/noc.h"
 #include "experimental/core_local_mem.h"

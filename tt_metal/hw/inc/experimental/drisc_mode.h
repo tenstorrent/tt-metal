@@ -54,7 +54,7 @@
     noc: NIU instance (0 or 1). Defaults to noc_index.
 */
 
-#include "noc.h"
+#include "noc/noc.h"
 #include "internal/dataflow/dataflow_api_common.h"
 
 inline __attribute__((always_inline)) void drisc_set_stream_mode(uint8_t noc = noc_index) {
