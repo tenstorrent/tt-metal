@@ -11,7 +11,6 @@ This tests the decoupled workflow:
 """
 
 import json
-import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -2300,11 +2299,6 @@ def imagenet_label_dict():
 
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
-@pytest.mark.skipif(
-    os.environ.get("TT_METAL_LLK_ASSERTS") == "1",
-    reason="ResNet50 enables conv2d activation reuse, which overshoots CB fifo_limit "
-    "by design and trips LLK asserts (GH #42510)",
-)
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
