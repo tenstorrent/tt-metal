@@ -976,17 +976,20 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
     Returns list of (base_token, spec_token) tuples.
 
     Weights match SyntheticWeightProvider from weight_provider.py:
-      - Embedding: random (seed=100)
-      - LM head: random (seed=200), bfloat8_b quantized
+      - Embedding: one-hot (emb[i, i % K] = 1)
+      - LM head: one-hot (lm_w[i % n_total, i] = 1, rest -1), bfloat8_b quantized
       - MTP norms: ones;  MTP eh_proj: randn (from _build_synthetic_mtp_state_dict)
     """
     K = _EMBED_HIDDEN
+    n_total = _LM_HEAD_N_SYNTHETIC
 
-    # Random embedding (same as SyntheticWeightProvider.load_embedding, seed=100)
-    base_embed_w = torch.randn(_VOCAB_SIZE, K, dtype=torch.bfloat16, generator=torch.Generator().manual_seed(100))
+    # One-hot embedding (same as SyntheticWeightProvider.load_embedding)
+    base_embed_w = torch.zeros(_VOCAB_SIZE, K, dtype=torch.bfloat16)
+    base_embed_w[torch.arange(_VOCAB_SIZE), torch.arange(_VOCAB_SIZE, dtype=torch.int64) % K] = 1
 
-    # Random LM head (same as SyntheticWeightProvider.load_lm_head, seed=200)
-    lm_w = torch.randn(_VOCAB_SIZE, K, dtype=torch.bfloat16, generator=torch.Generator().manual_seed(200))
+    # One-hot LM head (same as SyntheticWeightProvider.load_lm_head)
+    lm_w = torch.full((_VOCAB_SIZE, K), -1.0, dtype=torch.bfloat16)
+    lm_w[torch.arange(K, dtype=torch.int64) % n_total, torch.arange(K)] = 1
     norm_w = torch.ones(K, dtype=torch.bfloat16)
 
     # Round-trip through bfloat8_b to match device quantization (prepare_weights stores as bfloat8_b)
@@ -4871,7 +4874,7 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
     iterations = 50
-    run_golden = False
+    run_golden = True
 
     config = create_single_galaxy_combined_spec_decode_pipeline_configuration(
         SyntheticWeightProvider(),
@@ -4911,7 +4914,8 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
                 torch_token[0, 6] = slot_id
                 torch_token[0, 7] = iteration
-                torch_token[0, 8] = tok0_pos if iteration > 0 else pos_id
+                torch_token[0, 8] = iteration
+                torch_token[0, 9] = iteration
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
                 output_tensor = ttnn.from_torch(
                     torch.zeros(1, token_meta_words, dtype=torch.uint32),

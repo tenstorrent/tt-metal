@@ -564,7 +564,7 @@ class LMHeadSampling:
             print(f"[lm_head_sampling] eh_page_size={eh_page_size}, eh_num_pages={eh_num_pages}", flush=True)
             print("[lm_head_sampling] get_max_page_size_and_num_pages done", flush=True)
             eh_in1_block_size_bytes = eh_subblock_k * eh_proj_tile_size
-            eh_num_in1_buffers = 3  # Double buffering (must match NumBuffers=2 in dram_streaming_matmul.hpp)
+            eh_num_in1_buffers = 2  # Double buffering (must match NumBuffers=2 in dram_streaming_matmul.hpp)
             eh_in1_CB_tiles = eh_subblock_k * eh_num_in1_buffers
             eh_in1_CB_size = eh_in1_CB_tiles * eh_proj_tile_size
         else:
