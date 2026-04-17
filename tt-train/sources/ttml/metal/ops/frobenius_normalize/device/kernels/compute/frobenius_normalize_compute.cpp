@@ -5,11 +5,11 @@
 // Frobenius normalize compute kernel — all-to-origin reduction
 //
 // Phase 1:   square + accumulate all input tiles → cb_sq_acc (FP32 in DST)
-// Phase 2:   sfpu_reduce → cb_sq_partial (reader writes partial to origin's L1)
+// Phase 2:   sfpu_reduce → cb_sq_partial (reader writes partial to origin's L1 using 4-byte stride) 
 // Phase 3:   origin only: sfpu_reduce all partials from cb_recv, sqrt + eps + recip → cb_norm
-// Phase 4:   all cores: multiply each tile by 1/norm (block of 4)
+// Phase 4:   all cores: multiply each tile by 1/norm
 //
-// BF16 I/O, FP32 internal. Only BF16 truncation at input unpack and output pack.
+// BF16 I/O, all intermediates are FP32
 
 #include <cstdint>
 
@@ -33,6 +33,7 @@ constexpr auto cb_output = tt::CBIndex::c_5;
 constexpr auto cb_sq_partial = tt::CBIndex::c_7;
 
 constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
+constexpr uint32_t block_size = get_compile_time_arg_val(1);
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -73,13 +74,12 @@ void kernel_main() {
         }
     }
 
-    // Drain padding tiles from reader's blocked Push (block_size=4, tail padded)
+    // Drain padding tiles
     {
-        constexpr uint32_t block_size = 4;
         constexpr uint32_t padding = (block_size - num_tiles_per_core % block_size) % block_size;
-        for (uint32_t p = 0; p < padding; ++p) {
-            cb_wait_front(cb_input, 1);
-            cb_pop_front(cb_input, 1);
+        if constexpr (padding > 0) {
+            cb_wait_front(cb_input, padding);
+            cb_pop_front(cb_input, padding);
         }
     }
 
@@ -161,7 +161,6 @@ void kernel_main() {
 
         init_sfpu(cb_input, cb_output);
 
-        constexpr uint32_t block_size = 4;
         constexpr uint32_t num_blocks = num_tiles_per_core / block_size;
         constexpr uint32_t remainder = num_tiles_per_core % block_size;
 
@@ -194,9 +193,9 @@ void kernel_main() {
         }
         // Drain Pass 2 padding tiles
         constexpr uint32_t padding = (block_size - num_tiles_per_core % block_size) % block_size;
-        for (uint32_t p = 0; p < padding; ++p) {
-            cb_wait_front(cb_input, 1);
-            cb_pop_front(cb_input, 1);
+        if constexpr (padding > 0) {
+            cb_wait_front(cb_input, padding);
+            cb_pop_front(cb_input, padding);
         }
     }
 }

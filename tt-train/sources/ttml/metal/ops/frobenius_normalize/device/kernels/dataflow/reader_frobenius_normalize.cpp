@@ -20,7 +20,8 @@ constexpr uint32_t mcast_start_y = get_compile_time_arg_val(4);
 constexpr uint32_t mcast_end_x = get_compile_time_arg_val(5);
 constexpr uint32_t mcast_end_y = get_compile_time_arg_val(6);
 constexpr uint32_t num_active_cores = get_compile_time_arg_val(7);
-constexpr auto input_args = TensorAccessorArgs<8>();
+constexpr uint32_t block_size = get_compile_time_arg_val(8);
+constexpr auto input_args = TensorAccessorArgs<9>();
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -49,7 +50,7 @@ void kernel_main() {
     // cb_recv base address — used as the reduction buffer on origin.
     const uint32_t cb_recv_base = get_write_ptr(cb_recv);
 
-    // Origin: zero-fill cb_recv tile BEFORE Pass 1 so it completes before any
+    // Origin: zero-fill cb_recv tile before Pass 1 so it completes before any
     // non-origin core can write it's partial
 #ifdef IS_ORIGIN
     {
@@ -65,10 +66,9 @@ void kernel_main() {
 #endif
 
     // =========================================================================
-    // Pass 1: Stream input tiles to compute for square+accumulate.
+    // Pass 1: Stream input tiles to compute for square+accumulate
     // =========================================================================
     {
-        constexpr uint32_t block_size = 4;
         for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx += block_size) {
             const uint32_t current = std::min(block_size, num_tiles - tile_idx);
             read_tiles_by_row(cb_input, input_addr_gen, start_tile_id + tile_idx, current, tile_bytes, block_size);
@@ -79,7 +79,7 @@ void kernel_main() {
     // All-to-origin reduction: each core writes its 4-byte partial sum_sq to
     // origin's cb_recv L1 at core_index * 4. Origin zeros cb_recv at kernel
     // start so unused tile positions stay zero; sfpu_reduce then sums all 1024
-    // FP32 elements (partials + zeros) to get sum(partials).
+    // FP32 elements (partials + zeros) to get sum(partials)
     // =========================================================================
     {
         cb_wait_front(cb_sq_partial, 1);
@@ -100,9 +100,8 @@ void kernel_main() {
         // Push the completed tile to cb_recv for compute sfpu_reduce
         cb_push_back(cb_recv, 1);
 #else
-        // 4-byte inline NOC write of the FP32 partial to origin's cb_recv.
-        // noc_async_write rounds up to 16-byte packets on Blackhole and would
-        // clobber adjacent slots; noc_inline_dw_write is the 4-byte primitive.
+        // 4-byte NOC write of the FP32 partial to origin's cb_recv
+        // noc_inline_dw_write allows writining 4-bytes without any padding
         const uint32_t partial_val = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_l1);
         const uint64_t dst_noc = get_noc_addr(origin_phys_x, origin_phys_y, cb_recv_base + core_index * 4);
         noc_inline_dw_write(dst_noc, partial_val);
@@ -115,7 +114,7 @@ void kernel_main() {
 #endif
 
         // =====================================================================
-        // Norm broadcast: origin extracts scalar, multicasts to all cores.
+        // Norm broadcast: origin extracts scalar, multicasts to all cores
         // =====================================================================
 #ifdef IS_ORIGIN
         cb_wait_front(cb_norm, 1);
@@ -150,7 +149,6 @@ void kernel_main() {
     // Pass 2: Re-read input tiles for normalization
     // =========================================================================
     {
-        constexpr uint32_t block_size = 4;
         for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx += block_size) {
             const uint32_t current = std::min(block_size, num_tiles - tile_idx);
             read_tiles_by_row(cb_input, input_addr_gen, start_tile_id + tile_idx, current, tile_bytes, block_size);

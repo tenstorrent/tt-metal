@@ -65,11 +65,13 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     auto [num_cores, all_cores, core_group_1, core_group_2, tiles_per_core_g1, tiles_per_core_g2] =
         tt::tt_metal::split_work_to_cores(compute_grid, total_tiles);
 
+    uint32_t block_size = std::min(4U, tiles_per_core_g1);
+
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
-    constexpr uint32_t input_buf_tiles = 8U;
-    constexpr uint32_t output_buf_tiles = 8U;
+    const uint32_t input_buf_tiles = 2 * block_size;
+    const uint32_t output_buf_tiles = 2 * block_size;
 
     [[maybe_unused]] auto cb_input =
         create_circular_buffer(program, all_cores, kCbInput, bf16_format, bf16_tile_size, input_buf_tiles);
@@ -133,7 +135,8 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
         static_cast<uint32_t>(mcast_start.y),
         static_cast<uint32_t>(mcast_end.x),
         static_cast<uint32_t>(mcast_end.y),
-        mcast_num_dests};
+        mcast_num_dests,
+        block_size};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_ct_args);
 
     auto reader_origin = create_reader_kernel(program, origin_set, reader_ct_args, origin_defines, kReaderKernelPath);
@@ -162,19 +165,25 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     // Origin compute kernel (IS_ORIGIN=1)
     uint32_t origin_tiles = core_group_1.contains(origin_core) ? tiles_per_core_g1 : tiles_per_core_g2;
     auto compute_origin = tt::tt_metal::CreateKernel(
-        program, kComputeKernelPath, origin_set, make_compute_config({origin_tiles}, origin_defines));
+        program, kComputeKernelPath, origin_set, make_compute_config({origin_tiles, block_size}, origin_defines));
 
     // Non-origin compute kernels (core_group_1/2 minus origin)
     auto non_origin_g1 = core_group_1.subtract(origin_set);
     auto compute_g1 = tt::tt_metal::CreateKernel(
-        program, kComputeKernelPath, non_origin_g1, make_compute_config({tiles_per_core_g1}, defines));
+        program,
+        kComputeKernelPath,
+        non_origin_g1,
+        make_compute_config({tiles_per_core_g1, block_size}, defines));
 
     tt::tt_metal::KernelHandle compute_g2{};
     if (!core_group_2.ranges().empty()) {
         auto non_origin_g2 = core_group_2.subtract(origin_set);
         if (!non_origin_g2.ranges().empty()) {
             compute_g2 = tt::tt_metal::CreateKernel(
-                program, kComputeKernelPath, non_origin_g2, make_compute_config({tiles_per_core_g2}, defines));
+                program,
+                kComputeKernelPath,
+                non_origin_g2,
+                make_compute_config({tiles_per_core_g2, block_size}, defines));
         }
     }
 
