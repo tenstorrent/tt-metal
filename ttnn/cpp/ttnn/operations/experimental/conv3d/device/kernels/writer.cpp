@@ -4,9 +4,6 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-// #include "api/debug/device_print.h"
-#undef DEVICE_PRINT
-#define DEVICE_PRINT(...) ((void)0)
 #include "hostdevcommon/common_values.hpp"
 #if defined(PROFILE_ZONES)
 #include "tools/profiler/kernel_profiler.hpp"
@@ -103,7 +100,6 @@ void kernel_main() {
         cb_push_back(cb_zero_tiled, 1);
     }
 
-    DEVICE_PRINT("[CONV3D-WR] start is_red={} nw={}\n", is_reducer, num_workers);
     // Process each batch element
     for (uint32_t batch_idx = 0; batch_idx < N; batch_idx++) {
         for (uint32_t c_in_block = c_in_block_start; c_in_block < c_in_block_end; c_in_block++) {
@@ -114,11 +110,6 @@ void kernel_main() {
 
                 // Read weights and bias for this block
                 {
-#if defined(ABLATE_DM) || defined(ABLATE_WRITER_DM)
-                    // Skip DRAM reads, keep CB handshakes
-                    cb_reserve_back(cb_weight_tiled, weight_tiles);
-                    cb_push_back(cb_weight_tiled, weight_tiles);
-#else
 #if defined(PROFILE_ZONES)
                     DeviceZoneScopedN("w-weight-read");
 #endif
@@ -134,15 +125,10 @@ void kernel_main() {
                     }
                     noc_async_read_barrier();
                     cb_push_back(cb_weight_tiled, weight_tiles);
-#endif
                 }
 
                 if constexpr (use_bias) {
                     if (is_reducer) {
-#if defined(ABLATE_DM) || defined(ABLATE_WRITER_DM)
-                        cb_reserve_back(cb_bias_tiled, matmul_N_t);
-                        cb_push_back(cb_bias_tiled, matmul_N_t);
-#else
                         cb_reserve_back(cb_bias_tiled, matmul_N_t);
                         uint32_t bias_write_ptr = get_write_ptr(cb_bias_tiled);
                         for (uint32_t i = c_out_offset_t; i < c_out_offset_t + matmul_N_t; i++) {
@@ -152,7 +138,6 @@ void kernel_main() {
                         }
                         noc_async_read_barrier();
                         cb_push_back(cb_bias_tiled, matmul_N_t);
-#endif
                     }
                 }
 
@@ -186,17 +171,6 @@ void kernel_main() {
                                 *local_semaphore_addr_ptr = 0;
 
                                 {
-#if defined(ABLATE_DM) || defined(ABLATE_WRITER_DM)
-                                    // Skip reducer gather — push empty tiles
-                                    const uint32_t worker_output_read_ptr = get_read_ptr(cb_matmul_interm_tiled);
-                                    for (uint32_t worker_idx = 0; worker_idx < num_workers; worker_idx++) {
-                                        cb_reserve_back(cb_reduction_tiled, output_tiles);
-                                        cb_push_back(cb_reduction_tiled, output_tiles);
-                                        const uint64_t worker_semaphore_noc_addr = get_noc_addr(
-                                            worker_core_xs[worker_idx], worker_core_ys[worker_idx], semaphore_addr);
-                                        noc_semaphore_inc(worker_semaphore_noc_addr, 1);
-                                    }
-#else
 #if defined(PROFILE_ZONES)
                                     DeviceZoneScopedN("w-reducer-gather");
 #endif
@@ -221,7 +195,6 @@ void kernel_main() {
                                             worker_core_xs[worker_idx], worker_core_ys[worker_idx], semaphore_addr);
                                         noc_semaphore_inc(worker_semaphore_noc_addr, 1);
                                     }
-#endif
                                 }
 
                                 {
@@ -233,7 +206,6 @@ void kernel_main() {
                                 uint32_t cb_read_ptr = get_read_ptr(cb_matmul_result_rm);
 
                                 {
-#if !defined(ABLATE_DM)
 #if defined(PROFILE_ZONES)
                                     DeviceZoneScopedN("w-output-write");
 #endif
@@ -250,7 +222,6 @@ void kernel_main() {
                                         }
                                     }
                                     noc_async_write_barrier();
-#endif
                                 }
                                 cb_pop_front(cb_matmul_result_rm, output_tiles);
                             }
@@ -261,5 +232,4 @@ void kernel_main() {
         }
     }
     noc_async_atomic_barrier();
-    DEVICE_PRINT("[CONV3D-WR] DONE\n");
 }

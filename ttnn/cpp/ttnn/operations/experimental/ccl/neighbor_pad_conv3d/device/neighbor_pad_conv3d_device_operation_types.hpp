@@ -9,7 +9,7 @@
 namespace ttnn::experimental::prim {
 
 struct NpConv3dParams {
-    // NP topology (from NeighborPadAsyncParams — the fields needed for H-fabric-only path)
+    // NP topology: H-fabric and optional W-fabric halo exchange
     uint32_t np_padding_h;     // H padding per side (1 for k333)
     uint32_t np_padding_w;     // W padding per side (0 if W-halo not needed)
     uint32_t np_cluster_axis;  // mesh axis for H parallelism
@@ -21,8 +21,8 @@ struct NpConv3dParams {
     uint32_t np_pad2_left = 0;
     uint32_t np_pad2_right = 0;
     std::optional<uint32_t> np_pad2_cluster_axis;
-    size_t np_num_links = 1;  // always 1 when progress sem active
-    size_t np_pad2_num_links = 1;
+    size_t np_num_links = 2;
+    size_t np_pad2_num_links = 2;
     tt::tt_metal::MemoryConfig np_output_mem_config;
     GlobalSemaphore w_neighbor_semaphore;
 

@@ -29,14 +29,13 @@ def assert_quality(
     a = a.detach().flatten().to(torch.float64)
     b = b.detach().flatten().to(torch.float64)
 
-    cov = torch.cov(torch.stack([a, b])).numpy()
-
-    std_a = math.sqrt(cov[0, 0])
-    std_b = math.sqrt(cov[1, 1])
+    cov = torch.corrcoef(torch.stack([a, b]))
+    std_a = a.std().item()
+    std_b = b.std().item()
     mean_a = a.mean().item()
     mean_b = b.mean().item()
 
-    pcc_found = cov[0, 1] / (std_a * std_b)
+    pcc_found = cov[0, 1].item()
     # beta_found = cov[0, 1] / cov[0, 0]
     ccc_found = 2 * pcc_found * std_a * std_b / (std_a**2 + std_b**2 + (mean_a - mean_b) ** 2)
     relative_rmse_found = torch.nn.functional.mse_loss(a, b).sqrt().item() / std_a

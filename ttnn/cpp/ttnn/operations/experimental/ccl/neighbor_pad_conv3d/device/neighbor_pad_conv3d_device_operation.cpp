@@ -82,7 +82,6 @@ void NpConv3dDeviceOperation::validate_on_program_cache_miss(
         args.dilation[1],
         args.dilation[2]);
 
-    // NP-specific: fabric_only + use_h_halo_buffer must be implied by fused op
     TT_FATAL(
         args.conv_config.use_h_halo_buffer,
         "NpConv3d: conv_config.use_h_halo_buffer must be true for fused NP+Conv3d op.");
@@ -162,11 +161,10 @@ TensorSpec NpConv3dDeviceOperation::compute_output_specs(
     uint32_t padded_C_out = tt::round_up(C_out, tt::constants::TILE_WIDTH);
 
     // Inflate effective padding with halo buffer contributions so output dims are correct.
+    // Halo buffer is always enabled in the fused op (enforced by validate()).
     std::array<uint32_t, 3> effective_padding = args.padding;
-    if (args.conv_config.use_h_halo_buffer) {
-        effective_padding[1] += args.conv_config.h_halo_padding_h;
-        effective_padding[2] += args.conv_config.h_halo_padding_w;
-    }
+    effective_padding[1] += args.conv_config.h_halo_padding_h;
+    effective_padding[2] += args.conv_config.h_halo_padding_w;
 
     auto [T_out, H_out, W_out] =
         detail::compute_output_dims(T_in, H_in, W_in, effective_padding, args.stride, args.kernel_size, args.dilation);

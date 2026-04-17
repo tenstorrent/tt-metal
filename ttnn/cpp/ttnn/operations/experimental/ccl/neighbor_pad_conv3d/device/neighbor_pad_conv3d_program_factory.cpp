@@ -105,9 +105,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     constexpr uint32_t np_dim = 2;
     uint32_t page_size = input_buffer->aligned_page_size();
 
-    // num_sticks_per_halo_dim: sticks per H row = W * (all dims after H, before C)
-    // In BTHWC: after dim 1 (H) we have W (dim 2), then C (last dim excluded = sticks).
-    // So num_sticks_per_halo_dim = W_dev
+    // num_sticks_per_halo_dim = W_dev (product of dims between H and C)
     uint32_t num_sticks_per_halo_dim = 1;
     for (size_t d = np_dim + 1; d < input_tensor_shape.size() - 1; d++) {
         num_sticks_per_halo_dim *= input_tensor_shape[d];
@@ -125,20 +123,16 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
 
     bool is_first_device = !backward_coord.has_value();
     bool is_last_device = !forward_coord.has_value();
-    [[maybe_unused]] uint32_t forward_device_offset = forward_coord.has_value() ? 1u : 0u;
-    [[maybe_unused]] uint32_t backward_device_offset = backward_coord.has_value() ? 1u : 0u;
-
     bool is_padding_zeros = op.padding_mode == "zeros";
     const bool is_2d = op.np_pad_dim2.has_value();
 
-    // For 2D padding W-axis setup
+    // For the compact halo buffer, H-section rows are exactly W_dev wide.
+    // W-padding is handled in a separate W-section, so no extra columns in H rows.
+    // (The standalone NP factory widens rows to W+pad for padded-tensor output,
+    //  but the compact buffer layout keeps H and W sections independent.)
     uint32_t output_num_sticks_per_halo_dim = num_sticks_per_halo_dim;
     uint32_t writer_stick_start_id = 0;
     uint32_t writer_num_sticks_to_read = num_sticks_per_halo_dim;
-    if (is_2d) {
-        output_num_sticks_per_halo_dim = num_sticks_per_halo_dim + op.np_pad2_left + op.np_pad2_right;
-        writer_stick_start_id = op.np_pad2_left;
-    }
 
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
     uint32_t num_links = static_cast<uint32_t>(op.np_num_links);
@@ -190,6 +184,26 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, np_worker_core_ranges, cb_sender_config);
 
+    // L1 receive buffer for 2D padding: fabric-delivered H halo corner sticks arrive here.
+    // Corners-only optimization: only W-boundary sticks (pad2_left + pad2_right per row) go
+    // to L1; non-corner sticks go directly to neighbor DRAM via fabric.
+    // Buffer must hold ALL outer_dims' corner sticks (no per-outer_dim reuse) because the
+    // fabric pipeline can deliver data for outer_dim N+1 before the reader finishes
+    // copying outer_dim N.
+    uint32_t recv_cb_index = tt::CB::c_in1;
+    uint32_t corner_sticks_per_row = is_2d ? std::min(op.np_pad2_left + op.np_pad2_right, num_sticks_per_halo_dim) : 0;
+    if (is_2d) {
+        uint32_t max_padding = op.np_padding_h;  // symmetric H padding; matches main's max(left,right)
+        uint32_t max_outer_dims_per_core = np_dims_per_core_group_1;
+        uint32_t recv_total_sticks = max_outer_dims_per_core * max_padding * corner_sticks_per_row;
+        uint32_t recv_buf_size = recv_total_sticks * page_size;
+        if (recv_buf_size > 0) {
+            CircularBufferConfig recv_cb_config =
+                CircularBufferConfig(recv_buf_size, {{recv_cb_index, df}}).set_page_size(recv_cb_index, page_size);
+            CreateCircularBuffer(program, np_worker_core_ranges, recv_cb_config);
+        }
+    }
+
     // Phase 2 W-axis setup (for 2D padding)
     std::vector<CoreCoord> w_fabric_logical_cores;
     std::vector<CoreCoord> w_fabric_virtual_cores;
@@ -203,6 +217,8 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     uint32_t w_outer_dim_size = 0;
     uint32_t w_rows_per_link = 0;
     uint32_t w_extra_rows = 0;
+    uint32_t w_section_wleft_base = 0;
+    uint32_t w_section_wright_base = 0;
 
     if (is_2d) {
         w_forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
@@ -228,7 +244,14 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             CoreRangeSet(CoreRange({num_h_fabric_cores, 0}, {num_h_fabric_cores + num_w_fabric_cores - 1, 0}));
 
         // fabric_only: W exchange covers all H_dev + 2*ph rows per T
-        w_outer_dim_size = outer_dim_size * (input_halo_dim_size + 2 * op.np_padding_h);
+        uint32_t h_total = input_halo_dim_size + 2 * op.np_padding_h;
+        w_outer_dim_size = outer_dim_size * h_total;
+
+        // W-section base offsets in the compact halo buffer:
+        // Layout: [H-top | H-bot | W-left | W-right]
+        uint32_t h_section_sticks = outer_dim_size * 2 * op.np_padding_h * num_sticks_per_halo_dim;
+        w_section_wleft_base = h_section_sticks;
+        w_section_wright_base = w_section_wleft_base + outer_dim_size * op.np_pad2_left * h_total;
 
         CreateCircularBuffer(program, w_fabric_core_range, cb_sender_config);
 
@@ -290,8 +313,8 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         is_padding_zeros,  // is_padding_zeros
         page_size};        // stick_size
     TensorAccessorArgs(*input_buffer).append_to(h_reader_kernel_config.compile_args);
-    h_reader_kernel_config.compile_args.push_back(is_2d ? 1 : 0);  // use_l1_intermediate
-    h_reader_kernel_config.compile_args.push_back(0);              // recv_cb_id (unused in H-only)
+    h_reader_kernel_config.compile_args.push_back(is_2d ? 1 : 0);              // use_l1_intermediate
+    h_reader_kernel_config.compile_args.push_back(is_2d ? recv_cb_index : 0);  // recv_cb_id
     auto h_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
@@ -312,8 +335,8 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         is_padding_zeros,  // is_padding_zeros
         page_size};        // stick_size
     TensorAccessorArgs(*halo_buffer).append_to(h_writer_kernel_config.compile_args);
-    h_writer_kernel_config.compile_args.push_back(is_2d ? 1 : 0);    // use_l1_intermediate
-    h_writer_kernel_config.compile_args.push_back(0);                // recv_cb_id (unused)
+    h_writer_kernel_config.compile_args.push_back(is_2d ? 1 : 0);              // use_l1_intermediate
+    h_writer_kernel_config.compile_args.push_back(is_2d ? recv_cb_index : 0);  // recv_cb_id
     h_writer_kernel_config.compile_args.push_back(is_2d ? 1 : 0);    // handle_incoming_writes
     h_writer_kernel_config.compile_args.push_back(0);                // is_w_fabric_writer (false for H)
     h_writer_kernel_config.compile_args.push_back(op.np_ring_size);  // ring_size
@@ -365,14 +388,14 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
 
             // Reader runtime args
             std::vector<uint32_t> reader_rt_args = {
-                link_offset_start_id * input_halo_dim_size,     // outer_dim_offset_start_id
-                0,                                              // stick_start_id
-                input_halo_dim_size,                            // input_halo_dim_size
-                link_dims_to_read,                              // outer_dim_size
-                direction ? op.np_padding_h : op.np_padding_h,  // padding (same both sides for symmetric)
-                num_sticks_per_halo_dim,                        // num_sticks_to_read
-                num_sticks_per_halo_dim,                        // num_sticks_per_halo_dim
-                0u};                                            // num_l1_recv_sticks_per_row (no corners in H-only)
+                link_offset_start_id * input_halo_dim_size,                          // outer_dim_offset_start_id
+                0,                                                                   // stick_start_id
+                input_halo_dim_size,                                                 // input_halo_dim_size
+                link_dims_to_read,                                                   // outer_dim_size
+                op.np_padding_h,                                                     // padding (symmetric)
+                num_sticks_per_halo_dim,                                             // num_sticks_to_read
+                num_sticks_per_halo_dim,                                             // num_sticks_per_halo_dim
+                corner_sticks_per_row};                                              // num_l1_recv_sticks_per_row
             reader_rt_args.push_back(direction ? is_last_device : is_first_device);  // is_first_chip
             reader_rt_args.push_back(direction ? is_first_device : is_last_device);  // is_last_chip
             reader_rt_args.push_back(direction);                                     // direction
@@ -390,8 +413,8 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
                 input_halo_dim_size,                                 // input_halo_dim_size
                 output_halo_dim_size,                                // output_halo_dim_size
                 link_dims_to_read,                                   // outer_dim_size
-                direction ? op.np_padding_h : op.np_padding_h,       // padding
-                0u,                                                  // padding_left (no W-offset in compact)
+                op.np_padding_h,                                     // padding (symmetric)
+                op.np_pad2_left,                                     // padding_left (W-axis, for L1 corner detection)
                 h_writer_num_sticks_to_read,                         // num_sticks_to_read
                 h_writer_num_sticks_per_halo_dim,                    // num_sticks_per_halo_dim
                 virtual_core.x,                                      // neighbor_sem_noc0_x
@@ -448,11 +471,9 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
                 uint32_t top_halo_total = outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim;
                 uint32_t h_top_link_start = link_t_start * op.np_padding_h * num_sticks_per_halo_dim;
                 uint32_t h_bot_link_start = top_halo_total + link_t_start * op.np_padding_h * num_sticks_per_halo_dim;
-                uint32_t padding_this_dir = direction ? op.np_padding_h : op.np_padding_h;
                 writer_rt_args[0] = direction ? h_bot_link_start : h_top_link_start;  // per-link offset
                 writer_rt_args[1] = 0;                                // stick_start_id (no W-offset in compact)
-                writer_rt_args[3] = padding_this_dir;                 // output_halo_dim_size (compact)
-                writer_rt_args[6] = 0;                                // padding_left (no W-offset in compact)
+                writer_rt_args[3] = op.np_padding_h;                  // output_halo_dim_size (compact)
                 writer_rt_args[8] = num_sticks_per_halo_dim;          // stride = W_dev, not padded W
             }
             if (conv_config.input_progress_t_batch_size > 0) {
@@ -572,15 +593,19 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
                 w_reader_rt_args.push_back(outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim);
                 SetRuntimeArgs(program, w_reader_kernel_id, {w_core}, w_reader_rt_args);
 
-                // W writer runtime args
+                // W writer runtime args — addresses the W-section of the compact buffer.
+                // Direction 0 (forward): writes W-left on receiver.
+                // Direction 1 (backward): writes W-right on receiver.
+                uint32_t w_pad = w_direction ? op.np_pad2_right : op.np_pad2_left;
+                uint32_t w_base = w_direction ? w_section_wright_base : w_section_wleft_base;
                 std::vector<uint32_t> w_writer_rt_args = {
-                    w_link_start * output_num_sticks_per_halo_dim,
+                    w_base + w_link_start * w_pad,
                     0,
                     num_sticks_per_halo_dim,
-                    output_num_sticks_per_halo_dim,
+                    w_pad,
                     w_link_count,
-                    w_direction ? op.np_pad2_right : op.np_pad2_left,
-                    op.np_pad2_left,
+                    w_pad,
+                    0,
                     1,
                     1,
                     w_virtual_core.x,
@@ -643,7 +668,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     }
 
     // =========================================================================
-    // PART 3: CONV3D KERNELS (use_h_halo_buffer=true, input_progress_t_batch_size from config)
+    // PART 3: CONV3D KERNELS (halo buffer always enabled, input_progress_t_batch_size from config)
     // =========================================================================
 
     const auto& input_tensor = tensor_args.input_tensor;
@@ -663,12 +688,11 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     uint32_t W_in = input_tensor_shape_logical[3];
     uint32_t C_in = input_tensor_shape_logical[4];
 
-    // Inflate effective padding with halo buffer H/W contributions
+    // Inflate effective padding with halo buffer H/W contributions.
+    // The fused op always uses the halo buffer path (enforced by TT_FATAL in validate).
     std::array<uint32_t, 3> effective_padding = op.padding;
-    if (conv_config.use_h_halo_buffer) {
-        effective_padding[1] += conv_config.h_halo_padding_h;
-        effective_padding[2] += conv_config.h_halo_padding_w;
-    }
+    effective_padding[1] += conv_config.h_halo_padding_h;
+    effective_padding[2] += conv_config.h_halo_padding_w;
 
     auto [T_out, H_out, W_out] =
         detail::compute_output_dims(T_in, H_in, W_in, effective_padding, op.stride, op.kernel_size, op.dilation);
@@ -865,26 +889,14 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     std::map<std::string, std::string> ablation_defines;
     {
         const char* ablate_env = std::getenv("CONV3D_ABLATE");
-        if (ablate_env != nullptr) {
-            std::string ablate_str(ablate_env);
-            if (ablate_str == "tilize") {
-                ablation_defines["ABLATE_TILIZE"] = "1";
-            } else if (ablate_str == "dm") {
-                ablation_defines["ABLATE_DM"] = "1";
-            } else if (ablate_str == "tilize_dm") {
-                ablation_defines["ABLATE_TILIZE"] = "1";
-                ablation_defines["ABLATE_DM"] = "1";
-            } else if (ablate_str == "profile") {
-                ablation_defines["PROFILE_ZONES"] = "1";
-            }
+        if (ablate_env != nullptr && std::string(ablate_env) == "profile") {
+            ablation_defines["PROFILE_ZONES"] = "1";
         }
     }
     if (conv_config.input_progress_t_batch_size > 0) {
         ablation_defines["CONV3D_INPUT_PROGRESS_SEM"] = "1";
     }
-    if (conv_config.use_h_halo_buffer) {
-        ablation_defines["CONV3D_H_HALO"] = "1";
-    }
+    ablation_defines["CONV3D_H_HALO"] = "1";
 
     auto conv3d_reader_kernels_id = CreateKernel(
         program,
@@ -1284,15 +1296,13 @@ void NpConv3dMeshWorkloadFactory::override_runtime_arguments(
             if (op.conv_config.input_progress_t_batch_size > 0) {
                 reader_args[11] = op.conv_config.input_progress_sem_addr;
             }
-            // args[13] = halo_buffer_addr
-            if (op.conv_config.use_h_halo_buffer) {
-                reader_args[13] = halo_buffer_addr;
-                reader_args[14] = op.conv_config.h_halo_outer_dim_size;
-                reader_args[15] = op.conv_config.h_halo_H;
-                reader_args[16] = op.conv_config.h_halo_W;
-                reader_args[17] = op.conv_config.h_halo_padding_h;
-                reader_args[18] = op.conv_config.h_halo_padding_w;
-            }
+            // args[13..18] = halo buffer params (always enabled in fused op)
+            reader_args[13] = halo_buffer_addr;
+            reader_args[14] = op.conv_config.h_halo_outer_dim_size;
+            reader_args[15] = op.conv_config.h_halo_H;
+            reader_args[16] = op.conv_config.h_halo_W;
+            reader_args[17] = op.conv_config.h_halo_padding_h;
+            reader_args[18] = op.conv_config.h_halo_padding_w;
 
             writer_args[0] = output_addr;
             writer_args[1] = weight_addr;

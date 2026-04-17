@@ -113,6 +113,48 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
     return pipeline_cls, image_prompt, expected_metrics
 
 
+def _export_to_video(frames, video_path, fps=16):
+    """Export frames to video by calling ffmpeg directly via subprocess.
+    Avoids the preexec_fn=setpgrp used inside diffusers/imageio which causes
+    OSError: [Errno 12] Cannot allocate memory when forking under memory pressure.
+    Uses imageio_ffmpeg's bundled binary so a system ffmpeg is not required.
+    """
+    import subprocess
+
+    import imageio_ffmpeg
+
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    h, w = frames[0].shape[:2]
+    cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-f",
+        "rawvideo",
+        "-vcodec",
+        "rawvideo",
+        "-s",
+        f"{w}x{h}",
+        "-pix_fmt",
+        "rgb24",
+        "-r",
+        str(fps),
+        "-i",
+        "pipe:0",
+        "-vcodec",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        video_path,
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for frame in frames:
+        proc.stdin.write(frame.tobytes())
+    proc.stdin.close()
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg exited with code {proc.returncode} when writing {video_path}")
+
+
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
@@ -271,7 +313,7 @@ def test_pipeline_performance(
                     height=height,
                     width=width,
                     num_frames=num_frames,
-                    num_inference_steps=1,
+                    num_inference_steps=5,
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
                     seed=42,
@@ -304,13 +346,26 @@ def test_pipeline_performance(
     # Save video
     # Remove batch dimension
     frames = frames[0]
-    if not is_ci_env:
-        if int(ttnn.distributed_context_get_rank()) == 0:
-            output_path = f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4"
-            export_to_video(frames, output_path, fps=16)
-            print(f"✓ Saved video to: {output_path}")
-        else:
-            print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
+    try:
+        if not is_ci_env:
+            if int(ttnn.distributed_context_get_rank()) == 0:
+                # Convert to uint8 before export to avoid OOM from float64 intermediates
+                # inside export_to_video's list comprehension: (frame * 255).astype(uint8)
+                if isinstance(frames, torch.Tensor):
+                    frames_uint8 = (frames.clamp(0, 1).float().cpu().numpy() * 255).astype(np.uint8)
+                elif isinstance(frames, np.ndarray) and frames.dtype != np.uint8:
+                    frames_uint8 = (np.clip(frames, 0, 1) * 255).astype(np.uint8)
+                else:
+                    frames_uint8 = frames
+                del frames
+                video_path = f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4"
+                _export_to_video(frames_uint8, video_path, fps=16)
+                del frames_uint8
+                print(f"✓ Saved video to: {video_path}")
+            else:
+                print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
+    except (AttributeError, OSError, MemoryError) as e:
+        logger.info(f"Video export failed: {e}")
 
     # Calculate statistics
     text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]

@@ -414,18 +414,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     std::map<std::string, std::string> ablation_defines;
     {
         const char* ablate_env = std::getenv("CONV3D_ABLATE");
-        if (ablate_env != nullptr) {
-            std::string ablate_str(ablate_env);
-            if (ablate_str == "tilize") {
-                ablation_defines["ABLATE_TILIZE"] = "1";
-            } else if (ablate_str == "dm") {
-                ablation_defines["ABLATE_DM"] = "1";
-            } else if (ablate_str == "tilize_dm") {
-                ablation_defines["ABLATE_TILIZE"] = "1";
-                ablation_defines["ABLATE_DM"] = "1";
-            } else if (ablate_str == "profile") {
-                ablation_defines["PROFILE_ZONES"] = "1";
-            }
+        if (ablate_env != nullptr && std::string(ablate_env) == "profile") {
+            ablation_defines["PROFILE_ZONES"] = "1";
         }
     }
     if (config.input_progress_t_batch_size > 0) {

@@ -3,9 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-// #include "api/debug/device_print.h"
-#undef DEVICE_PRINT
-#define DEVICE_PRINT(...) ((void)0)
 #include <cstdint>
 
 using address_t = uint32_t;
@@ -20,15 +17,6 @@ constexpr uint32_t ct_after_src = src_ct_args.next_compile_time_args_offset();
 // L1 intermediate config
 constexpr bool use_l1_intermediate = get_compile_time_arg_val(ct_after_src);
 constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_src + 1);
-// NP_H_LINKS: number of H-fabric links. The H-reader waits for NP_H_LINKS*outer_dim_size
-// total h_nbr_sem increments (all links, all outer_dims) before reading L1 data.
-// Without this, one link's sem_inc can unblock another link's reader before its L1 data arrives.
-// Defaults to 1 (original single-link behavior) for non-NP users of this kernel.
-#if defined(NP_H_LINKS)
-constexpr uint32_t np_h_links = NP_H_LINKS;
-#else
-constexpr uint32_t np_h_links = 1;
-#endif
 
 template <uint32_t stick_size_bytes>
 inline void zeroPad(uint32_t cb_output_id) {
@@ -75,13 +63,6 @@ void kernel_main() {
     uint32_t read_size = stick_size;
     const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address);
 
-    DEVICE_PRINT(
-        "[H-RD] start dir={} is_first={} is_last={} od_size={} use_l1={}\n",
-        (uint32_t)direction,
-        (uint32_t)is_first_chip,
-        (uint32_t)is_last_chip,
-        outer_dim_size,
-        (uint32_t)use_l1_intermediate);
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
         if (is_first_chip) {
@@ -153,12 +134,10 @@ void kernel_main() {
             uint32_t buf_offset = 0;  // Accumulates across all outer_dims (no L1 reuse)
 
             for (uint32_t od = 0; od < outer_dim_size; od++) {
-                DEVICE_PRINT("[H-RD] waiting h_sem od={}\n", od);
                 // Wait for this outer_dim's data using cumulative count.
                 // h_neighbor_sem is per-core: each H-reader core's semaphore is only incremented
                 // by its corresponding sender link (1 inc per outer_dim). No cross-link contamination.
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), od + 1);
-                DEVICE_PRINT("[H-RD] h_sem od={} done\n", od);
                 for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
                     // Use num_l1_recv_sticks_per_row (corners-only count) instead of
                     // num_sticks_to_read (full row width) for the L1 recv path.
@@ -174,13 +153,10 @@ void kernel_main() {
             }
             // Reset after all waits are complete (safe: no more fabric increments expected)
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), 0);
-            DEVICE_PRINT("[H-RD] L1 path DONE\n");
         } else {
             // 1D case: fabric wrote directly to DRAM; just wait for all outer_dims
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), outer_dim_size);
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), 0);
-            DEVICE_PRINT("[H-RD] 1D path DONE\n");
         }
     }
-    DEVICE_PRINT("[H-RD] kernel DONE\n");
 }

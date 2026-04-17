@@ -263,6 +263,7 @@ class WanCausalConv3d(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         conv_dims: ConvDims = ConvDims(),
+        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -307,11 +308,11 @@ class WanCausalConv3d(Module):
             H=conv_dims.H,
             W=conv_dims.W,
         )
-        # Enable fused NP+Conv3d when spatial halo exchange is needed.
-        # use_h_halo_buffer is a compile-time flag (part of program hash); set it once here.
-        h_pad_enabled = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
-        w_pad_enabled = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
-        if h_pad_enabled or w_pad_enabled:
+        self._needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
+            self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+        )
+        self._use_fused = use_fused and self._needs_halo
+        if self._use_fused:
             self.conv_config.use_h_halo_buffer = True
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -409,33 +410,30 @@ class WanCausalConv3d(Module):
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
 
-        # Halo exchange (height and/or width padding)
-        h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
-        w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
-
-        if h_pad_needed or w_pad_needed:
+        if self._needs_halo:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
-            if h_pad_needed:
+            sem_getter = (
+                self.ccl_manager.get_np_fused_ping_pong_semaphore
+                if self._use_fused
+                else self.ccl_manager.get_np_ping_pong_semaphore
+            )
+            if self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1:
                 dims.append(2)
                 pad_left.append(self.external_padding[1])
                 pad_right.append(self.external_padding[1])
                 axes.append(self.parallel_config.height_parallel.mesh_axis)
-                neighbor_sems.append(
-                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)
-                )
+                neighbor_sems.append(sem_getter(self.parallel_config.height_parallel.mesh_axis))
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2))
-            if w_pad_needed:
+            if self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1:
                 dims.append(3)
                 pad_left.append(self.external_padding[2])
                 pad_right.append(self.external_padding[2])
                 axes.append(self.parallel_config.width_parallel.mesh_axis)
-                neighbor_sems.append(
-                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)
-                )
+                neighbor_sems.append(sem_getter(self.parallel_config.width_parallel.mesh_axis))
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
-            if self.conv_config.use_h_halo_buffer:
+            if self._use_fused:
                 return self.ccl_manager.neighbor_pad_conv3d_fused(
                     x_BTHWC,
                     self.weight.data,
@@ -497,6 +495,7 @@ class WanResidualBlock(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         conv_dims: ConvDims = ConvDims(),
+        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -523,6 +522,7 @@ class WanResidualBlock(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             conv_dims=conv_dims,
+            use_fused=use_fused,
         )
         self.norm2 = RMSNorm(
             embedding_dim=out_dim,
@@ -543,6 +543,7 @@ class WanResidualBlock(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             conv_dims=conv_dims,
+            use_fused=use_fused,
         )
 
         if in_dim != out_dim:
@@ -781,15 +782,14 @@ class WanConv2d(Module):
             H=conv_dims.H,
             W=conv_dims.W,
         )
-        h_pad_enabled = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
-        w_pad_enabled = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
-        if h_pad_enabled or w_pad_enabled:
-            self.conv_config.use_h_halo_buffer = True
+        self._needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
+            self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+        )
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4
-            if (is_blackhole() or dtype == ttnn.float32)
+            if dtype == ttnn.float32
             else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
@@ -863,14 +863,10 @@ class WanConv2d(Module):
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
 
-        # Halo exchange (height and/or width padding)
-        h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
-        w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
-
-        if h_pad_needed or w_pad_needed:
+        if self._needs_halo:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
-            if h_pad_needed:
+            if self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1:
                 dims.append(2)
                 pad_left.append(self.external_padding[1])
                 pad_right.append(self.external_padding[1])
@@ -879,7 +875,7 @@ class WanConv2d(Module):
                     self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2))
-            if w_pad_needed:
+            if self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1:
                 dims.append(3)
                 pad_left.append(self.external_padding[2])
                 pad_right.append(self.external_padding[2])
@@ -888,28 +884,6 @@ class WanConv2d(Module):
                     self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
-
-            if self.conv_config.use_h_halo_buffer:
-                return self.ccl_manager.neighbor_pad_conv3d_fused(
-                    x_BTHWC,
-                    self.weight.data,
-                    self.bias.data,
-                    dims=dims,
-                    pad_left=pad_left,
-                    pad_right=pad_right,
-                    axes=axes,
-                    neighbor_sems=neighbor_sems,
-                    num_links=links,
-                    conv_config=self.conv_config,
-                    output_channels=self.out_channels,
-                    kernel_size=self.kernel_size,
-                    stride=self.stride,
-                    padding=self.internal_padding,
-                    dilation=(1, 1, 1),
-                    padding_mode="zeros",
-                    dtype=self.dtype,
-                    compute_kernel_config=self.compute_kernel_config,
-                )
 
             x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
                 x_BTHWC,
@@ -1128,6 +1102,7 @@ class WanUpBlock(Module):
         res_dims: ConvDims = ConvDims(),
         tconv_dims: ConvDims = ConvDims(),
         spatial_dims: ConvDims = ConvDims(),
+        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -1153,6 +1128,7 @@ class WanUpBlock(Module):
                     parallel_config=parallel_config,
                     dtype=dtype,
                     conv_dims=res_dims,
+                    use_fused=use_fused,
                 )
             )
             current_dim = out_dim
@@ -1304,6 +1280,7 @@ class WanDecoder3d(Module):
                 res_dims=ConvDims(T_res, stage_h, stage_w),
                 tconv_dims=ConvDims(T_tconv, stage_h, stage_w),
                 spatial_dims=ConvDims(T_spatial, next_h, next_w),
+                use_fused=(i == 3),
             )
             self.up_blocks.append(up_block)
 

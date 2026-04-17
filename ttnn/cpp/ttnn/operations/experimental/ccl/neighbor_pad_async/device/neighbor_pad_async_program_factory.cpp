@@ -720,20 +720,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_mesh_workload_t NeighborPadAsyncMesh
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    // Synchronize before dispatching neighbor_pad programs.
-    // In fabric_only mode with sub_device_id: sync only the fabric CQ (CQ1) to avoid
-    // blocking the conv3d CQ (CQ0) and allow true concurrent execution.
     auto* mesh_device = tensor_args.input_tensor.device();
-    {
-        ttnn::SmallVector<tt::tt_metal::SubDeviceId> sync_sds;
-        std::optional<uint8_t> sync_cq = std::nullopt;
-        if (operation_attributes.sub_device_id.has_value()) {
-            sync_sds.push_back(*operation_attributes.sub_device_id);
-            // Only sync this CQ — don't block other CQs running concurrently
-            sync_cq = GetCurrentCommandQueueIdForThread();
-        }
-        tt::tt_metal::distributed::Synchronize(mesh_device, sync_cq, sync_sds);
-    }
+    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt);
 
     // Create programs for each coordinate in tensor_coords
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {

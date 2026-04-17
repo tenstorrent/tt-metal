@@ -42,8 +42,10 @@ class CCLManager:
         self.ag_ping_pong_idx = [0, 0]
         self.exp_ring_ping_pong_idx = [0, 0]
         self.np_ping_pong_idx = [0, 0]
+        self.np_fused_ping_pong_idx = [0, 0]
         self.sr_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
+        self.barrier_fused_idx = [0, 0]
 
     def _init_subdevice(self):
         compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
@@ -52,24 +54,6 @@ class CCLManager:
         )
 
         self.ccl_sub_device_id = ttnn.SubDeviceId(0)
-
-        # Sub-devices for halo-parallel mode:
-        # Sub-device 0: fabric cores (row 0, first N cols) — for NeighborPad fabric-only on CQ0
-        # Sub-device 1: all remaining cores — for conv3d on CQ0
-        #
-        # In the halo path, effective_num_links is always forced to 1 (see neighbor_pad_halo_only).
-        # NP therefore uses 1 link × 2 dirs (send+recv) × 2 dims (H+W) = 4 fabric cores.
-        # Allocating num_links*4 would waste cores to conv3d for no benefit.
-        num_fabric_cores = 4
-        self.fabric_cores = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_fabric_cores - 1, 0))}
-        )
-        self.conv3d_cores = self.ccl_cores.subtract(self.fabric_cores)
-        self._fabric_sub_device = ttnn.SubDevice([self.fabric_cores])
-        self._conv3d_sub_device = ttnn.SubDevice([self.conv3d_cores])
-        self._halo_sub_device_mgr = None
-        self._fabric_sd_id = None
-        self._conv3d_sd_id = None
 
     def _init_semaphores(self):
         # Initialize semaphores for reduce scatter ping pong - separate for each mesh axis
@@ -99,7 +83,7 @@ class CCLManager:
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(exp_ring_n_sems)],
         }
 
-        # Initialize neighbor pad semaphores
+        # Initialize neighbor pad semaphores (standalone NP path)
         np_n_sems = 1 * 2
         self.np_ping_pong_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(np_n_sems)],
@@ -120,6 +104,17 @@ class CCLManager:
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
         }
 
+        # Separate semaphores for fused NP+Conv3d path to avoid state conflicts
+        # when standalone NP and fused ops alternate in the same pipeline
+        self.np_fused_ping_pong_semaphores = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(np_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(np_n_sems)],
+        }
+        self.barrier_fused_semaphores = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
+        }
+
         # Progress semaphores for NeighborPad→Conv3d pipelining (one per axis, ping-pong)
         np_progress_n_sems = 2
         self.np_progress_semaphores = {
@@ -127,36 +122,6 @@ class CCLManager:
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(np_progress_n_sems)],
         }
         self._np_progress_sem_idx = {0: 0, 1: 0}
-
-    def activate_halo_sub_devices(self):
-        """
-        Load a 2-sub-device manager for halo-parallel execution:
-        - SD0 (fabric_sd_id): 4 fabric cores — for NP on CQ0
-        - SD1 (conv3d_sd_id): remaining compute cores — for conv3d on CQ0
-
-        Sub-devices are non-overlapping (required by TT-Metal).
-        Regular ops (RMSNorm, add, etc.) must call deactivate_halo_sub_devices() first
-        to restore the full-grid default manager before being dispatched.
-
-        Returns (fabric_sd_id, conv3d_sd_id).
-        """
-        if self._halo_sub_device_mgr is None:
-            # fabric_sub_device (4 cores) and conv3d_sub_device (116 cores) are
-            # already non-overlapping (conv3d_cores = all_cores - fabric_cores).
-            self._halo_sub_device_mgr = self.mesh_device.create_sub_device_manager(
-                [self._fabric_sub_device, self._conv3d_sub_device], 0
-            )
-            self._fabric_sd_id = ttnn.SubDeviceId(0)  # 4 fabric cores for NP
-            self._conv3d_sd_id = ttnn.SubDeviceId(1)  # remaining compute cores for conv3d
-        self.mesh_device.load_sub_device_manager(self._halo_sub_device_mgr)
-        return self._fabric_sd_id, self._conv3d_sd_id
-
-    def deactivate_halo_sub_devices(self):
-        """
-        Return to the default full-grid sub-device manager for regular ops.
-        Must be called after conv3d before any op that uses all cores.
-        """
-        self.mesh_device.clear_loaded_sub_device_manager()
 
     def get_rs_ping_pong_buffer(self, shape, dim, mesh_axis):
         """
@@ -306,12 +271,26 @@ class CCLManager:
 
     def get_np_ping_pong_semaphore(self, mesh_axis):
         """
-        Get semaphores for neighbor pad operations.
+        Get semaphores for standalone neighbor pad operations.
         """
         cur_idx = self.np_ping_pong_idx[mesh_axis]
         n_sems = 1
         self.np_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.np_ping_pong_semaphores[mesh_axis][cur_idx]
+
+    def get_np_fused_ping_pong_semaphore(self, mesh_axis):
+        """
+        Get semaphores for fused NP+Conv3d operations (separate pool from standalone NP).
+        """
+        cur_idx = self.np_fused_ping_pong_idx[mesh_axis]
+        self.np_fused_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
+        return self.np_fused_ping_pong_semaphores[mesh_axis][cur_idx]
+
+    def get_barrier_fused_semaphore(self, mesh_axis):
+        """Get barrier semaphore for fused NP+Conv3d (separate pool from standalone NP)."""
+        cur_idx = self.barrier_fused_idx[mesh_axis]
+        self.barrier_fused_idx[mesh_axis] = (cur_idx + 1) % 2
+        return self.barrier_fused_semaphores[mesh_axis][cur_idx]
 
     def get_sr_ping_pong_semaphore(self, mesh_axis):
         """
@@ -376,78 +355,6 @@ class CCLManager:
         self._ping_pong_buffer_indices[cache_key] = 1 - cur
         return self._ping_pong_buffer_cache[cache_key][cur]
 
-    def dispatch_on_cq(self, cq_id: int, fn, *args, **kwargs):
-        """Dispatch an op to a specific command queue for concurrent execution."""
-        from ttnn.decorators import pop_current_command_queue_id_for_thread, push_current_command_queue_id_for_thread
-
-        push_current_command_queue_id_for_thread(ttnn.QueueId(cq_id))
-        try:
-            result = fn(*args, **kwargs)
-        finally:
-            pop_current_command_queue_id_for_thread()
-        return result
-
-    def neighbor_pad_halo_only(
-        self,
-        tensor: ttnn.Tensor,
-        /,
-        *,
-        dims: list,
-        pad_left: list,
-        pad_right: list,
-        padding_mode: str,
-        axes: list,
-        neighbor_sems: list,
-        num_links: list,
-        progress_semaphore=None,
-        progress_t_batch_size: int = 0,
-    ) -> ttnn.Tensor:
-        """
-        Fabric-only NeighborPad: only writes halo rows to a compact buffer (no interior copy).
-        Returns the compact halo tensor. Conv3d reads interior from the original tensor.
-        Handles both H and W halos (dims can have 1 or 2 elements).
-
-        Dispatches NP on CQ0 targeting SD0 (fabric cores), same CQ as conv3d (SD1).
-        Like all_gather_matmul: single CQ drives both CCL writers (SD0) and compute (SD1)
-        concurrently. Dispatch fires go to SD0 then SD1; they run on different cores.
-        In-kernel semaphore handles T-batch ordering. Deactivate then correctly waits for
-        BOTH NP and conv3d completions before sending the reset go_signal to SD0.
-        """
-        # Load halo sub-device manager (SD0=fabric, SD1=compute).
-        fabric_sd_id, _ = self.activate_halo_sub_devices()
-
-        barrier_sem = self.get_barrier_semaphore(axes[0])
-        dim2 = dims[1] if len(dims) > 1 else None
-        padding2 = pad_left[1] if len(dims) > 1 else 0
-        halo_buf = self.get_np_halo_buffer(
-            tensor.shape, dims[0], pad_left[0], dtype=tensor.get_dtype(), dim2=dim2, padding2=padding2
-        )
-
-        # Dispatch NeighborPad on CQ0 (same CQ as conv3d) targeting SD0 (fabric cores).
-        # Single-CQ dispatch: NP (SD0) and conv3d (SD1) run concurrently on device.
-        # deactivate_halo_sub_devices() naturally waits for both NP+conv3d before reset.
-        result = self.dispatch_on_cq(
-            0,
-            ttnn.experimental.neighbor_pad_async,
-            tensor,
-            dims,
-            pad_left,
-            pad_right,
-            padding_mode,
-            axes,
-            neighbor_sems,
-            [barrier_sem],
-            num_links=num_links,
-            topology=self.topology,
-            persistent_output_buffer=halo_buf,
-            progress_semaphore=progress_semaphore,
-            progress_t_batch_size=progress_t_batch_size,
-            fabric_only=True,
-            sub_device_id=fabric_sd_id,
-        )
-
-        return result
-
     def neighbor_pad_conv3d_fused(
         self,
         tensor: ttnn.Tensor,
@@ -473,9 +380,8 @@ class CCLManager:
         """
         Fused NeighborPad + Conv3d: ONE program dispatch, no sub-device manager.
         Equivalent to neighbor_pad_halo_only() + conv3d() but as a single C++ op.
-        Requires conv_config.use_h_halo_buffer=True and input_progress_t_batch_size>0.
         """
-        barrier_sem = self.get_barrier_semaphore(axes[0])
+        barrier_sem = self.get_barrier_fused_semaphore(axes[0])
         dim2 = dims[1] if len(dims) > 1 else None
         padding2 = pad_left[1] if dim2 is not None else 0
         halo_buf = self.get_np_halo_buffer(
@@ -703,6 +609,10 @@ class CCLManager:
         """Reset all global semaphores to 0"""
         for axis in [0, 1]:
             for sem in self.np_ping_pong_semaphores[axis]:
+                ttnn.reset_global_semaphore_value(sem, 0)
+            for sem in self.np_fused_ping_pong_semaphores[axis]:
+                ttnn.reset_global_semaphore_value(sem, 0)
+            for sem in self.barrier_fused_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.sr_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)

@@ -10,9 +10,6 @@
 // DRAM writes are handled by the paired writer (minimal_default_writer).
 
 #include "api/dataflow/dataflow_api.h"
-// #include "api/debug/device_print.h"
-#undef DEVICE_PRINT
-#define DEVICE_PRINT(...) ((void)0)
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 
@@ -85,15 +82,10 @@ void kernel_main() {
 
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
-    DEVICE_PRINT(
-        "[W-RD] start dir={} barrier_count={} outer_dim_size={}\n", (uint32_t)direction, barrier_count, outer_dim_size);
-
     // Wait for Phase 1 to complete.
     if (barrier_count > 0) {
-        DEVICE_PRINT("[W-RD] waiting barrier_sem count={}\n", barrier_count);
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
-        DEVICE_PRINT("[W-RD] barrier_sem done\n");
     }
 
     // Main loop: read W-boundary sticks → CB for the paired writer.
@@ -187,22 +179,17 @@ void kernel_main() {
         }
     }
 
-    DEVICE_PRINT("[W-RD] main loop done\n");
-
     // Incoming W padding from neighbor: the neighbor's W writer sent padding sticks
     // directly to our output DRAM via fabric. Wait for all sem_incs confirming each
     // outer_dim's data has been sent.
     if (!is_first_chip) {
-        DEVICE_PRINT("[W-RD] waiting w_neighbor_sem count={}\n", outer_dim_size);
         volatile tt_l1_ptr uint32_t* w_neighbor_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_neighbor_sem_addr);
         noc_semaphore_wait_min(w_neighbor_sem_ptr, outer_dim_size);
         noc_semaphore_set(w_neighbor_sem_ptr, 0);
-        DEVICE_PRINT("[W-RD] w_neighbor_sem done\n");
     }
 
 #if defined(NP_PROGRESS_SEM)
-    DEVICE_PRINT("[W-RD] signaling progress_sem readers={}\n", num_reader_cores);
     noc_async_write_barrier();
     for (uint32_t i = 0; i < num_reader_cores; i++) {
         const uint32_t rx = get_common_arg_val<uint32_t>(5 + i * 2);
@@ -210,8 +197,5 @@ void kernel_main() {
         noc_semaphore_inc(get_noc_addr(rx, ry, progress_sem_addr), 1);
     }
     noc_async_atomic_barrier();
-    DEVICE_PRINT("[W-RD] progress_sem signaled DONE\n");
-#else
-    DEVICE_PRINT("[W-RD] NP_PROGRESS_SEM NOT defined - no progress signal sent!\n");
 #endif
 }
