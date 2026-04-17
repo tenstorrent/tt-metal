@@ -130,8 +130,6 @@ runs:
         echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
         echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
         echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
-        echo "CCACHE_DEBUG=1" >> $GITHUB_ENV
-        echo "CCACHE_DEBUGDIR=/tmp/ccache-debug" >> $GITHUB_ENV
 
         if [ -z "${{ inputs.redis-ccache-storage }}" ]; then
           echo "Redis ccache storage is missing. Did you forget to pass redis-ccache-storage?"
@@ -139,7 +137,7 @@ runs:
         fi
         echo "CCACHE_REMOTE_STORAGE=${{ inputs.redis-ccache-storage }}" >> $GITHUB_ENV
 
-        mkdir -p /tmp/ccache /tmp/ccache-debug
+        mkdir -p /tmp/ccache
       shell: bash
 
     - name: Set up env vars for auto-triage
