@@ -420,7 +420,20 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         // CT namespace map: ct::ns::field (plain constexpr values)
         if (!kernel_descriptor.named_compile_time_args.empty()) {
             NamedCTArgNamespaces ct_ns_map;
+            std::unordered_map<std::string, uint32_t> seen_ct_args;
             for (const auto& [name, value] : kernel_descriptor.named_compile_time_args) {
+                auto it = seen_ct_args.find(name);
+                if (it != seen_ct_args.end()) {
+                    TT_FATAL(
+                        it->second == value,
+                        "named_compile_time_arg '{}' is defined twice with conflicting values ({} vs {}). "
+                        "Each CT arg name must be unique across all sub-lists.",
+                        name,
+                        it->second,
+                        value);
+                    continue;  // same value — silently skip the duplicate
+                }
+                seen_ct_args.emplace(name, value);
                 auto [ns, field] = split_name(name);
                 ct_ns_map[ns].emplace_back(field, value);
             }
