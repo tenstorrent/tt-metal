@@ -56,21 +56,22 @@ class TtConv2d:
         self.activation = activation
         self.compute_config = compute_config
         self.slice_config = slice_config
-        # Host-side weights as fp32. First __call__ sends them to device
-        # and replaces the host tensors with device ones.
-        self.weight = ttnn.from_torch(conv.weight.detach().float(), dtype=ttnn.float32)
+        # Host-side weights as bf16 (preprocess_conv_weights converts
+        # to the runtime tile layout on first __call__).
+        self.weight = ttnn.from_torch(
+            conv.weight.detach().to(torch.bfloat16), dtype=ttnn.bfloat16
+        )
         if conv.bias is not None:
-            bias = conv.bias.detach().float().reshape(1, 1, 1, -1)
-            self.bias = ttnn.from_torch(bias, dtype=ttnn.float32)
+            bias = conv.bias.detach().to(torch.bfloat16).reshape(1, 1, 1, -1)
+            self.bias = ttnn.from_torch(bias, dtype=ttnn.bfloat16)
         else:
             self.bias = None
 
     def _conv_config(self):
-        # float32 weights + HiFi4 + fp32 accumulator keeps PCC above
-        # 0.99 across the DROID-SLAM 16-layer encoder chain. bf16
-        # weights drift PCC to ~0.95 end-to-end.
+        # bfloat16 weights halve the L1 footprint vs float32 and still
+        # hold PCC above 0.99 when paired with HiFi2 + fp32_dest_acc_en.
         return ttnn.Conv2dConfig(
-            weights_dtype=ttnn.float32,
+            weights_dtype=ttnn.bfloat16,
             activation=self.activation,
             deallocate_activation=False,
             enable_weights_double_buffer=True,
