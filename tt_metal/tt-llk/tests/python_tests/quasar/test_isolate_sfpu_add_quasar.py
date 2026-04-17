@@ -13,7 +13,9 @@ import pytest
 import torch
 from helpers.format_config import (
     MXFP8_E4M3_MAX_NORMAL,
+    MXFP8_E4M3_MIN_MAGNITUDE,
     MXFP8_E5M2_MAX_NORMAL,
+    MXFP8_E5M2_MIN_MAGNITUDE,
     DataFormat,
     FormatConfig,
 )
@@ -94,20 +96,18 @@ def prepare_add_inputs(
     # mismatches between golden and hardware.
     if input_format.is_mx_format():
         if input_format == DataFormat.MxFp8P:
-            # E4M3 min normal = 2^-6 = 0.015625; stay well above subnormals
-            min_magnitude = 0.0625  # 2^-4
+            min_magnitude = MXFP8_E4M3_MIN_MAGNITUDE
         else:
-            # E5M2 min normal = 2^-14 ≈ 6.1e-5; stay well above subnormals
-            min_magnitude = 2.44e-4  # 2^-12
+            min_magnitude = MXFP8_E5M2_MIN_MAGNITUDE
     else:
         min_magnitude = max(1e-6, input_finfo.tiny * 100)
 
     # Also respect output format minimum if output is MX
     if output_format.is_mx_format():
         if output_format == DataFormat.MxFp8P:
-            min_magnitude = max(min_magnitude, 0.0625)
+            min_magnitude = max(min_magnitude, MXFP8_E4M3_MIN_MAGNITUDE)
         else:
-            min_magnitude = max(min_magnitude, 2.44e-4)
+            min_magnitude = max(min_magnitude, MXFP8_E5M2_MIN_MAGNITUDE)
 
     def clamp_tensor(src: torch.Tensor) -> torch.Tensor:
         src_float = src.to(torch.float32)
