@@ -107,8 +107,11 @@ class TtDroidNet:
         self._cached_shape = (b, n, ch_, cw_)
 
         fmaps = _unpack_tile_nhwc_to_nchw(fmaps_tt, bn, fh, fw, 128).view(b, n, 128, fh, fw)
-        net = _unpack_tile_nhwc_to_nchw(net_tt, bn, ch_, cw_, 128).view(b, n, 128, ch_, cw_)
-        inp = _unpack_tile_nhwc_to_nchw(inp_tt, bn, ch_, cw_, 128).view(b, n, 128, ch_, cw_)
+        # net/inp consumers use the on-device cache via update(); the
+        # torch tensors returned here are only used for shape/indexing
+        # (`net[:, ii]`) so we skip the ~4MB round-trip.
+        net = torch.empty((b, n, 128, ch_, cw_), dtype=torch.float32)
+        inp = torch.empty((b, n, 128, ch_, cw_), dtype=torch.float32)
         return fmaps, net, inp
 
     # ------------------------------------------------------------------
