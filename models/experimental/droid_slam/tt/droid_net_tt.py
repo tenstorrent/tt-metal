@@ -217,9 +217,10 @@ class TtDroidNet:
             net_tt, inp_tt, corr_tt, flow_tt, batch_size=bn, h=h, w=w
         )
 
-        # Defer every download until the caller reads the tensor.
-        # eta's 0.01 scale is applied torch-side during materialization
-        # so we skip one device op per iter.
+        # Kick the 0.01 scale onto device eagerly (cheap op) but defer
+        # every actual download until the caller reads the tensor.
+        eta_scaled = ttnn.multiply(eta_tt, 0.01)
+
         net_o = _LazyTensor(
             lambda t=net_o_tt, bn=bn, h=h, w=w, b=b, n_e=n_edges: (
                 _unpack_tile_nhwc_to_nchw(t, bn, h, w, 128).view(b, n_e, 128, h, w)
@@ -236,8 +237,8 @@ class TtDroidNet:
             )
         )
         eta = _LazyTensor(
-            lambda t=eta_tt, bn=bn, h=h, w=w, b=b, n_e=n_edges: (
-                _unpack_tile_nhwc_to_nchw(t, bn, h, w, 1).view(b, n_e, h, w) * 0.01
+            lambda t=eta_scaled, bn=bn, h=h, w=w, b=b, n_e=n_edges: (
+                _unpack_tile_nhwc_to_nchw(t, bn, h, w, 1).view(b, n_e, h, w)
             )
         )
         upmask = _LazyTensor(
