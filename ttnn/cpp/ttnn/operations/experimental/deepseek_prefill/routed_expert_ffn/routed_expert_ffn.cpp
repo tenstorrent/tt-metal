@@ -331,17 +331,12 @@ ttnn::Tensor routed_expert_ffn_optim_wh(
         .fuse_batch = true,
     };
 
-    auto down_grid = CoreRangeSet({CoreRange({0, 0}, {GRID_X - 1, down_grid_y - 1})});
-    auto down_shard =
-        tt::tt_metal::ShardSpec(down_grid, {down_per_core_M * ttnn::TILE_SIZE, down_per_core_N * ttnn::TILE_SIZE});
-    auto down_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, down_shard};
-
     return ttnn::matmul(
         /*input_tensor_a=*/gate_result,
         /*input_tensor_b=*/down_proj,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
-        /*memory_config=*/down_mem,
+        /*memory_config=*/std::nullopt,
         /*dtype=*/std::nullopt,
         /*program_config=*/down_config,
         /*activation=*/std::nullopt,
