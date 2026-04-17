@@ -1103,11 +1103,10 @@ class Generator(WarmupForwardMixin):
                 return_logits=return_logits,
             )
         else:
-            tt_tok = self._decode_forward_no_trace_text(
+            tt_tok, tt_log_probs = self._decode_forward_no_trace_text(
                 **decode_kwargs,
                 return_logits=return_logits,
             )
-            tt_log_probs = None
 
         if read_from_device:
             # IMPORTANT: If split sampling is enabled, `tt_log_probs` is produced by the sampling
@@ -1136,7 +1135,7 @@ class Generator(WarmupForwardMixin):
     ):
         """
         Performs text decode step.
-        Returns tt_logits on device
+        Returns `(tt_output, tt_log_probs)` on device.
         """
         tt_tokens, tt_current_pos, rot_mat_idxs, tt_page_table = self.model.prepare_inputs_decode(
             tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
@@ -1152,9 +1151,15 @@ class Generator(WarmupForwardMixin):
             return_logits=return_logits,
             capture_sampling_trace=self.enable_split_sampling,
         )
-        # TODO this actually never calls sampling, because we're telling the model we'll do it ourselves.
-        # We also never set the sampling module up with the right parameters.
-        return tt_tok
+
+        if self.enable_split_sampling and not return_logits:
+            return self.model.sampling.sample(
+                logits=tt_tok,
+                tt_out_tok=tt_tokens,
+                enable_trace=False,
+            )
+
+        return tt_tok, None
 
     def _capture_trace_text(
         self,
