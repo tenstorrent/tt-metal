@@ -140,8 +140,7 @@ def prepare_generator_args(
 
 
 def _gemma3_vision_demo_device_params():
-    # Blackhole (P150, etc.): 2 CQs + L1 small size match successful multimodal bring-up; trace budget may be raised
-    # further by get_supported_trace_region_size (trace_region_config.py) when HF_MODEL is set.
+    # Blackhole (e.g. P150) needs a larger trace region than Wormhole.
     if is_blackhole():
         return {
             "fabric_config": True,
@@ -157,7 +156,6 @@ def _gemma3_vision_demo_device_params():
     }
 
 
-# MESH_DEVICE: select mesh shape, e.g. P150 (1x1), P300, P150x4, P150x8, or N150/T3K on Wormhole.
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -282,10 +280,6 @@ def test_multimodal_demo_text(
     else:
         device_sampling_params = None
 
-    logger.info(
-        f"Gemma3 vision sampling: device={can_sample_on_device}, non_greedy_warmup={non_greedy_decoding_on_device}"
-    )
-
     logger.info("Warming up model...")
     generator.warmup_model_prefill(
         kv_cache=None,
@@ -390,10 +384,7 @@ def test_multimodal_demo_text(
 
             prefill_start = time.perf_counter()
             with profiler("inference_prefill", iteration=batch_idx):
-                # prefill_forward returns (tokens, log_probs) when sampling on device,
-                # and a logits tensor otherwise. Do NOT spread-unpack with `*_` here:
-                # the tensor path would iterate the batch dim and the tuple path would
-                # strip log_probs into `_`, both of which break the branches below.
+                # prefill_forward returns (tokens, log_probs) when sampling on device, logits otherwise.
                 prefill_out = generator.prefill_forward(
                     vision_images,
                     vision_mask,

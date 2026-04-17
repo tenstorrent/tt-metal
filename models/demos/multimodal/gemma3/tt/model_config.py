@@ -96,8 +96,7 @@ class ModelArgs(TTModelArgs):
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.padded_vocab_size = 262400
-        # On N150/N300, padded per-device vocab is 262400//2 = 131200 (> legacy 64k cap). TTSampling
-        # uses uint32 indices when local vocab exceeds uint16; allow device sampling for this shard size.
+        # Raise the per-device cap so on-device sampling is enabled for Gemma3's 131200-wide shard.
         self.device_sampling_max_per_device_vocab = 192 * 1024
 
     @lru_cache(maxsize=None)
