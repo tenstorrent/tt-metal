@@ -388,9 +388,9 @@ def cmd_finalize(args: argparse.Namespace) -> None:
             completed.append(last["step"])
 
     doc["end_time"] = now
+    if doc.get("start_time"):
+        doc["duration_seconds"] = _duration_seconds(doc["start_time"], now)
     doc["status"] = args.status  # success | compiled | failed | skipped
-    if args.solver_state is not None:
-        doc["solver_state"] = args.solver_state
     doc["current_step_message"] = (
         args.final_message or doc.get("current_step_message") or ""
     )
@@ -398,6 +398,11 @@ def cmd_finalize(args: argparse.Namespace) -> None:
     patch = _json_arg(args.patch_json, {})
     for k, v in patch.items():
         doc[k] = v
+
+    # Apply typed --solver-state last so it cannot be silently overridden by
+    # --patch-json (argparse choices are otherwise bypassed via that escape hatch).
+    if args.solver_state is not None:
+        doc["solver_state"] = args.solver_state
 
     _atomic_write(log_dir, doc)
     print(f"finalize: status={args.status}")

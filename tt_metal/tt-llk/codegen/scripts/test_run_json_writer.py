@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for run_json_writer.py — dashboard-compatibility schema."""
@@ -147,3 +148,98 @@ def test_finalize_rejects_bad_solver_state(tmp_path):
     )
     assert r.returncode != 0
     assert "bogus" in (r.stderr + r.stdout)
+
+
+def test_finalize_without_solver_state_preserves_none(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "r1",
+        "--kernel",
+        "issue_1",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "start",
+    )
+    _run(
+        tmp_path,
+        "finalize",
+        "--status",
+        "success",
+        "--final-result",
+        "success",
+        "--final-message",
+        "done",
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["solver_state"] is None
+
+
+def test_finalize_solver_state_wins_over_patch_json(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "r1",
+        "--kernel",
+        "issue_1",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "start",
+    )
+    _run(
+        tmp_path,
+        "finalize",
+        "--status",
+        "success",
+        "--final-result",
+        "success",
+        "--final-message",
+        "done",
+        "--solver-state",
+        "working",
+        "--patch-json",
+        '{"solver_state": "bogus_via_patch"}',
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["solver_state"] == "working"
+
+
+def test_finalize_computes_duration_seconds(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "r1",
+        "--kernel",
+        "issue_1",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "start",
+        "--start-time",
+        "2026-04-17T12:00:00Z",
+    )
+    _run(
+        tmp_path,
+        "finalize",
+        "--status",
+        "success",
+        "--final-result",
+        "success",
+        "--final-message",
+        "done",
+        "--end-time",
+        "2026-04-17T12:03:45Z",
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["duration_seconds"] == 225  # 3m45s
