@@ -114,8 +114,9 @@ def benchmark_ttnn(
         sample_host,
         text_rope_from_hf,
     )
+    from models.demos.dots_ocr.tt.mesh import open_mesh_device
 
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    mesh_device = open_mesh_device()
     try:
         ref, model_args, tt_model, generator, visual = _build_tt_stack(
             model_id, mesh_device, load_real_weights=load_real_weights, max_seq_len=max_seq_len

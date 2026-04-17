@@ -17,8 +17,24 @@ class DotsModelArgs(ModelArgs):
     Uses the same text stack as other HF causal LMs in tt_transformers (RMSNorm + RoPE + SwiGLU),
     with HF-style RoPE (`use_hf_rope=True`).
 
-    **Wormhole LB (single chip):** set `MESH_DEVICE` to `N150` or `N300` and use a 1×1 mesh.
-    Optionally cap context for DRAM: `export DOTS_MAX_SEQ_LEN_WH_LB=8192`
+    Supported topologies
+    ---------------------
+    ``dots.mocr`` is GQA with ``num_attention_heads=12`` and
+    ``num_key_value_heads=2``. Tensor parallelism shards heads along
+    ``cluster_shape[1]`` and the base ``ModelArgs`` asserts
+    ``n_kv_heads % cluster_shape[1] == 0``, so the TP degree must divide
+    ``gcd(12, 2) = 2``.
+
+    * ``MESH_DEVICE=N150`` (mesh ``1x1``, TP=1) — fully supported.
+    * ``MESH_DEVICE=N300`` (mesh ``1x2``, TP=2) — fully supported.
+    * ``MESH_DEVICE=T3K`` on T3K hardware — opens a ``1x2`` submesh (TP=2) with
+      a warning. 6 of the 8 chips stay idle; no data-parallel support yet.
+
+    Use ``models.demos.dots_ocr.tt.mesh.open_mesh_device()`` to open the mesh —
+    it honors ``MESH_DEVICE`` and clamps to a supported shape automatically.
+
+    Optional context cap for DRAM-constrained runs: ``export DOTS_MAX_SEQ_LEN=8192``
+    (legacy ``DOTS_MAX_SEQ_LEN_WH_LB`` is still honored for back-compat).
     """
 
     def __init__(self, *args, hf_config=None, **kwargs):
@@ -41,14 +57,29 @@ class DotsModelArgs(ModelArgs):
         # untouched.
         self.LOCAL_HF_PARAMS = {**type(self).LOCAL_HF_PARAMS, self.model_name: self.CKPT_DIR}
 
-        cap = os.getenv("DOTS_MAX_SEQ_LEN_WH_LB")
+        # Canonical env var is ``DOTS_MAX_SEQ_LEN``; honor the legacy
+        # ``DOTS_MAX_SEQ_LEN_WH_LB`` for back-compat with older scripts.
+        cap = os.getenv("DOTS_MAX_SEQ_LEN") or os.getenv("DOTS_MAX_SEQ_LEN_WH_LB")
         if cap:
             self.max_seq_len = min(self.max_seq_len, int(cap))
-            logger.info(f"DotsModelArgs: DOTS_MAX_SEQ_LEN_WH_LB={cap} -> max_seq_len={self.max_seq_len}")
+            logger.info(f"DotsModelArgs: max_seq_len capped to {self.max_seq_len} via env")
+
+        # Belt-and-braces divisibility check so we emit a dots-specific diagnostic
+        # instead of a bare AssertionError from the parent. The parent also
+        # checks this, so we don't repeat the assert; we just print a helpful
+        # hint if the user misreads the "T3K auto-clamp" mechanism.
+        tp_cols = self.cluster_shape[1] if self.cluster_shape else 1
+        if self.n_kv_heads and tp_cols and self.n_kv_heads % tp_cols != 0:
+            logger.error(
+                f"DotsModelArgs: cluster_shape[1]={tp_cols} does not divide n_kv_heads={self.n_kv_heads}. "
+                f"Open the mesh via `models.demos.dots_ocr.tt.mesh.open_mesh_device()` so T3K / large "
+                f"meshes are automatically clamped to a 1x2 submesh."
+            )
 
         logger.info(
-            f"DotsModelArgs (WH LB friendly): dim={self.dim} layers={self.n_layers} heads={self.n_heads} "
-            f"kv_heads={self.n_kv_heads} max_seq_len={self.max_seq_len} device_name={self.device_name}"
+            f"DotsModelArgs: dim={self.dim} layers={self.n_layers} heads={self.n_heads} "
+            f"kv_heads={self.n_kv_heads} cluster_shape={self.cluster_shape} "
+            f"max_seq_len={self.max_seq_len} device_name={self.device_name}"
         )
 
     def _set_hf_params(self, checkpoint_dir):

@@ -161,7 +161,9 @@ def run_ttnn_backend(
     dummy_weights: bool = False,
     stop_at_eos: bool = True,
 ) -> str:
-    logger.info(f"[TTNN] Loading {model_id} and building Dots TT stack (WH LB 1x1 mesh)")
+    logger.info(
+        f"[TTNN] Loading {model_id} and building Dots TT stack (MESH_DEVICE={os.environ.get('MESH_DEVICE', 'N150')})"
+    )
     try:
         import ttnn
     except Exception as exc:  # pragma: no cover
@@ -175,11 +177,12 @@ def run_ttnn_backend(
         text_rope_from_hf,
     )
     from models.demos.dots_ocr.tt.generator import Generator
+    from models.demos.dots_ocr.tt.mesh import get_max_seq_len_cap, open_mesh_device
     from models.demos.dots_ocr.tt.model import DotsTransformer, DropInVisionTransformer
     from models.demos.dots_ocr.tt.model_config import DotsModelArgs
     from models.demos.dots_ocr.tt.vision_model_config import DotsVisionModelArgs
 
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    mesh_device = open_mesh_device()
     try:
         os.environ.setdefault("HF_MODEL", model_id)
 
@@ -189,7 +192,7 @@ def run_ttnn_backend(
         model_args = DotsModelArgs(
             mesh_device=mesh_device,
             max_batch_size=1,
-            max_seq_len=int(os.environ.get("DOTS_MAX_SEQ_LEN_WH_LB", 4096)),
+            max_seq_len=get_max_seq_len_cap() or 4096,
             dummy_weights=dummy_weights,
         )
         state_dict = _load_state_dict_with_real_weights_fallback(model_args, dummy_weights)

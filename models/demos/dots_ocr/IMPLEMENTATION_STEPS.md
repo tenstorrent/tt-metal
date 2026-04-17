@@ -1,6 +1,9 @@
 # Dots OCR (TTNN) — implementation steps (FINAL)
 
-**Target:** `models/demos/dots_ocr/` — TTNN Dots OCR with **Wormhole LB** (single chip, e.g. N150 / `MeshShape(1,1)`).
+**Primary target:** `models/demos/dots_ocr/` — TTNN Dots OCR on Wormhole.
+Supported topologies: **N150** (1x1), **N300** (1x2), and **T3K** on physical
+LLMBox hardware (auto-clamped to a 1x2 submesh — `num_key_value_heads=2` makes
+pure 1x8 TP infeasible). See `tt/mesh.py`.
 
 **ALL STEPS COMPLETED** ✅
 
@@ -50,10 +53,12 @@
    - `DotsOCRModel` class for easy usage
    - Both HF and TTNN backends supported
 
-4. **WHLB Optimization**:
-   - Single chip (1×1 mesh) configuration
-   - DRAM memory configs for memory-constrained devices
-   - `DOTS_MAX_SEQ_LEN_WH_LB` environment variable support
+4. **Wormhole Topology Support**:
+   - Single chip (N150, 1×1, TP=1) and 2-chip (N300, 1×2, TP=2) configurations.
+   - T3K (LLMBox) via `1x2` submesh auto-clamp — because `num_key_value_heads=2`
+     makes pure 1×8 TP infeasible.
+   - DRAM memory configs for memory-constrained devices.
+   - `DOTS_MAX_SEQ_LEN` (canonical) / `DOTS_MAX_SEQ_LEN_WH_LB` (legacy) env vars.
 
 ---
 

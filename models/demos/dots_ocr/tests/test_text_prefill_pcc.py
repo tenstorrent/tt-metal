@@ -62,13 +62,12 @@ def _load_dots_reference(model_id: str, torch_dtype=torch.bfloat16):
 
 
 def _open_mesh_device():
-    """Open 1x1 mesh device for WHLB (Wormhole Low Batch) testing."""
-    mesh_device = os.environ.get("MESH_DEVICE", None)
-    if mesh_device is None:
+    """Open a mesh per ``MESH_DEVICE`` (N150/N300/T3K); ``None`` if unset."""
+    if os.environ.get("MESH_DEVICE") is None:
         return None
-    # Use 1x1 mesh for single-chip Wormhole (N150/N300)
-    device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
-    return device
+    from models.demos.dots_ocr.tt.mesh import open_mesh_device as _open
+
+    return _open()
 
 
 @pytest.mark.skipif(os.environ.get("MESH_DEVICE") is None, reason="Requires TT device (set MESH_DEVICE)")

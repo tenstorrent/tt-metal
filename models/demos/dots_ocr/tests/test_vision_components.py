@@ -27,9 +27,10 @@ def test_dots_vision_model_args(tmp_path):
     if not hasattr(ttnn, "open_mesh_device"):
         pytest.skip("TTNN runtime has no open_mesh_device (mesh API missing)")
 
+    from models.demos.dots_ocr.tt.mesh import open_mesh_device
     from models.demos.dots_ocr.tt.vision_model_config import create_dots_vision_args
 
-    device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    device = open_mesh_device()
     try:
         # Create vision args
         args = create_dots_vision_args(
@@ -88,9 +89,10 @@ def test_patch_embed_with_device(tmp_path):
     if not hasattr(ttnn, "open_mesh_device"):
         pytest.skip("TTNN runtime has no open_mesh_device (mesh API missing)")
 
+    from models.demos.dots_ocr.tt.mesh import open_mesh_device
     from models.demos.dots_ocr.tt.vision_patch_embed import PatchEmbedTT
 
-    device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    device = open_mesh_device()
     try:
         # Create dummy state dict for testing
         state_dict = {
@@ -153,9 +155,10 @@ def test_full_vision_transformer_smoke():
     if not hasattr(ttnn, "open_mesh_device"):
         pytest.skip("TTNN runtime has no open_mesh_device (mesh API missing)")
 
+    from models.demos.dots_ocr.tt.mesh import open_mesh_device
     from models.demos.dots_ocr.tt.vision_transformer import create_dots_vision_transformer
 
-    device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    device = open_mesh_device()
     try:
         try:
             vision_transformer = create_dots_vision_transformer(

@@ -45,7 +45,11 @@ def test_e2e_structural_pcc(tmp_path):
 
     device = None
     try:
-        device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))  # WH LB 1x1 mesh
+        from models.demos.dots_ocr.tt.mesh import open_mesh_device as _open_mesh
+
+        # Honors MESH_DEVICE (N150/N300/T3K). dots.mocr is GQA with num_kv_heads=2,
+        # so T3K is auto-clamped to a 1x2 submesh (see tt/mesh.py).
+        device = _open_mesh()
 
         spec = HFLoadSpec(
             model_id=os.environ.get("HF_MODEL", "hf-internal-testing/tiny-random-LlamaForCausalLM"),

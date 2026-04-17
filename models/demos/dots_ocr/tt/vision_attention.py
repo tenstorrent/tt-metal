@@ -4,8 +4,10 @@
 """
 TTNN Vision Attention for Dots OCR.
 
-Implements self-attention for the 42-layer vision transformer.
-Uses Qwen2-style RoPE and is optimized for Wormhole LB (single chip).
+Implements self-attention for the 42-layer vision transformer. Uses Qwen2-style
+RoPE. Vision weights are replicated across the mesh (TP=1 for vision, even on
+N300 / T3K-1x2 submesh); the text decoder is the only path that actually
+shards via ``cluster_shape[1]``.
 """
 
 from __future__ import annotations
@@ -51,8 +53,15 @@ class VisionAttentionTT(LightweightModule):
         self.head_dim = model_args.vision_head_dim
         self.num_kv_heads = model_args.vision_n_kv_heads
 
-        # For single chip WHLB, we don't do tensor parallelism
-        self.num_devices = 1
+        # Vision weights are currently replicated across the mesh (see ``_load_weights``)
+        # so effective tensor parallelism is 1 regardless of mesh size. The vision tower
+        # is small relative to the text decoder and the HF hybrid path remains the default
+        # on multi-chip targets like T3K; replicating avoids all-gather plumbing in the
+        # vision stack for now. We still track the true mesh width here so downstream
+        # code (e.g. future TP'd vision forward) can key off ``cluster_shape``.
+        self.num_devices = mesh_device.get_num_devices() if mesh_device is not None else 1
+        cluster_shape = getattr(model_args, "cluster_shape", None)
+        self.cluster_shape = cluster_shape if cluster_shape else [1, self.num_devices]
 
         # Load weights
         self._load_weights(state_dict, weight_cache_path, dtype)
