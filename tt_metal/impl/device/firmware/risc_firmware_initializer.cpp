@@ -198,8 +198,28 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
 
     if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
         for (tt::ChipId device_id : all_devices) {
-            assert_cores(device_id);
-            cluster_.l1_barrier(device_id);
+            // teardown() is called from MetalContext::~MetalContext(). Any uncaught
+            // exception here would call std::terminate(). Catch all and log so that
+            // a dead ERISC relay on a remote device (left stale by a prior killed
+            // process) does not abort the entire test process.
+            try {
+                assert_cores(device_id);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogAlways,
+                    "teardown: assert_cores failed for device {} (likely dead ERISC relay): {}",
+                    device_id,
+                    e.what());
+            }
+            try {
+                cluster_.l1_barrier(device_id);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogAlways,
+                    "teardown: l1_barrier failed for device {}: {}",
+                    device_id,
+                    e.what());
+            }
         }
         // Set internal routing to false to exit active ethernet FW & go back to base FW
         // Must be last
@@ -402,6 +422,11 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
         }
     }
 
+    // Track whether any ETH cores on this device were unresponsive. If so, subsequent
+    // assert calls that route through the UMD ERISC relay may also time out (the relay
+    // is the same stale ERISC). We catch those rather than crashing.
+    bool had_unresponsive_eth_cores = false;
+
     for (auto& id_and_cores : device_to_early_exit_cores) {
         const int timeout_ms = 10000;
         if (!id_and_cores.second.empty()) {
@@ -409,6 +434,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
                 llrt::internal_::wait_until_cores_done(
                     id_and_cores.first, dev_msgs::RUN_MSG_GO, id_and_cores.second, timeout_ms);
             } catch (std::runtime_error&) {
+                had_unresponsive_eth_cores = true;
                 log_warning(
                     tt::LogAlways,
                     "Detected dispatch kernels still running but failed to complete an early exit. "
@@ -446,12 +472,31 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
         }
     }
 
-    assert_tensix_workers_impl(device_id);
-    assert_dram_cores(device_id);
+    // When stale ETH cores were unresponsive, assert calls for remote devices route
+    // through the dead ERISC relay and will time out. Catch and log rather than crash.
+    auto safe_assert = [&](auto fn, const char* label) {
+        if (had_unresponsive_eth_cores) {
+            try {
+                fn();
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogAlways,
+                    "reset_cores: {} failed for device {} (dead ERISC relay after stale ETH force-reset): {}",
+                    label,
+                    device_id,
+                    e.what());
+            }
+        } else {
+            fn();
+        }
+    };
+
+    safe_assert([&] { assert_tensix_workers_impl(device_id); }, "assert_tensix_workers_impl");
+    safe_assert([&] { assert_dram_cores(device_id); }, "assert_dram_cores");
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
-        assert_inactive_ethernet_cores(device_id);
+        safe_assert([&] { assert_inactive_ethernet_cores(device_id); }, "assert_inactive_ethernet_cores");
     }
-    cluster_.l1_barrier(device_id);
+    safe_assert([&] { cluster_.l1_barrier(device_id); }, "l1_barrier");
 }
 
 void RiscFirmwareInitializer::assert_cores(tt::ChipId device_id) {
