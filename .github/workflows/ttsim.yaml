@@ -305,38 +305,33 @@ jobs:
           ccache --show-stats || echo "ccache stats not available"
           echo "::endgroup::"
 
-      - name: 🔍 CCache Debug Logs
+      - name: 🔍 Publish ccache summary
         if: ${{ !cancelled() }}
         run: |
-          echo "::group::CCache Configuration"
-          echo "CCACHE_DEBUG=${CCACHE_DEBUG:-not set}"
-          echo "CCACHE_DEBUGDIR=${CCACHE_DEBUGDIR:-not set}"
-          ccache --show-config | grep -E '(debug|log)' || true
-          echo "::endgroup::"
-          echo "::group::CCache Debug Logs"
-          if [ -d "/tmp/ccache-debug" ]; then
-            LOG_COUNT=$(find /tmp/ccache-debug -type f -name "*.ccache-log" 2>/dev/null | wc -l)
-            echo "Found $LOG_COUNT ccache debug log files"
-            echo ""
-            # Show first 5 log files as samples
-            echo "=== Sample Debug Logs (first 5) ==="
-            find /tmp/ccache-debug -type f -name "*.ccache-log" 2>/dev/null | head -5 | while read log; do
-              echo "::group::$(basename $log)"
-              cat "$log" || true
-              echo "::endgroup::"
-            done || true
-            echo ""
-            # Search for remote storage errors
-            echo "=== Searching for Remote Storage Errors ==="
-            find /tmp/ccache-debug -type f -name "*.ccache-log" -exec grep -l "remote storage" {} \; 2>/dev/null | head -3 | while read log; do
-              echo "::group::Errors in $(basename $log)"
-              grep -A 5 -B 5 "remote storage\|error\|failed" "$log" || true
-              echo "::endgroup::"
-            done || true
+          echo '## Test CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          echo '## CCache Debug - Key Calculation' >> $GITHUB_STEP_SUMMARY
+          echo 'Debug files in /tmp/ccache-debug:' >> $GITHUB_STEP_SUMMARY
+          if [ -d /tmp/ccache-debug ] && [ "$(ls -A /tmp/ccache-debug 2>/dev/null)" ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            # Show first few debug log files with key calculation info
+            for f in $(find /tmp/ccache-debug -name '*.ccache-log' 2>/dev/null | head -5); do
+              echo "=== $f ===" >> $GITHUB_STEP_SUMMARY
+              cat "$f" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            done
+            echo '```' >> $GITHUB_STEP_SUMMARY
+
+            echo '### Cache hit/miss decisions - first 20' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -rE "(cache hit|cache miss|No such file|Storing embedded entry)" /tmp/ccache-debug/ | head -20 >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
           else
-            echo "No debug logs directory found at /tmp/ccache-debug"
+            echo 'No debug files found' >> $GITHUB_STEP_SUMMARY
           fi
-          echo "::endgroup::"
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
@@ -434,38 +429,33 @@ jobs:
           ccache --show-stats || echo "ccache stats not available"
           echo "::endgroup::"
 
-      - name: 🔍 CCache Debug Logs
+      - name: 🔍 Publish ccache summary
         if: ${{ !cancelled() }}
         run: |
-          echo "::group::CCache Configuration"
-          echo "CCACHE_DEBUG=${CCACHE_DEBUG:-not set}"
-          echo "CCACHE_DEBUGDIR=${CCACHE_DEBUGDIR:-not set}"
-          ccache --show-config | grep -E '(debug|log)' || true
-          echo "::endgroup::"
-          echo "::group::CCache Debug Logs"
-          if [ -d "/tmp/ccache-debug" ]; then
-            LOG_COUNT=$(find /tmp/ccache-debug -type f -name "*.ccache-log" 2>/dev/null | wc -l)
-            echo "Found $LOG_COUNT ccache debug log files"
-            echo ""
-            # Show first 5 log files as samples
-            echo "=== Sample Debug Logs (first 5) ==="
-            find /tmp/ccache-debug -type f -name "*.ccache-log" 2>/dev/null | head -5 | while read log; do
-              echo "::group::$(basename $log)"
-              cat "$log" || true
-              echo "::endgroup::"
-            done || true
-            echo ""
-            # Search for remote storage errors
-            echo "=== Searching for Remote Storage Errors ==="
-            find /tmp/ccache-debug -type f -name "*.ccache-log" -exec grep -l "remote storage" {} \; 2>/dev/null | head -3 | while read log; do
-              echo "::group::Errors in $(basename $log)"
-              grep -A 5 -B 5 "remote storage\|error\|failed" "$log" || true
-              echo "::endgroup::"
-            done || true
+          echo '## Test CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          echo '## CCache Debug - Key Calculation' >> $GITHUB_STEP_SUMMARY
+          echo 'Debug files in /tmp/ccache-debug:' >> $GITHUB_STEP_SUMMARY
+          if [ -d /tmp/ccache-debug ] && [ "$(ls -A /tmp/ccache-debug 2>/dev/null)" ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            # Show first few debug log files with key calculation info
+            for f in $(find /tmp/ccache-debug -name '*.ccache-log' 2>/dev/null | head -5); do
+              echo "=== $f ===" >> $GITHUB_STEP_SUMMARY
+              cat "$f" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            done
+            echo '```' >> $GITHUB_STEP_SUMMARY
+
+            echo '### Cache hit/miss decisions - first 20' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -rE "(cache hit|cache miss|No such file|Storing embedded entry)" /tmp/ccache-debug/ | head -20 >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
           else
-            echo "No debug logs directory found at /tmp/ccache-debug"
+            echo 'No debug files found' >> $GITHUB_STEP_SUMMARY
           fi
-          echo "::endgroup::"
 
   ttsim-galaxy-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
@@ -548,35 +538,30 @@ jobs:
           ccache --show-stats || echo "ccache stats not available"
           echo "::endgroup::"
 
-      - name: 🔍 CCache Debug Logs
+      - name: 🔍 Publish ccache summary
         if: ${{ !cancelled() }}
         run: |
-          echo "::group::CCache Configuration"
-          echo "CCACHE_DEBUG=${CCACHE_DEBUG:-not set}"
-          echo "CCACHE_DEBUGDIR=${CCACHE_DEBUGDIR:-not set}"
-          ccache --show-config | grep -E '(debug|log)' || true
-          echo "::endgroup::"
-          echo "::group::CCache Debug Logs"
-          if [ -d "/tmp/ccache-debug" ]; then
-            LOG_COUNT=$(find /tmp/ccache-debug -type f -name "*.ccache-log" 2>/dev/null | wc -l)
-            echo "Found $LOG_COUNT ccache debug log files"
-            echo ""
-            # Show first 5 log files as samples
-            echo "=== Sample Debug Logs (first 5) ==="
-            find /tmp/ccache-debug -type f -name "*.ccache-log" 2>/dev/null | head -5 | while read log; do
-              echo "::group::$(basename $log)"
-              cat "$log" || true
-              echo "::endgroup::"
-            done || true
-            echo ""
-            # Search for remote storage errors
-            echo "=== Searching for Remote Storage Errors ==="
-            find /tmp/ccache-debug -type f -name "*.ccache-log" -exec grep -l "remote storage" {} \; 2>/dev/null | head -3 | while read log; do
-              echo "::group::Errors in $(basename $log)"
-              grep -A 5 -B 5 "remote storage\|error\|failed" "$log" || true
-              echo "::endgroup::"
-            done || true
+          echo '## Test CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          echo '## CCache Debug - Key Calculation' >> $GITHUB_STEP_SUMMARY
+          echo 'Debug files in /tmp/ccache-debug:' >> $GITHUB_STEP_SUMMARY
+          if [ -d /tmp/ccache-debug ] && [ "$(ls -A /tmp/ccache-debug 2>/dev/null)" ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            # Show first few debug log files with key calculation info
+            for f in $(find /tmp/ccache-debug -name '*.ccache-log' 2>/dev/null | head -5); do
+              echo "=== $f ===" >> $GITHUB_STEP_SUMMARY
+              cat "$f" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            done
+            echo '```' >> $GITHUB_STEP_SUMMARY
+
+            echo '### Cache hit/miss decisions - first 20' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -rE "(cache hit|cache miss|No such file|Storing embedded entry)" /tmp/ccache-debug/ | head -20 >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
           else
-            echo "No debug logs directory found at /tmp/ccache-debug"
+            echo 'No debug files found' >> $GITHUB_STEP_SUMMARY
           fi
-          echo "::endgroup::"
