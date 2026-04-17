@@ -100,12 +100,10 @@ struct KernelSpec {
     struct CompilerOptions {
         using IncludePaths = std::vector<std::string>;
         using Defines = std::vector<std::pair<std::string, std::string>>;
-        using Macros = std::vector<std::string>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
         IncludePaths include_paths;         // -I <path>
         Defines defines;                    // -D <name>=<value>
-        Macros macros;                      // -M <macro>
         OptLevel opt_level = OptLevel::O2;  // -O<level>
         // Can add more options here as needed
     };
