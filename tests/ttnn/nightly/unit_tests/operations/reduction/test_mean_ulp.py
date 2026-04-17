@@ -47,7 +47,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.ttnn.unit_tests.operations.test_utils import get_compute_kernel_options
 from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
 
 
@@ -57,17 +56,14 @@ from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
 
 
 def _make_mean_compute_kernel_config(device, fp32_dest_acc_en: bool):
-    """Arch-aware compute kernel config (same pattern as test_softmax_ulp)."""
-    try:
-        return ttnn.init_device_compute_kernel_config(
-            device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            packer_l1_acc=True,
-        )
-    except TypeError:
-        return get_compute_kernel_options(fp32_dest_acc_en)
+    """Compute kernel config from device arch."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=True,
+    )
 
 
 def _golden_mean_bf16(input_bf16: torch.Tensor, dim, keepdim: bool) -> torch.Tensor:
