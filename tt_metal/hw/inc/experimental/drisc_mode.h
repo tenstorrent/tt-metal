@@ -27,6 +27,8 @@
           engine for L1<->DRAM transfers).
         - NOC traffic terminates at DRISC L1, so other cores can
           read/write that L1.
+        - Tensix cannot access DRAM directly through this endpoint;
+          DRAM traffic must go through the DRISC L1/DMA path.
 
   Register persistence (IMPORTANT):
     NIU_CFG_0 persists across program runs; only a chip reset
@@ -81,18 +83,15 @@ inline __attribute__((always_inline)) bool drisc_is_noc2axi_mode(uint8_t noc = n
     return (cfg >> NIU_CFG_0_AXI_SUBORDINATE_ENABLE) & 0x1;
 }
 
-// Apply to both NIU instances. Leaves active instance at 0 on return
-// (matches legacy boot post-condition).
+// Apply to both NIU instances.
 inline __attribute__((always_inline)) void drisc_set_stream_mode_all(void) {
     drisc_set_stream_mode(0);
     drisc_set_stream_mode(1);
-    noc_set_active_instance(0);
 }
 
 inline __attribute__((always_inline)) void drisc_set_noc2axi_mode_all(void) {
     drisc_set_noc2axi_mode(0);
     drisc_set_noc2axi_mode(1);
-    noc_set_active_instance(0);
 }
 
 #endif  // COMPILE_FOR_DRISC
@@ -103,11 +102,8 @@ inline __attribute__((always_inline)) void drisc_set_noc2axi_mode_all(void) {
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
 /*
   Remote API: any data-movement kernel configures a remote DRISC NIU
-  via NOC read-modify-write. Useful when a caller needs DRISC L1 access
-  (stream mode) rather than direct DRAM (NOC2AXI mode).
-
-  NIU config registers sit before the NOC2AXI mux, so remote writes
-  always reach NIU_CFG_0 regardless of the target NIU current mode.
+  via NOC read-modify-write. Useful when a DM kernel (e.g., on Tensix)
+  needs DRISC L1 access (stream mode) rather than direct DRAM (NOC2AXI mode).
 
   Parameters:
     drisc_noc_x, drisc_noc_y: NOC coords of the target DRISC.
@@ -121,12 +117,9 @@ inline __attribute__((always_inline)) void drisc_set_noc2axi_mode_all(void) {
                               call completes before returning.
 */
 
-// dataflow_api.h is kernel-only. Brings in get_noc_addr,
-// noc_async_read, noc_inline_dw_write, barriers, and noc_index.
 #include "api/dataflow/dataflow_api.h"
 
 // Caller-side address of NIU_CFG_0 for the given NIU instance (0 or 1).
-// NIUs are NOC_INSTANCE_OFFSET bytes apart; mirrors noc_{get,set}_cfg_reg.
 inline __attribute__((always_inline)) uint32_t _drisc_remote_niu_cfg_local_addr(uint8_t noc) {
     return NOC_CFG(NIU_CFG_0) + (noc * NOC_INSTANCE_OFFSET);
 }
