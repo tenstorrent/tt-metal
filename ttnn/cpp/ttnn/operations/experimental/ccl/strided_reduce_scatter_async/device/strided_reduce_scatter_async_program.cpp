@@ -208,7 +208,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> chunk_width_in_mm_blocks,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
-    const std::optional<const Tensor>& addcmul_input_tensor2) {
+    const std::optional<const Tensor>& addcmul_input_tensor2,
+    std::optional<tt::tt_metal::MathFidelity> reduce_math_fidelity) {
     auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
@@ -584,7 +585,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
 
     // Reduce kernel
-    auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
+    auto sender_reduce_kernel_config =
+        tt::tt_metal::ComputeConfig{.math_fidelity = reduce_math_fidelity.value_or(tt::tt_metal::MathFidelity::HiFi4)};
     sender_reduce_kernel_config.compile_args = {
         input_cb_index,                  // [0]  input_cb_id
         intermediate_cb_index,           // [1]  intermediate_cb

@@ -59,7 +59,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> chunk_width_in_mm_blocks,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
-    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt);
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,
+    std::optional<tt::tt_metal::MathFidelity> reduce_math_fidelity = std::nullopt);
 
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
@@ -242,7 +243,9 @@ minimal_matmul_strided_reduce_scatter_async_program(
         // Phase 2: fuse addcmul at the RS final write step (not in MM kernel)
         fused_ternary_scalar,
         addcmul_input_tensor1,
-        addcmul_input_tensor2);
+        addcmul_input_tensor2,
+        // Phase 3: propagate matmul math fidelity to the RS reduce kernel
+        std::optional<tt::tt_metal::MathFidelity>(compute_kernel_config.math_fidelity));
 
     // =========================================================================
     // STEP 2: Create the Matmul program SECOND
