@@ -86,6 +86,7 @@ class FuserConfigSchema(BaseModel):
                 test_name=test_name,
                 loop_factor=self.loop_factor,
             ),
+            operand_registry=operands,
         )
 
     @classmethod
