@@ -9,6 +9,7 @@ import pytest
 from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
+    skip_with_llk_assert,
 )
 import ttnn
 
@@ -20,6 +21,7 @@ from tests.ttnn.nightly.unit_tests.operations.conv.test_conv_transpose2d import 
 )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT. Issue #42597")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
@@ -516,6 +518,7 @@ def test_conv_transpose2d_config_tensors_in_dram(
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT. Issue #42597")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1024}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, groups",

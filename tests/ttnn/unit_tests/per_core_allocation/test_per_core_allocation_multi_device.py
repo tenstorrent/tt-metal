@@ -12,6 +12,7 @@ Tests the two-level allocator architecture:
 
 import torch
 from loguru import logger
+from models.common.utility_functions import skip_with_llk_assert
 
 import ttnn
 
@@ -101,6 +102,7 @@ def _assert_no_overlap_per_device(pc_tensor, pc_core, pc_size, ls_tensor, ls_siz
 # --- Basic tests ---
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_per_core_independent_addresses_across_devices(mesh_device):
     """Per-core allocations on different devices get same address when allocator states match."""
     shard_bytes = 2048

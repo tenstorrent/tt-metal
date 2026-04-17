@@ -15,6 +15,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from models.common.utility_functions import skip_with_llk_assert
+
 import pytest
 import torch
 
@@ -2298,6 +2300,7 @@ def imagenet_label_dict():
         return ast.literal_eval(f.read())
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT. Issue #42597")
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
