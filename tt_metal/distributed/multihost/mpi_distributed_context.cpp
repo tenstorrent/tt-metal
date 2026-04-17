@@ -756,9 +756,14 @@ MPIContext::~MPIContext() {
     if (was_mpi_finalized()) {
         return;  // MPI_Finalize() already called
     }
-    if (comm_ != MPI_COMM_WORLD && comm_ != MPI_COMM_NULL) {
+    // MPI_Comm_group allocates a group handle even for MPI_COMM_WORLD; always free it.
+    if (group_ != MPI_GROUP_NULL) {
         MPI_Group_free(&group_);
+        group_ = MPI_GROUP_NULL;
+    }
+    if (comm_ != MPI_COMM_WORLD && comm_ != MPI_COMM_NULL) {
         MPI_Comm_free(&comm_);
+        comm_ = MPI_COMM_NULL;
     }
 }
 }  // namespace tt::tt_metal::distributed::multihost
