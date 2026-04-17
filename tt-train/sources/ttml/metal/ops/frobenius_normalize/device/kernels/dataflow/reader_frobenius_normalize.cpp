@@ -76,30 +76,19 @@ void kernel_main() {
     }
 
     // =========================================================================
-    // All-to-origin reduction: each core writes its partial sum_sq (16 bytes,
-    // with bytes 4-15 zeroed) to origin's cb_recv L1 at core_index * 16.
-    // Origin zeros cb_recv at kernel start, waits for semaphore, then pushes
-    // the tile to compute for sfpu_reduce
-    // Stride has to be 16 bytes for some reason
+    // All-to-origin reduction: each core writes its 4-byte partial sum_sq to
+    // origin's cb_recv L1 at core_index * 4. Origin zeros cb_recv at kernel
+    // start so unused tile positions stay zero; sfpu_reduce then sums all 1024
+    // FP32 elements (partials + zeros) to get sum(partials).
     // =========================================================================
     {
-        // Read partial from compute and zero padding bytes for clean sfpu_reduce
         cb_wait_front(cb_sq_partial, 1);
         const uint32_t src_l1 = get_read_ptr(cb_sq_partial);
-        // Zero bytes 4-15 so the 16-byte NOC write is [scalar, 0, 0, 0]
-        volatile tt_l1_ptr uint32_t* const src_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_l1);
-        src_ptr[1] = 0;
-        src_ptr[2] = 0;
-        src_ptr[3] = 0;
 
 #ifdef IS_ORIGIN
-        // Write own partial at core_index offset (local L1 write, no NOC)
-        volatile tt_l1_ptr uint32_t* const dst =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_recv_base + core_index * 16);
-        dst[0] = src_ptr[0];
-        dst[1] = 0;
-        dst[2] = 0;
-        dst[3] = 0;
+        // Write own partial at core_index offset (local L1 word store, no NOC)
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_recv_base + core_index * 4) =
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_l1);
         cb_pop_front(cb_sq_partial, 1);
 
         // Wait for all non-origin cores
@@ -111,9 +100,12 @@ void kernel_main() {
         // Push the completed tile to cb_recv for compute sfpu_reduce
         cb_push_back(cb_recv, 1);
 #else
-        // NOC write [scalar, 0, 0, 0] to origin's cb_recv
-        const uint64_t dst_noc = get_noc_addr(origin_phys_x, origin_phys_y, cb_recv_base + core_index * 16);
-        noc_async_write(src_l1, dst_noc, 16);
+        // 4-byte inline NOC write of the FP32 partial to origin's cb_recv.
+        // noc_async_write rounds up to 16-byte packets on Blackhole and would
+        // clobber adjacent slots; noc_inline_dw_write is the 4-byte primitive.
+        const uint32_t partial_val = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_l1);
+        const uint64_t dst_noc = get_noc_addr(origin_phys_x, origin_phys_y, cb_recv_base + core_index * 4);
+        noc_inline_dw_write(dst_noc, partial_val);
         noc_async_write_barrier();
         cb_pop_front(cb_sq_partial, 1);
 
