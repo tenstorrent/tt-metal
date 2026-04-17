@@ -128,9 +128,14 @@ def cmd_init(args: argparse.Namespace) -> None:
         "run_type": args.run_type,
         "git_commit": args.git_commit,
         "git_branch": args.git_branch,
+        "description": args.description or None,
         "num_turns": 0,
         "solver_state": None,
-        "cost_usd": 0,
+        # cost_usd stays None until either (a) a batch runner drops a
+        # cli_output.json into LOG_DIR and the dashboard backfills, or
+        # (b) finalize sets it via --patch-json. Zero would render as
+        # "$0.00" in the dashboard; None renders as "—" (not captured).
+        "cost_usd": None,
         "duration_seconds": 0,
         "log_dir": args.log_dir,
         "phases_total": args.phases_total,
@@ -448,6 +453,11 @@ def _build_parser() -> argparse.ArgumentParser:
     init.add_argument("--run-type", default="manual")
     init.add_argument("--git-commit", default="unknown")
     init.add_argument("--git-branch", default="")
+    init.add_argument(
+        "--description",
+        default=None,
+        help="Short one-line description (e.g. issue title) shown in dashboard rows",
+    )
     init.add_argument("--phases-total", type=int, default=0)
     init.add_argument(
         "--pipeline-steps", default=None, help="JSON array of {id,name,desc} objects"

@@ -198,6 +198,7 @@ python codegen/scripts/run_json_writer.py init \
     --run-type "${CODEGEN_RUN_TYPE:-manual}" \
     --git-commit "$GIT_COMMIT" \
     --git-branch "$GIT_BRANCH" \
+    --description "#${ISSUE_NUMBER}: ${ISSUE_TITLE}" \
     --pipeline-steps "$PIPELINE_STEPS" \
     --issue "$ISSUE_JSON"
 ```
@@ -233,7 +234,9 @@ Agent tool:
 
 Wait for completion. **Verify** that `codegen/artifacts/issue_{ISSUE_NUMBER}_analysis.md` exists.
 
-Append `"issue_analyzer"` to `AGENTS_USED`.
+Append `"analyzer"` to `AGENTS_USED`.
+
+Note: the BH-specific role name is "issue_analyzer", but we append the generic `analyzer` label because the dashboard's `renderPipeline` (in `dashboard/static/dashboard.js`) checks `run.agents.includes(step.id)` against the default pipeline-step IDs (`analyzer, arch_lookup, planner, writer, fix_compile, tester, fix_tests`). Using the step-ID name keeps the pipeline-preview lights correct. The same rule applies to every other `AGENTS_USED` append below: use the pipeline-step ID, not the role name.
 
 If the analyzer reports the issue is out of scope (not an LLK issue for ${TARGET_ARCH}), call:
 ```bash
@@ -309,7 +312,7 @@ python codegen/scripts/run_json_writer.py advance \
     --new-message "Planning the fix for issue #${ISSUE_NUMBER}" \
     --prev-result "success" \
     --prev-message "${PREV_STEP_MESSAGE}" \
-    --agent "fix_planner"
+    --agent "planner"
 ```
 
 Spawn the fix planner:
@@ -334,7 +337,7 @@ Agent tool:
 
 Wait for completion. **Verify** that `codegen/artifacts/issue_{ISSUE_NUMBER}_fix_plan.md` exists.
 
-Append `"fix_planner"` to `AGENTS_USED`.
+Append `"planner"` to `AGENTS_USED` (pipeline-step ID).
 
 ---
 
@@ -348,7 +351,7 @@ python codegen/scripts/run_json_writer.py advance \
     --new-message "Applying fix per plan — modifying code in WORKTREE_DIR" \
     --prev-result "success" \
     --prev-message "Fix plan at codegen/artifacts/issue_${ISSUE_NUMBER}_fix_plan.md" \
-    --agent "fixer"
+    --agent "writer"
 ```
 
 Spawn the fixer:
@@ -373,7 +376,7 @@ Wait for completion. The fixer reports either:
 - **Compilation PASSED** → proceed to Step 5
 - **Compilation FAILED** → proceed to Step 4b (debug)
 
-Append `"fixer"` to `AGENTS_USED`.
+Append `"writer"` to `AGENTS_USED` (pipeline-step ID for the code-modification step).
 Increment `COMPILATION_ATTEMPTS` by 1.
 
 ### Step 4b: Debug Compilation (if needed)
@@ -383,7 +386,7 @@ Increment `COMPILATION_ATTEMPTS` by 1.
 python codegen/scripts/run_json_writer.py failure \
     --log-dir "$LOG_DIR" \
     --step "compile_after_fix" \
-    --agent "fixer" \
+    --agent "writer" \
     --type "compile_error" \
     --message "${FIRST_COMPILE_ERROR_LINE}" \
     --resolved "false"
@@ -661,12 +664,34 @@ The expected schema (matches the run.json that finalize wrote):
 ### 6d: Copy Artifacts to LOG_DIR
 
 ```bash
-cp codegen/artifacts/issue_{ISSUE_NUMBER}_*.md $LOG_DIR/ 2>/dev/null || true
+cp codegen/artifacts/issue_${ISSUE_NUMBER}_*.md $LOG_DIR/ 2>/dev/null || true
+
+# Snapshot the pre-fix (base) and post-fix (current) contents of every changed
+# file into $LOG_DIR using flattened path names. The dashboard's run-detail
+# renderer reads these two snapshots per changed file to show a unified diff
+# in the "Changed Files" view (see dashboard/core/run_detail.py).
+#   <flattened> = $filepath with "/" replaced by "_"
+#   base_<flattened>  → contents at origin/main (pre-fix)
+#   <flattened>       → contents in the worktree (post-fix)
+while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    flat=$(echo "$f" | tr '/' '_')
+    # Post-fix (current worktree version)
+    if [ -f "$WORKTREE_DIR/$f" ]; then
+        cp "$WORKTREE_DIR/$f" "$LOG_DIR/$flat" 2>/dev/null || true
+    fi
+    # Pre-fix (origin/main version), extracted via `git show`
+    git -C "$WORKTREE_DIR" show "origin/main:$f" > "$LOG_DIR/base_$flat" 2>/dev/null || true
+    # Drop empty base snapshots (e.g. file didn't exist pre-fix)
+    [ -s "$LOG_DIR/base_$flat" ] || rm -f "$LOG_DIR/base_$flat"
+done <<EOF
+$(echo "$CHANGED_FILES")
+EOF
 
 # If the run was launched via `claude -p "..." --output-format json > cli_output.json`,
 # the batch runner is expected to drop that file into $LOG_DIR. The dashboard's
 # `_enrich_run()` (dashboard/core/runs.py) reads it to backfill tokens and cost.
-# If the file is absent, tokens stay zeros — not fatal, but the dashboard shows "—".
+# If the file is absent, tokens stay zeros and the dashboard shows cost as "—".
 ```
 
 `${LOG_DIR}/run.json` is already on disk (written by `run_json_writer.py finalize`
