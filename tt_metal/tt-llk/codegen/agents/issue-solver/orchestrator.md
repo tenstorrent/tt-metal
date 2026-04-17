@@ -108,7 +108,7 @@ export DEBUG_CYCLES=0
 export TESTS_TOTAL=0
 export TESTS_PASSED=0
 export AGENTS_USED_JSON='[]'           # JSON-serialized AGENTS_USED list
-export TOKENS_JSON='{"input":0,"output":0,"cache_read":0,"total":0,"cost_usd":0}'
+export TOKENS_JSON='{"input":0,"output":0,"cache_read":0,"cache_creation":0,"total":0,"cost_usd":0}'
 export OBSTACLE=                        # set if blocked
 # FAILURES is maintained as a shell list (append as they happen) — too awkward to export.
 ```
@@ -592,7 +592,7 @@ patch = {
     "tests_passed": int(os.environ["TESTS_PASSED"]),
     "agents": json.loads(os.environ["AGENTS_USED_JSON"]),
     "changed_files": json.loads(os.environ["CHANGED_FILES_JSON"]),
-    "tokens": json.loads(os.environ.get("TOKENS_JSON", '{"input":0,"output":0,"cache_read":0,"total":0}')),
+    "tokens": json.loads(os.environ.get("TOKENS_JSON", '{"input":0,"output":0,"cache_read":0,"cache_creation":0,"total":0,"cost_usd":0}')),
     "obstacle": os.environ.get("OBSTACLE") or None,
 }
 print(json.dumps(patch))
