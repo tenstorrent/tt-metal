@@ -7,7 +7,6 @@ import random
 from datetime import datetime, timezone
 from typing import List, Callable, Sequence
 
-from ttml.trainers.grpo_ops import Exp, Clip, Min
 import os
 import numpy as np
 import torch
@@ -277,12 +276,12 @@ class GrpoTrainer:
         if mesh is None:
             mesh = GrpoMeshCtx()
         B_local, Tp = nlog_probs_old.shape()
-        ratio = Exp.apply(nlog_probs_old - nlog_probs_new)
-        clipped_ratio = Clip.apply(ratio, 1.0 - eps, 1.0 + eps)
+        ratio = ttml.ops.unary.exp(nlog_probs_old - nlog_probs_new)
+        clipped_ratio = ttml.ops.unary.clip(ratio, 1.0 - eps, 1.0 + eps)
 
         surr1 = ratio * adv_tt
         surr2 = clipped_ratio * adv_tt
-        surr = Min.apply(surr1, surr2)
+        surr = ttml.ops.binary.min(surr1, surr2)
 
         mask_np = mask.to_numpy(composer=mesh.dp_composer)
         tokens_per_completion = np.maximum(mask_np.sum(axis=1, keepdims=True), 1.0)
