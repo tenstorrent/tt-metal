@@ -130,8 +130,8 @@ class TtEncoderBlock:
         )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.add(x, self.attn(self.norm1(x)))
-        x = ttnn.add(x, self.norm_mlp(x))
+        x = ttnn.add(x, self.attn(self.norm1(x)), memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.add(x, self.norm_mlp(x), memory_config=ttnn.L1_MEMORY_CONFIG)
         return x
 
 
