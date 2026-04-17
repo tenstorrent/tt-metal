@@ -2658,34 +2658,48 @@ avoids pinning device buffers in the cache and prevents stale-buffer bugs
 when activations are reallocated between forward passes.
 
 
-### Cache Hit: Fast Path
+### Cache Hit: Two Fast Paths
 
-On a cache hit, `_container_run` dispatches directly via the allocating
-`fusion_dispatch_op` overload — no `FusedOp` is constructed:
+On a `_BUILD_CACHE` hit, `_container_run` takes one of two fast paths
+depending on whether the container has been called before.  Neither path
+constructs a `FusedOp`, and the `.descriptor` property of deferred branch
+`OpDescriptor` objects is **never accessed** — only their `input_tensors`
+(which the caller populated before `run()`) are read.
+
+#### Warm path (first call on a container instance)
+
+Used by inline containers (new each call) and on the first `run()` of a
+persistent container.  Dispatches via the 3-arg `fusion_dispatch_op`
+overload with the branch ops' pre-existing output tensors:
 
 ```python
 entry = _BUILD_CACHE.get(cache_key)
 if entry is not None:
     inputs = <identity-deduplicated branch input_tensors>
-    outputs = fusion_dispatch_op(
-        inputs, entry.output_specs, entry.shared_output_map,
-        entry.cached_descriptor, entry.address_slots,
-    )
+    outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
+    io_tensors = inputs + outputs
+    fusion_dispatch_op(io_tensors, entry.cached_descriptor, entry.address_slots)
 ```
 
-The hit path:
+After dispatch, `_container_run` creates a `FusionDispatchState` on the
+shared `_CacheEntry` (if not already present) and sets `_cached_entry` on
+the container so subsequent calls take the hot path.
 
-1. **Collect merged inputs**: Identity-deduplicate branch `input_tensors` in
-   flatten order.
-2. **Allocate + dispatch (single C++ call)**: `fusion_dispatch_op` allocates
-   fresh output tensors from the cached `TensorSpec` list, patches the
-   descriptor with the new addresses via `AddressSlots`, and dispatches.
-3. **Reorder**: The returned outputs (in `output_sources` order) are reordered
-   to `default_results` order via `result_reorder`.
+#### Persistent hot path (call 2+ on the same container)
 
-The `.descriptor` property of deferred branch `OpDescriptor` objects is **never
-accessed** on a cache hit.  Only their `input_tensors` (which the caller
-populated before `run()`) are read.
+Bypasses cache-key computation entirely.  `FusionDispatchState.dispatch`
+allocates ephemeral output tensors from cached `TensorSpec` metadata, patches
+the descriptor, and dispatches — all in a single C++ call:
+
+```python
+entry = container._cached_entry          # set on the previous call
+inputs = <identity-deduplicated from container._cached_ops>
+outputs = entry.dispatch_state.dispatch(inputs)
+```
+
+Updated activation slots are cleared after dispatch (zero L1 pinning between
+forward passes).  The returned outputs (in `output_sources` order) are
+reordered to `default_results` order via `result_reorder`.
 
 
 ### Cache Miss: Full Build
@@ -2717,24 +2731,21 @@ _BUILD_CACHE[cache_id] = _cache_build_result(fused, ops, r.output_source_map)
 
 ### Dispatch: fusion_dispatch_op
 
-`fusion_dispatch_op` has two overloads, both taking inputs and outputs as
-separate vectors:
+`fusion_dispatch_op` has three overloads, each used by a different dispatch
+path.  All patch the cached descriptor's stale addresses via `AddressSlots`
+before dispatching.
 
-**Allocating (5-arg, hot path):** Allocates fresh output tensors from cached
-`TensorSpec` metadata, patches the descriptor, and dispatches — all in one
-C++ call.  `shared_output_map` handles the case where multiple kernel outputs
-alias the same buffer (e.g. sharded branches writing to a shared output).
+**3-arg (warm path):** Takes a flat `io_tensors` list (inputs + outputs
+concatenated).  Used by `_container_run` on a build-cache hit when the
+container has pre-existing output tensors from the branch ops:
 
 ```python
-outputs = fusion_dispatch_op(
-    inputs, output_specs, shared_output_map,
-    descriptor, address_slots,
-)
+fusion_dispatch_op(io_tensors, entry.cached_descriptor, entry.address_slots)
 ```
 
-**Non-allocating (4-arg, cold path):** Dispatches into pre-allocated output
-tensors.  Used by `FusedOp.launch()` on the cold path where outputs already
-exist from `build()`:
+**4-arg (cold path):** Dispatches into pre-allocated output tensors passed
+as a separate vector.  Used by `FusedOp.launch()` on the cold path where
+outputs already exist from `build()`:
 
 ```python
 fusion_dispatch_op(
@@ -2743,10 +2754,21 @@ fusion_dispatch_op(
 )
 ```
 
-Before cold-path dispatch, `refresh_merged_io` copies the current branch ops'
-tensor lists into the fused op's merged IO lists — so in-place updates to
-branch tensor lists (e.g. activation buffer swaps between forward passes) are
-visible to the dispatch.
+**`FusionDispatchState` (persistent hot path):** A C++ class that caches
+output `TensorSpec` metadata, `shared_output_map`, `result_reorder`, and
+the `MeshProgramDescriptor`.  Its `dispatch(inputs)` method allocates
+ephemeral output tensors, patches the descriptor, dispatches, and applies
+result reordering — all in one C++ call with no round-trip to Python.
+Created once per `_CacheEntry` and shared across all containers with the
+same cache key:
+
+```python
+entry.dispatch_state = FusionDispatchState(
+    output_specs, shared_output_map, result_reorder,
+    descriptor, address_slots, mesh_device,
+)
+outputs = entry.dispatch_state.dispatch(inputs)   # persistent hot path
+```
 
 On the C++ side, `FusionDispatchMeshProgramFactory` implements a two-phase
 protocol:
@@ -2778,22 +2800,28 @@ The three slot types:
 ### Steady-State Pattern: run()
 
 `Sequential.run()` and `Parallel.run()` combine `build()` + `launch()` into
-a single call.  The dispatch path depends on how many times `run()` has been
-called on the same container:
+a single call via the shared `_container_run` implementation.  The dispatch
+path depends on the container's lifetime and the build-cache state:
 
-| Call # | Path | Overhead |
-|--------|------|----------|
-| 1st | `_materialize_chain` → `_container_run` (cold build) | Full codegen |
-| 2nd+ | `_container_run` (cache hit → `fusion_dispatch_op`) | ~tens of µs |
+| Path | When | Dispatch mechanism | Overhead |
+|------|------|--------------------|----------|
+| **Cold** | First call ever for this topology | Full codegen → `FusedOp.launch()` (4-arg) | ~seconds (codegen + JIT) |
+| **Warm** | `_BUILD_CACHE` hit, first call on this container | 3-arg `fusion_dispatch_op` with branch ops' output tensors | ~100s of µs |
+| **Persistent hot** | Call 2+ on the same container | `FusionDispatchState.dispatch` (C++, single call) | ~tens of µs |
 
-The first `run()` call builds the fused program and populates `_BUILD_CACHE`
-(including `output_specs` and `shared_output_map`).  All subsequent calls hit
-the cache directly — `_container_run` gathers inputs from the branch
-descriptors' current tensors, deduplicates them, and dispatches via the
-allocating `fusion_dispatch_op` overload which allocates ephemeral output
-tensors from the cached specs.  No `FusedOp` is retained on the container
-between calls, and output tensors are not pinned in the cache — zero L1
-retention between forward passes.
+**Inline containers** (new each call) always take the warm path — `_cached_entry`
+is `None` on each new container, but `_BUILD_CACHE` hits from the first call
+onward.  This is the natural pattern for inline `Sequential(…).run()` or
+`Parallel(…).run()`.
+
+**Persistent containers** (reused across calls) take the warm path on the
+first call, which creates the `FusionDispatchState` and sets `_cached_entry`.
+All subsequent calls bypass cache-key computation entirely and dispatch
+through the C++ hot path.
+
+No `FusedOp` is retained on the container between calls.  Output tensors are
+ephemeral (allocated fresh each hot-path call from cached `TensorSpec`
+metadata) — zero L1 retention between forward passes.
 
 See [Inline Mode](#inline-mode-simple) and [Persistent Mode](#persistent-mode-fast)
 at the top of this document for usage examples.
@@ -2809,10 +2837,10 @@ hash changes and a full rebuild occurs.
 `clear_build_cache()` manually clears all entries.  This is useful during
 development or when switching between device configurations.
 
-The `run()` cache (the stored `FusedOp` on the container) is invalidated
-separately via `invalidate_run()`, which is called automatically by `.add()`.
-Replacing `_items` entries in place requires calling `invalidate_run()`
-manually.
+The per-container `_cached_entry` pointer (which enables the persistent hot
+path) is reset by `invalidate_run()`, which is called automatically by
+`.add()`.  Replacing `_items` entries in place requires calling
+`invalidate_run()` manually.
 
 
 ## Constraints and Limitations
