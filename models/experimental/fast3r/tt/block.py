@@ -13,13 +13,6 @@ from .mlp import TtMlp, to_device_bias, to_device_weight
 class TtLayerNorm:
     """eps matches reference.model (1e-6)."""
 
-    COMPUTE = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=True,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
-
     def __init__(self, device, weight: torch.Tensor, bias: torch.Tensor, eps: float = 1e-6):
         self.weight = ttnn.from_torch(
             weight.unsqueeze(0).unsqueeze(0).unsqueeze(0),
@@ -36,10 +29,7 @@ class TtLayerNorm:
         self.eps = eps
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.layer_norm(
-            x, weight=self.weight, bias=self.bias, epsilon=self.eps,
-            compute_kernel_config=self.COMPUTE,
-        )
+        return ttnn.layer_norm(x, weight=self.weight, bias=self.bias, epsilon=self.eps)
 
 
 class TtNormMlp:
