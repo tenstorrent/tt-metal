@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string_view>
 
 namespace tt {
@@ -15,6 +15,13 @@ namespace tt {
 class StableHasher {
 public:
     StableHasher();
+    ~StableHasher();
+
+    StableHasher(StableHasher&&) noexcept;
+    StableHasher& operator=(StableHasher&&) noexcept;
+
+    StableHasher(const StableHasher&) = delete;
+    StableHasher& operator=(const StableHasher&) = delete;
 
     void update(uint64_t data);
     void update(const void* data, std::size_t size);
@@ -30,10 +37,13 @@ public:
     uint64_t digest() const;
 
 private:
-    // BLAKE3 state is embedded inline to avoid per-hasher dynamic allocation
-    // while keeping third-party type details out of this public header.
-    static constexpr std::size_t kStateStorageBytes = 2048;
-    alignas(std::max_align_t) std::array<std::byte, kStateStorageBytes> state_storage_{};
+    // Pimpl: keeps the BLAKE3 type out of this public header, and lets us
+    // avoid reasoning about placement-new / implicit object lifetime for a
+    // C-struct embedded in a byte buffer. The cost is one small heap
+    // allocation per StableHasher, which is immaterial for this class's
+    // cache-key-derivation use cases.
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace tt
