@@ -354,6 +354,39 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
             transform_version=self.transform_version,
         )
 
+    def tp4_merged_fusion_group_spec(
+        self,
+        o_proj_dtype: ttnn.DataType = ttnn.DataType.BFLOAT8_B,
+        mla_proj_dtype: ttnn.DataType = ttnn.DataType.BFLOAT8_B,
+    ) -> FusionGroupSpec:
+        """Build merged spec: TP4 o_proj + gate_mm + norms + q_ab + kv_a in one buffer."""
+        q_cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+        o_proj_tp4 = replace(
+            self.o_proj,
+            raw_tensor_shape=(8192, 14336),
+            dtype=o_proj_dtype,
+            tp_dim=(1, 0),
+        )
+        q_a = replace(q_cfg.q_a_shard_spec, dtype=mla_proj_dtype)
+        q_b = replace(q_cfg.q_b_shard_spec, dtype=mla_proj_dtype)
+        kv_a = replace(q_cfg.kv_a_shard_spec, dtype=mla_proj_dtype)
+        return _build_fusion_group_spec(
+            "o_proj_tp4_gate_mm_norms_q_ab_kv_a",
+            [
+                [("o_proj", o_proj_tp4)],
+                [("gate_mm", self.gate_mm)],
+                [("attn_norm", self.attn_norm), ("q_norm", self.q_norm), ("ffn_norm", self.ffn_norm)],
+                [("kv_norm", self.kv_norm)],
+                [("q_a_proj", q_a), ("q_b_proj", q_b)],
+                [("kv_a_proj", kv_a)],
+            ],
+            sharding_strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            # Explicit: mixed tp_dims (o_proj=(1,0), q_b=(None,1)) would
+            # conflict in _infer_mesh_mapper.  Per-tensor tp is handled by
+            # overlap_tensors independently; this config is for fingerprinting.
+            mesh_mapper_config=Shard2dMeshMapper(dims=(1, 0)),
+        )
+
 
 O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
 

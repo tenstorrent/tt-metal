@@ -10,7 +10,11 @@
 //   transport core: BRISC = fwd sender, NCRISC = bwd sender, TRISC = idle
 //
 // Semaphores (2 total):
-//   handoff_sem on transport core — monotonic (0 → 1 → 2 → 0)
+//   handoff_sem on transport core — shared bitfield (BRISC+NCRISC):
+//     bit 1: gather → scratch[0] ready  (noc_semaphore_inc 1)
+//     bit 2: gather → scratch[1] ready  (noc_semaphore_inc 1 << 1)
+//     bit 3: non-R2 RISC ack            (noc_semaphore_inc 1 << 2)
+//     R2-active resets to 0 after the non-R2 peer acks (bit 3).
 //   recv_sem on gather core — packed cumulative per-slot counter
 //
 // Data flow (mcast-owned receives, sender-only forwarding):
@@ -57,6 +61,14 @@ FORCE_INLINE void wait_for_slot(volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t s
     } while (((*sem_ptr >> shift) & field_mask) < NumChunksPerSlice);
 }
 
+// Poll until all bits in BitMask are set in the semaphore word.
+template <uint32_t BitMask>
+FORCE_INLINE void wait_for_bits(volatile tt_l1_ptr uint32_t* sem_ptr) {
+    do {
+        invalidate_l1_cache();
+    } while ((*sem_ptr & BitMask) != BitMask);
+}
+
 #endif  // COMPILE_FOR_NCRISC || COMPILE_FOR_BRISC
 
 // ============================================================================
@@ -100,7 +112,7 @@ struct GatherCTArgs {
 
 struct TransportArgs {
     uint32_t scratch_base_addr;
-    uint32_t handoff_sem_bank_addr;
+    uint32_t handoff_sem_bank_addr;  // Shared handoff semaphore; both BRISC and NCRISC use the same one
     uint32_t dest_output_base_addr;
     uint32_t r1_dest_slot_index;
     uint32_t dest_noc_x;
@@ -161,6 +173,9 @@ private:
 
         volatile tt_l1_ptr uint32_t* handoff_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.handoff_sem_bank_addr);
+        // Local NOC address for ack increments (must use NOC atomic to avoid
+        // racing with the gather core's NOC atomic incs on the same word).
+        const uint64_t local_handoff_noc = get_noc_addr(args.handoff_sem_bank_addr);
 
         // Send a full slice (possibly multi-chunk) rotating across links.
         auto send_slice = [&](uint32_t src_addr, uint32_t dest_slot_index) __attribute__((always_inline)) {
@@ -192,15 +207,23 @@ private:
             noc_async_writes_flushed();
         };
 
-        // Round 1: send local slice to neighbor
-        noc_semaphore_wait_min(handoff_sem_ptr, 1);
+        // Round 1: wait for bit 1 (scratch[0] ready), send local slice
+        wait_for_bits<1>(handoff_sem_ptr);
         send_slice(args.scratch_base_addr, args.r1_dest_slot_index);
 
         if constexpr (CTArgs::r2_active) {
-            // Round 2: forward the received slice to pair partner
-            noc_semaphore_wait_min(handoff_sem_ptr, 2);
+            // Round 2: wait for bit 2 (scratch[1] ready), forward received slice
+            wait_for_bits<1 << 1>(handoff_sem_ptr);
             send_slice(args.scratch_base_addr + CTArgs::slice_size_bytes, args.r2_dest_slot_index);
+
+            // Wait for non-R2 peer's bit 3 ack. Once observed, all NOC incs to
+            // this word (bits 1/2 from gather, bit 3 from peer) have landed,
+            // so the direct L1 reset is safe.
+            wait_for_bits<1 << 2>(handoff_sem_ptr);
             noc_semaphore_set(handoff_sem_ptr, 0);
+        } else {
+            // Ack: set bit 3 via NOC atomic inc
+            noc_semaphore_inc(local_handoff_noc, 1 << 2);
         }
 
         for (uint32_t link = 0; link < CTArgs::num_links; link++) {
@@ -240,7 +263,8 @@ private:
         // Cross-core write to transport scratch[0] FIRST to unblock R1 ASAP.
         noc_async_write(args.local_input_addr, scratch_base_noc, CTArgs::slice_size_bytes);
         noc_async_writes_flushed();
-        noc_semaphore_inc(handoff_sem_noc, 1);  // handoff_sem: 0 → 1
+        // Signal bit 1: scratch[0] ready (unblocks R1 on both BRISC and NCRISC)
+        noc_semaphore_inc(handoff_sem_noc, 1);
 
         // Local copy to own output slot (can overlap with R1 fabric sends).
         noc_async_write(
@@ -254,7 +278,8 @@ private:
         const uint64_t scratch_r2_noc = scratch_base_noc + CTArgs::slice_size_bytes;
         noc_async_write(args.output_buffer_addr + r2_src_slot_offset, scratch_r2_noc, CTArgs::slice_size_bytes);
         noc_async_writes_flushed();
-        noc_semaphore_inc(handoff_sem_noc, 1);  // handoff_sem: 1 → 2
+        // Signal bit 2: scratch[1] ready (unblocks R2 on the active RISC)
+        noc_semaphore_inc(handoff_sem_noc, 1 << 1);
 
         // Wait for all remaining slots (topology-agnostic).
         for (uint32_t slot = 0; slot < CTArgs::ring_size; slot++) {

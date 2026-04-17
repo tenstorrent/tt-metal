@@ -245,11 +245,8 @@ public:
 private:
     void impl([[maybe_unused]] const ReceiverArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
-        if constexpr (CTArgs::has_residual) {
-            cb_reserve_back(CTArgs::residual_cb_id, CTArgs::total_num_tiles);
-            cb_push_back(CTArgs::residual_cb_id, CTArgs::total_num_tiles);
-        }
-
+        // Note: residual CB lifecycle is handled by the caller (kernel NOC-copies
+        // the residual slice and does cb_reserve_back/cb_push_back before Reader runs).
         cb_reserve_back(CTArgs::recv_local_data_cb_id, CTArgs::total_num_tiles);
         cb_reserve_back(CTArgs::remote_data_cb_id, CTArgs::total_num_tiles);
         constexpr uint32_t local_payload_bytes = CTArgs::total_num_tiles * CTArgs::page_size_bytes;
@@ -360,12 +357,12 @@ private:
 
     void impl() {
 #if defined(COMPILE_FOR_TRISC)
+        // TODO: Fix this to account for actual dst size
+        static_assert(CTArgs::num_tiles <= 8, "num_tiles must be less than or equal to 8");
+
         reconfig_data_format<false, true>(CTArgs::cb_local, CTArgs::cb_remote);
         pack_reconfig_data_format<true>(CTArgs::cb_out);
         pack_block_contiguous_init(CTArgs::cb_out);
-
-        // TODO: Fix this to account for actual dst size
-        static_assert(CTArgs::num_tiles <= 8, "num_tiles must be less than or equal to 8");
 
         if constexpr (CTArgs::has_residual) {
             copy_tile_to_dst_init_short(CTArgs::cb_residual);
