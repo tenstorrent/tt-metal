@@ -95,13 +95,11 @@ class _TtResidualBlock:
                     residual, batch_size=batch_size, spatial=res_h * res_w
                 )
 
-        # Move both operands to a common interleaved L1 layout before
+        # Move both operands to a common interleaved DRAM layout before
         # the add — conv outputs can land in differently-sharded L1
         # buffers which makes ttnn.add silently produce stale results.
-        # Interleaved L1 avoids the DRAM round-trip while still giving
-        # a matching layout.
-        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-        residual = ttnn.sharded_to_interleaved(residual, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        residual = ttnn.sharded_to_interleaved(residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.add(x, residual, activations=[RELU])
         return out, h2, w2
 
