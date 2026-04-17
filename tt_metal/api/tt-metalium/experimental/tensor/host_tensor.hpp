@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -131,7 +131,7 @@ public:
      * The data in the buffer is copied into a tensor with host storage.
      */
     template <typename T>
-    static HostTensor from_span(std::span<T> buffer, const TensorSpec& spec, T pad_value = 0);
+    static HostTensor from_span(std::span<const T> buffer, const TensorSpec& spec, T pad_value = 0);
 
     /**
      * Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
@@ -186,6 +186,11 @@ public:
      * pre-condition: The HostTensor must be engaged.
      */
     const DistributedHostBuffer& buffer() const;
+
+    // TODO(#40348): This should be removed.
+    // We need to maintain invariant of this buffer.
+    // Giving out mutable reference allows user to assign into it.
+    DistributedHostBuffer& buffer();
 
     // Derivables:
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,8 +22,10 @@ void kernel_main() {
     constexpr auto dst0_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto dst1_args = TensorAccessorArgs<dst0_args.next_compile_time_args_offset()>();
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto s0 = TensorAccessor(src0_args, input_addr, aligned_elements * element_size);
-    const auto out0 = TensorAccessor(dst0_args, output_addr_0, 32);
+    const auto out0 = TensorAccessor(dst0_args, output_addr_0);
     const auto out1 = TensorAccessor(dst1_args, output_addr_1, aligned_elements * element_size);
 
     uint64_t src_noc_addr = get_noc_addr(0, s0);

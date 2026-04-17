@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,8 +21,7 @@ void kernel_main() {
 
     const auto local_weights_base_address = get_arg_val<uint32_t>(0);
 
-    const auto local_weights_addrgen =
-        TensorAccessor(local_weights_args, local_weights_base_address, local_weights_page_size_bytes);
+    const auto local_weights_addrgen = TensorAccessor(local_weights_args, local_weights_base_address);
 
     cb_reserve_back(local_weights_cb_id, 1);
     const uint32_t local_weights_l1_addr = get_read_ptr(local_weights_cb_id);

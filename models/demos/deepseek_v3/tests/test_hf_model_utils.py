@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,8 @@ from models.demos.deepseek_v3.utils.hf_model_utils import (
 )
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
+
+pytestmark = pytest.mark.t3k_compat
 
 
 def _write_index(model_dir: Path, weight_map: dict[str, str]) -> None:

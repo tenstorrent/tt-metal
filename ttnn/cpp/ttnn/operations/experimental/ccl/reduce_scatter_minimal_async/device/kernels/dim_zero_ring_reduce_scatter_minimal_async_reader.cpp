@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,16 +17,16 @@ using tt::tt_metal::BufferType;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-constexpr uint32_t cb_input_id = get_compile_time_arg_val(2);
-constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(3);
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
-constexpr uint32_t page_size = get_compile_time_arg_val(6);
-constexpr uint32_t output_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t batch_num_pages = get_compile_time_arg_val(8);
-constexpr uint32_t slice_B = get_compile_time_arg_val(9);
+constexpr uint32_t my_chip_id = get_named_compile_time_arg_val("my_chip_id");
+constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
+constexpr uint32_t cb_input_id = get_named_compile_time_arg_val("cb_input_id");
+constexpr uint32_t cb_intermediate_id = get_named_compile_time_arg_val("cb_interm_id");
+constexpr uint32_t cb_reader_output_id = get_named_compile_time_arg_val("cb_reader_output_id");
+constexpr uint32_t tile_granularity = get_named_compile_time_arg_val("tile_granularity");
+constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
+constexpr uint32_t output_num_pages = get_named_compile_time_arg_val("output_num_pages");
+constexpr uint32_t batch_num_pages = get_named_compile_time_arg_val("batch_num_pages");
+constexpr uint32_t slice_B = get_named_compile_time_arg_val("slice_B");
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -43,54 +43,12 @@ void kernel_main() {
     const int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 10;
-
-#ifdef INPUT_IS_SHARDED
-    constexpr uint32_t ct_offset = 7;
-
-    using input_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx),       // Memory layout
-        get_compile_time_arg_val(ct_idx + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + 3),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(ct_idx + 4),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(ct_idx + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + 6)>;  // pages_per_shard_y
-
-    const auto [input_mapping_table, input_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<input_tensor_shard_info>(get_arg_addr(arg_idx));
-    experimental::ShardedAddrGen<input_tensor_shard_info> input_tensor_addrgen = {
-        .bank_base_address = input_tensor_address, .shard_array = input_mapping_table};
-
-    arg_idx += input_rt_increment;
-#else
+    constexpr uint32_t ct_idx = 0;
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
-    constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
-    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
-#endif
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address);
 
-#ifdef INTERMEDIATE_IS_SHARDED
-    using intermediate_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx + ct_offset),       // Memory layout
-        get_compile_time_arg_val(ct_idx + ct_offset + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + ct_offset + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + ct_offset + 3),   // The number of pages in each sharding row not including
-                                                            // padding pages
-        get_compile_time_arg_val(ct_idx + ct_offset + 4),   // This defines times when contiguous pages can't be
-                                                            // calculated
-        get_compile_time_arg_val(ct_idx + ct_offset + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + ct_offset + 6)>;  // pages_per_shard_y
-
-    const auto [intermediate_mapping_table, intermediate_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<intermediate_tensor_shard_info>(get_arg_addr(arg_idx));
-    experimental::ShardedAddrGen<intermediate_tensor_shard_info> intermediate_tensor_addrgen = {
-        .bank_base_address = intermediate_tensor_address, .shard_array = intermediate_mapping_table};
-
-    arg_idx += intermediate_rt_increment;
-#else
-    constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
-#endif
+    constexpr auto intermediate_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
+    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address);
 
     uint32_t sem_target = 0;
 
@@ -139,7 +97,7 @@ void kernel_main() {
                 uint32_t l1_write_addr = get_write_ptr(cb_in0);
                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                     uint32_t input_tile_id = tile_id_start + tiles_read + j;
-                    uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
+                    uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(input_tile_id);
                     noc_async_read(noc_read_addr, l1_write_addr, page_size);
                     l1_write_addr += page_size;
                 }
@@ -151,7 +109,7 @@ void kernel_main() {
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t intermediate_tile_id = tile_id_start + tiles_read + j;
                         uint64_t intermediate_noc_read_addr =
-                            get_noc_addr(intermediate_tile_id, intermediate_tensor_addrgen);
+                            intermediate_tensor_addrgen.get_noc_addr(intermediate_tile_id);
                         noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
                         intermediate_l1_write_addr += page_size;
                     }

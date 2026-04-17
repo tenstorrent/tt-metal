@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,6 +54,7 @@ void kernel_main() {
     constexpr bool uniform_dataformat = get_compile_time_arg_val(36) == 1;
     constexpr bool is_causal = get_compile_time_arg_val(37) == 1;
     constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(39) == 1;
 
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
     // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
@@ -190,8 +191,9 @@ void kernel_main() {
             lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles;
         }
 
+        const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
+
         if constexpr (use_streaming_compute) {
-            const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
             sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -300,7 +302,9 @@ void kernel_main() {
                 cb_out,
                 lw_mask,
                 causality,
-                balancing);
+                balancing,
+                is_last_ring_iter,
+                use_zigzag_balancing);
         }
     }
 }

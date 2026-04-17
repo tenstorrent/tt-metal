@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,7 +31,7 @@ void kernel_main() {
     generate_reduce_scaler(cb_id_in2, scalar);
 
     constexpr auto tensor_args = TensorAccessorArgs<5>();
-    auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);
+    auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0(cb_id_in0);

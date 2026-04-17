@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,9 +17,6 @@ void kernel_main() {
     constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
     constexpr uint32_t mapping_pages = get_compile_time_arg_val(7);
 
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(10);
-    constexpr uint32_t indices_page_size = get_compile_time_arg_val(11);
-    constexpr uint32_t mapping_page_size = get_compile_time_arg_val(12);
     constexpr uint32_t metadata_page_size = get_compile_time_arg_val(14);
 
     constexpr uint32_t num_devices = get_compile_time_arg_val(15);
@@ -67,10 +64,10 @@ void kernel_main() {
     uint32_t token_start_idx = get_arg_val<uint32_t>(rt_ags++);
     uint32_t token_end_idx = get_arg_val<uint32_t>(rt_ags++);
 
-    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
-    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
-    const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
+    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address);
+    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address);
+    const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address);
+    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
     // read the expert mapping table
     cb_reserve_back(mapping_tensor_cb_id, mapping_pages);

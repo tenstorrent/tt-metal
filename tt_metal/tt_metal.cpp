@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -446,6 +446,60 @@ std::map<ChipId, IDevice*> CreateDevices(
     return ret_devices;
 }
 
+void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
+    ZoneScoped;
+
+    auto device_id = device->id();
+
+    // Verify program was prepared by prior LaunchProgram call
+    TT_FATAL(
+        program.impl().is_finalized(),
+        "Program must be finalized before calling DispatchCompiledProgramToDevice (target device {}). "
+        "Call LaunchProgram on another device first.",
+        device_id);
+    TT_FATAL(
+        program.impl().is_compiled(),
+        "Program must be compiled on at least one device before calling DispatchCompiledProgramToDevice (target device "
+        "{}). "
+        "Call LaunchProgram on another device first.",
+        device_id);
+
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
+    TT_FATAL(
+        !logical_cores_used_in_program.empty(),
+        "Program has no logical cores to dispatch to device {}. Ensure the program has kernels.",
+        device_id);
+
+    detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
+    detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
+
+    MetalContext::instance().get_cluster().dram_barrier(device_id);
+    MetalContext::instance().get_cluster().l1_barrier(device_id);
+    const auto& hal = MetalContext::instance().hal();
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        CoreType core_type = hal.get_core_type(programmable_core_type_index);
+        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
+        for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+            auto runtime_id = program.get_runtime_id();
+
+            // Use a thread-local copy of launch_msg to avoid racing on the shared KernelGroup state
+            dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
+            local_launch_msg.view().kernel_config().host_assigned_id() =
+                runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device_id);
+
+            auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                device_id,
+                physical_core,
+                local_launch_msg.view(),
+                kg->go_msg.view(),
+                hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
+        }
+    }
+}
+
 }  // namespace experimental
 
 namespace detail {
@@ -818,6 +872,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
              programmable_core_type_index < logical_cores_used_in_program.size();
              programmable_core_type_index++) {
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
+            HalProgrammableCoreType programmable_core_type =
+                hal.get_programmable_core_type(programmable_core_type_index);
+
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                 auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
                 auto runtime_id = program.get_runtime_id();
@@ -835,7 +892,8 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                     physical_core,
                     kg->launch_msg.view(),
                     kg->go_msg.view(),
-                    device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
+                    hal.get_dev_addr(
+                        programmable_core_type, HalL1MemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {
@@ -936,7 +994,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
                     uint32_t offset = 0;
                     for (const auto& dfb : dfbs_on_core) {
-                        auto serialized = dfb->serialize();
+                        auto serialized = dfb->serialize_for_core(logical_core);
                         std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());
                         offset += serialized.size();
                     }
@@ -974,9 +1032,12 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
+        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
+        uint64_t l1_noc_offset = hal.get_l1_noc_offset(programmable_core_type);
         for (const auto& kg : program.impl().get_kernel_groups(index)) {
             auto kernel_config = kg->launch_msg.view().kernel_config();
-            uint32_t kernel_config_base = kernel_config.kernel_config_base()[index];
+            uint64_t kernel_config_base =
+                static_cast<uint64_t>(kernel_config.kernel_config_base()[index]) + l1_noc_offset;
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -1372,6 +1433,39 @@ KernelHandle CreateKernelFromString(
     return CreateEthernetKernel(program, kernel_src, core_ranges, config);
 }
 
+static KernelHandle CreateDramKernel(
+    Program& program, const KernelSource& kernel_src, const CoreRangeSet& core_range_set, const DramConfig& config) {
+    TT_FATAL(
+        MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE, "DramKernel is only supported on Blackhole.");
+    TT_FATAL(
+        MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM),
+        "DRAM programmable cores are not enabled. Set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 to enable.");
+    std::shared_ptr<Kernel> kernel = std::make_shared<DramKernel>(kernel_src, core_range_set, config);
+    return program.impl().add_kernel(kernel, HalProgrammableCoreType::DRAM);
+}
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    return CreateDramKernel(program, kernel_src, core_ranges, config);
+}
+
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
+    return CreateDramKernel(program, kernel_src, core_ranges, config);
+}
+
 CBHandle CreateCircularBuffer(
     Program& program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
@@ -1402,6 +1496,15 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer) {
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
+    circular_buffer->config().set_globally_allocated_address(buffer);
+    circular_buffer->assign_global_address();
+}
+
+void UpdateDynamicCircularBufferAddress(
+    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset) {
+    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
+    TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
+    circular_buffer->config().set_address_offset(address_offset);
     circular_buffer->config().set_globally_allocated_address(buffer);
     circular_buffer->assign_global_address();
 }

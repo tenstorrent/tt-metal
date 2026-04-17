@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
 
 #include "reshape.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/small_vector_caster.hpp"  // for SmallVector<int32_t>
 
 namespace ttnn::operations::data_movement {
 
@@ -67,16 +68,15 @@ void bind_reshape(nb::module_& mod) {
     ttnn::bind_function<"reshape_on_device">(
         mod,
         doc,
-        ttnn::overload_t(
-            nb::overload_cast<const ttnn::Tensor&, int, int, int, int, const std::optional<ttnn::MemoryConfig>&>(
-                &reshape_on_device_wrapper),
-            nb::arg("input_tensor"),
-            nb::arg("W"),
-            nb::arg("Z"),
-            nb::arg("Y"),
-            nb::arg("X"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        nb::overload_cast<const ttnn::Tensor&, int, int, int, int, const std::optional<ttnn::MemoryConfig>&>(
+            &reshape_on_device_wrapper),
+        nb::arg("input_tensor"),
+        nb::arg("W"),
+        nb::arg("Z"),
+        nb::arg("Y"),
+        nb::arg("X"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,7 +39,7 @@ void kernel_main() {
     const uint32_t total_rows_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t rows_count = get_arg_val<uint32_t>(arg_idx++);
 
-    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
+    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
 
     for (uint32_t s = 0; s < rows_count; s++) {
         const uint32_t linear_row = total_rows_start + s;  // [0 .. outer_dim_size*input_halo_dim_size)
@@ -68,7 +68,8 @@ void kernel_main() {
             uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[t], signal_noc_y[t], phase2_barrier_sem);
             noc_semaphore_inc(sem_noc_addr, 1);
         }
-        // Ensure sem inc signals are delivered before kernel exits.
-        noc_async_write_barrier();
+        // Flush nonposted atomics (noc_semaphore_inc) before kernel exits.
+        // noc_async_write_barrier only flushes posted writes, not atomics.
+        noc_async_atomic_barrier();
     }
 }

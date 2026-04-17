@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,6 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include "impl/context/metal_context.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
@@ -510,7 +509,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::add(args...); },
+            [](auto&&... args) { return ttnn::add(std::forward<decltype(args)>(args)...); },
             device,
             input_spec_a,
             input_spec_b,
@@ -545,7 +544,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::subtract(args...); },
+            [](auto&&... args) { return ttnn::subtract(std::forward<decltype(args)>(args)...); },
             device,
             input_spec_a,
             input_spec_b,
@@ -580,7 +579,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::multiply(args...); },
+            [](auto&&... args) { return ttnn::multiply(std::forward<decltype(args)>(args)...); },
             device,
             input_spec_a,
             input_spec_b,
@@ -615,7 +614,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::maximum(args...); },
+            [](auto&&... args) { return ttnn::maximum(std::forward<decltype(args)>(args)...); },
             device,
             input_spec_a,
             input_spec_b,
@@ -650,7 +649,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            [](auto&&... args) { return ttnn::minimum(args...); },
+            [](auto&&... args) { return ttnn::minimum(std::forward<decltype(args)>(args)...); },
             device,
             input_spec_a,
             input_spec_b,

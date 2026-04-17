@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -276,10 +276,10 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
                 cb_wait_front(mm_src1, onetile);
             }
 
-            mm_init_short(mm_src0, mm_src1);
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(mm_src0, mm_src1);
 #endif
+            mm_init_short(mm_src0, mm_src1);
             matmul_tiles(mm_src0, mm_src1, 0, 0, 0);
             tile_regs_commit();
 

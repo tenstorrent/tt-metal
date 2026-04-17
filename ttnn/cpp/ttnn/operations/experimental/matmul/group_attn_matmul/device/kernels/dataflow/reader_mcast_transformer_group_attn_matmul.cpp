@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -80,7 +80,7 @@ void kernel_main() {
 
 #ifndef IN1_SHARDED
     constexpr auto in1_args = TensorAccessorArgs<3>();
-    const auto s1 = TensorAccessor(in1_args, src1_addr, in1_tile_bytes);
+    const auto s1 = TensorAccessor(in1_args, src1_addr);
 #endif
 
     // Mcast setup

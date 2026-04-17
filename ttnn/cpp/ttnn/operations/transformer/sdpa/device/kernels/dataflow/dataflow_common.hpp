@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -64,6 +65,8 @@ volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
     uint32_t page_table_addr,
     uint32_t page_table_stick_size) {
     uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id);
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto page_table_reader = TensorAccessor(page_table_args, page_table_addr, page_table_stick_size);
     uint64_t page_table_noc_addr = page_table_reader.get_noc_addr(batch_idx);
     noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
@@ -918,25 +921,23 @@ struct Slice {
     uint32_t get_d3_size() const { return d3_end - d3_start; }
 };
 
+// Fetch tiles via NOC reads into a given L1 address. No CB lifecycle — caller manages
+// cb_reserve_back / cb_push_back. Used by forwarding paths that mcast before pushing.
 template <typename CatAddrGeneratorType>
-void read_block(
+void fetch_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
     const uint32_t end_seq_tile,
-    const uint32_t cb_id,
+    const uint32_t dst_addr,
     const uint32_t tile_bytes,
     const bool transpose) {
     const uint32_t src_rows = src_slice.get_d2_size();
     const uint32_t src_cols = src_slice.get_d3_size();
-    const uint32_t num_tiles = src_rows * src_cols;
-    cb_reserve_back(cb_id, num_tiles);
-    const uint32_t base_write_ptr = get_write_ptr(cb_id);
     uint32_t outer_ptr_stride = transpose ? tile_bytes : src_cols * tile_bytes;
     uint32_t inner_ptr_stride = transpose ? tile_bytes * src_rows : tile_bytes;
 
-    uint32_t barrier_count = 0;
     for (uint32_t row = 0; row < src_rows; ++row) {
-        uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
+        uint32_t write_ptr = dst_addr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < src_cols; ++col) {
             uint32_t did_read = cat_addr_generator.maybe_read_tile(
                 src_slice.d0,
@@ -950,6 +951,19 @@ void read_block(
         }
     }
     noc_async_read_barrier();
+}
+
+template <typename CatAddrGeneratorType>
+void read_block(
+    const CatAddrGeneratorType& cat_addr_generator,
+    const Slice& src_slice,
+    const uint32_t end_seq_tile,
+    const uint32_t cb_id,
+    const uint32_t tile_bytes,
+    const bool transpose) {
+    const uint32_t num_tiles = src_slice.get_d2_size() * src_slice.get_d3_size();
+    cb_reserve_back(cb_id, num_tiles);
+    fetch_block(cat_addr_generator, src_slice, end_seq_tile, get_write_ptr(cb_id), tile_bytes, transpose);
     cb_push_back(cb_id, num_tiles);
 }
 
