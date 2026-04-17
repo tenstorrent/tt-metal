@@ -102,7 +102,6 @@ class TtEncoderAttention:
         ttnn.deallocate(q); ttnn.deallocate(k)
         attn = ttnn.transformer.scaled_dot_product_attention(
             q_rot, k_rot, v, is_causal=False, program_config=TtAttention.SDPA_PROG,
-            compute_kernel_config=TtAttention.SDPA_COMPUTE,
         )
         ttnn.deallocate(q_rot); ttnn.deallocate(k_rot); ttnn.deallocate(v)
         out = ttnn.experimental.nlp_concat_heads(attn)
