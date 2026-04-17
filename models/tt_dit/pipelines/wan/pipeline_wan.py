@@ -6,8 +6,10 @@
 
 import html
 import os
+import sys
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional, Union
 
 import ftfy
@@ -25,6 +27,13 @@ from transformers import AutoTokenizer, UMT5EncoderModel
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
+
+# The internal-prodia directory contains a hyphen, which is not a valid Python
+# identifier, so we add it to sys.path and import via its inner `pipelines` package.
+_INTERNAL_PRODIA_DIR = (Path(__file__).resolve().parents[4] / "internal-prodia").as_posix()
+if _INTERNAL_PRODIA_DIR not in sys.path:
+    sys.path.insert(0, _INTERNAL_PRODIA_DIR)
+from pipelines.pipeline_wan_demo_internal import create_pipeline as _create_demo_internal_pipeline  # noqa: E402
 
 from ...encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder
 from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
@@ -331,7 +340,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
         # TODO: Reset buffers for change in resolution. Also reinitialize trace
-        self.warmup_buffers(height=target_height, width=target_width)
+        self.warmup_buffers(*self.get_warmup_resolution(target_height, target_width))
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         prompt_1BLP = tt_model.prepare_text_conditioning(prompt_embeds)
@@ -341,14 +350,17 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ttnn.copy(prompt_1BLP, buffer)
         return buffer
 
-    def warmup_buffers(self, height, width):
-        self.run_single_prompt(
-            prompt="warmup",
-            height=height,
-            width=width,
-            num_frames=81,
-            num_inference_steps=2,
-        )
+    def get_warmup_resolution(self, height: int, width: int, num_frames: int = 81) -> dict:
+        if height != 0 and width != 0 and num_frames != 0:
+            return (height, width, num_frames)
+        if self.mesh_device.shape.mesh_size() >= 32:
+            return (720, 1280, 81)
+        return (480, 832, 81)
+
+    def warmup_buffers(self, height: int, width: int, num_frames: int):
+        logger.info(f"Warming up buffers at {height}x{width}x{num_frames}")
+        self(prompt="warmup", height=height, width=width, num_frames=num_frames)
+        logger.info("Warmup complete")
 
     @staticmethod
     def create_pipeline(
@@ -369,6 +381,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         target_width: int = 0,
         num_frames: int = 81,
     ):
+        if "DEMO_WEIGHTS_DIR" in os.environ:
+            return _create_demo_internal_pipeline(
+                mesh_device=mesh_device,
+                weights_dir=os.environ["DEMO_WEIGHTS_DIR"],
+            )
         device_configs = {}
         if ttnn.device.is_blackhole():
             device_configs[(1, 4)] = {
