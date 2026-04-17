@@ -2323,7 +2323,7 @@ class MLA1D(AbstractModule):
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], **cfg["q_concat"])
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
-        if pad_rows:
+        if tt_q.shape[-2] != num_heads_local:
             tt_q_unsliced = tt_q
             tt_q = ttnn.slice(tt_q, [0, 0, 0, 0], [1, bsz, num_heads_local, tt_q.shape[-1]])
             ttnn.deallocate(tt_q_unsliced)
