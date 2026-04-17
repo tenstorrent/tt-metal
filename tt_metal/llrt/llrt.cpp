@@ -266,6 +266,15 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& 
             core_status.data(), core_status.size(), {static_cast<size_t>(chip_id), core}, go_msg_addr & ~0x3);
         uint8_t run = core_status.view().signal();
         if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
+            // RUN_MSG_INIT is a valid transitional state on the INIT→GO→DONE path.
+            // A process killed mid-initialization leaves ETH dispatch cores with mailbox=INIT.
+            // The early-exit recovery path in risc_firmware_initializer.cpp waits for GO — seeing
+            // INIT here is expected; treat it as "not done yet" so the caller's timeout can fire
+            // and fall through to force-reset rather than crashing with TT_FATAL.
+            if (run_state == tt_metal::dev_msgs::RUN_MSG_GO &&
+                run == tt_metal::dev_msgs::RUN_MSG_INIT) {
+                return false;
+            }
             fprintf(
                 stderr,
                 "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",
