@@ -84,6 +84,10 @@ def _atomic_write(log_dir: Path, doc: dict[str, Any]) -> None:
         with os.fdopen(fd, "w") as f:
             json.dump(doc, f, indent=2)
             f.write("\n")
+        # mkstemp creates files with 0o600, which locks the dashboard (running as
+        # a different user) out of reading run.json. Relax to 0o664 so the shared
+        # group — and anything else — can read the live status.
+        os.chmod(tmp, 0o664)
         os.replace(tmp, path)
     except Exception:
         if os.path.exists(tmp):
