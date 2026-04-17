@@ -77,7 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // argument passed of _calculate_sfpu_binary_ is dest index of the second operand
 
     test_utils::call_binary_sfpu_operation<APPROX_MODE, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>(
-        0 /* dst_index */, 0 /* dst_index_in0 */, 1 /* dst_index_in1 */, 0 /* dst_index_out */);
+        0 /* dst_index_in0 */, 1 /* dst_index_in1 */, 0 /* dst_index_out */);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
