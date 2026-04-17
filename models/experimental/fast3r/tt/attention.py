@@ -42,7 +42,7 @@ class TtAttention:
         proj_b: torch.Tensor,
     ):
         self.num_heads = num_heads
-        self.qkv_w = to_device_weight(device, qkv_w, dtype=ttnn.bfloat16)
+        self.qkv_w = to_device_weight(device, qkv_w)
         self.qkv_b = to_device_bias(device, qkv_b)
         self.proj_w = to_device_weight(device, proj_w)
         self.proj_b = to_device_bias(device, proj_b)
