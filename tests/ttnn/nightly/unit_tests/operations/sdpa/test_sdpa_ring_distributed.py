@@ -342,5 +342,129 @@ def test_ring_distributed_sdpa_prefix_and_paged_kv(device, s, prefix_len, page_b
     )
 
 
+def create_sliding_window_mask_prefill(b, nh, seq_len, sliding_window, is_causal=True):
+    """
+    Create attention mask for sliding window attention in prefill mode.
+
+    Returns:
+        attn_mask: [b, nh, seq_len, seq_len] mask with -inf for positions outside window
+    """
+    attn_mask = torch.zeros((b, nh, seq_len, seq_len))
+
+    for i in range(b):
+        for q_pos in range(seq_len):
+            if is_causal:
+                window_end = q_pos + 1
+                window_start = max(0, window_end - sliding_window) if sliding_window > 0 else 0
+
+                if window_start > 0:
+                    attn_mask[i, :, q_pos, :window_start] = torch.finfo(torch.float32).min
+
+                if q_pos + 1 < seq_len:
+                    attn_mask[i, :, q_pos, q_pos + 1 :] = torch.finfo(torch.float32).min
+            else:
+                half_window = sliding_window // 2 if sliding_window > 0 else seq_len // 2
+                window_start = max(0, q_pos - half_window)
+                window_end = min(seq_len, q_pos + half_window + 1)
+
+                if window_start > 0:
+                    attn_mask[i, :, q_pos, :window_start] = torch.finfo(torch.float32).min
+                if window_end < seq_len:
+                    attn_mask[i, :, q_pos, window_end:] = torch.finfo(torch.float32).min
+
+    return attn_mask
+
+
+def run_test_ring_distributed_sdpa_sliding_window(
+    mesh_device, b, s, ring_size, q_chunk_size, k_chunk_size, sliding_window
+):
+    """Test ring_distributed_sdpa with sliding_window_size on a GLX (8,4) mesh."""
+    torch.manual_seed(1234)
+
+    nh, nkv, d = 8, 1, 128
+    dtype = ttnn.bfloat8_b
+
+    assert ring_size % 2 == 0, f"Ring size must be even, got {ring_size}"
+    assert s % (2 * ring_size) == 0, f"Sequence length {s} must be divisible by 2 * ring_size ({2 * ring_size})"
+
+    # Create a (1, ring_size) submesh from the full GLX mesh — one row of devices
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, ring_size))
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=submesh.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=True,
+    )
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    # Generate test tensors
+    Q = fa_rand(b, nh, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+
+    # Replicate tensors to all devices in the submesh
+    tt_Q = ttnn.from_torch(
+        Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=submesh, mesh_mapper=ttnn.ReplicateTensorToMesh(submesh)
+    )
+    tt_K = ttnn.from_torch(
+        K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=submesh, mesh_mapper=ttnn.ReplicateTensorToMesh(submesh)
+    )
+    tt_V = ttnn.from_torch(
+        V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=submesh, mesh_mapper=ttnn.ReplicateTensorToMesh(submesh)
+    )
+
+    # Run ring_distributed_sdpa with sliding_window_size
+    tt_out = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        ring_size=ring_size,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        sliding_window_size=sliding_window,
+    )
+
+    # Gather per-device outputs and reshuffle to restore global sequence order
+    device_outputs = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tt_out.cpu())]
+    local_seq_len = s // ring_size
+    ring_outputs = [out[:, :, :local_seq_len, :] for out in device_outputs]
+    final_output = gather_and_reshuffle_ring_outputs(ring_outputs, ring_size, s)
+
+    # Reference: PyTorch SDPA with sliding window mask
+    K_expanded = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    V_expanded = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    sw_mask = create_sliding_window_mask_prefill(b, nh, s, sliding_window, is_causal=True)
+    gt_sliding = torch.nn.functional.scaled_dot_product_attention(
+        Q, K_expanded, V_expanded, attn_mask=sw_mask, is_causal=False
+    )
+
+    out_pass, out_pcc = comp_pcc(gt_sliding, final_output, 0.99)
+    logger.info(f"Ring-distributed vs sliding window (w={sliding_window}) reference PCC: {out_pcc}")
+    assert out_pass, f"ring_distributed_sdpa with sliding_window={sliding_window} PCC={out_pcc} < 0.99"
+
+
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "s, sliding_window",
+    [(4096, 256), (8192, 512)],
+    ids=["s4k_w256", "s8k_w512"],
+)
+def test_ring_distributed_sdpa_sliding_window(mesh_device, s, sliding_window):
+    """Test ring_distributed_sdpa correctly applies sliding window attention on GLX (8,4) mesh."""
+    b, ring_size = 1, 4
+    q_chunk_size, k_chunk_size = 128, 256
+    run_test_ring_distributed_sdpa_sliding_window(
+        mesh_device, b, s, ring_size, q_chunk_size, k_chunk_size, sliding_window
+    )
+
+
 if __name__ == "__main__":
     print("Minimal ring-distributed SDPA test file ready!")

@@ -341,7 +341,8 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& page_table,
-    std::optional<int64_t> chunk_start_idx) {
+    std::optional<int64_t> chunk_start_idx,
+    std::optional<uint32_t> sliding_window_size) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -359,7 +360,8 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
         program_config,
         kernel_config_val,
         page_table,
-        chunk_start_idx);
+        chunk_start_idx,
+        sliding_window_size);
 }
 
 }  // namespace ttnn::transformer

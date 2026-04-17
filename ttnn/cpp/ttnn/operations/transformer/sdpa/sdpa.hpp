@@ -152,6 +152,7 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const std::optional<operations::transformer::SDPAProgramConfig>& program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& page_table = std::nullopt,
-    std::optional<int64_t> chunk_start_idx = std::nullopt);
+    std::optional<int64_t> chunk_start_idx = std::nullopt,
+    std::optional<uint32_t> sliding_window_size = std::nullopt);
 
 }  // namespace ttnn::transformer

@@ -52,7 +52,8 @@ private:
         DeviceComputeKernelConfig compute_kernel_config,
         std::optional<operations::transformer::SDPAProgramConfig> program_config,
         const std::optional<Tensor>& page_table = std::nullopt,
-        std::optional<int64_t> chunk_start_idx = std::nullopt);
+        std::optional<int64_t> chunk_start_idx = std::nullopt,
+        std::optional<uint32_t> sliding_window_size = std::nullopt);
 };
 
 }  // namespace ttnn::prim

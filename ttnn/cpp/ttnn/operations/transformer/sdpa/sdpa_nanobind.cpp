@@ -661,6 +661,8 @@ void bind_sdpa(nb::module_& mod) {
             page_table (ttnn.Tensor, optional): Page table tensor for paged KV cache access [b x num_pages]. Defaults to `None`.
             chunk_start_idx (int, optional): Absolute position in the sequence where this chunk starts (for prefix caching).
                 Must be a multiple of program_config.q_chunk_size. Defaults to `None`.
+            sliding_window_size (int, optional): Size of sliding window for attention. If provided, only attends
+                to the last `sliding_window_size` tokens (causal sliding window). Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
@@ -683,6 +685,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("page_table") = nb::none(),
-        nb::arg("chunk_start_idx") = nb::none());
+        nb::arg("chunk_start_idx") = nb::none(),
+        nb::arg("sliding_window_size") = nb::none());
 }
 }  // namespace ttnn::operations::transformer
