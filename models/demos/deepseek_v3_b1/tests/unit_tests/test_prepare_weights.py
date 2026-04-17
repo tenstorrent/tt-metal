@@ -1052,6 +1052,41 @@ def test_prepare_mtp_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
 # BSPM / CompressedTensor tests
 # =============================================================================
 
+import struct as _struct
+
+_BSPM_STRUCT_FMT = _struct.Struct("<4sIIIIIIIIB3xII")
+_BSPM_HEADER_SIZE = 64
+
+
+def _write_synthetic_bspm(
+    path,
+    layer_idx: int,
+    n_experts: int,
+    tile_rows: int,
+    tile_cols: int,
+    codes_bitsculpt: np.ndarray,
+    variant_code: int = 1,
+    budget_millibits: int = 3500,
+) -> None:
+    """Write a minimal valid .bspm binary for integration tests."""
+    tiles_per_proj = tile_rows * tile_cols
+    header_fields = _BSPM_STRUCT_FMT.pack(
+        b"BSPM",
+        1,
+        layer_idx,
+        n_experts,
+        3,
+        tiles_per_proj,
+        tile_rows,
+        tile_cols,
+        32,
+        variant_code,
+        budget_millibits,
+        budget_millibits,
+    )
+    header = header_fields + b"\x00" * (_BSPM_HEADER_SIZE - len(header_fields))
+    path.write_bytes(header + codes_bitsculpt.astype(np.uint8).tobytes())
+
 
 def _small_bspm_state_dict(
     layer_idx: int,
@@ -1378,3 +1413,84 @@ def test_prepare_moe_layer_bspm_cache_roundtrip_4x2(bh_2d_mesh_device, tmp_path)
             count_miss = int(np.sum(ct_miss._assignment_flat == code))
             count_hit = int(np.sum(ct_hit._assignment_flat == code))
             assert count_miss == count_hit, f"expert {e}: {name} count miss={count_miss} vs hit={count_hit}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_routed_expert_weights_via_bspm_dir_4x2(bh_2d_mesh_device, tmp_path):
+    """End-to-end integration: synthetic .bspm file on disk → load_bspm_for_layer →
+    prepare_routed_expert_weights → CompressedTensor with correct remapped code distribution.
+
+    This exercises the real bspm_loader.py binary parsing and BitSculpt→tt-metal code
+    remapping path that is bypassed when bspm_data is injected directly in other tests.
+    """
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+
+    tile_w = 32
+    num_banks = submesh.dram_grid_size().x
+    num_experts = 2
+    layer_idx = 6
+    K, N = 256, 256
+    N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    tiles_h = K // tile_w  # K/32 — rows in tt-metal convention
+    tiles_w_count = N_padded // tile_w  # N/32 — cols in tt-metal convention
+
+    # BSPM stores codes in (N/32, K/32) order (= tiles_w_count × tiles_h).
+    # We use BitSculpt codes: 1=bfp2 (→ tt-metal 2) and 2=bfp4 (→ tt-metal 1).
+    # Split 50/50 so the remapping is verifiable by count.
+    rng = np.random.default_rng(42)
+    tiles_per_proj = tiles_w_count * tiles_h  # storage order matches BSPM file
+    bs_codes_flat = rng.choice([1, 2], size=(num_experts, 3, tiles_per_proj), p=[0.5, 0.5]).astype(np.uint8)
+
+    # Write the synthetic .bspm into the expected directory layout.
+    bspm_dir = tmp_path / "bspm_results"
+    bspm_file = bspm_dir / f"layer_{layer_idx}" / "precision_eval" / "precision_map_B_3.5.bspm"
+    bspm_file.parent.mkdir(parents=True)
+    _write_synthetic_bspm(
+        bspm_file,
+        layer_idx=layer_idx,
+        n_experts=num_experts,
+        tile_rows=tiles_w_count,  # BSPM tile_rows = N/32
+        tile_cols=tiles_h,  # BSPM tile_cols = K/32
+        codes_bitsculpt=bs_codes_flat,
+    )
+
+    state = _small_bspm_state_dict(layer_idx, num_experts=num_experts, K=K, N=N)
+
+    routed = prepare_routed_expert_weights(
+        submesh,
+        state,
+        layer_idx,
+        is_moe=True,
+        num_routed_experts=num_experts,
+        move_to_device=True,
+        bspm_dir=bspm_dir,
+    )
+
+    assert isinstance(routed, MoERoutedExpertWeights)
+
+    # Verify BitSculpt→tt-metal remapping is correct end-to-end:
+    # BS 1 (bfp2) → ttnn 2;  BS 2 (bfp4) → ttnn 1.
+    for e in range(num_experts):
+        ct = routed.routed_gate_proj[e]
+        assert isinstance(ct, CompressedTensor), f"expert {e} gate_proj should be CompressedTensor"
+
+        bs_flat = bs_codes_flat[e, 0]  # BitSculpt codes in (N/32, K/32) flat order
+        expected_ttnn = (3 - bs_flat.astype(np.int8)).astype(np.int8)  # BS→ttnn: 3-code
+
+        # After reshape+transpose+shuffle, counts must be preserved.
+        actual_ttnn_2 = int(np.sum(ct._assignment_flat == 2))  # bfp2 in tt-metal
+        actual_ttnn_1 = int(np.sum(ct._assignment_flat == 1))  # bfp4 in tt-metal
+        expected_ttnn_2 = int(np.sum(expected_ttnn == 2))
+        expected_ttnn_1 = int(np.sum(expected_ttnn == 1))
+
+        assert (
+            actual_ttnn_2 == expected_ttnn_2
+        ), f"expert {e}: tt-metal bfp2 count {actual_ttnn_2} != expected {expected_ttnn_2}"
+        assert (
+            actual_ttnn_1 == expected_ttnn_1
+        ), f"expert {e}: tt-metal bfp4 count {actual_ttnn_1} != expected {expected_ttnn_1}"

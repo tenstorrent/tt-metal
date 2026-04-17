@@ -2,12 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hardware-free unit tests for compact_io and shuffle_dram_assignment.
+"""Hardware-free unit tests for compact_io, shuffle_dram_assignment, and bspm_loader.
 
 No TT device is needed — all tests run on CPU with numpy/torch only.
 """
 
 from __future__ import annotations
+
+import struct
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -225,3 +228,125 @@ def test_shuffle_dram_assignment_one_tile_per_bank_is_identity():
     np.testing.assert_array_equal(
         shuffled, assignment, err_msg="tiles_w==num_banks (per_N_tiles=1) must yield identity shuffle"
     )
+
+
+# ─── bspm_loader tests ────────────────────────────────────────────────────────
+
+from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import (  # noqa: E402
+    load_bspm_for_layer,
+    remap_bspm_to_ttnn,
+)
+
+_BSPM_STRUCT = struct.Struct("<4sIIIIIIIIB3xII")
+_BSPM_HEADER_SIZE = 64  # 48 bytes fields + 16 bytes reserved
+
+
+def _write_synthetic_bspm(
+    path: Path,
+    layer_idx: int,
+    n_experts: int,
+    tile_rows: int,
+    tile_cols: int,
+    codes_bitsculpt: np.ndarray,
+    variant_code: int = 1,
+    budget_millibits: int = 3500,
+) -> None:
+    """Write a minimal valid .bspm binary file for testing."""
+    tiles_per_proj = tile_rows * tile_cols
+    header_fields = _BSPM_STRUCT.pack(
+        b"BSPM",
+        1,  # version
+        layer_idx,
+        n_experts,
+        3,  # n_projections
+        tiles_per_proj,
+        tile_rows,
+        tile_cols,
+        32,  # tile_size
+        variant_code,
+        budget_millibits,
+        budget_millibits,  # actual_millibits
+    )
+    header = header_fields + b"\x00" * (_BSPM_HEADER_SIZE - len(header_fields))
+    path.write_bytes(header + codes_bitsculpt.astype(np.uint8).tobytes())
+
+
+def test_load_bspm_for_layer_parses_synthetic_file(tmp_path):
+    """load_bspm_for_layer correctly parses all header fields and body from a synthetic file."""
+    n_experts, tile_rows, tile_cols = 4, 8, 8
+    tiles_per_proj = tile_rows * tile_cols
+    rng = np.random.default_rng(7)
+    codes_bs = rng.integers(0, 3, size=(n_experts, 3, tiles_per_proj), dtype=np.uint8)
+
+    bspm_path = tmp_path / "precision_map_B_3.5.bspm"
+    _write_synthetic_bspm(
+        bspm_path, layer_idx=3, n_experts=n_experts, tile_rows=tile_rows, tile_cols=tile_cols, codes_bitsculpt=codes_bs
+    )
+
+    data = load_bspm_for_layer(str(bspm_path))
+
+    assert data["magic"] == "BSPM"
+    assert data["version"] == 1
+    assert data["layer_idx"] == 3
+    assert data["n_experts"] == n_experts
+    assert data["n_projections"] == 3
+    assert data["tiles_per_proj"] == tiles_per_proj
+    assert data["tile_rows"] == tile_rows
+    assert data["tile_cols"] == tile_cols
+    assert data["variant"] == "B"
+    assert abs(data["budget"] - 3.5) < 1e-3
+    assert data["codes"].shape == (n_experts, 3, tiles_per_proj)
+    assert data["codes_bitsculpt"].shape == (n_experts, 3, tiles_per_proj)
+    np.testing.assert_array_equal(data["codes_bitsculpt"], codes_bs)
+
+
+def test_load_bspm_for_layer_code_remapping(tmp_path):
+    """BitSculpt→tt-metal code remapping is correct: BS[0,1,2,3] → ttnn[3,2,1,0]."""
+    n_experts, tile_rows, tile_cols = 1, 4, 4
+    tiles_per_proj = tile_rows * tile_cols
+
+    # One tile per BitSculpt code, repeated to fill tiles_per_proj
+    bs_cycle = np.array([0, 1, 2, 3] * (tiles_per_proj // 4), dtype=np.uint8)
+    codes_bs = bs_cycle[np.newaxis, np.newaxis, :].repeat(n_experts, 0).repeat(3, 1)
+
+    bspm_path = tmp_path / "precision_map_B_3.5.bspm"
+    _write_synthetic_bspm(
+        bspm_path, layer_idx=5, n_experts=n_experts, tile_rows=tile_rows, tile_cols=tile_cols, codes_bitsculpt=codes_bs
+    )
+
+    data = load_bspm_for_layer(str(bspm_path))
+    ttnn_codes = data["codes"][0, 0]  # (tiles_per_proj,)
+    bs_codes = data["codes_bitsculpt"][0, 0]
+
+    # Verify mapping: ttnn = 3 - bs (they are mirrors of each other)
+    expected_ttnn = (3 - bs_codes.astype(np.int8)).astype(np.int8)
+    np.testing.assert_array_equal(ttnn_codes, expected_ttnn, err_msg="BitSculpt→tt-metal remapping incorrect")
+
+    # Also verify remap_bspm_to_ttnn is its own inverse (it is: [3,2,1,0] applied twice = identity)
+    double_mapped = remap_bspm_to_ttnn(ttnn_codes.astype(np.uint8))
+    np.testing.assert_array_equal(double_mapped, bs_codes, err_msg="remap_bspm_to_ttnn should be its own inverse")
+
+
+def test_load_bspm_for_layer_invalid_magic(tmp_path):
+    """load_bspm_for_layer raises ValueError on wrong magic bytes."""
+    bspm_path = tmp_path / "bad.bspm"
+    bad_header = _BSPM_STRUCT.pack(b"NOPE", 1, 0, 2, 3, 64, 8, 8, 32, 1, 3500, 3500)
+    bspm_path.write_bytes(bad_header + b"\x00" * 16)
+
+    try:
+        load_bspm_for_layer(str(bspm_path))
+        assert False, "Expected ValueError for bad magic"
+    except ValueError as e:
+        assert "magic" in str(e).lower()
+
+
+def test_load_bspm_for_layer_lfs_pointer_detected(tmp_path):
+    """load_bspm_for_layer raises RuntimeError on Git LFS pointer files."""
+    lfs_path = tmp_path / "lfs.bspm"
+    lfs_path.write_bytes(b"version https://git-lfs.github.com/spec/v1\noid sha256:abc\n")
+
+    try:
+        load_bspm_for_layer(str(lfs_path))
+        assert False, "Expected RuntimeError for LFS pointer"
+    except RuntimeError as e:
+        assert "LFS" in str(e) or "lfs" in str(e).lower()
