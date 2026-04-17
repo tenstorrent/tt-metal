@@ -100,9 +100,7 @@ class TtEncoderAttention:
         q_rot = ttnn.experimental.rotary_embedding(q, self.cos, self.sin)
         k_rot = ttnn.experimental.rotary_embedding(k, self.cos, self.sin)
         ttnn.deallocate(q); ttnn.deallocate(k)
-        attn = ttnn.transformer.scaled_dot_product_attention(
-            q_rot, k_rot, v, is_causal=False, compute_kernel_config=TtMlp.COMPUTE,
-        )
+        attn = ttnn.transformer.scaled_dot_product_attention(q_rot, k_rot, v, is_causal=False)
         ttnn.deallocate(q_rot); ttnn.deallocate(k_rot); ttnn.deallocate(v)
         out = ttnn.experimental.nlp_concat_heads(attn)
         ttnn.deallocate(attn)

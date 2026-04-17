@@ -45,9 +45,7 @@ class TtAttention:
             qkv, num_heads=self.num_heads, transpose_k_heads=False
         )
         ttnn.deallocate(qkv)
-        attn = ttnn.transformer.scaled_dot_product_attention(
-            q, k, v, is_causal=False, compute_kernel_config=self.COMPUTE,
-        )
+        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
