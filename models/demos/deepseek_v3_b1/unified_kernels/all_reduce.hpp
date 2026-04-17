@@ -141,6 +141,23 @@ public:
     void operator()(const SenderArgs& args) { impl(args); }
 
 private:
+    // This writer only sends chunk indices:
+    //   link_index, link_index + num_links, link_index + 2 * num_links, ...
+    // Count how many of those indices are still < num_chunks.
+    // If link_index is already beyond the final chunk, this writer sends nothing.
+    // Otherwise solve:
+    //   link_index + k * num_links <= num_chunks - 1
+    // which gives:
+    //   k_max = (num_chunks - 1 - link_index) / num_links
+    // and therefore count = k_max + 1.
+    static constexpr uint32_t packets_to_send_for_writer() {
+        if constexpr (CTArgs::num_chunks <= CTArgs::link_index) {
+            return 0u;
+        } else {
+            return ((CTArgs::num_chunks - 1 - CTArgs::link_index) / CTArgs::num_links) + 1u;
+        }
+    }
+
     void impl([[maybe_unused]] const SenderArgs& args) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
         if constexpr (CTArgs::link_index >= CTArgs::num_links) {
@@ -186,7 +203,10 @@ private:
         }
 
         constexpr bool use_posted_transport_writes = true;
-        constexpr uint32_t header_ring_size = 2;
+        constexpr uint32_t max_header_ring_size = 2;
+        constexpr uint32_t packets_to_send = packets_to_send_for_writer();
+        // A single packet never reuses a header, so the second header only pays setup cost with no flush savings.
+        constexpr uint32_t header_ring_size = packets_to_send <= 1u ? 1u : max_header_ring_size;
         constexpr uint32_t regular_payload_bytes = CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
         constexpr uint32_t last_payload_bytes = CTArgs::last_chunk_tiles * CTArgs::page_size_bytes;
         std::array<volatile tt_l1_ptr PACKET_HEADER_TYPE*, header_ring_size> headers = {};
