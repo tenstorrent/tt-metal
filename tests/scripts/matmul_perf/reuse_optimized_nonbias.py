@@ -9,9 +9,11 @@ code path. Chosen to cover the ``#ifdef ROW_MAJOR_OUTPUT`` branch in
 ``reader_writer_bmm_tile_layout_in1.cpp`` end-to-end with a larger tile budget.
 
 Shape notes (justified further in the runbook):
-- 2048x2048x2048 bf16 is a common production matmul size on BH/WH and has
-  per-core tile budget where subblock choice matters.
-- If this is too large for a given grid, phase 2 can lower per_core_M/N.
+- 1024x1024x1024 bf16 on a 4x1 grid (MatmulMultiCoreReuse requires
+  per_core_N == N, so grid_x=1). Per-core output tile count is 8x32 = 256
+  tiles, matching the ``reuse_fuse_bias`` precedent that fits L1 comfortably.
+  A single-core 2048^3 variant overflowed L1 (9MB static CBs vs 1.5MB L1),
+  so phase 2 halved the shape and spread M across 4 cores.
 
 Run (from the repo root, after ``./build_metal.sh``):
 
@@ -43,14 +45,16 @@ SCRIPT_LABEL = "reuse_optimized_nonbias"
 def build_inputs(device):
     torch.manual_seed(0)
 
-    # 2048x2048x2048: one batch, interleaved DRAM on both sides, enters the
-    # optimized reuse factory via explicit MatmulMultiCoreReuseProgramConfig.
-    # Use a 1x1 grid for a single-core path so the Tracy measurement stays
-    # clean (keeps the single-core baseline from project memory useful).
+    # 1024x1024x1024 on a 4x1 grid. Grid_x must be 1 because MatmulMultiCoreReuse
+    # requires per_core_N == N (it distributes only along M / batch). per_core
+    # comes to 8x32 = 256 output tiles, same per-core footprint as the
+    # known-working reuse_fuse_bias (512x512x512 1x1). DRAM output so L1
+    # pressure stays in the CBs only — the branch's separate out_cb/partials_cb
+    # reallocation doubled single-core footprint, so we go multi-core.
     b0, b1 = 1, 1
-    m_size, k_size, n_size = 2048, 2048, 2048
+    m_size, k_size, n_size = 1024, 1024, 1024
 
-    grid_y, grid_x = 1, 1
+    grid_y, grid_x = 4, 1
     in0_shape = [b0, b1, m_size, k_size]
     in1_shape = [b0, b1, k_size, n_size]
 
@@ -65,8 +69,8 @@ def build_inputs(device):
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=1,
-        per_core_M=m_size // 32,
-        per_core_N=n_size // 32,
+        per_core_M=m_size // (grid_y * 32),
+        per_core_N=n_size // (grid_x * 32),
     )
     return a, b, program_config
 
@@ -83,7 +87,7 @@ def main():
                 a,
                 b,
                 program_config=program_config,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=compute_config,
             )
 
