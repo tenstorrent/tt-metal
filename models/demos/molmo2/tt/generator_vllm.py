@@ -2831,11 +2831,32 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
             ttnn.copy(new_pos, self.current_pos)
-            ttnn.copy(new_pos, self.rot_mat_idxs)
             ttnn.deallocate(new_pos)
+            # rot_mat_idxs has shape [1, batch_padded] (e.g. [1,32] for batch=1 padded to 32)
+            # so we must broadcast the scalar position to match that shape
+            rot_mat_sz = self.rot_mat_idxs.shape[-1]
+            new_rot_idxs = ttnn.from_torch(
+                start_pos[:1].int().unsqueeze(0).expand(1, rot_mat_sz).contiguous(),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            ttnn.copy(new_rot_idxs, self.rot_mat_idxs)
+            ttnn.deallocate(new_rot_idxs)
 
-            # Copy hidden states into trace input tensor
-            ttnn.copy(hidden_states, self.decode_trace_tensors["hidden_states"])
+            # Copy hidden states into trace input tensor.
+            # The trace was captured with [1,1,1,4096] (1 token); hidden_states may be
+            # [1,1,32,4096] (padded to 32) when batch=1. Slice to the first token.
+            hs_trace = ttnn.slice(
+                hidden_states,
+                [0, 0, 0, 0],
+                list(self.decode_trace_tensors["hidden_states"].shape),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.copy(hs_trace, self.decode_trace_tensors["hidden_states"])
+            ttnn.deallocate(hs_trace)
             ttnn.deallocate(hidden_states)
 
             # Copy page_table to trace tensor if provided
@@ -2984,10 +3005,29 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 )
                 ttnn.copy(new_pos, self.current_pos)
-                ttnn.copy(new_pos, self.rot_mat_idxs)
                 ttnn.deallocate(new_pos)
+                # rot_mat_idxs has shape [1, batch_padded]; broadcast scalar position
+                rot_mat_sz = self.rot_mat_idxs.shape[-1]
+                new_rot_idxs = ttnn.from_torch(
+                    pos_chunk[:1].int().unsqueeze(0).expand(1, rot_mat_sz).contiguous(),
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                ttnn.copy(new_rot_idxs, self.rot_mat_idxs)
+                ttnn.deallocate(new_rot_idxs)
 
-                ttnn.copy(hidden_states, self.decode_trace_tensors["hidden_states"])
+                # Slice to trace tensor shape [1,1,1,4096] if hidden_states is padded
+                hs_trace = ttnn.slice(
+                    hidden_states,
+                    [0, 0, 0, 0],
+                    list(self.decode_trace_tensors["hidden_states"].shape),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.copy(hs_trace, self.decode_trace_tensors["hidden_states"])
+                ttnn.deallocate(hs_trace)
                 ttnn.deallocate(hidden_states)
 
                 if page_table_tt is not None and "page_table" in self.decode_trace_tensors:
