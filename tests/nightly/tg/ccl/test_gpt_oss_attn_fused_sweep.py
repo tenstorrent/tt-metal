@@ -31,7 +31,8 @@ K = 512
 N = 3072
 TILE = 32
 DIM = 3
-N_ITERS = int(os.environ.get("GPT_OSS_SWEEP_ITERS", "5"))
+N_ITERS = int(os.environ.get("GPT_OSS_SWEEP_ITERS", "10"))
+N_WARMUP = int(os.environ.get("GPT_OSS_SWEEP_WARMUP", "5"))
 SWEEP_FILTER = os.environ.get("GPT_OSS_SWEEP_FILTER", "")
 
 
@@ -179,12 +180,19 @@ def test_gpt_oss_attn_o_proj_s128_sweep(mesh_device, device_params):
             )
 
         try:
-            # Warmup / compile
-            mm_out, rs_out = run_op()
+            # Warmup / compile — N_WARMUP iters OUTSIDE the signpost window so
+            # the first-call JIT/program-cache-entry overhead is excluded
+            # from the measured average.
+            for _ in range(N_WARMUP):
+                mm_out, rs_out = run_op()
+                mm_out.deallocate(True)
+                rs_out.deallocate(True)
             ttnn.synchronize_device(mesh_device)
 
-            # Correctness sanity on first iter only (cheap compared to perf loop).
+            # Correctness sanity on first config only (cheap compared to perf loop).
             if ci == 0:
+                mm_out, rs_out = run_op()
+                ttnn.synchronize_device(mesh_device)
                 concat_mesh_shape = list(mesh_device.shape)
                 concat_mesh_shape[1 - cluster_axis] = 1
                 concat_dims = [DIM, DIM]
@@ -197,20 +205,16 @@ def test_gpt_oss_attn_o_proj_s128_sweep(mesh_device, device_params):
                     ),
                 )
                 for d in range(num_devices):
-                    lo = d * (N // num_devices // TILE) * TILE
-                    hi = lo + (N // num_devices)
-                    tt_slice = tt_rs_torch[0:1, :, :, lo:hi] if tt_rs_torch.shape[0] >= 1 else tt_rs_torch
-                    # Fallback: composed shape depends on axis; just log PCC.
                     try:
                         eq, pcc = comp_pcc(tt_rs_torch[d : d + 1], torch_rs_scattered[d], 0.98)
                         logger.info(f"cfg={cfg['id']} dev{d} RS PCC: {pcc}")
                     except Exception as e:
                         logger.warning(f"PCC skipped for dev{d}: {e}")
                         break
-            mm_out.deallocate(True)
-            rs_out.deallocate(True)
+                mm_out.deallocate(True)
+                rs_out.deallocate(True)
 
-            # Perf loop with signpost
+            # Perf loop with signpost — measured iters only.
             signpost(f"start cfg={cfg['id']}")
             for _ in range(N_ITERS):
                 mm_out_i, rs_out_i = run_op()

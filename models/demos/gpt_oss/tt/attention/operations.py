@@ -146,10 +146,12 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
     N = weights.o_proj.shape[-1]
     assert K % TILE == 0 and N % TILE == 0, f"K={K}, N={N} must be tile-aligned"
 
-    # Tunable via env for sweeps. Defaults came out of the S=128 parameter
-    # sweep on TG (num_links=4, 4x8 mesh): winner was
-    #   mm_grid=(8,2), M_block=2, K_block=8, N_block=6, chunk_width=4
-    # at 105.8 us avg (vs 173.9 us for non-fused MM+bias+RS).
+    # Tunable via env for sweeps. Defaults from a warmed 180-config parameter
+    # sweep at S=128 on TG (num_links=4, 4x8 mesh) with 5 warmup + 10 measured
+    # iters per config: winner was
+    #   mm_grid=(8,2), M_block=2, K_block=8, N_block=6, chunk_width=2
+    # at 104.5 us avg (vs 173.9 us for non-fused MM+bias+RS). chunk_width=4
+    # is within 0.3 us — either is safe.
     mm_grid_x = _env_int("GPT_OSS_FMM_GRID_X", 8)
     mm_grid_y = _env_int("GPT_OSS_FMM_GRID_Y", 2)
     mm_core_grid = ttnn.CoreCoord(mm_grid_x, mm_grid_y)
@@ -165,7 +167,7 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
     N_block = _env_int("GPT_OSS_FMM_NBLOCK", min(6, Nt_per_core))
     subblock_h = _env_int("GPT_OSS_FMM_SBH", 1)
     subblock_w = _env_int("GPT_OSS_FMM_SBW", 1)
-    chunk_width = _env_int("GPT_OSS_FMM_CHUNK", 4)
+    chunk_width = _env_int("GPT_OSS_FMM_CHUNK", 2)
     num_workers_env = os.environ.get("GPT_OSS_FMM_WORKERS", "")
     num_workers = int(num_workers_env) if num_workers_env else None
     num_buffers_env = os.environ.get("GPT_OSS_FMM_BUFFERS", "")
