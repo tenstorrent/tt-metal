@@ -674,18 +674,51 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         in1_tile,
         in1_is_sharded ? in1_buffer : nullptr));
 
-    // CB 4: Output, CB 5: Intermediate accumulator (always separate)
-    // Separate CBs allow the compute kernel to use per-row-group reservation
-    // for absolute-offset packing while partials are still in the intermediate CB.
-    program_descriptor.cbs.push_back(make_cb_descriptor(
-        out_CB_size,
-        tt::CBIndex::c_4,
-        output_data_format,
-        output_single_tile_size,
-        output_tile,
-        output_is_sharded ? out_buffer : nullptr));
-    program_descriptor.cbs.push_back(make_cb_descriptor(
-        interm0_CB_size, tt::CBIndex::c_5, interm0_data_format, interm0_single_tile_size, output_tile));
+    // CB 4 (output) and CB 5 (K-block partials). Default layout overlays both
+    // indices on the same L1 bytes: the row_major_output helper pops partials
+    // from c_5 before packing the final output to c_4, so only one view holds
+    // live data at a time. This halves the output+partials L1 footprint vs
+    // separate CBs and is load-bearing on wormhole_b0 (L1 = 1,499,136 B) —
+    // without it, configs with large per_core_M × per_core_N (e.g. the
+    // canonical MatmulMultiCoreReuseProgramConfig per_core_M=32, per_core_N=16)
+    // overflow L1 by ~1 MB.
+    //
+    // Two cases can't share:
+    //   1. format mismatch — different byte-per-tile sizes, so the two CB views
+    //      can't overlay the same L1 bytes.
+    //   2. untilize with multiple N-subblocks — the untilize phase reads from
+    //      c_5 concurrently with the packer producing the next subblock into
+    //      c_5, so shared CBs would corrupt partials.
+    if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
+        // Separate output and intermediate CBs
+        program_descriptor.cbs.push_back(make_cb_descriptor(
+            out_CB_size,
+            tt::CBIndex::c_4,
+            output_data_format,
+            output_single_tile_size,
+            output_tile,
+            output_is_sharded ? out_buffer : nullptr));
+        program_descriptor.cbs.push_back(make_cb_descriptor(
+            interm0_CB_size, tt::CBIndex::c_5, interm0_data_format, interm0_single_tile_size, output_tile));
+    } else {
+        // Shared L1 region: c_4 and c_5 are two format views on the same buffer.
+        CBDescriptor output_cb_desc;
+        output_cb_desc.total_size = out_CB_size;
+        output_cb_desc.core_ranges = all_cores;
+        tt::tt_metal::TileDescriptor output_tile_desc{output_tile};
+        output_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_4,
+            .data_format = output_data_format,
+            .page_size = output_single_tile_size,
+            .tile = output_tile_desc});
+        output_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_5,
+            .data_format = interm0_data_format,
+            .page_size = interm0_single_tile_size,
+            .tile = output_tile_desc});
+        output_cb_desc.buffer = output_is_sharded ? out_buffer : nullptr;
+        program_descriptor.cbs.push_back(std::move(output_cb_desc));
+    }
 
     // Optional CBs for Blackhole intermediate reads
     if (in1_needs_intermediate_cb_read) {
