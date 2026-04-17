@@ -1,6 +1,6 @@
-# 1D Matmul Data Movement Tests
+# Matmul Data Movement Tests
 
-This test suite validates the data movement patterns required for 1D matrix multiplication on Tenstorrent hardware. The tests do not perform actual matrix multiplication compute — they verify that the correct data arrives at the correct L1 memory location on every core.
+This test suite validates the data movement patterns required for matrix multiplication on Tenstorrent hardware. The tests do not perform actual matrix multiplication compute — they verify that the correct data arrives at the correct L1 memory location on every core.
 
 The multiplication being modeled is:
 
@@ -10,12 +10,13 @@ out[M, N] = in0[M, K_total] x in1[K_total, N]
 
 where `M`, `N`, and `K_total` are derived from the core grid dimensions and subblock sizes (see [Dimensions and Core Grid Mapping](#dimensions-and-core-grid-mapping) below).
 
-Two multicast strategies are tested for distributing the `in0` matrix across cores:
+Three variants are tested, covering different strategies for distributing input matrices across cores:
 
-- **v1** (`test_matmul_1d.cpp`): Fixed sender — column 0 holds all `in0` data and multicasts it to every core in the same row.
-- **v2** (`test_matmul_1d_v2.cpp`): Rotating sender — `in0` K subblocks are distributed round-robin across columns, and each column takes turns multicasting its portion.
+- **1D v1** (`test_matmul_1d.cpp`): Fixed sender — column 0 holds all `in0` data and multicasts it to every core in the same row. `in1` is read from DRAM independently by each core.
+- **1D v2** (`test_matmul_1d_v2.cpp`): Rotating sender — `in0` K subblocks are distributed round-robin across columns, and each column takes turns multicasting its portion. `in1` is read from DRAM independently by each core.
+- **2D** (`test_matmul_2d.cpp`): Rotating sender for both inputs — `in0` K subblocks are distributed round-robin across columns and multicast row-wise (same as 1D v2), while `in1` K subblocks are distributed round-robin across rows and multicast column-wise. No DRAM is used; all data is written to L1 by the host.
 
-Both variants share test configurations defined in `test_matmul_common.hpp`. Each configuration runs as both a v1 and v2 test, producing 52 total test cases (26 per variant).
+All three variants share test configurations defined in `test_matmul_common.hpp`. Each configuration runs as a 1D v1, 1D v2, and 2D test, producing 78 total test cases (26 per variant).
 
 ## Dimensions and Core Grid Mapping
 
@@ -220,9 +221,9 @@ In v1, column 0 bears the entire multicast burden — it must send all K subbloc
 
 In v2, the multicast workload is spread across all columns. When K >= C, each column contributes approximately `K/C` multicasts. This distributes the NOC write traffic more evenly across the physical network, reduces congestion at a single sender, and allows each sender to use a smaller L1 source buffer (it only stores its own K subblocks, not the full row).
 
-## in1 Path (Shared by v1 and v2)
+## in1 Path (1D v1 and v2)
 
-The `in1` data movement is identical in both variants. Each core independently reads its column's portion of `in1` from DRAM.
+The `in1` data movement is identical in both 1D variants. Each core independently reads its column's portion of `in1` from DRAM.
 
 ### Host-side data placement
 
@@ -244,9 +245,68 @@ dram_read_addr = base_dram_addr + col_idx * per_core_read_size
 
 All cores read the same number of bytes, but from different offsets. Cores in the same column read the same DRAM region (they need identical in1 column data).
 
+## 2D: Rotating Sender for Both in0 and in1
+
+The 2D variant (`test_matmul_2d.cpp`) extends the rotating sender approach to **both** input matrices. Unlike the 1D variants where `in1` is read from DRAM, the 2D variant distributes `in1` via multicast down columns — making all data movement L1-to-L1 with no DRAM involvement.
+
+### in0 path (row-wise multicast, RISCV_0)
+
+The in0 data movement is identical to 1D v2: K subblocks are distributed round-robin across columns, and each column takes turns multicasting its portion across the row. See [v2: Rotating Sender Methodology](#v2-rotating-sender-methodology) above.
+
+### in1 path (column-wise multicast, RISCV_1)
+
+The in1 data movement mirrors the in0 rotating sender pattern, but operates along columns instead of rows:
+
+- **Host-side placement**: For each column, the host distributes K subblocks round-robin across rows. Row `r` receives K subblocks at indices `{r, r+R, r+2R, ...}` for each column.
+- **On-device K-loop** (`in1_kernel_2d.cpp`): At each iteration `k`, the sender is row `k % R`. The sender multicasts its K subblock to all cores in its column. After all K iterations, every core in the same column has the complete, correctly-ordered in1 data.
+
+```cpp
+for (k = 0; k < K; k++) {
+    sender_row = k % R;
+    output_addr = mcast_output_base + k * k_subblock_size;
+
+    if (my_row == sender_row) {
+        // SENDER: multicast K subblock from local source to all cores in column
+    } else {
+        // RECEIVER: signal readiness to sender
+    }
+}
+```
+
+The same K-vs-R partitioning scenarios apply (K < R, K = R, K > R), mirroring the K-vs-C behavior of the in0 path.
+
+### NOC assignment
+
+The two multicast paths run concurrently on separate RISC-V processors and separate NOCs:
+- **RISCV_0 / NOC0**: in0 row-wise multicast
+- **RISCV_1 / NOC1**: in1 column-wise multicast
+
+NOC1 has reversed routing direction, so the in1 kernel swaps `start_y` and `end_y` when constructing multicast addresses.
+
+### Example: R=3, C=4, K=2
+
+```
+in0 (row-wise multicast, same as 1D v2):
+  Each row's K subblocks distributed across columns round-robin.
+  k=0: column 0 multicasts K0 across row
+  k=1: column 1 multicasts K1 across row
+
+in1 (column-wise multicast):
+  Each column's K subblocks distributed across rows round-robin.
+  k=0: row 0 multicasts K0 down column
+  k=1: row 1 multicasts K1 down column
+
+After both K-loops complete: every core has all in0 data for its row
+and all in1 data for its column.
+```
+
+### Why 2D matters
+
+In 1D, every core independently reads in1 from DRAM. Cores in the same column read the same DRAM region, creating redundant DRAM traffic that scales linearly with R. The 2D approach eliminates this redundancy: each row reads its portion of in1 once, then multicasts it to the rest of the column. This trades DRAM bandwidth for NOC bandwidth, which is more plentiful and has lower latency on Tenstorrent hardware.
+
 ## Barrier Synchronization
 
-Both RISCV_0 (in0 multicast) and RISCV_1 (in1 DRAM read) execute a global barrier before starting data movement. This ensures all cores are ready before any multicast or DRAM read begins.
+Both RISCV_0 (in0 multicast) and RISCV_1 (in1 DRAM read or column multicast) execute a global barrier before starting data movement. This ensures all cores are ready before any multicast or DRAM read begins.
 
 Each RISC processor has its own independent barrier using two semaphores:
 - **Arrival semaphore**: Each core increments the coordinator's semaphore to signal it has reached the barrier.
@@ -258,8 +318,8 @@ The coordinator is always the first matmul core (top-left corner of the grid).
 
 After program execution, the host reads back L1 memory from every core and verifies:
 
-- **in0**: Each core's multicast output buffer contains the complete, correctly-ordered in0 data for its row. In v1, this is the data that column 0 multicast. In v2, this is the reassembled sequence of K subblocks from the rotating senders.
-- **in1**: Each core's DRAM read output buffer matches the golden in1 data for its column.
+- **in0**: Each core's multicast output buffer contains the complete, correctly-ordered in0 data for its row. In v1, this is the data that column 0 multicast. In v2 and 2D, this is the reassembled sequence of K subblocks from the rotating senders.
+- **in1**: Each core's output buffer matches the golden in1 data for its column. In 1D (v1 and v2), this is the DRAM read output. In 2D, this is the column-wise multicast output.
 
 ## Test Parameters
 
@@ -348,20 +408,23 @@ These test the three key relationships between K and C that affect v2's rotating
 ## Running the Tests
 
 ```bash
-# Run all 1D matmul tests (both v1 and v2)
-./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*1DMatmul*"
+# Run all matmul tests (1D v1, 1D v2, and 2D)
+./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*Matmul*"
 
-# Run only v1 tests
+# Run only 1D v1 tests
 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*Matmul1DSweep*"
 
-# Run only v2 tests
+# Run only 1D v2 tests
 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*Matmul1DV2Sweep*"
 
-# Run a specific test by ID
+# Run only 2D tests
+./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*Matmul2DSweep*"
+
+# Run a specific test by ID (runs across all variants)
 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*ID1000*"
 
 # List all test names without running
-./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*1DMatmul*" --gtest_list_tests
+./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*Matmul*" --gtest_list_tests
 ```
 
 ## L1 Memory Layout Per Core
@@ -386,10 +449,22 @@ align16(barrier_scratch_0 + 16):              RISCV_1 barrier scratch (16 bytes)
 
 The `in1` DRAM output address is aligned to 64 bytes (`NOC_DRAM_READ_ALIGNMENT_BYTES` on Blackhole) so that the low address bits match the DRAM source address.
 
+### 2D
+```
+l1_base_address:                              in0 source data (this col's K subblocks)
+in0_source_end + 0x10:                        in0 multicast output (K * in0_k_sub_size)
+in0_mcast_end + 0x10:                         in1 source data (this row's K subblocks)
+in1_source_end + 0x10:                        in1 multicast output (K * in1_k_sub_size)
+align16(in1_mcast_end):                       RISCV_0 barrier scratch (16 bytes)
+align16(risc0_scratch + 16):                  RISCV_1 barrier scratch (16 bytes)
+```
+
+In the 2D variant, both in0 and in1 have separate source and multicast output regions in L1. No DRAM alignment is needed since all data movement is L1-to-L1.
+
 ## Notes
 
 - All test cases use bfloat16 data format and architecture-specific page sizes (32B for Wormhole, 64B for Blackhole).
-- For single-column grids (C = 1), the in0 kernel uses a unicast self-write instead of multicast loopback due to a known hardware limitation.
+- For single-column grids (C = 1), the in0 kernel uses a unicast self-write instead of multicast loopback due to a known hardware limitation. Similarly, for single-row grids (R = 1) in 2D, the in1 kernel uses a unicast self-write.
 - Tests that request a grid exceeding the device's compute grid are automatically skipped (not failed).
 - Barrier synchronization uses a coordinator-based polling pattern from `barrier_sync.hpp`, shared with other data movement test suites.
 - This test suite uses the TT-Metal Mesh Device API with `GenericMeshDeviceFixture`, running on single-device unit meshes. The Mesh Device API only supports fast dispatch mode.
