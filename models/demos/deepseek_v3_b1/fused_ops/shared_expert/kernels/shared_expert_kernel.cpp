@@ -109,6 +109,7 @@ void kernel_main() {
                 1,  // row_major
                 get_named_compile_time_arg_val("ag_receiver_data_addr"),
                 get_named_compile_time_arg_val("ag_sender_idx"),
+                noc_index,
             },
         .receiver = {},
     };
@@ -130,6 +131,7 @@ void kernel_main() {
                 1,  // row_major
                 get_named_compile_time_arg_val("bg_receiver_data_addr"),
                 get_named_compile_time_arg_val("bg_sender_idx"),
+                noc_index,
             },
         .receiver = {},
     };
@@ -182,6 +184,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather_row_major"),
                 get_named_compile_time_arg_val("gather_receiver_data_addr"),
                 get_named_compile_time_arg_val("gather_sender_idx"),
+                noc_index,
             },
         .receiver = {},
     };
