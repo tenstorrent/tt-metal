@@ -19,6 +19,12 @@ from .mlp import TtMlp, to_device_bias, to_device_weight
 class TtAttention:
     CORE_GRID = TtMlp.CORE_GRID
     COMPUTE = TtMlp.COMPUTE
+    SDPA_PROG = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+        q_chunk_size=128,
+        k_chunk_size=512,
+        exp_approx_mode=True,
+    )
 
     def __init__(
         self,
@@ -45,7 +51,9 @@ class TtAttention:
             qkv, num_heads=self.num_heads, transpose_k_heads=False
         )
         ttnn.deallocate(qkv)
-        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, program_config=self.SDPA_PROG,
+        )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
