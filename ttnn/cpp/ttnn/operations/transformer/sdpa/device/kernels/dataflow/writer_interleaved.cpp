@@ -74,15 +74,25 @@ void kernel_main() {
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
-    // Lightweight mask: generate a single -inf tile once, leave permanently fronted.
+    // Lightweight mask: generate template tiles once, leave permanently fronted.
+    // Non-causal: 1 tile (neginf). Causal: 2 tiles (neginf + diagonal).
     if constexpr (use_lightweight_mask) {
-        const uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
-        cb_reserve_back(cb_mask_in, 1);
+        constexpr uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
+        constexpr uint32_t lw_mask_tiles = is_causal ? 2 : 1;
+        cb_reserve_back(cb_mask_in, lw_mask_tiles);
+
+        // Tile 0: all -inf
         auto* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_mask_in));
         for (uint32_t i = 0; i < mask_tile_size_bytes / sizeof(uint32_t); i++) {
             ptr[i] = 0xFF80FF80;  // -inf in bfloat16
         }
-        cb_push_back(cb_mask_in, 1);
+
+        // Tile 1: causal diagonal (0 where col<=row, -inf where col>row)
+        if constexpr (is_causal) {
+            fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(cb_mask_in, 1);
+        }
+
+        cb_push_back(cb_mask_in, lw_mask_tiles);
     }
 
     if constexpr (is_chunked) {
