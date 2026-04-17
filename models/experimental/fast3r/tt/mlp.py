@@ -45,11 +45,17 @@ class TtMlp:
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
+    FAST_COMPUTE = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         y = ttnn.linear(
             x, self.fc1_w, bias=self.fc1_b, activation="gelu",
-            core_grid=self.CORE_GRID, compute_kernel_config=self.COMPUTE,
+            core_grid=self.CORE_GRID, compute_kernel_config=self.FAST_COMPUTE,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         out = ttnn.linear(
