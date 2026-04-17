@@ -21,7 +21,7 @@ class TtAttention:
     COMPUTE = TtMlp.COMPUTE
     SDPA_PROG = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-        q_chunk_size=32,
+        q_chunk_size=64,
         k_chunk_size=512,
         exp_approx_mode=True,
     )
