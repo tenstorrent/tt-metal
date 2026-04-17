@@ -20,7 +20,83 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
     create_dram_expert_tensors_multi_device,
     encode_expert_indices,
 )
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
+
+
+def shuffle_tensor_tiles(tensor, tile_size, num_banks, subblock_k=None, subblock_n=None):
+    """Tile shuffle for WIDTH_SHARDED DRAM layout with subblock support.
+
+    Reorders tiles within each bank's shard for DRAM streaming matmul.
+    When subblock_n>1, tiles are grouped into [subblock_k, subblock_n] blocks,
+    row-major within each block, column-major at block level.
+    When subblock_n=1 (default): fully column-major within each shard.
+    """
+    orig_shape = tensor.shape
+    K = orig_shape[-2]
+    N = orig_shape[-1]
+
+    lcm = tile_size * num_banks
+    n_padded = ((N + lcm - 1) // lcm) * lcm
+    needs_padding = n_padded != N
+
+    tensor = tensor.reshape(-1, K, N)
+    batch_size = tensor.shape[0]
+
+    if needs_padding:
+        tensor = torch.nn.functional.pad(tensor, (0, n_padded - N))
+
+    K_tiles = K // tile_size
+    per_N = n_padded // num_banks
+    per_N_tiles = per_N // tile_size
+    num_tiles_per_shard = K_tiles * per_N_tiles
+
+    if subblock_k is None:
+        subblock_k = K_tiles
+    if subblock_n is None:
+        subblock_n = 1
+
+    assert K_tiles % subblock_k == 0, f"K_tiles ({K_tiles}) must be divisible by subblock_k ({subblock_k})"
+    assert per_N_tiles % subblock_n == 0, f"per_N_tiles ({per_N_tiles}) must be divisible by subblock_n ({subblock_n})"
+
+    tensor = tensor.reshape(batch_size, K, num_banks, per_N)
+    tensor = tensor.permute(0, 2, 1, 3).contiguous()
+    shards = tensor.reshape(-1, K, per_N)
+
+    tiles = shards.reshape(-1, K_tiles, tile_size, per_N_tiles, tile_size)
+    tiles = tiles.permute(0, 1, 3, 2, 4).contiguous()
+    tiles = tiles.reshape(-1, num_tiles_per_shard, tile_size, tile_size)
+
+    num_subblocks_k = K_tiles // subblock_k
+    num_n_groups = per_N_tiles // subblock_n
+    block_size = subblock_k * subblock_n
+
+    i = torch.arange(num_tiles_per_shard, device=tensor.device)
+    block_idx = i // block_size
+    pos_in_block = i % block_size
+    local_k = pos_in_block // subblock_n
+    local_n = pos_in_block % subblock_n
+
+    n_group = block_idx % num_n_groups
+    k_sub = block_idx // num_n_groups
+
+    global_k = k_sub * subblock_k + local_k
+    global_n = n_group * subblock_n + local_n
+    source_idx = global_k * per_N_tiles + global_n
+
+    shuffled_tiles = tiles[:, source_idx, :, :]
+
+    shuffled_tiles = shuffled_tiles.reshape(-1, K_tiles, per_N_tiles, tile_size, tile_size)
+    shuffled_tiles = shuffled_tiles.permute(0, 1, 3, 2, 4).contiguous()
+    shuffled_shards = shuffled_tiles.reshape(-1, K, per_N)
+
+    shuffled = shuffled_shards.reshape(batch_size, num_banks, K, per_N)
+    shuffled = shuffled.permute(0, 2, 1, 3).contiguous()
+    shuffled = shuffled.reshape(batch_size, K, n_padded)
+
+    if needs_padding:
+        shuffled = shuffled[:, :, :N]
+
+    shuffled = shuffled.reshape(*orig_shape)
+    return shuffled
 
 
 def _build_down_grid(device):
