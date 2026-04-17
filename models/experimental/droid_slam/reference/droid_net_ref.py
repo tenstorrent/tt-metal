@@ -222,19 +222,47 @@ class UpdateModule(nn.Module):
         # though only the first two are consumed (the `[..., :2]` slice
         # below). Keep the full 3-channel conv so pretrained weights
         # load cleanly.
-        self.weight = nn.Sequential(
-            nn.Conv2d(128, 128, 3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128, 3, 3, padding=1),
-            nn.Sigmoid(),
-        )
-        self.delta = nn.Sequential(
-            nn.Conv2d(128, 128, 3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128, 3, 3, padding=1),
-        )
+        #
+        # Delta and weight heads share the same input (`net`) but have
+        # independent 128→128 pre-convs. Fuse them into one 128→256
+        # conv and split; the tail 128→3 convs stay separate (they feed
+        # into different activation functions).
+        self.deltaweight_pre = nn.Conv2d(128, 256, 3, padding=1)
+        self.delta_tail = nn.Conv2d(128, 3, 3, padding=1)
+        self.weight_tail = nn.Conv2d(128, 3, 3, padding=1)
         self.gru = ConvGRU(128, 128 + 128 + 64)
         self.agg = GraphAgg()
+
+    # --- state-dict migration from unfused delta/weight Sequential ---
+    def _load_from_state_dict(
+        self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+    ):
+        legacy_pre_weight_w = state_dict.pop(f"{prefix}weight.0.weight", None)
+        legacy_pre_weight_b = state_dict.pop(f"{prefix}weight.0.bias", None)
+        legacy_pre_delta_w = state_dict.pop(f"{prefix}delta.0.weight", None)
+        legacy_pre_delta_b = state_dict.pop(f"{prefix}delta.0.bias", None)
+        legacy_tail_weight_w = state_dict.pop(f"{prefix}weight.2.weight", None)
+        legacy_tail_weight_b = state_dict.pop(f"{prefix}weight.2.bias", None)
+        legacy_tail_delta_w = state_dict.pop(f"{prefix}delta.2.weight", None)
+        legacy_tail_delta_b = state_dict.pop(f"{prefix}delta.2.bias", None)
+        if all(
+            x is not None
+            for x in (legacy_pre_weight_w, legacy_pre_delta_w, legacy_tail_weight_w, legacy_tail_delta_w)
+        ):
+            # Fused layout: delta pre goes in the FIRST half, weight pre in the SECOND.
+            state_dict[f"{prefix}deltaweight_pre.weight"] = torch.cat(
+                [legacy_pre_delta_w, legacy_pre_weight_w], dim=0
+            )
+            state_dict[f"{prefix}deltaweight_pre.bias"] = torch.cat(
+                [legacy_pre_delta_b, legacy_pre_weight_b], dim=0
+            )
+            state_dict[f"{prefix}delta_tail.weight"] = legacy_tail_delta_w
+            state_dict[f"{prefix}delta_tail.bias"] = legacy_tail_delta_b
+            state_dict[f"{prefix}weight_tail.weight"] = legacy_tail_weight_w
+            state_dict[f"{prefix}weight_tail.bias"] = legacy_tail_weight_b
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+        )
 
     def forward(self, net, inp, corr, flow, ii):
         batch, num, ch, ht, wd = net.shape
@@ -245,8 +273,12 @@ class UpdateModule(nn.Module):
         corr = self.corr_encoder(corr)
         flow = self.flow_encoder(flow)
         net = self.gru(net, inp, corr, flow)
-        delta = self.delta(net).view(batch, num, -1, ht, wd)
-        weight = self.weight(net).view(batch, num, -1, ht, wd)
+        # Fused pre-conv for delta + weight; split halves and finish via
+        # independent tail convs.
+        dw = F.relu(self.deltaweight_pre(net), inplace=True)
+        dw_d, dw_w = dw.split(128, dim=1)
+        delta = self.delta_tail(dw_d).view(batch, num, -1, ht, wd)
+        weight = torch.sigmoid(self.weight_tail(dw_w)).view(batch, num, -1, ht, wd)
         delta = delta.permute(0, 1, 3, 4, 2)[..., :2].contiguous()
         weight = weight.permute(0, 1, 3, 4, 2)[..., :2].contiguous()
         net = net.view(batch, num, -1, ht, wd)
