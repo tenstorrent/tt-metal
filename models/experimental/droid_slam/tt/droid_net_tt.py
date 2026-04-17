@@ -98,13 +98,6 @@ class TtDroidNet:
         self._image_cache = None  # (data_ptr, shape, version, x_tt_normalized)
         self._corr_cache = None
         self._flow_cache = None
-        # Output memoization: once the inputs are cache-identical across
-        # iterations, every convolution in extract_features and update
-        # produces the same tiles — keeping the outputs by input-tile
-        # object identity lets every repeated forward skip compute.
-        self._fnet_memo = None  # (input_tt, (fmaps_tt, fh, fw))
-        self._cnet_memo = None  # (input_tt, (context_tt, ch, cw))
-        self._update_memo = None  # (key, outputs tuple)
 
     # ------------------------------------------------------------------
     # extract_features
@@ -132,28 +125,16 @@ class TtDroidNet:
             x_tt = ttnn.subtract(x_tt, self._norm_shift)
             self._image_cache = (cache_key, x_tt)
 
-        # Memoize fnet output by x_tt object identity. When the benchmark
-        # re-feeds the same input tile across warmup+timed iterations
-        # (the cache path), every conv produces the same output — reusing
-        # the stashed tiles skips 16 conv launches per iter.
-        if self._fnet_memo is not None and self._fnet_memo[0] is x_tt:
-            fmaps_tt, fh, fw = self._fnet_memo[1]
-        else:
-            fmaps_tt, fh, fw = self.tt_fnet(x_tt, batch_size=bn, h=h, w=w)
-            self._fnet_memo = (x_tt, (fmaps_tt, fh, fw))
+        fmaps_tt, fh, fw = self.tt_fnet(x_tt, batch_size=bn, h=h, w=w)
+        context_tt, ch_, cw_ = self.tt_cnet(x_tt, batch_size=bn, h=h, w=w)
 
-        if self._cnet_memo is not None and self._cnet_memo[0] is x_tt:
-            net_tt, inp_tt, ch_, cw_ = self._cnet_memo[1]
-        else:
-            context_tt, ch_, cw_ = self.tt_cnet(x_tt, batch_size=bn, h=h, w=w)
-            # context has 256 channels — split into net(128) + inp(128),
-            # apply tanh/relu on device.
-            n_last = context_tt.shape[-2]
-            net_tt = ttnn.slice(context_tt, [0, 0, 0, 0], [1, 1, n_last, 128])
-            inp_tt = ttnn.slice(context_tt, [0, 0, 0, 128], [1, 1, n_last, 256])
-            net_tt = ttnn.tanh(net_tt)
-            inp_tt = ttnn.relu(inp_tt)
-            self._cnet_memo = (x_tt, (net_tt, inp_tt, ch_, cw_))
+        # context has 256 channels — split into net(128) + inp(128),
+        # apply tanh/relu on device.
+        n_last = context_tt.shape[-2]
+        net_tt = ttnn.slice(context_tt, [0, 0, 0, 0], [1, 1, n_last, 128])
+        inp_tt = ttnn.slice(context_tt, [0, 0, 0, 128], [1, 1, n_last, 256])
+        net_tt = ttnn.tanh(net_tt)
+        inp_tt = ttnn.relu(inp_tt)
 
         # Stash on-device net/inp tiles so update() can slice them by
         # ii directly without a torch roundtrip.
@@ -232,35 +213,13 @@ class TtDroidNet:
             flow_tt = _pack_nchw_to_tile_nhwc(flow_bn, self.device)
             self._flow_cache = (flow_key, flow_tt)
 
-        # Memoize update outputs when every input tile is identity-stable
-        # — under the benchmark's repeat-the-same-frame pattern this lets
-        # iters after the first skip all 15 update convs + elementwise.
-        # We key by the source cache tiles (not the per-call slice) so
-        # that a fresh ttnn.slice each iter does not force a memo miss.
-        update_key = (
-            id(self._cached_net_tt) if use_cache else id(net_tt),
-            id(self._cached_inp_tt) if use_cache else id(inp_tt),
-            id(corr_tt),
-            id(flow_tt),
-            n_edges,
-            h,
-            w,
+        net_o_tt, delta_tt, weight_tt, eta_tt, upmask_tt = self.tt_update.forward(
+            net_tt, inp_tt, corr_tt, flow_tt, batch_size=bn, h=h, w=w
         )
-        if self._update_memo is not None and self._update_memo[0] == update_key:
-            net_o_tt, delta_tt, weight_tt, eta_tt, upmask_tt, eta_scaled = (
-                self._update_memo[1]
-            )
-        else:
-            net_o_tt, delta_tt, weight_tt, eta_tt, upmask_tt = self.tt_update.forward(
-                net_tt, inp_tt, corr_tt, flow_tt, batch_size=bn, h=h, w=w
-            )
-            # Kick the 0.01 scale onto device eagerly (cheap op) but defer
-            # every actual download until the caller reads the tensor.
-            eta_scaled = ttnn.multiply(eta_tt, 0.01)
-            self._update_memo = (
-                update_key,
-                (net_o_tt, delta_tt, weight_tt, eta_tt, upmask_tt, eta_scaled),
-            )
+
+        # Kick the 0.01 scale onto device eagerly (cheap op) but defer
+        # every actual download until the caller reads the tensor.
+        eta_scaled = ttnn.multiply(eta_tt, 0.01)
 
         net_o = _LazyTensor(
             lambda t=net_o_tt, bn=bn, h=h, w=w, b=b, n_e=n_edges: (
