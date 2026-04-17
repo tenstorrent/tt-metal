@@ -145,14 +145,18 @@ def tt_vit_block(
     block_params,
     num_heads,
     window_size,
+    H,
+    W,
     device,
 ):
     """Single ViT transformer block — fully on-device.
 
-    Takes/returns ttnn tensor (B, H, W, C). No host transfers inside the block.
+    Takes/returns ttnn tensor (B, L=H*W, C) flat. Spatial dims H,W passed
+    explicitly so we never need a (B,H,W,C)↔(B,L,C) round-trip per block.
     """
     tt_x = x
-    B, H, W, C = tt_x.shape
+    B = tt_x.shape[0]
+    C = tt_x.shape[-1]
     assert window_size == 0 or (H % window_size == 0 and W % window_size == 0), (
         "on-device window partition requires H,W divisible by window_size"
     )
@@ -165,7 +169,7 @@ def tt_vit_block(
         epsilon=1e-5,
     )
 
-    # Window partition → (B', L, C)
+    # Window partition: (B, L, C) → (B', win*win, C). Reshape flat-to-6D directly.
     if window_size > 0:
         nW_h, nW_w = H // window_size, W // window_size
         tt_attn_input = ttnn.reshape(tt_normed, [B, nW_h, window_size, nW_w, window_size, C])
@@ -174,7 +178,7 @@ def tt_vit_block(
             tt_attn_input, [B * nW_h * nW_w, window_size * window_size, C]
         )
     else:
-        tt_attn_input = ttnn.reshape(tt_normed, [B, H * W, C])
+        tt_attn_input = tt_normed  # already (B, L, C)
 
     tt_attn_out = tt_vit_attention(
         tt_attn_input,
@@ -188,22 +192,19 @@ def tt_vit_block(
         device=device,
     )
 
-    # Window unpartition → (B, H, W, C)
+    # Window unpartition: (B', win*win, C) → (B, L, C) flat.
     if window_size > 0:
-        nW_h, nW_w = H // window_size, W // window_size
         tt_attn_out = ttnn.reshape(
             tt_attn_out, [B, nW_h, nW_w, window_size, window_size, C]
         )
         tt_attn_out = ttnn.permute(tt_attn_out, [0, 1, 3, 2, 4, 5])
-        tt_attn_out = ttnn.reshape(tt_attn_out, [B, H, W, C])
-    else:
-        tt_attn_out = ttnn.reshape(tt_attn_out, [B, H, W, C])
+        tt_attn_out = ttnn.reshape(tt_attn_out, [B, H * W, C])
+    # else: already (B, L, C)
 
     tt_residual1 = ttnn.add(tt_x, tt_attn_out)
-    tt_residual1_flat = ttnn.reshape(tt_residual1, [B, H * W, C])
 
     tt_normed2 = ttnn.layer_norm(
-        tt_residual1_flat,
+        tt_residual1,
         weight=block_params["norm2_weight_tt"],
         bias=block_params["norm2_bias_tt"],
         epsilon=1e-5,
@@ -218,8 +219,7 @@ def tt_vit_block(
         device=device,
     )
 
-    tt_output = ttnn.add(tt_residual1_flat, tt_mlp_out)
-    return ttnn.reshape(tt_output, [B, H, W, C])
+    return ttnn.add(tt_residual1, tt_mlp_out)
 
 
 # ---------------------------------------------------------------------------
@@ -259,14 +259,20 @@ def tt_vit_backbone(pixel_values, backbone_params, device):
             epsilon=1e-5,
         )
 
+    # Blocks operate on flat (B, L, C). Single reshape into flat then back at the end.
+    B, H, W, C = tt_x.shape
+    tt_x = ttnn.reshape(tt_x, [B, H * W, C])
     for block_params in backbone_params["blocks"]:
         tt_x = tt_vit_block(
             tt_x,
             block_params["tt_params"],
             num_heads=16,
             window_size=block_params["window_size"],
+            H=H,
+            W=W,
             device=device,
         )
+    tt_x = ttnn.reshape(tt_x, [B, H, W, C])
 
     # Single device→host hop; return NCHW feature map.
     x = ttnn.to_torch(tt_x).float()
