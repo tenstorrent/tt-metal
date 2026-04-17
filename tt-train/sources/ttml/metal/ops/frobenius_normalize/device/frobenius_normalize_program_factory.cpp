@@ -68,8 +68,8 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
-    constexpr uint32_t input_buf_tiles = 4U;  // block_size=4 for Phase 6
-    constexpr uint32_t output_buf_tiles = 4U;
+    constexpr uint32_t input_buf_tiles = 8U;
+    constexpr uint32_t output_buf_tiles = 8U;
 
     [[maybe_unused]] auto cb_input =
         create_circular_buffer(program, all_cores, kCbInput, bf16_format, bf16_tile_size, input_buf_tiles);
@@ -83,7 +83,7 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
         create_circular_buffer(program, all_cores, kCbChainSend, fp32_format, fp32_tile_size, 1);
 
     // -------------------------------------------------------------------------
-    // 3) Create semaphores and scalar storage
+    // 3) Create semaphores
     // -------------------------------------------------------------------------
     // Reduction: non-origin cores increment after writing partial to origin's L1
     // Origin waits for count == num_cores - 1 before reading all partials
