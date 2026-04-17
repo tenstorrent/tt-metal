@@ -163,7 +163,11 @@ private:
 
         auto connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* header = nullptr;
+        constexpr bool use_posted_transport_writes = true;
+        constexpr uint32_t header_ring_size = 2;
+        constexpr uint32_t regular_payload_bytes = CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
+        constexpr uint32_t last_payload_bytes = CTArgs::last_chunk_tiles * CTArgs::page_size_bytes;
+        std::array<volatile tt_l1_ptr PACKET_HEADER_TYPE*, header_ring_size> headers = {};
         uint64_t dst_noc_base = 0;
         uint64_t remote_sem_noc = 0;
         {
@@ -171,18 +175,17 @@ private:
             connection.open_start();
         }
         {
-            DeviceZoneScopedN("CCL_WRITER_SETUP_HEADER_POOL");
+            DeviceZoneScopedN("CCL_WRITER_SETUP_HEADERS");
+            const auto edm_direction = connection.get_edm_direction();
             PacketHeaderPool::reset();
-            header = PacketHeaderPool::allocate_header();
-        }
-        {
-            DeviceZoneScopedN("CCL_WRITER_SETUP_FABRIC_ROUTE");
-            fabric_set_single_hop_unicast_route_from_direction(header, connection.get_edm_direction());
-        }
-        {
-            DeviceZoneScopedN("CCL_WRITER_SETUP_NOC_ADDR");
             dst_noc_base = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.intermediate_buffer_address, 0);
             remote_sem_noc = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, link_sem_bank_addr, 0);
+            for (uint32_t i = 0; i < header_ring_size; ++i) {
+                headers[i] = PacketHeaderPool::allocate_header();
+                fabric_set_single_hop_unicast_route_from_direction(headers[i], edm_direction);
+                headers[i]->to_noc_fused_unicast_write_atomic_inc(
+                    {dst_noc_base, remote_sem_noc, 1, false}, regular_payload_bytes);
+            }
         }
 
         // Ensure local data is available in the CB before signaling or sending.
@@ -206,19 +209,14 @@ private:
                 noc_async_atomic_barrier();
             }
         }
-
         const uint32_t src_base_addr = get_read_ptr(CTArgs::local_data_cb_id);
         connection.open_finish();
-        constexpr bool use_posted_transport_writes = true;
         connection.setup_stateful_send_cmd_bufs<use_posted_transport_writes>();
 
         constexpr uint32_t stride_bytes = CTArgs::num_links * CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
         uint32_t offset = CTArgs::link_index * CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
+        uint32_t header_idx = 0;
 
-        constexpr uint32_t regular_payload_bytes = CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
-        constexpr uint32_t last_payload_bytes = CTArgs::last_chunk_tiles * CTArgs::page_size_bytes;
-
-        header->to_noc_fused_unicast_write_atomic_inc({dst_noc_base, remote_sem_noc, 1, false}, regular_payload_bytes);
         // Amortize downstream free-slot queries across back-to-back payload sends.
         uint32_t cached_free_write_slots = 0;
 
@@ -229,7 +227,8 @@ private:
             } while (cached_free_write_slots == 0);
         };
 
-        auto send_payload = [&](uint32_t chunk_offset, uint32_t payload_bytes) __attribute__((always_inline)) {
+        auto send_regular_payload = [&](uint32_t chunk_offset) __attribute__((always_inline)) {
+            auto* header = headers[header_idx++];
             {
                 DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_HDR_SETUP");
                 header->set_fused_unicast_write_atomic_inc_write_noc_address(dst_noc_base + chunk_offset);
@@ -237,7 +236,32 @@ private:
             {
                 DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_TRANSPORT");
                 connection.send_current_slot_stateful_non_blocking<use_posted_transport_writes>(
-                    src_base_addr + chunk_offset, payload_bytes, reinterpret_cast<uint32_t>(header));
+                    src_base_addr + chunk_offset, regular_payload_bytes, reinterpret_cast<uint32_t>(header));
+            }
+            if (header_idx == header_ring_size) {
+                header_idx = 0;
+                DeviceZoneScopedN("CCL_WRITER_SEND_FLUSH");
+                if constexpr (use_posted_transport_writes) {
+                    noc_async_posted_writes_flushed();
+                } else {
+                    noc_async_writes_flushed();
+                }
+            }
+        };
+
+        auto send_last_payload = [&](uint32_t chunk_offset) __attribute__((always_inline)) {
+            auto* header = headers[header_idx++];
+            {
+                DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_HDR_SETUP");
+                if constexpr (CTArgs::last_chunk_tiles != CTArgs::tiles_per_chunk) {
+                    header->set_payload_size_bytes(last_payload_bytes);
+                }
+                header->set_fused_unicast_write_atomic_inc_write_noc_address(dst_noc_base + chunk_offset);
+            }
+            {
+                DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_TRANSPORT");
+                connection.send_current_slot_stateful_non_blocking<use_posted_transport_writes>(
+                    src_base_addr + chunk_offset, last_payload_bytes, reinterpret_cast<uint32_t>(header));
             }
         };
 
@@ -245,17 +269,9 @@ private:
         while (chunk_idx < CTArgs::num_chunks - 1) {
             refill_free_write_slots();
             while (chunk_idx < CTArgs::num_chunks - 1 && cached_free_write_slots > 0) {
-                send_payload(offset, regular_payload_bytes);
+                send_regular_payload(offset);
                 cached_free_write_slots--;
-                {
-                    DeviceZoneScopedN("CCL_WRITER_SEND_FLUSH");
-                    offset += stride_bytes;
-                    if constexpr (use_posted_transport_writes) {
-                        noc_async_posted_writes_flushed();
-                    } else {
-                        noc_async_writes_flushed();
-                    }
-                }
+                offset += stride_bytes;
                 chunk_idx += CTArgs::num_links;
             }
         }
@@ -264,18 +280,14 @@ private:
             if (cached_free_write_slots == 0) {
                 refill_free_write_slots();
             }
-            if constexpr (CTArgs::last_chunk_tiles != CTArgs::tiles_per_chunk) {
-                header->set_payload_size_bytes(last_payload_bytes);
-            }
-            send_payload(offset, last_payload_bytes);
+            send_last_payload(offset);
         }
 
         {
             DeviceZoneScopedN("CCL_WRITER_CLOSE");
             if constexpr (use_posted_transport_writes) {
-                // The last transport packet does not go through a later non-posted drain. For the non-posted path,
-                // close_finish()'s noc_async_write_barrier() drains that final payload/header send for us. Posted
-                // writes are not covered by that barrier, so flush them here before starting teardown.
+                // send_last_payload intentionally skips the wrap-time flush since the last packet never needs to
+                // make a header reusable again. Drain that remaining posted tail here before teardown.
                 noc_async_posted_writes_flushed();
             }
             connection.close_start();
