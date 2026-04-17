@@ -662,14 +662,12 @@ def full_decoder(
         out2 = ttnn.to_torch(tt_out2)
     else:
         out1 = out2 = None
-    taps1 = [ttnn.to_torch(t) for t in dev_taps1]
-    taps2 = [ttnn.to_torch(t) for t in dev_taps2]
-    return out1, out2, taps1, taps2
+    # Return tap tensors as device tensors (caller may download or feed to dpt_head_device).
+    return out1, out2, dev_taps1, dev_taps2
 
 
 def dust3r_forward(img1: torch.Tensor, img2: torch.Tensor, state: dict, device):
-    """Full end-to-end DUSt3R forward on TT (with host DPT fallback)."""
-    # Keep encoder outputs on device for direct decoder use; download once at end.
+    """Full end-to-end DUSt3R forward on TT — DPT runs on device too."""
     tt_enc1 = full_encoder(img1, state, device, return_device=True)
     tt_enc2 = full_encoder(img2, state, device, return_device=True)
     B, C, H, W = img1.shape
@@ -679,20 +677,16 @@ def dust3r_forward(img1: torch.Tensor, img2: torch.Tensor, state: dict, device):
     gy, gx = torch.meshgrid(ys, xs, indexing="ij")
     pos = torch.stack((gy, gx), dim=-1).reshape(hp * wp, 2).unsqueeze(0).expand(B, -1, -1).contiguous()
 
-    _, _, taps1, taps2 = full_decoder(tt_enc1, tt_enc2, pos, state, device, compute_norm=False)
-    # Now download enc tensors for DPT head input.
-    enc1 = ttnn.to_torch(tt_enc1)
-    enc2 = ttnn.to_torch(tt_enc2)
-    feats1 = [enc1, taps1[0], taps1[1], taps1[2]]
-    feats2 = [enc2, taps2[0], taps2[1], taps2[2]]
+    _, _, dev_taps1, dev_taps2 = full_decoder(tt_enc1, tt_enc2, pos, state, device, compute_norm=False)
+    feats1 = [tt_enc1, dev_taps1[0], dev_taps1[1], dev_taps1[2]]
+    feats2 = [tt_enc2, dev_taps2[0], dev_taps2[1], dev_taps2[2]]
 
-    # Two independent DPT heads — run concurrently to overlap host conv work.
-    from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        f1 = pool.submit(dpt_head, feats1, (hp, wp), state, 1, device)
-        f2 = pool.submit(dpt_head, feats2, (hp, wp), state, 2, device)
-        out1 = f1.result()
-        out2 = f2.result()
+    tt_out1 = dpt_head_device(feats1, (hp, wp), state, 1, device)
+    tt_out2 = dpt_head_device(feats2, (hp, wp), state, 2, device)
+    # Final downloads — single sync wave.
+    Hh, Wh = H, W
+    out1 = ttnn.to_torch(tt_out1).reshape(B, Hh, Wh, 4).permute(0, 3, 1, 2).contiguous().float()
+    out2 = ttnn.to_torch(tt_out2).reshape(B, Hh, Wh, 4).permute(0, 3, 1, 2).contiguous().float()
     return out1, out2
 
 
@@ -700,7 +694,7 @@ _DPT_HEAD_CACHE: dict = {}
 
 
 def dpt_head(feats_list, hw, state: dict, branch: int, device):
-    """DPT head — host-torch bfloat16 + channels_last memory layout for fast convs."""
+    """Host wrapper kept for per-layer pytest harness."""
     from reference.torch_dust3r import load_dpt_head
     key = (id(state), branch, "bf16cl", hw)
     head = _DPT_HEAD_CACHE.get(key)
@@ -715,3 +709,223 @@ def dpt_head(feats_list, hw, state: dict, branch: int, device):
     feats_bf16 = [f.to(torch.bfloat16) for f in feats_list]
     with torch.no_grad():
         return head(feats_bf16, hw).float()
+
+
+# ---------- On-device DPT ----------
+
+_DPT_DEVICE_CACHE: dict = {}
+
+
+def _preload_dpt_weights(state: dict, branch: int, device) -> dict:
+    """Upload all DPT weights as ttnn tensors (per branch). Cached on module.
+
+    1×1 convs are stored as (in, out) tile tensors on device for use as matmul
+    via ttnn.linear (avoids fragile conv2d shard alignment for tiny spatial dims).
+    Other convs keep their (out, in, kH, kW) host tensors for ttnn.conv2d.
+    """
+    prefix = f"downstream_head{branch}.dpt."
+
+    def _w(k):
+        return state[prefix + k]
+
+    def _wt(t):
+        # weight: (out, in, kH, kW). ttnn.conv2d accepts torch tensor in this exact shape.
+        return ttnn.from_torch(t.to(torch.bfloat16), dtype=ttnn.bfloat16)
+
+    def _bt(t):
+        return ttnn.from_torch(t.reshape(1, 1, 1, -1).to(torch.bfloat16), dtype=ttnn.bfloat16)
+
+    def _w_lin(t):
+        # 1x1 conv weight (out, in, 1, 1) → linear matmul weight (in, out) on device.
+        out_c, in_c = t.shape[0], t.shape[1]
+        w_t = t.reshape(out_c, in_c).t().contiguous()
+        return ttnn.from_torch(w_t.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def _b_lin(t):
+        # bias as a (1, 1, out_c) tile tensor for ttnn.linear bias arg.
+        return ttnn.from_torch(t.reshape(1, 1, -1).to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    w = {}
+    # act_postprocess: 1x1 projections as linear weights, spatial up/down as conv2d.
+    w["ap0_proj_w"] = _w_lin(_w("act_postprocess.0.0.weight"))
+    w["ap0_proj_b"] = _b_lin(_w("act_postprocess.0.0.bias"))
+    w["ap0_up_w"] = _wt(_w("act_postprocess.0.1.weight"))
+    w["ap0_up_b"] = _bt(_w("act_postprocess.0.1.bias"))
+    w["ap1_proj_w"] = _w_lin(_w("act_postprocess.1.0.weight"))
+    w["ap1_proj_b"] = _b_lin(_w("act_postprocess.1.0.bias"))
+    w["ap1_up_w"] = _wt(_w("act_postprocess.1.1.weight"))
+    w["ap1_up_b"] = _bt(_w("act_postprocess.1.1.bias"))
+    w["ap2_proj_w"] = _w_lin(_w("act_postprocess.2.0.weight"))
+    w["ap2_proj_b"] = _b_lin(_w("act_postprocess.2.0.bias"))
+    w["ap3_proj_w"] = _w_lin(_w("act_postprocess.3.0.weight"))
+    w["ap3_proj_b"] = _b_lin(_w("act_postprocess.3.0.bias"))
+    w["ap3_down_w"] = _wt(_w("act_postprocess.3.1.weight"))
+    w["ap3_down_b"] = _bt(_w("act_postprocess.3.1.bias"))
+    # layer_rn (no bias)
+    for i in (1, 2, 3, 4):
+        w[f"l{i}_rn_w"] = _wt(_w(f"scratch.layer{i}_rn.weight"))
+    # refinenets
+    for r in (1, 2, 3, 4):
+        for cu in (1, 2):
+            for k in (1, 2):
+                w[f"r{r}_u{cu}_c{k}_w"] = _wt(_w(f"scratch.refinenet{r}.resConfUnit{cu}.conv{k}.weight"))
+                w[f"r{r}_u{cu}_c{k}_b"] = _bt(_w(f"scratch.refinenet{r}.resConfUnit{cu}.conv{k}.bias"))
+        w[f"r{r}_out_w"] = _w_lin(_w(f"scratch.refinenet{r}.out_conv.weight"))
+        w[f"r{r}_out_b"] = _b_lin(_w(f"scratch.refinenet{r}.out_conv.bias"))
+    # head
+    w["head0_w"] = _wt(_w("head.0.weight"))
+    w["head0_b"] = _bt(_w("head.0.bias"))
+    w["head2_w"] = _wt(_w("head.2.weight"))
+    w["head2_b"] = _bt(_w("head.2.bias"))
+    w["head4_w"] = _w_lin(_w("head.4.weight"))
+    w["head4_b"] = _b_lin(_w("head.4.bias"))
+    return w
+
+
+_DPT_KCFG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
+
+def _conv2d(tt_x, w_t, b_t, in_c, out_c, B, H, W, k=3, stride=1, padding=1, device=None):
+    """ttnn.conv2d wrapper with high-fidelity compute config (DPT precision matters)."""
+    return ttnn.conv2d(
+        input_tensor=tt_x, weight_tensor=w_t, bias_tensor=b_t,
+        device=device, in_channels=in_c, out_channels=out_c,
+        batch_size=B, input_height=H, input_width=W,
+        kernel_size=(k, k), stride=(stride, stride), padding=(padding, padding),
+        compute_config=_DPT_KCFG,
+    )
+
+
+def _linear_1x1(tt_x, w_lin, b_lin, B, H, W, in_c, out_c):
+    """1×1 conv via ttnn.linear (matmul). Input/output in conv2d-flat (1, 1, N, C) form, TILE layout."""
+    if tt_x.layout != ttnn.TILE_LAYOUT:
+        tt_x = ttnn.to_layout(tt_x, ttnn.TILE_LAYOUT)
+    return ttnn.linear(tt_x, w_lin, bias=b_lin)
+
+
+def _conv_t2d(tt_x, w_t, b_t, in_c, out_c, B, H, W, k, stride, padding=0, device=None):
+    return ttnn.conv_transpose2d(
+        input_tensor=tt_x, weight_tensor=w_t, bias_tensor=b_t,
+        device=device, in_channels=in_c, out_channels=out_c,
+        batch_size=B, input_height=H, input_width=W,
+        kernel_size=(k, k), stride=(stride, stride), padding=(padding, padding),
+    )
+
+
+def _tokens_to_nhwc(tt_t, B, N, C):
+    """Tokens (B, N, C) (TILE) → NHWC flat (1, 1, N, C) (ROW_MAJOR) for conv2d input."""
+    if tt_t.layout != ttnn.ROW_MAJOR_LAYOUT:
+        tt_t = ttnn.to_layout(tt_t, ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.reshape(tt_t, (1, 1, N, C))
+
+
+def _resconv(tt_x, w, prefix, ch, B, H, W, device):
+    """ResConvUnit on device: relu + 3x3 conv + relu + 3x3 conv + add residual."""
+    tt_relu = ttnn.relu(tt_x)
+    tt_c1 = _conv2d(tt_relu, w[f"{prefix}_c1_w"], w[f"{prefix}_c1_b"], ch, ch, B, H, W, k=3, padding=1, device=device)
+    tt_c1 = ttnn.relu(tt_c1)
+    tt_c2 = _conv2d(tt_c1, w[f"{prefix}_c2_w"], w[f"{prefix}_c2_b"], ch, ch, B, H, W, k=3, padding=1, device=device)
+    return ttnn.add(tt_x, tt_c2)
+
+
+def _flat_to_nhwc(tt_x, B, H, W, C):
+    """Conv2d output (1, 1, B*H*W, C) tile → upsample input (B, H, W, C) row-major."""
+    if tt_x.layout != ttnn.ROW_MAJOR_LAYOUT:
+        tt_x = ttnn.to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.reshape(tt_x, (B, H, W, C))
+
+
+def _nhwc_to_flat(tt_x, B, H, W, C):
+    """Upsample output (B, H, W, C) row-major sharded → conv2d input (1, 1, B*H*W, C)
+    interleaved tile. Goes through DRAM-interleaved to avoid shard tile-alignment errors.
+    """
+    if tt_x.is_sharded():
+        tt_x = ttnn.sharded_to_interleaved(tt_x, ttnn.DRAM_MEMORY_CONFIG)
+    tt_x = ttnn.reshape(tt_x, (1, 1, B * H * W, C))
+    if tt_x.layout != ttnn.TILE_LAYOUT:
+        tt_x = ttnn.to_layout(tt_x, ttnn.TILE_LAYOUT)
+    return tt_x
+
+
+def _ffb(tt_x, w, r: int, ch, B, H, W, device, skip=None):
+    """FeatureFusionBlock: optional skip branch's resConvUnit1, then resConvUnit2,
+    then bilinear upsample (×2), then 1×1 out_conv. Input/output in conv2d-flat form."""
+    if skip is not None:
+        tt_skip_proc = _resconv(skip, w, f"r{r}_u1", ch, B, H, W, device)
+        tt_x = ttnn.add(tt_x, tt_skip_proc)
+    tt_x = _resconv(tt_x, w, f"r{r}_u2", ch, B, H, W, device)
+    # Upsample requires NHWC 4D shape.
+    tt_x = _flat_to_nhwc(tt_x, B, H, W, ch)
+    tt_x = ttnn.upsample(tt_x, scale_factor=2, mode="bilinear")
+    H2, W2 = H * 2, W * 2
+    tt_x = _nhwc_to_flat(tt_x, B, H2, W2, ch)
+    tt_x = _linear_1x1(tt_x, w[f"r{r}_out_w"], w[f"r{r}_out_b"], B, H2, W2, ch, ch)
+    return tt_x
+
+
+def dpt_head_device(tt_feats_list, hw, state: dict, branch: int, device):
+    """Full DPT on TT device. Inputs are 4 device tensors (B, N, D) tile.
+    Returns a device tensor in NHWC flat shape (1, 1, B*H_img*W_img, 4).
+    """
+    H, W = hw
+    B = 1
+    N = H * W
+
+    cache_key = ("dpt", id(state), branch, id(device))
+    w = _DPT_DEVICE_CACHE.get(cache_key)
+    if w is None:
+        w = _preload_dpt_weights(state, branch, device)
+        _DPT_DEVICE_CACHE[cache_key] = w
+
+    # Reshape inputs to NHWC flat for conv2d.
+    f0 = _tokens_to_nhwc(tt_feats_list[0], B, N, 1024)  # enc tap
+    f1 = _tokens_to_nhwc(tt_feats_list[1], B, N, 768)
+    f2 = _tokens_to_nhwc(tt_feats_list[2], B, N, 768)
+    f3 = _tokens_to_nhwc(tt_feats_list[3], B, N, 768)
+
+    # ap0: 1024 -> 96 1x1 (linear), then ConvTranspose 4x4 stride 4 (96 -> 96).
+    l1 = _linear_1x1(f0, w["ap0_proj_w"], w["ap0_proj_b"], B, H, W, 1024, 96)
+    l1 = _conv_t2d(l1, w["ap0_up_w"], w["ap0_up_b"], 96, 96, B, H, W, k=4, stride=4, padding=0, device=device)
+    H1, W1 = H * 4, W * 4
+
+    # ap1: 768 -> 192 1x1, then ConvTranspose 2x2 stride 2 (192 -> 192).
+    l2 = _linear_1x1(f1, w["ap1_proj_w"], w["ap1_proj_b"], B, H, W, 768, 192)
+    l2 = _conv_t2d(l2, w["ap1_up_w"], w["ap1_up_b"], 192, 192, B, H, W, k=2, stride=2, padding=0, device=device)
+    H2, W2 = H * 2, W * 2
+
+    # ap2: 768 -> 384 1x1.
+    l3 = _linear_1x1(f2, w["ap2_proj_w"], w["ap2_proj_b"], B, H, W, 768, 384)
+
+    # ap3: 768 -> 768 1x1, then 768 -> 768 3x3 stride 2 padding 1.
+    l4 = _linear_1x1(f3, w["ap3_proj_w"], w["ap3_proj_b"], B, H, W, 768, 768)
+    l4 = _conv2d(l4, w["ap3_down_w"], w["ap3_down_b"], 768, 768, B, H, W, k=3, stride=2, padding=1, device=device)
+    H4, W4 = H // 2, W // 2
+
+    # layer_rn: scale to 256 channels, no bias.
+    l1 = _conv2d(l1, w["l1_rn_w"], None, 96, 256, B, H1, W1, k=3, padding=1, device=device)
+    l2 = _conv2d(l2, w["l2_rn_w"], None, 192, 256, B, H2, W2, k=3, padding=1, device=device)
+    l3 = _conv2d(l3, w["l3_rn_w"], None, 384, 256, B, H, W, k=3, padding=1, device=device)
+    l4 = _conv2d(l4, w["l4_rn_w"], None, 768, 256, B, H4, W4, k=3, padding=1, device=device)
+
+    # Refinenets (top-down).
+    p4 = _ffb(l4, w, 4, 256, B, H4, W4, device, skip=None)   # 16->32
+    p3 = _ffb(p4, w, 3, 256, B, H, W, device, skip=l3)       # 32->64
+    p2 = _ffb(p3, w, 2, 256, B, H2, W2, device, skip=l2)     # 64->128
+    p1 = _ffb(p2, w, 1, 256, B, H1, W1, device, skip=l1)     # 128->256
+
+    # head
+    p1_h, p1_w = H1 * 2, W1 * 2
+    x = _conv2d(p1, w["head0_w"], w["head0_b"], 256, 128, B, p1_h, p1_w, k=3, padding=1, device=device)
+    x = _flat_to_nhwc(x, B, p1_h, p1_w, 128)
+    x = ttnn.upsample(x, scale_factor=2, mode="bilinear")  # 256->512
+    Hh, Wh = p1_h * 2, p1_w * 2
+    x = _nhwc_to_flat(x, B, Hh, Wh, 128)
+    x = _conv2d(x, w["head2_w"], w["head2_b"], 128, 128, B, Hh, Wh, k=3, padding=1, device=device)
+    x = ttnn.relu(x)
+    x = _linear_1x1(x, w["head4_w"], w["head4_b"], B, Hh, Wh, 128, 4)
+    return x  # NHWC flat (1, 1, B*Hh*Wh, 4)
