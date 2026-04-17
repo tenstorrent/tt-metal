@@ -70,6 +70,7 @@ struct MeshWorkloadRuntimeEntry {
     runtimeId @1 :UInt64;
     operationName @2 :Text;
     operationParameters @3 :Text;
+    traced @4 :Bool;
 }
 
 # Build environment info for a specific device

@@ -367,7 +367,8 @@ void Inspector::emit_debug_entry(
     const distributed::MeshWorkloadImpl* mesh_workload,
     uint64_t runtime_id,
     std::string_view operation_name,
-    std::vector<TensorSpec> tensor_specs) noexcept {
+    std::vector<TensorSpec> tensor_specs,
+    std::optional<distributed::MeshTraceId> trace_id) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -377,6 +378,19 @@ void Inspector::emit_debug_entry(
         return;
     }
     try {
+        if (trace_id.has_value()) {
+            // Trace-capture path: route into the per-trace bucket so the entry survives until release_trace.
+            std::lock_guard<std::mutex> lock(data->trace_runtime_entries_mutex);
+            auto& bucket = data->trace_runtime_entries[*trace_id];
+            auto& slot = bucket.emplace_back();
+            slot.workload_id = mesh_workload->get_id();
+            slot.runtime_id = runtime_id;
+            slot.operation_name = operation_name;
+            slot.tensor_specs = std::move(tensor_specs);
+            slot.traced = true;
+            return;
+        }
+
         std::lock_guard<std::mutex> lock(data->runtime_entries_mutex);
         auto pos = data->runtime_entries_write_pos;
         auto& slot = data->runtime_entries[pos % inspector::Data::kRuntimeEntriesCapacity];
@@ -384,6 +398,7 @@ void Inspector::emit_debug_entry(
         slot.runtime_id = runtime_id;
         slot.operation_name = operation_name;
         slot.tensor_specs = std::move(tensor_specs);
+        slot.traced = false;
         if (pos == 2 * inspector::Data::kRuntimeEntriesCapacity) {
             data->runtime_entries_write_pos = inspector::Data::kRuntimeEntriesCapacity + 1;
         } else {
@@ -395,6 +410,22 @@ void Inspector::emit_debug_entry(
         }
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to emit debug entry: {}", e.what());
+    }
+}
+
+void Inspector::release_trace(distributed::MeshTraceId trace_id) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(data->trace_runtime_entries_mutex);
+        data->trace_runtime_entries.erase(trace_id);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to release trace runtime entries: {}", e.what());
     }
 }
 
@@ -563,8 +594,14 @@ void EmitMeshWorkloadDebugEntry(
     tt::tt_metal::distributed::MeshWorkload& workload,
     uint64_t runtime_id,
     std::string_view operation_name,
-    std::vector<TensorSpec> tensor_specs) {
-    tt::tt_metal::Inspector::emit_debug_entry(&workload.impl(), runtime_id, operation_name, std::move(tensor_specs));
+    std::vector<TensorSpec> tensor_specs,
+    std::optional<tt::tt_metal::distributed::MeshTraceId> trace_id) {
+    tt::tt_metal::Inspector::emit_debug_entry(
+        &workload.impl(), runtime_id, operation_name, std::move(tensor_specs), trace_id);
+}
+
+void ReleaseTraceDebugEntries(tt::tt_metal::distributed::MeshTraceId trace_id) {
+    tt::tt_metal::Inspector::release_trace(trace_id);
 }
 
 }  // namespace experimental::inspector

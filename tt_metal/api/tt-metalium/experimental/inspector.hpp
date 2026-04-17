@@ -5,9 +5,11 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <vector>
 
+#include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 
@@ -24,6 +26,10 @@ void EmitMeshWorkloadDebugEntry(
     tt::tt_metal::distributed::MeshWorkload& workload,
     uint64_t runtime_id,
     std::string_view operation_name,
-    std::vector<TensorSpec> tensor_specs);
+    std::vector<TensorSpec> tensor_specs,
+    std::optional<tt::tt_metal::distributed::MeshTraceId> trace_id = std::nullopt);
+
+// Drops the per-trace runtime-entry bucket. Called at trace release time.
+void ReleaseTraceDebugEntries(tt::tt_metal::distributed::MeshTraceId trace_id);
 
 }  // namespace tt::tt_metal::experimental::inspector

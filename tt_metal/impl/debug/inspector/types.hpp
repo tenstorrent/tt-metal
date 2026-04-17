@@ -59,6 +59,7 @@ struct MeshWorkloadRuntimeEntry {
     uint64_t runtime_id = 0;
     std::string_view operation_name;
     std::vector<TensorSpec> tensor_specs;
+    bool traced = false;
 };
 
 std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs);
