@@ -116,7 +116,17 @@ static bool run_matmul_reduce_inplace_test(
     auto out_dram = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = dram_size_out}, lc_out, mesh_device.get());
 
-    // CBs: c_0 (in_out), c_1 (col-ident, 1 tile), c_16 (out-copy)
+    // CBs:
+    //   c_0  (in_out)   — compute-owned in/out CB for the reduce (double-buffered)
+    //   c_1  (col-ident) — single column-identity tile
+    //   c_2  (staging)  — reader-produced input; compute copies to c_0 to
+    //                     establish compute ownership before matmul_reduce_inplace
+    //   c_16 (out-copy) — reduced output for the writer to drain
+    //
+    // c_2 is necessary because matmul_reduce_inplace requires in_out_cb to be
+    // compute-produced. If the reader fills c_0 directly, T2's tiles_received
+    // shadow for c_0 starts at 0 while L1's counter is already 1; T2's push-back
+    // then writes 1 to L1 (instead of 2), causing cb_wait_front to deadlock.
     uint32_t c0_tiles = total_tiles * 2;  // double-buffered
     CircularBufferConfig cb0_cfg = CircularBufferConfig(c0_tiles * single_tile_size, {{CBIndex::c_0, cb_data_format}})
                                        .set_page_size(CBIndex::c_0, single_tile_size);
@@ -126,13 +136,19 @@ static bool run_matmul_reduce_inplace_test(
                                        .set_page_size(CBIndex::c_1, single_tile_size);
     CreateCircularBuffer(program, core, cb1_cfg);
 
+    // c_2: reader staging CB (reader pushes here, compute consumes and copies to c_0)
+    uint32_t c2_tiles = total_tiles * 2;
+    CircularBufferConfig cb2_cfg = CircularBufferConfig(c2_tiles * single_tile_size, {{CBIndex::c_2, cb_data_format}})
+                                       .set_page_size(CBIndex::c_2, single_tile_size);
+    CreateCircularBuffer(program, core, cb2_cfg);
+
     uint32_t c16_tiles = total_tiles * 2;
     CircularBufferConfig cb16_cfg =
         CircularBufferConfig(c16_tiles * single_tile_size, {{CBIndex::c_16, cb_data_format}})
             .set_page_size(CBIndex::c_16, single_tile_size);
     CreateCircularBuffer(program, core, cb16_cfg);
 
-    // Reader: feeds c_0 (total_tiles) from DRAM then pushes col-ident into c_1.
+    // Reader: feeds c_2 (staging, total_tiles) from DRAM then pushes col-ident into c_1.
     // We use a lightweight inline reader kernel — generate a custom one.
     auto reader_id = CreateKernel(
         program,
