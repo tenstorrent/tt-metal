@@ -138,7 +138,7 @@ class QwenImageEditPipeline:
       - Takes an input image that is encoded through the VAE
       - Images are also passed to the VL encoder for cross-modal conditioning
       - Noise latents are concatenated with image latents along the sequence dimension
-      - Supports true classifier-free guidance with norm preservation
+      - Supports true classifier-free guidance
     """
 
     def __init__(
