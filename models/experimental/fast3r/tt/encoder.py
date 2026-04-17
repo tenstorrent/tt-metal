@@ -90,7 +90,7 @@ class TtEncoderAttention:
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         qkv = ttnn.linear(
             x, self.qkv_w, bias=self.qkv_b,
-            core_grid=TtMlp.CORE_GRID, compute_kernel_config=TtMlp.COMPUTE,
+            core_grid=TtMlp.CORE_GRID, compute_kernel_config=TtAttention.QKV_COMPUTE,
             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b,
         )
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(

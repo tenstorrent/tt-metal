@@ -19,6 +19,12 @@ from .mlp import TtMlp, to_device_bias, to_device_weight
 class TtAttention:
     CORE_GRID = TtMlp.CORE_GRID
     COMPUTE = TtMlp.COMPUTE
+    QKV_COMPUTE = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
     SDPA_PROG = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
         q_chunk_size=64,
@@ -44,7 +50,7 @@ class TtAttention:
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         qkv = ttnn.linear(
             x, self.qkv_w, bias=self.qkv_b,
-            core_grid=self.CORE_GRID, compute_kernel_config=self.COMPUTE,
+            core_grid=self.CORE_GRID, compute_kernel_config=self.QKV_COMPUTE,
             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b,
         )
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
