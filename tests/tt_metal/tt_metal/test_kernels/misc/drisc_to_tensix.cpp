@@ -12,8 +12,8 @@
 #include "experimental/core_local_mem.h"
 
 void kernel_main() {
-    constexpr uint32_t tensix_l1_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t dram_l1_addr = get_compile_time_arg_val(1);
+    constexpr uint32_t tensix_l1_src_addr = get_compile_time_arg_val(0);
+    constexpr uint32_t drisc_l1_dst_addr = get_compile_time_arg_val(1);
     constexpr uint32_t tensix_noc_x = get_compile_time_arg_val(2);
     constexpr uint32_t tensix_noc_y = get_compile_time_arg_val(3);
 
@@ -21,10 +21,10 @@ void kernel_main() {
     // we need to configure DRISC's NIU into stream mode from default NOC2AXI mode
     drisc_set_stream_mode();
     experimental::Noc noc;
-    experimental::CoreLocalMem<uint32_t> dst(dram_l1_addr);
+    experimental::CoreLocalMem<uint32_t> dst(drisc_l1_dst_addr);
     experimental::UnicastEndpoint src;
     noc.async_read(
-        src, dst, sizeof(uint32_t), {.noc_x = tensix_noc_x, .noc_y = tensix_noc_y, .addr = tensix_l1_addr}, {});
+        src, dst, sizeof(uint32_t), {.noc_x = tensix_noc_x, .noc_y = tensix_noc_y, .addr = tensix_l1_src_addr}, {});
 
     noc.async_read_barrier();
 }
