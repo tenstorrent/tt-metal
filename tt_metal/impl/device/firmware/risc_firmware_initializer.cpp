@@ -232,9 +232,24 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             }
         }
         // Set internal routing to false to exit active ethernet FW & go back to base FW
-        // Must be last
+        // Must be last. Wrapping in try/catch: on a machine with dead ERISC relays the
+        // underlying wait_for_non_mmio_flush() can throw UmdException<RuntimeError>
+        // ("Timeout waiting for Ethernet core service remote IO request flush").
+        // UmdException does not inherit from std::exception, so catch(...) is required.
         if (get_control_plane_) {
-            cluster_.set_internal_routing_info_for_ethernet_cores(this->get_control_plane_(), false);
+            try {
+                cluster_.set_internal_routing_info_for_ethernet_cores(this->get_control_plane_(), false);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogAlways,
+                    "teardown: set_internal_routing_info_for_ethernet_cores failed: {}",
+                    e.what());
+            } catch (...) {
+                log_warning(
+                    tt::LogAlways,
+                    "teardown: set_internal_routing_info_for_ethernet_cores failed with unknown exception type "
+                    "(likely UmdException<RuntimeError> from dead ERISC relay on remote chip)");
+            }
         }
     }
 
