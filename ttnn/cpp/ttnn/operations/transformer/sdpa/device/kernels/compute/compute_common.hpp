@@ -1656,6 +1656,9 @@ void sdpa_inner_loop(
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
 
+    constexpr bool c_skip_compute = false;  // Profiling the data movement and synchronization overhead of the loop
+                                            // without compute to find bottlenecks.
+
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
         uint32_t q_low_idx;
         uint32_t q_high_idx;
@@ -1734,6 +1737,16 @@ void sdpa_inner_loop(
             }
 
             KV_chunks_processed_in_iter++;
+
+            if constexpr (c_skip_compute) {
+                // Even when skipping compute, we still need to perform the waits and pops to get an accurate measure of
+                // the loop overhead.
+                cb_wait_front(cb_k_in, k_chunk_tiles);
+                cb_wait_front(cb_v_in, v_chunk_tiles);
+                cb_pop_front(cb_k_in, k_chunk_tiles);
+                cb_pop_front(cb_v_in, v_chunk_tiles);
+                continue;
+            }
 
             if (sdpa_type == RING && k_chunk >= q_high_idx && is_causal) {
                 cb_wait_front(cb_k_in, k_chunk_tiles);
@@ -1900,6 +1913,15 @@ void sdpa_inner_loop(
             std::swap(alias_prev_max, alias_cur_max);
 
             processed_k_chunks++;
+        }
+
+        // When q_per_core == 1, Q is identical across ring iterations so we keep it
+        // fronted in the CB and only pop on the last iteration to avoid redundant DRAM re-reads.
+        if constexpr (c_skip_compute) {
+            if (q_per_core > 1 || is_last_ring_iter) {
+                cb_pop_front(cb_q_in, q_chunk_tiles);
+            }
+            continue;
         }
 
         /**

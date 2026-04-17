@@ -420,8 +420,15 @@ void kernel_main() {
     constexpr bool c_profile_skip_ring_iter_0 = false;  // Set true to skip iter 0 (run only iter 1+)
     constexpr bool c_profile_only_ring_iter_0 = false;  // Set true to keep only iter 0 (skip iter 1+)
 
+    // Profiling: Set true to skip all compute (run full ring loop with only synchronization and DRAM ops)
+    constexpr bool c_skip_compute = false;
+
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+
+        if (c_skip_compute) {
+            continue;
+        }
 
         // Profiling: skip iterations based on profiling mode (after sync to maintain device coordination)
         if constexpr (c_profile_skip_ring_iter_0) {
