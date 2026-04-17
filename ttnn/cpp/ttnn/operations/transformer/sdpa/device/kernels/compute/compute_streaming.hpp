@@ -1425,6 +1425,10 @@ void sdpa_ring_v2(
     const uint32_t joint_n_sbw = lw_mask.joint_n_padded_tiles
                                      ? largest_factor_le(Sk_chunk_t - lw_mask.joint_n_padded_tiles, qkt_subblock_w)
                                      : full_sbw;
+    const uint32_t straddle_sbw =
+        lw_mask.straddle_num_padded_tiles
+            ? largest_factor_le(Sk_chunk_t - lw_mask.straddle_num_padded_tiles, qkt_subblock_w)
+            : full_sbw;
 
     uint32_t KV_chunks_processed_in_iter = 0;
 
@@ -1561,6 +1565,11 @@ void sdpa_ring_v2(
             const bool is_local_n_mask_chunk = local_n_needs_masking && k_chunk == local_n_mask_chunk_id;
             const bool is_joint_n_mask_chunk = ring_iter_needs_joint_n_mask && kv_chunk_is_joint &&
                                                (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id;
+            // Straddle chunk (rix > rid balanced-causal with k_chunk_size ∤ coarse_chunk_size):
+            // only the early-half columns attend; late-half columns must be dropped. Narrow
+            // active_Sk like local_n; no partial-tile stamp needed for tile-aligned straddle.
+            const bool is_straddle_mask_chunk =
+                lw_mask.straddle_num_padded_tiles > 0 && k_chunk == lw_mask.straddle_mask_chunk_id;
 
             bool apply_mask = is_global_n_mask_chunk || is_joint_n_mask_chunk;
 
@@ -1590,6 +1599,9 @@ void sdpa_ring_v2(
             } else if (is_joint_n_mask_chunk) {
                 active_Sk_param = Sk_chunk_t - lw_mask.joint_n_padded_tiles;
                 chunk_sbw = joint_n_sbw;
+            } else if (is_straddle_mask_chunk) {
+                active_Sk_param = Sk_chunk_t - lw_mask.straddle_num_padded_tiles;
+                chunk_sbw = straddle_sbw;
             }
 
             // On last K-chunk of non-last ring iters (multi-Q), redirect output, sum, and max
