@@ -67,6 +67,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     tt::DataFormat output_data_format,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    bool row_broadcast_bias,
     CoreCoord sub_device_start_core = {0, 0}) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
@@ -846,6 +847,9 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         false,         // get_batch_from_reader
         in0_transpose_tile,
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
+    }
 
     // Create compute kernel
     // bool fp32_dest_acc_en = true;
@@ -1620,6 +1624,8 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
+    const bool row_broadcast_bias = operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias);
+
     tt_metal::IDevice* device = a.device();
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
@@ -1763,6 +1769,7 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
         output_data_format,
         untilize_out,
         fused_op_signaler,
+        row_broadcast_bias,
         sub_device_start_core);
 }
 

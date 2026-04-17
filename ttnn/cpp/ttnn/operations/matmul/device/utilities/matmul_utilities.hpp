@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -17,6 +18,24 @@ namespace ttnn::operations::matmul::utilities {
 // 2 = double buffer, 3 = triple buffer, etc.
 // Allows easily changing buffering strategy in one place for relevant factories.
 constexpr uint32_t MCAST_INPUT_BUFFERING_DEPTH = 2;
+
+/**
+ * @brief True when fused matmul bias add can use the row-broadcast kernel path.
+ *
+ * Broadcast applies when there is no distinct row axis (rank < 2, e.g. vector bias) or the
+ * logical row dimension is 1 (shape[-2] == 1, e.g. [..., 1, N]). Otherwise the bias has multiple
+ * logical rows and the fused kernel must use elementwise add_tiles.
+ */
+inline bool fused_matmul_bias_row_broadcastable(const std::optional<const Tensor>& bias) {
+    if (!bias.has_value()) {
+        return false;
+    }
+    const auto& shape = bias->logical_shape();
+    if (shape.rank() < 2) {
+        return true;
+    }
+    return shape[-2] == 1;
+}
 
 uint32_t get_estimated_size_of_cbs(
     uint32_t per_core_M,

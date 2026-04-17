@@ -15,12 +15,15 @@
 #include "api/compute/bcast.h"
 #endif
 
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
 // when making any changes to this file.
 // Have to keep a copy because cannot import ttnn into tests/tt_metal.
+// With FUSE_BIAS: row_broadcast_bias (row-broadcast vs elementwise add_tiles) is compile-time arg 18 here;
+// the perf copy uses index 14 (different compile-time arg layout).
 
 /**
  * @brief Transposes a block of tiles from one circular buffer to another.
@@ -196,6 +199,8 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = get_named_compile_time_arg_val("cb_bias");
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
+    // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
+    constexpr bool row_broadcast_bias = (bool)get_compile_time_arg_val(18);
     experimental::CircularBuffer bias_cb(bias_cb_id);
 #else
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
@@ -433,10 +438,12 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-
                 reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
-                add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
-                // reconfigure unpacker df for src B
+                if constexpr (row_broadcast_bias) {
+                    add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
+                } else {
+                    add_tiles_init(mm_partials_cb_id, bias_cb_id);
+                }
                 bias_cb.wait_front(in1_block_w);
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     int in1_index_subblock_offset = 0;
@@ -445,10 +452,14 @@ void kernel_main() {
                         mm_partials_cb.wait_front(out_subblock_num_tiles);
                         tile_regs_acquire();
                         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
-                            uint32_t bcast_tile_idx = in1_index_subblock_offset;
+                            uint32_t bias_tile_idx = in1_index_subblock_offset;
                             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
-                                add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bcast_tile_idx, i);
-                                bcast_tile_idx++;
+                                if constexpr (row_broadcast_bias) {
+                                    add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bias_tile_idx, i);
+                                } else {
+                                    add_tiles(mm_partials_cb_id, bias_cb_id, i, bias_tile_idx, i);
+                                }
+                                bias_tile_idx++;
                             }
                         }
 // if there's no SFPU fusion, we commit the regs so packer can start packing
