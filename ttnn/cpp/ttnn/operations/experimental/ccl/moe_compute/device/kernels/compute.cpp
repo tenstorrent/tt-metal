@@ -99,8 +99,8 @@ void kernel_main() {
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;  // reuse cb_r2c_w0_w1
 
     // Constants for MoE
-    constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
-    constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
+    constexpr uint32_t num_w0_w1_tiles_h = config_t::NUM_W0_W1_TILES_H;
+    constexpr uint32_t num_w2_tiles_h = config_t::NUM_W2_TILES_H;
 
     const uint32_t num_w0_w1_tiles_w = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][0];
     const uint32_t num_w2_tiles_w = config_t::W2_TILES_PER_CORE[ring_core_id];
@@ -122,11 +122,15 @@ void kernel_main() {
             // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
 
     // W2 reading constants
+    constexpr auto w2_tiles_per_iter_w = moe_ring::W2_TILES_PER_A2A_ITER_W;
+    constexpr auto w2_tiles_per_expert_w = config_t::W2_TILES_PER_EXPERT_W;
+    constexpr uint32_t w2_subblock_rem_idx = config_t::W2_SUBBLOCK_REM * w2_tiles_per_iter_w;
     constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
     constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
     constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
-    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 5 / 2 = 10
+    constexpr uint32_t w2_blocks_per_a2a_iter =
+        moe_ring::W2_TILES_PER_A2A_ITER_W * w2_txns_h / w2_txns_per_block;  // 4 * 5 / 2 = 10
     constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
 
     //-------------------------------------------------------------------------
@@ -194,7 +198,7 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            detail::pack_init_activation<activation_type>();
+            pack_init_activation<activation_type>();
 
             // Initialize matmul for W0
             mm_block_init(
@@ -273,12 +277,14 @@ void kernel_main() {
                 uint32_t in2_offset = 0, in2_index = 0;
 
                 tile_regs_acquire();
-                for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
+                for (uint32_t block_id = 0; block_id < w2_blocks_per_a2a_iter; ++block_id) {
                     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
 
-                    for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
+                    for (uint32_t k = 0; k < w2_tiles_per_block; k += w2_tiles_per_iter_w) {
                         // The last block has only 4 tiles of interest, so we exit early.
-                        if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
+
+                        // NUM_W2_TILES_H % W2_TILES_PER_A2A_ITER_H to figure out this remainder
+                        if ((block_id == (w2_blocks_per_a2a_iter - 1)) && (k == w2_subblock_rem_idx)) {
                             cb_pop_front(cb_w2c_rdy, 1);
                             break;
                         }
@@ -309,9 +315,10 @@ void kernel_main() {
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
+                pack_untilize_dest_init</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/w2_tiles_per_expert_w>(
+                    cb_c2s_out);
 
-                pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/20>(
+                pack_untilize_dest</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/w2_tiles_per_expert_w>(
                     cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
                 pack_untilize_uninit(cb_c2s_out);
 
