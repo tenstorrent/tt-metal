@@ -767,8 +767,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         sampling_logits = logits
         if logits.shape[2] != sampling_batch_size:
             if enable_trace:
-                raise ValueError(
-                    f"Device sampling trace requires logits batch {sampling_batch_size}, got {logits.shape[2]}"
+                enable_trace = False
+                logger.warning(
+                    f"Sampling tracing is disabled: Device sampling trace requires logits batch {sampling_batch_size}, got {logits.shape[2]}."
                 )
             if logits.shape[2] <= 0 or logits.shape[2] > sampling_batch_size:
                 raise ValueError(
