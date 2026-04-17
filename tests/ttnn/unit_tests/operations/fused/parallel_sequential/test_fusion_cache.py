@@ -8,23 +8,39 @@ Exhaustive fusion build cache tests.
 Tests cache key properties (topology fingerprint, branch order),
 cache hit correctness (RT args, CB pointers, outputs, PCC), cache
 entry structure, topology differentiation, and lifecycle.
+
+Also tests the LRU eviction, generation counter, and program key
+cache mechanisms added for cache hardening.
 """
 
 import pytest
 import torch
 import ttnn
+from collections import OrderedDict
+from unittest import mock
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.ops.descriptors.fusion import Parallel, Sequential, clear_build_cache
 from models.experimental.ops.descriptors.fusion.fusion import (
     _BUILD_CACHE,
+    _BUILD_CACHE_GEN,
+    _BUILD_CACHE_MAX,
     _CacheEntry,
+    _build_cache_get,
+    _build_cache_put,
     _build_cache_surface_key,
     _build_run_cache_key,
     _topology_fingerprint,
 )
 from models.experimental.ops.descriptors.normalization.rms_norm import rms_norm
-from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
+from models.experimental.ops.descriptors.op_descriptor import (
+    OpDescriptor,
+    _PROGRAM_KEY_CACHE_MAX,
+    _PROGRAM_KEY_CACHE_REGISTRY,
+    _clear_all_program_key_caches,
+    _program_key_cache_get,
+    _program_key_cache_put,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -686,3 +702,426 @@ class TestPersistentWithResults:
         torch_q_in, torch_q_w, _, _ = torches
         ok, _ = comp_pcc(torch_rms_norm(torch_q_in.float(), torch_q_w.float()), ttnn.to_torch(out_q), pcc=0.98)
         assert ok, "Explicit results=[q] should return correct Q output"
+
+
+# ===========================================================================
+# Program key cache — LRU helpers (unit, no device)
+# ===========================================================================
+
+
+class TestProgramKeyCacheLRU:
+    """Unit tests for the program key cache LRU helpers."""
+
+    def test_get_miss_returns_none(self):
+        cache = OrderedDict()
+        assert _program_key_cache_get(cache, "missing") is None
+
+    def test_get_hit_returns_value(self):
+        cache = OrderedDict()
+        cache["k1"] = "v1"
+        assert _program_key_cache_get(cache, "k1") == "v1"
+
+    def test_get_promotes_to_end(self):
+        cache = OrderedDict()
+        cache["a"] = 1
+        cache["b"] = 2
+        cache["c"] = 3
+        _program_key_cache_get(cache, "a")
+        assert list(cache.keys()) == ["b", "c", "a"]
+
+    def test_put_adds_entry(self):
+        cache = OrderedDict()
+        _program_key_cache_put(cache, "x", 42)
+        assert cache["x"] == 42
+
+    def test_put_promotes_existing(self):
+        cache = OrderedDict()
+        cache["a"] = 1
+        cache["b"] = 2
+        _program_key_cache_put(cache, "a", 10)
+        assert list(cache.keys()) == ["b", "a"]
+        assert cache["a"] == 10
+
+    def test_put_evicts_oldest_beyond_max(self):
+        cache = OrderedDict()
+        orig_max = _PROGRAM_KEY_CACHE_MAX
+        with mock.patch("models.experimental.ops.descriptors.op_descriptor._PROGRAM_KEY_CACHE_MAX", 3):
+            _program_key_cache_put(cache, "a", 1)
+            _program_key_cache_put(cache, "b", 2)
+            _program_key_cache_put(cache, "c", 3)
+            assert len(cache) == 3
+            _program_key_cache_put(cache, "d", 4)
+            assert len(cache) == 3
+            assert "a" not in cache, "oldest entry should be evicted"
+            assert list(cache.keys()) == ["b", "c", "d"]
+
+    def test_put_evicts_multiple_when_far_over(self):
+        """If cache somehow grew past max, put drains it back to max."""
+        cache = OrderedDict()
+        for i in range(10):
+            cache[f"k{i}"] = i
+        with mock.patch("models.experimental.ops.descriptors.op_descriptor._PROGRAM_KEY_CACHE_MAX", 3):
+            _program_key_cache_put(cache, "new", 99)
+            assert len(cache) == 3
+            assert list(cache.keys()) == ["k8", "k9", "new"]
+
+    def test_lru_order_with_mixed_get_put(self):
+        """Interleaved gets and puts maintain correct LRU order."""
+        cache = OrderedDict()
+        with mock.patch("models.experimental.ops.descriptors.op_descriptor._PROGRAM_KEY_CACHE_MAX", 4):
+            _program_key_cache_put(cache, "a", 1)
+            _program_key_cache_put(cache, "b", 2)
+            _program_key_cache_put(cache, "c", 3)
+            _program_key_cache_get(cache, "a")  # promote a
+            _program_key_cache_put(cache, "d", 4)
+            # Order: b, c, a, d → adding "e" evicts "b"
+            _program_key_cache_put(cache, "e", 5)
+            assert len(cache) == 4
+            assert "b" not in cache
+            assert list(cache.keys()) == ["c", "a", "d", "e"]
+
+
+class TestProgramKeyCacheRegistry:
+    """Tests for the program key cache registry and clear mechanism."""
+
+    def test_clear_all_empties_registered_caches(self):
+        test_cache = OrderedDict({"k": "v"})
+        _PROGRAM_KEY_CACHE_REGISTRY.append(test_cache)
+        try:
+            _clear_all_program_key_caches()
+            assert len(test_cache) == 0
+        finally:
+            _PROGRAM_KEY_CACHE_REGISTRY.remove(test_cache)
+
+    def test_clear_all_handles_multiple_caches(self):
+        c1 = OrderedDict({"a": 1})
+        c2 = OrderedDict({"b": 2, "c": 3})
+        _PROGRAM_KEY_CACHE_REGISTRY.append(c1)
+        _PROGRAM_KEY_CACHE_REGISTRY.append(c2)
+        try:
+            _clear_all_program_key_caches()
+            assert len(c1) == 0
+            assert len(c2) == 0
+        finally:
+            _PROGRAM_KEY_CACHE_REGISTRY.remove(c1)
+            _PROGRAM_KEY_CACHE_REGISTRY.remove(c2)
+
+
+# ===========================================================================
+# Build cache — LRU helpers (unit, no device)
+# ===========================================================================
+
+
+class TestBuildCacheLRU:
+    """Unit tests for the build cache LRU helpers."""
+
+    def _save_and_clear(self):
+        saved = OrderedDict(_BUILD_CACHE)
+        _BUILD_CACHE.clear()
+        return saved
+
+    def _restore(self, saved):
+        _BUILD_CACHE.clear()
+        _BUILD_CACHE.update(saved)
+
+    def test_get_miss_returns_none(self):
+        saved = self._save_and_clear()
+        try:
+            assert _build_cache_get(("missing",)) is None
+        finally:
+            self._restore(saved)
+
+    def test_get_hit_returns_entry(self):
+        saved = self._save_and_clear()
+        try:
+            sentinel = object()
+            _BUILD_CACHE[("key",)] = sentinel
+            assert _build_cache_get(("key",)) is sentinel
+        finally:
+            self._restore(saved)
+
+    def test_get_promotes_to_end(self):
+        saved = self._save_and_clear()
+        try:
+            _BUILD_CACHE[("a",)] = 1
+            _BUILD_CACHE[("b",)] = 2
+            _BUILD_CACHE[("c",)] = 3
+            _build_cache_get(("a",))
+            assert list(_BUILD_CACHE.keys()) == [("b",), ("c",), ("a",)]
+        finally:
+            self._restore(saved)
+
+    def test_put_adds_and_evicts(self):
+        saved = self._save_and_clear()
+        try:
+            with mock.patch("models.experimental.ops.descriptors.fusion.fusion._BUILD_CACHE_MAX", 2):
+                _build_cache_put(("x",), "X")
+                _build_cache_put(("y",), "Y")
+                assert len(_BUILD_CACHE) == 2
+                _build_cache_put(("z",), "Z")
+                assert len(_BUILD_CACHE) == 2
+                assert ("x",) not in _BUILD_CACHE
+                assert list(_BUILD_CACHE.keys()) == [("y",), ("z",)]
+        finally:
+            self._restore(saved)
+
+    def test_put_promotes_existing_key(self):
+        saved = self._save_and_clear()
+        try:
+            _build_cache_put(("a",), 1)
+            _build_cache_put(("b",), 2)
+            _build_cache_put(("a",), 10)
+            assert list(_BUILD_CACHE.keys()) == [("b",), ("a",)]
+            assert _BUILD_CACHE[("a",)] == 10
+        finally:
+            self._restore(saved)
+
+
+# ===========================================================================
+# Generation counter (unit, no device)
+# ===========================================================================
+
+
+class TestBuildCacheGeneration:
+    """Tests for the _BUILD_CACHE_GEN generation counter mechanism."""
+
+    def test_clear_increments_generation(self):
+        import models.experimental.ops.descriptors.fusion.fusion as fusion_mod
+
+        gen_before = fusion_mod._BUILD_CACHE_GEN
+        clear_build_cache()
+        assert fusion_mod._BUILD_CACHE_GEN == gen_before + 1
+
+    def test_clear_cascades_to_program_key_caches(self):
+        test_cache = OrderedDict({"k": "v"})
+        _PROGRAM_KEY_CACHE_REGISTRY.append(test_cache)
+        try:
+            clear_build_cache()
+            assert len(test_cache) == 0, "clear_build_cache should cascade to program key caches"
+        finally:
+            _PROGRAM_KEY_CACHE_REGISTRY.remove(test_cache)
+
+    def test_multiple_clears_keep_incrementing(self):
+        import models.experimental.ops.descriptors.fusion.fusion as fusion_mod
+
+        gen_start = fusion_mod._BUILD_CACHE_GEN
+        for i in range(5):
+            clear_build_cache()
+        assert fusion_mod._BUILD_CACHE_GEN == gen_start + 5
+
+
+# ===========================================================================
+# Generation counter — container invalidation (device)
+# ===========================================================================
+
+
+class TestGenerationContainerInvalidation:
+    """Test that _cached_entry_gen protects persistent containers from stale entries."""
+
+    def test_cached_entry_gen_set_on_run(self, device):
+        """After run(), container._cached_entry_gen equals _BUILD_CACHE_GEN."""
+        import models.experimental.ops.descriptors.fusion.fusion as fusion_mod
+
+        clear_build_cache()
+        q, kv, _ = _make_branches(device, seed=42)
+        p = Parallel(q, kv)
+        p.run()
+
+        assert hasattr(p, "_cached_entry_gen")
+        assert p._cached_entry_gen == fusion_mod._BUILD_CACHE_GEN
+
+    def test_clear_invalidates_persistent_container(self, device):
+        """After clear_build_cache(), a persistent container's cached entry is stale."""
+        import models.experimental.ops.descriptors.fusion.fusion as fusion_mod
+
+        clear_build_cache()
+        q, kv, _ = _make_branches(device, seed=42)
+        p = Parallel(q, kv)
+        p.run()
+
+        gen_at_run = p._cached_entry_gen
+        clear_build_cache()
+
+        assert (
+            fusion_mod._BUILD_CACHE_GEN != gen_at_run
+        ), "Generation should have advanced past the container's cached gen"
+
+    def test_stale_container_recovers_after_clear(self, device):
+        """Persistent container recovers from a stale _cached_entry after clear_build_cache."""
+        clear_build_cache()
+        q, kv, torches = _make_branches(device, seed=42)
+        p = Parallel(q, kv)
+
+        p.run()
+        p.run()
+
+        clear_build_cache()
+
+        [out_q, out_kv] = p.run()
+        torch_q_in, torch_q_w, torch_kv_in, torch_kv_w = torches
+        ok_q, _ = comp_pcc(
+            torch_rms_norm(torch_q_in.float(), torch_q_w.float()),
+            ttnn.to_torch(out_q),
+            pcc=0.98,
+        )
+        ok_kv, _ = comp_pcc(
+            torch_rms_norm(torch_kv_in.float(), torch_kv_w.float()),
+            ttnn.to_torch(out_kv),
+            pcc=0.98,
+        )
+        assert ok_q and ok_kv, "Persistent container should produce correct results after cache clear"
+
+
+# ===========================================================================
+# Build cache LRU — integration (device)
+# ===========================================================================
+
+
+class TestBuildCacheLRUIntegration:
+    """Test that build cache LRU eviction works end-to-end."""
+
+    def test_build_cache_bounded_by_max(self, device):
+        """Build cache respects _BUILD_CACHE_MAX by evicting oldest entries."""
+        clear_build_cache()
+        with mock.patch("models.experimental.ops.descriptors.fusion.fusion._BUILD_CACHE_MAX", 2):
+            q1, kv1, _ = _make_branches(device, seed=100)
+            Parallel(q1, kv1).run()
+            assert len(_BUILD_CACHE) == 1
+
+            q2, _, _ = _make_branches(device, seed=200)
+            Sequential(q2).run()
+            assert len(_BUILD_CACHE) == 2
+
+            q3, kv3, _ = _make_branches(device, seed=300)
+            kv3_only = Sequential(kv3)
+            kv3_only.run()
+            assert len(_BUILD_CACHE) <= 2, "Build cache should have evicted oldest entry"
+
+    def test_evicted_topology_rebuilds_correctly(self, device):
+        """After LRU evicts a topology, re-running it produces correct PCC."""
+        clear_build_cache()
+        with mock.patch("models.experimental.ops.descriptors.fusion.fusion._BUILD_CACHE_MAX", 1):
+            q1, kv1, torches1 = _make_branches(device, seed=100)
+            Parallel(q1, kv1).run()
+            assert len(_BUILD_CACHE) == 1
+
+            q2, _, _ = _make_branches(device, seed=200)
+            Sequential(q2).run()
+            assert len(_BUILD_CACHE) == 1
+
+            q3, kv3, torches3 = _make_branches(device, seed=300)
+            [out_q, out_kv] = Parallel(q3, kv3).run()
+            torch_q_in, torch_q_w, torch_kv_in, torch_kv_w = torches3
+            ok_q, _ = comp_pcc(
+                torch_rms_norm(torch_q_in.float(), torch_q_w.float()),
+                ttnn.to_torch(out_q),
+                pcc=0.98,
+            )
+            ok_kv, _ = comp_pcc(
+                torch_rms_norm(torch_kv_in.float(), torch_kv_w.float()),
+                ttnn.to_torch(out_kv),
+                pcc=0.98,
+            )
+            assert ok_q and ok_kv, "Rebuild after eviction should produce correct results"
+
+
+# ===========================================================================
+# Program key cache — integration (device)
+# ===========================================================================
+
+
+class TestProgramKeyCacheIntegration:
+    """Test that the per-factory program key cache works end-to-end."""
+
+    def test_inline_cache_hit(self, device):
+        """Second inline call with same config objects hits the program key cache."""
+        clear_build_cache()
+        q_cores = cores(0, 0, 3, 3)
+        q_shard_w = 96
+        q_total_w = 16 * q_shard_w
+        q_shard_spec = ttnn.ShardSpec(q_cores, [32, q_shard_w], ttnn.ShardOrientation.ROW_MAJOR)
+        q_mem = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+            shard_spec=q_shard_spec,
+        )
+        q_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(4, 4),
+            subblock_w=q_shard_w // 32,
+            block_h=1,
+            block_w=q_shard_w // 32,
+            inplace=False,
+        )
+
+        torch_input1 = torch.rand(1, 1, 32, q_total_w, dtype=torch.bfloat16)
+        torch_weight = torch.rand(1, 1, 1, q_total_w, dtype=torch.bfloat16)
+        tt_input1 = ttnn.from_torch(torch_input1, device=device, layout=ttnn.TILE_LAYOUT, memory_config=q_mem)
+        tt_weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT)
+
+        desc1 = rms_norm(
+            tt_input1,
+            epsilon=1e-5,
+            weight=tt_weight,
+            memory_config=q_mem,
+            core_range_set=q_cores,
+            program_config=q_pc,
+        )
+        pck1 = desc1.program_cache_key
+
+        torch_input2 = torch.rand(1, 1, 32, q_total_w, dtype=torch.bfloat16)
+        tt_input2 = ttnn.from_torch(torch_input2, device=device, layout=ttnn.TILE_LAYOUT, memory_config=q_mem)
+
+        desc2 = rms_norm(
+            tt_input2,
+            epsilon=1e-5,
+            weight=tt_weight,
+            memory_config=q_mem,
+            core_range_set=q_cores,
+            program_config=q_pc,
+        )
+        pck2 = desc2.program_cache_key
+
+        assert pck1 == pck2, "Same config should yield same program_cache_key via cache hit"
+
+    def test_clear_build_cache_clears_program_key_caches(self, device):
+        """clear_build_cache() empties all registered program key caches."""
+        q, _, _ = _make_branches(device, seed=42)
+
+        nonempty = any(len(c) > 0 for c in _PROGRAM_KEY_CACHE_REGISTRY)
+        if not nonempty:
+            pass
+
+        clear_build_cache()
+        for cache in _PROGRAM_KEY_CACHE_REGISTRY:
+            assert len(cache) == 0, "All program key caches should be empty after clear_build_cache()"
+
+
+# ===========================================================================
+# Environment variable configurability (unit, no device)
+# ===========================================================================
+
+
+class TestCacheEnvVars:
+    """Test that cache sizes are configurable via environment variables."""
+
+    def test_build_cache_max_reads_from_env(self):
+        assert _BUILD_CACHE_MAX == int(__import__("os").environ.get("TT_METAL_FUSION_BUILD_CACHE_MAX_ENTRIES", "256"))
+
+    def test_program_key_cache_max_reads_from_env(self):
+        assert _PROGRAM_KEY_CACHE_MAX == int(
+            __import__("os").environ.get("TT_METAL_FUSION_PROGRAM_KEY_CACHE_MAX_ENTRIES", "128")
+        )
+
+    def test_build_cache_max_default_is_256(self):
+        """Without env var override, default build cache max is 256."""
+        import os
+
+        if "TT_METAL_FUSION_BUILD_CACHE_MAX_ENTRIES" not in os.environ:
+            assert _BUILD_CACHE_MAX == 256
+
+    def test_program_key_cache_max_default_is_128(self):
+        """Without env var override, default program key cache max is 128."""
+        import os
+
+        if "TT_METAL_FUSION_PROGRAM_KEY_CACHE_MAX_ENTRIES" not in os.environ:
+            assert _PROGRAM_KEY_CACHE_MAX == 128

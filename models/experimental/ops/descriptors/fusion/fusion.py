@@ -8,9 +8,11 @@ High-Level Fusion API: Sequential and Parallel.
 Fused execution uses ``fusion_dispatch_op`` so the device program cache can patch
 only tensor-address slots on repeat launches.
 
-**Fusion build cache** (``_BUILD_CACHE``): collision-free tuple key
-``(container kind, tree shape, branch program_cache_key / descriptor hash)``.
-Cache lookup never accesses :attr:`OpDescriptor.descriptor`.
+**Fusion build cache** (``_BUILD_CACHE``): LRU-bounded ``OrderedDict`` with
+collision-free tuple key ``(container kind, tree shape, branch
+program_cache_key / descriptor hash)``.  Max entries controlled by
+``TT_METAL_FUSION_BUILD_CACHE_MAX_ENTRIES`` (default 256).  Cache lookup
+never accesses :attr:`OpDescriptor.descriptor`.
 
 The cache stores only the fused ``ProgramDescriptor``, semaphores, kernel labels,
 and an output-source map — **no IO tensors**. On a cache hit, a fresh
@@ -22,6 +24,12 @@ else Python ``id`` of the device object) from ``build(device=...)`` or inferred
 from branch tensors, so entries never cross different open meshes — required
 because the device program cache behind ``fusion_dispatch_op`` is tied to a
 specific mesh.
+
+**Generation counter** (``_BUILD_CACHE_GEN``): monotonically incremented by
+:func:`clear_build_cache`.  Each persistent container stores
+``_cached_entry_gen`` alongside ``_cached_entry``; the hot path in
+:func:`_container_run` checks the generation before using the cached entry,
+falling through to the cache lookup / cold path when stale.
 
 **Steady state:** each ``build()`` call creates new branch descriptors (cheap:
 params + hash, no factory), gets a cache hit (reuses the fused
@@ -43,27 +51,43 @@ containers (new each call) always use the lightweight warm path (3-arg
 
 import os
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import ttnn
 
-from models.experimental.ops.descriptors.op_descriptor import OpDescriptor, _DeferredOutput, is_op_descriptor
+from models.experimental.ops.descriptors.op_descriptor import (
+    OpDescriptor,
+    _DeferredOutput,
+    _clear_all_program_key_caches,
+    is_op_descriptor,
+)
 from models.experimental.ops.descriptors.fusion.common import (
     _get_risc_type,
 )
 
 
 # =============================================================================
-# Fusion Build Cache
+# Fusion Build Cache — LRU-bounded
 # =============================================================================
 
-# Fused ``ProgramDescriptor`` + metadata, keyed by fusion cache key (collision-free tuple).
-# No IO tensor objects are stored.  The cached descriptor's buffer addresses and
-# pointers may go stale between launches; ``address_slots`` (an opaque C++ object)
-# ensures they are always refreshed from live IO tensors before any C++ code
-# dereferences them (see ``fusion_dispatch_op`` / ``patch_stale_descriptor``).
-_BUILD_CACHE: Dict[tuple, "_CacheEntry"] = {}
+_BUILD_CACHE: OrderedDict[tuple, "_CacheEntry"] = OrderedDict()
+_BUILD_CACHE_MAX = int(os.environ.get("TT_METAL_FUSION_BUILD_CACHE_MAX_ENTRIES", "256"))
+
+
+def _build_cache_get(key):
+    entry = _BUILD_CACHE.get(key)
+    if entry is not None:
+        _BUILD_CACHE.move_to_end(key)
+    return entry
+
+
+def _build_cache_put(key, entry):
+    _BUILD_CACHE[key] = entry
+    _BUILD_CACHE.move_to_end(key)
+    while len(_BUILD_CACHE) > _BUILD_CACHE_MAX:
+        _BUILD_CACHE.popitem(last=False)
 
 
 @dataclass
@@ -341,9 +365,15 @@ def _fused_op_from_cache_entry(entry: _CacheEntry, ops: List) -> "FusedOp":
     )
 
 
+_BUILD_CACHE_GEN: int = 0
+
+
 def clear_build_cache() -> None:
-    """Clear the fusion build cache."""
+    """Clear the fusion build cache, increment the generation counter, and clear all program key caches."""
+    global _BUILD_CACHE_GEN
     _BUILD_CACHE.clear()
+    _BUILD_CACHE_GEN += 1
+    _clear_all_program_key_caches()
 
 
 def _default_results(items) -> List:
@@ -496,19 +526,26 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
     **Persistent hot path** (call 2+ on the same container): ``_cached_entry``
     points to the shared ``_CacheEntry`` whose ``dispatch_state`` allocates
     ephemeral outputs, patches, and dispatches in C++.  Skips cache-key
-    computation entirely.  After dispatch, updated activation slots are cleared
-    (zero L1 pinning between calls).
+    computation entirely.  Guarded by ``_cached_entry_gen == _BUILD_CACHE_GEN``
+    so that ``clear_build_cache()`` invalidates stale entries without
+    needing to track live containers.  After dispatch, updated activation
+    slots are cleared (zero L1 pinning between calls).
 
     **Inline warm path** (cache hit, first call on this container instance):
     computes the cache key from ``container._topo_fp`` and
     ``container._cached_ops``.  On hit, dispatches via ``dispatch_state``
-    and sets ``_cached_entry`` for subsequent hot-path calls.
+    and sets ``_cached_entry`` (+ ``_cached_entry_gen``) for subsequent
+    hot-path calls.
 
     **Cold path** (cache miss): full ``build()`` + ``launch()``.
     """
     # ── Persistent hot path ──
     entry = getattr(container, "_cached_entry", None)
-    if entry is not None and entry.dispatch_state is not None:
+    if (
+        entry is not None
+        and entry.dispatch_state is not None
+        and getattr(container, "_cached_entry_gen", -1) == _BUILD_CACHE_GEN
+    ):
         inputs = _gather_inputs(container._cached_ops)
         outputs = entry.dispatch_state.dispatch(inputs)
         _cleanup_persistent_ops(container._cached_ops)
@@ -518,12 +555,13 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
     ops = container._cached_ops
     cache_key = _build_run_cache_key(container, ops, device)
 
-    entry = _BUILD_CACHE.get(cache_key)
+    entry = _build_cache_get(cache_key)
     if entry is not None:
         if entry.dispatch_state is not None:
             inputs = _gather_inputs(ops)
             outputs = entry.dispatch_state.dispatch(inputs)
             container._cached_entry = entry
+            container._cached_entry_gen = _BUILD_CACHE_GEN
             return _filter_results(outputs, container._default_results, results)
 
         # Fallback warm path (no dispatch_state — e.g. no device at build
@@ -539,12 +577,13 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
         # Cold path: full build (populates _BUILD_CACHE), then launch.
         fused = container.build(device=device, kernel_dir=kernel_dir)
         fused.launch()
-        entry = _BUILD_CACHE.get(cache_key)
+        entry = _build_cache_get(cache_key)
 
     if results is None:
         results = container._default_results
 
     container._cached_entry = entry
+    container._cached_entry_gen = _BUILD_CACHE_GEN
     return [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
 
 
@@ -822,7 +861,7 @@ class Sequential:
         _materialize_chain(self._items, self._internal_edges, self._cached_ops)
         ops = self._cached_ops
         cache_key = _build_run_cache_key(self, ops, cache_device)
-        entry = _BUILD_CACHE.get(cache_key)
+        entry = _build_cache_get(cache_key)
         if entry is not None:
             result = _fused_op_from_cache_entry(entry, ops)
             if kernel_dir is not None:
@@ -844,13 +883,16 @@ class Sequential:
         io_tensors = list(fused.input_tensors) + list(fused.output_tensors)
         fused._address_slots = _compute_address_slots(fused.descriptor, io_tensors)
 
-        _BUILD_CACHE[cache_key] = _cache_build_result(
-            fused,
-            ops,
-            r.output_source_map,
-            fused._address_slots,
-            self._default_results,
-            cache_device,
+        _build_cache_put(
+            cache_key,
+            _cache_build_result(
+                fused,
+                ops,
+                r.output_source_map,
+                fused._address_slots,
+                self._default_results,
+                cache_device,
+            ),
         )
 
         if kernel_dir is not None:
@@ -990,7 +1032,7 @@ class Parallel:
         _materialize_chain(self._items, self._internal_edges, self._cached_ops)
         ops = self._cached_ops
         cache_key = _build_run_cache_key(self, ops, cache_device)
-        entry = _BUILD_CACHE.get(cache_key)
+        entry = _build_cache_get(cache_key)
         if entry is not None:
             result = _fused_op_from_cache_entry(entry, ops)
             if kernel_dir is not None:
@@ -1014,13 +1056,16 @@ class Parallel:
         io_tensors = list(fused.input_tensors) + list(fused.output_tensors)
         fused._address_slots = _compute_address_slots(fused.descriptor, io_tensors)
 
-        _BUILD_CACHE[cache_key] = _cache_build_result(
-            fused,
-            ops,
-            r.output_source_map,
-            fused._address_slots,
-            self._default_results,
-            cache_device,
+        _build_cache_put(
+            cache_key,
+            _cache_build_result(
+                fused,
+                ops,
+                r.output_source_map,
+                fused._address_slots,
+                self._default_results,
+                cache_device,
+            ),
         )
 
         if kernel_dir is not None:

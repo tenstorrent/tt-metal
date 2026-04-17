@@ -4,9 +4,47 @@
 
 import functools
 import inspect
+import os
+from collections import OrderedDict
 from typing import Callable, Optional
 
 import ttnn
+
+
+# ---------------------------------------------------------------------------
+# Program key cache — LRU helpers
+# ---------------------------------------------------------------------------
+# Per-factory cache storing (program_cache_key, input_name_map, input_names,
+# arg_refs) keyed by a cheap arg fingerprint.  Bounded by LRU eviction to
+# prevent unbounded growth.
+#
+# Keying strategy per arg type:
+#   Tensor       → hash(tensor.spec)       (content-based, no pinning)
+#   Hashable     → hash(obj)               (content-based, no pinning)
+#   id()-based   → id(obj) + strong ref    (pinned until LRU eviction)
+
+_PROGRAM_KEY_CACHE_MAX = int(os.environ.get("TT_METAL_FUSION_PROGRAM_KEY_CACHE_MAX_ENTRIES", "128"))
+
+_PROGRAM_KEY_CACHE_REGISTRY: list = []
+
+
+def _program_key_cache_get(cache, k):
+    v = cache.get(k)
+    if v is not None:
+        cache.move_to_end(k)
+    return v
+
+
+def _program_key_cache_put(cache, k, v):
+    cache[k] = v
+    cache.move_to_end(k)
+    while len(cache) > _PROGRAM_KEY_CACHE_MAX:
+        cache.popitem(last=False)
+
+
+def _clear_all_program_key_caches():
+    for cache in _PROGRAM_KEY_CACHE_REGISTRY:
+        cache.clear()
 
 
 def core_range_set_fusion_key(core_range_set) -> tuple:
@@ -341,56 +379,76 @@ class OpDescriptor:
             param_names = list(params.keys())
             required_positions = {t: param_names.index(t) for t in required}
 
-            # Per-factory cache: maps a cheap argument fingerprint to a
-            # previously computed (program_cache_key, input_name_map) pair.
-            # Avoids rebuilding C++ param structs and calling
-            # compute_program_hash on repeated inline calls with equivalent
-            # arguments.
+            # Per-factory program key cache (LRU): maps a cheap argument
+            # fingerprint to a previously computed (program_cache_key,
+            # input_name_map, input_names, arg_refs) tuple, skipping the
+            # full factory body on repeated inline calls.  Bounded by
+            # _PROGRAM_KEY_CACHE_MAX to prevent unbounded growth.
             #
-            # Cache key strategy:
-            #   - Tensors use ``hash(tensor.spec)`` — a fast, content-based
-            #     C++ hash of shape/dtype/layout/memory_config.  Safe across
-            #     GC cycles (no id-reuse risk).
-            #   - All other arguments use ``id()``.  This is safe for
-            #     long-lived objects (configs, core ranges) that are typically
-            #     created once and reused.  If a caller creates fresh config
-            #     objects each call, the cache misses (safe, just slower).
-            #
-            # MAINTENANCE NOTE: id() for non-tensor C++ binding types
-            # (CoreRangeSet, ComputeKernelConfig, etc.) means the cache
-            # only helps when callers reuse the same Python objects.  If a
-            # binding type gains a content-based __hash__, it can replace
-            # id() here for better hit rates with freshly-constructed objects.
-            _program_key_cache: dict = {}
+            # Keying: tensors → hash(spec); hashable args → hash(obj);
+            # id()-only args → id(obj) + strong ref pinning (see
+            # _content_hash / _inline_cache_key_and_refs).
+            _program_key_cache: OrderedDict = OrderedDict()
+            _PROGRAM_KEY_CACHE_REGISTRY.append(_program_key_cache)
 
             def _is_pending(val):
                 return val is None or isinstance(val, _DeferredOutput)
 
-            def _inline_cache_key(args, kwargs):
-                """Cheap fingerprint from argument metadata.
+            def _content_hash(v):
+                """Content-based hash when the type provides one, else ``None``.
 
-                Tensors use ``hash(tensor.spec)`` (content-based, safe from
-                ``id()`` recycling).  Everything else uses ``id()`` (safe for
-                long-lived config objects; causes harmless cache misses if
-                objects are recreated each call).
+                Returns ``None`` for types with only ``object.__hash__``
+                (id-based, unsafe across allocator reuse) or unhashable
+                types (``__hash__ = None``).  Those args fall back to
+                ``id()`` with strong-reference pinning.
+                """
+                h = type(v).__hash__
+                if h is object.__hash__ or h is None:
+                    return None
+                try:
+                    return hash(v)
+                except TypeError:
+                    return None
+
+            def _inline_cache_key_and_refs(args, kwargs):
+                """Cheap fingerprint + list of objects that need pinning.
+
+                Tensors use ``hash(tensor.spec)`` (content-based).  Other
+                args use ``hash()`` if the type provides a content-based
+                ``__hash__``, otherwise ``id()`` — and those objects are
+                collected into ``refs`` for strong-reference pinning in
+                the cache entry.
 
                 Iterates kwargs in signature-defined ``param_names`` order
                 (deterministic, avoids ``sorted()`` per call).
+
+                Returns ``(key_tuple, refs_tuple)``.
                 """
                 parts = []
+                refs = []
                 for i, a in enumerate(args):
                     if isinstance(a, ttnn.Tensor):
                         parts.append((i, hash(a.spec)))
                     else:
-                        parts.append((i, id(a)))
+                        h = _content_hash(a)
+                        if h is not None:
+                            parts.append((i, h))
+                        else:
+                            parts.append((i, id(a)))
+                            refs.append(a)
                 for k in param_names:
                     if k in kwargs:
                         v = kwargs[k]
                         if isinstance(v, ttnn.Tensor):
                             parts.append((k, hash(v.spec)))
                         else:
-                            parts.append((k, id(v)))
-                return tuple(parts)
+                            h = _content_hash(v)
+                            if h is not None:
+                                parts.append((k, h))
+                            else:
+                                parts.append((k, id(v)))
+                                refs.append(v)
+                return tuple(parts), tuple(refs)
 
             @functools.wraps(fn)
             def wrapper(*args, **kwargs):
@@ -407,11 +465,23 @@ class OpDescriptor:
                         break
 
                 if not deferred:
-                    # ── Program-key cache: skip full factory on inline hit ──
-                    ck = _inline_cache_key(args, kwargs)
-                    hit = _program_key_cache.get(ck)
+                    # ── Program key cache: skip full factory on inline hit ──
+                    #
+                    # The cache key uses a three-tier strategy:
+                    #   Tensor       → hash(tensor.spec)   content-based
+                    #   Hashable arg → hash(obj)            content-based
+                    #   Other arg    → id(obj)              pinned via strong
+                    #                                       ref in cache entry
+                    #                                       to prevent address
+                    #                                       reuse
+                    #
+                    # ``refs`` collects the id()-keyed objects; stored
+                    # alongside the cached value so they stay alive (and
+                    # their addresses valid) until the entry is LRU-evicted.
+                    ck, refs = _inline_cache_key_and_refs(args, kwargs)
+                    hit = _program_key_cache_get(_program_key_cache, ck)
                     if hit is not None:
-                        pck, input_name_map, input_names_tuple = hit
+                        program_cache_key, input_name_map, input_names_tuple, _refs = hit
                         tensors = []
                         for _pname, src in input_name_map:
                             if isinstance(src, int):
@@ -428,7 +498,7 @@ class OpDescriptor:
                             input_tensors=tensors,
                             output_tensors=[_DeferredOutput()],
                             name=name,
-                            program_cache_key=pck,
+                            program_cache_key=program_cache_key,
                             input_names=input_names_tuple,
                         )
 
@@ -447,7 +517,10 @@ class OpDescriptor:
                                         input_name_map.append((pname, pi))
                                         break
                     input_names_tuple = tuple((pname, idx) for idx, (pname, _) in enumerate(input_name_map))
-                    _program_key_cache[ck] = (desc.program_cache_key, input_name_map, input_names_tuple)
+
+                    _program_key_cache_put(
+                        _program_key_cache, ck, (desc.program_cache_key, input_name_map, input_names_tuple, refs)
+                    )
                     return desc
 
                 # Deferred path: use sig.bind() to resolve all arg values by name.

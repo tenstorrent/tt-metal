@@ -81,7 +81,7 @@ The rest of this document provides implementation details for the various compon
 - [Argument Concatenation](#argument-concatenation)
   - [Runtime Args](#runtime-args) | [Compile-Time Args](#compile-time-args)
 - [Build Cache](#build-cache)
-  - [OpDescriptor Construction Modes](#opdescriptor-construction-modes) | [Cache Key](#cache-key) | [What Gets Cached](#what-gets-cached) | [Cache Hit](#cache-hit-fast-path) | [Cache Miss](#cache-miss-full-build) | [Dispatch: fusion_dispatch_op](#dispatch-fusion_dispatch_op) | [Steady-State Pattern: run()](#steady-state-pattern-run) | [Cache Invalidation](#cache-invalidation)
+  - [OpDescriptor Construction Modes](#opdescriptor-construction-modes) | [Program Key Cache](#program-key-cache) | [Cache Key](#cache-key) | [What Gets Cached](#what-gets-cached) | [Cache Hit](#cache-hit-fast-path) | [Cache Miss](#cache-miss-full-build) | [Dispatch: fusion_dispatch_op](#dispatch-fusion_dispatch_op) | [Steady-State Pattern: run()](#steady-state-pattern-run) | [Cache Invalidation](#cache-invalidation) | [LRU Eviction](#lru-eviction)
 - [Constraints and Limitations](#constraints-and-limitations)
 - [File Map](#file-map)
 
@@ -2547,17 +2547,27 @@ and C++ source generation are orders of magnitude slower than simply patching
 tensor addresses.  An **in-memory build cache** avoids repeating this work
 when the same fusion topology is built again with different tensor buffers.
 
-Fused dispatch uses a **three-level caching architecture**:
+Fused dispatch uses a **four-level caching architecture**:
 
-| Level | Key | Stores | Avoids |
-|-------|-----|--------|--------|
-| **Fusion Build** (`_BUILD_CACHE`) | topology + branch hashes + mesh id | Fused `ProgramDescriptor` + metadata (no tensors) | Codegen, CB allocation, barrier setup |
-| **Device Program** (`ProgramCache`) | `type_hash` + descriptor hash | `MeshWorkload` + slot indices | `Program` creation from descriptor |
-| **Slot Patching** (per-launch) | per-slot address comparison | `prev_io_addresses` | Patching unchanged address slots |
+| Level | Key | Stores | Avoids | Eviction |
+|-------|-----|--------|--------|----------|
+| **Program Key** (per-factory `_program_key_cache`) | cheap arg fingerprint (`id()` / `hash(spec)`) | `(program_cache_key, input_name_map, input_names)` | Full factory body on repeated inline calls | LRU (default 128, `TT_METAL_FUSION_PROGRAM_KEY_CACHE_MAX_ENTRIES`) |
+| **Fusion Build** (`_BUILD_CACHE`) | topology + branch hashes + mesh id | Fused `ProgramDescriptor` + metadata (no tensors) | Codegen, CB allocation, barrier setup | LRU (default 256, `TT_METAL_FUSION_BUILD_CACHE_MAX_ENTRIES`) |
+| **Device Program** (`ProgramCache`) | `type_hash` + descriptor hash | `MeshWorkload` + slot indices | `Program` creation from descriptor | — |
+| **Slot Patching** (per-launch) | per-slot address comparison | `prev_io_addresses` | Patching unchanged address slots | — |
 
-The fusion build cache lives in a process-global dict and does not persist to
-disk — it is lost on process exit.  The device program cache and slot
-patching are handled by `fusion_dispatch_op` on the C++ side.
+Both Python-side caches (program key and fusion build) use **LRU eviction**
+via `OrderedDict` to bound memory growth.  Cache sizes are tunable via
+environment variables.  The device program cache and slot patching are
+handled by `fusion_dispatch_op` on the C++ side and are not bounded by
+Python.
+
+A **generation counter** (`_BUILD_CACHE_GEN`) protects persistent containers
+from using stale `_cached_entry` pointers after `clear_build_cache()`.
+Each call to `clear_build_cache()` increments the counter and also clears
+all registered program key caches.  The persistent hot path in
+`_container_run` checks `container._cached_entry_gen == _BUILD_CACHE_GEN`
+before using the cached entry.
 
 
 ### OpDescriptor Construction Modes
@@ -2599,6 +2609,36 @@ For persistent mode, `_DeferredOutput` sentinels in `output_tensors` enable
 identity-based edge detection: `child.input_tensors[i] is parent.output_tensors[j]`
 tells `Sequential` which inputs are internal edges (auto-connected on first `run()`)
 vs external (provided by the user via `update()`).
+
+
+### Program Key Cache
+
+The `@OpDescriptor.create` decorator creates a **per-factory program key
+cache** (`_program_key_cache`) — an `OrderedDict` with LRU eviction that
+maps a cheap argument fingerprint to a previously computed
+`(program_cache_key, input_name_map, input_names)` tuple.
+
+On the **inline path** (all required tensor args present), the wrapper
+computes a fingerprint from the call arguments and checks the cache:
+
+- **Hit**: Returns a deferred `OpDescriptor` with the cached
+  `program_cache_key` and a lazy factory that only runs `.descriptor` if
+  needed.  The full factory body is skipped entirely.
+- **Miss**: Runs the full factory, then stores the result in the cache for
+  next time.
+
+The fingerprint uses three keying strategies depending on argument type
+(see [`id()` keying](#program-key-cache-id-keying-and-strong-references)):
+
+| Arg type | Key | Pinned? |
+|----------|-----|---------|
+| `Tensor` | `hash(tensor.spec)` | No |
+| Hashable (int, float, str, etc.) | `hash(obj)` | No |
+| id()-only (C++ bindings without `__hash__`) | `id(obj)` | Yes (strong ref) |
+
+Each factory's cache is registered in `_PROGRAM_KEY_CACHE_REGISTRY` so that
+`clear_build_cache()` can clear them all.  The LRU cap is controlled by
+`TT_METAL_FUSION_PROGRAM_KEY_CACHE_MAX_ENTRIES` (default 128).
 
 
 ### Cache Key
@@ -2673,7 +2713,7 @@ persistent container.  Dispatches via the 3-arg `fusion_dispatch_op`
 overload with the branch ops' pre-existing output tensors:
 
 ```python
-entry = _BUILD_CACHE.get(cache_key)
+entry = _build_cache_get(cache_key)     # promotes key to MRU on hit
 if entry is not None:
     inputs = <identity-deduplicated branch input_tensors>
     outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
@@ -2693,9 +2733,15 @@ the descriptor, and dispatches — all in a single C++ call:
 
 ```python
 entry = container._cached_entry          # set on the previous call
+if getattr(container, "_cached_entry_gen", -1) != _BUILD_CACHE_GEN:
+    # Stale — fall through to cache lookup / cold path
+    ...
 inputs = <identity-deduplicated from container._cached_ops>
 outputs = entry.dispatch_state.dispatch(inputs)
 ```
+
+The generation guard prevents a persistent container from using a stale
+`_cached_entry` after `clear_build_cache()` has been called.
 
 Updated activation slots are cleared after dispatch (zero L1 pinning between
 forward passes).  The returned outputs (in `output_sources` order) are
@@ -2712,8 +2758,11 @@ building, the result is stored:
 r = self._build_internal(device)                # slow: full codegen pipeline
 fused = FusedOp(op=..., semaphores=r.semaphores, kernel_labels=r.kernel_labels, ...)
 
-_BUILD_CACHE[cache_id] = _cache_build_result(fused, ops, r.output_source_map)
+_build_cache_put(cache_id, _cache_build_result(fused, ops, r.output_source_map))
 ```
+
+`_build_cache_put` inserts the entry and evicts the least-recently-used
+entry if the cache exceeds `_BUILD_CACHE_MAX`.
 
 `_cache_build_result` performs two optimizations before storing:
 
@@ -2815,9 +2864,12 @@ onward.  This is the natural pattern for inline `Sequential(…).run()` or
 `Parallel(…).run()`.
 
 **Persistent containers** (reused across calls) take the warm path on the
-first call, which creates the `FusionDispatchState` and sets `_cached_entry`.
-All subsequent calls bypass cache-key computation entirely and dispatch
-through the C++ hot path.
+first call, which creates the `FusionDispatchState` and sets `_cached_entry`
+alongside `_cached_entry_gen`.  All subsequent calls check
+`_cached_entry_gen == _BUILD_CACHE_GEN` before using the cached entry —
+if `clear_build_cache()` was called in between, the generation mismatch
+forces a fall-through to the warm/cold path.  Otherwise, cache-key
+computation is bypassed entirely and dispatch goes through the C++ hot path.
 
 No `FusedOp` is retained on the container between calls.  Output tensors are
 ephemeral (allocated fresh each hot-path call from cached `TensorSpec`
@@ -2834,13 +2886,66 @@ The fusion build cache key incorporates the topology fingerprint, all branch
 — different op structure, different kernel config, different device — the
 hash changes and a full rebuild occurs.
 
-`clear_build_cache()` manually clears all entries.  This is useful during
-development or when switching between device configurations.
+`clear_build_cache()` performs three operations:
+
+1. **Clears `_BUILD_CACHE`** — removes all fusion build cache entries.
+2. **Increments `_BUILD_CACHE_GEN`** — invalidates every persistent
+   container's `_cached_entry` pointer.  On the next `run()`, the
+   generation check fails and the container falls through to the cache
+   lookup / cold path, rebuilding as needed.
+3. **Clears all program key caches** — calls `_clear_all_program_key_caches()`
+   to empty every per-factory `_program_key_cache` registered in
+   `_PROGRAM_KEY_CACHE_REGISTRY`.
+
+The generation counter approach avoids the need to track every live
+container — invalidation is O(1) regardless of how many persistent
+containers exist.
 
 The per-container `_cached_entry` pointer (which enables the persistent hot
-path) is reset by `invalidate_run()`, which is called automatically by
+path) is also reset by `invalidate_run()`, which is called automatically by
 `.add()`.  Replacing `_items` entries in place requires calling
 `invalidate_run()` manually.
+
+#### LRU eviction
+
+Both the build cache and program key caches use LRU eviction to prevent
+unbounded memory growth:
+
+| Cache | Default max | Environment variable |
+|-------|-------------|----------------------|
+| Build cache (`_BUILD_CACHE`) | 256 | `TT_METAL_FUSION_BUILD_CACHE_MAX_ENTRIES` |
+| Program key cache (per factory) | 128 | `TT_METAL_FUSION_PROGRAM_KEY_CACHE_MAX_ENTRIES` |
+
+When a `put` operation causes the cache to exceed its max, the
+least-recently-used entry is evicted.  Both `get` and `put` promote the
+accessed key to the most-recently-used position.
+
+For a typical decoder pipeline with ~60 layers and several fused ops per
+layer, the default sizes provide ample headroom.  Multi-bucket inference
+deployments (where input shapes are grouped into fixed categories) multiply
+the effective working set; the environment variables allow tuning without
+code changes.
+
+#### Program key cache `id()` keying and strong references
+
+The program key cache uses a three-tier keying strategy for arguments:
+
+1. **Tensors** → `hash(tensor.spec)` — content-based, no pinning needed.
+2. **Hashable non-tensors** (int, float, str, tuple, etc.) → `hash(obj)` —
+   content-based, no pinning needed.  Detected via
+   `type(obj).__hash__ is not object.__hash__`.
+3. **id()-only non-tensors** (C++ binding types without custom `__hash__`) →
+   `id(obj)` — requires pinning to prevent address reuse.
+
+For category 3, the cache entry holds **strong references** (`_arg_refs`)
+to the keyed objects.  This pins them in memory for the lifetime of the
+cache entry, guaranteeing their addresses cannot be reused by CPython's
+allocator.  When the entry is LRU-evicted, the references are dropped.
+
+Only C++ binding config objects (lightweight structs with a few fields)
+fall into category 3.  Python builtins and any type with a content-based
+`__hash__` are never pinned.  At most `_PROGRAM_KEY_CACHE_MAX` entries
+(default 128) exist per factory, bounding the total pinned set.
 
 
 ## Constraints and Limitations
@@ -2880,6 +2985,6 @@ path) is reset by `invalidate_run()`, which is called automatically by
 | `models/experimental/ops/descriptors/fusion/codegen/builder.py` | Validation, barrier config, build orchestration |
 | `models/experimental/ops/descriptors/op_descriptor.py` | `OpDescriptor`, `_DeferredOutput`, `@OpDescriptor.create` decorator, `update()`, `LazyOutputList` |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py` | Device tests (require hardware) |
-| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_fusion_cache.py` | Build cache, update API, deferred descriptor, named kwargs tests |
+| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_fusion_cache.py` | Build cache, program key cache, LRU eviction, generation counter, update API, deferred descriptor, named kwargs tests |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential_infra.py` | Standalone infrastructure tests (no hardware) |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential_global_cb.py` | GlobalCircularBuffer fusion tests (require hardware) |
