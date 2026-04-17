@@ -124,6 +124,7 @@ enum class UnaryOpType {
     XIELU,
     LGAMMA,
     SWISH,
+    RRELU,
 };
 
 enum class VecMode {

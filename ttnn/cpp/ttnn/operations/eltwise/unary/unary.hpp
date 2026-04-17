@@ -278,6 +278,15 @@ operations::complex::ComplexTensor reciprocal(
 // abs overload for ComplexTensor
 Tensor abs(const operations::complex::ComplexTensor& input_tensor, const tt::tt_metal::MemoryConfig& output_mem_config);
 
+// rrelu: three float parameters with defaults
+Tensor rrelu(
+    const Tensor& input_tensor,
+    float lower = 0.125f,
+    float upper = 0.3333333333333333f,
+    bool training = false,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 // hardtanh: two float parameters with defaults
 inline Tensor hardtanh(
     const Tensor& input_tensor,

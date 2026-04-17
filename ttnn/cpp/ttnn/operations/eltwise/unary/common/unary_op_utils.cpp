@@ -21,6 +21,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::SWISH: return "SFPU_OP_SWISH_INCLUDE";
         case UnaryOpType::ATANH: return "SFPU_OP_ATANH_INCLUDE";
         case UnaryOpType::SINH: return "SFPU_OP_SINH_INCLUDE";
+        case UnaryOpType::RRELU: return "SFPU_OP_RRELU_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -39,6 +40,17 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     [[maybe_unused]] const T param0_raw = params[0];
     [[maybe_unused]] float param0 = static_cast<float>(params[0]);
     switch (op_type) {
+        case UnaryOpType::RRELU: {
+            float lower = static_cast<float>(params[0]);
+            float upper = static_cast<float>(params[1]);
+            float training = params.size() > 2 ? static_cast<float>(params[2]) : 0.0f;
+            auto lower_u = std::bit_cast<uint32_t>(lower);
+            auto upper_u = std::bit_cast<uint32_t>(upper);
+            uint32_t training_u = training != 0.0f ? 1u : 0u;
+            return {
+                "rrelu_tile_init();",
+                fmt::format("rrelu_tile({}, 0x{:x}, 0x{:x}, 0x{:x});", idst, lower_u, upper_u, training_u)};
+        }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
 }

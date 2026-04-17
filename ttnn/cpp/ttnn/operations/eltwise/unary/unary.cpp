@@ -176,6 +176,21 @@ Tensor xielu(
         input_tensor, {UnaryWithParam{UnaryOpType::XIELU, {alpha_p, alpha_n}}}, memory_config, optional_output_tensor);
 }
 
+Tensor rrelu(
+    const Tensor& input_tensor,
+    float lower,
+    float upper,
+    bool training,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    float training_f = training ? 1.0f : 0.0f;
+    return ttnn::detail::unary_impl(
+        input_tensor,
+        {UnaryWithParam{UnaryOpType::RRELU, {lower, upper, training_f}}},
+        memory_config,
+        optional_output_tensor);
+}
+
 Tensor clamp_tss(
     const Tensor& input_tensor,
     float min_val,
