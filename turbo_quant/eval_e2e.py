@@ -40,6 +40,7 @@ def build_parser():
     p.add_argument("--num-layers", type=int, default=None, help="Limit to N layers (default: all 32)")
     p.add_argument("--no-turbo-quant", action="store_true", help="Baseline: skip TurboQuant, use standard BFP8 cache")
     p.add_argument("--bfp4-cache", action="store_true", help="Use BFP4 paged cache (0.5 bytes/elem) instead of BF16")
+    p.add_argument("--batch-size", type=int, default=1, help="Batch size (number of parallel sequences)")
     p.add_argument("--no-trace", action="store_true", help="Disable TTNN trace (slower, useful for debugging)")
     return p
 
@@ -63,11 +64,11 @@ def main():
     print(f"Opening mesh device ({mesh_shape})...")
     mesh_device = ttnn.open_mesh_device(mesh_shape)
 
-    print("Creating ModelArgs...")
+    print(f"Creating ModelArgs (batch_size={args.batch_size})...")
     model_args = ModelArgs(
         mesh_device,
         instruct=args.instruct,
-        max_batch_size=1,
+        max_batch_size=args.batch_size,
         max_seq_len=args.max_seq_len,
         # accuracy mode keeps weights in BF16 where possible
         optimizations=lambda ma: DecodersPrecision.accuracy(ma.n_layers, ma.model_name),
@@ -205,14 +206,19 @@ def main():
     # ------------------------------------------------------------------ #
     # Prepare initial inputs                                               #
     # ------------------------------------------------------------------ #
-    batch = 1
+    batch = args.batch_size
     total_steps = min(len(encoded) + args.max_new_tokens, model_args.max_seq_len - 1)
 
-    # Page table: identity mapping (block i → physical page i).
-    page_table_cpu = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32).unsqueeze(0)
+    # Page table: identity mapping per batch slot. Shape [batch, max_num_blocks].
+    # Each batch gets distinct pages (interleaved): batch b uses pages [b, b+batch, b+2*batch, ...]
+    # Simple approach: give each batch its own contiguous block of pages.
+    pages_per_batch = paged_attention_config.max_num_blocks // batch
+    page_table_cpu = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32)
+    page_table_cpu = page_table_cpu[: batch * pages_per_batch].reshape(batch, pages_per_batch)
 
-    tokens_torch = torch.tensor([encoded[0]], dtype=torch.int64)  # [B=1]
-    pos_torch = torch.tensor([0], dtype=torch.int64)  # [B=1]
+    # Replicate same prompt across all batch slots for throughput testing.
+    tokens_torch = torch.tensor([encoded[0]] * batch, dtype=torch.int64)  # [B]
+    pos_torch = torch.tensor([0] * batch, dtype=torch.int64)  # [B]
     host_inputs_0 = tt_model.prepare_decode_inputs_host(tokens_torch, pos_torch, page_table=page_table_cpu)
 
     use_trace = not args.no_trace
@@ -252,14 +258,14 @@ def main():
     print("\n=== Decode loop ===")
     all_tokens = list(encoded)
     times = []
-    current_token = encoded[0]
+    current_tokens = [encoded[0]] * batch  # one token per batch slot
 
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=model_args.cluster_shape)
 
     for step in range(total_steps):
         # Update pre-allocated device tensors in-place with current step's inputs.
-        tokens_torch = torch.tensor([current_token], dtype=torch.int64)
-        pos_torch = torch.tensor([step], dtype=torch.int64)
+        tokens_torch = torch.tensor(current_tokens, dtype=torch.int64)
+        pos_torch = torch.tensor([step] * batch, dtype=torch.int64)
         host_inputs_step = tt_model.prepare_decode_inputs_host(tokens_torch, pos_torch, page_table=page_table_cpu)
         copy_host_to_device(host_inputs_step, device_tensors=trace_inputs)
 
@@ -282,16 +288,18 @@ def main():
             ttnn.deallocate(tt_logits)
 
         _, next_tok = sample_host(logits, temperature=0, top_p=0.8)
-        next_tok_id = int(next_tok.squeeze().item())
+        # next_tok shape: [batch, 1]. Extract token id per batch slot.
+        next_tok_ids = [int(next_tok[b].squeeze().item()) for b in range(batch)]
 
-        # Teacher-force within prompt, then generate freely.
+        # Teacher-force within prompt, then generate freely. All batch slots
+        # get the same prompt, so they produce the same tokens.
         if step + 1 < len(encoded):
-            current_token = encoded[step + 1]
+            current_tokens = [encoded[step + 1]] * batch
         else:
-            current_token = next_tok_id
-            all_tokens.append(next_tok_id)
-            tok_str = tokenizer.decode([next_tok_id])
-            print(f"  step {step:3d}: {next_tok_id:7d} → {tok_str!r}  ({elapsed*1000:.0f}ms)")
+            current_tokens = next_tok_ids
+            all_tokens.append(next_tok_ids[0])  # only log first batch slot
+            tok_str = tokenizer.decode([next_tok_ids[0]])
+            print(f"  step {step:3d}: {next_tok_ids[0]:7d} → {tok_str!r}  ({elapsed*1000:.0f}ms)")
 
     # ------------------------------------------------------------------ #
     # Results                                                              #
@@ -310,10 +318,13 @@ def main():
             mode_label = f"{args.bits}-bit TurboQuant BF16 paged"
         if use_trace:
             mode_label += " (traced)"
-        print(f"\n=== Performance ({mode_label}) ===")
+        print(f"\n=== Performance ({mode_label}, batch={batch}) ===")
         print(f"  Prompt tokens : {len(encoded)}")
         print(f"  Generated     : {len(gen_times)}")
-        print(f"  Avg step time : {avg_ms:.1f} ms/tok  ({1000/avg_ms:.1f} tok/s)")
+        print(f"  Avg step time : {avg_ms:.1f} ms/tok  ({1000/avg_ms:.1f} tok/s single-seq)")
+        if batch > 1:
+            throughput = batch * 1000 / avg_ms
+            print(f"  Throughput    : {throughput:.1f} tok/s (batch={batch})")
         print(f"  First step    : {times[0]*1000:.0f} ms  (includes compile)")
         if len(times) > 1:
             warm_avg = sum(times[len(encoded) + 1 :]) / max(1, len(times) - len(encoded) - 1) * 1000

@@ -42,6 +42,23 @@ mesh when `num_devices > 1`. TQ's `from_torch` calls replicate constants across
 devices automatically. KV heads shard across devices: Llama-3.1-8B has 8 KV heads
 → 1 head/device on T3K.
 
+### T3K Batch Throughput (2026-04-17)
+
+Batch scaling on T3K with `--batch-size N`:
+
+| Batch | Latency (ms/tok) | Throughput (tok/s) | Scaling vs batch=1 |
+|-------|------------------|--------------------|--------------------|
+| 1 | 14.2 | 70.6 | 1.00× |
+| 4 | 14.1 | 283.4 | 4.01× |
+| 8 | 14.1 | 565.9 | 8.01× |
+| 16 | 14.2 | 1,128.2 | 15.98× |
+| **32** | **14.5** | **2,213.2** | **31.35×** |
+
+**Perfect linear scaling up to batch=32. 2,213 tok/s peak throughput.**
+Latency barely grows (14.2 → 14.5ms). TQ's compressed BFP4 cache (0.5 bytes/elem,
+2× smaller than baseline BFP8) enables these large batch sizes at long seqlens
+without running out of DRAM — this is the key benefit of KV compression for serving.
+
 ### E2E Overhead: TQ BFP4 vs Baseline BFP8 (2026-04-14)
 
 Back-to-back comparison, same machine, same prompt, traced, 10 generated tokens.
@@ -575,8 +592,9 @@ block_size mismatch — model-level issue, not TQ-specific.
 **Fused SDPA kernel chunking (development track):**
 Add Flash Attention-style online softmax to the custom TQ kernel for comparison.
 
-**Multi-batch:**
-- Batch > 1: TQ's compressed cache enables more concurrent sequences. Untested.
+**~~Multi-batch~~ DONE (2026-04-17):**
+- T3K batch sweep: perfect linear scaling 1→32, 2,213 tok/s peak at batch=32
+- `--batch-size N` flag in eval_e2e.py
 
 **~~Multi-device~~ DONE (2026-04-17):**
 - T3K (8× Wormhole) verified: 14.2 ms/tok, 2.6× speedup vs single device
