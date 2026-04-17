@@ -65,8 +65,9 @@ void kernel_main() {
         chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(10);
     }
 
-#ifdef FLATTENED_WORK
-    // Flatten_work: causal only, non-chunked, single phase. Args sit right after chunked_q_chunk_offset_phase_1.
+#if defined(SDPA_FLAT_WORK)
+    // Flat work distribution: causal only, non-chunked, single phase. Args sit right after
+    // chunked_q_chunk_offset_phase_1. Zigzag sub-mode is compile-time arg 33.
     const uint32_t global_q_start = get_arg_val<uint32_t>(10);
     const uint32_t global_q_count = get_arg_val<uint32_t>(11);
 #endif
@@ -169,71 +170,65 @@ void kernel_main() {
                 chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
             }
 
-#ifdef FLATTENED_WORK
-            // Flat iteration: each iteration dispatches sdpa_standard for a single (nb, nq, q_chunk).
+#if defined(SDPA_FLAT_WORK)
+            // Flat work distribution: one sdpa_standard call over the full
+            // [global_q_start, global_q_start + global_q_count) range. The STANDARD branch of
+            // sdpa_inner_loop does the remap_q_index -> q_chunk internally (gated by SDPA_FLAT_WORK),
+            // mirroring the RING branch's pattern. Reader/writer still decompose the flat index into
+            // (nb, nq, q_chunk) to fetch the right Q/K/V; compute only needs q_chunk for causal masking.
             // Restrictions enforced on host: is_causal, !is_chunked, !use_attention_sink.
-#ifdef FLATTEN_WORK_ZIGZAG
-            constexpr bool _flat_use_zigzag = true;
-#else
-            constexpr bool _flat_use_zigzag = false;
-#endif
-            for (uint32_t _gq = 0; _gq < global_q_count; ++_gq) {
-                const uint32_t _flat_linear = global_q_start + _gq;
-                const uint32_t _flat = remap_q_index(_flat_linear, q_num_chunks, _flat_use_zigzag);
-                const uint32_t q_chunk = _flat % q_num_chunks;
-                sdpa_standard<
-                    cb_qk_im,
-                    cb_identity_scale_in,
-                    cb_attention_sink,
-                    Sq_chunk_t,
-                    Sk_chunk_t,
-                    DHt,
-                    vDHt,
-                    use_attention_sink,
-                    is_causal,
-                    use_provided_mask,
-                    use_padded_mask,
-                    is_chunked,
-                    scale_fp32,
-                    sliding_window_size>(
-                    Skt,
-                    qk_in0_block_w,
-                    qk_subblock_w,
-                    qk_subblock_h,
-                    qk_in0_num_subblocks,
-                    qk_in1_num_subblocks,
-                    qk_num_blocks,
-                    out_in0_block_w,
-                    out_subblock_w,
-                    out_subblock_h,
-                    out_in0_num_subblocks,
-                    out_in1_num_subblocks,
-                    out_num_blocks,
-                    0,  // iter_q_start
-                    1,  // iter_q_end: one chunk per flat iteration
-                    q_num_chunks,
-                    q_chunk,  // local_q_start: absolute q_chunk index for this iteration
-                    chunked_q_chunk_offset,
-                    k_num_chunks,
-                    q_chunk_tiles,
-                    k_chunk_tiles,
-                    v_chunk_tiles,
-                    qk_chunk_tiles,
-                    out_chunk_tiles,
-                    cb_q_in,
-                    cb_k_in,
-                    cb_v_in,
-                    cb_mask_in,
-                    cb_col_identity,
-                    cb_out_im_A,
-                    cb_out_im_B,
-                    cb_max_A,
-                    cb_max_B,
-                    cb_sum_A,
-                    cb_sum_B,
-                    cb_exp_max_diff,
-                    cb_out);
-            }
+            sdpa_standard<
+                cb_qk_im,
+                cb_identity_scale_in,
+                cb_attention_sink,
+                Sq_chunk_t,
+                Sk_chunk_t,
+                DHt,
+                vDHt,
+                use_attention_sink,
+                is_causal,
+                use_provided_mask,
+                use_padded_mask,
+                is_chunked,
+                scale_fp32,
+                sliding_window_size>(
+                Skt,
+                qk_in0_block_w,
+                qk_subblock_w,
+                qk_subblock_h,
+                qk_in0_num_subblocks,
+                qk_in1_num_subblocks,
+                qk_num_blocks,
+                out_in0_block_w,
+                out_subblock_w,
+                out_subblock_h,
+                out_in0_num_subblocks,
+                out_in1_num_subblocks,
+                out_num_blocks,
+                global_q_start,                   // iter_q_start (global flat index)
+                global_q_start + global_q_count,  // iter_q_end
+                q_num_chunks,
+                0,  // local_q_start (unused under flat work distribution)
+                chunked_q_chunk_offset,
+                k_num_chunks,
+                q_chunk_tiles,
+                k_chunk_tiles,
+                v_chunk_tiles,
+                qk_chunk_tiles,
+                out_chunk_tiles,
+                cb_q_in,
+                cb_k_in,
+                cb_v_in,
+                cb_mask_in,
+                cb_col_identity,
+                cb_out_im_A,
+                cb_out_im_B,
+                cb_max_A,
+                cb_max_B,
+                cb_sum_A,
+                cb_sum_B,
+                cb_exp_max_diff,
+                cb_out);
 #else
             for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
                 for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {

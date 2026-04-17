@@ -1655,7 +1655,14 @@ void sdpa_inner_loop(
         uint32_t q_high_idx;
         if constexpr (sdpa_type == STANDARD) {
             uint32_t q_chunk;
-#if defined BALANCED_Q_PARALLEL
+#if defined(SDPA_FLAT_WORK)
+            // Flat work distribution: q_iter is a global index into B*NQH*q_num_chunks. Only q_chunk
+            // is needed by compute (reader/writer do the full (nb, nq, q_chunk) decomposition to
+            // fetch the right Q/K/V). Mirrors the RING branch's internal remap pattern.
+            // Zigzag sub-mode is carried as compile-time arg 33 (see program factory).
+            constexpr bool _flat_use_zigzag = get_compile_time_arg_val(33) == 1;
+            q_chunk = remap_q_index(q_iter, q_num_chunks, _flat_use_zigzag) % q_num_chunks;
+#elif defined BALANCED_Q_PARALLEL
             uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
             if (q_iter < q_chunk_div_2) {             // bottom half
                 q_chunk = local_q_start + q_iter;

@@ -67,9 +67,9 @@ class ModelConfig:
     q_chunk_sizes: List[int]
     k_chunk_sizes: List[int]
 
-    # Flat B*NH*q_num_chunks distribution (matches ring_joint_sdpa's scheme). Enable for suites that
-    # are ring-iter-0 proxies (MLA) so per-core work matches the multi-chip op across grid sizes.
-    # Leave False (default) for standard MHA suites that use hierarchical batch × heads × q_chunks.
+    # Flat B*NH*q_num_chunks work distribution: split the full chunk space evenly across cores
+    # instead of the hierarchical batch × heads × q_chunks split. Enable for low batch × head
+    # workloads where hierarchical leaves cores idle (e.g. MLA with nhq=32 and grid=110).
     flatten_work: bool = False
 
 
