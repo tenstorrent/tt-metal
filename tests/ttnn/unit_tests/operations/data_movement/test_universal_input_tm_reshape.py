@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 # ---------------------------------------------------------------------------
@@ -13,7 +14,10 @@ import ttnn
 
 
 def _divisible_grid_1d(total_dim, max_cores, step):
-    """Find largest n <= max_cores such that total_dim is divisible by n*step."""
+    """Find largest n <= max_cores such that total_dim is divisible by n*step.
+
+    Mirrors the grid search in recompute_shard_spec_for_output (reshape.cpp).
+    """
     for n in range(max_cores, 0, -1):
         if total_dim % (n * step) == 0:
             return n
@@ -235,12 +239,12 @@ def test_reshape_sharded_output(device, input_shape, output_shape, case_id, stra
 @pytest.mark.parametrize(
     "input_shape,output_shape,case_id",
     [
-        # Includes both view-like (PerformView fast path) and data-movement (s2i→reshape→i2s) cases.
         ([1, 4, 256, 128], [1, 1, 1024, 128], "merge_ch"),
         ([1, 4, 256, 128], [1, 4, 128, 256], "swap_hw"),
+        ([1, 4, 128, 256], [1, 4, 256, 128], "halve_w_double_h"),
         ([1, 4, 256, 128], [1, 4, 512, 64], "double_h_halve_w"),
     ],
-    ids=["merge_ch", "swap_hw", "double_h_halve_w"],
+    ids=["merge_ch", "swap_hw", "halve_w_double_h", "double_h_halve_w"],
 )
 @pytest.mark.parametrize(
     "strategy,strat_id",
@@ -300,3 +304,180 @@ def test_reshape_non_4d_sharded_input(device, input_shape, output_shape, strateg
     """Non-4D tensor with sharded input."""
     mem_cfg = make_sharded_memory_config(device, input_shape, strategy, layout)
     _run_reshape(device, input_shape, output_shape, mem_cfg, layout)
+
+
+# ---------------------------------------------------------------------------
+# Cross-strategy sharded-to-sharded: different shard strategy for input/output
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "in_strategy,out_strategy",
+    [
+        (ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH),
+        (ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK),
+        (ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.HEIGHT),
+        (ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK),
+        (ttnn.ShardStrategy.BLOCK, ttnn.ShardStrategy.HEIGHT),
+        (ttnn.ShardStrategy.BLOCK, ttnn.ShardStrategy.WIDTH),
+    ],
+    ids=["h_to_w", "h_to_b", "w_to_h", "w_to_b", "b_to_h", "b_to_w"],
+)
+@pytest.mark.parametrize(
+    "input_shape,output_shape,case_id",
+    [
+        ([1, 4, 256, 128], [1, 1, 1024, 128], "view_like"),
+        ([1, 4, 256, 128], [1, 4, 128, 256], "data_movement"),
+    ],
+    ids=["view_like", "data_movement"],
+)
+@pytest.mark.parametrize("layout", LAYOUTS, ids=["TILE", "ROW_MAJOR"])
+def test_reshape_cross_strategy_sharded(device, in_strategy, out_strategy, input_shape, output_shape, case_id, layout):
+    """Input and output use different sharding strategies."""
+    torch.manual_seed(0)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_output = torch_input.reshape(output_shape)
+
+    input_mem_cfg = make_sharded_memory_config(device, input_shape, in_strategy, layout)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=layout,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=input_mem_cfg,
+    )
+
+    output_mem_cfg = make_sharded_memory_config(device, output_shape, out_strategy, layout)
+    tt_output = ttnn.reshape(tt_input, output_shape, memory_config=output_mem_cfg)
+    actual = ttnn.to_torch(tt_output)
+
+    assert list(actual.shape) == list(
+        torch_output.shape
+    ), f"Shape mismatch: got {list(actual.shape)}, expected {list(torch_output.shape)}"
+    assert torch.equal(torch_output, actual), "Data mismatch: reshape should preserve values exactly"
+
+
+# ---------------------------------------------------------------------------
+# Default output derivation: sharded input, no explicit output memory_config
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "strategy",
+    [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK],
+    ids=["height", "width", "block"],
+)
+@pytest.mark.parametrize("layout", LAYOUTS, ids=["TILE", "ROW_MAJOR"])
+def test_reshape_sharded_default_output(device, strategy, layout):
+    """Sharded input without explicit output memory_config; system derives it."""
+    input_shape = [1, 4, 256, 128]
+    output_shape = [1, 1, 1024, 128]
+
+    torch.manual_seed(0)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_output = torch_input.reshape(output_shape)
+
+    input_mem_cfg = make_sharded_memory_config(device, input_shape, strategy, layout)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=layout,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=input_mem_cfg,
+    )
+
+    tt_output = ttnn.reshape(tt_input, output_shape)
+    actual = ttnn.to_torch(tt_output)
+
+    assert list(actual.shape) == list(
+        torch_output.shape
+    ), f"Shape mismatch: got {list(actual.shape)}, expected {list(torch_output.shape)}"
+    assert torch.equal(torch_output, actual), "Data mismatch: reshape should preserve values exactly"
+
+
+# ---------------------------------------------------------------------------
+# BFLOAT8_B dtype: the BF8 path retains s2i/i2s — verify correctness
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape,case_id",
+    [
+        ([1, 4, 256, 128], [1, 1, 1024, 128], "merge_ch"),
+        ([1, 4, 256, 128], [1, 4, 128, 256], "swap_hw"),
+    ],
+    ids=["merge_ch", "swap_hw"],
+)
+@pytest.mark.parametrize(
+    "strategy",
+    [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK],
+    ids=["height", "width", "block"],
+)
+def test_reshape_bfloat8_b(device, input_shape, output_shape, case_id, strategy):
+    """BFLOAT8_B uses the s2i/i2s path; verify it produces correct results."""
+    torch.manual_seed(0)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_output = torch_input.reshape(output_shape)
+
+    input_mem_cfg = make_sharded_memory_config(device, input_shape, strategy, ttnn.TILE_LAYOUT)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        memory_config=input_mem_cfg,
+    )
+
+    tt_output = ttnn.reshape(tt_input, output_shape)
+    actual = ttnn.to_torch(tt_output).to(torch.bfloat16)
+
+    assert list(actual.shape) == list(
+        torch_output.shape
+    ), f"Shape mismatch: got {list(actual.shape)}, expected {list(torch_output.shape)}"
+    assert_with_pcc(torch_output, actual, 0.99)
+
+
+# ---------------------------------------------------------------------------
+# INTERLEAVED fallback guard: verify reshape succeeds even when the output
+# shape forces aggressive grid reduction in recompute_shard_spec_for_output.
+# With standard tile-aligned shapes n=1 always satisfies the constraints, so
+# a true INTERLEAVED fallback is unlikely; the guard in reshape.cpp ensures
+# safety if it ever occurs.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    [
+        ([1, 8, 32, 256], [1, 1, 256, 256]),
+    ],
+    ids=["grid_reduction"],
+)
+@pytest.mark.parametrize(
+    "strategy",
+    [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK],
+    ids=["height", "width", "block"],
+)
+def test_reshape_grid_reduction(device, input_shape, output_shape, strategy):
+    """Input grid is large relative to output dims, forcing grid reduction."""
+    torch.manual_seed(0)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_output = torch_input.reshape(output_shape)
+
+    input_mem_cfg = make_sharded_memory_config(device, input_shape, strategy, ttnn.TILE_LAYOUT)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=input_mem_cfg,
+    )
+
+    output_mem_cfg = make_sharded_memory_config(device, output_shape, strategy, ttnn.TILE_LAYOUT)
+    tt_output = ttnn.reshape(tt_input, output_shape, memory_config=output_mem_cfg)
+    actual = ttnn.to_torch(tt_output)
+
+    assert list(actual.shape) == list(
+        torch_output.shape
+    ), f"Shape mismatch: got {list(actual.shape)}, expected {list(torch_output.shape)}"
+    assert torch.equal(torch_output, actual), "Data mismatch: reshape should preserve values exactly"
