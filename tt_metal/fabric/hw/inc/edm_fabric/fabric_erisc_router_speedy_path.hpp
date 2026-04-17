@@ -119,6 +119,8 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
             if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
                 while (busy) {
+                    // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
+                    __asm__ volatile(".4byte 0x0100000F");
                     busy = internal_::eth_txq_is_busy(sender_txq_id);
                     // Yield to teardown: spinning indefinitely on a congested ETH TX queue
                     // (e.g. flow-control deadlock) prevents close_finish() from completing.
@@ -143,6 +145,8 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
             while (busy) {
+                // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
+                __asm__ volatile(".4byte 0x0100000F");
                 busy = internal_::eth_txq_is_busy(sender_txq_id);
                 // Post-send: packet already enqueued in ETH HW. Yield to teardown if TXQ
                 // remains busy — remote_update_ptr_val is intentionally skipped; the

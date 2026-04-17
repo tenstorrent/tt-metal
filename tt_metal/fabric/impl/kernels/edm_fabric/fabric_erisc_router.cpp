@@ -596,6 +596,8 @@ FORCE_INLINE void send_next_data(
                     return;
                 }
             }
+            // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
+            __asm__ volatile(".4byte 0x0100000F");
         };
     }
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
@@ -621,6 +623,8 @@ FORCE_INLINE void send_next_data(
                 return;
             }
         }
+        // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
+        __asm__ volatile(".4byte 0x0100000F");
     };
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
 }
