@@ -48,7 +48,7 @@ TUM_SEQ = Path(
 )
 
 BATCH = 1
-NUM_KEYFRAMES = 4
+NUM_KEYFRAMES = int(os.environ.get("DROID_KEYFRAMES", "4"))
 HEIGHT = 240
 WIDTH = 320
 NUM_ITERS = int(os.environ.get("DROID_ITERS", "12"))
