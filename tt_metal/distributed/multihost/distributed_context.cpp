@@ -4,7 +4,7 @@
 
 #include "api/tt-metalium/distributed_context.hpp"
 
-#include <vector>
+#include <array>
 
 #include <tt_stl/assert.hpp>
 
@@ -43,8 +43,8 @@ Size DistributedContext::subcontext_size(SubcontextId subcontext_id) const {
 }
 
 tt::stl::Span<const int> DistributedContext::subcontext_sizes() const {
-    static thread_local std::vector<int> backing;
-    backing.assign(1, *size());
+    static thread_local std::array<int, 1> backing;
+    backing[0] = *size();
     return {backing.data(), backing.size()};
 }
 
