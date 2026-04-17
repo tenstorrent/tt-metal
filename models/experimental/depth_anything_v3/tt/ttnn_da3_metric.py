@@ -53,6 +53,10 @@ _HIFI4 = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
+# 8x12=96-core grid. Larger 10x12 grids on Blackhole shifted PCC below the
+# 99% guard — the extra rows alter reduction ordering enough to matter for
+# bf16 accumulation. 96 cores still beats default-grid placement.
+_CORE_GRID = ttnn.CoreGrid(y=8, x=12)
 
 
 def _hifi4_kernel_config():
@@ -145,10 +149,11 @@ def _ttnn_block(x, p, attention_mask):
                         memory_config=ttnn.L1_MEMORY_CONFIG)
     h = ttnn.linear(h, p["fc1_w"], bias=p["fc1_b"],
                     memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
-                    activation="gelu", compute_kernel_config=_hifi4_kernel_config())
+                    activation="gelu", compute_kernel_config=_hifi4_kernel_config(),
+                    core_grid=_CORE_GRID)
     h = ttnn.linear(h, p["fc2_w"], bias=p["fc2_b"],
                     memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
-                    compute_kernel_config=_hifi4_kernel_config())
+                    compute_kernel_config=_hifi4_kernel_config(), core_grid=_CORE_GRID)
     h = ttnn.mul(h, p["ls2_g"])
     x = ttnn.add(x, h)
     ttnn.deallocate(h)
