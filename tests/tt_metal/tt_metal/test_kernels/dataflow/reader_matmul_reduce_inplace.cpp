@@ -3,7 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Reader for the matmul_reduce_inplace isolated test.
-// Loads `total_tiles` from DRAM into c_0, then one col-identity tile into c_1.
+// Loads `total_tiles` from DRAM into c_2 (staging for compute), then one
+// col-identity tile into c_1.
+//
+// c_2 (not c_0) is the reader-produced CB so that the compute kernel can
+// copy c_2 → c_0 under compute ownership.  matmul_reduce_inplace requires
+// its in_out_cb to be compute-produced; using a reader-produced CB directly
+// would leave T2's tiles_received shadow out of sync with the L1 counter and
+// cause cb_wait_front to deadlock after the push-back.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -17,14 +24,14 @@ void kernel_main() {
     uint32_t src0_bytes = get_arg_val<uint32_t>(5);
     uint32_t src1_bytes = get_arg_val<uint32_t>(6);
 
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_staging = tt::CBIndex::c_2;  // reader → compute staging
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
 
     uint64_t src0_noc = get_noc_addr_from_bank_id<true>(src0_bank_id, src0_addr);
     uint64_t src1_noc = get_noc_addr_from_bank_id<true>(src1_bank_id, src1_addr);
 
-    cb_reserve_back(cb_id_in0, total_tiles);
-    uint32_t l1_w0 = get_write_ptr(cb_id_in0);
+    cb_reserve_back(cb_id_staging, total_tiles);
+    uint32_t l1_w0 = get_write_ptr(cb_id_staging);
     noc_async_read(src0_noc, l1_w0, src0_bytes);
 
     cb_reserve_back(cb_id_in1, 1);
@@ -33,6 +40,6 @@ void kernel_main() {
 
     noc_async_read_barrier();
 
-    cb_push_back(cb_id_in0, total_tiles);
+    cb_push_back(cb_id_staging, total_tiles);
     cb_push_back(cb_id_in1, 1);
 }
