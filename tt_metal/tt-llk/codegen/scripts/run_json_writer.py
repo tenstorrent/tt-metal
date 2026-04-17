@@ -389,6 +389,8 @@ def cmd_finalize(args: argparse.Namespace) -> None:
 
     doc["end_time"] = now
     doc["status"] = args.status  # success | compiled | failed | skipped
+    if args.solver_state is not None:
+        doc["solver_state"] = args.solver_state
     doc["current_step_message"] = (
         args.final_message or doc.get("current_step_message") or ""
     )
@@ -547,6 +549,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["success", "compile_error", "test_failure"],
     )
     fz.add_argument("--final-message", default="")
+    fz.add_argument(
+        "--solver-state",
+        default=None,
+        choices=["not_working", "working", "draft_pr", "active_pr", "merged"],
+        help="Optional issue-solver state for dashboard 5-state model",
+    )
     fz.add_argument(
         "--patch-json",
         default=None,

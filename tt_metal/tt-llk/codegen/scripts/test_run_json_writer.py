@@ -77,3 +77,73 @@ def test_issue_url_preserved(tmp_path):
     )
     doc = json.loads((tmp_path / "run.json").read_text())
     assert doc["issue"]["url"] == "https://github.com/x/y/issues/1148"
+
+
+def test_finalize_sets_solver_state(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "r1",
+        "--kernel",
+        "issue_1",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "start",
+    )
+    _run(
+        tmp_path,
+        "finalize",
+        "--status",
+        "success",
+        "--final-result",
+        "success",
+        "--final-message",
+        "done",
+        "--solver-state",
+        "working",
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["solver_state"] == "working"
+    assert doc["status"] == "success"
+
+
+def test_finalize_rejects_bad_solver_state(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "r1",
+        "--kernel",
+        "issue_1",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "start",
+    )
+    r = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "finalize",
+            "--log-dir",
+            str(tmp_path),
+            "--status",
+            "success",
+            "--final-result",
+            "success",
+            "--final-message",
+            "x",
+            "--solver-state",
+            "bogus",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode != 0
+    assert "bogus" in (r.stderr + r.stdout)
