@@ -129,6 +129,12 @@ def get_supported_trace_region_size(request, mesh_device):
         "gemma-3-27b": {
             "T3K": 70000000,
             "TG": 70000000,
+            "P100": 70000000,
+            "P150": 70000000,
+            "P300": 70000000,
+            "P150x4": 70000000,
+            "P150x8": 70000000,
+            "BHGLX": 70000000,
         },
         "DeepSeek-R1-Distill-Llama-70B": {
             "P150x4": 90000000,
