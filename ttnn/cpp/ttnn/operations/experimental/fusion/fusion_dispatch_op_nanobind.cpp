@@ -2,24 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "patchable_generic_op_nanobind.hpp"
+#include "fusion_dispatch_op_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/vector.h>
 
-#include "device/patchable_generic_op_device_operation.hpp"
-#include "device/patchable_generic_op_helpers.hpp"
+#include "device/fusion_dispatch_op_device_operation.hpp"
+#include "device/fusion_dispatch_op_helpers.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace nb = nanobind;
 
-namespace ttnn::operations::experimental::generic::detail {
+namespace ttnn::operations::experimental::fusion::detail {
 
 namespace {
 
 /// Patch the descriptor, wrap in MeshProgramDescriptor, and dispatch.
 /// Used by inline mode and the cold path (FusedOp.launch).
-void patchable_generic_op_with_address_refresh(
+void fusion_dispatch_op_with_address_refresh(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::ProgramDescriptor& program_descriptor,
     const AddressSlots& address_slots) {
@@ -34,7 +34,7 @@ void patchable_generic_op_with_address_refresh(
     auto& desc_copy = mesh_program_descriptor.mesh_programs.back().second;
     patch_stale_descriptor(desc_copy, io_tensors, address_slots);
 
-    (void)ttnn::prim::patchable_generic_op(io_tensors, mesh_program_descriptor);
+    (void)ttnn::prim::fusion_dispatch_op(io_tensors, mesh_program_descriptor);
 }
 
 void dispatch_patched(
@@ -58,7 +58,7 @@ void dispatch_patched(
     auto& desc_copy = mesh_program_descriptor.mesh_programs.back().second;
     patch_stale_descriptor(desc_copy, io_tensors, address_slots);
 
-    (void)ttnn::prim::patchable_generic_op(io_tensors, mesh_program_descriptor);
+    (void)ttnn::prim::fusion_dispatch_op(io_tensors, mesh_program_descriptor);
 }
 
 std::vector<Tensor> allocate_outputs(
@@ -86,7 +86,7 @@ std::vector<Tensor> allocate_outputs(
                 auto canonical = shared_output_map[i];
                 TT_FATAL(
                     output_specs[i] == output_specs[canonical],
-                    "patchable_generic_op: shared outputs at indices {} and {} have "
+                    "fusion_dispatch_op: shared outputs at indices {} and {} have "
                     "mismatched TensorSpecs — this indicates a bug in the merge logic",
                     i,
                     canonical);
@@ -137,7 +137,7 @@ public:
 
         auto& desc = mesh_desc_.mesh_programs.back().second;
         patch_stale_descriptor(desc, io_tensors, address_slots_);
-        (void)ttnn::prim::patchable_generic_op(io_tensors, mesh_desc_);
+        (void)ttnn::prim::fusion_dispatch_op(io_tensors, mesh_desc_);
 
         if (!result_reorder_.empty()) {
             std::vector<Tensor> reordered;
@@ -153,12 +153,12 @@ public:
 
 }  // namespace
 
-void bind_patchable_generic_op(nb::module_& mod) {
+void bind_fusion_dispatch_op(nb::module_& mod) {
     nb::class_<AddressSlots>(mod, "AddressSlots", R"doc(
         Opaque mapping of every position in a ProgramDescriptor that references
         an IO tensor address (CB buffer pointers, per-core runtime args, common
         runtime args).  Computed once at build time via ``compute_address_slots``,
-        stored by the fusion build cache, and passed to ``patchable_generic_op``
+        stored by the fusion build cache, and passed to ``fusion_dispatch_op``
         on each launch to refresh stale addresses.
     )doc");
 
@@ -174,11 +174,11 @@ void bind_patchable_generic_op(nb::module_& mod) {
         valid (at build time, before tensors are freed).  Uses the same
         address-matching logic as ``discover_address_slots`` in the program
         factory.  The returned ``AddressSlots`` should be passed to
-        ``patchable_generic_op`` on each launch.
+        ``fusion_dispatch_op`` on each launch.
         )doc");
 
     mod.def(
-        "patchable_generic_op",
+        "fusion_dispatch_op",
         [](nb::list ops_input_tensors,
            nb::list output_specs_py,
            const std::vector<std::uint32_t>& shared_output_map,
@@ -242,7 +242,7 @@ void bind_patchable_generic_op(nb::module_& mod) {
         )doc");
 
     mod.def(
-        "patchable_generic_op",
+        "fusion_dispatch_op",
         &dispatch_patched,
         nb::arg("input_tensors"),
         nb::arg("output_tensors"),
@@ -256,8 +256,8 @@ void bind_patchable_generic_op(nb::module_& mod) {
         )doc");
 
     mod.def(
-        "patchable_generic_op",
-        &patchable_generic_op_with_address_refresh,
+        "fusion_dispatch_op",
+        &fusion_dispatch_op_with_address_refresh,
         nb::arg("io_tensors"),
         nb::arg("program_descriptor"),
         nb::arg("address_slots"),
@@ -290,4 +290,4 @@ void bind_patchable_generic_op(nb::module_& mod) {
         .def("dispatch", &FusionDispatchState::dispatch, nb::arg("inputs"));
 }
 
-}  // namespace ttnn::operations::experimental::generic::detail
+}  // namespace ttnn::operations::experimental::fusion::detail

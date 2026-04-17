@@ -13,7 +13,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::generic {
+namespace ttnn::operations::experimental::fusion {
 
 using OptionalAddr = std::optional<std::uint32_t>;
 
@@ -81,7 +81,7 @@ struct CBSlot {
 /// Complete mapping of every position in a ProgramDescriptor that references
 /// an IO tensor address.  Computed once at build time via ``compute_address_slots``
 /// (when addresses are valid), held opaquely by Python, and passed back to
-/// ``patchable_generic_op`` on each launch to refresh stale values.
+/// ``fusion_dispatch_op`` on each launch to refresh stale values.
 struct AddressSlots {
     std::vector<PerCoreRTArgSlot> per_core_rt_arg_slots;
     std::vector<CommonRTArgSlot> common_rt_arg_slots;
@@ -151,4 +151,4 @@ inline void patch_stale_descriptor(
     }
 }
 
-}  // namespace ttnn::operations::experimental::generic
+}  // namespace ttnn::operations::experimental::fusion
