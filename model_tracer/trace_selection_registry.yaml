@@ -95,7 +95,6 @@ registry:
     status: active
     models:
       - deepseek-llm-7b-chat
-      - efficientnetb0
       - falcon7b
       - llama-3.2-11b-vision-instruct
       - llama-3.2-1b-instruct

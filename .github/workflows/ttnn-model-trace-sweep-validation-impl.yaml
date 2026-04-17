@@ -503,8 +503,7 @@ jobs:
           python3 tests/sweep_framework/validate_sweep_trace.py \
             --master-trace model_tracer/traced_operations/ttnn_operations_master.json \
             --sweep-trace "${sweep_trace_files[@]}" \
-            --output-report validation_summary.md \
-            --ignore-categories tensor_placement
+            --output-report validation_summary.md
           validation_exit_code=$?
           set -e
 
