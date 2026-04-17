@@ -14,6 +14,27 @@ The system is designed to work across architectures. Agents must **discover** ar
 
 ---
 
+## Input
+
+The top-level routing (`codegen/CLAUDE.md`) creates an isolated worktree and passes you:
+
+- **KERNEL_NAME** — the kernel to generate (e.g., `gelu`)
+- **TARGET_ARCH** — target architecture (default: `quasar`)
+- **WORKTREE_DIR** — absolute path to the isolated git worktree (e.g., `/tmp/codegen_worktree_generate-gelu-quasar`)
+- **WORKTREE_BRANCH** — the branch name (e.g., `ai-code-gen/generate-gelu-quasar-v1`)
+
+**CRITICAL: All code writes and file modifications MUST happen inside `$WORKTREE_DIR/tt_metal/tt-llk`.** The worktree has `codegen/` populated with symlinks to the source branch (read-only: `agents/`, `scripts/`, `references/`, `config/`, `CLAUDE.md`) plus a real per-worktree `codegen/artifacts/` directory for this run's outputs. Anything you or a subagent writes outside the worktree leaks into the source branch.
+
+Before any other work, enter the worktree:
+
+```bash
+cd "$WORKTREE_DIR/tt_metal/tt-llk"
+```
+
+Every `cd`, file path, and subagent prompt below assumes this as the starting CWD. Each agent you spawn MUST also operate inside the worktree — pass `WORKTREE_DIR` in every agent prompt and tell them to `cd` there before doing anything.
+
+---
+
 ## CRITICAL: Incremental Phase-Based Generation
 
 **Kernels MUST be generated incrementally, one sub-kernel at a time.**
@@ -41,13 +62,15 @@ If any issues are reported, **stop and tell the user** what needs to be fixed be
 
 ## Step 0: Setup Metrics Logging
 
-Record the start time and create a unique log directory for this run:
+Record the start time and create a unique log directory for this run. Every
+variable that's later referenced by a Python heredoc (`os.environ[...]`) is
+`export`'d so the subprocess can read it.
 
 ```bash
-START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-RUN_ID=$(date +%Y-%m-%d)_{kernel}_{arch}_$(head -c 4 /dev/urandom | xxd -p)
-LOG_DIR=/proj_sw/user_dev/llk_code_gen/quasar/$RUN_ID
-GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+export START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+export RUN_ID=$(date +%Y-%m-%d)_{kernel}_{arch}_$(head -c 4 /dev/urandom | xxd -p)
+export LOG_DIR=/proj_sw/user_dev/llk_code_gen/quasar/$RUN_ID
+export GIT_COMMIT=$(git -C "$WORKTREE_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
 mkdir -p $LOG_DIR/instructions
 ```
 
@@ -111,15 +134,34 @@ Note: `--phases-total` is unknown at this point — patch it later with the `met
 subcommand after Step 2 (analyzer) reports the phase plan.
 
 
-Track these variables throughout the run for metrics:
-- `START_TIME` — captured above
-- `PROMPT` — the original user prompt verbatim (e.g., "Generate gelu for Quasar")
-- `BATCH_ID` — if provided via environment variable `CODEGEN_BATCH_ID`, use it; otherwise `null`
-- `MODEL` — if provided via environment variable `CODEGEN_MODEL`, use it; otherwise detect from the current Claude CLI model (e.g., "opus", "sonnet", "haiku")
-- `RUN_TYPE` — if `CODEGEN_BATCH_ID` is set, use `"ci"`; otherwise `"manual"`
-- `GIT_COMMIT` — the repo commit hash at run start, captured above
-- `COMPILATION_ATTEMPTS=0` — increment each time `compiler.py` is run
-- `TESTS_GENERATED=false` — set to `true` if the test-writer agent is spawned (Step 3d)
+Track these variables throughout the run for metrics. **All of them must be
+`export`'d** because the `finalize` step (Step 10) reads them from a Python
+subprocess via `os.environ[...]`:
+
+```bash
+export PROMPT="Generate {kernel} for {arch}"       # the original user prompt verbatim
+export BATCH_ID="${CODEGEN_BATCH_ID:-}"             # empty string if not a batch run
+export MODEL="${CODEGEN_MODEL:-opus}"               # opus | sonnet | haiku
+export RUN_TYPE="$([ -n "$BATCH_ID" ] && echo ci || echo manual)"
+export COMPILATION_ATTEMPTS=0                       # increment each compiler.py invocation
+export DEBUG_CYCLES=0                               # increment each debugger invocation
+export PHASES_TOTAL=0                               # set after analyzer (Step 2)
+export PHASES_COMPLETED=0                           # increment as phases pass
+export TESTS_TOTAL=0                                # set after regression (Step 4)
+export TESTS_PASSED=0
+export LINES_GENERATED=0
+export TESTS_GENERATED=false                        # true if test-writer was spawned
+export OPTIMIZED=false                              # true if optimizer applied a change
+export OPTIMIZATION_TYPE=none                       # replay | none
+export FORMATS_TESTED_JSON='[]'
+export FORMATS_EXCLUDED_JSON='{}'
+export AGENTS_JSON='[]'
+export TOKENS_JSON='{"input":0,"output":0,"cache_read":0,"total":0,"cost_usd":0}'
+export OBSTACLE=                                    # set if the run is blocked
+```
+
+You still need to track two list-valued items in shell (they are too awkward
+to maintain as exported strings):
 - `PER_PHASE=[]` — build up per-phase results as phases complete
 - `FAILURES=[]` — append every failure encountered during the run (see below)
 
@@ -231,6 +273,7 @@ Agent tool:
 
     Be thorough — downstream agents depend on this research being complete.
 
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -276,6 +319,7 @@ Agent tool:
     CRITICAL: You MUST identify sub-kernel phases in your analysis. See the
     "Sub-Kernel Phases" section in llk-analyzer.md for the required output format.
 
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -354,6 +398,7 @@ Agent tool:
     function signatures MUST match those, not the reference.
     Verify init/uninit symmetry: uninit must restore what init changes.
 
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -403,6 +448,7 @@ Agent tool:
     If the spec conflicts with target sources, target sources WIN.
     Do NOT port reference features that the target test/parent don't reference.
 
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -452,6 +498,7 @@ Agent tool:
     Functions in this phase: {phase_functions}
     Do NOT modify functions from previously completed phases — they are tested and working.
 
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -510,6 +557,7 @@ Agent tool:
     Target architecture: {target_arch}
     Kernel path: tt_llk_{target_arch}/{kernel_path}
 
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -562,6 +610,7 @@ Agent tool:
     After your phase test passes, also re-run phase tests from previous phases to
     confirm no regressions.
 
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -637,6 +686,7 @@ Agent tool:
 
     Max 5 fix attempts.
 
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
     LOG_DIR: {LOG_DIR}
 ```
 After the debugger fixes the code, return to Step 3e (test) to verify.
@@ -778,6 +828,7 @@ Agent tool:
 
     If optimization fails, revert to the pre-optimization version.
 
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -835,12 +886,12 @@ After all agents complete:
 
 1. **Record end time**:
 ```bash
-END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+export END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 ```
 
 2. **Count lines generated**:
 ```bash
-LINES_GENERATED=$(wc -l < tt_llk_{target_arch}/{kernel_path})
+export LINES_GENERATED=$(wc -l < tt_llk_{target_arch}/{kernel_path})
 ```
 
 3. **Finalize the live `run.json`** — this is mandatory. Choose `--status`

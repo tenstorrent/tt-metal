@@ -32,26 +32,47 @@ You will receive:
 
 **CRITICAL: All subagents that read or modify code must operate inside `WORKTREE_DIR`.** The worktree contains the codebase from `origin/main` plus symlinked codegen infrastructure. Pass `WORKTREE_DIR` to every subagent prompt.
 
+**CRITICAL: The orchestrator ITSELF must also cd into the worktree** — otherwise `cp codegen/artifacts/…` at Step 6d reads from the source branch (where `codegen/artifacts/` doesn't exist) instead of the worktree's per-run artifacts directory, and those files end up missing from `LOG_DIR` silently.
+
 ---
 
 ## Step 0: Setup Logging
 
-This orchestrator owns its logging. Create a run directory and track metrics:
+This orchestrator owns its logging. Enter the worktree, then create a run directory and track metrics. Every variable that's later referenced by a Python heredoc (`os.environ[...]`) is `export`'d so the subprocess can read it.
 
 ```bash
-LOGS_BASE=/proj_sw/user_dev/llk_code_gen/blackhole_issue_solver
-START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-RUN_ID=$(date +%Y-%m-%d)_issue_${ISSUE_NUMBER}_$(head -c 4 /dev/urandom | xxd -p)
-LOG_DIR=${LOGS_BASE}/${RUN_ID}
-GIT_COMMIT=$(git -C "$WORKTREE_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
+# Enter the worktree so all relative paths resolve inside it, not the source branch.
+cd "$WORKTREE_DIR/tt_metal/tt-llk"
+
+export LOGS_BASE=/proj_sw/user_dev/llk_code_gen/blackhole_issue_solver
+export START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+export RUN_ID=$(date +%Y-%m-%d)_issue_${ISSUE_NUMBER}_$(head -c 4 /dev/urandom | xxd -p)
+export LOG_DIR=${LOGS_BASE}/${RUN_ID}
+export GIT_COMMIT=$(git -C "$WORKTREE_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
 mkdir -p $LOG_DIR/instructions
 ```
 
-Track these variables throughout the run:
-- `COMPILATION_ATTEMPTS = 0`
-- `DEBUG_CYCLES = 0`
-- `FAILURES = []`
-- `AGENTS_USED = []`
+Track these variables throughout the run. **All must be `export`'d** because
+the `finalize` step (Step 6) reads them from a Python subprocess:
+
+```bash
+export COMPILATION_ATTEMPTS=0
+export DEBUG_CYCLES=0
+export TESTS_TOTAL=0
+export TESTS_PASSED=0
+export AGENTS_USED_JSON='[]'           # JSON-serialized AGENTS_USED list
+export TOKENS_JSON='{"input":0,"output":0,"cache_read":0,"total":0,"cost_usd":0}'
+export OBSTACLE=                        # set if blocked
+# FAILURES is maintained as a shell list (append as they happen) — too awkward to export.
+```
+
+Also ensure `ISSUE_NUMBER`, `ISSUE_TITLE`, `ISSUE_LABELS` received from the
+top-level are **exported** (not just shell locals) — Step 0a's Python heredoc
+reads them via `os.environ`:
+
+```bash
+export ISSUE_NUMBER ISSUE_TITLE ISSUE_LABELS
+```
 
 Snapshot agent playbooks for reproducibility:
 ```bash
@@ -479,10 +500,13 @@ python codegen/scripts/run_json_writer.py advance \
 
 ### 6a: Record Timing and Changed Files
 
+Every variable below is `export`'d so Step 6b's Python heredoc can read it
+from `os.environ`:
+
 ```bash
-END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-CHANGED_FILES=$(git -C "$WORKTREE_DIR" diff --name-only origin/main...HEAD 2>/dev/null || echo "")
-CHANGED_FILES_JSON=$(python -c "import json,os; print(json.dumps(os.environ['CHANGED_FILES'].splitlines()))" | tr -d '\n')
+export END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+export CHANGED_FILES=$(git -C "$WORKTREE_DIR" diff --name-only origin/main...HEAD 2>/dev/null || echo "")
+export CHANGED_FILES_JSON=$(python -c "import json,os; print(json.dumps(os.environ['CHANGED_FILES'].splitlines()))" | tr -d '\n')
 ```
 
 ### 6b: Finalize run.json
@@ -641,10 +665,13 @@ The top-level can use this to decide next steps (commit, PR, move to next issue,
 ## Commands
 
 ```bash
-# Compilation check
+# Compilation check — compiler.py takes the test .cpp plus -t/-r params.
+# Read the params from the matching pytest's TestConfig(templates=[...], runtimes=[...]).
 cd codegen
 source ../tests/.venv/bin/activate
-PYTHONPATH=.. python scripts/check_compile.py {path_to_kernel} -v
+CHIP_ARCH=blackhole python scripts/compiler.py \
+    {path_to_test_source} \
+    -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
 
 # Functional tests (BH) — ALWAYS use flock wrapper
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '

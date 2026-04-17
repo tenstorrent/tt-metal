@@ -126,7 +126,7 @@ Create `codegen/artifacts/bh_issue_{number}_fix_plan.md`:
 
 ## Test Strategy
 - **Reproduction test**: `{command to reproduce the original bug}`
-- **Compile check**: `cd codegen && PYTHONPATH=.. python scripts/check_compile.py {file} -v`
+- **Compile check**: `cd codegen && CHIP_ARCH=blackhole python scripts/compiler.py {path_to_test_source} -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v` — template/runtime params come from the pytest's `TestConfig(templates=[...], runtimes=[...])`
 - **Regression tests**: [list of tests that must still pass]
 
 ## Risk Assessment

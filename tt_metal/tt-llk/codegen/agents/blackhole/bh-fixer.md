@@ -71,15 +71,20 @@ Follow the fix plan's "Order of Operations" exactly. For each change:
 
 ### Step 5: Compile Check
 
-After applying all changes, verify compilation:
+After applying all changes, verify compilation via the test that exercises the changed file:
 
 ```bash
 cd codegen
 source ../tests/.venv/bin/activate
-PYTHONPATH=.. python scripts/check_compile.py {path_to_changed_file} -v
+# compiler.py needs the test .cpp source plus -t/-r params. Discover them by
+# reading tests/python_tests/blackhole/test_{kernel}_*.py and copying the
+# TestConfig(templates=[...], runtimes=[...]) values verbatim.
+CHIP_ARCH=blackhole python scripts/compiler.py \
+    {path_to_test_source} \
+    -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
 ```
 
-Run this for each changed file. If multiple files were changed, compile-check all of them.
+Run this for each test source that exercises a changed file. If multiple files were changed, compile-check every test that touches them.
 
 ### Step 6: Handle Compilation Failures
 

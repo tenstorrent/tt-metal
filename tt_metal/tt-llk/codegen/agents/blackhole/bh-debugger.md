@@ -44,7 +44,12 @@ For compilation errors:
 ```bash
 cd codegen
 source ../tests/.venv/bin/activate
-PYTHONPATH=.. python scripts/check_compile.py {path_to_file} -v
+# compiler.py takes the test .cpp source plus -t/-r params. Read them from the
+# matching pytest's TestConfig(templates=[...], runtimes=[...]) call under
+# tests/python_tests/blackhole/.
+CHIP_ARCH=blackhole python scripts/compiler.py \
+    {path_to_test_source} \
+    -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
 ```
 
 For runtime errors, the tester will have provided the error output.
@@ -99,7 +104,9 @@ Use the Edit tool to make targeted fixes. **One fix at a time.**
 ```bash
 cd codegen
 source ../tests/.venv/bin/activate
-PYTHONPATH=.. python scripts/check_compile.py {path_to_file} -v
+CHIP_ARCH=blackhole python scripts/compiler.py \
+    {path_to_test_source} \
+    -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
 ```
 
 ### Step 6: Track Fix Attempts and Iterate

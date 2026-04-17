@@ -95,6 +95,9 @@ setup_worktree() {
   ln -snf "${LLK_ROOT}/codegen/scripts"    "${wt_llk}/codegen/scripts"
   ln -snf "${LLK_ROOT}/codegen/config"     "${wt_llk}/codegen/config"
   ln -sf  "${LLK_ROOT}/codegen/CLAUDE.md"  "${wt_llk}/codegen/CLAUDE.md"
+  # __init__.py is required so `import codegen.config.settings` (Step -1 env
+  # validation, agent_tools imports) works inside the worktree.
+  ln -sf  "${LLK_ROOT}/codegen/__init__.py" "${wt_llk}/codegen/__init__.py"
 
   # Writable: artifacts dir is per-worktree (no cross-contamination)
   mkdir -p "${wt_llk}/codegen/artifacts"

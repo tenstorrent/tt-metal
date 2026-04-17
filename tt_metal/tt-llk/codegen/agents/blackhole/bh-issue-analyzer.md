@@ -105,7 +105,13 @@ If the issue describes a compilation error:
 ```bash
 cd codegen
 source ../tests/.venv/bin/activate
-PYTHONPATH=.. python scripts/check_compile.py {path_to_file} -v
+# compiler.py takes the test .cpp source (not the kernel .h directly) plus the
+# exact template (-t) and runtime (-r) params. Discover both by reading the
+# matching pytest under tests/python_tests/blackhole/ — look for the
+# TestConfig(templates=[...], runtimes=[...]) call.
+CHIP_ARCH=blackhole python scripts/compiler.py \
+    {path_to_test_source} \
+    -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
 ```
 
 If the issue describes a test failure, note the test command but do NOT run it yet — that's the tester's job. Just document what command would reproduce it.

@@ -62,11 +62,15 @@ Read `codegen/artifacts/bh_issue_{number}_fix_plan.md` and find the "Test Strate
 
 ### Step 2: Compile Check (ALWAYS)
 
-For every changed `.h` file:
+For every changed `.h` file, compile-check the test that exercises it:
 ```bash
 cd codegen
 source ../tests/.venv/bin/activate
-PYTHONPATH=.. python scripts/check_compile.py {path_to_file} -v
+# compiler.py needs the test .cpp source plus -t/-r params. Get them from the
+# matching pytest's TestConfig(templates=[...], runtimes=[...]) call.
+CHIP_ARCH=blackhole python scripts/compiler.py \
+    {path_to_test_source} \
+    -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
 ```
 
 If compilation fails, report immediately — no point running tests.
