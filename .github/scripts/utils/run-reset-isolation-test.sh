@@ -100,7 +100,7 @@ sleep 5
 wait "$container0_initial_pid" || true
 
 echo ">>> Resetting device(s): ${RESET_DEVICE_IDS} via tt-smi -r ..."
-tt-smi -r "$RESET_DEVICE_IDS"
+docker exec "${container0}" tt-smi -r "$RESET_DEVICE_IDS"
 echo ">>> Reset complete."
 
 # Unblock the survivor loops so they perform their final confirming run.
