@@ -142,14 +142,14 @@ def mesh_device(request, device_params):
     logger.debug(f"Mesh device with {mesh_device.get_num_devices()} devices is created with shape {mesh_device.shape}")
     yield mesh_device
 
-    for submesh in mesh_device.get_submeshes():
-        ttnn.close_mesh_device(submesh)
-
-    ttnn.close_mesh_device(mesh_device)
-    if fabric_config:
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-
-    del mesh_device
+    try:
+        for submesh in mesh_device.get_submeshes():
+            ttnn.close_mesh_device(submesh)
+        ttnn.close_mesh_device(mesh_device)
+    finally:
+        if fabric_config:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        del mesh_device
 
 
 @pytest.fixture(scope="session")
