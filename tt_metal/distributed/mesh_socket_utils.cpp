@@ -186,6 +186,19 @@ Tag generate_descriptor_exchange_tag(tt_fabric::MeshId peer_mesh_id, std::option
     DistributedContextId unique_context_id = context_id.value_or(DistributedContext::get_current_world()->id());
     return Tag{static_cast<int>(exchange_tags[unique_context_id][peer_mesh_id]++)};
 }
+
+Tag generate_same_mesh_exchange_tag(
+    Rank sender_rank, Rank receiver_rank, std::optional<DistributedContextId> context_id) {
+    // For same-mesh sockets, the per-mesh_id counter used by
+    // generate_descriptor_exchange_tag diverges across ranks because each rank
+    // creates a different number of local create_socket_pair calls that bump the
+    // same counter.  Instead, key the counter on the (sender_rank, receiver_rank)
+    // pair so both sides deterministically produce the same tag.
+    static std::unordered_map<DistributedContextId, std::unordered_map<uint64_t, uint32_t>> exchange_tags;
+    DistributedContextId unique_context_id = context_id.value_or(DistributedContext::get_current_world()->id());
+    uint64_t pair_key = (static_cast<uint64_t>(*sender_rank) << 32) | static_cast<uint64_t>(*receiver_rank);
+    return Tag{static_cast<int>(exchange_tags[unique_context_id][pair_key]++)};
+}
 }  // namespace
 
 std::shared_ptr<MeshBuffer> create_socket_config_buffer(
@@ -298,28 +311,46 @@ void write_socket_configs(
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
+    const auto& global_bindings = control_plane.get_global_logical_bindings();
+
     auto get_fabric_node_from_coord = [&](const MeshCoordinate& device_coord,
                                           const std::shared_ptr<MeshDevice>& peer_device,
-                                          tt_fabric::MeshId peer_mesh_id) -> tt_fabric::FabricNodeId {
+                                          tt_fabric::MeshId peer_mesh_id,
+                                          multihost::Rank peer_rank) -> tt_fabric::FabricNodeId {
         if (peer_device) {
             return peer_device->get_fabric_node_id(device_coord);
         }
-        return tt_fabric::FabricNodeId(peer_mesh_id, mesh_graph.coordinate_to_chip(peer_mesh_id, device_coord));
+        auto it = global_bindings.find(peer_rank);
+        std::optional<tt_fabric::MeshHostRankId> host_rank;
+        if (it != global_bindings.end()) {
+            host_rank = std::get<1>(it->second);
+        }
+        return tt_fabric::FabricNodeId(
+            peer_mesh_id, mesh_graph.coordinate_to_chip(peer_mesh_id, device_coord, host_rank));
     };
 
     if (is_sender) {
         const auto max_num_downstreams = get_max_num_downstreams_per_core(config);
-        const auto local_coord_range =
-            control_plane.get_coord_range(local_descriptor.config.sender_mesh_id.value(), tt_fabric::MeshScope::LOCAL);
         const auto sender_total_size_bytes =
             sender_size.md_size_bytes +
             (max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes));
 
+        std::optional<tt_fabric::MeshHostRankId> sender_host_rank;
+        auto sender_it = global_bindings.find(local_descriptor.config.sender_rank);
+        if (sender_it != global_bindings.end()) {
+            sender_host_rank = std::get<1>(sender_it->second);
+        }
+
         std::vector<uint32_t> config_data(config_buffer->size() / sizeof(uint32_t), 0);
 
         for (const auto& [device_coord, cores_map] : grouped_connections) {
-            if (!local_coord_range.contains(device_coord)) {
-                continue;
+            if (sender_host_rank.has_value()) {
+                auto sender_mesh_id = local_descriptor.config.sender_mesh_id.value();
+                auto global_coord = mesh_graph.chip_to_coordinate(
+                    sender_mesh_id, mesh_graph.coordinate_to_chip(sender_mesh_id, device_coord, sender_host_rank));
+                if (!mesh_graph.get_coord_range(sender_mesh_id, sender_host_rank).contains(global_coord)) {
+                    continue;
+                }
             }
             if (cores_map.size() > 1) {
                 log_warning(
@@ -350,8 +381,8 @@ void write_socket_configs(
                     MeshCoordinate recv_device_coord = connection.receiver_core.device_coord;
                     auto recv_virtual_core =
                         mesh_device->worker_core_from_logical_core(connection.receiver_core.core_coord);
-                    tt_fabric::FabricNodeId recv_fabric_node_id =
-                        get_fabric_node_from_coord(recv_device_coord, peer_device, config.receiver_mesh_id.value());
+                    tt_fabric::FabricNodeId recv_fabric_node_id = get_fabric_node_from_coord(
+                        recv_device_coord, peer_device, config.receiver_mesh_id.value(), config.receiver_rank);
                     uint32_t receiver_id = receiver_ids_per_sender.at(connection);
                     auto [downstream_mesh_id, downstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
                         mesh_device->get_fabric_node_id(sender_core.device_coord),
@@ -372,12 +403,22 @@ void write_socket_configs(
     } else {
         std::vector<receiver_socket_md> config_data(
             config_buffer->size() / sizeof(receiver_socket_md), receiver_socket_md());
-        const auto local_coord_range = control_plane.get_coord_range(
-            local_descriptor.config.receiver_mesh_id.value(), tt_fabric::MeshScope::LOCAL);
+
+        std::optional<tt_fabric::MeshHostRankId> receiver_host_rank;
+        auto receiver_it = global_bindings.find(local_descriptor.config.receiver_rank);
+        if (receiver_it != global_bindings.end()) {
+            receiver_host_rank = std::get<1>(receiver_it->second);
+        }
 
         for (const auto& [device_coord, cores_map] : grouped_connections) {
-            if (!local_coord_range.contains(device_coord)) {
-                continue;
+            if (receiver_host_rank.has_value()) {
+                auto receiver_mesh_id = local_descriptor.config.receiver_mesh_id.value();
+                auto global_coord = mesh_graph.chip_to_coordinate(
+                    receiver_mesh_id,
+                    mesh_graph.coordinate_to_chip(receiver_mesh_id, device_coord, receiver_host_rank));
+                if (!mesh_graph.get_coord_range(receiver_mesh_id, receiver_host_rank).contains(global_coord)) {
+                    continue;
+                }
             }
 
             for (const auto& [recv_core_coord, indexed_connections] : cores_map) {
@@ -386,8 +427,8 @@ void write_socket_configs(
                 MeshCoordinate sender_device_coord = connection.sender_core.device_coord;
                 auto sender_virtual_core =
                     mesh_device->worker_core_from_logical_core(connection.sender_core.core_coord);
-                tt_fabric::FabricNodeId sender_fabric_node_id =
-                    get_fabric_node_from_coord(sender_device_coord, peer_device, config.sender_mesh_id.value());
+                tt_fabric::FabricNodeId sender_fabric_node_id = get_fabric_node_from_coord(
+                    sender_device_coord, peer_device, config.sender_mesh_id.value(), config.sender_rank);
                 MeshCoreCoord recv_core = {device_coord, recv_core_coord};
 
                 auto [upstream_mesh_id, upstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
@@ -421,13 +462,17 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
     const auto& config = socket_endpoint.get_config();
     bool is_sender = socket_endpoint.get_socket_endpoint_type() == SocketEndpoint::SENDER;
 
+    auto my_mesh_id = is_sender ? config.sender_mesh_id.value() : config.receiver_mesh_id.value();
     auto peer_mesh_id = is_sender ? config.receiver_mesh_id.value() : config.sender_mesh_id.value();
+    bool same_mesh = (my_mesh_id == peer_mesh_id);
+    Tag tag = same_mesh ? generate_same_mesh_exchange_tag(config.sender_rank, config.receiver_rank, context_id)
+                        : generate_descriptor_exchange_tag(peer_mesh_id, context_id);
+
     SocketPeerDescriptor local_endpoint_desc = {
         .config = config,
         .config_buffer_address = socket_endpoint.get_config_buffer()->address(),
         .data_buffer_address = is_sender ? 0 : socket_endpoint.get_data_buffer()->address(),
-        .exchange_tag = generate_descriptor_exchange_tag(peer_mesh_id, context_id)  // Unique tag for this exchange
-    };
+        .exchange_tag = tag};
     return local_endpoint_desc;
 }
 
@@ -585,12 +630,64 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     return remote_desc;
 }
 
+void forward_descriptor_to_peer(
+    const SocketPeerDescriptor& desc,
+    multihost::Rank peer_rank,
+    const std::shared_ptr<const multihost::DistributedContext>& context) {
+    auto serialized = serialize_to_bytes(desc);
+    int size = static_cast<int>(serialized.size());
+    execute_with_timeout([&]() {
+        context->send(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&size), sizeof(size)), peer_rank, desc.exchange_tag);
+    });
+    execute_with_timeout([&]() {
+        context->send(
+            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized.data(), serialized.size())),
+            peer_rank,
+            desc.exchange_tag);
+    });
+}
+
+SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
+    const SocketPeerDescriptor& desc,
+    multihost::Rank peer_rank,
+    const std::shared_ptr<const multihost::DistributedContext>& context) {
+    int remote_size = 0;
+    execute_with_timeout([&]() {
+        context->recv(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&remote_size), sizeof(remote_size)),
+            peer_rank,
+            desc.exchange_tag);
+    });
+    std::vector<uint8_t> serialized_remote(remote_size);
+    execute_with_timeout([&]() {
+        context->recv(
+            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_remote.data(), serialized_remote.size())),
+            peer_rank,
+            desc.exchange_tag);
+    });
+    return deserialize_from_bytes(serialized_remote);
+}
+
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
     const SocketConfig& config,
     const std::shared_ptr<MeshDevice>& sender_device,
     const std::shared_ptr<MeshDevice>& receiver_device) {
     std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> fabric_node_id_map;
-    const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& global_bindings = control_plane.get_global_logical_bindings();
+
+    auto resolve_fabric_node_id_from_rank = [&](const MeshCoordinate& local_coord,
+                                                tt_fabric::MeshId mesh_id,
+                                                multihost::Rank rank) -> tt_fabric::FabricNodeId {
+        auto it = global_bindings.find(rank);
+        std::optional<tt_fabric::MeshHostRankId> host_rank;
+        if (it != global_bindings.end()) {
+            host_rank = std::get<1>(it->second);
+        }
+        return tt_fabric::FabricNodeId(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, local_coord, host_rank));
+    };
 
     for (uint32_t i = 0; i < config.socket_connection_config.size(); ++i) {
         const auto& connection = config.socket_connection_config[i];
@@ -602,9 +699,8 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
             TT_FATAL(config.sender_mesh_id.has_value(), "Sender mesh id is not set.");
             fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::SENDER)].emplace(
                 connection.sender_core.device_coord,
-                tt::tt_fabric::FabricNodeId(
-                    config.sender_mesh_id.value(),
-                    mesh_graph.coordinate_to_chip(config.sender_mesh_id.value(), connection.sender_core.device_coord)));
+                resolve_fabric_node_id_from_rank(
+                    connection.sender_core.device_coord, config.sender_mesh_id.value(), config.sender_rank));
         }
         if (receiver_device) {
             fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::RECEIVER)].emplace(
@@ -614,10 +710,8 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
             TT_FATAL(config.receiver_mesh_id.has_value(), "Receiver mesh id is not set.");
             fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::RECEIVER)].emplace(
                 connection.receiver_core.device_coord,
-                tt::tt_fabric::FabricNodeId(
-                    config.receiver_mesh_id.value(),
-                    mesh_graph.coordinate_to_chip(
-                        config.receiver_mesh_id.value(), connection.receiver_core.device_coord)));
+                resolve_fabric_node_id_from_rank(
+                    connection.receiver_core.device_coord, config.receiver_mesh_id.value(), config.receiver_rank));
         }
     }
     return fabric_node_id_map;
