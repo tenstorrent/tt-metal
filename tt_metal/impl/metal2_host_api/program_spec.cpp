@@ -220,11 +220,9 @@ bool IsValidCppIdentifier(std::string_view s) {
         "using",       "virtual",   "void",       "volatile",  "wchar_t",  "while",        "xor",
         "xor_eq",
     };
-    if (kCppKeywords.contains(s)) {
-        return false;
-    }
 
-    return true;
+    // If we got this far, and the name doesn't match any keywords, it's valid.
+    return !kCppKeywords.contains(s);
 }
 
 // ============================================================================
