@@ -412,10 +412,10 @@ def _build_program_for_device(
     # Activation tile size in shifted units (byte >> cb_addr_shift=4).
     # bf16 tile: face_r_dim * 32 * 2 bytes per face, 4 faces if full tile.
     # For M=1: tile shape [1, 32], page_size from CB.
-    # Activation tile page size in CB-shifted units (bytes >> _CB_ADDR_SHIFT).
+    # Activation tile page size in bytes (override_cb_rd_ptr handles shifting).
     tile_h, tile_w = a_tensor.get_tile().tile_shape
     datum_size = dtype_size(a_tensor.dtype)
-    in0_page_size = (tile_h * tile_w * datum_size) >> _CB_ADDR_SHIFT
+    in0_page_size = tile_h * tile_w * datum_size
 
     # Metadata words per expert/block for new packed LLK format.
     sram_meta_words_per_expert = _meta_words_for_tiles(sram_k_per_core * sram_per_core_n)

@@ -405,11 +405,7 @@ struct MatmulExpertCompressedDRAM {
                 }
 
                 uint32_t in0_base = 0;
-                uint32_t in0_operand_id = 0;
-                UNPACK(({
-                    in0_operand_id = get_operand_id(CTArgs::cb_in0);
-                    in0_base = get_local_cb_interface(in0_operand_id).fifo_rd_ptr;
-                }));
+                UNPACK(({ in0_base = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in0); }));
 
                 if constexpr (CTArgs::accum_experts) {
                     constexpr uint32_t tiles_per_block = CTArgs::subblock_k * CTArgs::subblock_n;
@@ -441,8 +437,8 @@ struct MatmulExpertCompressedDRAM {
                                 uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
 
                                 UNPACK(({
-                                    get_local_cb_interface(in0_operand_id).fifo_rd_ptr =
-                                        act_rd_ptr + sb_k * CTArgs::subblock_k * in0_page_size;
+                                    unified_kernels::override_cb_rd_ptr(
+                                        CTArgs::cb_in0, act_rd_ptr + sb_k * CTArgs::subblock_k * in0_page_size);
                                 }));
 
                                 if (sb_k < CTArgs::num_subblocks_k - 1) {
@@ -508,8 +504,8 @@ struct MatmulExpertCompressedDRAM {
                                 cb_wait_front(CTArgs::cb_in1, tiles_per_block);
 
                                 UNPACK(({
-                                    get_local_cb_interface(in0_operand_id).fifo_rd_ptr =
-                                        in0_base + sb_k * CTArgs::subblock_k * in0_page_size;
+                                    unified_kernels::override_cb_rd_ptr(
+                                        CTArgs::cb_in0, in0_base + sb_k * CTArgs::subblock_k * in0_page_size);
                                 }));
 
                                 uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);

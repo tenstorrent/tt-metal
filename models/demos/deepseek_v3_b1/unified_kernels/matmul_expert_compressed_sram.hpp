@@ -177,11 +177,7 @@ struct MatmulExpertCompressedSRAM {
                 compressed_custom_mm_block_init_short<false, true, true>(cb_in0, cb_in1, cb_out);
 
                 uint32_t in0_base = 0;
-                uint32_t in0_operand_id = 0;
-                UNPACK(({
-                    in0_operand_id = get_operand_id(cb_in0);
-                    in0_base = get_local_cb_interface(in0_operand_id).fifo_rd_ptr;
-                }));
+                UNPACK(({ in0_base = unified_kernels::get_cb_rd_ptr(cb_in0); }));
 
                 const volatile uint32_t* sram_base_addrs =
                     reinterpret_cast<const volatile uint32_t*>(CTArgs::sram_base_addrs_l1_addr);
@@ -199,8 +195,8 @@ struct MatmulExpertCompressedSRAM {
 
                         UNPACK(({
                             unified_kernels::override_cb_rd_ptr(cb_in1, expert_base);
-                            get_local_cb_interface(in0_operand_id).fifo_rd_ptr =
-                                in0_base_k + sram_expert_info[i].act_tile_offset * in0_page_size;
+                            unified_kernels::override_cb_rd_ptr(
+                                cb_in0, in0_base_k + sram_expert_info[i].act_tile_offset * in0_page_size);
                         }));
 
                         if (i < num_sram_experts - 1) {
@@ -219,9 +215,7 @@ struct MatmulExpertCompressedSRAM {
                     cb_push_back(cb_out, out_w);
                 } else {
                     if constexpr (k_offset > 0) {
-                        UNPACK(({
-                            get_local_cb_interface(in0_operand_id).fifo_rd_ptr = in0_base + k_offset * in0_page_size;
-                        }));
+                        UNPACK(({ unified_kernels::override_cb_rd_ptr(cb_in0, in0_base + k_offset * in0_page_size); }));
                     }
 
                     for (uint32_t i = 0; i < num_sram_experts; i++) {
@@ -245,6 +239,8 @@ struct MatmulExpertCompressedSRAM {
                         cb_push_back(cb_out, out_w);
                     }
                 }
+
+                UNPACK(({ unified_kernels::override_cb_rd_ptr(cb_in0, in0_base); }));
 
                 compressed_custom_mm_block_uninit<true>();
             }

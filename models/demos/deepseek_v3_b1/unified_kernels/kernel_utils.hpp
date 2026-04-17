@@ -151,6 +151,11 @@ FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
 
 #if defined(COMPILE_FOR_TRISC)
 
+// Read a CB's current read pointer as a byte address.
+FORCE_INLINE uint32_t get_cb_rd_ptr(uint32_t cb_id) {
+    return get_local_cb_interface(cb_id).fifo_rd_ptr << cb_addr_shift;
+}
+
 // Override a CB's read pointer to a byte address (converted to cb_addr_shift units).
 FORCE_INLINE void override_cb_rd_ptr(uint32_t cb_id, uint32_t byte_address) {
     get_local_cb_interface(cb_id).fifo_rd_ptr = byte_address >> cb_addr_shift;
