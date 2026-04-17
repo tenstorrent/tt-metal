@@ -17,7 +17,7 @@ WHISPER_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
 # FFN matmuls: LoFi (N150). FFN runs fc1+fc2 in L1 with one DRAM round-trip; fc1 uses fused ``activation='gelu'``.
 WHISPER_FFN_MATMUL_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=False,
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
