@@ -142,15 +142,15 @@ static uint32_t get_fpu_utilization_pct() {
     if (env != nullptr) {
         try {
             int val = std::stoi(env);
-            if (val >= 1 && val <= 92) {
+            if (val >= 1 && val <= 98) {
                 return static_cast<uint32_t>(val);
             }
         } catch (...) {
         }
         log_warning(
-            LogTest, "MAX_UTIL_FPU_UTILIZATION_PCT='{}' is not an integer in [1, 92] – using default of 92", env);
+            LogTest, "MAX_UTIL_FPU_UTILIZATION_PCT='{}' is not an integer in [1, 98] – using default of 98", env);
     }
-    return 92;
+    return 98;
 }
 
 /// Reads MAX_UTIL_DRAM_UTILIZATION_PCT from the environment; defaults to 100.
@@ -572,24 +572,23 @@ static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
 //
 // Maps FPU utilization percentage → cycles_to_wait between compute operations.
 // The kernel uses cycles_to_wait to insert idle cycles and throttle the FPU.
-// Fill in the values for your target architecture; keys cover the valid [1, 92]
+// Fill in the values for your target architecture; keys cover the valid [1, 98]
 // range at representative intervals.
 //
-// TODO(WH): Recalibrate for Wormhole B0; map entries below are copied from BH as a starting point.
 // ---------------------------------------------------------------------------
 
 // clang-format off
 static const std::map<uint32_t, uint32_t> kFpuUtilToCyclesMap = {
-    {10,  1100},
-    {20,  500},
-    {30,  280},
-    {40,  180},
-    {50,  120},
-    {60,  75},
-    {70,  47},
-    {80,  23},
-    {90,  6},
-    {92,  0},
+    {10,  1540},
+    {20,   750},
+    {30,   441},
+    {40,   290},
+    {50,   195},
+    {60,   153},
+    {70,    105},
+    {80,    60},
+    {90,    23},
+    {98,     0},
 };
 // clang-format on
 
