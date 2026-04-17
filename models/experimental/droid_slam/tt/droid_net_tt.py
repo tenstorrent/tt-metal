@@ -98,6 +98,49 @@ class TtDroidNet:
         self._image_cache = None  # (data_ptr, shape, version, x_tt_normalized)
         self._corr_cache = None
         self._flow_cache = None
+        # Trace-capture state. When inputs are identity-cached across
+        # iterations, the extract/update ops become deterministic — we
+        # capture them into a ttnn trace after the first cache hit and
+        # replay via `execute_trace` thereafter so the CPU no longer
+        # pays per-op Python dispatch cost.
+        self._extract_trace_id = None
+        self._extract_trace_outputs = None  # (fmaps_tt, fh, fw, net_tt, inp_tt, ch, cw)
+        self._extract_cache_hit_seen = False
+        self._update_trace_id = None
+        self._update_trace_outputs = None
+        self._update_trace_key = None  # fingerprint of the inputs used at capture
+        self._update_cache_hit_seen = False
+
+    def _update_body(self, net_src, inp_src, corr_tt, flow_tt, bn, h, w,
+                     is_identity_slice, n_edges):
+        """Trace-eligible body of update — the conv stack plus the
+        optional slice when ii subsets the cached frames.
+        """
+        if is_identity_slice:
+            net_tt = net_src
+            inp_tt = inp_src
+        else:
+            rows = n_edges * h * w
+            net_tt = ttnn.slice(net_src, [0, 0, 0, 0], [1, 1, rows, 128])
+            inp_tt = ttnn.slice(inp_src, [0, 0, 0, 0], [1, 1, rows, 128])
+        net_o_tt, delta_tt, weight_tt, eta_tt, upmask_tt = self.tt_update.forward(
+            net_tt, inp_tt, corr_tt, flow_tt, batch_size=bn, h=h, w=w
+        )
+        eta_scaled = ttnn.multiply(eta_tt, 0.01)
+        return net_o_tt, delta_tt, weight_tt, eta_tt, upmask_tt, eta_scaled
+
+    def _extract_body(self, x_tt, bn, h, w):
+        """Trace-eligible body of extract_features — every op inside is
+        pure ttnn compute on the cached input tile.
+        """
+        fmaps_tt, fh, fw = self.tt_fnet(x_tt, batch_size=bn, h=h, w=w)
+        context_tt, ch_, cw_ = self.tt_cnet(x_tt, batch_size=bn, h=h, w=w)
+        n_last = context_tt.shape[-2]
+        net_tt = ttnn.slice(context_tt, [0, 0, 0, 0], [1, 1, n_last, 128])
+        inp_tt = ttnn.slice(context_tt, [0, 0, 0, 128], [1, 1, n_last, 256])
+        net_tt = ttnn.tanh(net_tt)
+        inp_tt = ttnn.relu(inp_tt)
+        return fmaps_tt, fh, fw, net_tt, inp_tt, ch_, cw_
 
     # ------------------------------------------------------------------
     # extract_features
@@ -125,16 +168,33 @@ class TtDroidNet:
             x_tt = ttnn.subtract(x_tt, self._norm_shift)
             self._image_cache = (cache_key, x_tt)
 
-        fmaps_tt, fh, fw = self.tt_fnet(x_tt, batch_size=bn, h=h, w=w)
-        context_tt, ch_, cw_ = self.tt_cnet(x_tt, batch_size=bn, h=h, w=w)
-
-        # context has 256 channels — split into net(128) + inp(128),
-        # apply tanh/relu on device.
-        n_last = context_tt.shape[-2]
-        net_tt = ttnn.slice(context_tt, [0, 0, 0, 0], [1, 1, n_last, 128])
-        inp_tt = ttnn.slice(context_tt, [0, 0, 0, 128], [1, 1, n_last, 256])
-        net_tt = ttnn.tanh(net_tt)
-        inp_tt = ttnn.relu(inp_tt)
+        if self._extract_trace_id is not None and x_tt is self._image_cache[1]:
+            # Replay path — traced ops rewrite the same on-device buffers.
+            ttnn.execute_trace(
+                self.device, self._extract_trace_id, cq_id=0, blocking=True
+            )
+            fmaps_tt, fh, fw, net_tt, inp_tt, ch_, cw_ = self._extract_trace_outputs
+        elif (
+            self._extract_cache_hit_seen
+            and x_tt is self._image_cache[1]
+            and self._extract_trace_id is None
+        ):
+            # Second cache-hit call: capture the trace while executing.
+            trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+            try:
+                fmaps_tt, fh, fw, net_tt, inp_tt, ch_, cw_ = self._extract_body(
+                    x_tt, bn, h, w
+                )
+            finally:
+                ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+            self._extract_trace_id = trace_id
+            self._extract_trace_outputs = (fmaps_tt, fh, fw, net_tt, inp_tt, ch_, cw_)
+        else:
+            fmaps_tt, fh, fw, net_tt, inp_tt, ch_, cw_ = self._extract_body(
+                x_tt, bn, h, w
+            )
+            if self._image_cache is not None and x_tt is self._image_cache[1]:
+                self._extract_cache_hit_seen = True
 
         # Stash on-device net/inp tiles so update() can slice them by
         # ii directly without a torch roundtrip.
@@ -178,25 +238,14 @@ class TtDroidNet:
                 if ii_list == list(range(n_edges)):
                     use_cache = True
 
-        if use_cache:
-            cn_total = self._cached_shape[1]
-            if n_edges == cn_total:
-                net_tt = self._cached_net_tt
-                inp_tt = self._cached_inp_tt
-            else:
-                # Slice the first n_edges frames from packed (1,1,cn*h*w,128).
-                rows = n_edges * h * w
-                net_tt = ttnn.slice(
-                    self._cached_net_tt, [0, 0, 0, 0], [1, 1, rows, 128]
-                )
-                inp_tt = ttnn.slice(
-                    self._cached_inp_tt, [0, 0, 0, 0], [1, 1, rows, 128]
-                )
-        else:
+        if not use_cache:
             net_bn = net.view(bn, nc, h, w)
             inp_bn = inp.view(bn, -1, h, w)
-            net_tt = _pack_nchw_to_tile_nhwc(net_bn, self.device)
-            inp_tt = _pack_nchw_to_tile_nhwc(inp_bn, self.device)
+            net_src = _pack_nchw_to_tile_nhwc(net_bn, self.device)
+            inp_src = _pack_nchw_to_tile_nhwc(inp_bn, self.device)
+        else:
+            net_src = self._cached_net_tt
+            inp_src = self._cached_inp_tt
 
         # corr/flow identity caches (same rationale as the image cache).
         corr_key = (corr.data_ptr(), tuple(corr.shape), corr._version)
@@ -213,13 +262,67 @@ class TtDroidNet:
             flow_tt = _pack_nchw_to_tile_nhwc(flow_bn, self.device)
             self._flow_cache = (flow_key, flow_tt)
 
-        net_o_tt, delta_tt, weight_tt, eta_tt, upmask_tt = self.tt_update.forward(
-            net_tt, inp_tt, corr_tt, flow_tt, batch_size=bn, h=h, w=w
+        cn_total = self._cached_shape[1] if use_cache else n_edges
+        is_identity_slice = use_cache and n_edges == cn_total
+        inputs_stable = (
+            use_cache
+            and self._corr_cache is not None
+            and corr_tt is self._corr_cache[1]
+            and self._flow_cache is not None
+            and flow_tt is self._flow_cache[1]
         )
+        key = (id(net_src), id(inp_src), id(corr_tt), id(flow_tt), n_edges, h, w)
 
-        # Kick the 0.01 scale onto device eagerly (cheap op) but defer
-        # every actual download until the caller reads the tensor.
-        eta_scaled = ttnn.multiply(eta_tt, 0.01)
+        if (
+            inputs_stable
+            and self._update_trace_id is not None
+            and self._update_trace_key == key
+        ):
+            ttnn.execute_trace(
+                self.device, self._update_trace_id, cq_id=0, blocking=True
+            )
+            net_o_tt, delta_tt, weight_tt, eta_tt, upmask_tt, eta_scaled = (
+                self._update_trace_outputs
+            )
+        elif (
+            inputs_stable
+            and self._update_cache_hit_seen
+            and self._update_trace_id is None
+        ):
+            trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+            try:
+                (
+                    net_o_tt,
+                    delta_tt,
+                    weight_tt,
+                    eta_tt,
+                    upmask_tt,
+                    eta_scaled,
+                ) = self._update_body(
+                    net_src, inp_src, corr_tt, flow_tt, bn, h, w,
+                    is_identity_slice, n_edges,
+                )
+            finally:
+                ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+            self._update_trace_id = trace_id
+            self._update_trace_key = key
+            self._update_trace_outputs = (
+                net_o_tt, delta_tt, weight_tt, eta_tt, upmask_tt, eta_scaled,
+            )
+        else:
+            (
+                net_o_tt,
+                delta_tt,
+                weight_tt,
+                eta_tt,
+                upmask_tt,
+                eta_scaled,
+            ) = self._update_body(
+                net_src, inp_src, corr_tt, flow_tt, bn, h, w,
+                is_identity_slice, n_edges,
+            )
+            if inputs_stable:
+                self._update_cache_hit_seen = True
 
         net_o = _LazyTensor(
             lambda t=net_o_tt, bn=bn, h=h, w=w, b=b, n_e=n_edges: (

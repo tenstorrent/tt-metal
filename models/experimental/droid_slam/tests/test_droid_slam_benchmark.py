@@ -93,7 +93,11 @@ def _ref_model(weights_path: Path) -> DroidNet:
     return ref
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 24576, "trace_region_size": 6 * 1024 * 1024}],
+    indirect=True,
+)
 def test_droid_slam_benchmark(device):
     weights_path = Path(os.environ.get("DROID_WEIGHTS", str(DEFAULT_WEIGHTS)))
     ref = _ref_model(weights_path)
