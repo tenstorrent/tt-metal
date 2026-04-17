@@ -260,8 +260,6 @@ class WhisperGenerator:
 
         # Decode trace (enlarged: embedding -> decoder -> lm_head -> argmax, persistent across generations)
         self.trace_id_decode = defaultdict(lambda: None)
-        # One-time JIT warmup per trace_key before ``begin_trace_capture`` (persistent decode trace).
-        self._decode_kernels_compiled = defaultdict(bool)
 
         # Host/device staging for token IDs (enlarged decode trace and non-traced decode steps).
         self.token_id_host = defaultdict(lambda: None)
