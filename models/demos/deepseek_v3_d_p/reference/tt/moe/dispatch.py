@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@ Expert-centric MoE Dispatch Module (PyTorch Reference Implementation)
 This module implements token dispatching for Mixture-of-Experts (MoE) layers.
 
 Goals:
-- Expert-centric buffer organization: [chips, experts_per_chip, tokens, hidden]
+- Expert-centric buffer organization: [chips, experts_per_chip, tokens, emb_dim]
 - Dense expert matmuls with no wasted compute (each expert only processes its routed tokens)
 - No wasted memory (compact buffers, no sparse token arrays)
 - Capacity factor (CF) handles load imbalance: allocates CF × expected_load per expert
@@ -17,6 +17,8 @@ Goals:
 
 import torch
 from loguru import logger
+
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 
 class TorchDispatchModule(torch.nn.Module):
@@ -31,7 +33,7 @@ class TorchDispatchModule(torch.nn.Module):
         metadata_len: int,
         max_dispatched_tokens_per_expert: int,
         seq_len_per_chip: int,
-        hidden_dim: int = 7 * 1024,
+        emb_dim: int = 7 * 1024,
         num_dispatch_groups: int = 1,
         expert_dispatch_table: torch.Tensor = None,
     ):
@@ -64,7 +66,7 @@ class TorchDispatchModule(torch.nn.Module):
             dispatch_group_size,
             self.experts_per_chip,
             self.max_dispatched_tokens_per_expert,
-            hidden_dim,
+            emb_dim,
         )
         self.dispatched_metadata_shape = (
             num_dispatch_groups,
@@ -91,19 +93,19 @@ class TorchDispatchModule(torch.nn.Module):
         Tokens are gathered into per-expert buffers with metadata tracking their origin for later recombination.
 
         Args:
-            x: Input tensor of shape (dispatch_group_size, seq_len, hidden_dim)
+            x: Input tensor of shape (dispatch_group_size, seq_len, emb_dim)
             weights: Router weights of shape (num_dispatch_groups, dispatch_group_size, seq_len, num_experts_per_tok) or
                      (dispatch_group_size, seq_len, num_experts_per_tok)
             indices: Expert indices of shape (dispatch_group_size, seq_len, num_experts_per_tok)
-            expert_offsets: Base offset for each expert from each chip
-                Shape: (dispatch_group_size, num_routed_experts) - from get_gate_outputs()
+            expert_offsets: Base offset for each expert from each chip (sparse per group)
+                Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts) - from get_gate_outputs()
 
         Returns:
             If num_dispatch_groups == 1:
-                dispatched: shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
+                dispatched: shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
                 metadata: shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
             If num_dispatch_groups > 1:
-                dispatched: shape (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
+                dispatched: shape (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
                 metadata: shape (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
         """
         logger.debug(f"[TorchDispatchModule.forward] INPUT SHAPES:")
@@ -133,8 +135,8 @@ class TorchDispatchModule(torch.nn.Module):
         dispatched_metadata = torch.ones(self.dispatched_metadata_shape, dtype=torch.int32) * -1
 
         for group in range(self.num_dispatch_groups):
-            # Make a mutable copy of offsets for dispatch loop
-            offset_copy = expert_offsets.clone()
+            # Make a mutable copy of offsets for this group's dispatch loop
+            offset_copy = expert_offsets[group].clone()
 
             # Dispatch tokens and metadata
             for chip in range(self.dispatch_group_size):
@@ -156,9 +158,13 @@ class TorchDispatchModule(torch.nn.Module):
                         dst_index = offset_copy[chip, routed_expert]
 
                         dispatched_buffer[group, expert_chip, expert_index_within_chip, dst_index] = x[chip, token]
+                        # Compute linearized mesh coord for combine module
+                        linearized_coord = ExpertMapping.compute_linearized_mesh_coord(
+                            chip, group, self.num_dispatch_groups
+                        )
                         dispatched_metadata[group, expert_chip, expert_index_within_chip, dst_index] = torch.tensor(
                             [
-                                chip,
+                                linearized_coord,
                                 token,
                                 topk_idx,
                                 routed_expert,

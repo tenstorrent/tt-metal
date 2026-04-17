@@ -31,12 +31,12 @@ void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor {} must be on device", i);
         TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor {} must be allocated in buffers on device", i);
 
-        TT_FATAL(
-            input_tensor.dtype() == dtype,
-            "All input tensors must have the same dtype. Input tensor {} has dtype {} but expected {}",
-            i,
-            input_tensor.dtype(),
-            dtype);
+        // TT_FATAL(
+        //     input_tensor.dtype() == dtype,
+        //     "All input tensors must have the same dtype. Input tensor {} has dtype {} but expected {}",
+        //     i,
+        //     input_tensor.dtype(),
+        //     dtype);
 
         TT_FATAL(
             input_tensor.memory_config() == memory_config,

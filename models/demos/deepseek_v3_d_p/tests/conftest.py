@@ -1,13 +1,15 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Pytest configuration for deepseek_v3_d_p tests.
-
-Provides the `requires_mesh_topology` marker for skipping tests based on
-device count and topology constraints for Blackhole vs Wormhole architectures.
+Shared fixtures for deepseek_v3_d_p tests.
+Provides mesh topology markers and pretrained weights checking.
+Automatically downloads weights from HuggingFace if not available locally.
 """
+
+import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -16,6 +18,8 @@ from transformers import AutoConfig
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
 
 
 def pytest_configure(config):
