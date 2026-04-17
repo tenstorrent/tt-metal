@@ -131,7 +131,8 @@ def run_test(device_id: int = 0):
                 weight_dtype=ttnn.bfloat16,
             )
 
-            output_tt = layer(hidden_tt, cos_tt, sin_tt, trans_mat, attention_mask=None)
+            # Layer returns (hidden_states, kv_cache); only hidden_states is a TTNN tensor for to_torch.
+            output_tt, _kv_cache = layer(hidden_tt, cos_tt, sin_tt, trans_mat, attention_mask=None, kv_cache=None)
             ttnn_output = ttnn.to_torch(output_tt).squeeze(1)[:, :seq_len, :]
 
             # Compare
@@ -172,7 +173,7 @@ def run_test(device_id: int = 0):
                 weight_dtype=ttnn.bfloat16,
             )
 
-            hidden_tt = layer(hidden_tt, cos_tt, sin_tt, trans_mat, attention_mask=None)
+            hidden_tt, _kv_cache = layer(hidden_tt, cos_tt, sin_tt, trans_mat, attention_mask=None, kv_cache=None)
             ttnn_output = ttnn.to_torch(hidden_tt).squeeze(1)[:, :seq_len, :]
 
             # Compare
