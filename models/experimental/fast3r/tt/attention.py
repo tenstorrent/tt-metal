@@ -22,7 +22,7 @@ class TtAttention:
     SDPA_PROG = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
         q_chunk_size=64,
-        k_chunk_size=256,
+        k_chunk_size=512,
         exp_approx_mode=True,
     )
 
