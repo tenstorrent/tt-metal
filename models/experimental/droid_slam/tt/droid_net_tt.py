@@ -47,12 +47,19 @@ class TtDroidNet:
         self.tt_fnet = TtBasicEncoder(reference.fnet, device)
         self.tt_cnet = TtBasicEncoder(reference.cnet, device)
         self.tt_update = TtUpdateModule(reference.update, device)
-        # Constant normalization tensors cached once on device.
+        # Fold 1/255 into the scale/shift so normalize becomes 2 ops:
+        #   y = x * scale - shift
+        # where scale = inv_std / 255, shift = mean * inv_std (BGR order).
         mean = torch.tensor([0.406, 0.456, 0.485]).view(1, 1, 1, 3)
         std = torch.tensor([0.225, 0.224, 0.229]).view(1, 1, 1, 3)
-        self._mean = ttnn.from_torch(mean, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        self._inv_std = ttnn.from_torch(
-            1.0 / std, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
+        inv_std = 1.0 / std
+        scale = inv_std / 255.0
+        shift = mean * inv_std
+        self._norm_scale = ttnn.from_torch(
+            scale, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
+        )
+        self._norm_shift = ttnn.from_torch(
+            shift, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
         )
 
     # ------------------------------------------------------------------
@@ -73,9 +80,8 @@ class TtDroidNet:
         # Upload + normalize ONCE; fnet keeps its input live
         # (deallocate_activation=False) so cnet can reuse the same tile.
         x_tt = _pack_nchw_to_tile_nhwc(images_bn, self.device)
-        x_tt = ttnn.multiply(x_tt, 1.0 / 255.0)
-        x_tt = ttnn.subtract(x_tt, self._mean)
-        x_tt = ttnn.multiply(x_tt, self._inv_std)
+        x_tt = ttnn.multiply(x_tt, self._norm_scale)
+        x_tt = ttnn.subtract(x_tt, self._norm_shift)
 
         fmaps_tt, fh, fw = self.tt_fnet(x_tt, batch_size=bn, h=h, w=w)
         context_tt, ch_, cw_ = self.tt_cnet(x_tt, batch_size=bn, h=h, w=w)
