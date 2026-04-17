@@ -81,10 +81,8 @@ class AdaLayerNormTTNN:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # (1 + scale) * normed + shift
-        ones = ttnn.ones_like(scale)
-        scale_p1 = ttnn.add(ones, scale)
-        ttnn.deallocate(ones)
+        # (1 + scale) * normed + shift — scalar add avoids ones_like allocation (×256 calls/inference)
+        scale_p1 = ttnn.add(scale, 1.0)
         ttnn.deallocate(scale)
 
         output = ttnn.mul(normed, scale_p1)
