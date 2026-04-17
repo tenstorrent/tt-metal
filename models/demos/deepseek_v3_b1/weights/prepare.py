@@ -701,6 +701,7 @@ def prepare_q_ab_kv_a_weights(
         device,
         preprocess=_preprocess,
         raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, q_b_key, kv_a_key)},
+        host_only=cache_config.host_only,
     )
     if not isinstance(q_ab_views, dict):
         raise TypeError("expected dict[str, OverlappedTensor] for q_ab_kv_a cache entry")
@@ -739,6 +740,7 @@ def prepare_kv_b12_weights(
         device,
         preprocess=_preprocess_kv_b12,
         raw_tensors=lambda: {kv_b_key: state_dict[kv_b_key]},
+        host_only=cache_config.host_only,
     )
     if not isinstance(kv_views, dict):
         raise TypeError("expected dict[str, OverlappedTensor] for kv_b12 cache entry")
@@ -795,6 +797,7 @@ def prepare_o_proj_norms_weights(
             device,
             preprocess=_preprocess_o_proj_moe,
             raw_tensors=lambda: {k: state_dict[k] for k in o_src},
+            host_only=cache_config.host_only,
         )
     else:
         o_src_dense = (o_proj_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key)
@@ -826,6 +829,7 @@ def prepare_o_proj_norms_weights(
             device,
             preprocess=_preprocess_o_proj_dense,
             raw_tensors=lambda: {k: state_dict[k] for k in o_src_dense},
+            host_only=cache_config.host_only,
         )
     if not isinstance(o_views, dict):
         raise TypeError("expected dict[str, OverlappedTensor] for o_proj_gate_mm_norms cache entry")
@@ -854,6 +858,7 @@ def prepare_gate_bias_weight(
         device,
         preprocess=lambda t: {target.name: t[bias_key].reshape(16, 16).T.contiguous().to(torch.bfloat16)},
         raw_tensors=lambda: {bias_key: state_dict[bias_key]},
+        host_only=cache_config.host_only,
     )
     if not isinstance(gate_bias_tt, ttnn.Tensor):
         raise TypeError("expected ttnn.Tensor for gate_bias cache entry")
@@ -1051,6 +1056,7 @@ def prepare_gate_up_weights(
             device,
             preprocess=_preprocess_gate_up_moe,
             raw_tensors=lambda: {gate_k: state_dict[gate_k], up_k: state_dict[up_k]},
+            host_only=cache_config.host_only,
         )
         if not isinstance(gu_views, dict):
             raise TypeError("expected dict[str, OverlappedTensor] for gate_up cache entry")
@@ -1076,6 +1082,7 @@ def prepare_gate_up_weights(
         device,
         preprocess=_preprocess_gate_up_dense,
         raw_tensors=lambda: {gate_k: state_dict[gate_k], up_k: state_dict[up_k]},
+        host_only=cache_config.host_only,
     )
     if not isinstance(gu_views, dict):
         raise TypeError("expected dict[str, OverlappedTensor] for gate_up cache entry")
@@ -1129,6 +1136,7 @@ def prepare_shared_down_proj_weight(
         device,
         preprocess=_preprocess_shared_down_moe,
         raw_tensors=lambda: {down_k: state_dict[down_k]},
+        host_only=cache_config.host_only,
     )
     if not isinstance(shared_down_proj, ttnn.Tensor):
         raise TypeError("expected ttnn.Tensor for shared_down_proj cache entry")
@@ -1338,6 +1346,7 @@ def prepare_routed_expert_weights(
                     "routed_gate_proj": moe_routed_expert_torch_for_cache(t[_gk].T.contiguous(), num_banks)
                 },
                 raw_tensors=lambda _gk=gk: {_gk: state_dict[_gk]},
+                host_only=cache_config.host_only,
             )
             if not isinstance(gw, ttnn.Tensor):
                 raise TypeError("expected ttnn.Tensor for routed gate expert cache entry")
@@ -1355,6 +1364,7 @@ def prepare_routed_expert_weights(
                     "routed_up_proj": moe_routed_expert_torch_for_cache(t[_uk].T.contiguous(), num_banks)
                 },
                 raw_tensors=lambda _uk=uk: {_uk: state_dict[_uk]},
+                host_only=cache_config.host_only,
             )
             if not isinstance(uw, ttnn.Tensor):
                 raise TypeError("expected ttnn.Tensor for routed up expert cache entry")
@@ -1372,6 +1382,7 @@ def prepare_routed_expert_weights(
                     "routed_down_proj": moe_routed_expert_torch_for_cache(t[_dk].T.contiguous(), num_banks)
                 },
                 raw_tensors=lambda _dk=dk: {_dk: state_dict[_dk]},
+                host_only=cache_config.host_only,
             )
             if not isinstance(dw, ttnn.Tensor):
                 raise TypeError("expected ttnn.Tensor for routed down expert cache entry")
@@ -1431,18 +1442,21 @@ def prepare_routed_expert_weights(
             device,
             preprocess=_pre_routed_gate,
             raw_tensors=lambda: {gate_k: state_dict[gate_k]},
+            host_only=cache_config.host_only,
         )
         routed_up_proj = cache_config.cache.get_or_create(
             fp_u,
             device,
             preprocess=_pre_routed_up,
             raw_tensors=lambda: {up_k: state_dict[up_k]},
+            host_only=cache_config.host_only,
         )
         routed_down_proj = cache_config.cache.get_or_create(
             fp_d,
             device,
             preprocess=_pre_routed_down,
             raw_tensors=lambda: {down_k: state_dict[down_k]},
+            host_only=cache_config.host_only,
         )
         if not isinstance(routed_gate_proj, ttnn.Tensor):
             raise TypeError("expected ttnn.Tensor for dense routed_gate_proj cache entry")
@@ -1604,6 +1618,7 @@ def prepare_embedding_weights(
         device,
         preprocess=_preprocess_embedding,
         raw_tensors=lambda: {_src_key: state_dict[_src_key]},
+        host_only=cache_config.host_only,
     )
     return DeepSeekV3EmbeddingLayerWeights(embedding=embedding_tt)
 
@@ -1643,6 +1658,7 @@ def prepare_lm_head_weights(
         device,
         preprocess=_preprocess_lm_head,
         raw_tensors=lambda: {_lm_key: state_dict[_lm_key]},
+        host_only=cache_config.host_only,
     )
 
     _norm_key = "model.norm.weight"
@@ -1661,6 +1677,7 @@ def prepare_lm_head_weights(
         device,
         preprocess=_preprocess_final_norm,
         raw_tensors=lambda: {_norm_key: state_dict[_norm_key]},
+        host_only=cache_config.host_only,
     )
 
     return DeepSeekV3LMHeadWeights(lm_head=lm_head_tt, final_norm=final_norm_tt)
@@ -1708,6 +1725,7 @@ def prepare_mtp_weights(
         device,
         preprocess=lambda t: {h_target.name: t[_h_key].unsqueeze(0).contiguous()},
         raw_tensors=lambda: {_h_key: state_dict[_h_key]},
+        host_only=cache_config.host_only,
     )
 
     _e_key = _key(mtp_layer_idx, "enorm.weight")
@@ -1718,6 +1736,7 @@ def prepare_mtp_weights(
         device,
         preprocess=lambda t: {e_target.name: t[_e_key].unsqueeze(0).contiguous()},
         raw_tensors=lambda: {_e_key: state_dict[_e_key]},
+        host_only=cache_config.host_only,
     )
 
     _eh_key = _key(mtp_layer_idx, "eh_proj.weight")
@@ -1728,6 +1747,7 @@ def prepare_mtp_weights(
         device,
         preprocess=lambda t: _mtp_eh_proj_preprocess(t, _eh_key, eh_target.name),
         raw_tensors=lambda: {_eh_key: state_dict[_eh_key]},
+        host_only=cache_config.host_only,
     )
 
     logger.info("MTP weights prepared in {:.3f}s", time.perf_counter() - t0)
