@@ -135,7 +135,7 @@ TEST_F(BlackholeSingleCardFixture, TensixReadFromDRISCL1) {
 
     constexpr uint32_t kMagicValue = 0xCAFEBABE;
     auto mesh_device = devices_[0];
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord);
 
@@ -186,7 +186,7 @@ TEST_F(BlackholeSingleCardFixture, DRISCReadFromTensixL1) {
 
     constexpr uint32_t kMagicValue = 0xDEADBEEF;
     auto mesh_device = devices_[0];
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord);
 
@@ -214,8 +214,7 @@ TEST_F(BlackholeSingleCardFixture, DRISCReadFromTensixL1) {
         logical_core_dram,
         DramConfig{
             .noc = NOC::NOC_0,
-            .compile_args = {
-                l1_unreserved_base_tensix, l1_unreserved_base_dram, kMagicValue, tensix_virtual.x, tensix_virtual.y}});
+            .compile_args = {l1_unreserved_base_tensix, l1_unreserved_base_dram, tensix_virtual.x, tensix_virtual.y}});
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
