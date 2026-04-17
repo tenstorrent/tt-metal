@@ -298,41 +298,6 @@ jobs:
           ${{ matrix.test-group.cmd }} --lf --lfnf=all --tb=long -v ${{ steps.skip-list.outputs.skip_args }} || true
           exit 1
 
-      - name: 📊 CCache Report
-        if: ${{ !cancelled() }}
-        run: |
-          echo "::group::CCache Statistics"
-          ccache --show-stats || echo "ccache stats not available"
-          echo "::endgroup::"
-
-      - name: 🔍 Publish ccache summary
-        if: ${{ !cancelled() }}
-        run: |
-          echo '## Test CCache Summary' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-          echo '## CCache Debug - Key Calculation' >> $GITHUB_STEP_SUMMARY
-          echo 'Debug files in /tmp/ccache-debug:' >> $GITHUB_STEP_SUMMARY
-          if [ -d /tmp/ccache-debug ] && [ "$(ls -A /tmp/ccache-debug 2>/dev/null)" ]; then
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            # Show first few debug log files with key calculation info
-            for f in $(find /tmp/ccache-debug -name '*.ccache-log' 2>/dev/null | head -5); do
-              echo "=== $f ===" >> $GITHUB_STEP_SUMMARY
-              cat "$f" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-            done
-            echo '```' >> $GITHUB_STEP_SUMMARY
-
-            echo '### Cache hit/miss decisions - first 20' >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -rE "(cache hit|cache miss|No such file|Storing embedded entry)" /tmp/ccache-debug/ | head -20 >> $GITHUB_STEP_SUMMARY || true
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo 'No debug files found' >> $GITHUB_STEP_SUMMARY
-          fi
-
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
     runs-on: tt-ubuntu-2204-large-stable
@@ -422,41 +387,6 @@ jobs:
             ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnBothIdleEriscs"
           fi
 
-      - name: 📊 CCache Report
-        if: ${{ !cancelled() }}
-        run: |
-          echo "::group::CCache Statistics"
-          ccache --show-stats || echo "ccache stats not available"
-          echo "::endgroup::"
-
-      - name: 🔍 Publish ccache summary
-        if: ${{ !cancelled() }}
-        run: |
-          echo '## Test CCache Summary' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-          echo '## CCache Debug - Key Calculation' >> $GITHUB_STEP_SUMMARY
-          echo 'Debug files in /tmp/ccache-debug:' >> $GITHUB_STEP_SUMMARY
-          if [ -d /tmp/ccache-debug ] && [ "$(ls -A /tmp/ccache-debug 2>/dev/null)" ]; then
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            # Show first few debug log files with key calculation info
-            for f in $(find /tmp/ccache-debug -name '*.ccache-log' 2>/dev/null | head -5); do
-              echo "=== $f ===" >> $GITHUB_STEP_SUMMARY
-              cat "$f" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-            done
-            echo '```' >> $GITHUB_STEP_SUMMARY
-
-            echo '### Cache hit/miss decisions - first 20' >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -rE "(cache hit|cache miss|No such file|Storing embedded entry)" /tmp/ccache-debug/ | head -20 >> $GITHUB_STEP_SUMMARY || true
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo 'No debug files found' >> $GITHUB_STEP_SUMMARY
-          fi
-
   ttsim-galaxy-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
     runs-on: tt-ubuntu-2204-large-stable
@@ -530,38 +460,3 @@ jobs:
         run: |
           ./build/test/tt_metal/unit_tests_api --gtest_filter="*StreamRegWrite*"
           ./build/test/tt_metal/unit_tests_api --gtest_filter="*InlineWrite*"
-
-      - name: 📊 CCache Report
-        if: ${{ !cancelled() }}
-        run: |
-          echo "::group::CCache Statistics"
-          ccache --show-stats || echo "ccache stats not available"
-          echo "::endgroup::"
-
-      - name: 🔍 Publish ccache summary
-        if: ${{ !cancelled() }}
-        run: |
-          echo '## Test CCache Summary' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-          echo '## CCache Debug - Key Calculation' >> $GITHUB_STEP_SUMMARY
-          echo 'Debug files in /tmp/ccache-debug:' >> $GITHUB_STEP_SUMMARY
-          if [ -d /tmp/ccache-debug ] && [ "$(ls -A /tmp/ccache-debug 2>/dev/null)" ]; then
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            # Show first few debug log files with key calculation info
-            for f in $(find /tmp/ccache-debug -name '*.ccache-log' 2>/dev/null | head -5); do
-              echo "=== $f ===" >> $GITHUB_STEP_SUMMARY
-              cat "$f" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-            done
-            echo '```' >> $GITHUB_STEP_SUMMARY
-
-            echo '### Cache hit/miss decisions - first 20' >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -rE "(cache hit|cache miss|No such file|Storing embedded entry)" /tmp/ccache-debug/ | head -20 >> $GITHUB_STEP_SUMMARY || true
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo 'No debug files found' >> $GITHUB_STEP_SUMMARY
-          fi
