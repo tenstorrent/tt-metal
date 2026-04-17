@@ -360,12 +360,28 @@ class WanAttention(Module):
             )
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
-        # Norm spatial before splitting heads
+        # Fuse SDPA input dtype into norm+RoPE kernel to avoid separate Q/K typecasts.
+        # Only for self-attn with ring SDPA; cross-attn (_sdpa_input_dtype not set) gets None.
+        sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
+        use_ring_sdpa = self.parallel_config.sequence_parallel.factor > 1
+        norm_dtype = sdpa_input_dtype if (use_ring_sdpa and prompt_1BLP is None) else None
+
+        # Norm spatial before splitting heads (+ optional fused output dtype cast)
         q_BHNE = self.norm_q(
-            q_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+            q_1BNF,
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            trans_mat=trans_mat,
+            dtype=norm_dtype,
         )
         k_BHNE = self.norm_k(
-            k_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+            k_1BNF,
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            trans_mat=trans_mat,
+            dtype=norm_dtype,
         )
 
         def create_heads(inp):
@@ -379,18 +395,11 @@ class WanAttention(Module):
 
         v_BHNE = create_heads(v_1BNF)
 
-        # Rope
-
         if prompt_1BLP is None:
             # Self attention
-            if self.parallel_config.sequence_parallel.factor > 1:
-                # Optional SDPA input dtype cast (e.g. bf8 for quantization experiments)
-                sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
+            if use_ring_sdpa:
+                # Q and K already cast by norm kernel; only V needs explicit typecast
                 if sdpa_input_dtype is not None:
-                    if q_BHNE.dtype != sdpa_input_dtype:
-                        q_BHNE = ttnn.typecast(q_BHNE, sdpa_input_dtype)
-                    if k_BHNE.dtype != sdpa_input_dtype:
-                        k_BHNE = ttnn.typecast(k_BHNE, sdpa_input_dtype)
                     if v_BHNE.dtype != sdpa_input_dtype:
                         v_BHNE = ttnn.typecast(v_BHNE, sdpa_input_dtype)
                 dummy = self.dummy_joint_input  # pre-cast at init by apply_quant_config

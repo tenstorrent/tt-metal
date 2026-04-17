@@ -390,6 +390,7 @@ class RowParallelLinear(Module):
         scalar: float = 1.0,
         *,
         compute_kernel_config=None,
+        dtype=None,
     ) -> ttnn.Tensor:
         """Fused RowParallel matmul + reduce-scatter + addcmul at the RS final write step.
 
@@ -430,6 +431,7 @@ class RowParallelLinear(Module):
             fused_ternary_scalar=scalar,
             addcmul_input_tensor1=addcmul_a,
             addcmul_input_tensor2=addcmul_b,
+            dtype=dtype,
         )
         if needs_reshape:
             output = ttnn.squeeze(output, 0)
