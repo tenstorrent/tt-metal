@@ -94,6 +94,7 @@ protected:
                             "while chip-3 AllGather hang is being root-caused.";
         }
         setenv("TT_METAL_DISABLE_QUIESCE_FABRIC_RESTART", "1", /*overwrite=*/0);
+        setenv("TT_METAL_FABRIC_HEALTH_PROBE", "1", /*overwrite=*/0);
         MeshDeviceFixtureBase::SetUp();
     }
     void TearDown() override {
