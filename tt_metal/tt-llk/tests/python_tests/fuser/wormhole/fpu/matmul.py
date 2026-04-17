@@ -63,10 +63,16 @@ class MatmulFpu(Fpu):
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
 
+        partial_face = operation.src_a.partial_face.cpp_enum_value
+        tile_r_dim_a = operation.src_a.tile_shape.total_row_dim()
+        tile_c_dim_a = operation.src_a.tile_shape.total_col_dim()
+        tile_r_dim_b = operation.src_b.tile_shape.total_row_dim()
+        tile_c_dim_b = operation.src_b.tile_shape.total_col_dim()
+
         return (
             f"// Operation {stage}: Matmul FPU\n"
             f"_llk_math_matmul_init_<{math_fidelity}>(\n"
-            f"    TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, {transpose}, {ct_dim}, {rt_dim}\n"
+            f"    {tile_r_dim_a}, {tile_c_dim_a}, {tile_r_dim_b}, {tile_c_dim_b}, {partial_face}, {transpose}, {ct_dim}, {rt_dim}\n"
             f");\n"
         )
 
