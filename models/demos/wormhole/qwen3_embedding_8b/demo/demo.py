@@ -16,11 +16,14 @@ Metrics reported:
   - Tokens/s:     total_tokens / prefill_time
 
 Usage (standalone, single device):
+    export HF_MODEL=Qwen/Qwen3-Embedding-0.6B
     python models/demos/wormhole/qwen3_embedding_8b/demo/demo.py
 
 Usage (pytest, picks device from MESH_DEVICE env):
+    export HF_MODEL=Qwen/Qwen3-Embedding-4B   # HuggingFace id for weights/tokenizer (required by model_config)
     pytest models/demos/wormhole/qwen3_embedding_8b/demo/demo.py -sv -k "dp32"
-    pytest .../demo.py -sv -k "dp1-batch1-seqlt512"   # batch=1, seq length < 512
+    pytest .../demo.py -sv -k "dp1-batch1-seq256"    # synthetic tokens, ISL=max_seq_len=256 (<512 short-seq path)
+    pytest .../demo.py -sv -k "dp1-batch1-seq512"      # fixed ISL = 512
 """
 
 import json
@@ -42,7 +45,9 @@ from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_mod
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name
 
-MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
+# HuggingFace checkpoint id; must match model_config (set HF_MODEL in the environment).
+_DEFAULT_HF_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+MODEL_NAME = (os.environ.get("HF_MODEL") or _DEFAULT_HF_MODEL).strip() or _DEFAULT_HF_MODEL
 BLOCK_SIZE = 32
 
 INSTRUCTION = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
@@ -261,19 +266,26 @@ def clear_all_kv_caches(generator):
     for model_instance in generator.model:
         for layer in model_instance.layers:
             k_cache, v_cache = layer.attention.layer_past
-            k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
-            v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+            ttnn.mul(k_cache, 0, output_tensor=k_cache)
+            ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
 
 # ---------------------------------------------------------------------------
 # Main benchmark entry point
 # ---------------------------------------------------------------------------
+#
+# Parametrize ids: dp{data_parallel}-batch{batch_size}-<case>
+#   - sample-max1024: real sample texts, input_seq_len=None (capped by max_seq_len 1024)
+#   - seq256:         synthetic tokens, ISL=max_seq_len=256 (short-seq / <512 prefill path)
+#   - seq{N}:         fixed input_seq_len = N tokens (32, 64, 128, 512, …)
+#   - seq{N} (dp32):  same, multi-device data-parallel embedding
+#
 
 
 @pytest.mark.parametrize(
     "batch_size, max_seq_len, input_seq_len, page_params, num_iterations, enable_trace, data_parallel",
     [
-        (  # dp1-batch1-short: single text, 1024 tokens, single device
+        (  # dp1-batch1-sample-max1024: single text, 1024 tokens, single device
             1,
             1024,
             None,
@@ -282,7 +294,7 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
-        (  # dp1-batch1-seqlt512: batch=1, max_seq_len and ISL both < 512 (synthetic tokens)
+        (  # dp1-batch1-seq256: batch=1, ISL=max_seq_len=256 (synthetic; <512 short-seq prefill path)
             1,
             256,
             256,
@@ -291,7 +303,7 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
-        (  # dp1-batch1-seqlt128: short ISL (trace bucket 128), batch 1
+        (  # dp1-batch1-seq128: ISL 128, max_seq_len 128, batch 1
             1,
             128,
             128,
@@ -300,7 +312,7 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
-        (  # dp1-batch1-seqlt32: ISL 32; max_seq_len 128 (get_padded_prefill_len pads <=128 to 128)
+        (  # dp1-batch1-seq32: ISL 32; max_seq_len 128 (get_padded_prefill_len pads <=128 to 128)
             1,
             128,
             32,
@@ -309,7 +321,7 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
-        (  # dp1-batch1-seqlt64: ISL 64; max_seq_len 128 (prefill padded to 128)
+        (  # dp1-batch1-seq64: ISL 64; max_seq_len 128 (prefill padded to 128)
             1,
             128,
             64,
@@ -318,7 +330,7 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
-        (  # dp1-batch1-seq512: ISL 512 at max_seq_len 512 (upper end of short-seq L1 path)
+        (  # dp1-batch1-seq512: ISL 512, max_seq_len 512 (upper end of short-seq L1 path)
             1,
             512,
             512,
@@ -327,7 +339,7 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
-        (  # dp1-batch25-seqlt512: batch=25, max_seq_len and ISL both < 512 (synthetic tokens)
+        (  # dp1-batch25-seq256: batch=25, ISL=max_seq_len=256 (synthetic; <512 short-seq prefill path)
             25,
             256,
             256,
@@ -336,7 +348,7 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
-        (  # dp1-batch25-seqlt128: short ISL (trace bucket 128), batch 25
+        (  # dp1-batch25-seq128: ISL 128, max_seq_len 128, batch 25
             25,
             128,
             128,
@@ -345,7 +357,7 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
-        (  # dp1-batch25-seqlt32: ISL 32; max_seq_len 128 (prefill padded to 128)
+        (  # dp1-batch25-seq32: ISL 32; max_seq_len 128 (prefill padded to 128)
             25,
             128,
             32,
@@ -354,7 +366,7 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
-        (  # dp1-batch25-seqlt64: ISL 64; max_seq_len 128 (prefill padded to 128)
+        (  # dp1-batch25-seq64: ISL 64; max_seq_len 128 (prefill padded to 128)
             25,
             128,
             64,
@@ -363,7 +375,7 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
-        (  # dp1-batch25-seq512: ISL 512 at max_seq_len 512, batch 25
+        (  # dp1-batch25-seq512: ISL 512, max_seq_len 512, batch 25
             25,
             512,
             512,
@@ -372,7 +384,7 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
-        (  # dp1-batch8-short: 8 texts, 1024 tokens, single device
+        (  # dp1-batch8-sample-max1024: 8 texts, max 1024 tokens, single device
             8,
             1024,
             None,
@@ -381,7 +393,7 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
-        (  # dp32-isl512
+        (  # dp32-batch32-seq512: DP=32, batch=32, ISL 512, max_seq_len 8192
             32,
             8192,
             512,
@@ -390,7 +402,7 @@ def clear_all_kv_caches(generator):
             True,
             32,
         ),
-        (  # dp32-isl1024
+        (  # dp32-batch32-seq1024: DP=32, batch=32, ISL 1024, max_seq_len 8192
             32,
             8192,
             1024,
@@ -399,7 +411,7 @@ def clear_all_kv_caches(generator):
             True,
             32,
         ),
-        (  # dp32-isl2048
+        (  # dp32-batch32-seq2048: DP=32, batch=32, ISL 2048, max_seq_len 8192
             32,
             8192,
             2048,
@@ -408,7 +420,7 @@ def clear_all_kv_caches(generator):
             True,
             32,
         ),
-        (  # dp32-isl4096
+        (  # dp32-batch32-seq4096: DP=32, batch=32, ISL 4096, max_seq_len 8192
             32,
             8192,
             4096,
@@ -417,7 +429,7 @@ def clear_all_kv_caches(generator):
             True,
             32,
         ),
-        (  # dp32-isl8192
+        (  # dp32-batch32-seq8192: DP=32, batch=32, ISL 8192, max_seq_len 8192
             32,
             8192,
             8192,
@@ -428,23 +440,23 @@ def clear_all_kv_caches(generator):
         ),
     ],
     ids=[
-        "dp1-batch1-short",
-        "dp1-batch1-seqlt512",
-        "dp1-batch1-seqlt128",
-        "dp1-batch1-seqlt32",
-        "dp1-batch1-seqlt64",
+        "dp1-batch1-sample-max1024",
+        "dp1-batch1-seq256",
+        "dp1-batch1-seq128",
+        "dp1-batch1-seq32",
+        "dp1-batch1-seq64",
         "dp1-batch1-seq512",
-        "dp1-batch25-seqlt512",
-        "dp1-batch25-seqlt128",
-        "dp1-batch25-seqlt32",
-        "dp1-batch25-seqlt64",
+        "dp1-batch25-seq256",
+        "dp1-batch25-seq128",
+        "dp1-batch25-seq32",
+        "dp1-batch25-seq64",
         "dp1-batch25-seq512",
-        "dp1-batch8-short",
-        "dp32-isl512",
-        "dp32-isl1024",
-        "dp32-isl2048",
-        "dp32-isl4096",
-        "dp32-isl8192",
+        "dp1-batch8-sample-max1024",
+        "dp32-batch32-seq512",
+        "dp32-batch32-seq1024",
+        "dp32-batch32-seq2048",
+        "dp32-batch32-seq4096",
+        "dp32-batch32-seq8192",
     ],
 )
 @pytest.mark.parametrize(
@@ -607,7 +619,7 @@ def test_embedding_perf(
     # ---- Print results ----
     logger.info("")
     logger.info("=" * 60)
-    logger.info(f"  Qwen3-Embedding-8B Performance  ({tt_device_name})")
+    logger.info(f"  {MODEL_NAME} Performance  ({tt_device_name})")
     logger.info("=" * 60)
     logger.info(f"  Data parallel:        {data_parallel}")
     logger.info(f"  Global batch size:    {batch_size}")
@@ -674,7 +686,7 @@ def test_embedding_perf(
     profiler.end("run")
 
     if is_ci_env:
-        model_name = model_args.base_model_name if hasattr(model_args, "base_model_name") else "Qwen3-Embedding-8B"
+        model_name = model_args.base_model_name if hasattr(model_args, "base_model_name") else MODEL_NAME
         benchmark_data = create_benchmark_data(profiler, measurements, {}, {})
         benchmark_data.save_partial_run_json(
             profiler,
@@ -695,6 +707,8 @@ def test_embedding_perf(
 
 if __name__ == "__main__":
     import argparse
+
+    os.environ.setdefault("HF_MODEL", _DEFAULT_HF_MODEL)
 
     parser = argparse.ArgumentParser(description="Qwen3-Embedding-8B performance demo")
     parser.add_argument("--batch-size", type=int, default=1, help="Global batch size")
