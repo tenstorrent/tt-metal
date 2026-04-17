@@ -283,19 +283,27 @@ ALWI void max_util_pack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buff
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     addr_mod_pack_t{
+        .y_src = {.incr = 0, .clr = 0, .cr = 0},
+        .y_dst = {.incr = 0, .clr = 0, .cr = 0},
+        .z_src = {.incr = 4, .clr = 0},
+        .z_dst = {.incr = 4, .clr = 0},
+    }
+        .set(ADDR_MOD_0);
+    addr_mod_pack_t{
         .y_src = {.incr = 0, .clr = 1, .cr = 0},
         .y_dst = {.incr = 0, .clr = 1, .cr = 0},
-        .z_src = {.incr = 0, .clr = 0},
-        .z_dst = {.incr = 0, .clr = 0},
+        .z_src = {.incr = 0, .clr = 1},
+        .z_dst = {.incr = 0, .clr = 1},
     }
         .set(ADDR_MOD_1);
 
     const std::uint32_t MOP_INNER_LOOP = 1;
-    const std::uint32_t MOP_OUTER_LOOP = 1;
+    const std::uint32_t MOP_OUTER_LOOP = 2;
     ckernel::ckernel_template tmp(
         MOP_OUTER_LOOP,
         MOP_INNER_LOOP,
         TT_OP_PACR(ADDR_MOD_1, p_pacr::P_ZERO_OUTPUT_DISABLED, PACK_SEL(4), 0, 1, 0, 1));
+    tmp.set_last_outer_loop_instr(TT_OP_PACR(ADDR_MOD_1, p_pacr::P_ZERO_OUTPUT_DISABLED, PACK_SEL(4), 0, 1, 0, 1));
     tmp.program();
     set_dst_write_addr(0);
     program_packer_destination(L1_ADDRESS(l1_buffer2_addr));
