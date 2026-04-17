@@ -22,6 +22,7 @@ import ttnn
 from models.experimental.droid_slam.reference.droid_net_ref import DroidNet as ReferenceDroidNet
 from models.experimental.droid_slam.tt.droid_encoder_tt import TtBasicEncoder
 from models.experimental.droid_slam.tt.droid_update_tt import TtUpdateModule
+from models.experimental.droid_slam.tt.ttnn_layers import RELU, TANH, TtConv2d
 
 
 def _pack_nchw_to_tile_nhwc(t_nchw: torch.Tensor, device) -> "ttnn.Tensor":
@@ -69,7 +70,20 @@ class TtDroidNet:
         # Build the on-device modules directly from the fp32 torch
         # weights — TtConv2d preprocesses per-op at first call.
         self.tt_fnet = TtBasicEncoder(reference.fnet, device)
-        self.tt_cnet = TtBasicEncoder(reference.cnet, device)
+        # cnet skips its 1x1 conv2 (128→256); we replace it with two
+        # fused halves that bake the subsequent tanh/relu activations
+        # directly into the conv, saving slice+tanh+relu ops per iter.
+        self.tt_cnet = TtBasicEncoder(reference.cnet, device, skip_conv2=True)
+        cnet_c2 = reference.cnet.conv2  # Conv2d(128, 256, 1x1)
+        cnet_net = torch.nn.Conv2d(128, 128, kernel_size=1, bias=cnet_c2.bias is not None)
+        cnet_inp = torch.nn.Conv2d(128, 128, kernel_size=1, bias=cnet_c2.bias is not None)
+        cnet_net.weight.data.copy_(cnet_c2.weight.data[:128])
+        cnet_inp.weight.data.copy_(cnet_c2.weight.data[128:])
+        if cnet_c2.bias is not None:
+            cnet_net.bias.data.copy_(cnet_c2.bias.data[:128])
+            cnet_inp.bias.data.copy_(cnet_c2.bias.data[128:])
+        self.tt_cnet_net_head = TtConv2d(cnet_net, activation=TANH)
+        self.tt_cnet_inp_head = TtConv2d(cnet_inp, activation=RELU)
         self.tt_update = TtUpdateModule(reference.update, device)
         # Fold 1/255 into the scale/shift so normalize becomes 2 ops:
         #   y = x * scale - shift
@@ -126,15 +140,12 @@ class TtDroidNet:
             self._image_cache = (cache_key, x_tt)
 
         fmaps_tt, fh, fw = self.tt_fnet(x_tt, batch_size=bn, h=h, w=w)
-        context_tt, ch_, cw_ = self.tt_cnet(x_tt, batch_size=bn, h=h, w=w)
-
-        # context has 256 channels — split into net(128) + inp(128),
-        # apply tanh/relu on device.
-        n_last = context_tt.shape[-2]
-        net_tt = ttnn.slice(context_tt, [0, 0, 0, 0], [1, 1, n_last, 128])
-        inp_tt = ttnn.slice(context_tt, [0, 0, 0, 128], [1, 1, n_last, 256])
-        net_tt = ttnn.tanh(net_tt)
-        inp_tt = ttnn.relu(inp_tt)
+        # cnet returns post-layer3 activations (skip_conv2); we apply the
+        # two split conv2 halves directly, each with its own fused
+        # activation — net = tanh(conv_net(x)), inp = relu(conv_inp(x)).
+        cnet_pre, ch_, cw_ = self.tt_cnet(x_tt, batch_size=bn, h=h, w=w)
+        net_tt, _, _ = self.tt_cnet_net_head(cnet_pre, self.device, bn, ch_, cw_)
+        inp_tt, _, _ = self.tt_cnet_inp_head(cnet_pre, self.device, bn, ch_, cw_)
 
         # Stash on-device net/inp tiles so update() can slice them by
         # ii directly without a torch roundtrip.
