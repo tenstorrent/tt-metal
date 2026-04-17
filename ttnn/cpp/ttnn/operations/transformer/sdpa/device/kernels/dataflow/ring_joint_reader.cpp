@@ -237,11 +237,11 @@ void kernel_main() {
     uint32_t k_total_reads = 0;
 
     constexpr bool c_skip_q_dram = false;
-    constexpr bool c_skip_k_dram = true;
-    constexpr bool c_skip_v_dram = true;
+    constexpr bool c_skip_k_dram = false;
+    constexpr bool c_skip_v_dram = false;
 
-    constexpr bool c_skip_v_fwd = true;
-    constexpr bool c_skip_k_fwd = true;
+    constexpr bool c_skip_v_fwd = false;
+    constexpr bool c_skip_k_fwd = false;
 
     // Profiling: isolate ring iteration 0 for cost-benefit analysis
     constexpr bool c_profile_skip_ring_iter_0 = false;  // Set true to skip iter 0 (run only iter 1+)
