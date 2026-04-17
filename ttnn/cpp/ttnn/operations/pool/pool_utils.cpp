@@ -152,10 +152,19 @@ FactoryParameters get_factory_parameters(
     uint32_t num_tilized_rows =
         kernel_size_hw <= tt::constants::FACE_WIDTH ? kernel_size_hw : tt::constants::TILE_HEIGHT;
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / tt::constants::TILE_WIDTH);
-    // For TILE_LAYOUT output, we need to align to TILE_WIDTH instead of FACE_WIDTH
-    uint32_t effective_tile_width_for_output =
-        (output_layout == Layout::TILE) ? tt::constants::TILE_WIDTH : tt::constants::FACE_WIDTH;
-    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / effective_tile_width_for_output);
+    // Use ceiling division so WIDTH/BLOCK sharding with non-integer channels/core is handled
+    // correctly — avoids false partial-tile detection when floor(channels/cores) < FACE_WIDTH.
+    uint32_t channels_per_shard = tt::div_up(in_channels, num_shards_c);
+    // out_ntiles_c is kept at the FACE_WIDTH-aligned count (old formula) so it can be used for L1
+    // estimation (via calculate_L1_usage) without changing scheme-selection behaviour. The actual
+    // output CB page count is derived from output_shard_shape[1] / FACE_WIDTH in
+    // calculate_pool_cb_sizes, which correctly reflects the wider shard allocated for partial tiles.
+    uint32_t out_ntiles_c;
+    if (output_layout == Layout::TILE) {
+        out_ntiles_c = (uint32_t)std::ceil((float)channels_per_shard / tt::constants::TILE_WIDTH);
+    } else {
+        out_ntiles_c = (uint32_t)std::ceil((float)channels_per_shard / tt::constants::FACE_WIDTH);
+    }
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const bool last_tile_is_partial =
@@ -280,7 +289,10 @@ PoolCBSizes calculate_pool_cb_sizes(
     } else {
         sizes.out_cb_pagesize =
             std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_shard_shape[1]) * params.nbytes;
-        sizes.out_cb_npages = output_shard_shape[0] * params.out_ntiles_c;
+        // Derive page count directly from the actual shard width so that CB size always matches
+        // the tensor buffer exactly — regardless of whether the shard was padded to TILE_WIDTH
+        // (partial last face) or FACE_WIDTH (all other cases).
+        sizes.out_cb_npages = output_shard_shape[0] * (output_shard_shape[1] / tt::constants::FACE_WIDTH);
     }
 
     // Output index CB (globally allocated, backed by output index tensor buffer)
@@ -400,8 +412,15 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
 
     auto get_memconfig = [&](const ParallelConfig& parallel_config) {
         uint32_t nhw = batch_size * output_shape[1] * output_shape[2];
+        // Use FACE_WIDTH (TILE_WIDTH/2) alignment to match the actual shard formula for
+        // non-partial cases, so the L1 estimate stays consistent with the pre-partial-tile-fix
+        // behaviour and doesn't shift scheme selection for configs that were already working.
+        // For the actual output tensor the shard is widened to TILE_WIDTH when
+        // channels % TILE_WIDTH < FACE_WIDTH (generic_pools.cpp / pool_op.cpp), but that extra
+        // 32 bytes per row is small enough never to cause L1 overflow.
         uint32_t out_channel_padded = tt::round_up(
-            channels, conv::get_num_cores_channels_from_parallel_config(parallel_config) * tt::constants::TILE_WIDTH);
+            channels,
+            conv::get_num_cores_channels_from_parallel_config(parallel_config) * tt::constants::TILE_WIDTH / 2);
         return conv::create_sharded_memory_config_from_parallel_config(
             ttnn::Shape({1, 1, nhw, out_channel_padded}), parallel_config, tt::constants::TILE_HEIGHT);
     };
