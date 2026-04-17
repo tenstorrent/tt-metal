@@ -1087,12 +1087,30 @@ class MatmulGolden(FidelityMasking):
     def _convert_block_float_inputs(
         operand1,
         operand2,
+<<<<<<< HEAD
         input_A_format: DataFormat,
         input_B_format: DataFormat,
         input_A_dimensions,
         input_B_dimensions,
         tilize: bool,
     ):
+=======
+        data_format,
+        math_fidelity,
+        input_A_dimensions=None,
+        input_B_dimensions=None,
+        tilize: bool = False,
+        input_A_format: DataFormat = None,
+        input_B_format: DataFormat = None,
+        math_format: Optional[DataFormat] = None,
+        dest_acc: Optional[DestAccumulation] = None,
+    ):
+        torch_format = format_dict[data_format]
+        math_format = math_format or data_format
+        result_format = math_format if data_format.is_mx_format() else data_format
+        result_torch_format = format_dict[result_format]
+
+>>>>>>> 2e4c2845732 (Finished tests with mxfp4.)
         if input_A_format == DataFormat.Bfp8_b:
             dims = input_A_dimensions if tilize else None
             operand1 = _bfp8b_to_float16b(operand1, dims)
@@ -1112,6 +1130,7 @@ class MatmulGolden(FidelityMasking):
             dims = input_B_dimensions if tilize else None
             operand2 = _bfp2b_to_float16b(operand2, dims)
 
+<<<<<<< HEAD
         return operand1, operand2
 
     @staticmethod
@@ -1211,6 +1230,10 @@ class MatmulGolden(FidelityMasking):
             input_B_dimensions,
             tilize,
         )
+=======
+        t1 = to_tensor(operand1, math_format)
+        t2 = to_tensor(operand2, math_format)
+>>>>>>> 2e4c2845732 (Finished tests with mxfp4.)
 
         # Handle multi-tile matmul with different operand dimensions
         if input_A_dimensions is not None and input_B_dimensions is not None:
@@ -1222,6 +1245,7 @@ class MatmulGolden(FidelityMasking):
         fidelity_iters = self._get_fidelity_iters(math_fidelity)
         res: Optional[torch.Tensor] = None
 
+<<<<<<< HEAD
         for fidelity_iter in fidelity_iters:
             t1, t2 = self._prepare_fidelity_operands(
                 operand1, operand2, data_format, fidelity_iter
@@ -1231,6 +1255,119 @@ class MatmulGolden(FidelityMasking):
                 torch.matmul(t1, t2)
                 .view(output_dimensions[0] * output_dimensions[1])
                 .to(torch_format)
+=======
+            output_dimensions = [M, N]
+
+        MATH_FIDELITY_TO_ITER_COUNT = {
+            MathFidelity.LoFi: 0,
+            MathFidelity.HiFi2: 1,
+            MathFidelity.HiFi3: 2,
+            MathFidelity.HiFi4: 3,
+        }
+
+        fidelity_iter_count = MATH_FIDELITY_TO_ITER_COUNT[math_fidelity]
+        if get_chip_architecture() != ChipArchitecture.QUASAR and math_format not in (
+            DataFormat.Float32,
+            DataFormat.Tf32,
+        ):
+            # Fidelity phases only affect FP32 math on non-Quasar; other formats use full precision.
+            fidelity_iter_count = 3
+
+        math_torch_format = format_dict[math_format]
+        use_fp16_acc = dest_acc == DestAccumulation.No and math_format in (
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        )
+
+        def _matmul_blocked(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+            if not use_fp16_acc:
+                return torch.matmul(a, b).to(result_torch_format)
+
+            # Quasar matmul probably accumulates per KT tile (32 elements), so match KT_DIM chunking
+            # to avoid extra rounding compared to HW.
+            k_tile = TILE_DIM if K1 >= TILE_DIM else K1
+
+            acc = torch.zeros((M, N), dtype=math_torch_format)
+            for k0 in range(0, K1, k_tile):
+                a_block = a[:, k0 : k0 + k_tile].to(math_torch_format)
+                b_block = b[k0 : k0 + k_tile, :].to(math_torch_format)
+                acc += torch.matmul(a_block, b_block)
+            return acc.to(result_torch_format)
+
+        def _accumulate(
+            acc: Optional[torch.Tensor], value: torch.Tensor
+        ) -> torch.Tensor:
+            if acc is None:
+                return value
+            if use_fp16_acc:
+                return (acc + value).to(result_torch_format)
+            return acc + value
+
+        res: Optional[torch.Tensor] = None
+
+        if fidelity_iter_count == 0:
+
+            t1, t2 = self._apply_fidelity_masking(math_format, t1, t2, 0)
+            t1, t2 = t1.view(M, K1), t2.view(K2, N)
+            res = _matmul_blocked(t1, t2).view(
+                output_dimensions[0] * output_dimensions[1]
+            )
+
+        elif fidelity_iter_count == 1:
+
+            t1, t2 = self._apply_fidelity_masking(math_format, t1, t2, 0)
+            t1, t2 = t1.view(M, K1), t2.view(K2, N)
+            res = _matmul_blocked(t1, t2).view(
+                output_dimensions[0] * output_dimensions[1]
+            )
+
+            t1 = to_tensor(operand1, math_format)
+            t2 = to_tensor(operand2, math_format)
+            t1, t2 = self._apply_fidelity_masking(math_format, t1, t2, 1)
+            t1, t2 = t1.view(M, K1), t2.view(K2, N)
+            res = _accumulate(
+                res,
+                _matmul_blocked(t1, t2).view(
+                    output_dimensions[0] * output_dimensions[1]
+                ),
+            )
+
+        elif fidelity_iter_count == 2:
+
+            t1, t2 = self._apply_fidelity_masking(math_format, t1, t2, 0)
+            t1, t2 = t1.view(M, K1), t2.view(K2, N)
+            res = _matmul_blocked(t1, t2).view(
+                output_dimensions[0] * output_dimensions[1]
+            )
+
+            t1 = to_tensor(operand1, math_format)
+            t2 = to_tensor(operand2, math_format)
+            t1, t2 = self._apply_fidelity_masking(math_format, t1, t2, 1)
+            t1, t2 = t1.view(M, K1), t2.view(K2, N)
+            res = _accumulate(
+                res,
+                _matmul_blocked(t1, t2).view(
+                    output_dimensions[0] * output_dimensions[1]
+                ),
+            )
+
+            t1 = to_tensor(operand1, math_format)
+            t2 = to_tensor(operand2, math_format)
+            t1, t2 = self._apply_fidelity_masking(math_format, t1, t2, 2)
+            t1, t2 = t1.view(M, K1), t2.view(K2, N)
+            res = _accumulate(
+                res,
+                _matmul_blocked(t1, t2).view(
+                    output_dimensions[0] * output_dimensions[1]
+                ),
+            )
+
+        elif fidelity_iter_count == 3:
+
+            t1, t2 = t1.view(M, K1), t2.view(K2, N)
+            res = _matmul_blocked(t1, t2).view(
+                output_dimensions[0] * output_dimensions[1]
+>>>>>>> 2e4c2845732 (Finished tests with mxfp4.)
             )
             if res is None:
                 res = partial
@@ -1238,10 +1375,11 @@ class MatmulGolden(FidelityMasking):
                 res += partial
 
         if tilize:
+            tilize_format = result_format if data_format.is_mx_format() else data_format
             res = tilize_block(
                 res,
                 dimensions=(input_A_dimensions[0], input_B_dimensions[1]),
-                stimuli_format=data_format,
+                stimuli_format=tilize_format,
             ).flatten()
         return res
 

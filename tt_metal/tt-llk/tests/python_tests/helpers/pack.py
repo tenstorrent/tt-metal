@@ -557,11 +557,7 @@ def pack_mxfp4(
 ):
     """
     Pack tensor into MXFP4 format (E2M1 variant).
-<<<<<<< HEAD
     Function is implemented based on the OCP MX specification and Tensix hardware documentation.
-=======
-    Function is implemented based on the OCP MX specification and ws_tensix quantization model.
->>>>>>> 90c94712cf0 (Added warnings and asserts to MxFp4 unpack and pack.)
 
     MXFP4 uses 32-element blocks per OCP MX spec, each with:
     - 1 shared E8M0 scale (8 bits)
@@ -685,45 +681,10 @@ def pack_mxfp4(
     )
 
 
-<<<<<<< HEAD
 def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
     """Quantize scaled values to FP4 nibbles."""
     flat = scaled_blocks.astype(np.float32).ravel()
     ui32 = flat.view(np.uint32)
-=======
-def _round_ties_even(
-    input_mantissa: int, output_width: int, input_width: int = 23
-) -> tuple[int, int]:
-    if output_width < 0:
-        return 0, 0
-    if input_width == output_width:
-        return input_mantissa, 0
-    shift_out = input_width - output_width
-    rounded_bits = input_mantissa & ((1 << shift_out) - 1)
-    rounded_msb = (rounded_bits >> (shift_out - 1)) & 0x1
-    rounded_lsbs = rounded_bits & ((1 << (shift_out - 1)) - 1)
-    mantissa_lsb = (input_mantissa >> shift_out) & 0x1
-
-    # Round-to-nearest-even: increment on >0.5, or on exact 0.5 when the kept LSB is 1.
-    round_inc = 1 if (rounded_msb and (rounded_lsbs != 0 or mantissa_lsb == 0x1)) else 0
-
-    if output_width == 0:
-        round_inc = rounded_msb if rounded_lsbs != 0x0 else 0
-        output_width = 1
-
-    new_mantissa = (input_mantissa >> shift_out) + round_inc
-    return new_mantissa & ((1 << output_width) - 1), new_mantissa >> output_width
-
-
-def _float_to_fp4_bits_storage(value: float) -> int:
-    """Quantize to FP4 E2M1 (round-to-nearest-even)."""
-    if np.isnan(value):
-        return 0x0
-    if np.isinf(value):
-        return 0x7 if value > 0 else 0xF
-
-    ui32 = np.float32(value).view(np.uint32)
->>>>>>> 90c94712cf0 (Added warnings and asserts to MxFp4 unpack and pack.)
     sign = (ui32 >> 31) & 0x1
     exp_biased = (ui32 >> 23) & 0xFF
     mant = ui32 & 0x7FFFFF
@@ -789,13 +750,4 @@ def _float_to_fp4_bits_storage(value: float) -> int:
             elem_bits |= sign.astype(np.uint8) << 3
             out[normal_mask] = elem_bits[normal_mask]
 
-<<<<<<< HEAD
-=======
-def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
-    """Quantize scaled values to FP4 nibbles."""
-    flat = scaled_blocks.astype(np.float32).ravel()
-    out = np.empty_like(flat, dtype=np.uint8)
-    for i, v in enumerate(flat):
-        out[i] = _float_to_fp4_bits_storage(float(v)) & 0xF
->>>>>>> 90c94712cf0 (Added warnings and asserts to MxFp4 unpack and pack.)
     return out
