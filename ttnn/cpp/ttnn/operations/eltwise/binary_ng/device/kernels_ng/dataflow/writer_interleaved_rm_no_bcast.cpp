@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
 #include "api/alignment.h"
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t index = 0;
@@ -28,12 +30,17 @@ void kernel_main() {
     constexpr auto cb_id_out = tt::CBIndex::c_2;
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_out(cb_id_out);
+
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_out);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_out);
     constexpr uint32_t element_size = tile_bytes / tile_hw;
     const uint32_t full_page_size = align(page_size_arg, alignment);
     const uint32_t row_width_bytes = row_width_elements * element_size;
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto dst = TensorAccessor(dst_args, dst_addr, full_page_size);
 
     const uint32_t row_blocks_per_channel = (outHt + rows_per_tile - 1) / rows_per_tile;
@@ -68,9 +75,9 @@ void kernel_main() {
                                 (stride_size_bytes < bytes_left_in_row) ? stride_size_bytes : bytes_left_in_row;
                             const uint32_t current_write_len = align(current_chunk_bytes, alignment);
 
-                            cb_wait_front(cb_id_out, 1);
+                            cb_out.wait_front(1);
 
-                            uint32_t l1_read_addr = get_read_ptr(cb_id_out);
+                            uint32_t l1_read_addr = cb_out.get_read_ptr();
                             for (uint32_t row = 0; row < limit; ++row) {
                                 const uint32_t row_abs_idx = row_block_base_row + row;
                                 const uint64_t dst_noc_addr = get_noc_addr(row_abs_idx, dst) + current_chunk_offset;
@@ -78,8 +85,8 @@ void kernel_main() {
                                 l1_read_addr += current_chunk_bytes;
                             }
 
-                            noc_async_write_barrier();
-                            cb_pop_front(cb_id_out, 1);
+                            noc.async_write_barrier();
+                            cb_out.pop_front(1);
                         }
 
                         row_blocks_written++;

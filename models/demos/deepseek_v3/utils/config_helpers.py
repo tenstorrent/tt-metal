@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
@@ -20,7 +20,10 @@ from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 USERS_PER_ROW = 32
+DEFAULT_MAX_SEQ_LEN = 2048
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
+Q_CHUNK_SIZE = 128
+K_CHUNK_SIZE = 128
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 MAX_TOP_K = 32
 # Default sampling parameters, huggingface recommended values
@@ -1116,7 +1119,7 @@ def _shard_device_impl(
                 tensor = torch.nn.functional.pad(tensor, (0, pad_last, 0, pad_second_to_last), mode="constant", value=0)
     if shard_dims[0] is None and shard_dims[1] is None:
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-    if shard_dims[0] == shard_dims[1] and shard_dims[0] is not None:
+    elif shard_dims[0] == shard_dims[1] and shard_dims[0] is not None:
         mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=shard_dims[0])
     else:
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=shard_dims)

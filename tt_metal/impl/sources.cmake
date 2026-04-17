@@ -1,4 +1,5 @@
 set(IMPL_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/disaggregation/kv_chunk_address_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
@@ -17,6 +18,9 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_device_util.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/memory_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/mesh_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_distribution_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_page_mapping.cpp
@@ -27,16 +31,20 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/blockfloat_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat4.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/blockfloat_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/float8.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/int8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/uint8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dataflow_buffer/dataflow_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_run_params.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
@@ -48,6 +56,9 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_device_map.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_rpc_client.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_service.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_server_controller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_analysis.cpp
@@ -59,6 +70,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command_calculator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/simple_trace_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_mem_map.cpp
@@ -112,4 +124,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/tensor_topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/mesh_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_impl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor_factory.cpp
 )

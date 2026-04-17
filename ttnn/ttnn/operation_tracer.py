@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -34,6 +34,9 @@ _IS_SERIALIZING = False
 
 # Flag to control whether tensor values are serialized (default False)
 _SERIALIZE_TENSOR_VALUES = False
+
+# Sweep source hash set by the sweep runner for the current vector execution
+_SWEEP_SOURCE_HASH: Optional[str] = None
 
 # Command-line flag constant
 _TRACE_PARAMS_FLAG = "--trace-params"
@@ -92,6 +95,19 @@ def is_tracing_enabled() -> bool:
         True if tracing is enabled, False otherwise.
     """
     return _is_tracing_enabled()
+
+
+def set_sweep_source_hash(hash_value: Optional[str] = None) -> None:
+    """Set the sweep source hash for the current vector execution.
+
+    When set, all traced operations will include this hash in their output,
+    enabling traceability back to the originating master trace config.
+
+    Args:
+        hash_value: The config_hash from the sweep vector, or None to clear.
+    """
+    global _SWEEP_SOURCE_HASH
+    _SWEEP_SOURCE_HASH = hash_value
 
 
 def enable_tensor_value_serialization(enable: bool = True) -> None:
@@ -421,6 +437,10 @@ def serialize_operation_parameters(
             "args": serialized_args,
             "kwargs": serialized_kwargs,
         }
+
+        # Propagate sweep source hash if set by the sweep runner
+        if _SWEEP_SOURCE_HASH:
+            operation_data["sweep_source_hash"] = _SWEEP_SOURCE_HASH
 
         # Add return value if available
         if serialized_return_value is not None:

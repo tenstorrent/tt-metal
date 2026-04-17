@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,13 +10,12 @@ from models.common.utility_functions import is_watcher_enabled
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
+TEST_PADDING_VALUE = -42
+
 
 @pytest.mark.parametrize(
     "T, B, C, cores_y, cores_x",
-    [
-        (2048, 2, 4096, 0, 0),  # base case
-        (2048, 2, 4096, 4, 4),  # custom grid
-    ],
+    [(2048, 2, 4096, 0, 0), (2048, 2, 4096, 4, 4), (10, 3, 18, 0, 0)],  # base case  # custom grid  # implicit padding
 )
 def test_ema(device, T, B, C, cores_y, cores_x):
     if T == 2048 and B == 2 and C == 4096 and is_watcher_enabled():
@@ -37,6 +36,7 @@ def test_ema(device, T, B, C, cores_y, cores_x):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    ttnn_input_tensor = ttnn.fill_implicit_tile_padding(ttnn_input_tensor, TEST_PADDING_VALUE)
 
     alpha = 0.25
     num_itr = 2  # second iteration to help catch potential runtime args issue.

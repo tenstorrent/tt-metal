@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -144,7 +144,9 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto max_dispatched_tokens_per_expert = dispatched_shape[-2];
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    uint32_t effective_num_links = std::min(num_links, 4u);
+    // Maximum worker cores: one per fabric link.
+    constexpr uint32_t MAX_WORKER_CORES = 4;
+    uint32_t effective_num_links = std::min(num_links, MAX_WORKER_CORES);
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
@@ -169,7 +171,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto zero_init_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
     auto zero_init_barrier_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
 
-    constexpr uint32_t read_batch_size = 8;
+    constexpr uint32_t read_batch_size = 8;  // matches BH DRAM bank count for full bandwidth utilization
 
     // c_0: dispatched_buffer scratch (reader-only, batched DRAM reads)
     detail::create_tensor_cb(
@@ -196,25 +198,26 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         /*cb_id=*/tt::CBIndex::c_2,
         "expert_token_counts");
 
-    // c_3: route_info (reader->writer, 4 x uint32_t per entry)
+    // c_3, c_4: reader→writer CBs for (route_info, output) per remote entry.
+    // The reader pushes both per entry in lockstep, so small buffering (2) suffices.
     {
+        constexpr uint32_t rw_buffering = 2;
+
         uint32_t route_info_page_size = l1_alignment;
-        constexpr uint32_t route_info_buffering = 16;
         tt::tt_metal::CircularBufferConfig route_info_cb_config =
             tt::tt_metal::CircularBufferConfig(
-                route_info_buffering * route_info_page_size, {{tt::CBIndex::c_3, tt::DataFormat::UInt8}})
+                rw_buffering * route_info_page_size, {{tt::CBIndex::c_3, tt::DataFormat::UInt8}})
                 .set_page_size(tt::CBIndex::c_3, route_info_page_size);
         tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, route_info_cb_config);
-    }
 
-    // c_4: output_for_writer (reader->writer, output pages for fabric sends)
-    detail::create_tensor_cb(
-        program,
-        sender_core_grid,
-        dispatched_buffer,
-        /*buffering_factor=*/16,
-        /*cb_id=*/tt::CBIndex::c_4,
-        "output_for_writer");
+        detail::create_tensor_cb(
+            program,
+            sender_core_grid,
+            dispatched_buffer,
+            /*buffering_factor=*/rw_buffering,
+            /*cb_id=*/tt::CBIndex::c_4,
+            "output_for_writer");
+    }
 
     // c_5: packet header CB for fabric sends (writer-only)
     if (num_links > 0) {
@@ -285,6 +288,9 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         l1_alignment,
         static_cast<uint32_t>(num_links),
         static_cast<uint32_t>(topology),
+
+        // Batch configuration (1)
+        read_batch_size,
     };
 
     // Append TensorAccessorArgs for all 4 tensors

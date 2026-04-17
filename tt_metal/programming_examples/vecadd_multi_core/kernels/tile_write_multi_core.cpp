@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,12 +11,11 @@ void kernel_main() {
 
     // The circular buffer that we are going to read from and write to DRAM
     constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
-    const uint32_t tile_size_bytes = get_tile_size(cb_out0);
 
     // Address generator for the output buffer. This is faster than doing plain
     // DRAM writes.
     constexpr auto c_args = TensorAccessorArgs<1>();
-    const auto c = TensorAccessor(c_args, c_addr, tile_size_bytes);
+    const auto c = TensorAccessor(c_args, c_addr);
 
     // Calculate the range of tiles this core should process
     const uint32_t end_tile_id = start_tile_id + n_tiles;

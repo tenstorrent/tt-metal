@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -67,6 +67,7 @@ public:
 
     void enable_asynchronous_slow_dispatch();
     void disable_asynchronous_slow_dispatch();
+    bool is_asynchronous_slow_dispatch_enabled() const { return asynchronous_slow_dispatch_enabled_; }
 
 private:
     void wait_for_cores_idle();

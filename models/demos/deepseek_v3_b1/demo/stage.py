@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -19,8 +19,8 @@ import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
-from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3EmbeddingLayerWeights, DeepSeekV3LMHeadWeights
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_broadcast_test_inputs
+from models.demos.deepseek_v3_b1.weights.prepare import DeepSeekV3EmbeddingLayerWeights, DeepSeekV3LMHeadWeights
 
 # Global constants used by multiple stage kinds (and exported to pipeline/cli)
 TOKEN_PAGE_SIZE_BYTES = 64
@@ -28,7 +28,7 @@ TOKEN_FIFO_NUM_PAGES = 64
 TOKEN_FIFO_SIZE = TOKEN_PAGE_SIZE_BYTES * TOKEN_FIFO_NUM_PAGES
 ACTIVATION_DIM = 7168
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
-ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 1
+ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 2
 PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 8)
 
 
@@ -59,31 +59,51 @@ class StageKind(ABC):
         """Run stage compute after ``pipeline_block.run()`` (execute pre-built programs where applicable). Default: no-op."""
 
 
-class EmbeddingStage(StageKind):
-    """Stage 0: H2D + embedding lookup, forwards activation; loopback receives token."""
-
-    def __init__(self, weights: DeepSeekV3EmbeddingLayerWeights) -> None:
-        self._weights = weights
-
-    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
-        mesh_device = ctx.mesh_device
-        return PipelineBlock(
-            mesh_device,
-            PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            upstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
-            h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
-            embedding_tensor=self._weights.embedding,
-        )
-
-
 class PassthroughPayload(Enum):
     ACTIVATION = "activation"
     TOKEN = "token"
+
+
+class EmbeddingStage(StageKind):
+    """Stage 0: H2D + embedding lookup, forwards activation; loopback payload is configurable."""
+
+    def __init__(
+        self,
+        weights: DeepSeekV3EmbeddingLayerWeights,
+        *,
+        loopback_payload: PassthroughPayload = PassthroughPayload.TOKEN,
+    ) -> None:
+        self._weights = weights
+        self._loopback_payload = loopback_payload
+
+    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
+        mesh_device = ctx.mesh_device
+        # Loopback entry + D2H must use the same page size (see PipelineBlock._init_first_stage).
+        # Token-sized: LMHead / sampling returns a token page to the host (default).
+        # Activation-sized: embed → passthrough chain returns an embedding row on loopback.
+        if self._loopback_payload == PassthroughPayload.ACTIVATION:
+            up_fifo = ACTIVATION_FIFO_SIZE
+            up_page = ACTIVATION_PAGE_SIZE_BYTES
+            d2h_fifo = ACTIVATION_FIFO_SIZE
+            d2h_page = ACTIVATION_PAGE_SIZE_BYTES
+        else:
+            up_fifo = TOKEN_FIFO_SIZE
+            up_page = TOKEN_PAGE_SIZE_BYTES
+            d2h_fifo = TOKEN_FIFO_SIZE
+            d2h_page = TOKEN_PAGE_SIZE_BYTES
+
+        return PipelineBlock(
+            mesh_device,
+            PIPELINE_CORE_COORD,
+            upstream_d2d_socket_fifo_size=up_fifo,
+            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            upstream_d2d_socket_page_size=up_page,
+            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
+            d2h_socket_fifo_size=d2h_fifo,
+            d2h_socket_page_size=d2h_page,
+            embedding_tensor=self._weights.embedding,
+        )
 
 
 class PassthroughStage(StageKind):

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,7 +35,7 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<7>();
 
-    const auto s0 = TensorAccessor(dst_args, output_addr, page_size);
+    const auto s0 = TensorAccessor(dst_args, output_addr);
 
     // Reserve and push the pad value into the circular buffer, generalized for any contiguous dtype
     cb_reserve_back(pad_val_cb_id, 1);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -51,16 +51,16 @@ void kernel_main() {
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_s2c_in = tt::CBIndex::c_0;
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
-    constexpr auto cb_w2c_md = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
+    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_3;  // cb_r2c_w0
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_4;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_6;
+    constexpr auto cb_w2c_md = tt::CBIndex::c_7;
 
     // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_0;
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_1;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
+    constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
@@ -153,16 +153,14 @@ void kernel_main() {
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
 
-    // Precompute NUM_CHUNKS_PER_EXPERT
-    volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
-    uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
+    // Read per-expert token counts from CB
+    volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
 
-    constexpr uint32_t BITS_PER_EXPERT = 10;
-    constexpr uint32_t EXPERT_MASK = 0x3FFu;
+    // Precompute NUM_CHUNKS_PER_EXPERT
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
+        uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
         NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
 

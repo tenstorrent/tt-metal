@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     extract_mesh_config,
     get_ep_mesh_composer,
     get_ep_mesh_mapper,
+    get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
+    get_max_payload_size,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
@@ -42,7 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
     [
-        (32, 7 * 1024, 16, 4, 2),
+        (128, 7 * 1024, 16, 4, 2),
     ],
 )
 @pytest.mark.parametrize(
@@ -52,7 +54,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -63,7 +65,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,
@@ -74,7 +76,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -85,7 +87,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,
@@ -96,7 +98,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Ring,
@@ -107,7 +109,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Ring,
@@ -118,7 +120,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -129,7 +131,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,
@@ -140,7 +142,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Ring,
@@ -151,7 +153,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Ring,
@@ -162,7 +164,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -173,7 +175,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -184,7 +186,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -207,6 +209,7 @@ def test_ttnn_combine(
     use_predictable_data,
 ):
     """Test TTNN combine operation in isolation using torch reference inputs."""
+    torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
 
@@ -253,20 +256,9 @@ def test_ttnn_combine(
             num_routed_experts,
             num_experts_per_tok,
             max_dispatched_tokens_per_expert,
-            seed=42,
             num_dispatch_groups=num_dispatch_groups,
         )
         logger.debug("Using RANDOM test data")
-
-    # Compute gate outputs before dispatch (same for all EP ranks since indices are shared)
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
-        indices,
-        dispatch_group_size,
-        num_routed_experts,
-        experts_per_chip,
-        seq_len_per_chip,
-        num_experts_per_tok,
-    )
 
     # Create expert dispatch table
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
@@ -279,6 +271,17 @@ def test_ttnn_combine(
         num_dispatch_groups=num_dispatch_groups,
         dispatch_group_size=dispatch_group_size,
         num_routed_experts=num_routed_experts,
+    )
+
+    # Compute gate outputs before dispatch (same for all EP ranks since indices are shared)
+    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+        indices,
+        dispatch_group_size,
+        num_routed_experts,
+        experts_per_chip,
+        seq_len_per_chip,
+        num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
     )
 
     # Initialize torch dispatch module with num_dispatch_groups support
@@ -319,7 +322,7 @@ def test_ttnn_combine(
 
     tt_expert_token_counts = ttnn.from_torch(
         expert_token_counts,
-        mesh_mapper=mesh_mapper,
+        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.int32,
@@ -335,7 +338,7 @@ def test_ttnn_combine(
 
     torch_output = torch_combine(dispatched_buffer, dispatched_metadata, expert_token_counts)
 
-    # Step 5: Run ttnn combine
+    # Run ttnn combine
     tt_combine = TtCombineModule(
         mesh_device=mesh_device,
         dispatch_group_size=dispatch_group_size,

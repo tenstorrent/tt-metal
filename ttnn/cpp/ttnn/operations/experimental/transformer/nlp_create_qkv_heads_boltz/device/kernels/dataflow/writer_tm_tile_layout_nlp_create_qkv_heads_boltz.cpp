@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,11 +32,10 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_id_k = 1;  // cb for K heads (directly from reader)
 #endif
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_qv);
     const DataFormat data_format = get_dataformat(cb_id_qv);
-    const auto sq = TensorAccessor(q_args, q_tensor_addr, single_tile_size_bytes);
-    const auto sk = TensorAccessor(k_args, k_tensor_addr, single_tile_size_bytes);
-    const auto sv = TensorAccessor(v_args, v_tensor_addr, single_tile_size_bytes);
+    const auto sq = TensorAccessor(q_args, q_tensor_addr);
+    const auto sk = TensorAccessor(k_args, k_tensor_addr);
+    const auto sv = TensorAccessor(v_args, v_tensor_addr);
 
     constexpr uint32_t block_size = 1;  // micro-block size for read/write; nothing to do with num_blocks
     // TODO: This might negatively impact perf

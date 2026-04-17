@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -123,7 +123,7 @@ void kernel_main() {
     }
 
 #else
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, in0_single_tile_size_bytes);
+    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
 #ifndef IN0_SHARDED
 #ifdef INTERMEDIATE_CB_READ
     constexpr uint32_t in0_intermediate_cb_index = get_named_compile_time_arg_val("cb_in0_intermediate");
@@ -135,7 +135,7 @@ void kernel_main() {
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
     experimental::CircularBuffer cb_sparsity(cb_id_sparsity);
-    const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr, sparsity_pagesize);
+    const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -156,7 +156,7 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < in0_B; ++b) {
         if constexpr (batchB > 0) {
-            noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
+            noc.async_read(s_sparsity, cb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
 
@@ -310,6 +310,29 @@ void kernel_main() {
 
                             in0_tensor_current_inner_dim_block_start_addr += shard_read_width;
                             noc.async_read_barrier();
+                        }
+
+                        {
+                            constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                            uint32_t in0_pad_base_addr = cb_in0.get_write_ptr();
+                            if constexpr (in0_last_ktile_w > 0) {
+                                if ((block == num_blocks_inner_dim - 1)) {
+                                    for (uint32_t h = 0; h < in0_block_h; ++h) {
+                                        auto ptr = in0_pad_base_addr +
+                                                   (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(ptr);
+                                    }
+                                }
+                            }
+                            if constexpr (in0_last_ktile_h > 0) {
+                                if ((block == num_blocks_inner_dim - 1)) {
+                                    for (uint32_t w = 0; w < in0_block_w; ++w) {
+                                        auto ptr = in0_pad_base_addr +
+                                                   ((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes;
+                                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(ptr);
+                                    }
+                                }
+                            }
                         }
 #endif  // IN0_SHARDED
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,7 +36,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
-    const auto s0 = TensorAccessor(input_args, src_addr, input_tile_bytes);
+    const auto s0 = TensorAccessor(input_args, src_addr);
 
     // ------------------------------------------------------------------
     // Transformation matrix
@@ -51,8 +51,7 @@ void kernel_main() {
         cb_push_back(trans_mat_cb_id, onetile);
     } else {
         // Non-height-sharded/fewer-#shards-than-cores-height-sharded cases
-        const uint32_t trans_mat_tile_bytes = get_tile_size(trans_mat_cb_id);
-        const auto s3 = TensorAccessor(trans_mat_args, trans_mat_addr, trans_mat_tile_bytes);
+        const auto s3 = TensorAccessor(trans_mat_args, trans_mat_addr);
 
         cb_reserve_back(trans_mat_cb_id, onetile);
         uint32_t trans_mat_l1_write_addr = get_write_ptr(trans_mat_cb_id);
@@ -69,8 +68,8 @@ void kernel_main() {
 #if COS_SIN_SHARDED_RELOAD == 1
         const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);
         const uint32_t sin_tile_bytes = get_tile_size(sin_cb_id);
-        const auto s1 = TensorAccessor(cos_args, cos_addr, cos_tile_bytes);
-        const auto s2 = TensorAccessor(sin_args, sin_addr, sin_tile_bytes);
+        const auto s1 = TensorAccessor(cos_args, cos_addr);
+        const auto s2 = TensorAccessor(sin_args, sin_addr);
 #endif
 
         for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
@@ -108,10 +107,10 @@ void kernel_main() {
     } else {
         // Interleaved cos/sin (trans_mat may still be sharded).
         const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);
-        const auto s1 = TensorAccessor(cos_args, cos_addr, cos_tile_bytes);
+        const auto s1 = TensorAccessor(cos_args, cos_addr);
 
         const uint32_t sin_tile_bytes = get_tile_size(sin_cb_id);
-        const auto s2 = TensorAccessor(sin_args, sin_addr, sin_tile_bytes);
+        const auto s2 = TensorAccessor(sin_args, sin_addr);
 
         for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
 #if RELOAD_IMPL == 0

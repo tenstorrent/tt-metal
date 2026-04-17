@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: © 2023, 2024 Tenstorrent Inc.
+ * SPDX-FileCopyrightText: 2023-2026 Tenstorrent USA, Inc.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -30,6 +30,24 @@ PHDRS {
 SECTIONS
 {
   PROVIDE (__erisc_jump_table = ORIGIN(ERISC_JUMPTABLE));
+
+  /* DEVICE_PRINT string table – file-only section, VMA = 0x6400000 */
+  .device_print_strings 0x6400000 :
+  {
+    __device_print_strings_start = .;
+    KEEP(*(.device_print_strings))
+    __device_print_strings_end = .;
+    . = ALIGN(4);
+  }
+
+  /* DEVICE_PRINT strings info table – file-only section, VMA = 0x6500000 */
+  .device_print_strings_info 0x6500000 :
+  {
+      __device_print_strings_info_start = .;
+      KEEP(*(.device_print_strings_info))
+      __device_print_strings_info_end = .;
+    . = ALIGN(4);
+  }
 
   .text __firmware_start :
   {

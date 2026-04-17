@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,7 +31,7 @@ void kernel_main() {
 
     // Tensor accessor
     // ---------------
-    const auto src_accessor = TensorAccessor(src_args, src_base_addr, src_tile_size);
+    const auto src_accessor = TensorAccessor(src_args, src_base_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_src(src_cb_idx);

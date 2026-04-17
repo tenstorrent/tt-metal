@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -186,6 +186,14 @@
 
 #if SFPU_OP_LGAMMA_INCLUDE
 #include "api/compute/eltwise_unary/lgamma.h"
+#endif
+
+#if SFPU_OP_DIGAMMA_INCLUDE
+#include "api/compute/eltwise_unary/digamma.h"
+#endif
+
+#if SFPU_OP_POLYGAMMA_INCLUDE
+#include "api/compute/eltwise_unary/polygamma.h"
 #endif
 
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE

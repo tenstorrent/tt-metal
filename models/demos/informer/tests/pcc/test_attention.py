@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """PCC tests for Informer attention components."""

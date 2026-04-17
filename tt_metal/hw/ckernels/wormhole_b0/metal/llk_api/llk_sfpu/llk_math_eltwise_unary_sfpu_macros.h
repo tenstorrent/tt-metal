@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,9 +31,9 @@
 #define SFPU_TWO_PARAM_KERNEL_INIT(OP, INIT_CB, APPROXIMATE, PARAM0, PARAM1) \
     llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, PARAM0, PARAM1)
 
-// For ops where init takes multiple template parameters (e.g., approximate, fast_approx, scale).
-#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, FAST_APPROX, SCALE, CLAMP_NEGATIVE) \
-    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROX>(INIT_CB<APPROX, FAST_APPROX, SCALE, CLAMP_NEGATIVE>)
+// For ops where init takes multiple template parameters (e.g., approximate, scale).
+#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, SCALE, CLAMP_NEGATIVE) \
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROX>(INIT_CB<APPROX, SCALE, CLAMP_NEGATIVE>)
 
 // For the int32 comparison variants
 #define SFPU_COMP_INT32_KERNEL(OP, MODE, APPROXIMATE, ITERATIONS, DST_IDX, PARAM0) \
@@ -82,6 +82,12 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                           \
         ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0, PARAM1, PARAM2)
 
+// For ops with exactly three extra uint parameters AND DST_ACCUM_MODE as template param
+#define SFPU_UNARY_THREE_PARAM_KERNEL_WITH_DST_ACCUM(                  \
+    FN, MODE, APPROXIMATE, DST_ACCUM, DST_IDX, PARAM0, PARAM1, PARAM2) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                 \
+        ckernel::sfpu::FN<APPROXIMATE, DST_ACCUM>, DST_IDX, (int)VectorMode::MODE, PARAM0, PARAM1, PARAM2)
+
 // For ops without extra uint parameter
 #define SFPU_UNARY_NO_PARAM_KERNEL_FN(FN, MODE, APPROXIMATE, DST_IDX) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE)
@@ -101,29 +107,12 @@
         ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0, PARAM1);
 
 // For ops with multiple template parameters and one runtime parameter (e.g., scale)
-#define SFPU_TEMPLATE_PARAMS_KERNEL_FN(                \
-    FN,                                                \
-    APPROXIMATE,                                       \
-    FAST_APPROX,                                       \
-    IS_FP32_DEST_ACC_EN,                               \
-    SCALE_EN,                                          \
-    SKIP_POSITIVE_CHECK,                               \
-    CLAMP_NEGATIVE,                                    \
-    ITERATIONS,                                        \
-    DST_IDX,                                           \
-    VECTOR_MODE,                                       \
-    SCALE)                                             \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>( \
-        ckernel::sfpu::FN<                             \
-            APPROXIMATE,                               \
-            FAST_APPROX,                               \
-            IS_FP32_DEST_ACC_EN,                       \
-            SCALE_EN,                                  \
-            ITERATIONS,                                \
-            SKIP_POSITIVE_CHECK,                       \
-            CLAMP_NEGATIVE>,                           \
-        DST_IDX,                                       \
-        VECTOR_MODE,                                   \
+#define SFPU_TEMPLATE_PARAMS_KERNEL_FN(                                                                      \
+    FN, APPROXIMATE, IS_FP32_DEST_ACC_EN, SCALE_EN, CLAMP_NEGATIVE, ITERATIONS, DST_IDX, VECTOR_MODE, SCALE) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                       \
+        ckernel::sfpu::FN<APPROXIMATE, IS_FP32_DEST_ACC_EN, SCALE_EN, ITERATIONS, CLAMP_NEGATIVE>,           \
+        DST_IDX,                                                                                             \
+        VECTOR_MODE,                                                                                         \
         SCALE)
 
 // For kernels with one template parameter and one extra runtime argument.

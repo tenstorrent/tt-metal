@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 
 #include <array>
 #include <cstddef>
-#include <iterator>
 #include "api/tensor/page.h"
 #include "internal/tensor/helpers.h"
 
@@ -21,7 +20,6 @@ namespace tensor_accessor {
 template <typename Accessor>
 class PagesAddressIteratorSharded {
 public:
-    using iterator_category = std::forward_iterator_tag;
     using value_type = Page;
     using difference_type = std::ptrdiff_t;
     using reference = const Page&;
@@ -259,7 +257,6 @@ private:
 template <typename Accessor>
 class PagesAddressIteratorInterleaved {
 public:
-    using iterator_category = std::forward_iterator_tag;
     using value_type = Page;
     using difference_type = std::ptrdiff_t;
     using reference = const Page&;
