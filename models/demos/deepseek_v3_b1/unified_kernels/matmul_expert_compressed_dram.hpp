@@ -368,200 +368,194 @@ struct MatmulExpertCompressedDRAM {
             volatile tt_l1_ptr uint16_t* index_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
 
-            // Count DRAM experts and record activation tile offsets.
             // Index tensor encodes SRAM/DRAM via bit 15: 1=SRAM, 0=DRAM.
-            // index_offset is used in TP=false mode, to offset to the correct expert in
-            // index tensor.
-            uint32_t num_dram_experts = 0;
-            uint32_t dram_act_tile_offset[num_active_experts];
-            for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
-                uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
-                if (raw_idx & 0x8000) {
-                    continue;  // bit15=1 → SRAM expert, skip
-                }
-                if constexpr (CTArgs::accum_experts) {
-                    dram_act_tile_offset[num_dram_experts] = exp_i * num_tiles_k;
-                }
-                num_dram_experts++;
+            // index_offset is used in TP=false mode, to offset to the correct expert.
+            constexpr uint32_t meta_words_per_block = CTArgs::meta_words_per_block;
+            constexpr uint32_t in0_page_size = CTArgs::in0_page_size;
+            constexpr uint32_t tiles_per_block = CTArgs::subblock_k * CTArgs::subblock_n;
+            constexpr uint32_t num_subblocks_n = CTArgs::per_core_n / CTArgs::subblock_n;
+
+            reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
+            pack_reconfig_data_format<true>(CTArgs::cb_out);
+            compressed_custom_mm_block_init_short<false, true, true>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+            if constexpr (CTArgs::fuse_silu) {
+                PACK((llk_math_eltwise_unary_sfpu_silu_init<false>()));
+            }
+            if constexpr (CTArgs::accum_experts) {
+                cb_wait_front(CTArgs::cb_in0, num_tiles_k * num_active_experts);
+            } else {
+                cb_wait_front(CTArgs::cb_in0, num_tiles_k);
             }
 
-            if (num_dram_experts > 0) {
-                constexpr uint32_t meta_words_per_block = CTArgs::meta_words_per_block;
-                constexpr uint32_t in0_page_size = CTArgs::in0_page_size;
+            uint32_t in0_base = 0;
+            UNPACK(({ in0_base = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in0); }));
 
-                reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
-                pack_reconfig_data_format<true>(CTArgs::cb_out);
-                compressed_custom_mm_block_init_short<false, true, true>(
-                    CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
-
-                if constexpr (CTArgs::fuse_silu) {
-                    PACK((llk_math_eltwise_unary_sfpu_silu_init<false>()));
+            if constexpr (CTArgs::accum_experts) {
+                uint32_t num_dram_experts = 0;
+                for (uint32_t i = 0; i < num_active_experts; i++) {
+                    if (!(static_cast<uint32_t>(index_ptr[i + CTArgs::index_offset]) & 0x8000)) {
+                        num_dram_experts++;
+                    }
                 }
 
-                if constexpr (CTArgs::accum_experts) {
-                    cb_wait_front(CTArgs::cb_in0, num_tiles_k * num_active_experts);
-                } else {
-                    cb_wait_front(CTArgs::cb_in0, num_tiles_k);
-                }
-
-                uint32_t in0_base = 0;
-                UNPACK(({ in0_base = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in0); }));
-
-                if constexpr (CTArgs::accum_experts) {
-                    constexpr uint32_t tiles_per_block = CTArgs::subblock_k * CTArgs::subblock_n;
-                    constexpr uint32_t num_subblocks_n = CTArgs::per_core_n / CTArgs::subblock_n;
-                    // Double-buffered fmt slot — toggles per DRAM expert on both UNPACK and MATH.
-                    uint32_t fmt_slot = 0;
-                    for (uint32_t i = 0; i < num_dram_experts; i++) {
-                        cb_reserve_back(CTArgs::cb_out, CTArgs::per_core_n);
-
-                        if (i == 0) {
-                            PACK((llk_pack_reconfig_l1_acc(0)));
-                        } else if (i == 1) {
-                            PACK((llk_pack_reconfig_l1_acc(1)));
-                        }
-
-                        UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
-                        MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1)));
-                        const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
-                            CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
-                        uint32_t fmt_meta_offset = 0;
-                        uint32_t act_rd_ptr = in0_base + dram_act_tile_offset[i] * in0_page_size;
-
-                        for (uint32_t ng = 0; ng < num_subblocks_n; ng++) {
-                            tile_regs_acquire();
-
-                            for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
-                                cb_wait_front(CTArgs::cb_in1, tiles_per_block);
-
-                                uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
-
-                                UNPACK(({
-                                    unified_kernels::override_cb_rd_ptr(
-                                        CTArgs::cb_in0, act_rd_ptr + sb_k * CTArgs::subblock_k * in0_page_size);
-                                }));
-
-                                if (sb_k < CTArgs::num_subblocks_k - 1) {
-                                    compressed_custom_mm_block<false>(
-                                        CTArgs::cb_in0,
-                                        CTArgs::cb_in1,
-                                        meta_addr,
-                                        0,
-                                        CTArgs::subblock_k,
-                                        CTArgs::subblock_n);
-                                } else {
-                                    compressed_custom_mm_block<true>(
-                                        CTArgs::cb_in0,
-                                        CTArgs::cb_in1,
-                                        meta_addr,
-                                        0,
-                                        CTArgs::subblock_k,
-                                        CTArgs::subblock_n);
-                                }
-
-                                fmt_meta_offset += meta_words_per_block;
-                                cb_pop_front(CTArgs::cb_in1, tiles_per_block);
-                            }
-
-                            tile_regs_commit();
-                            tile_regs_wait();
-                            for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
-                                pack_tile(sn, CTArgs::cb_out);
-                            }
-                            tile_regs_release();
-                        }
-
-                        UNPACK((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_0)));
-                        MATH((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_1)));
-                        fmt_slot ^= 1;
-                        cb_push_back(CTArgs::cb_out, CTArgs::per_core_n);
-
-                        // Reset write pointer for next expert's L1_ACC accumulation.
-                        if (i < num_dram_experts - 1) {
-                            cb_wait_front(CTArgs::cb_out, CTArgs::per_core_n);
-                            cb_pop_front(CTArgs::cb_out, CTArgs::per_core_n);
-                        }
+                uint32_t fmt_slot = 0;
+                uint32_t dram_idx = 0;
+                for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
+                    uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
+                    if (raw_idx & 0x8000) {
+                        continue;
                     }
 
-                    PACK((llk_pack_reconfig_l1_acc(0)));
-                } else {
-                    constexpr uint32_t tiles_per_block = CTArgs::subblock_k * CTArgs::subblock_n;
-                    constexpr uint32_t num_subblocks_n = CTArgs::per_core_n / CTArgs::subblock_n;
-                    // Double-buffered fmt slot — toggles per DRAM expert on both UNPACK and MATH.
-                    uint32_t fmt_slot = 0;
-                    for (uint32_t i = 0; i < num_dram_experts; i++) {
-                        UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
-                        MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1)));
-                        const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
-                            CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
-                        uint32_t fmt_meta_offset = 0;
+                    cb_reserve_back(CTArgs::cb_out, CTArgs::per_core_n);
 
-                        for (uint32_t ng = 0; ng < num_subblocks_n; ng++) {
-                            cb_reserve_back(CTArgs::cb_out, CTArgs::subblock_n);
-                            tile_regs_acquire();
+                    if (dram_idx == 0) {
+                        PACK((llk_pack_reconfig_l1_acc(0)));
+                    } else if (dram_idx == 1) {
+                        PACK((llk_pack_reconfig_l1_acc(1)));
+                    }
 
-                            for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
-                                cb_wait_front(CTArgs::cb_in1, tiles_per_block);
+                    UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
+                    MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1)));
+                    const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
+                        CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
+                    uint32_t fmt_meta_offset = 0;
+                    uint32_t act_rd_ptr = in0_base + exp_i * num_tiles_k * in0_page_size;
 
-                                UNPACK(({
-                                    unified_kernels::override_cb_rd_ptr(
-                                        CTArgs::cb_in0, in0_base + sb_k * CTArgs::subblock_k * in0_page_size);
-                                }));
+                    for (uint32_t ng = 0; ng < num_subblocks_n; ng++) {
+                        tile_regs_acquire();
 
-                                uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
+                        for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
+                            cb_wait_front(CTArgs::cb_in1, tiles_per_block);
 
-                                if (sb_k < CTArgs::num_subblocks_k - 1) {
-                                    compressed_custom_mm_block<false>(
-                                        CTArgs::cb_in0,
-                                        CTArgs::cb_in1,
-                                        meta_addr,
-                                        0,
-                                        CTArgs::subblock_k,
-                                        CTArgs::subblock_n);
-                                } else {
-                                    compressed_custom_mm_block<true>(
-                                        CTArgs::cb_in0,
-                                        CTArgs::cb_in1,
-                                        meta_addr,
-                                        0,
-                                        CTArgs::subblock_k,
-                                        CTArgs::subblock_n);
-                                }
+                            uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
 
-                                fmt_meta_offset += meta_words_per_block;
-                                cb_pop_front(CTArgs::cb_in1, tiles_per_block);
-                            }
+                            UNPACK(({
+                                unified_kernels::override_cb_rd_ptr(
+                                    CTArgs::cb_in0, act_rd_ptr + sb_k * CTArgs::subblock_k * in0_page_size);
+                            }));
 
-                            tile_regs_commit();
-                            if constexpr (CTArgs::fuse_silu) {
-                                TTI_SEMWAIT(
-                                    p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                                    semaphore::t6_sem(semaphore::MATH_PACK),
-                                    p_stall::STALL_ON_ZERO);
-                                PACK(TT_SETC16(
-                                    DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-                                for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
-                                    PACK((llk_math_eltwise_unary_sfpu_silu<false, false, 2>(sn, (int)VectorMode::R)));
-                                }
-                                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                            if (sb_k < CTArgs::num_subblocks_k - 1) {
+                                compressed_custom_mm_block<false>(
+                                    CTArgs::cb_in0,
+                                    CTArgs::cb_in1,
+                                    meta_addr,
+                                    0,
+                                    CTArgs::subblock_k,
+                                    CTArgs::subblock_n);
                             } else {
-                                tile_regs_wait();
+                                compressed_custom_mm_block<true>(
+                                    CTArgs::cb_in0,
+                                    CTArgs::cb_in1,
+                                    meta_addr,
+                                    0,
+                                    CTArgs::subblock_k,
+                                    CTArgs::subblock_n);
                             }
-                            for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
-                                pack_tile(sn, CTArgs::cb_out, 0);
-                            }
-                            tile_regs_release();
-                            cb_push_back(CTArgs::cb_out, CTArgs::subblock_n);
+
+                            fmt_meta_offset += meta_words_per_block;
+                            cb_pop_front(CTArgs::cb_in1, tiles_per_block);
                         }
 
-                        UNPACK((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_0)));
-                        MATH((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_1)));
-                        fmt_slot ^= 1;
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
+                            pack_tile(sn, CTArgs::cb_out);
+                        }
+                        tile_regs_release();
+                    }
+
+                    UNPACK((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_0)));
+                    MATH((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_1)));
+                    fmt_slot ^= 1;
+                    cb_push_back(CTArgs::cb_out, CTArgs::per_core_n);
+
+                    if (++dram_idx < num_dram_experts) {
+                        cb_wait_front(CTArgs::cb_out, CTArgs::per_core_n);
+                        cb_pop_front(CTArgs::cb_out, CTArgs::per_core_n);
                     }
                 }
 
-                compressed_custom_mm_block_uninit<false>();
+                PACK((llk_pack_reconfig_l1_acc(0)));
+            } else {
+                uint32_t fmt_slot = 0;
+
+                for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
+                    uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
+                    if (raw_idx & 0x8000) {
+                        continue;
+                    }
+
+                    UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
+                    MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1)));
+                    const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
+                        CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
+                    uint32_t fmt_meta_offset = 0;
+
+                    for (uint32_t ng = 0; ng < num_subblocks_n; ng++) {
+                        cb_reserve_back(CTArgs::cb_out, CTArgs::subblock_n);
+                        tile_regs_acquire();
+
+                        for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
+                            cb_wait_front(CTArgs::cb_in1, tiles_per_block);
+
+                            UNPACK(({
+                                unified_kernels::override_cb_rd_ptr(
+                                    CTArgs::cb_in0, in0_base + sb_k * CTArgs::subblock_k * in0_page_size);
+                            }));
+
+                            uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
+
+                            if (sb_k < CTArgs::num_subblocks_k - 1) {
+                                compressed_custom_mm_block<false>(
+                                    CTArgs::cb_in0,
+                                    CTArgs::cb_in1,
+                                    meta_addr,
+                                    0,
+                                    CTArgs::subblock_k,
+                                    CTArgs::subblock_n);
+                            } else {
+                                compressed_custom_mm_block<true>(
+                                    CTArgs::cb_in0,
+                                    CTArgs::cb_in1,
+                                    meta_addr,
+                                    0,
+                                    CTArgs::subblock_k,
+                                    CTArgs::subblock_n);
+                            }
+
+                            fmt_meta_offset += meta_words_per_block;
+                            cb_pop_front(CTArgs::cb_in1, tiles_per_block);
+                        }
+
+                        tile_regs_commit();
+                        if constexpr (CTArgs::fuse_silu) {
+                            TTI_SEMWAIT(
+                                p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                                semaphore::t6_sem(semaphore::MATH_PACK),
+                                p_stall::STALL_ON_ZERO);
+                            PACK(TT_SETC16(
+                                DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+                            for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
+                                PACK((llk_math_eltwise_unary_sfpu_silu<false, false, 2>(sn, (int)VectorMode::R)));
+                            }
+                            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                        } else {
+                            tile_regs_wait();
+                        }
+                        for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
+                            pack_tile(sn, CTArgs::cb_out, 0);
+                        }
+                        tile_regs_release();
+                        cb_push_back(CTArgs::cb_out, CTArgs::subblock_n);
+                    }
+
+                    UNPACK((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_0)));
+                    MATH((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_1)));
+                    fmt_slot ^= 1;
+                }
             }
+
+            compressed_custom_mm_block_uninit<false>();
 
             if constexpr (pop_in0) {
                 if constexpr (CTArgs::accum_experts) {
