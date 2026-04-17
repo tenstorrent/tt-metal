@@ -16,7 +16,14 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
+// A name identifying a DataflowBufferSpec within a ProgramSpec.
+//
+// CONVENTION: define names as `constexpr const char*` constants, e.g.:
+//   constexpr const char* INPUT_DFB = "input_dfb";
+//   DataflowBufferSpec{.unique_id = INPUT_DFB, ...};
+// This way, cross-reference validity is checked at compile time.
 using DFBSpecName = std::string;
+
 enum class DFBAccessPattern { STRIDED, BLOCKED, CONTIGUOUS };
 
 struct DataflowBufferSpec {

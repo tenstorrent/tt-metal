@@ -54,7 +54,12 @@ struct DataMovementConfiguration {
     std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
 };
 
-using KernelSpecID = uint32_t;
+// A name identifying a KernelSpec within a ProgramSpec.
+//
+// CONVENTION: define names as `constexpr const char*` constants, e.g.:
+//   constexpr const char* READER_KERNEL = "reader";
+//   KernelSpec{.unique_id = READER_KERNEL, ...};
+// This way, cross-reference validity is checked at compile time.
 using KernelSpecName = std::string;
 
 struct KernelSpec {

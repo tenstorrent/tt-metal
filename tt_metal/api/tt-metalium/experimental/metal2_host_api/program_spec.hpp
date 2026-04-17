@@ -17,8 +17,17 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
-using WorkerSpecName = std::string;
+// A name identifying a ProgramSpec within a MeshWorkload.
+//
+// CONVENTION: define names as `constexpr const char*` constants, e.g.:
+//   constexpr const char* MATMUL_PROGRAM = "matmul";
+//   ProgramSpec{.program_id = MATMUL_PROGRAM, ...};
+// This way, cross-reference validity is checked at compile time.
 using ProgramSpecName = std::string;
+
+// A name identifying a WorkerSpec within a ProgramSpec.
+// CONVENTION: define names as `constexpr const char*` constants (see above).
+using WorkerSpecName = std::string;
 
 //------------------------------------------------
 // ProgramSpec & WorkerSpec
