@@ -46,7 +46,7 @@ It's a lot to take in. Let's start from the obvious - RISC-V cores and the SRAM.
 
 The intended data flow is as follows, resembling software pipelining but on a distributed and hardware scale:
 
-* NoC 0 reads data from DRAM (or accept data from other Tensixes)
+* NoC 0 reads data from DRAM (or accepts data from other Tensixes)
 * Unpacker unpacks the data into a format that can be processed by the matrix/tensor unit
 * Matrix/tensor unit performs the computation
 * Packer packs the result back into a format for storage
@@ -88,7 +88,7 @@ This mechanism ensures that each kernel only proceeds when the necessary data is
 <img width="900" alt="image" src="docs/source/common/images/tenstorrent-circular-buffer-send-data-cross-kernel-or-itself.webp">
 The vector addition operation demonstrates the three-kernel architecture clearly. The reader kernel accepts three parameters: the addresses of input buffers A and B, and the number of tiles to process. It fetches data from DRAM and places it into circular buffers. The compute kernel waits for data availability from the reader, performs the addition operation, and outputs results to another circular buffer. The writer kernel then retrieves the computed results and writes them to the designated output buffer. Since the NoC interfaces and compute engines operate as independent peripherals, all operations execute asynchronously, requiring explicit synchronization barriers to ensure correct data flow and prevent race conditions.
 
-The following are the kernels, when run together, will perform vector addition on two input buffers A and B, each containing `n_tiles` tiles and write the result to an output buffer C.
+The following kernels, when run together, perform vector addition on two input buffers A and B, each containing `n_tiles` tiles, and write the result to an output buffer C.
 
 ```c++
 // Data read kernel (data movement kernel 0)
@@ -393,7 +393,7 @@ SetRuntimeArgs(program, writer, core, {c->address(), n_tiles});
 SetRuntimeArgs(program, compute, core, {n_tiles});
 ```
 
-Following setting the arguments, the program is added to a `MeshWorkload` and is enqueued for execution, synchronized for completion, and the computational results are retrieved.
+After setting the arguments, the program is added to a `MeshWorkload` and is enqueued for execution, synchronized for completion, and the computational results are retrieved.
 
 ```c++
 MeshWorkload workload;
@@ -428,86 +428,77 @@ add_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, dst_reg);
 pack_tile(dst_reg, tt::CBIndex::c_16, /*output_tile_index=*/0);
 ```
 
-For functions such as sine or cosine, you must explicitly load the input tile into the Dst register, call the relevant SFPU function, and then write the result back to the circular buffer.
+For functions such as exp or selu, you must explicitly load the input tile into the Dst register, call the relevant SFPU function, and then write the result back to the circular buffer.
 
 ```c++
 // Dst register index for the result
 constexpr uint32_t dst_reg = 0;
 // Load the input tile into the `dst_reg`-th register.
 copy_tile(tt::CBIndex::c_0, 0, dst_reg);
-// Call the SFPU sine function. It overwrites original value in register
-sin_tile(dst_reg);
+// Call SFPU selu function. It overwrites original value in register
+selu_tile(dst_reg);
 // Write the result back to the circular buffer
 pack_tile(dst_reg, tt::CBIndex::c_16, /*output_tile_index=*/0);
 ```
 
-In general, FPU operations can work directly on circular buffers, while SFPU operations require data to be moved into into the Dst register before invoking the SFPU. But almost always `pack_tile` is needed to write the result back to the circular buffer, which is then pushed and the writer kernel can proceed to write the result to the output buffer.
+In general, FPU operations can work directly on circular buffers, while SFPU operations require data to be moved into the Dst register before invoking the SFPU. But almost always `pack_tile` is needed to write the result back to the circular buffer, which is then pushed and the writer kernel can proceed to write the result to the output buffer.
 
 #### Compute APIs
 
 A natural question when encountering a new abstraction layer is, "Why is this needed?" For Metalium kernels, the Compute API abstraction layer addresses a fundamental problem: **maintaining kernel code compatibility and performance across different hardware generations.**
 
-Tenstorrent hardware evolves between generations with significant architectural changes. Vector units, instruction sets, and data path characteristics differ - Grayskull's vector unit processes 64 elements with 19-bit floating point precision, while Wormhole and Blackhole generations use 32-element vectors with 32-bit floating point operations.
+Tenstorrent hardware evolves between generations with significant architectural changes. Vector units, instruction sets, and data path characteristics differ - Grayskull's vector unit processes 64 elements with 19-bit floating point precision, while newer Wormhole and Blackhole generations use 32-element vectors with 32-bit floating point operations.
 
 Without an abstraction like compute API, developers would need to write kernels directly for specific hardware generations. This creates several problems:
 *   **Code Brittleness:** Kernels written for Grayskull (using 64-wide vector operations) won't work on Wormhole or Blackhole.
 *   **Maintenance Overhead:** Each new hardware generation requires rewriting and re-validating kernels, slowing development and adoption.
 
-Compute APIs solve this by providing a stable programming interface. When invoked from a compute kernel (e.g., `sin_tile`), the Metalium compiler automatically selects the correct implementation optimized for the target hardware's vector width, instruction set, and other capabilities. This preserves the kernel's functionality while ensuring optimal performance across hardware generations.
+Compute APIs solve this by providing a stable programming interface. When invoked from a compute kernel (e.g., `selu_tile`), the Metalium compiler automatically selects the correct implementation optimized for the target hardware's vector width, instruction set, and other capabilities. This preserves the kernel's functionality while ensuring optimal performance across hardware generations.
 
-This abstraction ensures kernel code remains functional and efficient across hardware generations. For example, when a compute kernel invokes `sin_tile`, the compiler automatically selects the appropriate implementation optimized for the target hardware's specific vector width and computational capabilities.
-
-```c++
-sin_tile(0); // Different implementation for sin is called when compiled for
-             // different generations of Tenstorrent processors.
-```
-When a compute kernel calls `sin_tile`, Metalium automatically selects the correct hardware-specific implementation for the target processor. For Grayskull processors, the implementation performs a phase shift transformation from the [0, 2π] range to [-π, π] and employs a MacLaurin series expansion to compute the sine function. This selection and dispatch are handled by Metalium, ensuring that the appropriate version of the sine operation is invoked for each hardware generation.
+This abstraction ensures kernel code remains functional and efficient across hardware generations. For example, when a compute kernel invokes `selu_tile`, the Metalium automatically selects the appropriate implementation optimized for the target hardware's specific vector width and computational capabilities.
 
 ```c++
-// tt_metal/hw/ckernels/grayskull/metal/llk_api/llk_sfpu/ckernel_sfpu_trigonometry.h
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_sine() {
-    // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-
-        // Assume v is bound [0:2pi]
-        // phase shift [0:2pi] to [-pi:pi] and multiply result by -1
-        v = v - 3.14159264f;
-        v = sfpu_sine_maclaurin_series<APPROXIMATION_MODE>(v);
-
-        // Use symmetrical properties of trig
-        v *= -1;
-
-        // Write Output
-        dst_reg[0] = v;
-        dst_reg++;
-    }
-}
+selu_tile(0); // Different implementation for selu is called when compiled for
+              // different generations of Tenstorrent processors.
 ```
 
-For Blackhole (and Wormhole) processors, the availability of `float_to_int16` instruction enables reliable value shifting to the [-π, π] range. The implementation then applies a MacLaurin series calculation for sine computation (utilizing the same mathematical approach but with processor-specific function naming). Additionally, the ITERATIONS parameter differs between processor generations (not shown in code here, it is set by an outside source): Grayskull requires 4 iterations, while Wormhole and Blackhole require 8 iterations to accommodate their reduced vector width of 32 elements compared to Grayskull's 64-element vectors.
+The following code shows the implementation of the `selu_tile` SFPU kernel. It follows the SELU definition of `SELU(x) =scale ∗ ( max(0, x) + min(0, α ∗ (exp(x)−1) ) )`.
+
+Internally, LLKs process tiles as four 16x16 _faces_. On Blackhole (and Wormhole), it takes 8 iterations to process each face (`ITERATIONS` template argument). The following kernel will be called four times to process a full 32x32 tile.
+
 
 ```c++
-// tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_trigonometry.h
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_sine() {
-    // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0] * FRAC_1_PI;
-        vInt whole_v = float_to_int16(v, 0);
-        v -= int32_to_float(whole_v, 0);
-        v = sfpu_sinpi<APPROXIMATION_MODE>(v);
+// SELU(x) = scale ∗ ( max(0, x) + min(0, α ∗ (exp(x)−1) ) )
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+inline void calculate_selu(uint scale, uint alpha) {
+    // reinterpret uint parameters as float
+    sfpi::vFloat scale_value = Converter::as_float(scale);
+    sfpi::vFloat alpha_value = Converter::as_float(alpha);
+#pragma GCC unroll 8
 
-        v_if(whole_v & 1) { v = -v; }
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat v = sfpi::dst_reg[0]; // Load 32 elements from DST
+        v_if(v >= 0.0f) { sfpi::dst_reg[0] = v * scale_value; }
+        v_else {
+            sfpi::vFloat exp_calc = _sfpu_exp_21f_<true>(
+                v);  // is_fp32_dest_acc_en is set to true to avoid rounding within exp function; rounding is done at the end of the operation
+            sfpi::vFloat minus_mul = exp_calc - sfpi::vConst1;
+            sfpi::vFloat result = minus_mul * alpha_value * scale_value;
+
+            if constexpr (!is_fp32_dest_acc_en) {
+                // Round 32-bits LRegs to bfloat16 by rounding-to-nearest
+                // Without this, data is truncated towards zero
+                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            }
+            sfpi::dst_reg[0] = result; // Store 32 elements to DST
+        }
         v_endif;
-        dst_reg[0] = v;
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 ```
 
-While Metalium supports custom vectorized computation implementations, developers should note that vector width and hardware-specific details vary between processor generations. And working implementation must be provide for the target processor. For most applications, use the provided compute APIs from the kernel library since Tenstorrent maintains these implementations for compatibility with future hardware generations. For custom vectorized computation guidance, see the [Low Level Kernels][tt_llk_doc] section in the Metalium documentation.
+While Metalium supports custom vectorized computation implementations, developers should note that vector width and hardware-specific details can vary between processor generations. A working implementation must be provided for the target processor. For most applications, use the provided compute APIs from the kernel library since Tenstorrent maintains these implementations for compatibility with future hardware generations. For guidance writing custom vectorized computation guidance, see the [Low Level Kernels][tt_llk_doc] section in the Metalium documentation.
 
 [tt_llk_doc]: https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/sfpu/llk.html
 
