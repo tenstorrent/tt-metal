@@ -180,3 +180,13 @@ registry:
     config_count: 130
     loaded_at: '2026-04-17'
     notes: ''
+
+  - trace_id: 13
+    status: draft
+    models: [deepseek_v3]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: 8b53d615-a39d-4b02-bca1-7006e3ee0ef1
+    tt_metal_sha: 1a6fb7d120edfbf67f43be3e83f83095cff794c4
+    config_count: 331
+    loaded_at: '2026-04-17'
+    notes: ''
