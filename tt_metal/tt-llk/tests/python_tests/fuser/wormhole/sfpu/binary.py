@@ -88,7 +88,6 @@ class BinarySfpu(Sfpu):
 
         return (
             f"    // Operation {stage}: Binary {self.operation.cpp_enum_value} SFPU\n"
-            f"    _llk_math_eltwise_binary_sfpu_init_<SfpuType::add1>();\n"
         )
 
     def calculate(

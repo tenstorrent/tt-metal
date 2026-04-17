@@ -71,7 +71,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             i, formats.math, formats.math);
     }
 
-    _llk_math_eltwise_binary_sfpu_init_<SfpuType::add1>();
     test_utils::call_binary_sfpu_operation_init<APPROX_MODE, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>();
 
     // Note: argument passed to _llk_math_eltwise_binary_sfpu_start_ is dest index of first operand, and
