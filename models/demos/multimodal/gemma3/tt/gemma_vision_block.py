@@ -25,7 +25,6 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         dtype,
         configuration,
         weight_cache_path=None,
-        return_intermediate=None,
     ):
         super().__init__()
         self.state_dict = state_dict
@@ -41,7 +40,6 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         self.act_layer = configuration.vision_act_layer
         self.in_channels = configuration.vision_in_channels
         self.n_global_layers = configuration.vision_n_global_layers
-        self.return_intermediate = return_intermediate
 
         self.embeddings = TtSiglipVisionEmbeddings(
             mesh_device=mesh_device,
