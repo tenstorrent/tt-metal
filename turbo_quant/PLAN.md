@@ -601,9 +601,23 @@ All completed:
 
 ### Remaining Next Steps
 
-**Paged prefill → paged decode (for 37ms decode after prefill):**
-Currently prefill uses non-paged model (43ms decode). Paged prefill fails with
-block_size mismatch — model-level issue, not TQ-specific.
+**~~End-to-end demo with real prefill + paged decode~~ DONE (2026-04-20):**
+
+`eval_e2e_prefill.py --bfp4-cache` now runs real prefill + paged decode on device,
+no teacher forcing. Correct output across prompts.
+
+Fix was passing `page_table=` to `prepare_inputs_prefill` and `kv_cache=` to
+`ttnn_prefill_forward` (previously omitted). Migration function now handles paged
+layer_past layout `[max_num_blocks, n_kv_heads, block_size, head_dim]`.
+
+| Config | Prefill+decode (ms/tok) | eval_e2e.py teacher-forced | Gap |
+|--------|-------------------------|---------------------------|-----|
+| Single device | 42.8 | 37.1 | +5.7ms |
+| T3K 8-device | 18.7 | 14.2 | +4.5ms |
+
+**Residual ~5ms gap vs teacher-forced path** — possibly program cache / memory
+fragmentation after prefill. Non-blocking but worth investigating. Not TQ-specific
+(would likely affect any paged-prefill → paged-decode flow).
 
 **Max batch at 128K context:**
 Sweep to find batch limit at long seqlen. TQ's 2× KV compression should enable
