@@ -60,9 +60,18 @@ inline void pack_compute_activation<MoEActivationFunction::SWIGLU>() {
     PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
 };
 
+// Type holder to extract config type at compile time
+template <uint32_t ConfigTypeValue>
+struct ConfigTypeHolder {
+    static constexpr auto config_type = static_cast<moe_ring::MoEConfigType>(ConfigTypeValue);
+    using type = moe_ring::ConfigType_t<config_type>;
+};
+
 }  // namespace detail
 void kernel_main() {
-    using config_t = moe_ring::DeepSeekRingConfig;
+    // Extract config type from compile-time argument
+    constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
+    using config_t = typename detail::ConfigTypeHolder<moe_config_type_value>::type;
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -198,7 +207,7 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            pack_init_activation<activation_type>();
+            detail::pack_init_activation<activation_type>();
 
             // Initialize matmul for W0
             mm_block_init(
