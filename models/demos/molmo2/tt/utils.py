@@ -43,7 +43,7 @@ IMAGENET_STD = [0.26862954, 0.26130258, 0.27577711]
 
 # Prefill sequence length buckets for trace reuse (must match warmup_video_traces defaults).
 # Pads via get_padded_prefill_len / pad_input_ids; long video prompts use 16k–64k.
-PREFILL_SEQ_BUCKETS = [1024, 2048, 4096, 8192, 16384, 18432, 32768]
+PREFILL_SEQ_BUCKETS = [1024, 2048, 4096, 8192, 16384, 18432, 32768, 36864]
 
 # Padding token ID for sequence length padding
 VISION_PAD_TOKEN_ID = 151654  # <|vision_pad|>
