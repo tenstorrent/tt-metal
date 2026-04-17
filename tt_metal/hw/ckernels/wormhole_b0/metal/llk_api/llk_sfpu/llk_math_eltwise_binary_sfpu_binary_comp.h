@@ -72,7 +72,7 @@ inline void llk_math_eltwise_binary_sfpu_le_int32(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_lt_uint32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::lt, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::lt_uint, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE>
@@ -88,7 +88,7 @@ inline void llk_math_eltwise_binary_sfpu_lt_uint32(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_gt_uint32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::gt, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::gt_uint, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE>
@@ -104,7 +104,7 @@ inline void llk_math_eltwise_binary_sfpu_gt_uint32(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_le_uint32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::le, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::le_uint, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE>
@@ -120,7 +120,7 @@ inline void llk_math_eltwise_binary_sfpu_le_uint32(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_ge_uint32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::ge, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::ge_uint, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE>
@@ -134,7 +134,7 @@ inline void llk_math_eltwise_binary_sfpu_ge_uint32(
         vector_mode);
 }
 
-inline void llk_math_eltwise_binary_sfpu_lt_uint16_init() { llk_math_eltwise_binary_sfpu_init<SfpuType::lt>(); }
+inline void llk_math_eltwise_binary_sfpu_lt_uint16_init() { llk_math_eltwise_binary_sfpu_init<SfpuType::lt_uint>(); }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_lt_uint16(
@@ -147,7 +147,7 @@ inline void llk_math_eltwise_binary_sfpu_lt_uint16(
         vector_mode);
 }
 
-inline void llk_math_eltwise_binary_sfpu_gt_uint16_init() { llk_math_eltwise_binary_sfpu_init<SfpuType::gt>(); }
+inline void llk_math_eltwise_binary_sfpu_gt_uint16_init() { llk_math_eltwise_binary_sfpu_init<SfpuType::gt_uint>(); }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_gt_uint16(
@@ -160,6 +160,38 @@ inline void llk_math_eltwise_binary_sfpu_gt_uint16(
         vector_mode);
 }
 
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_le_uint16_init() {
+    llk_math_eltwise_binary_sfpu_init<SfpuType::le_uint, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_le_uint16(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_binary_comp_uint16<APPROXIMATE, 8, SfpuType::le>,
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
+}
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_ge_uint16_init() {
+    llk_math_eltwise_binary_sfpu_init<SfpuType::ge_uint, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_ge_uint16(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_binary_comp_uint16<APPROXIMATE, 8, SfpuType::ge>,
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
+}
+
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_eq_fp32_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::eq>();
 }

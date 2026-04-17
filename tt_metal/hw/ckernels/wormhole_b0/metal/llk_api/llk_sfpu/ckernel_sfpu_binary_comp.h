@@ -274,8 +274,7 @@ inline void calculate_binary_comp_uint32(const uint dst_index_in0, const uint ds
             TTI_SFPLOADI(p_sfpu::LREG7, SFPLOADI_MOD0_USHORT, 0x01);
             TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG1, 0);
         }
-        TT_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_3, dst_index_out * dst_tile_size);
-        dst_reg++;
+        TT_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_2, dst_index_out * dst_tile_size);
     }
 }
 
@@ -312,8 +311,7 @@ inline void calculate_binary_comp_uint16(const uint dst_index_in0, const uint ds
             TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG1, 0);
         }
 
-        TT_SFPSTORE(p_sfpu::LREG1, LO16, ADDR_MOD_3, dst_index_out * dst_tile_size);
-        sfpi::dst_reg++;
+        TT_SFPSTORE(p_sfpu::LREG1, LO16, ADDR_MOD_2, dst_index_out * dst_tile_size);
     }
 }
 }  //  namespace ckernel::sfpu

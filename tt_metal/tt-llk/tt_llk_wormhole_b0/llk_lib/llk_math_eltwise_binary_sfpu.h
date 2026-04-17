@@ -35,7 +35,8 @@ inline void eltwise_binary_sfpu_configure_addrmod()
 
     if constexpr (
         sfpu_op == SfpuType::mul_int32 || sfpu_op == SfpuType::mul_uint16 || sfpu_op == SfpuType::max || sfpu_op == SfpuType::min ||
-        sfpu_op == SfpuType::max_int32 || sfpu_op == SfpuType::min_int32 || sfpu_op == SfpuType::max_uint32 || sfpu_op == SfpuType::min_uint32)
+        sfpu_op == SfpuType::max_int32 || sfpu_op == SfpuType::min_int32 || sfpu_op == SfpuType::max_uint32 || sfpu_op == SfpuType::min_uint32 ||
+        sfpu_op == SfpuType::lt_uint || sfpu_op == SfpuType::gt_uint || sfpu_op == SfpuType::le_uint || sfpu_op == SfpuType::ge_uint)
     {
         addr_mod_t {
             .srca = {.incr = 0},
