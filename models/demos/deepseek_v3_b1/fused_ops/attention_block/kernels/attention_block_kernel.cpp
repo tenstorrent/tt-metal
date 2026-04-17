@@ -175,6 +175,13 @@ void kernel_main() {
             },
     };
 
+    // Mcast_dkv receiver args (DKV matmul cores receive normalized data from input core)
+    deepseek_b1_ops::Mcast::ReceiverArgs mcast_dkv_args{
+        get_named_compile_time_arg_val("mcast_dkv_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("mcast_dkv_dst_cb"),
+        get_named_compile_time_arg_val("mcast_dkv_dst_num_pages"),
+    };
+
     // Matmul3 reader args (NCRISC is no-op)
     deepseek_b1_ops::Matmul::ReaderArgs matmul3_args{};
 
@@ -697,6 +704,23 @@ void kernel_main() {
         .receiver = {},
     };
 
+    // Mcast_dkv sender args (input core sends normalized data to DKV matmul cores)
+    // Reuses same grid coords + sender semaphore as mcast1/mcast2
+    constexpr uint32_t mcast_dkv_src_cb = get_named_compile_time_arg_val("mcast_dkv_src_cb");
+    deepseek_b1_ops::Mcast::SenderArgs mcast_dkv_args{
+        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+        get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
+        get_named_compile_time_arg_val("mcast_dkv_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("mcast_dkv_data_size_bytes"),
+        mcast_dkv_src_cb,
+        get_named_compile_time_arg_val("mcast_dkv_src_num_pages"),
+        get_read_ptr(mcast_dkv_src_cb),
+        get_write_ptr(mcast_dst_cb),
+    };
+
     // Matmul writer args (BRISC is no-op)
     using DKV_MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs dkv_matmul_args{};
@@ -1008,6 +1032,9 @@ void kernel_main() {
     // Mcast2 compute args (no-op for TRISC)
     deepseek_b1_ops::Mcast::ComputeArgs mcast2_args{};
 
+    // Mcast_dkv compute args (no-op for TRISC)
+    deepseek_b1_ops::Mcast::ComputeArgs mcast_dkv_args{};
+
     // Matmul3 CTArgs type alias (out_w is compile-time for TRISC)
     using Matmul3CTArgs =
         deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul3_out_w_per_core")>;
@@ -1235,8 +1262,8 @@ void kernel_main() {
         Core::is_input_core,
         // Receive on the whole grid. This is used to block downstream ccls
         Core::is_full_mcast_grid_core,
-        Core::is_matmul_core || Core::is_dkv_matmul_core,
-        true>
+        Core::is_matmul_core,  // Only Q-proj cores do CB receive; DKV gets data via mcast_dkv
+        false>                 // Don't pop input_cb — TRISC RMSNorm still needs it
         mcast;
     {
         DeviceZoneScopedN("MCAST_INIT");
@@ -1281,16 +1308,10 @@ void kernel_main() {
         // The first mcast is also used to synchronize downstream ccls, so must always run.
         // Can revisit this later
         // ====================================================================
-        // Input core: RMSNorm + Mcast send
+        // Mcast1: Send RAW activations to Q-proj grid (pop_src=false)
         // ====================================================================
         {
-            DeviceZoneScopedN("RMSNORM");
-            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
-            rmsnorm(rmsnorm_args);
-        }
-
-        {
-            DeviceZoneScopedN("MCAST");
+            DeviceZoneScopedN("MCAST_RAW");
             mcast(mcast_args);
         }
 
@@ -1311,6 +1332,31 @@ void kernel_main() {
         }
 
         if (!skip_attention) {
+            // ====================================================================
+            // RMSNorm on input core (with gamma → rmsnorm_output_cb, for DKV path)
+            // ====================================================================
+            {
+                DeviceZoneScopedN("RMSNORM");
+                deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
+                rmsnorm(rmsnorm_args);  // pop_input=true frees input_cb
+            }
+
+            // ====================================================================
+            // Mcast_dkv: Send normalized data to DKV matmul cores
+            // Non-persistent, reuses mcast1 persistent state
+            // ====================================================================
+            {
+                DeviceZoneScopedN("MCAST_DKV");
+                deepseek_b1_ops::Mcast::Op<
+                    McastCTArgs,
+                    Core::is_input_core,
+                    Core::is_dkv_matmul_core,
+                    Core::is_dkv_matmul_core,
+                    true>  // pop_src=true (pop rmsnorm_output_cb)
+                    mcast_dkv;
+                mcast_dkv(mcast_dkv_args);
+            }
+
             // ====================================================================
             // Matmul operation
             // ====================================================================

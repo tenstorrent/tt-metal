@@ -692,6 +692,10 @@ def prepare_attention_weights(
 
     def _preprocess_q_ab_kv_a(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         q_a = t[q_a_key].T.contiguous()
+        attn_norm = t[attn_norm_key].T.contiguous()
+        # deffered norm preprocessing step
+        q_a = q_a * attn_norm.unsqueeze(-1)
+
         q_b = deinterleave_q_b_proj(t[q_b_key])
         kv_a = t[kv_a_key].T.contiguous()
         if mla_tp == 1 and q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
@@ -699,14 +703,15 @@ def prepare_attention_weights(
         return preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
 
     q_ab_fp = cache_config.context.fingerprint(
-        source=SourceTensorSelection(names=(q_a_key, q_b_key, kv_a_key)),
+        # needs all names of keys to make proper fingerprint
+        source=SourceTensorSelection(names=(q_a_key, attn_norm_key, q_b_key, kv_a_key)),
         target=Q_AB_KV_A_SPEC,
     )
     q_ab_views = cache_config.cache.get_or_create(
         q_ab_fp,
         device,
         preprocess=_preprocess_q_ab_kv_a,
-        raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, q_b_key, kv_a_key)},
+        raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, attn_norm_key, q_b_key, kv_a_key)},
     )
     if not isinstance(q_ab_views, dict):
         raise TypeError("expected dict[str, OverlappedTensor] for q_ab_kv_a cache entry")
