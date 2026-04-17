@@ -140,7 +140,6 @@ def test_bcast_moe_reduce_pipeline(
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     num_gate_proj_cores = len(gate_proj_worker_cores)
-    reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
     aggregator_core = shard_cores_list[0]
@@ -160,6 +159,61 @@ def test_bcast_moe_reduce_pipeline(
         exit_column = 0
     pipeline_column_coords = [ttnn.MeshCoordinate(r, exit_column) for r in range(int(mesh_rows))]
     logger.info(f"exit_column={exit_column}, pipeline_column_coords={len(pipeline_column_coords)} devices")
+
+    # -- MoE tensor setup (needed before PipelineBlock to get correct reduce shard size) --
+    result_scores = None
+    result_indices = None
+    result_output = None
+    r = None
+    s = None
+    state_dict = get_reference_model_state_dict(
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=256,
+        include_global=False,
+    )
+
+    if is_stage0 or is_stage1:
+        logger.info(f"[rank={my_mesh_id}] creating routed expert tensors")
+        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        logger.info(f"[rank={my_mesh_id}] mesh_mapper created")
+        needs_device_tensors = is_stage1
+        r = create_routed_expert_tensors(
+            mesh_device,
+            use_hardcoded_expert_index=True,
+            mesh_mapper=mesh_mapper,
+            state_dict=state_dict,
+            is_moe=True,
+            layer_idx=ROUTED_EXPERT_LAYER_IDX,
+            skip_attention_weights=True,
+            create_device_tensors=needs_device_tensors,
+        )
+        logger.info(f"[rank={my_mesh_id}] routed expert tensors created")
+        mcast_grid = moe_worker_core_grid
+        s = create_shared_expert_tensors(
+            mesh_device,
+            M,
+            K,
+            mcast_grid,
+            mesh_mapper=mesh_mapper,
+            state_dict=state_dict,
+            is_moe=True,
+            layer_idx=ROUTED_EXPERT_LAYER_IDX,
+            create_device_tensors=needs_device_tensors,
+        )
+        logger.info(f"[rank={my_mesh_id}] MoE tensors created")
+
+    # Compute per-shard reduce payload from actual shard spec (not from embedding dim)
+    if r is not None:
+        _shard_spec = r.final_output_mem_config.shard_spec
+        reduce_payload_per_shard = _shard_spec.shape[0] * _shard_spec.shape[1] * 2  # bfloat16
+        logger.info(
+            f"[rank={my_mesh_id}] reduce_payload_per_shard={reduce_payload_per_shard} "
+            f"(shard_shape={_shard_spec.shape})"
+        )
+    else:
+        reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
 
     # -- Pipeline block setup (collective -- all hosts must participate simultaneously) --
     pipeline_block = None
@@ -336,51 +390,6 @@ def test_bcast_moe_reduce_pipeline(
             f"{sum(1 for s in forward_sockets if s is not None)}/{num_devices} devices, "
             f"{len(raw_ds)} downstream socket groups"
         )
-
-    # -- MoE tensor setup (stage 0: golden validation, stage 1: MoE compute + validation) --
-    result_scores = None
-    result_indices = None
-    result_output = None
-    r = None
-    s = None
-    state_dict = get_reference_model_state_dict(
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
-        is_moe=True,
-        seed=RoutedExpert.SEED,
-        num_routed_experts=256,
-        include_global=False,
-    )
-
-    if is_stage0 or is_stage1:
-        logger.info(f"[rank={my_mesh_id}] creating routed expert tensors")
-        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-        logger.info(f"[rank={my_mesh_id}] mesh_mapper created")
-        needs_device_tensors = is_stage1
-        r = create_routed_expert_tensors(
-            mesh_device,
-            use_hardcoded_expert_index=True,
-            mesh_mapper=mesh_mapper,
-            state_dict=state_dict,
-            is_moe=True,
-            layer_idx=ROUTED_EXPERT_LAYER_IDX,
-            skip_attention_weights=True,
-            create_device_tensors=needs_device_tensors,
-        )
-        logger.info(f"[rank={my_mesh_id}] routed expert tensors created")
-        mcast_grid = moe_worker_core_grid
-        s = create_shared_expert_tensors(
-            mesh_device,
-            M,
-            K,
-            mcast_grid,
-            mesh_mapper=mesh_mapper,
-            state_dict=state_dict,
-            is_moe=True,
-            layer_idx=ROUTED_EXPERT_LAYER_IDX,
-            create_device_tensors=needs_device_tensors,
-        )
-        logger.info(f"[rank={my_mesh_id}] MoE tensors created")
-
     if is_stage1:
         kv_cache_shard_height = 256
         kvpe_dim = 576

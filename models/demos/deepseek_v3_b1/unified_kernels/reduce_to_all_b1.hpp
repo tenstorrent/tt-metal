@@ -312,9 +312,7 @@ struct ReduceToAllB1 {
                 volatile tt_l1_ptr uint32_t* r2_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_sem_addr);
 
                 bwd_sender.open();
-                DPRINT << "BWD edm=(" << (uint32_t)bwd_sender.edm_noc_x << "," << (uint32_t)bwd_sender.edm_noc_y
-                       << ") nb=" << (uint32_t)bwd_sender.num_buffers_per_channel
-                       << " spc=" << (bwd_sender.edm_has_space_for_packet<1>() ? 1 : 0) << "\n";
+                DPRINT << "BWD\n";
                 {
                     uint32_t r1_sent = 0;
                     uint32_t r2_sent = 0;
@@ -326,7 +324,6 @@ struct ReduceToAllB1 {
                         bwd_spin++;
                         if ((bwd_spin & 0xFFFFFFF) == 0) {
                             invalidate_l1_cache();
-                            DPRINT << "BWD r1=0x" << HEX() << r1_sent << " r2=0x" << r2_sent << DEC() << "\n";
                         }
                     } while (r1_sent != CTArgs::all_sent_mask || r2_sent != CTArgs::all_sent_mask);
                     noc_semaphore_set(r1_sem, 0);
@@ -351,24 +348,18 @@ struct ReduceToAllB1 {
                 unified_kernels::semaphore_dec(sem_ptr);
             };
 
-            DPRINT << "NW R1\n";
             cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
             wait_round(args.recv_sem_round1);
             cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
-            DPRINT << "NR1\n";
 
             cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
             wait_round(args.recv_sem_round2);
             cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
-            DPRINT << "NR2\n";
 
             if constexpr (CTArgs::is_exit_column) {
                 cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
                 wait_round(args.recv_sem_round3);
                 cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
-                DPRINT << "NR3\n";
-            } else {
-                DPRINT << "NR3skip\n";
             }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -426,9 +417,7 @@ struct ReduceToAllB1 {
                 volatile tt_l1_ptr uint32_t* r3_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r3_sem_addr_val);
 
                 fwd_sender.open();
-                DPRINT << "FWD edm=(" << (uint32_t)fwd_sender.edm_noc_x << "," << (uint32_t)fwd_sender.edm_noc_y
-                       << ") nb=" << (uint32_t)fwd_sender.num_buffers_per_channel
-                       << " spc=" << (fwd_sender.edm_has_space_for_packet<1>() ? 1 : 0) << "\n";
+                DPRINT << "FWD\n";
                 {
                     uint32_t r1_sent = 0;
                     uint32_t r2_sent = 0;
@@ -440,7 +429,6 @@ struct ReduceToAllB1 {
                         fwd_spin++;
                         if ((fwd_spin & 0xFFFFFFF) == 0) {
                             invalidate_l1_cache();
-                            DPRINT << "FW r1=0x" << HEX() << r1_sent << " r2=0x" << r2_sent << DEC() << "\n";
                         }
                     } while (r1_sent != CTArgs::all_sent_mask || r2_sent != CTArgs::all_sent_mask);
                     noc_semaphore_set(r1_sem, 0);
@@ -454,9 +442,7 @@ struct ReduceToAllB1 {
                     auto r3_sender =
                         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
                     r3_sender.open();
-                    DPRINT << "R3O edm=(" << (uint32_t)r3_sender.edm_noc_x << "," << (uint32_t)r3_sender.edm_noc_y
-                           << ") spc=" << (r3_sender.edm_has_space_for_packet<1>() ? 1 : 0) << " sem=0x" << HEX()
-                           << *r3_sem << DEC() << "\n";
+                    DPRINT << "R3O\n";
                     {
                         uint32_t r3_sent = 0;
                         uint32_t r3_spin = 0;
@@ -466,8 +452,6 @@ struct ReduceToAllB1 {
                             r3_spin++;
                             if ((r3_spin & 0xFFFFFFF) == 0) {
                                 invalidate_l1_cache();
-                                DPRINT << "R3 s=0x" << HEX() << r3_sent << " raw=0x" << *r3_sem << " mask=0x"
-                                       << CTArgs::r3_all_sent_mask << DEC() << "\n";
                             }
                         } while (r3_sent != CTArgs::r3_all_sent_mask);
                         noc_semaphore_set(r3_sem, 0);
@@ -503,10 +487,7 @@ struct ReduceToAllB1 {
             PacketHeaderPool::reset();
             auto* packet_header = PacketHeaderPool::allocate_header(1);
 
-            DPRINT << "W fc=(" << args.fc_noc_x << "," << args.fc_noc_y << ") r1s=0x" << HEX() << args.r1_sem_addr
-                   << " r2s=0x" << args.r2_sem_addr << " r3s=0x" << args.r3_sem_addr << DEC() << " a=" << args.is_type_a
-                   << "\n";
-            DPRINT << "WR1\n";
+            DPRINT << "W a=" << args.is_type_a << "\n";
             {
                 uint32_t data_addr = local_data_addr;
                 uint16_t r1_chip = args.is_type_a ? CTArgs::fwd_dst_chip_id : CTArgs::bwd_dst_chip_id;
@@ -611,7 +592,9 @@ struct ReduceToAllB1 {
                             SocketSenderInterface sender_socket =
                                 create_sender_socket_interface(args.socket_config_addr);
                             set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size);
+                            DPRINT << "WSR\n";
                             socket_reserve_pages(sender_socket, 1);
+                            DPRINT << "WSRd\n";
                             sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
                             uint64_t fifo_dst = get_noc_addr(
@@ -624,7 +607,9 @@ struct ReduceToAllB1 {
                             socket_push_pages(sender_socket, 1);
                             socket_notify_receiver(sender_socket);
                             noc_async_write_barrier();
+                            DPRINT << "WSP\n";
                             socket_barrier(sender_socket);
+                            DPRINT << "WSB\n";
                             update_socket_config(sender_socket);
                         }
                         if (args.persistent_enable != 0) {
@@ -683,7 +668,6 @@ struct ReduceToAllB1 {
             }
             tile_regs_release();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
-
             // R2: reload(R1 sum) + received_R2
             add_tiles_init(CTArgs::reload_cb, CTArgs::received_cb, true);
             cb_wait_front(CTArgs::reload_cb, CTArgs::num_tiles);
@@ -704,7 +688,6 @@ struct ReduceToAllB1 {
             }
             tile_regs_release();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
-
             if constexpr (CTArgs::is_exit_column) {
                 // R3: reload(column sum) + received_R3
                 add_tiles_init(CTArgs::reload_cb, CTArgs::received_cb, true);
@@ -726,6 +709,7 @@ struct ReduceToAllB1 {
                 }
                 tile_regs_release();
                 cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
+                DPRINT << "TRd\n";
             }
 #endif
         }

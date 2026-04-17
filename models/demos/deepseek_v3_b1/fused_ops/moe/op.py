@@ -4376,7 +4376,7 @@ class MoeOp:
                 if self.downstream_sockets is not None and is_exit_col:
                     device_sockets = self.downstream_sockets[chip_id]
                     if isinstance(device_sockets, list):
-                        socket_config_addr = device_sockets[0].get_config_buffer_address()
+                        socket_config_addr = device_sockets[shard_idx].get_config_buffer_address()
                     else:
                         socket_config_addr = device_sockets.get_config_buffer_address()
 

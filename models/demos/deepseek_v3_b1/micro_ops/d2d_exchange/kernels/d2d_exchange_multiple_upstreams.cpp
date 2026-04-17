@@ -113,7 +113,7 @@ FORCE_INLINE void send_worker_data_over_fabric(
 }
 
 void kernel_main() {
-    DPRINT << "Starting d2d exchange kernel with " << (uint32_t)num_upstream_sockets << " upstream sockets\n";
+    DPRINT << "D2D_MU n=" << (uint32_t)num_upstream_sockets << "\n";
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;
@@ -139,6 +139,7 @@ void kernel_main() {
         receiver_sockets[i] = create_receiver_socket_interface(receiver_socket_config_addrs[i]);
         set_receiver_socket_page_size(receiver_sockets[i], upstream_page_size);
     }
+    DPRINT << "D2D_MU init ok\n";
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,
@@ -190,7 +191,6 @@ void kernel_main() {
     bool terminated = false;
 
     while (!terminated) {
-        DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << ENDL();
         socket_reserve_pages(sender_socket, 1);
 
         invalidate_l1_cache();
@@ -204,15 +204,12 @@ void kernel_main() {
         uint32_t processed_mask = 0;
         while (remaining > 0) {
             invalidate_l1_cache();
-            DPRINT << "remaining workers: " << remaining << ", current worker idx: " << worker_idx
-                   << ", processed mask: " << processed_mask << ENDL();
             if (termination_semaphore[0] == 1) {
                 terminated = true;
                 break;
             }
-            DPRINT << "checking worker idx " << worker_idx << ENDL();
             if (!(processed_mask & (1 << worker_idx)) && socket_wait_for_pages(receiver_sockets[worker_idx], 1, 1000)) {
-                DPRINT << "got page from worker idx " << worker_idx << ENDL();
+                DPRINT << "gw" << worker_idx << "\n";
                 uint32_t l1_read_addr = receiver_sockets[worker_idx].read_ptr;
                 uint64_t dst_addr = dst_addr_base + worker_idx * upstream_page_size;
 
@@ -251,7 +248,7 @@ void kernel_main() {
                 worker_idx = (worker_idx + 1) % num_upstream_sockets;
             }
         }
-        DPRINT << "finished processing all workers for this iteration\n";
+        DPRINT << "D2D_MU iter\n";
         if (!terminated) {
             socket_push_pages(sender_socket, 1);
             if constexpr (!use_fabric_on_sender) {
@@ -269,5 +266,5 @@ void kernel_main() {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
     }
-    DPRINT << "Finished d2d exchange kernel with multiple upstreams" << ENDL();
+    DPRINT << "D2D_MU done\n";
 }
