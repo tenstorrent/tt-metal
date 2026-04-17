@@ -155,20 +155,44 @@ def _build_ab_grids(device):
     return a_cores, b_cores
 
 
-def _scale_tiles_random_formats(b_torch, formats):
-    """Randomly assign formats to tiles so the assigner picks a mix.
+def _scale_tiles_random_formats(b_torch, formats, distribution="random", weights=None):
+    """Assign formats to tiles and scale values to be representable.
 
-    Vectorized: assigns a random format to each tile, then applies format-specific
-    scaling in bulk using masked tensor ops instead of per-tile Python loops.
-    For single-format lists, all tiles get scaled for that format.
+    Args:
+        b_torch: weight tensor to modify in-place.
+        formats: list of format names (e.g. ["bfp8", "bfp2", "bfp4"]).
+        distribution: "random" — each tile picks a format independently (default).
+                      "uniform" — deterministic 2D interleave so any row-slice or
+                      column-slice sees all formats in proportion.
+        weights: optional dict mapping format name to relative proportion,
+                 e.g. {"bfp8": 3, "bfp2": 1}. None means equal distribution.
     """
     assert formats, "formats must not be empty"
 
     M, N = b_torch.shape
     tiles_h, tiles_w = M // 32, N // 32
+    num_tiles = tiles_h * tiles_w
 
-    # Random format index per tile: (tiles_h, tiles_w)
-    fmt_indices = torch.randint(0, len(formats), (tiles_h, tiles_w))
+    if weights is not None:
+        probs = torch.tensor([weights.get(f, 1) for f in formats], dtype=torch.float)
+    else:
+        probs = torch.ones(len(formats))
+    probs = probs / probs.sum()
+
+    if distribution == "random":
+        fmt_indices = torch.multinomial(probs.expand(num_tiles, -1), 1).squeeze(1)
+        fmt_indices = fmt_indices.reshape(tiles_h, tiles_w)
+    elif distribution == "uniform":
+        if weights is not None:
+            int_weights = [int(weights.get(f, 1)) for f in formats]
+        else:
+            int_weights = [1] * len(formats)
+        pattern = torch.cat([torch.full((w,), i, dtype=torch.long) for i, w in enumerate(int_weights)])
+        reps = (tiles_h + len(pattern) - 1) // len(pattern)
+        col = pattern.repeat(reps)[:tiles_h]
+        fmt_indices = col.unsqueeze(1).expand(tiles_h, tiles_w).contiguous()
+    else:
+        raise ValueError(f"Unknown distribution: {distribution}")
 
     # bfp8: scale each row by 2^(row%16) — build a (32, 1) multiplier column
     if "bfp8" in formats:
@@ -703,7 +727,17 @@ def _build_assigner(formats_per_device):
     return CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=all_formats, bfp0_mae_threshold=bfp0_mae)
 
 
-def _build_weight_tensors(num_experts, K, N, N_dram_per_device, sram_id_set, formats_per_device, num_devices):
+def _build_weight_tensors(
+    num_experts,
+    K,
+    N,
+    N_dram_per_device,
+    sram_id_set,
+    formats_per_device,
+    num_devices,
+    fmt_distribution="random",
+    fmt_ratios=None,
+):
     """Build per-expert, per-device random B weight tensors."""
     torch_b_all = {}
     for eidx in range(num_experts):
@@ -712,20 +746,28 @@ def _build_weight_tensors(num_experts, K, N, N_dram_per_device, sram_id_set, for
         per_dev = []
         for dev_idx in range(num_devices):
             b = torch.randn((K, N_per_dev)).float()
-            _scale_tiles_random_formats(b, formats_per_device[dev_idx])
+            _scale_tiles_random_formats(b, formats_per_device[dev_idx], fmt_distribution, fmt_ratios)
             per_dev.append(b)
         torch_b_all[eidx] = per_dev
         logger.info(f"  torch_b expert {eidx}/{num_experts} created")
     return torch_b_all
 
 
-def _build_weight_tensors_replicated(num_experts, K, N_dram_per_device, formats, num_devices):
+def _build_weight_tensors_replicated(
+    num_experts,
+    K,
+    N_dram_per_device,
+    formats,
+    num_devices,
+    fmt_distribution="random",
+    fmt_ratios=None,
+):
     """Build per-expert weight tensors, identical across devices (for tp_expert=False)."""
     torch_b_all = {}
     for eidx in range(num_experts):
         torch.manual_seed(eidx * 1000 + 42)
         b = torch.randn((K, N_dram_per_device)).float()
-        _scale_tiles_random_formats(b, formats)
+        _scale_tiles_random_formats(b, formats, fmt_distribution, fmt_ratios)
         # All devices share the same tensor.
         torch_b_all[eidx] = [b] * num_devices
         logger.info(f"  torch_b expert {eidx}/{num_experts} created (replicated)")
@@ -891,6 +933,8 @@ def _run_standard(
     pcc_threshold,
     dram_fuse_silu,
     tp_expert=True,
+    fmt_distribution="random",
+    fmt_ratios=None,
 ):
     """Standard path: WIDTH_SHARDED SRAM, per-expert output slices on compute_core_grid."""
     tile_w = 32
@@ -937,6 +981,8 @@ def _run_standard(
             sram_id_set,
             formats_per_device,
             num_devices,
+            fmt_distribution,
+            fmt_ratios,
         )
         dram_cts, dram_meta_tensors = _build_dram_experts(
             dram_expert_ids,
@@ -966,6 +1012,8 @@ def _run_standard(
             N_dram_per_device,
             formats_per_device[0],
             num_devices,
+            fmt_distribution,
+            fmt_ratios,
         )
         dram_cts, dram_meta_tensors = _build_dram_experts_replicated(
             dram_expert_ids,
@@ -1117,6 +1165,8 @@ def _run_accum(
     sram_n_parallel,
     pcc_threshold,
     tp_expert=True,
+    fmt_distribution="random",
+    fmt_ratios=None,
 ):
     """Accumulation path: WIDTH_SHARDED SRAM, expert outputs summed in-place."""
     assert tp_expert, "Expert parallel (tp_expert=False) not supported in accum path"
@@ -1164,6 +1214,8 @@ def _run_accum(
         sram_id_set,
         formats_per_device,
         num_devices,
+        fmt_distribution,
+        fmt_ratios,
     )
     dram_meta_flags, is_dram_flags = _build_expert_flags(num_experts, sram_expert_ids, dram_expert_ids)
     dram_cts, dram_meta_tensors = _build_dram_experts(
@@ -1313,6 +1365,8 @@ def _run_slice_k(
     pcc_threshold,
     dram_fuse_silu,
     tp_expert=True,
+    fmt_distribution="random",
+    fmt_ratios=None,
 ):
     """K-sliced path: HEIGHT_SHARDED SRAM, separate output grids."""
     assert tp_expert, "Expert parallel (tp_expert=False) not supported in slice_k path"
@@ -1356,6 +1410,8 @@ def _run_slice_k(
         sram_id_set,
         formats_per_device,
         num_devices,
+        fmt_distribution,
+        fmt_ratios,
     )
     dram_meta_flags, is_dram_flags = _build_expert_flags(num_experts, sram_expert_ids, dram_expert_ids)
     dram_cts, dram_meta_tensors = _build_dram_experts(
@@ -1508,6 +1564,8 @@ def _run_hybrid_expert_multi_device(
     sram_n_parallel=1,
     dram_fuse_silu=False,
     tp_expert=True,
+    fmt_distribution="random",
+    fmt_ratios=None,
 ):
     """Dispatcher: delegate to the appropriate variant."""
     assert dram_expert_ids, "DRAM expert path is always required"
@@ -1538,6 +1596,8 @@ def _run_hybrid_expert_multi_device(
             pcc_threshold,
             dram_fuse_silu,
             tp_expert,
+            fmt_distribution,
+            fmt_ratios,
         )
     elif accum_experts:
         _run_accum(
@@ -1558,6 +1618,8 @@ def _run_hybrid_expert_multi_device(
             sram_n_parallel,
             pcc_threshold,
             tp_expert,
+            fmt_distribution,
+            fmt_ratios,
         )
     else:
         _run_standard(
@@ -1579,6 +1641,8 @@ def _run_hybrid_expert_multi_device(
             pcc_threshold,
             dram_fuse_silu,
             tp_expert,
+            fmt_distribution,
+            fmt_ratios,
         )
 
 
@@ -2387,4 +2451,65 @@ def test_benchmark_up_proj(device):
         ],
         subblock_n=1,
         accum_experts=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Benchmark tests — DRAM-only, 1 expert per device, production MoE shapes
+# ---------------------------------------------------------------------------
+
+
+def test_benchmark_gate_proj(device):
+    """MoE gate-proj shape: 256 experts, 8 selected (1 per device), K=7168, N=256, DRAM-only, fuse_silu."""
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[["bfp4"]],
+        dram_fuse_silu=False,  # disable to reduce runtime for benchmarking
+        subblock_n=1,
+        fmt_distribution="uniform",
+        # fmt_ratios={"bfp4": 3, "bfp0": 1},
+    )
+
+
+def test_benchmark_up_proj(device):
+    """MoE up-proj shape: 8 experts, 8 selected (1 per device), K=7168, N=256, DRAM-only."""
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[["bfp4", "bfp0"]],
+        subblock_n=1,
+        fmt_distribution="uniform",
+        fmt_ratios={"bfp4": 3, "bfp0": 1},
+    )
+
+
+def test_benchmark_down_proj(device):
+    """MoE down-proj shape: 8 experts, 8 selected (1 per device), K=256, N=7168, DRAM-only."""
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=256,
+        N=7168,
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[["bfp4", "bfp0"]],
+        accum_experts=True,
+        subblock_n=4,
+        fmt_distribution="uniform",
+        fmt_ratios={"bfp4": 3, "bfp0": 1},
     )

@@ -219,13 +219,26 @@ struct MatmulExpertCompressedDRAM {
             uint64_t next_noc_addr = get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, 0);
             uint64_t next_sem_noc_addr = next_noc_addr | next_sem_l1;
 
-            // CB base address — set on first DRAM expert.
-            uint32_t cb_in1_base = 0;
-            uint32_t cb_in1_end = 0;
-            bool first_dram_expert = true;
-
             // Double-buffered fmt slot. Toggles per DRAM expert.
             uint32_t fmt_slot = 0;
+
+            // Triple-buffer state PERSISTS across experts. The in-flight block at the
+            // end of expert E is drained naturally by expert E+1's first inner-loop
+            // barrier (block_trid_to_wait points at E's tail), which hides the barrier
+            // latency behind NOC issue of E+1's ramp reads. Only the LAST expert needs
+            // a dedicated flush at the very end. The per-iter cb_reserve_back inside
+            // the inner loop keeps TRISC within 1 block of NCRISC at all times.
+            // Assumes num_iterations >= 2 so fmt signaling lands inside the inner loop.
+            cb_reserve_back(CTArgs::cb_in1, tiles_per_block * (extra_blocks_in_flight + 1));
+            uint32_t cb_in1_base = get_write_ptr(CTArgs::cb_in1);
+            uint32_t cb_in1_end = cb_in1_base + CTArgs::cb_in1_size_bytes;
+            uint32_t l1_write_addr_in1 = cb_in1_base;
+            uint32_t num_free_blocks_in_buffer = num_buffers;
+            uint32_t curr_block_trid = 1;
+            uint32_t block_trid_to_wait = 1;
+            bool any_dram_expert_seen = false;
+
+            reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
             for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                 uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
@@ -245,24 +258,12 @@ struct MatmulExpertCompressedDRAM {
                 // Wait for a free fmt slot (at most 1 expert ahead of each TRISC consumer).
                 fmt_sync::producer_wait_slot(CTArgs::fmt_sem_addr_0, CTArgs::fmt_sem_addr_1);
 
-                reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
-
-                // Initial reserve for this expert.
-                cb_reserve_back(CTArgs::cb_in1, tiles_per_block * (extra_blocks_in_flight + 1));
-
-                if (first_dram_expert) {
-                    cb_in1_base = get_write_ptr(CTArgs::cb_in1);
-                    cb_in1_end = cb_in1_base + CTArgs::cb_in1_size_bytes;
-                    first_dram_expert = false;
-                }
+                any_dram_expert_seen = true;
 
                 uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(CTArgs::bank_id, expert_in1_addr);
-                uint32_t l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
-                uint32_t num_free_blocks_in_buffer = num_buffers;
-                uint32_t curr_block_trid = 1;
-                uint32_t block_trid_to_wait = 1;
 
-                // Read fmt to double-buffered L1 slot. Shares trid 1 with first weight block.
+                // Read fmt to double-buffered L1 slot. Shares trid with this expert's
+                // first weight block (curr_block_trid) so one barrier drains both.
                 uint32_t fmt_write_l1 = CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size;
                 {
                     uint32_t fmt_dram_offset = CTArgs::fmt_dram_addr +
@@ -273,6 +274,7 @@ struct MatmulExpertCompressedDRAM {
                     noc_async_read_one_packet_set_state<true>(fmt_noc_addr, CTArgs::fmt_per_expert_bytes, CTArgs::vc);
                     noc_async_read_one_packet_with_state_with_trid(fmt_noc_addr, 0, fmt_write_l1, curr_block_trid);
                 }
+                uint32_t fmt_trid_pending = curr_block_trid;
                 bool fmt_signaled = false;
 
                 // Triple-buffer streaming loop.
@@ -316,13 +318,16 @@ struct MatmulExpertCompressedDRAM {
                         if (num_free_blocks_in_buffer == num_buffers - extra_blocks_in_flight) {
                             noc_async_read_barrier_with_trid(block_trid_to_wait);
                             cb_push_back(CTArgs::cb_in1, tiles_per_block);
-                            // Trid 1 wait also completes the fmt DRAM read for this expert.
-                            // Signal fmt slot ready to UNPACK/MATH.
-                            if (!fmt_signaled) {
+                            // fmt for this expert shares trid with its first weight block.
+                            // When the barrier hits that trid, fmt is in L1 — signal consumers.
+                            if (!fmt_signaled && block_trid_to_wait == fmt_trid_pending) {
                                 fmt_sync::producer_signal(CTArgs::fmt_sem_addr_0, CTArgs::fmt_sem_addr_1);
                                 fmt_signaled = true;
                             }
                             block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
+                            // Re-reserve after push: without the per-expert flush, this is the
+                            // only throttle keeping TRISC within 1 block of NCRISC. Missing it
+                            // allows NCRISC to wrap into a slot TRISC is still reading (race).
                             cb_reserve_back(CTArgs::cb_in1, tiles_per_block * (extra_blocks_in_flight + 1));
                         } else {
                             num_free_blocks_in_buffer -= 1;
@@ -345,17 +350,19 @@ struct MatmulExpertCompressedDRAM {
                     }
                 }
 
-                // Flush remaining in-flight blocks.
+                // No per-expert flush: the tail block stays in flight and is drained
+                // by the next expert's first inner-loop barrier (or by the final flush
+                // below if this is the last DRAM expert).
+                fmt_slot ^= 1;
+            }
+
+            // Final flush: drain the in-flight block(s) from the LAST DRAM expert.
+            if (any_dram_expert_seen) {
                 for (uint32_t i = 0; i < extra_blocks_in_flight; ++i) {
                     noc_async_read_barrier_with_trid(block_trid_to_wait);
                     cb_push_back(CTArgs::cb_in1, tiles_per_block);
                     block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
                 }
-
-                // Toggle double-buffer slot for next expert. The next expert's slot-free
-                // check is the wait at the top of the loop, so no blocking wait here —
-                // NCRISC can pipeline 1 expert ahead of the slowest TRISC consumer.
-                fmt_slot ^= 1;
             }
 
 #elif defined(COMPILE_FOR_TRISC)
