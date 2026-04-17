@@ -857,17 +857,41 @@ class Sequential:
         return fused
 
     def run(self, *, results=None, device=None, kernel_dir: str = None):
-        """Dispatch the fused program via ``_BUILD_CACHE`` + ``fusion_dispatch_op``.
+        """Dispatch the fused program.  No ``FusedOp`` is retained on the
+        container between calls — tensor lifetime is not extended.
 
-        First call builds the fused program and populates ``_BUILD_CACHE``.
-        Subsequent calls hit the cache directly — no ``FusedOp`` is retained
-        on the container, so no tensor references are held between calls.
+        Three dispatch paths, selected automatically:
+
+        1. **Cold path** (first call ever for this topology): runs the full
+           codegen pipeline to build a fused ``ProgramDescriptor``, then
+           dispatches via ``FusedOp.launch()``.  Populates ``_BUILD_CACHE``
+           so subsequent calls with the same topology skip codegen.
+
+        2. **Warm path** (``_BUILD_CACHE`` hit, first call on this container
+           instance): gathers inputs from branch descriptors and dispatches
+           via the 3-arg ``fusion_dispatch_op`` using the branch ops'
+           pre-existing output tensors.  Also creates the C++
+           ``FusionDispatchState`` for the hot path and sets
+           ``_cached_entry`` on the container.
+
+        3. **Persistent hot path** (call 2+ on the same container): bypasses
+           cache-key computation entirely.  ``_cached_entry.dispatch_state``
+           allocates ephemeral output tensors, patches the cached descriptor,
+           and dispatches — all in a single C++ call.  Updated activation
+           slots are cleared after dispatch (zero L1 pinning between calls).
+
+        Inline containers (new each call) always take the warm path since
+        ``_cached_entry`` is reset.  Persistent containers (reused across
+        calls) take the warm path on the first call, then the hot path on
+        all subsequent calls.
 
         Args:
             results: List of descriptors whose ``output_tensors[0]`` are
                 returned. Defaults to the last op's output (for a plain
                 chain) or each branch's leaf output (if the chain ends
                 in a ``Parallel``).
+            device: Inferred from tensors when omitted.
+            kernel_dir: If set, kernel sources are written as files.
 
         Returns:
             List of output tensors, one per descriptor in *results*.
@@ -992,16 +1016,19 @@ class Parallel:
         return fused
 
     def run(self, *, results=None, device=None, kernel_dir: str = None):
-        """Dispatch the fused program via ``_BUILD_CACHE`` + ``fusion_dispatch_op``.
+        """Dispatch the fused program.  No ``FusedOp`` is retained on the
+        container between calls — tensor lifetime is not extended.
 
-        First call builds the fused program and populates ``_BUILD_CACHE``.
-        Subsequent calls hit the cache directly — no ``FusedOp`` is retained
-        on the container, so no tensor references are held between calls.
+        See :meth:`Sequential.run` for a full description of the three
+        dispatch paths (cold, warm, persistent hot).  The same logic applies
+        here via the shared ``_container_run`` implementation.
 
         Args:
             results: List of descriptors whose ``output_tensors[0]`` are
                 returned. Defaults to each branch's leaf output in
                 branch order.
+            device: Inferred from tensors when omitted.
+            kernel_dir: If set, kernel sources are written as files.
 
         Returns:
             List of output tensors, one per descriptor in *results*.
