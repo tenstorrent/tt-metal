@@ -65,7 +65,7 @@ Its runtime behavior depends on the compile context, which is determined by flag
 
 - **tt-metal context** (``ENABLE_LLK_ASSERT`` defined but neither of the above): delegates to the standard ``ASSERT(condition)`` macro from ``api/debug/assert.h``. This covers two sub-cases:
 
-  - *Lightweight Kernel Asserts enabled* (``TT_METAL_LLK_ASSERTS=1`` + ``TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1``, no Watcher): ``ASSERT`` triggers ``ebreak`` via the lightweight-assert path, allowing ``dump_lightweight_asserts.py`` to retrieve the call stack and local variables.
+  - *Lightweight Kernel Asserts enabled* (``TT_METAL_LLK_ASSERTS=1`` + ``TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1``, no Watcher): ``ASSERT`` triggers ``ebreak`` via the lightweight-assert path, allowing ``tools/triage/dump_lightweight_asserts.py`` to retrieve the call stack and local variables.
   - *Watcher enabled* (``TT_METAL_LLK_ASSERTS=1`` + ``TT_METAL_WATCHER=1``): ``ASSERT`` reports the failure through the Watcher mechanism, printing a message to stderr and the watcher log file.
 
 The macro is defined in ``tt_metal/tt-llk/common/llk_assert.h``.
@@ -84,7 +84,7 @@ LLK asserts perform runtime validation of low-level kernel operations. Common ch
 
 **Tensor Dimension Validation**
    - Number of faces is 1, 2, or 4 (``num_faces``, ``unpA_num_faces``, ``unpB_num_faces``)
-   - Tile dimensions match expected values (TILE_R_DIM, TILE_C_DIM)
+   - Tile dimensions match expected values (``TILE_R_DIM``, ``TILE_C_DIM``)
    - Tile shape is valid for tile-dependent operations (``validate_tensor_shape_tile_dependent_ops_``)
 
 **Matrix Multiplication Constraints**
@@ -94,14 +94,14 @@ LLK asserts perform runtime validation of low-level kernel operations. Common ch
 
 **Broadcast and Transpose Constraints**
    - Column broadcast requires full 32×32 tiles (``num_faces == 4``)
-   - Broadcast with 32×16 (narrow) tiles is not supported for column or row modes
+   - Broadcast with 32×16 (``narrow_tile``) tiles is not supported for column or row modes
    - Scalar broadcast is not compatible with transpose of faces
    - Transpose requires ``face_r_dim == 16`` and ``num_faces`` of 4 or 1
 
 **Math Pipeline Constraints**
-   - Math fidelity higher than LoFi is only valid with element-wise multiply (``ELWMUL``)
+   - Math fidelity higher than ``LoFi`` is only valid with element-wise multiply (``ELWMUL``)
    - Element-wise binary type must be ``ELWADD``, ``ELWSUB``, or ``ELWMUL``
-   - Reduce narrow tile: ``num_faces`` of 4 implies full-width 32×32, not a narrow tile
+   - Reduce narrow tile: ``num_faces`` of 4 implies full-width 32×32, not a ``narrow_tile``
 
 **Destination Register Addressing**
    - Destination tile index does not exceed ``get_dest_max_tiles()`` for SFPU unary, binary, and ternary operations
@@ -171,7 +171,7 @@ CI/CD Integration
 
 LLK asserts are fully integrated into the tt-metal CI/CD system through the ``enable-llk-asserts`` input parameter. When set to ``true``, the ``setup-job`` composite action exports ``TT_METAL_LLK_ASSERTS=1`` into the test environment, causing JIT-compiled kernels to include ``LLK_ASSERT`` checks at runtime.
 
-**Workflows Accepting ``enable-llk-asserts``**
+**Workflows Accepting enable-llk-asserts**
 
 The following key workflow files accept the ``enable-llk-asserts`` boolean input and can be triggered manually via ``workflow_dispatch`` with the checkbox enabled:
 
@@ -243,7 +243,7 @@ When an LLK assert fails:
 
 1. The kernel hangs at the assertion point (``ebreak`` instruction)
 2. Run ``tt-triage`` to analyze the device state
-3. If Lightweight Kernel Asserts are enabled or LLK Asserts only are enabled, use ``dump_lightweight_asserts.py`` to see call stacks and local variables
+3. If Lightweight Kernel Asserts are enabled or LLK Asserts only are enabled, use ``tools/triage/dump_lightweight_asserts.py`` to see call stacks and local variables
 4. Check the assertion message to understand what constraint was violated
 
 .. note::
@@ -268,7 +268,7 @@ The umbrella tracking issue that motivated systematic LLK assert work. When LLK 
 
 **Issue** `#39184 <https://github.com/tenstorrent/tt-metal/issues/39184>`_ — *Fix tests which hit LLK_ASSERT during unpack configuration verification*
 
-A detailed description of the most common HW configure assert pattern: the unpacker is configured during HW configure (or a reconfigure phase) with specific ``face_r_dim`` / ``num_faces`` values, but a different configuration is then passed to ``init`` or the execution block — causing the assert to fire on the mismatch. The issue includes a full reproduction recipe and an example ``dump_lightweight_asserts.py`` callstack:
+A detailed description of the most common HW configure assert pattern: the unpacker is configured during HW configure (or a reconfigure phase) with specific ``face_r_dim`` / ``num_faces`` values, but a different configuration is then passed to ``init`` or the execution block — causing the assert to fire on the mismatch. The issue includes a full reproduction recipe and an example ``tools/triage/dump_lightweight_asserts.py`` callstack:
 
 .. code-block:: text
 
