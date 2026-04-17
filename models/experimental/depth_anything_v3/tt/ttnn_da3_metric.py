@@ -117,7 +117,8 @@ def _ttnn_block(x, p, attention_mask):
                         memory_config=ttnn.L1_MEMORY_CONFIG)
     qkv = ttnn.linear(h, p["qkv_w"], bias=p["qkv_b"],
                       memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
-                      compute_kernel_config=_hifi4_kernel_config())
+                      compute_kernel_config=_hifi4_kernel_config(),
+                      core_grid=_CORE_GRID)
     ttnn.deallocate(h)
     q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
         qkv, memory_config=ttnn.L1_MEMORY_CONFIG, num_heads=NUM_HEADS,
