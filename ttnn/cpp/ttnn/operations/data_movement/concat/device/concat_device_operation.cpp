@@ -35,12 +35,11 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
 
     if (output_is_sharded) {
         // Sharded-to-sharded (s2s) cases
-        const bool is_width_sharded =
-            input_tensors[0].memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+        const bool is_height_sharded =
+            input_tensors[0].memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
 
-        // Route 2-tensor width-sharded to ConcatS2SMultiProgramFactory since the
         // optimized 2-tensor kernels only support height-sharded.
-        if (input_tensors.size() == 2 && !is_width_sharded) {
+        if (input_tensors.size() == 2 && is_height_sharded) {
             TT_FATAL(
                 input_tensors[0].layout() == input_tensors[1].layout(),
                 "Expected all input tensors to have the same layout for 2-tensor sharded concat");
@@ -395,8 +394,13 @@ Tensor concat_impl(
         }
     }
 
-    if (output_mem_config.is_sharded()) {
-        // Interleaved inputs with sharded output: do interleaved concat, then convert to sharded
+    if (output_mem_config.is_sharded() && target_layout == Layout::ROW_MAJOR &&
+        output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+        // For width/block-sharded RM output the buffer page width equals the shard width,
+        // which is narrower than the full-row pages the concat pipeline produces.
+        // Fall back to interleaved concat + to_memory_config for these cases.
+        // Height-sharded RM pages span the full tensor width (same as interleaved),
+        // so they flow through ConcatProgramFactory natively via TensorAccessor.
         auto interleaved_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
         auto interleaved_result =
             ttnn::prim::concat(formatted_tensors, dim, groups, interleaved_config, sub_core_grids);
