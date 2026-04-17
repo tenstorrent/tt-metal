@@ -376,13 +376,10 @@ def create_sliding_window_mask_prefill(b, nh, seq_len, sliding_window, is_causal
 
 
 def run_test_ring_distributed_sdpa_sliding_window(
-    mesh_device, b, s, ring_size, q_chunk_size, k_chunk_size, sliding_window
+    mesh_device, b, nh, nkv, s, d, ring_size, q_chunk_size, k_chunk_size, sliding_window, dtype
 ):
     """Test ring_distributed_sdpa with sliding_window_size on a GLX (8,4) mesh."""
     torch.manual_seed(1234)
-
-    nh, nkv, d = 8, 1, 128
-    dtype = ttnn.bfloat8_b
 
     assert ring_size % 2 == 0, f"Ring size must be even, got {ring_size}"
     assert s % (2 * ring_size) == 0, f"Sequence length {s} must be divisible by 2 * ring_size ({2 * ring_size})"
@@ -446,24 +443,148 @@ def run_test_ring_distributed_sdpa_sliding_window(
     )
 
     out_pass, out_pcc = comp_pcc(gt_sliding, final_output, 0.99)
-    logger.info(f"Ring-distributed vs sliding window (w={sliding_window}) reference PCC: {out_pcc}")
+    logger.info(
+        f"Ring-distributed sliding window: b={b}, nh={nh}, nkv={nkv}, s={s}, d={d}, "
+        f"w={sliding_window}, q_chunk={q_chunk_size}, k_chunk={k_chunk_size}, dtype={dtype} => PCC: {out_pcc}"
+    )
     assert out_pass, f"ring_distributed_sdpa with sliding_window={sliding_window} PCC={out_pcc} < 0.99"
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
+@pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
+@pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
-    "s, sliding_window",
-    [(4096, 256), (8192, 512)],
-    ids=["s4k_w256", "s8k_w512"],
+    "b, nh, nkv, s, d, sliding_window",
+    [
+        # Window < chunk size
+        [1, 8, 1, 1024, 128, 64],
+        # Window == chunk size (128)
+        [1, 8, 1, 1024, 128, 128],
+        # Window > chunk size, window < per-device seq (s/8=128 here, so use larger s)
+        [1, 8, 1, 4096, 128, 256],
+        # Longer sequence with larger window
+        [1, 8, 1, 8192, 128, 512],
+        # Large sequence, large window (gemma-like)
+        [1, 8, 1, 32768, 128, 1024],
+        # GQA: nkv=2
+        [1, 16, 2, 2048, 128, 128],
+        # Batch size > 1
+        [2, 8, 1, 1024, 128, 64],
+    ],
+    ids=[
+        "w64_s1k",
+        "w128_s1k",
+        "w256_s4k",
+        "w512_s8k",
+        "w1024_s32k",
+        "gqa_nkv2",
+        "batch2",
+    ],
 )
-def test_ring_distributed_sdpa_sliding_window(mesh_device, s, sliding_window):
-    """Test ring_distributed_sdpa correctly applies sliding window attention on GLX (8,4) mesh."""
-    b, ring_size = 1, 4
-    q_chunk_size, k_chunk_size = 128, 256
+def test_ring_distributed_sdpa_sliding_window(
+    mesh_device, b, nh, nkv, s, d, dtype, q_chunk_size, k_chunk_size, sliding_window
+):
+    """Stress test ring_distributed_sdpa sliding window across shapes, chunk sizes, dtypes, and GQA."""
+    ring_size = 4
+
+    per_device_seq_len = s // (2 * ring_size)
+    if per_device_seq_len < q_chunk_size:
+        pytest.skip(f"per-device seq_len {per_device_seq_len} < q_chunk_size {q_chunk_size}")
+    if per_device_seq_len % q_chunk_size != 0:
+        pytest.skip(f"per-device seq_len {per_device_seq_len} not divisible by q_chunk_size {q_chunk_size}")
+    if s % k_chunk_size != 0:
+        pytest.skip(f"s={s} not divisible by k_chunk_size {k_chunk_size}")
+    if sliding_window >= s:
+        pytest.skip(f"sliding_window {sliding_window} must be < s {s}")
+
     run_test_ring_distributed_sdpa_sliding_window(
-        mesh_device, b, s, ring_size, q_chunk_size, k_chunk_size, sliding_window
+        mesh_device, b, nh, nkv, s, d, ring_size, q_chunk_size, k_chunk_size, sliding_window, dtype
     )
+
+
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_ring_distributed_sdpa_sliding_window_program_cache(mesh_device):
+    """
+    Regression test: program cache must distinguish different sliding_window_size values.
+
+    Runs two back-to-back calls with different sliding_window_size but identical program_config
+    to ensure the program cache key includes sliding_window_size.
+    """
+    b, nh, nkv, s, d = 1, 8, 1, 2048, 128
+    ring_size = 4
+    dtype = ttnn.bfloat8_b
+    window_a, window_b = 64, 256
+    assert window_a != window_b
+
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, ring_size))
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=submesh.compute_with_storage_grid_size(),
+        q_chunk_size=128,
+        k_chunk_size=128,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    torch.manual_seed(1234)
+    Q = fa_rand(b, nh, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+
+    tt_Q = ttnn.from_torch(
+        Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=submesh, mesh_mapper=ttnn.ReplicateTensorToMesh(submesh)
+    )
+    tt_K = ttnn.from_torch(
+        K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=submesh, mesh_mapper=ttnn.ReplicateTensorToMesh(submesh)
+    )
+    tt_V = ttnn.from_torch(
+        V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=submesh, mesh_mapper=ttnn.ReplicateTensorToMesh(submesh)
+    )
+
+    # PyTorch references for each window
+    K_expanded = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    V_expanded = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    mask_a = create_sliding_window_mask_prefill(b, nh, s, window_a, is_causal=True)
+    mask_b = create_sliding_window_mask_prefill(b, nh, s, window_b, is_causal=True)
+    gt_a = torch.nn.functional.scaled_dot_product_attention(
+        Q, K_expanded, V_expanded, attn_mask=mask_a, is_causal=False
+    )
+    gt_b = torch.nn.functional.scaled_dot_product_attention(
+        Q, K_expanded, V_expanded, attn_mask=mask_b, is_causal=False
+    )
+
+    def run_and_gather(window_size):
+        tt_out = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
+            tt_Q,
+            tt_K,
+            tt_V,
+            ring_size=ring_size,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            sliding_window_size=window_size,
+        )
+        device_outputs = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tt_out.cpu())]
+        local_seq_len = s // ring_size
+        ring_outputs = [out[:, :, :local_seq_len, :] for out in device_outputs]
+        return gather_and_reshuffle_ring_outputs(ring_outputs, ring_size, s)
+
+    # Run A then B back-to-back to exercise program caching
+    out_a = run_and_gather(window_a)
+    out_b = run_and_gather(window_b)
+
+    pass_a, pcc_a = comp_pcc(gt_a, out_a, 0.99)
+    pass_b, pcc_b = comp_pcc(gt_b, out_b, 0.99)
+    logger.info(f"Program cache test: window_a={window_a} PCC={pcc_a}, window_b={window_b} PCC={pcc_b}")
+    assert pass_a, f"window_a={window_a} PCC={pcc_a} < 0.99"
+    assert pass_b, f"window_b={window_b} PCC={pcc_b} < 0.99 (possible program cache collision)"
 
 
 if __name__ == "__main__":
