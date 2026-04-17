@@ -28,12 +28,15 @@ PCC_THRESHOLD_DENSE = 0.996
 PCC_THRESHOLD_MOE_GATE_HOST = 0.996
 PCC_THRESHOLD_MOE_GATE_DEVICE = 0.992
 PCC_THRESHOLD_KVPE = 0.999
+SEQ_LEN_25_K = 25 * 1024
+SEQ_LEN_100_K = 100 * 1024
 
 
 @pytest.mark.parametrize(
     "input_source, is_balanced, isl_total",
     [
-        ("random", True, 25 * 1024),
+        ("random", True, SEQ_LEN_25_K),
+        ("random", True, SEQ_LEN_100_K),
     ],
     ids=["random_input"],
 )
@@ -59,6 +62,17 @@ PCC_THRESHOLD_KVPE = 0.999
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
         ),
+        pytest.param(
+            (32, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-32x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -83,6 +97,12 @@ def test_prefill_block(
     sp_axis = 0
     tp_axis = 1
     mesh_shape = list(mesh_device.shape)
+    if mesh_shape[0] == 32 and mesh_shape[1] == 4:
+        if isl_total != SEQ_LEN_100_K:
+            pytest.skip("For mesh shape (32, 4) we only run the test with isl_total=100K")
+    if mesh_shape[0] == 8 and mesh_shape[1] == 4:
+        if isl_total != SEQ_LEN_25_K:
+            pytest.skip("For mesh shape (8, 4) we only run the test with isl_total=25K")
     sp_factor = mesh_shape[sp_axis]
     tp_factor = mesh_shape[tp_axis]
     emb_dim = config.hidden_size
@@ -125,6 +145,7 @@ def test_prefill_block(
 
     block = TtPrefillBlock(**block_kwargs)
     ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
 
     # Shard input to device: [1, 1, isl_total, emb_dim] → [1, 1, isl_per_chip, emb_dim/tp]
     tt_input_4d = torch_input.unsqueeze(0)  # [1, 1, isl_total, emb_dim]
@@ -150,12 +171,14 @@ def test_prefill_block(
         num_kvpe_cache_layers=1,
     )
 
+    rank = ttnn.distributed_context_get_rank()
     logger.info("Running TtPrefillBlock forward...")
     for i in range(num_iterations):
-        logger.info(f"Iteration {i+1}/{num_iterations} start fwd pass")
+        logger.info(f"Rank: {rank} Iteration {i+1}/{num_iterations} start fwd pass")
         tt_output, _ = block(tt_input, rope_tensors, tt_kvpe_cache, return_kv_cache=False)
         ttnn.deallocate(tt_output)
         ttnn.synchronize_device(mesh_device)
-        logger.info(f"Iteration {i+1}/{num_iterations} completed")
+        ttnn.distributed_context_barrier()
+        logger.info(f"Rank: {rank} Iteration {i+1}/{num_iterations} completed")
 
     logger.info("Forward pass loop completed successfully")
