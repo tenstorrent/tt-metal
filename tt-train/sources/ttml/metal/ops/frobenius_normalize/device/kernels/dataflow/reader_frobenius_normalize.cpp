@@ -11,7 +11,7 @@
 constexpr uint32_t cb_input = tt::CBIndex::c_0;
 constexpr uint32_t cb_recv = tt::CBIndex::c_3;
 constexpr uint32_t cb_norm = tt::CBIndex::c_4;
-constexpr uint32_t cb_chain_send = tt::CBIndex::c_7;
+constexpr uint32_t cb_sq_partial = tt::CBIndex::c_7;
 
 constexpr uint32_t origin_phys_x = get_compile_time_arg_val(0);
 constexpr uint32_t origin_phys_y = get_compile_time_arg_val(1);
@@ -85,8 +85,8 @@ void kernel_main() {
         DeviceZoneScopedN("READER-REDUCE-BCAST");
 
         // Read partial from compute and zero padding bytes for clean sfpu_reduce
-        cb_wait_front(cb_chain_send, 1);
-        uint32_t src_l1 = get_read_ptr(cb_chain_send);
+        cb_wait_front(cb_sq_partial, 1);
+        uint32_t src_l1 = get_read_ptr(cb_sq_partial);
         // Zero bytes 4-15 so the 16-byte NOC write is [scalar, 0, 0, 0]
         volatile tt_l1_ptr uint32_t* src_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_l1);
         src_ptr[1] = 0;
@@ -101,7 +101,7 @@ void kernel_main() {
         dst[1] = 0;
         dst[2] = 0;
         dst[3] = 0;
-        cb_pop_front(cb_chain_send, 1);
+        cb_pop_front(cb_sq_partial, 1);
 
         // Wait for all non-origin cores
         if constexpr (num_cores > 1) {
@@ -116,7 +116,7 @@ void kernel_main() {
         uint64_t dst_noc = get_noc_addr(origin_phys_x, origin_phys_y, cb_recv_base + core_index * 16);
         noc_async_write(src_l1, dst_noc, 16);
         noc_async_write_barrier();
-        cb_pop_front(cb_chain_send, 1);
+        cb_pop_front(cb_sq_partial, 1);
 
         // Signal origin
         uint64_t origin_sem_noc = get_noc_addr(origin_phys_x, origin_phys_y, reduction_sem_addr);

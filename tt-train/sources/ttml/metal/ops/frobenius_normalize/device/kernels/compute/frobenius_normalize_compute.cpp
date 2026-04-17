@@ -5,7 +5,7 @@
 // Frobenius normalize compute kernel — all-to-origin reduction
 //
 // Phase 1:   square + accumulate all input tiles → cb_sq_acc (FP32 in DST)
-// Phase 2:   sfpu_reduce → cb_chain_send (reader writes partial to origin's L1)
+// Phase 2:   sfpu_reduce → cb_sq_partial (reader writes partial to origin's L1)
 // Phase 3:   origin only: sfpu_reduce all partials from cb_recv, sqrt + eps + recip → cb_norm
 // Phase 4:   all cores: multiply each tile by 1/norm (block of 4)
 //
@@ -33,7 +33,7 @@ constexpr auto cb_sq_acc = tt::CBIndex::c_1;
 constexpr auto cb_recv = tt::CBIndex::c_3;
 constexpr auto cb_norm = tt::CBIndex::c_4;
 constexpr auto cb_output = tt::CBIndex::c_5;
-constexpr auto cb_chain_send = tt::CBIndex::c_7;
+constexpr auto cb_sq_partial = tt::CBIndex::c_7;
 
 void kernel_main() {
     uint32_t rt = 0;
@@ -86,14 +86,14 @@ void kernel_main() {
     }
 
     // =========================================================================
-    // Phase 2: sfpu_reduce → scalar. Pack to cb_chain_send for reader to write to origin.
+    // Phase 2: sfpu_reduce → scalar. Pack to cb_sq_partial for reader to write to origin.
     // =========================================================================
     {
         DeviceZoneScopedN("COMPUTE-P2-REDUCE");
         cb_wait_front(cb_sq_acc, 1);
-        cb_reserve_back(cb_chain_send, 1);
+        cb_reserve_back(cb_sq_partial, 1);
 
-        init_sfpu(cb_sq_acc, cb_chain_send);
+        init_sfpu(cb_sq_acc, cb_sq_partial);
 
         tile_regs_acquire();
         copy_tile_init(cb_sq_acc);
@@ -106,10 +106,10 @@ void kernel_main() {
 
         tile_regs_commit();
         tile_regs_wait();
-        pack_reconfig_data_format(cb_chain_send);
-        pack_tile(0, cb_chain_send);
+        pack_reconfig_data_format(cb_sq_partial);
+        pack_tile(0, cb_sq_partial);
         tile_regs_release();
-        cb_push_back(cb_chain_send, 1);
+        cb_push_back(cb_sq_partial, 1);
     }  // COMPUTE-P2-REDUCE
 
     // =========================================================================
