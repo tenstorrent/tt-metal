@@ -379,6 +379,17 @@ private:
     // Directed inter-mesh links: exit node on src mesh paired with peer node on dst mesh (same cable / logical port).
     std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<std::pair<FabricNodeId, FabricNodeId>>>>
         intermesh_exit_peer_fabric_node_id_pairs_;
+
+    // Per-channel inter-mesh peer map: my (FabricNode, physical_chan) -> (peer FabricNode, peer physical_chan).
+    //
+    // This is the AUTHORITATIVE per-cable answer to "what is at the other end of this
+    // inter-mesh ethernet channel?" populated directly from PSD physical cable info during
+    // port assignment. get_connected_mesh_chip_chan_ids consults this map first for inter-mesh
+    // queries instead of relying on the chip-level inter_mesh_connectivity_ structure, which
+    // collapses multiple distinct peer chips for the same (src_chip, dst_mesh) pair into a
+    // single edge and only retains the first peer chip — silently corrupting per-channel
+    // routing whenever a single src chip is cabled to more than one chip in a given dst mesh.
+    std::map<FabricNodeId, std::unordered_map<chan_id_t, std::pair<FabricNodeId, chan_id_t>>> intermesh_chan_to_peer_;
     // Mapping from MeshId, MeshHostRankId to MPI rank
     std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
     std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
