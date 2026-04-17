@@ -59,10 +59,10 @@ jobs:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
 
-  # Inlined (not via uses:) so we can pass GITHUB_WRITE_TOKEN directly.
+  # Inlined (not via uses:) so we can pass EVAN_PAT directly.
   # GitHub's auto-generated GITHUB_TOKEN (even with contents:write) cannot create
   # branches at commits containing .github/workflows/ — it lacks 'workflow' OAuth scope.
-  # GITHUB_WRITE_TOKEN must be a PAT with repo+workflow scopes stored in this repo's secrets.
+  # EVAN_PAT must be a PAT with repo+workflow scopes stored in this repo's secrets.
   verify:
     if: inputs.fix-commit-sha != ''
     runs-on: ubuntu-latest
@@ -81,7 +81,7 @@ jobs:
           repository: tenstorrent/tt-metal
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_WRITE_TOKEN }}
+          token: ${{ secrets.EVAN_PAT }}
           path: tt-metal
 
       - name: Install dependencies
@@ -89,7 +89,7 @@ jobs:
 
       - name: Run verification
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.EVAN_PAT }}
           FIX_COMMIT_SHA: ${{ inputs.fix-commit-sha }}
           TEST_PIPELINE: ${{ inputs.verify-test-pipeline }}
           TEST_JOB: ${{ inputs.verify-test-job }}
