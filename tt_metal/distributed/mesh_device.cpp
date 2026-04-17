@@ -2088,22 +2088,21 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
                 dispatch_s_core.y);
         }
 
-        // Allocate L1 ring buffer for BRISC→NCRISC handoff on the profiler core
+        // Allocate L1 ring buffer for BRISC→NCRISC handoff on the profiler core.
+        // Use per-device Buffer::create (not MeshBuffer) so the allocation is
+        // scoped to this device only, avoiding cross-device L1 bank exhaustion.
         {
             const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
             uint32_t ring_buffer_size_aligned = tt::align(kRingBufferSize, l1_alignment);
 
             auto ring_shard_params = ShardSpecBuffer(
                 CoreRangeSet(CoreRange(realtime_profiler_core)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-            DeviceLocalBufferConfig ring_specs = {
-                .page_size = ring_buffer_size_aligned,
-                .buffer_type = BufferType::L1,
-                .sharding_args = BufferShardingArgs(ring_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-                .bottom_up = std::nullopt,
-                .sub_device_id = std::nullopt,
-            };
-            MeshBufferConfig ring_mesh_specs = ReplicatedBufferConfig{.size = ring_buffer_size_aligned};
-            dev_state.ring_buffer = MeshBuffer::create(ring_mesh_specs, ring_specs, mesh_device.get());
+            dev_state.ring_buffer = Buffer::create(
+                device,
+                ring_buffer_size_aligned,
+                ring_buffer_size_aligned,
+                BufferType::L1,
+                BufferShardingArgs(ring_shard_params, TensorMemoryLayout::HEIGHT_SHARDED));
         }
         uint32_t ring_buffer_addr = dev_state.ring_buffer->address();
 

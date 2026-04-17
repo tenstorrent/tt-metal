@@ -22,7 +22,7 @@ struct RtProfilerRingBuffer {
     uint8_t data[RT_PROFILER_RING_CAPACITY][RT_PROFILER_ENTRY_SIZE];
 };
 
-// 64 + 128*64 = 8256 bytes total
+// 64 + 4096*64 = 262208 bytes total
 
 static_assert(sizeof(RtProfilerRingBuffer) == 64 + RT_PROFILER_RING_CAPACITY * RT_PROFILER_ENTRY_SIZE);
 
