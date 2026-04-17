@@ -15,6 +15,25 @@ PYTHON=python_env/bin/python
 PYTEST="$PYTHON -m pytest"
 TESTS=models/demos/deepseek_v3_b1/tests/unit_tests
 
+# ─── Step 1: compact_io roundtrip + shuffle_dram_assignment (no hardware) ─────
+#
+# Subtests (all PASSING: 2026-04-17):
+#   test_pack_unpack_all_bfp4 / test_pack_unpack_mixed_formats
+#     — pack→unpack roundtrip matches per-tile primitives exactly.
+#   test_zero_tiles_produce_no_bytes_and_zero_fill
+#     — zero assignment → 0 bytes packed, zeros on unpack.
+#   test_compact_tile_byte_count_matches_packed_length
+#     — compact_tile_byte_count() == len(pack_compact_tiles(...)).
+#   test_bfp4_tile_byte_count_formula / test_compact_smaller_than_bfp4_for_mixed_assignment
+#     — byte count helpers and compression ratio.
+#   test_shuffle_dram_assignment_matches_shuffle_dram_tiles
+#     — shuffle_dram_assignment uses the same permutation as shuffle_dram_tiles (labeled-tile strategy).
+#   test_shuffle_dram_assignment_is_permutation / test_shuffle_dram_assignment_one_tile_per_bank_is_identity
+#     — count invariance and identity case.
+# PASSING: 2026-04-17
+$PYTEST $TESTS/test_compact_io.py -v \
+  || { echo "FAILED: test_compact_io.py"; exit 1; }
+
 # ─── Step 1: BSPM loading + TensorCache (test_prepare_weights.py) ─────────────
 #
 # Subtests (all PASSING: 2026-04-17):
