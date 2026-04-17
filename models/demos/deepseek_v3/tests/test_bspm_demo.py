@@ -38,6 +38,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import types
 from collections.abc import Mapping
 from copy import deepcopy
@@ -1056,6 +1057,7 @@ def test_bspm_vs_uniform_5layers_decode(
     hf_config,
     model_path,
     cache_path,
+    tmp_path,
     ccl,
     force_recalculate_weight_config,
 ):
@@ -1083,6 +1085,18 @@ def test_bspm_vs_uniform_5layers_decode(
     deq_state_dict_5 = sub_state_dict(LazyStateDict(deq_path), "", NUM_LAYERS)
     baseline_weight_cache_identity = f"bspm_demo_savedweight_{BSPM_DEMO_WEIGHT_CACHE_VERSION}_{deq_path.resolve()}"
     rebuild_savedweight_cache = True
+    # This test intentionally forces a fresh SavedWeight rebuild so it validates
+    # the current stacked/BSPM inputs. Keep that rebuild on DEEPSEEK_V3_CACHE
+    # when this test owns a writable cache dir (e.g. recreated-cache workflows),
+    # but fall back to tmp_path when CI mounts the shared cache read-only.
+    savedweight_cache_root = cache_path
+    if rebuild_savedweight_cache:
+        try:
+            cache_path.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=cache_path):
+                pass
+        except OSError:
+            savedweight_cache_root = tmp_path / "deepseek-v3-cache"
 
     # ── Shared random decode inputs ─────────────────────────────────────────
     dp_factor = mesh_device.shape[1]
@@ -1108,7 +1122,7 @@ def test_bspm_vs_uniform_5layers_decode(
         RowBatchedModel,
         hf_config_5,
         (deq_state_dict_5,),
-        cache_path,
+        savedweight_cache_root,
         mesh_device,
         rebuild_savedweight_cache or force_recalculate_weight_config,
         test_name="test_bspm_demo",
@@ -1160,7 +1174,7 @@ def test_bspm_vs_uniform_5layers_decode(
         RowBatchedModel,
         hf_config_5,
         (bspm_state_dict,),
-        cache_path,
+        savedweight_cache_root,
         mesh_device,
         rebuild_savedweight_cache or force_recalculate_weight_config,
         test_name="test_bspm_demo",
