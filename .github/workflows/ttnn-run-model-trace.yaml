@@ -666,18 +666,36 @@ jobs:
           TRACE_UID: ${{ steps.homogenize.outputs.trace_uid }}
           TRACE_RUN_ID: ${{ steps.load.outputs.trace_run_id }}
           RUN_ID: ${{ github.run_id }}
-          BASE_REF: ${{ github.ref_name }}
+          # Branch off main so the manifest-PR branch tip contains no .github/workflows
+          # changes relative to main. Otherwise GitHub's workflow-scope check rejects
+          # the push since CODEOWNERS_GROUP_ANALYSIS_PAT lacks the 'workflows' scope.
+          BASE_REF: main
           TT_METAL_SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           MASTER_JSON: model_tracer/traced_operations/ttnn_operations_master.json
           LEG_STATUS_DIR: leg_status
         run: |
           if ! git diff --quiet model_tracer/trace_selection_registry.yaml 2>/dev/null; then
+            # Snapshot the loader-updated registry before we change branches.
+            cp model_tracer/trace_selection_registry.yaml /tmp/registry_updated.yaml
+
+            # Fetch the target base (main) and branch from it so the push only
+            # contains the registry delta, not the feature branch's workflow edits.
+            git fetch --depth=1 origin "$BASE_REF"
             BRANCH_NAME="trace/auto-manifest-${RUN_ID}"
-            git checkout -b "$BRANCH_NAME"
+            git checkout -B "$BRANCH_NAME" "origin/$BASE_REF"
+
+            # Reapply the loader's registry update on top of main.
+            cp /tmp/registry_updated.yaml model_tracer/trace_selection_registry.yaml
+
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add model_tracer/trace_selection_registry.yaml
+
+            if git diff --cached --quiet; then
+              echo "::notice::Registry on main already matches loader output; skipping PR."
+              exit 0
+            fi
 
             MODEL_COUNT=$(python3 -c "import json; print(len(json.load(open('$MASTER_JSON'))['metadata'].get('models', [])))")
             git commit -m "Add draft trace entry for ${MODEL_COUNT} model(s) (trace_run_id=${TRACE_RUN_ID})"
