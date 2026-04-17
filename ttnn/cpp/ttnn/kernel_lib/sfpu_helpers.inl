@@ -263,9 +263,9 @@ template <Approx approx, Dst Slot>
 ALWI void Erf<approx, Slot>::call(uint32_t d0) const { erf_tile<static_cast<bool>(approx)>(d0); }
 
 template <Approx approx, Dst Slot>
-ALWI void Erfc<approx, Slot>::init() const { erfc_tile_init<static_cast<bool>(approx)>(); }
+ALWI void Erfc<approx, Slot>::init() const { erfc_tile_init(); }
 template <Approx approx, Dst Slot>
-ALWI void Erfc<approx, Slot>::call(uint32_t d0) const { erfc_tile<static_cast<bool>(approx)>(d0); }
+ALWI void Erfc<approx, Slot>::call(uint32_t d0) const { erfc_tile(d0); }
 
 template <Dst Slot> ALWI void Erfinv<Slot>::init() const { erfinv_tile_init(); }
 template <Dst Slot> ALWI void Erfinv<Slot>::call(uint32_t d0) const { erfinv_tile(d0); }
