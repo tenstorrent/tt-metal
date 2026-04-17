@@ -361,6 +361,9 @@ class OpDescriptor:
                 ``id()`` recycling).  Everything else uses ``id()`` (safe for
                 long-lived config objects; causes harmless cache misses if
                 objects are recreated each call).
+
+                Iterates kwargs in signature-defined ``param_names`` order
+                (deterministic, avoids ``sorted()`` per call).
                 """
                 parts = []
                 for i, a in enumerate(args):
@@ -368,11 +371,13 @@ class OpDescriptor:
                         parts.append((i, hash(a.spec)))
                     else:
                         parts.append((i, id(a)))
-                for k, v in sorted(kwargs.items()):
-                    if isinstance(v, ttnn.Tensor):
-                        parts.append((k, hash(v.spec)))
-                    else:
-                        parts.append((k, id(v)))
+                for k in param_names:
+                    if k in kwargs:
+                        v = kwargs[k]
+                        if isinstance(v, ttnn.Tensor):
+                            parts.append((k, hash(v.spec)))
+                        else:
+                            parts.append((k, id(v)))
                 return tuple(parts)
 
             @functools.wraps(fn)
@@ -394,13 +399,13 @@ class OpDescriptor:
                     ck = _inline_cache_key(args, kwargs)
                     hit = _program_key_cache.get(ck)
                     if hit is not None:
-                        pck, input_name_map = hit
-                        tensors = {}
-                        for pname, src in input_name_map:
+                        pck, input_name_map, input_names_tuple = hit
+                        tensors = []
+                        for _pname, src in input_name_map:
                             if isinstance(src, int):
-                                tensors[pname] = args[src]
+                                tensors.append(args[src])
                             else:
-                                tensors[pname] = kwargs[src]
+                                tensors.append(kwargs[src])
 
                         def _lazy_factory():
                             full = fn(*args, **kwargs)
@@ -412,6 +417,7 @@ class OpDescriptor:
                             output_tensors=[_DeferredOutput()],
                             name=name,
                             program_cache_key=pck,
+                            input_names=input_names_tuple,
                         )
 
                     # Cache miss — full construction.
@@ -428,7 +434,8 @@ class OpDescriptor:
                                     if p == pname and pi < len(args):
                                         input_name_map.append((pname, pi))
                                         break
-                    _program_key_cache[ck] = (desc.program_cache_key, input_name_map)
+                    input_names_tuple = tuple((pname, idx) for idx, (pname, _) in enumerate(input_name_map))
+                    _program_key_cache[ck] = (desc.program_cache_key, input_name_map, input_names_tuple)
                     return desc
 
                 # Deferred path: use sig.bind() to resolve all arg values by name.

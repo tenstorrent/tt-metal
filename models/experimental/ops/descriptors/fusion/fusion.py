@@ -430,7 +430,7 @@ def _materialize_chain(items, edges: List[Tuple[int, int, int, int]], ops=None) 
                 ops[consumer_i].input_tensors[inp_j] = ops[i].output_tensors[out_j]
 
 
-def _container_run(container: Any, surface_prefix: str, results, device=None, kernel_dir: Optional[str] = None):
+def _container_run(container: Any, results, device=None, kernel_dir: Optional[str] = None):
     """Shared implementation for :meth:`Sequential.run` / :meth:`Parallel.run`.
 
     Two dispatch paths:
@@ -442,14 +442,14 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
     (zero L1 pinning between calls).
 
     **Cache-lookup path** (inline warm, first persistent call, or cold miss):
-    computes the cache key, looks up ``_BUILD_CACHE``.  On hit, does a
-    lightweight parent-style 3-arg dispatch (reuses output tensors from ops).
-    On miss, does a full ``build()`` + ``launch()``.  Sets ``_cached_entry``
-    so the next call on the same container goes hot.
+    computes the cache key from ``container._topo_fp`` and
+    ``container._cached_ops`` (avoids re-flattening and re-computing the
+    topology fingerprint).  On hit with ``dispatch_state``, dispatches
+    directly.  On first warm hit, does a 3-arg dispatch.  On miss, does a
+    full ``build()`` + ``launch()``.  Sets ``_cached_entry`` so the next
+    call on the same container goes hot.
     """
     # ── Persistent hot path ──
-    # _cached_entry is set after the first run on a persistent container.
-    # dispatch_state on the shared _CacheEntry does the C++ dispatch.
     entry = getattr(container, "_cached_entry", None)
     if entry is not None and entry.dispatch_state is not None:
         seen: Set[int] = set()
@@ -472,20 +472,19 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
         return _filter_results(outputs, container._default_results, results)
 
     # ── Cache lookup (inline warm OR first persistent call) ──
-    cache_device = device
-    if cache_device is None:
-        try:
-            cache_device = _extract_device(container._items)
-        except ValueError:
-            cache_device = None
-    cache_key, ops = _fusion_cache_key_and_ops(container._items, surface_prefix, cache_device)
+    ops = container._cached_ops
+    branch_keys = tuple(op.program_cache_key for op in ops)
+    if device is not None:
+        dev_id = _fusion_mesh_runtime_id(device)
+    elif ops and ops[0].input_tensors:
+        dev_id = _fusion_mesh_runtime_id(ops[0].input_tensors[0].device())
+    else:
+        dev_id = 0
+    cache_key = (container._topo_fp, branch_keys, dev_id)
 
     entry = _BUILD_CACHE.get(cache_key)
     if entry is not None:
         # ── Fast warm path: reuse FusionDispatchState if available ──
-        # dispatch_state allocates outputs internally, patches, and dispatches
-        # in a single C++ call — avoids the MeshProgramDescriptor copy and
-        # output-tensor gathering that the 3-arg overload does.
         if entry.dispatch_state is not None:
             seen: Set[int] = set()
             inputs: List = []
@@ -497,11 +496,6 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
                         seen.add(tid)
             outputs = entry.dispatch_state.dispatch(inputs)
             container._cached_entry = entry
-            if results is None:
-                if surface_prefix == "P":
-                    results = _default_results_parallel_branches(container._items)
-                else:
-                    results = _default_results(container._items)
             return _filter_results(outputs, container._default_results, results)
 
         # Warm path (first warm hit — no dispatch_state yet): parent-style
@@ -527,10 +521,7 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
         entry = _BUILD_CACHE.get(cache_key)
 
     if results is None:
-        if surface_prefix == "P":
-            results = _default_results_parallel_branches(container._items)
-        else:
-            results = _default_results(container._items)
+        results = container._default_results
 
     ret = [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
 
@@ -543,7 +534,6 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
             src_outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
             if src_outputs and src_outputs[0] is not None:
                 entry.output_specs = [t.spec for t in src_outputs]
-                # Build shared_output_map for shared output buffers.
                 seen_srcs_cold: Dict[Tuple[int, int], int] = {}
                 dedup_cold: List[int] = []
                 for i, src in enumerate(entry.output_sources):
@@ -554,8 +544,6 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
                         dedup_cold.append(i)
                 if any(d != i for i, d in enumerate(dedup_cold)):
                     entry.shared_output_map = dedup_cold
-                # Build reorder: result_reorder[j] = output_sources index
-                # whose tensor matches default_results[j].
                 src_id_to_idx = {}
                 for src_i, (pi, ti) in enumerate(entry.output_sources):
                     src_id_to_idx[id(ops[pi])] = src_i
@@ -563,7 +551,6 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
         elif ret and ret[0] is not None:
             entry.output_specs = [t.spec for t in ret if t is not None]
 
-    # Create FusionDispatchState once on the shared _CacheEntry.
     if entry is not None and entry.dispatch_state is None and entry.output_specs is not None:
         first_tensor = next((t for op in ops for t in op.input_tensors if t is not None), None)
         if first_tensor is not None:
@@ -576,7 +563,6 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
                 first_tensor.device(),
             )
 
-    # Set _cached_entry so persistent containers go hot on the next call.
     container._cached_entry = entry
     return ret
 
@@ -817,6 +803,7 @@ class Sequential:
         self._items = all_items
         self._descriptor_names: tuple = ()
         self._cached_ops = _flatten_ops(all_items)
+        self._topo_fp = _build_cache_surface_key(all_items, "S")
         self._internal_edges = _detect_internal_edges(all_items, self._cached_ops)
         self._default_results = _default_results(all_items)
         self._cached_entry = None
@@ -827,6 +814,7 @@ class Sequential:
         for op in self._cached_ops:
             op._updated_indices = []
         self._cached_ops = _flatten_ops(self._items)
+        self._topo_fp = _build_cache_surface_key(self._items, "S")
         self._internal_edges = _detect_internal_edges(self._items, self._cached_ops)
         self._default_results = _default_results(self._items)
         self._cached_entry = None
@@ -922,7 +910,7 @@ class Sequential:
         """
         if self._cached_entry is None:
             _materialize_chain(self._items, self._internal_edges, self._cached_ops)
-        return _container_run(self, "S", results, device=device, kernel_dir=kernel_dir)
+        return _container_run(self, results, device=device, kernel_dir=kernel_dir)
 
     def _build_internal(self, device=None):
         """Internal build returning intermediate _BuildResult."""
@@ -975,6 +963,7 @@ class Parallel:
         self._items = all_items
         self._descriptor_names: tuple = ()
         self._cached_ops = _flatten_ops(all_items)
+        self._topo_fp = _build_cache_surface_key(all_items, "P")
         self._internal_edges = _detect_internal_edges(all_items, self._cached_ops)
         self._default_results = _default_results_parallel_branches(all_items)
         self._cached_entry = None
@@ -985,6 +974,7 @@ class Parallel:
         for op in self._cached_ops:
             op._updated_indices = []
         self._cached_ops = _flatten_ops(self._items)
+        self._topo_fp = _build_cache_surface_key(self._items, "P")
         self._internal_edges = _detect_internal_edges(self._items, self._cached_ops)
         self._default_results = _default_results_parallel_branches(self._items)
         self._cached_entry = None
@@ -1060,7 +1050,7 @@ class Parallel:
         """
         if self._cached_entry is None:
             _materialize_chain(self._items, self._internal_edges, self._cached_ops)
-        return _container_run(self, "P", results, device=device, kernel_dir=kernel_dir)
+        return _container_run(self, results, device=device, kernel_dir=kernel_dir)
 
     def _build_internal(self, device=None):
         """Internal build returning intermediate _BuildResult."""
