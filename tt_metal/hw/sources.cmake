@@ -1,4 +1,5 @@
 set(HW_JIT_API_HEADERS
+    inc/api/rt_arg.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
     inc/api/remote_circular_buffer.h
