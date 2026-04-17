@@ -4,6 +4,7 @@
 
 #include "rmsnorm_bw_program_factory.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -219,8 +220,21 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     // Compile arguments
     uint32_t block_size = get_block_size(Wt, 2U);  // We need two extra registers during calculation
 
+    const uint32_t device_core_volume =
+        compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
+    const uint32_t core_budget = (args.max_num_cores == 0U)
+                                       ? device_core_volume
+                                       : std::min(args.max_num_cores, device_core_volume);
+    TT_FATAL(
+        core_budget >= 1U,
+        "rmsnorm_bw max_num_cores must be >= 1 after clamping to device (got {})",
+        core_budget);
+
+    const tt::tt_metal::CoreRangeSet sub_core_grid = tt::tt_metal::num_cores_to_corerangeset(
+        core_budget, compute_with_storage_grid_size, /*row_wise=*/false);
+
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
+        tt::tt_metal::split_work_to_cores(sub_core_grid, total_rows_to_process, /*row_wise=*/false);
 
     uint32_t packed_scaler = pack_two_bfloat16_to_uint32(static_cast<float>(1.F / num_inner));
 
