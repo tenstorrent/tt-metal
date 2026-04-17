@@ -160,3 +160,23 @@ registry:
     config_count: 223
     loaded_at: '2026-04-16'
     notes: ''
+
+  - trace_id: 9
+    status: draft
+    models: [tt_dit]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: 44091313-d561-4b25-9cb2-483faaba1488
+    tt_metal_sha: bf8cdac63c32c5a1a04fa1de699af55e26851624
+    config_count: 249
+    loaded_at: '2026-04-17'
+    notes: ''
+
+  - trace_id: 10
+    status: draft
+    models: [gpt_oss]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: 39637819-20dc-4fc4-a168-b1d3bdf0495f
+    tt_metal_sha: bf8cdac63c32c5a1a04fa1de699af55e26851624
+    config_count: 130
+    loaded_at: '2026-04-17'
+    notes: ''
