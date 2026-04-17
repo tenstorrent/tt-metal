@@ -31,6 +31,11 @@ on:
         required: false
         type: boolean
         default: false
+      models-filter:
+        required: false
+        type: string
+        description: "Comma-separated model names to filter reconstruction (empty = all models in registry)"
+        default: ""
 
 permissions:
   contents: read
@@ -108,11 +113,17 @@ jobs:
         env:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
           MANIFEST_PATH: ${{ inputs.manifest-path }}
+          MODELS_FILTER: ${{ inputs.models-filter }}
         run: |
           mkdir -p model_tracer/traced_operations
+          FILTER_ARGS=""
+          if [[ -n "$MODELS_FILTER" ]]; then
+            FILTER_ARGS="--models-filter $MODELS_FILTER"
+          fi
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
             "$MANIFEST_PATH" \
-            model_tracer/traced_operations/ttnn_operations_master.json
+            model_tracer/traced_operations/ttnn_operations_master.json \
+            $FILTER_ARGS
 
       - name: Reconstruct master JSON from pinned trace
         if: ${{ inputs.pinned-trace-id != '' }}

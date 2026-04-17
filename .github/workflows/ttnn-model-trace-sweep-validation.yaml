@@ -56,6 +56,8 @@ jobs:
 
           targets = registry_data.get("targets", {})
 
+          # Filter targets in-memory for scope detection (no file written;
+          # the actual DB filtering is done by --models-filter in the impl workflow)
           if models_filter:
               filtered_targets = {}
               for scope, entries in targets.items():
@@ -67,12 +69,6 @@ jobs:
                   if filtered_entries:
                       filtered_targets[scope] = filtered_entries
               targets = filtered_targets
-              registry_data["targets"] = targets
-
-              filtered_path = "model_tracer/trace_selection_registry_filtered.yaml"
-              with open(filtered_path, "w", encoding="utf-8") as f:
-                  yaml.dump(registry_data, f, default_flow_style=False, sort_keys=False)
-              registry_path = filtered_path
 
           target_keys = set(targets.keys())
           if target_keys == {"lead_models"}:
@@ -131,9 +127,10 @@ jobs:
     uses: ./.github/workflows/ttnn-model-trace-sweep-validation-impl.yaml
     secrets: inherit
     with:
-      manifest-path: ${{ needs.inspect-trace-selection-registry.outputs.trace-selection-registry-path }}
+      manifest-path: model_tracer/trace_selection_registry.yaml
       scope-targets: ${{ needs.inspect-trace-selection-registry.outputs.scope-targets }}
       models: ${{ needs.inspect-trace-selection-registry.outputs.selected-models }}
       trace-ids: ${{ needs.inspect-trace-selection-registry.outputs.selected-trace-ids }}
       caller-id: ${{ needs.inspect-trace-selection-registry.outputs.caller-id }}
       allow-partial-hash-changes: ${{ inputs.allow-partial-hash-changes }}
+      models-filter: ${{ inputs.models-filter }}
