@@ -301,29 +301,23 @@ access to `trainer.model` and `trainer.config`.
 
 ## Transformer Config
 
-Model architecture parameters passed as a plain dict:
+Model architecture parameters passed as a plain dict. In YAML configs, the
+transformer config can be provided inline under `transformer_config:` or as a
+path to a separate file via `transformer_config_path:` (resolved relative to
+the YAML file's directory). The external file must contain a top-level
+`transformer_config` mapping. See
+[`configs/model_configs/`](../../../configs/model_configs/) for available model
+config files.
 
-```python
-transformer_config = {
-    "model_type": "llama",
-    "num_heads": 32,
-    "num_groups": 8,
-    "embedding_dim": 2048,
-    "intermediate_dim": 8192,
-    "dropout_prob": 0.0,
-    "num_blocks": 16,
-    "weight_tying": "enabled",
-    "vocab_size": 32000,
-    "max_sequence_length": 1024,
-    "runner_type": "memory_efficient",
-    "theta": 500000.0,
-    "rope_scaling": {
-        "scaling_factor": 32.0,
-        "high_freq_factor": 4.0,
-        "low_freq_factor": 1.0,
-        "original_context_length": 8192,
-    },
-}
+```yaml
+# Option 1: reference an external model config file
+transformer_config_path: "../model_configs/llama3_2_1B.yaml"
+
+# Option 2: inline (still supported)
+transformer_config:
+  model_type: "llama"
+  num_heads: 32
+  ...
 ```
 
 ---
@@ -459,7 +453,7 @@ python3 boolq_training_example.py
 
 [`boolq_accuracy_example.py`](boolq_accuracy_example.py) — evaluates a
 model on the BoolQ validation set with greedy decoding (`temperature=0`)
-and writes per-question results to a CSV. Runs on 2 devices (p150x2) with
+and writes per-question results to a CSV. Runs on 1 device (p150) with
 `PROMPTS_TO_VALIDATE=20` by default.
 
 ```bash
