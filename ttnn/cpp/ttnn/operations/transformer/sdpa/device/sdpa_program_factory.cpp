@@ -353,6 +353,15 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         num_cores,
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 
+    // Flattened work distribution (optional): distribute B*NQH*q_num_chunks evenly across cores,
+    // matching ring_joint_sdpa's scheme. When disabled (default), use hierarchical batch -> heads -> q_chunks.
+    const bool flatten_work = program_config.has_value() && program_config->flatten_work;
+    if (flatten_work) {
+        TT_FATAL(is_causal, "SDPAProgramConfig::flatten_work currently requires is_causal=true");
+        TT_FATAL(!is_chunked, "SDPAProgramConfig::flatten_work does not support chunked prefill");
+        TT_FATAL(!use_attention_sink, "SDPAProgramConfig::flatten_work does not support attention_sink");
+    }
+
     // Parallelization scheme
     // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
     uint32_t batch_parallel_factor = std::min(B, num_cores);
@@ -375,7 +384,32 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
     const uint32_t q_per_core = (q_num_chunks + q_parallel_factor - 1) / q_parallel_factor;
 
-    const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
+    // Flat-distribution per-core assignments (only used when flatten_work is true).
+    // Evenly split total_q_chunks across cores. With zigzag balancing (causal + even num_q_chunks),
+    // distribute in pairs so every core ends up with even flat-count, matching ring_joint's scheme —
+    // each core then gets balanced light/heavy work after linear_to_zigzag remap.
+    const uint32_t total_q_chunks = B * NQH * q_num_chunks;
+    const bool flat_zigzag = flatten_work && is_causal && (q_num_chunks % 2 == 0);
+    uint32_t base_chunks_per_core = 0;
+    uint32_t cores_doing_extra = 0;
+    uint32_t extra_chunks_per_core = 0;
+    if (flat_zigzag) {
+        const uint32_t total_pairs = total_q_chunks / 2;
+        base_chunks_per_core = (num_cores == 0) ? 0 : (total_pairs / num_cores) * 2;
+        cores_doing_extra = (num_cores == 0) ? 0 : (total_pairs % num_cores);
+        extra_chunks_per_core = (num_cores == 0) ? 0 : 2;
+    } else {
+        base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
+        cores_doing_extra = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
+        extra_chunks_per_core = (num_cores == 0) ? 0 : 1;
+    }
+    // Upper bound per-core flat count — used to size the Q CB in flatten mode.
+    const uint32_t max_flat_chunks_per_core =
+        base_chunks_per_core + (cores_doing_extra > 0 ? extra_chunks_per_core : 0);
+
+    const uint32_t q_buffer_factor_hier = (q_per_core > 1) ? 2 : 1;
+    const uint32_t q_buffer_factor_flat = (max_flat_chunks_per_core > 1) ? 2 : 1;
+    const uint32_t q_buffer_factor = flatten_work ? q_buffer_factor_flat : q_buffer_factor_hier;
 
     log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
 
@@ -632,12 +666,20 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     uint32_t balanced_q_parallel =
-        (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
+        (!flatten_work && is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
+    if (flatten_work) {
+        defines["FLATTENED_WORK"] = "1";
+    }
+    if (flat_zigzag) {
+        defines["FLATTEN_WORK_ZIGZAG"] = "1";
+    }
 
     log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
+    log_debug(tt::LogOp, "FLATTENED_WORK: {}", flatten_work);
+    log_debug(tt::LogOp, "FLATTEN_WORK_ZIGZAG: {}", flat_zigzag);
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
@@ -1299,7 +1341,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-        // log_debug(tt::LogOp, "core: {} getting runtime args for idx {i}", core, i);
+        // Hierarchical (default) assignment — also used as a fallback for compile-time args
+        // not touched by the flat path. In flatten_work mode these are effectively unused.
         uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
         uint32_t local_batch_end = local_batch_start + batch_per_core;
         uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
@@ -1315,6 +1358,20 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         local_q_start = std::min(local_q_start, q_num_chunks);
         local_q_end = std::min(local_q_end, q_num_chunks);
 
+        // Flat-mode per-core range (only used when FLATTENED_WORK is compiled in).
+        uint32_t global_q_start = 0;
+        uint32_t global_q_count = 0;
+        if (flatten_work) {
+            global_q_start = i * base_chunks_per_core + std::min(i, cores_doing_extra) * extra_chunks_per_core;
+            global_q_count = base_chunks_per_core + ((i < cores_doing_extra) ? extra_chunks_per_core : 0u);
+            if (global_q_start >= total_q_chunks) {
+                global_q_start = total_q_chunks;
+                global_q_count = 0;
+            } else if (global_q_start + global_q_count > total_q_chunks) {
+                global_q_count = total_q_chunks - global_q_start;
+            }
+        }
+
         // log the above
         log_debug(tt::LogOp, "core: {}", i);
         log_debug(tt::LogOp, "x={},y={}", core.x, core.y);
@@ -1324,6 +1381,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         log_debug(tt::LogOp, "local_nh_end: {}", local_nh_end);
         log_debug(tt::LogOp, "local_q_start: {}", local_q_start);
         log_debug(tt::LogOp, "local_q_end: {}", local_q_end);
+        if (flatten_work) {
+            log_debug(tt::LogOp, "global_q_start: {}, global_q_count: {}", global_q_start, global_q_count);
+        }
 
         // Get chain info for this core
         const auto& chain = core_chain_info[i];
@@ -1345,7 +1405,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             local_q_end,
             num_phases,
             chunked_q_chunk_offset,
-            read_offset  // read_offset
+            read_offset,  // read_offset
+            global_q_start,
+            global_q_count,
         };
 
         // Add chain metadata for non-causal case
@@ -1382,7 +1444,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
              num_phases,
              static_cast<uint32_t>(flexible_chunked ? 1 : 0),
              chunked_q_chunk_offset,
-             write_offset});  // write_offset
+             write_offset,  // write_offset
+             global_q_start,
+             global_q_count});
         SetRuntimeArgs(
             program,
             compute_kernels_id,
@@ -1396,7 +1460,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
              local_q_end,
              num_phases,
              static_cast<uint32_t>(flexible_chunked ? 1 : 0),
-             chunked_q_chunk_offset});
+             chunked_q_chunk_offset,
+             global_q_start,
+             global_q_count});
     }
 
     return cached_program_t{
