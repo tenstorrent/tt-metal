@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3MTPWeights,
     MoERoutedExpertWeights,
     OverlappedTensor,
+    SramExpertCoreGrids,
     SramHotExpertConfig,
     prepare_attention_weights,
     prepare_compressed_sram_slots,
@@ -220,7 +221,7 @@ class CacheWeightProvider:
         hf_revision: str = "local",
         schema_version: int = 1,
         sram_hot_experts: SramHotExpertConfig | None = None,
-        sram_core_grid: ttnn.CoreRangeSet | None = None,
+        sram_core_grids: SramExpertCoreGrids | None = None,
         sram_assigner: CompressedTensorAssigner | None = None,
     ) -> None:
         cache_path = Path(cache_path)
@@ -233,7 +234,7 @@ class CacheWeightProvider:
         self._hf_model_id = hf_model_id or model_path.name
         self._hf_revision = hf_revision
         self._sram_hot_experts = sram_hot_experts
-        self._sram_core_grid = sram_core_grid
+        self._sram_core_grids = sram_core_grids
         self._sram_assigner = sram_assigner
 
     def _cache_config(self, device: ttnn.MeshDevice) -> CacheConfig:
@@ -318,7 +319,7 @@ class CacheWeightProvider:
         sram_slots = None
         sram_expert_indices = (self._sram_hot_experts or {}).get(layer_id)
         if sram_expert_indices:
-            assert self._sram_core_grid is not None, "sram_core_grid required for SRAM hot experts"
+            assert self._sram_core_grids is not None, "sram_core_grids required for SRAM hot experts"
             assert self._sram_assigner is not None, "sram_assigner required for SRAM hot experts"
             t0 = time.perf_counter()
             sram_slots = prepare_compressed_sram_slots(
@@ -326,7 +327,7 @@ class CacheWeightProvider:
                 state_dict=self._state_dict,
                 layer_idx=layer_id,
                 initial_expert_indices=sram_expert_indices,
-                core_grid=self._sram_core_grid,
+                core_grids=self._sram_core_grids,
                 assigner=self._sram_assigner,
                 move_to_device=True,
             )
@@ -374,11 +375,11 @@ class SyntheticWeightProvider:
         self,
         *,
         sram_hot_experts: SramHotExpertConfig | None = None,
-        sram_core_grid: ttnn.CoreRangeSet | None = None,
+        sram_core_grids: SramExpertCoreGrids | None = None,
         sram_assigner: CompressedTensorAssigner | None = None,
     ) -> None:
         self._sram_hot_experts = sram_hot_experts
-        self._sram_core_grid = sram_core_grid
+        self._sram_core_grids = sram_core_grids
         self._sram_assigner = sram_assigner
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
@@ -419,7 +420,7 @@ class SyntheticWeightProvider:
             num_routed_experts=NUM_ROUTED_EXPERTS,
             move_to_device=True,
             sram_hot_experts=self._sram_hot_experts,
-            sram_core_grid=self._sram_core_grid,
+            sram_core_grids=self._sram_core_grids,
             sram_assigner=self._sram_assigner,
         )
 
@@ -440,7 +441,7 @@ class StateDictWeightProvider:
         model_path: Path,
         *,
         sram_hot_experts: SramHotExpertConfig | None = None,
-        sram_core_grid: ttnn.CoreRangeSet | None = None,
+        sram_core_grids: SramExpertCoreGrids | None = None,
         sram_assigner: CompressedTensorAssigner | None = None,
     ) -> None:
         model_path = Path(model_path)
@@ -448,7 +449,7 @@ class StateDictWeightProvider:
         assert model_path.is_dir(), f"Model path is not a directory: {model_path}"
         self._state_dict = LazyStateDict(model_path)
         self._sram_hot_experts = sram_hot_experts
-        self._sram_core_grid = sram_core_grid
+        self._sram_core_grids = sram_core_grids
         self._sram_assigner = sram_assigner
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
@@ -465,7 +466,7 @@ class StateDictWeightProvider:
             num_routed_experts=NUM_ROUTED_EXPERTS,
             move_to_device=True,
             sram_hot_experts=self._sram_hot_experts,
-            sram_core_grid=self._sram_core_grid,
+            sram_core_grids=self._sram_core_grids,
             sram_assigner=self._sram_assigner,
         )
 
