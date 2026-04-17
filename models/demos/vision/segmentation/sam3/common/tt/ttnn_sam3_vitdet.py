@@ -130,8 +130,7 @@ def tt_vit_mlp(x, fc1_weight, fc1_bias, fc2_weight, fc2_bias, device=None):
     Returns:
         ttnn tensor (B, L, dim) in TILE_LAYOUT on device.
     """
-    hidden = ttnn.linear(x, fc1_weight, bias=fc1_bias)
-    hidden = ttnn.gelu(hidden)
+    hidden = ttnn.linear(x, fc1_weight, bias=fc1_bias, activation="gelu")
     output = ttnn.linear(hidden, fc2_weight, bias=fc2_bias)
     return output
 
