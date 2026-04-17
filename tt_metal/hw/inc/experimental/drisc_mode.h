@@ -55,30 +55,21 @@
     noc: NIU instance (0 or 1). Defaults to noc_index.
 */
 
-#include "noc/noc.h"
+#include "noc_nonblocking_api.h"
 #include "internal/dataflow/dataflow_api_common.h"
 
 inline __attribute__((always_inline)) void drisc_set_stream_mode(uint8_t noc = noc_index) {
-    uint32_t save_instance = noc_get_active_instance();
-    noc_set_active_instance(noc);
-    uint32_t cfg = noc_get_cfg_reg(NIU_CFG_0);
-    noc_set_cfg_reg(NIU_CFG_0, cfg & ~(1u << NIU_CFG_0_AXI_SUBORDINATE_ENABLE));
-    noc_set_active_instance(save_instance);
+    uint32_t cfg = NOC_CFG_READ_REG(noc, NIU_CFG_0);
+    NOC_CFG_WRITE_REG(noc, NIU_CFG_0, cfg & ~(1u << NIU_CFG_0_AXI_SUBORDINATE_ENABLE));
 }
 
 inline __attribute__((always_inline)) void drisc_set_noc2axi_mode(uint8_t noc = noc_index) {
-    uint32_t save_instance = noc_get_active_instance();
-    noc_set_active_instance(noc);
-    uint32_t cfg = noc_get_cfg_reg(NIU_CFG_0);
-    noc_set_cfg_reg(NIU_CFG_0, cfg | (1u << NIU_CFG_0_AXI_SUBORDINATE_ENABLE));
-    noc_set_active_instance(save_instance);
+    uint32_t cfg = NOC_CFG_READ_REG(noc, NIU_CFG_0);
+    NOC_CFG_WRITE_REG(noc, NIU_CFG_0, cfg | (1u << NIU_CFG_0_AXI_SUBORDINATE_ENABLE));
 }
 
 inline __attribute__((always_inline)) bool drisc_is_noc2axi_mode(uint8_t noc = noc_index) {
-    uint32_t save_instance = noc_get_active_instance();
-    noc_set_active_instance(noc);
-    uint32_t cfg = noc_get_cfg_reg(NIU_CFG_0);
-    noc_set_active_instance(save_instance);
+    uint32_t cfg = NOC_CFG_READ_REG(noc, NIU_CFG_0);
     return (cfg >> NIU_CFG_0_AXI_SUBORDINATE_ENABLE) & 0x1;
 }
 
