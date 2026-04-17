@@ -25,7 +25,7 @@ def _default_compute_config(device):
     # enough for DROID-SLAM's 16-layer encoder to stay above 99% PCC.
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
