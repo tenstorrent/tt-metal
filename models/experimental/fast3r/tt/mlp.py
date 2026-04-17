@@ -50,7 +50,7 @@ class TtMlp:
         y = ttnn.linear(
             x, self.fc1_w, bias=self.fc1_b, activation="gelu",
             core_grid=self.CORE_GRID, compute_kernel_config=self.COMPUTE,
-            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         out = ttnn.linear(
             y, self.fc2_w, bias=self.fc2_b,
