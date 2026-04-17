@@ -72,7 +72,7 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Llama 3B | N150 |
 | Llama 11B-VL | WH LoudBox |
 | QwQ-32B | WH LoudBox |
-| Qwen 2.5-7B | N150 |
+| Qwen 2.5-7B | N150, N300 |
 | Qwen 2.5-72B | WH LoudBox |
 | Qwen2.5-VL-32B | WH LoudBox |
 | Phi-3 | N150 |
