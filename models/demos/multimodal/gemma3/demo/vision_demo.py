@@ -24,6 +24,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.sampling import SamplingParams
 from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMultimodalGenerator
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -251,13 +252,26 @@ def test_multimodal_demo_text(
 
     generator = GemmaMultimodalGenerator(model, model_args, mesh_device)
 
-    # Warmup prefill (decode warmup skipped - no paged attention in vision demo)
+    can_sample_on_device = getattr(model[0], "_supports_on_device_sampling", False) and model[0].sampling is not None
+    non_greedy_decoding_on_device = can_sample_on_device and temperature > 0
+    if can_sample_on_device:
+        if temperature <= 0:
+            device_sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+        else:
+            device_sampling_params = SamplingParams(temperature=temperature, top_k=32, top_p=top_p)
+    else:
+        device_sampling_params = None
+
+    logger.info(
+        f"Gemma3 vision sampling: device={can_sample_on_device}, non_greedy_warmup={non_greedy_decoding_on_device}"
+    )
+
     logger.info("Warming up model...")
     generator.warmup_model_prefill(
         kv_cache=None,
         enable_trace=enable_trace,
-        can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        can_sample_on_device=can_sample_on_device,
+        non_greedy_decoding_on_device=non_greedy_decoding_on_device,
     )
     logger.info("Warmup complete")
 
@@ -313,7 +327,7 @@ def test_multimodal_demo_text(
     total_users = len(dialogs)
     num_batches = total_users // max_batch_size
 
-    sampler = get_batch_sampler(temperature, top_p, model_args[0].tokenizer)
+    sampler = None if can_sample_on_device else get_batch_sampler(temperature, top_p, model_args[0].tokenizer)
     _num_prefill_tokens = 0
     _num_decode_tokens = 0
 
@@ -356,17 +370,23 @@ def test_multimodal_demo_text(
 
             prefill_start = time.perf_counter()
             with profiler("inference_prefill", iteration=batch_idx):
-                batch_logits, *_ = generator.prefill_forward(
+                prefill_first, *_ = generator.prefill_forward(
                     vision_images,
                     vision_mask,
                     tokens,
                     None,  # xattn_caches not used for Gemma3
                     total_lens,
                     prefill_lens,
+                    sampling_params=device_sampling_params,
                 )
 
             prefill_end = time.perf_counter()
-            next_tokens, next_texts = sampler(batch_logits)
+            if device_sampling_params is not None:
+                prefill_toks, _prefill_lp = prefill_first
+                next_tokens = prefill_toks.long().squeeze(-1).reshape(-1)[:max_batch_size]
+                next_texts = [tokenizer.decode([next_tokens[i].item()]) for i in range(next_tokens.shape[0])]
+            else:
+                next_tokens, next_texts = sampler(prefill_first)
             for i, (next_token, next_text) in enumerate(zip(next_tokens, next_texts)):
                 tokens[i, prefill_lens[i]] = next_token
             print(f"Next tokens: {next_tokens}")
@@ -379,13 +399,22 @@ def test_multimodal_demo_text(
                     position_id = prefill_lens + gen_idx
                     next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
-                    logits, _ = generator.decode_forward(
-                        next_token_tensor,
-                        position_id,
-                        enable_trace=enable_trace,
-                    )
-
-                    next_tokens, next_texts = sampler(logits)
+                    if device_sampling_params is not None:
+                        tok, _ = generator.decode_forward(
+                            next_token_tensor,
+                            position_id,
+                            enable_trace=enable_trace,
+                            sampling_params=device_sampling_params,
+                        )
+                        next_tokens = tok.long().reshape(-1)[:max_batch_size]
+                        next_texts = [tokenizer.decode([next_tokens[i].item()]) for i in range(next_tokens.shape[0])]
+                    else:
+                        logits, _ = generator.decode_forward(
+                            next_token_tensor,
+                            position_id,
+                            enable_trace=enable_trace,
+                        )
+                        next_tokens, next_texts = sampler(logits)
                     # Update next token
                     tokens[torch.arange(max_batch_size), position_id + 1] = next_tokens
                     decode_end = time.perf_counter()
