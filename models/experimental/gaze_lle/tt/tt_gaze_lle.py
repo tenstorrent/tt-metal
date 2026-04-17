@@ -2,18 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TT-NN Gaze-LLE on a single Blackhole p150a chip.
+TT-NN Gaze-LLE, end-to-end on a single Blackhole p150a chip.
+
+Everything from patch embed to sigmoid'd heatmap runs on device. Host only:
+  * formats the image into NHWC/C=4 for device fold,
+  * builds the binary head bbox mask (1 x H_feat x W_feat),
+  * receives the tiny (64x64) heatmap and (1,) in/out score.
 
 Device placement:
-  * DINOv2 ViT-B/14 encoder (12 blocks + final LayerNorm) — bfp8_b weights + LoFi.
-  * 1x1 projection 768->256, gaze pos/head conditioning, 3 gaze decoder blocks,
-    register/CLS slice — all on device.
-
-Host (torch CPU):
-  * Patch embedding nn.Conv2d(3->768, k=14, s=14).
-  * CLS/REG token prepend + DINOv2 pos_embed add.
-  * Per-frame pos_embed + head_map*head_token fusion (one upload).
-  * Small ConvTranspose heatmap head + in/out MLP + interpolate.
+  * Patch embedding via ttnn.fold + ttnn.linear (openvla pattern).
+  * Pre-composed [CLS+pos_cls, REG] prefix + pos_patches add + concat.
+  * DINOv2 ViT-B/14 encoder (12 blocks) + final LayerNorm + slice (CLS+REG).
+  * 1x1 projection 768->256, gaze pos + head_map*head_token conditioning.
+  * 3 gaze decoder blocks.
+  * Fused ConvTranspose2d(256,256,2,2) + Conv2d(256,1,1) + Sigmoid heatmap head,
+    expressed as a single (256,4) matmul + scalar add + sigmoid. Tiny CPU
+    permutation folds the (1024,4) output into a 64x64 image.
+  * In/out MLP (256->128->1) with ReLU + Sigmoid.
 """
 
 from __future__ import annotations
@@ -178,91 +183,181 @@ class TtGazeLLE:
         self.num_heads = self.cfg.num_heads
         self.embed_dim = self.cfg.embed_dim
         self.num_reg_tokens = self.cfg.num_register_tokens
+        self.patch_size = backbone.patch_size
+        self.img_size = backbone.img_size
+        self.num_patches_side = self.img_size // self.patch_size
+        self.num_patches = self.num_patches_side ** 2
+        self.dim = ref_model.dim  # decoder hidden 256
+        self.featmap_h = ref_model.featmap_h
+        self.featmap_w = ref_model.featmap_w
+        self.out_size = ref_model.out_size
 
         self.block_params = [_BlockParams(blk, device) for blk in backbone.blocks]
         self.final_norm_w = _to_device(backbone.norm.weight.unsqueeze(0), device)
         self.final_norm_b = _to_device(backbone.norm.bias.unsqueeze(0), device)
 
-        # --- Gaze decoder: 1x1 conv projection, pos_embed, head_token, transformer, inout head on device
-        linear_w = ref_model.linear.weight.squeeze(-1).squeeze(-1).T.contiguous()  # (768,256)
+        # --- Patch embed as fold + matmul. Pad C=3 to 4 in the weight up front so the
+        # input can be uploaded as NHWC/C=4 (zero-filled last channel).
+        w_padded = F.pad(backbone.patch_embed_proj.weight.detach(), (0, 0, 0, 0, 0, 1))
+        w_flat = w_padded.permute(2, 3, 1, 0).reshape(-1, self.embed_dim).contiguous()
+        self.patch_embed_w = _to_device(w_flat, device, dtype=ttnn.bfloat8_b)
+        self.patch_embed_b = _to_device(backbone.patch_embed_proj.bias.detach().unsqueeze(0), device)
+
+        # --- Pre-composed [CLS + pos_cls, REG] prefix + standalone pos_patches.
+        cls_tok = backbone.cls_token.detach()
+        reg_tok = backbone.reg_token.detach()
+        pos_cls = backbone.pos_embed[:, :1].detach()
+        pos_patches = backbone.pos_embed[:, 1:].detach().contiguous()
+        prefix = torch.cat([cls_tok + pos_cls, reg_tok], dim=1).contiguous()
+        self.prefix_tt = _to_device(prefix, device)
+        self.pos_patches_tt = _to_device(pos_patches, device)
+
+        # --- Gaze decoder 1x1 projection (768 -> 256) and on-device pos_embed + head_token.
+        linear_w = ref_model.linear.weight.squeeze(-1).squeeze(-1).T.contiguous()
         self.proj_w = _to_device(linear_w, device)
         self.proj_b = _to_device(ref_model.linear.bias.unsqueeze(0), device)
 
-        # pos_embed (dim=256, featmap_h, featmap_w) → (1, H*W, 256). Kept on host and
-        # fused with the per-frame head_map*head_token contribution so device sees a
-        # single add instead of two.
-        pe_host = ref_model.pos_embed.permute(1, 2, 0).reshape(1, -1, ref_model.dim).contiguous()
-        self.gaze_pos_embed_host = pe_host
-        # head_token.weight: (1, 256)
-        self.head_token = ref_model.head_token.weight  # kept on host for per-frame head_map mult
+        pe = ref_model.pos_embed.permute(1, 2, 0).reshape(1, -1, self.dim).contiguous()
+        self.gaze_pos_embed_tt = _to_device(pe, device)
+        self.head_token_tt = _to_device(ref_model.head_token.weight.unsqueeze(0), device)  # (1, 1, 256)
+
         if inout:
             self.inout_token = _to_device(ref_model.inout_token.weight.unsqueeze(0), device)
+            # Reference inout_head = Sequential(Linear 256->128, ReLU, Linear 128->1, Sigmoid)
+            self.inout_fc1_w = _to_device(ref_model.inout_head[0].weight.T.contiguous(), device)
+            self.inout_fc1_b = _to_device(ref_model.inout_head[0].bias.unsqueeze(0), device)
+            self.inout_fc2_w = _to_device(ref_model.inout_head[2].weight.T.contiguous(), device)
+            self.inout_fc2_b = _to_device(ref_model.inout_head[2].bias.unsqueeze(0), device)
+
+        # --- Fused heatmap head. ConvTranspose2d(k=2, s=2) bias + Conv2d(256->1, k=1, bias=False)
+        # is algebraically equivalent to a single per-pixel matmul with weight shape
+        # (256, 2, 2) and a scalar bias. We emit a (256, 4) matmul and reshape afterwards.
+        ct_w = ref_model.heatmap_head[0].weight.detach()  # (in=256, out=256, kH=2, kW=2)
+        ct_b = ref_model.heatmap_head[0].bias.detach()
+        c1_w = ref_model.heatmap_head[1].weight.detach().squeeze(-1).squeeze(-1)  # (1, 256)
+        w_fused = torch.einsum('ko,ioab->ikab', c1_w, ct_w).squeeze(1)  # (256, 2, 2)
+        b_fused = (c1_w @ ct_b).squeeze().item()  # scalar
+        w_fused_2d = w_fused.reshape(self.dim, 4).contiguous()
+        self.heatmap_w = _to_device(w_fused_2d, device)
+        # Broadcast-add scalar bias by uploading a (1, 1, 1) constant.
+        self.heatmap_b_tt = _to_device(torch.full((1, 1, 1), float(b_fused)), device)
 
         self.gaze_block_params = [_GazeBlockParams(blk, device) for blk in ref_model.transformer]
 
-    @torch.no_grad()
-    def _backbone_forward_to_patch_tokens(self, images: torch.Tensor) -> "ttnn.Tensor":
-        """Run DINOv2 on device, return patch tokens on-device as (B, H*W, embed_dim)."""
-        backbone = self.ref.backbone
-        b = images.shape[0]
-        patches = backbone.patch_embed_proj(images).flatten(2).transpose(1, 2)
-        cls = backbone.cls_token.expand(b, -1, -1)
-        reg = backbone.reg_token.expand(b, -1, -1)
-        x = torch.cat([cls, patches], dim=1) + backbone.pos_embed
-        x = torch.cat([x[:, :1], reg, x[:, 1:]], dim=1)
-
-        x_tt = _to_device(x, self.device)
-        for p in self.block_params:
-            x_tt = _dinov2_block(x_tt, p, self.num_heads)
-        x_tt = ttnn.layer_norm(x_tt, weight=self.final_norm_w, bias=self.final_norm_b, epsilon=1e-6)
-
-        # Slice CLS + register tokens off on device. Fallback to host round-trip if unsupported.
-        total_prefix = 1 + self.num_reg_tokens
-        shape = x_tt.shape
-        try:
-            patch_tokens = ttnn.slice(x_tt, [0, total_prefix, 0], [shape[0], shape[1], shape[2]])
-            ttnn.deallocate(x_tt)
-            return patch_tokens
-        except Exception:
-            x_host = ttnn.to_torch(x_tt)
-            ttnn.deallocate(x_tt)
-            patch_tokens = x_host[:, total_prefix:].contiguous()
-            return _to_device(patch_tokens, self.device)
+    def _patch_embed_device(self, img_nhwc_padded_tt):
+        """(B, H, W, 4) ROW_MAJOR bf16 → (B, num_patches, embed_dim) TILE bf16 via fold + matmul."""
+        shape = img_nhwc_padded_tt.shape
+        b, h, w, _ = shape[0], shape[1], shape[2], shape[3]
+        ps = self.patch_size
+        x = ttnn.reshape(img_nhwc_padded_tt, (b, h, w // ps, 4 * ps))
+        x = ttnn.fold(x, ps, 1)  # stride_h=ps, stride_w=1 → (B, h/ps, w/ps, 4*ps*ps)
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+        x = ttnn.linear(
+            x,
+            self.patch_embed_w,
+            bias=self.patch_embed_b,
+            core_grid=_CORE_GRID,
+            compute_kernel_config=_LOFI,
+        )
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, (b, self.num_patches, self.embed_dim))
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+        return x
 
     @torch.no_grad()
     def __call__(self, images: torch.Tensor, bboxes: List[Sequence[float]]):
         ref = self.ref
         b = images.shape[0]
+        assert b == 1, "TtGazeLLE currently supports B=1 only"
 
-        feat_tt = self._backbone_forward_to_patch_tokens(images)
-        # Project 768 -> 256 on device.
+        # ---- 1. Upload image as NHWC/C=4 (single pure-view permute + zero-pad on host).
+        img_nhwc = images.permute(0, 2, 3, 1).contiguous()
+        img_padded = F.pad(img_nhwc, (0, 1))  # (B, H, W, 4)
+        img_tt = ttnn.from_torch(
+            img_padded, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+        )
+
+        # ---- 2. Patch embed on device.
+        patches_tt = self._patch_embed_device(img_tt)
+        ttnn.deallocate(img_tt)
+
+        # ---- 3. Add DINOv2 pos_embed for patch tokens, then prepend [CLS+pos_cls, REG].
+        patches_tt = ttnn.add(patches_tt, self.pos_patches_tt)
+        x_tt = ttnn.concat([self.prefix_tt, patches_tt], dim=1)
+        ttnn.deallocate(patches_tt)
+
+        # ---- 4. DINOv2 backbone.
+        for bp in self.block_params:
+            x_tt = _dinov2_block(x_tt, bp, self.num_heads)
+        x_tt = ttnn.layer_norm(x_tt, weight=self.final_norm_w, bias=self.final_norm_b, epsilon=1e-6)
+
+        # ---- 5. Drop CLS + register tokens on device.
+        total_prefix = 1 + self.num_reg_tokens
+        shp = x_tt.shape
+        feat_tt = ttnn.slice(x_tt, [0, total_prefix, 0], [shp[0], shp[1], shp[2]])
+        ttnn.deallocate(x_tt)
+
+        # ---- 6. Gaze decoder: project 768→256, add pos_embed, multiply head_map by head_token.
         x_tt = ttnn.linear(feat_tt, self.proj_w, bias=self.proj_b, core_grid=_CORE_GRID)
         ttnn.deallocate(feat_tt)
+        x_tt = ttnn.add(x_tt, self.gaze_pos_embed_tt)
 
-        # Fused pos_embed + head_map*head_token on host — one upload, one add.
-        head_maps = torch.stack([ref._bbox_to_head_map(bb) for bb in bboxes]).view(b, -1)
-        pos_plus_head = self.gaze_pos_embed_host + head_maps.unsqueeze(-1) * self.head_token.unsqueeze(0)
-        pos_plus_head_tt = _to_device(pos_plus_head.contiguous(), self.device)
-        x_tt = ttnn.add(x_tt, pos_plus_head_tt)
-        ttnn.deallocate(pos_plus_head_tt)
+        # head_map is a tiny (B, 1024, 1) binary mask; compute + upload is cheap.
+        head_map = torch.stack([ref._bbox_to_head_map(bb) for bb in bboxes]).view(b, -1, 1).contiguous()
+        head_map_tt = _to_device(head_map, self.device)
+        head_contrib = ttnn.mul(head_map_tt, self.head_token_tt)  # broadcast → (B, 1024, 256)
+        ttnn.deallocate(head_map_tt)
+        x_tt = ttnn.add(x_tt, head_contrib)
+        ttnn.deallocate(head_contrib)
 
-        # Prepend in/out token. self.inout_token already shaped (1,1,256); requires B==1.
+        # ---- 7. Prepend in/out token, run 3 gaze blocks, split outputs.
         if self.inout:
-            assert b == 1, "TtGazeLLE currently supports B=1 only"
             x_tt = ttnn.concat([self.inout_token, x_tt], dim=1)
 
         for gp in self.gaze_block_params:
             x_tt = _gaze_block(x_tt, gp, num_heads=8)
 
-        x_host = ttnn.to_torch(x_tt)
-        ttnn.deallocate(x_tt)
+        inout_preds_tt = None
+        if self.inout:
+            seq = x_tt.shape[1]
+            inout_tok = ttnn.slice(x_tt, [0, 0, 0], [b, 1, self.dim])
+            patch_out = ttnn.slice(x_tt, [0, 1, 0], [b, seq, self.dim])
+            ttnn.deallocate(x_tt)
+
+            # ---- 8a. In/out head on device: Linear+ReLU → Linear → Sigmoid.
+            h = ttnn.linear(
+                inout_tok, self.inout_fc1_w, bias=self.inout_fc1_b, activation="relu"
+            )
+            ttnn.deallocate(inout_tok)
+            h = ttnn.linear(h, self.inout_fc2_w, bias=self.inout_fc2_b)
+            inout_preds_tt = ttnn.sigmoid(h)
+        else:
+            patch_out = x_tt
+
+        # ---- 8b. Fused heatmap head: (B,1024,256) @ (256,4) + scalar bias + sigmoid.
+        hm = ttnn.linear(patch_out, self.heatmap_w, bias=None, core_grid=_CORE_GRID)
+        ttnn.deallocate(patch_out)
+        hm = ttnn.add(hm, self.heatmap_b_tt)
+        hm = ttnn.sigmoid(hm)
+
+        # ---- 9. Download the small outputs. The (B, 1024, 4) → (B, 64, 64) re-interleave is
+        # a pure view on contiguous memory; doing it on device would require a 5D permute
+        # across non-tile-aligned dims, which isn't worth the dispatch cost.
+        heatmap_compact = ttnn.to_torch(hm).to(torch.float32)  # (B, 1024, 4)
+        ttnn.deallocate(hm)
+        heatmap = (
+            heatmap_compact.view(b, self.featmap_h, self.featmap_w, 2, 2)
+            .permute(0, 1, 3, 2, 4)
+            .reshape(b, self.featmap_h * 2, self.featmap_w * 2)
+        )
+        if (self.featmap_h * 2, self.featmap_w * 2) != self.out_size:
+            heatmap = F.interpolate(
+                heatmap.unsqueeze(1), size=self.out_size, mode="bilinear", align_corners=False
+            ).squeeze(1)
 
         inout_preds = None
         if self.inout:
-            inout_preds = ref.inout_head(x_host[:, 0, :].float()).squeeze(-1)
-            x_host = x_host[:, 1:, :]
+            inout_preds = ttnn.to_torch(inout_preds_tt).to(torch.float32).reshape(b)
+            ttnn.deallocate(inout_preds_tt)
 
-        x_host = x_host.reshape(b, ref.featmap_h, ref.featmap_w, ref.dim).permute(0, 3, 1, 2).float()
-        x_host = ref.heatmap_head(x_host).squeeze(1)
-        x_host = F.interpolate(x_host.unsqueeze(1), size=ref.out_size, mode="bilinear", align_corners=False).squeeze(1)
-        return {"heatmap": x_host, "inout": inout_preds}
+        return {"heatmap": heatmap, "inout": inout_preds}
