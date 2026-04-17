@@ -85,10 +85,7 @@ class UnarySfpu(Sfpu):
     ) -> str:
         stage = operation.stage_id
 
-        return (
-            f"// Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
-            f"_llk_math_eltwise_unary_sfpu_init_<SfpuType::{self.operation.cpp_enum_value}>();\n"
-        )
+        return f"// Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
 
     def calculate(
         self,
@@ -103,8 +100,8 @@ class UnarySfpu(Sfpu):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
 
         return (
-            f"test_utils::call_unary_sfpu_operation_init<{approx_mode}, {dest_acc}, {self.iterations}>({op});\n"
-            f"test_utils::call_unary_sfpu_operation<{approx_mode}, {dest_acc}, {self.iterations}>({op}, {self.dest_idx}, math_format{stage}, {self.fill_const_value});\n"
+            f"test_utils::call_unary_sfpu_operation_init<{op}, {approx_mode}, {dest_acc}, {self.iterations}>();\n"
+            f"test_utils::call_unary_sfpu_operation<{op}, {approx_mode}, {dest_acc}, {self.iterations}>({self.dest_idx}, math_format{stage}, {self.fill_const_value});\n"
         )
 
     def __str__(self) -> str:
