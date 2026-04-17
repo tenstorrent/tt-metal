@@ -30,10 +30,8 @@ def patch_embed(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, dev
 
 
 def patch_embed_device(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, device):
-    """Patch embedding on device via host im2col + ttnn.linear.
-
-    img: (B, 3, H, W) host. weight: (1024, 3, 16, 16). bias: (1024,).
-    Returns ttnn tensor of shape (B, N, 1024) on device.
+    """Patch embedding fully on device: upload img + ttnn im2col (reshape+permute)
+    + ttnn.linear matmul. img: (B, 3, H, W) host → ttnn (B, N, 1024) tile.
     """
     B, C, H, W = img.shape
     p = weight.shape[2]
@@ -50,10 +48,14 @@ def patch_embed_device(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tens
     else:
         tt_w, tt_b = cached
 
-    # im2col on host (cheap), upload to device, matmul on device — output stays on device.
-    patches = img.unfold(2, p, p).unfold(3, p, p)
-    patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous().reshape(B, N, C * p * p)
-    tt_patches = ttnn.from_torch(patches, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    # Upload img directly; do im2col entirely on device via reshape + permute.
+    img_bf16 = img.to(torch.bfloat16) if img.dtype != torch.bfloat16 else img
+    tt_img = ttnn.from_torch(img_bf16, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    # (B, C, H, W) → (B, C, hp, p, wp, p) → permute → (B, hp, wp, C, p, p) → (B, N, C*p*p)
+    tt_img = ttnn.reshape(tt_img, (B, C, hp, p, wp, p))
+    tt_img = ttnn.permute(tt_img, (0, 2, 4, 1, 3, 5))
+    tt_patches = ttnn.reshape(tt_img, (B, N, C * p * p))
+    tt_patches = ttnn.to_layout(tt_patches, ttnn.TILE_LAYOUT)
     tt_out = ttnn.linear(tt_patches, tt_w, bias=tt_b)
     return tt_out
 
@@ -666,16 +668,32 @@ def full_decoder(
     return out1, out2, dev_taps1, dev_taps2
 
 
+_POS_TENSOR_CACHE: dict = {}
+
+
+def _make_positions_cached(B: int, hp: int, wp: int) -> torch.Tensor:
+    """Cache the positions tensor across inferences so the device RoPE LUT
+    cache (keyed on id(pos)) survives — eliminates per-inference host work for
+    the cos/sin pos-indexing.
+    """
+    key = (B, hp, wp)
+    pos = _POS_TENSOR_CACHE.get(key)
+    if pos is None:
+        ys = torch.arange(hp)
+        xs = torch.arange(wp)
+        gy, gx = torch.meshgrid(ys, xs, indexing="ij")
+        pos = torch.stack((gy, gx), dim=-1).reshape(hp * wp, 2).unsqueeze(0).expand(B, -1, -1).contiguous()
+        _POS_TENSOR_CACHE[key] = pos
+    return pos
+
+
 def dust3r_forward(img1: torch.Tensor, img2: torch.Tensor, state: dict, device):
     """Full end-to-end DUSt3R forward on TT — DPT runs on device too."""
     tt_enc1 = full_encoder(img1, state, device, return_device=True)
     tt_enc2 = full_encoder(img2, state, device, return_device=True)
     B, C, H, W = img1.shape
     hp, wp = H // 16, W // 16
-    ys = torch.arange(hp)
-    xs = torch.arange(wp)
-    gy, gx = torch.meshgrid(ys, xs, indexing="ij")
-    pos = torch.stack((gy, gx), dim=-1).reshape(hp * wp, 2).unsqueeze(0).expand(B, -1, -1).contiguous()
+    pos = _make_positions_cached(B, hp, wp)
 
     _, _, dev_taps1, dev_taps2 = full_decoder(tt_enc1, tt_enc2, pos, state, device, compute_norm=False)
     feats1 = [tt_enc1, dev_taps1[0], dev_taps1[1], dev_taps1[2]]
