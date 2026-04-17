@@ -8,7 +8,11 @@ import time
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+_tests_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_tests_dir, ".."))
+sys.path.insert(0, _tests_dir)
+
+from test_gated_deltanet import make_gated_deltanet_params
 
 
 def assert_with_pcc(torch_output, ttnn_output, pcc_threshold=0.99):
@@ -362,7 +366,8 @@ def test_gated_deltanet_recurrent_ttnn(seq_len=16):
 
     from torch_functional.gated_deltanet import gated_deltanet_forward
     from tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
-    from tests.test_gated_deltanet import make_gated_deltanet_params
+
+    # from test_gated_deltanet import make_gated_deltanet_params
 
     params = make_gated_deltanet_params(seq_len=seq_len)
 
@@ -426,7 +431,7 @@ def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=64):
 
     from torch_functional.gated_deltanet import gated_deltanet_forward
     from tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
-    from tests.test_gated_deltanet import make_gated_deltanet_params
+    from test_gated_deltanet import make_gated_deltanet_params
 
     params = make_gated_deltanet_params(seq_len=seq_len)
 
@@ -655,7 +660,7 @@ def benchmark_gated_deltanet(warmup=3, iterations=10, seq_len=16, mode="recurren
 
     from torch_functional.gated_deltanet import gated_deltanet_forward
     from tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
-    from tests.test_gated_deltanet import make_gated_deltanet_params
+    from test_gated_deltanet import make_gated_deltanet_params
 
     params = make_gated_deltanet_params(seq_len=seq_len)
 
@@ -890,3 +895,12 @@ if __name__ == "__main__":
                 head_k_dim=args.head_k_dim,
                 head_v_dim=args.head_v_dim,
             )
+
+# if __name__ == "__main__":
+#     # test_gated_attention_ttnn()
+#     # test_gated_deltanet_recurrent_ttnn(seq_len=16)
+#     # test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=64)
+#     # test_fused_chunked_delta_rule_ttnn(seq_len=128, chunk_size=64, batch_size=1, num_heads=4, head_k_dim=64, head_v_dim=128)
+#     # benchmark_gated_deltanet(warmup=3, iterations=10, seq_len=1, mode="recurrent", chunk_size=64)
+#     # benchmark_gated_deltanet(warmup=3, iterations=10, seq_len=128, mode="chunk", chunk_size=64)
+#     benchmark_fused_chunked_delta_rule(warmup=3, iterations=10, seq_len=128, chunk_size=64, batch_size=1, num_heads=4, head_k_dim=64, head_v_dim=128)

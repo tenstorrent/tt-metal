@@ -13,7 +13,9 @@ import time
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+_tests_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_tests_dir, ".."))
+sys.path.insert(0, _tests_dir)
 
 import ttnn
 
@@ -110,7 +112,7 @@ def sweep_gated_attention(device, seq_lens, warmup=2, iterations=3, batch_size=2
 def sweep_gated_deltanet(device, seq_lens, chunk_size=64, warmup=2, iterations=3):
     from torch_functional.gated_deltanet import gated_deltanet_forward
     from tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
-    from tests.test_gated_deltanet import make_gated_deltanet_params
+    from test_gated_deltanet import make_gated_deltanet_params
 
     header = f"{'T':>7} | {'Torch (ms)':>11} | {'TTNN (ms)':>11} | {'Speedup':>8} | {'PCC':>10}"
     sep = "-" * len(header)
