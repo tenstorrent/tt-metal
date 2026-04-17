@@ -31,7 +31,7 @@ constexpr auto kCbSqAcc = tt::CBIndex::c_1;
 constexpr auto kCbRecv = tt::CBIndex::c_3;
 constexpr auto kCbNorm = tt::CBIndex::c_4;
 constexpr auto kCbOutput = tt::CBIndex::c_5;
-constexpr auto kCbChainSend = tt::CBIndex::c_7;
+constexpr auto kCbSqPartial = tt::CBIndex::c_7;
 
 constexpr uint32_t kReaderInputAddrIdx = 0;
 
@@ -79,8 +79,8 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     [[maybe_unused]] auto cb_norm = create_circular_buffer(program, all_cores, kCbNorm, fp32_format, fp32_tile_size, 1);
     [[maybe_unused]] auto cb_output =
         create_circular_buffer(program, all_cores, kCbOutput, bf16_format, bf16_tile_size, output_buf_tiles);
-    [[maybe_unused]] auto cb_chain_send =
-        create_circular_buffer(program, all_cores, kCbChainSend, fp32_format, fp32_tile_size, 1);
+    [[maybe_unused]] auto cb_sq_partial =
+        create_circular_buffer(program, all_cores, kCbSqPartial, fp32_format, fp32_tile_size, 1);
 
     // -------------------------------------------------------------------------
     // 3) Create semaphores
