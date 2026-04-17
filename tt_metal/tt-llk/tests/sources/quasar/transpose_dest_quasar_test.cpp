@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_memory_checks.h"
 #include "sfpu_stub.h"
 
 #ifdef LLK_TRISC_UNPACK
@@ -29,21 +30,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
-
-        // DataFormat math_format     = static_cast<DataFormat>(formats.math);
-        // DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-        // if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
-        // {
-        //     _llk_math_srcAB_hw_configure_<false, true /*fp32_dest*/, false /*int32_dest*/>(DataFormat::Float32, DataFormat::Float32);
-        // }
-        // else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-        // {
-        _llk_math_srcAB_hw_configure_<false, true /*fp32_dest*/, false /*int32_dest*/>(DataFormat::Int32, DataFormat::Int32);
-        // }
-        // else
-        // {
-        //     _llk_math_srcAB_hw_configure_<false, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        // }
     }
     else
     {
@@ -55,11 +41,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     unsigned l1_addr_16B;
     if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B)
     {
-        l1_addr_16B = params.buffer_B[0] / 16;
+        l1_addr_16B = L1_ADDRESS(params.buffer_B[0]);
     }
     else
     {
-        l1_addr_16B = params.buffer_A[0] / 16;
+        l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
     }
 
     bd_val.f.l1_addr_16B = l1_addr_16B;
@@ -112,11 +98,37 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
     // Set up dest dvalid scheme
     if constexpr (!unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+    }
+    else
+    {
+        set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+    }
 
+    DataFormat math_format     = static_cast<DataFormat>(formats.math);
+    DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
+    if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
+    {
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(DataFormat::Float32, DataFormat::Float32);
+    }
+    else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
+    {
+        // Transpose dest requires opposite fp32_dest <-> int32_dest settings for Int32 dest
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(DataFormat::Int32, DataFormat::Int32);
+    }
+    else
+    {
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+    }
+
+    if constexpr (!unpack_to_dest)
+    {
         // Perform datacopy if not unpack_to_dest
         _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(
             params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
@@ -124,10 +136,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_math_eltwise_unary_datacopy_(params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_tile*/, params.DST_INDEX + i);
         }
-    }
-    else
-    {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     }
 
     // Perform transpose dest
@@ -168,7 +176,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     buffer_descriptor_u bd_val = {0};
     tdma_descriptor_t tdma_desc;
 
-    bd_val.f.l1_addr_16B = params.buffer_Res[0] / 16;
+    bd_val.f.l1_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
     bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
     bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
     bd_val.f.y_dim       = params.TEST_FACE_R_DIM;

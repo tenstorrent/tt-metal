@@ -1,9 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
+
+from typing import List
 
 import pytest
 import torch
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     DataCopyGolden,
     TransposeGolden,
@@ -12,6 +14,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
+    DestSync,
     ImpliedMathFormat,
     Transpose,
     UnpackerEngine,
@@ -37,37 +40,106 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
-DATACOPY_FORMATS = input_output_formats(
+
+def generate_qsr_transpose_dest_combinations(
+    formats_list: List[FormatConfig],
+):
+    """
+    Generate pack combinations for Quasar pack tests.
+
+    Args:
+        formats_list: List of input/output format pairs
+
+    Returns:
+        List of (format, dest_acc, dest_sync, math_transpose_faces) tuples
+    """
+
+    def is_supported_format_conversion(in_fmt, out_fmt):
+        """Check if the format conversion is supported by packer. These format conversions are NOT dependent on the dest register mode."""
+        # Skip if mixing integer and non-integer formats
+        if in_fmt.is_integer() ^ out_fmt.is_integer():
+            return False
+        return True
+
+    def get_dest_acc_modes(in_fmt):
+        """Determine valid dest register modes depending on the input format."""
+        # Int32, Float32 (unpack_to_dest) requires 32bit mode dest register
+        if in_fmt.is_32_bit():
+            return (DestAccumulation.Yes,)
+        # Int8/UInt8 in Src regs and Int32 in dest reg is unsupported for MOVB2D
+        if in_fmt == DataFormat.Int8 or in_fmt == DataFormat.UInt8:
+            return (DestAccumulation.No,)
+        return (DestAccumulation.No, DestAccumulation.Yes)
+
+    def get_transpose_faces_modes(dest_acc):
+        """Determine valid math_transpose_faces modes depending on dest_acc."""
+        if dest_acc == DestAccumulation.Yes:
+            return (Transpose.No, Transpose.Yes)
+        return (Transpose.Yes,)
+
+    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
+        """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
+        # Upcasting to Float32/Int32 requires dest_acc enabled
+        if (
+            out_fmt.is_32_bit()
+            and not in_fmt.is_32_bit()
+            and dest_acc == DestAccumulation.No
+        ):
+            return False
+        # Int8<->UInt8 conversion requires dest_acc enabled
+        if (
+            dest_acc == DestAccumulation.No
+            and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
+            and in_fmt != out_fmt
+        ):
+            return False
+        return True
+
+    dest_sync_modes = (DestSync.Half, DestSync.Full)
+
+    combinations = []
+    for fmt in formats_list:
+        in_fmt, out_fmt = fmt.input_format, fmt.output_format
+
+        if not is_supported_format_conversion(in_fmt, out_fmt):
+            continue
+
+        for dest_acc in get_dest_acc_modes(in_fmt):
+            if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
+                for dest_sync in dest_sync_modes:
+                    for math_transpose_faces in get_transpose_faces_modes(dest_acc):
+                        combinations.append(
+                            (fmt, dest_acc, dest_sync, math_transpose_faces)
+                        )
+
+    return combinations
+
+
+TRANSPOSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float32,
         DataFormat.Int32,
+        DataFormat.Int8,
+        DataFormat.UInt8,
     ],
-    same=True,
 )
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats=DATACOPY_FORMATS,
-    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
-    math_transpose_faces=[Transpose.No, Transpose.Yes],
+    formats_dest_acc_sync_transpose=generate_qsr_transpose_dest_combinations(
+        TRANSPOSE_DEST_FORMATS
+    ),
     implied_math_format=[ImpliedMathFormat.No],
 )
 def test_transpose_dest_quasar(
-    formats,
-    dest_acc,
-    math_transpose_faces,
+    formats_dest_acc_sync_transpose,
     implied_math_format,
 ):
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Skip 32-bit dest with DestAccumulation.No")
-
-    if (
-        not formats.input_format.is_32_bit()
-        and not math_transpose_faces == Transpose.Yes
-    ):
-        pytest.skip("Skip 16-bit dest with math_transpose_faces = Transpose.No")
+    (formats, dest_acc, dest_sync, math_transpose_faces) = (
+        formats_dest_acc_sync_transpose
+    )
 
     data_copy_type = DataCopyType.A2D
     input_dimensions = [64, 64]
@@ -80,17 +152,20 @@ def test_transpose_dest_quasar(
         input_dimensions_B=input_dimensions,
     )
 
-    if formats.input_format == DataFormat.Int32:
-        src_A = (torch.arange(0, src_A.numel()) * 10000).reshape_as(src_A)
-        src_B = (torch.arange(0, src_B.numel()) * 10000).reshape_as(src_B)
+    # Generate custom test input stimuli to check large Int32 and Float32 values
+    if (
+        formats.input_format == DataFormat.Int32
+        and formats.output_format == DataFormat.Int32
+    ):
+        lo, hi = -1_000_000, 1_000_000
+        n = src_A.numel()
+        src_A = torch.randint(lo, hi, (n,), dtype=torch.int32).reshape_as(src_A)
+        src_B = torch.randint(lo, hi, (n,), dtype=torch.int32).reshape_as(src_B)
 
     if formats.input_format == DataFormat.Float32:
-        src_A = (
-            torch.arange(0, src_A.numel(), dtype=torch.float32) * 10000.0
-        ).reshape_as(src_A)
-        src_B = (
-            torch.arange(0, src_B.numel(), dtype=torch.float32) * 10000.0
-        ).reshape_as(src_B)
+        n = src_A.numel()
+        src_A = (torch.randn(n, dtype=torch.float32) * 10000.0).reshape_as(src_A)
+        src_B = (torch.randn(n, dtype=torch.float32) * 10000.0).reshape_as(src_B)
 
     generate_datacopy_golden = get_golden_generator(DataCopyGolden)
     datacopy_tensor = generate_datacopy_golden(
@@ -127,7 +202,7 @@ def test_transpose_dest_quasar(
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync),
             MATH_TRANSPOSE_FACES(math_transpose_faces),
         ],
         runtimes=[
@@ -157,35 +232,8 @@ def test_transpose_dest_quasar(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
-    # Silence the large per-tile error dump from passed_test; we print a compact hex dump below on Int32 failures.
-    passed = passed_test(
-        golden_tensor, res_tensor, formats.output_format, print_errors=False
-    )
-    if (not passed) and formats.output_format == DataFormat.Int32:
-        # Dump a few mismatches in both decimal and hex (uint32) to spot hi16/lo16 mixing.
-        diff = (golden_tensor != res_tensor).flatten()
-        idx = torch.nonzero(diff, as_tuple=False).flatten()
-        max_dump = 32
-
-        def _u32_hex(x: torch.Tensor) -> list[str]:
-            x64 = x.to(torch.int64) & 0xFFFFFFFF
-            return [f"0x{int(v):08x}" for v in x64.tolist()]
-
-        idx_sel = idx[:max_dump]
-        g_sel = golden_tensor.flatten()[idx_sel]
-        r_sel = res_tensor.flatten()[idx_sel]
-
-        print("\nInt32 mismatch dump (first few):")
-        for i, g, r, gh, rh in zip(
-            idx_sel.tolist(),
-            g_sel.tolist(),
-            r_sel.tolist(),
-            _u32_hex(g_sel),
-            _u32_hex(r_sel),
-        ):
-            print(f"  idx={i:5d}  golden={int(g):12d} ({gh})  res={int(r):12d} ({rh})")
-
-    assert passed, "Assert against golden failed"
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"
