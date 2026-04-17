@@ -47,15 +47,23 @@ _TILE = 32
 _state: dict = {}
 
 
-def _hifi4_kernel_config():
-    """Higher matmul fidelity + fp32 accumulation. Closes most of the bf16 PCC
-    gap left by the default LoFi math fidelity used in ttnn.linear/matmul."""
+def _kernel_config(fidelity: ttnn.MathFidelity):
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=fidelity,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
+
+
+def _hifi4_kernel_config():
+    return _kernel_config(ttnn.MathFidelity.HiFi4)
+
+
+def _hifi2_kernel_config():
+    """Half the multiplier cycles of HiFi4. Used on the MLP fc1/fc2 matmuls
+    (1024<->4096) which dominate compute and tolerate the precision loss."""
+    return _kernel_config(ttnn.MathFidelity.HiFi2)
 
 
 def _next_tile(n: int) -> int:
@@ -141,10 +149,10 @@ def _ttnn_block(x, p, attention_mask):
                         memory_config=ttnn.L1_MEMORY_CONFIG)
     h = ttnn.linear(h, p["fc1_w"], bias=p["fc1_b"],
                     memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
-                    activation="gelu", compute_kernel_config=_hifi4_kernel_config())
+                    activation="gelu", compute_kernel_config=_hifi2_kernel_config())
     h = ttnn.linear(h, p["fc2_w"], bias=p["fc2_b"],
                     memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
-                    compute_kernel_config=_hifi4_kernel_config())
+                    compute_kernel_config=_hifi2_kernel_config())
     h = ttnn.mul(h, p["ls2_g"])
     x = ttnn.add(x, h)
     ttnn.deallocate(h)
