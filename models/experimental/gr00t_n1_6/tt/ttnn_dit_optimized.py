@@ -104,29 +104,73 @@ class DiTAttentionOptimizedTTNN:
         self.head_dim = head_dim
         self.padded_head_dim = PADDED_HEAD_DIM
         self.inner_dim = num_heads * head_dim  # 1536
+        self.padded_inner = num_heads * PADDED_HEAD_DIM  # 2048
 
         # Detect cross-attention from K weight input dim
         k_w = weights.get(f"{prefix}to_k.weight")
         self.is_cross_attention = k_w is not None and k_w.shape[1] != k_w.shape[0]
 
-        # Preprocess weights with padded head dimensions
-        for proj in ["to_q", "to_k", "to_v"]:
-            w = weights.get(f"{prefix}{proj}.weight")
-            b = weights.get(f"{prefix}{proj}.bias")
-            if w is not None:
-                setattr(
-                    self,
-                    f"{proj.replace('.', '_')}_weight",
-                    _pad_attention_weight_for_heads(w, num_heads, head_dim, PADDED_HEAD_DIM, device),
-                )
-                if b is not None:
-                    setattr(
-                        self,
-                        f"{proj.replace('.', '_')}_bias",
-                        _pad_attention_bias(b, num_heads, head_dim, PADDED_HEAD_DIM, device),
-                    )
-                else:
-                    setattr(self, f"{proj.replace('.', '_')}_bias", None)
+        # ---- Fused projection weights ----
+        # Self-attn: fuse Q/K/V into one matmul (Q/K/V all come from hidden_states).
+        # Cross-attn: Q from hidden, K/V from encoder — Q stays separate but K/V fuse.
+        q_w = weights.get(f"{prefix}to_q.weight")
+        q_b = weights.get(f"{prefix}to_q.bias")
+        v_w = weights.get(f"{prefix}to_v.weight")
+        v_b = weights.get(f"{prefix}to_v.bias")
+
+        def _pad_qkv_weight(w: torch.Tensor) -> torch.Tensor:
+            out_dim, in_dim = w.shape
+            return (
+                F.pad(w.reshape(num_heads, head_dim, in_dim), (0, 0, 0, PADDED_HEAD_DIM - head_dim))
+                .reshape(num_heads * PADDED_HEAD_DIM, in_dim)
+            )
+
+        def _pad_qkv_bias(b: torch.Tensor) -> torch.Tensor:
+            return F.pad(b.reshape(num_heads, head_dim), (0, PADDED_HEAD_DIM - head_dim)).reshape(
+                num_heads * PADDED_HEAD_DIM
+            )
+
+        def _to_ttnn_weight(w_cat: torch.Tensor) -> ttnn.Tensor:
+            return ttnn.from_torch(
+                w_cat.t().contiguous().to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+
+        def _to_ttnn_bias(b_cat: torch.Tensor) -> ttnn.Tensor:
+            return ttnn.from_torch(
+                b_cat.unsqueeze(0).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+
+        if self.is_cross_attention:
+            # Q alone (in_dim = inner_dim = 1536)
+            self.to_q_weight = _to_ttnn_weight(_pad_qkv_weight(q_w))
+            self.to_q_bias = _to_ttnn_bias(_pad_qkv_bias(q_b)) if q_b is not None else None
+            # K/V fused (in_dim = cross_attention_dim = 2048)
+            kv_w = torch.cat([_pad_qkv_weight(k_w), _pad_qkv_weight(v_w)], dim=0)
+            self.to_kv_weight = _to_ttnn_weight(kv_w)
+            k_b = weights.get(f"{prefix}to_k.bias")
+            if k_b is not None:
+                kv_b = torch.cat([_pad_qkv_bias(k_b), _pad_qkv_bias(v_b)], dim=0)
+                self.to_kv_bias = _to_ttnn_bias(kv_b)
+            else:
+                self.to_kv_bias = None
+        else:
+            # Fused QKV (in_dim = inner_dim = 1536)
+            qkv_w = torch.cat(
+                [_pad_qkv_weight(q_w), _pad_qkv_weight(k_w), _pad_qkv_weight(v_w)], dim=0
+            )
+            self.to_qkv_weight = _to_ttnn_weight(qkv_w)
+            if q_b is not None:
+                k_b = weights.get(f"{prefix}to_k.bias")
+                qkv_b = torch.cat([_pad_qkv_bias(q_b), _pad_qkv_bias(k_b), _pad_qkv_bias(v_b)], dim=0)
+                self.to_qkv_bias = _to_ttnn_bias(qkv_b)
+            else:
+                self.to_qkv_bias = None
 
         # Output projection: needs padded input dim
         out_w = weights.get(f"{prefix}to_out.0.weight")
@@ -138,45 +182,50 @@ class DiTAttentionOptimizedTTNN:
             self.to_out_0_bias = preprocess_linear_bias(out_b, device) if out_b is not None else None
 
     def __call__(self, hidden_states: ttnn.Tensor, encoder_hidden_states: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
-        """Fully on-device attention with padded heads."""
+        """Fully on-device attention with padded heads + fused QKV matmul."""
         batch_size = hidden_states.shape[0]
         q_seq = hidden_states.shape[1]
+        padded_inner = self.padded_inner
 
-        # Q projection: [B, q_seq, inner_dim] -> [B, q_seq, num_heads * padded_head_dim]
-        q = ttnn.linear(
-            hidden_states,
-            self.to_q_weight,
-            bias=self.to_q_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
-            core_grid=CORE_GRID_BH,
-        )
-
-        # K/V source
-        kv_source = (
-            encoder_hidden_states if (self.is_cross_attention and encoder_hidden_states is not None) else hidden_states
-        )
-        kv_seq = kv_source.shape[1]
-
-        k = ttnn.linear(
-            kv_source,
-            self.to_k_weight,
-            bias=self.to_k_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
-            core_grid=CORE_GRID_BH,
-        )
-        v = ttnn.linear(
-            kv_source,
-            self.to_v_weight,
-            bias=self.to_v_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
-            core_grid=CORE_GRID_BH,
-        )
+        if self.is_cross_attention and encoder_hidden_states is not None:
+            # Q: single matmul; K/V: fused matmul (2 matmuls instead of 3)
+            q = ttnn.linear(
+                hidden_states,
+                self.to_q_weight,
+                bias=self.to_q_bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                core_grid=CORE_GRID_BH,
+            )
+            kv = ttnn.linear(
+                encoder_hidden_states,
+                self.to_kv_weight,
+                bias=self.to_kv_bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                core_grid=CORE_GRID_BH,
+            )
+            kv_seq = encoder_hidden_states.shape[1]
+            k = ttnn.slice(kv, [0, 0, 0], [batch_size, kv_seq, padded_inner])
+            v = ttnn.slice(kv, [0, 0, padded_inner], [batch_size, kv_seq, 2 * padded_inner])
+            ttnn.deallocate(kv)
+        else:
+            # Self-attn: one fused QKV matmul (1 instead of 3)
+            qkv = ttnn.linear(
+                hidden_states,
+                self.to_qkv_weight,
+                bias=self.to_qkv_bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                core_grid=CORE_GRID_BH,
+            )
+            kv_seq = q_seq
+            q = ttnn.slice(qkv, [0, 0, 0], [batch_size, q_seq, padded_inner])
+            k = ttnn.slice(qkv, [0, 0, padded_inner], [batch_size, q_seq, 2 * padded_inner])
+            v = ttnn.slice(qkv, [0, 0, 2 * padded_inner], [batch_size, q_seq, 3 * padded_inner])
+            ttnn.deallocate(qkv)
 
         # Reshape to multi-head: [B, seq, num_heads*padded_hd] -> [B, num_heads, seq, padded_hd]
-        # padded_head_dim=64 is tile-aligned, so reshape+permute+matmul all work
         q = ttnn.reshape(q, (batch_size, q_seq, self.num_heads, self.padded_head_dim))
         q = ttnn.permute(q, (0, 2, 1, 3))
         k = ttnn.reshape(k, (batch_size, kv_seq, self.num_heads, self.padded_head_dim))
