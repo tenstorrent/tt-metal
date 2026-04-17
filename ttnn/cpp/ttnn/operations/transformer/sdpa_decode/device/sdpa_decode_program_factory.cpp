@@ -160,13 +160,15 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     TT_FATAL(num_cores_available >= B, "Cores available ({}) must be >= batch size ({})", num_cores_available, B);
 
     // ========== Core Allocation ==========
-    const uint32_t max_cores_per_head =
+    uint32_t max_cores_per_head =
         program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available;
     const uint32_t max_num_cores_for_compute = max_cores_per_head * B * num_kv_heads;
     const uint32_t num_cores_per_batch_uncapped = std::min(num_cores_available, max_num_cores_for_compute) / B;
     const uint32_t num_cores_per_head = std::max(1u, num_cores_per_batch_uncapped / num_kv_heads);
-    const uint32_t num_heads_per_core =
-        std::max(1u, (uint32_t)std::ceil((float)num_kv_heads / num_cores_per_batch_uncapped));
+    uint32_t num_heads_per_core = std::max(1u, (uint32_t)std::ceil((float)num_kv_heads / num_cores_per_batch_uncapped));
+    while (num_kv_heads % num_heads_per_core != 0) {
+        num_heads_per_core++;
+    }
     const uint32_t num_cores_per_batch = num_cores_per_head * num_kv_heads / num_heads_per_core;
     const uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
     const uint32_t num_output_cores = B;
