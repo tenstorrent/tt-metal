@@ -26,11 +26,6 @@ on:
           - BH-DeskBox
           - BH-LoudBox
         default: "N150"
-      store-raw-traces:
-        description: "Keep individual per-op trace files and upload as artifact"
-        required: false
-        type: boolean
-        default: false
       load-to-db:
         description: "Homogenize, load into DB, and open a single manifest PR"
         required: false
@@ -45,7 +40,7 @@ on:
         description: "Timeout per tracing leg (minutes)"
         required: false
         type: number
-        default: 60
+        default: 120
 
 permissions:
   contents: read
@@ -274,7 +269,6 @@ jobs:
           CI_VERSION: ${{ needs.validate-inputs.outputs.ci-version }}
           HF_MODEL: ${{ matrix.hf_model }}
           EXTRA_ARGS: ${{ matrix.extra_args }}
-          STORE_RAW: ${{ inputs.store-raw-traces }}
           LOAD_DB: ${{ inputs.load-to-db }}
           RUN_VALIDATION: ${{ inputs.run-validation }}
           TIMEOUT: ${{ inputs.timeout-minutes }}
@@ -296,7 +290,6 @@ jobs:
           echo "│ CI version:           $CI_VERSION"
           echo "│ HF_MODEL:             ${HF_MODEL:-(not set)}"
           echo "│ HF weights source:    $HF_SOURCE"
-          echo "│ Store Raw Traces:     $STORE_RAW"
           echo "│ Load to DB:           $LOAD_DB"
           echo "│ Run Validation:       $RUN_VALIDATION"
           echo "│ Extra Args:           ${EXTRA_ARGS:-(none)}"
@@ -347,7 +340,6 @@ jobs:
           HF_MODEL: ${{ matrix.hf_model }}
           TEST_PATH: ${{ matrix.test_path }}
           EXTRA_ARGS: ${{ matrix.extra_args }}
-          STORE_RAW_TRACES: ${{ inputs.store-raw-traces }}
         run: |
           TRACER_OUTPUT_DIR="model_tracer/traced_operations"
 
@@ -358,10 +350,6 @@ jobs:
           fi
 
           cmd=(python3 model_tracer/generic_ops_tracer.py "$TEST_PATH" --output-dir "$TRACER_OUTPUT_DIR")
-
-          if [[ "$STORE_RAW_TRACES" == "true" ]]; then
-            cmd+=("--store")
-          fi
 
           if [[ -n "$EXTRA_ARGS" ]]; then
             mapfile -d '' -t extra < <(
@@ -375,9 +363,8 @@ jobs:
           MASTER_JSON="$TRACER_OUTPUT_DIR/ttnn_operations_master.json"
           echo "master_json_path=$MASTER_JSON" >> $GITHUB_OUTPUT
 
-          # Extract trace_uid from the persisted master JSON rather than the
-          # per-trace metadata file, which generic_ops_tracer.py deletes unless
-          # --store is set.
+          # Extract trace_uid from the persisted master JSON; the per-trace
+          # metadata file is deleted by generic_ops_tracer.py after the run.
           if [[ -f "$MASTER_JSON" ]]; then
             TRACE_UID=$(MASTER_JSON="$MASTER_JSON" python3 - <<'PY'
           import json
@@ -530,14 +517,6 @@ jobs:
         with:
           name: model-trace-status-${{ matrix.slug }}
           path: /work/leg-status/${{ matrix.slug }}.json
-          retention-days: 1
-
-      - name: Upload raw trace files
-        if: inputs.store-raw-traces && steps.trace.outcome == 'success'
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: model-trace-raw-files-${{ matrix.slug }}
-          path: /work/generated/ttnn/reports/operation_parameters/
           retention-days: 1
 
   homogenize-and-load:
