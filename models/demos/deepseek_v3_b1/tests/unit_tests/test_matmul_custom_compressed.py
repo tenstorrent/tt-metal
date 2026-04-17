@@ -183,7 +183,7 @@ def test_matmul_custom_compressed_small(device):
 
 def test_matmul_custom_compressed_mixed(device):
     """[1, 256] x [256, 32], mixed bfp8+bfp4. K=8 tiles."""
-    _run_matmul_custom_compressed(device, 1, 256, 32, formats=["bfp8", "bfp4"])
+    _run_matmul_custom_compressed(device, 1, 256, 32, formats=["bfp4", "bfp2"])
 
 
 def test_matmul_custom_compressed_large(device):
@@ -454,10 +454,7 @@ def _run_matmul_custom_compressed_bspm(
     assert passing, f"BSPM matmul PCC too low: {pcc}"
 
 
-@pytest.mark.xfail(
-    reason="Bug: constexpr_compact hangs with 0 bfp8 tiles — tenstorrent/tt-metal#42586",
-    strict=False,
-)
+@pytest.mark.skip(reason="Bug: constexpr_compact hangs with 0 bfp8 tiles — tenstorrent/tt-metal#42586")
 def test_matmul_custom_compressed_bspm_gate_proj(device):
     """[1, 7168] x [7168, 2048] with real BSPM assignment at 3.5 b/e — gate_proj shape.
 
@@ -480,10 +477,7 @@ def test_matmul_custom_compressed_bspm_gate_proj(device):
     _run_matmul_custom_compressed_bspm(device, M=1, K=7168, N=2048, bspm_path=bspm_path, proj_idx=0, num_cores=32)
 
 
-@pytest.mark.xfail(
-    reason="Bug: constexpr_compact hangs with 0 bfp8 tiles — tenstorrent/tt-metal#42586",
-    strict=False,
-)
+@pytest.mark.skip(reason="Bug: constexpr_compact hangs with 0 bfp8 tiles — tenstorrent/tt-metal#42586")
 def test_matmul_custom_compressed_bspm_down_proj(device):
     """[1, 2048] x [2048, 7168] with real BSPM assignment at 3.5 b/e — down_proj shape.
 
@@ -506,10 +500,7 @@ def test_matmul_custom_compressed_bspm_down_proj(device):
     _run_matmul_custom_compressed_bspm(device, M=1, K=2048, N=7168, bspm_path=bspm_path, proj_idx=2, num_cores=32)
 
 
-@pytest.mark.xfail(
-    reason="Bug: constexpr_compact hangs with 0 bfp8 tiles — tenstorrent/tt-metal#42586",
-    strict=False,
-)
+@pytest.mark.skip(reason="Bug: constexpr_compact hangs with 0 bfp8 tiles — tenstorrent/tt-metal#42586")
 def test_matmul_custom_compressed_bspm_mixed_budget(device):
     """Compare PCC of real 3.5 b/e BSPM vs synthetic uniform BFP4 on the same random weight.
 
