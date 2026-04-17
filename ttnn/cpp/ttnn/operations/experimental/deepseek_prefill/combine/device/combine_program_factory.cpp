@@ -230,8 +230,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         "Same-row has only {} idle cores for {} senders — need at least one idle core per sender",
         num_idle_cores,
         num_cores);
-    uint32_t K_base = num_idle_cores / num_cores;
-    uint32_t K_extra = num_idle_cores % num_cores;
+    uint32_t idle_cores_per_sender = num_idle_cores / num_cores;
+    uint32_t senders_with_extra_idle = num_idle_cores % num_cores;
 
     // Build sender_core_grid from selected sender cores
     std::set<CoreRange> sender_ranges_set;
@@ -244,14 +244,14 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     log_debug(
         tt::LogOp,
         "Combine program: hidden_size: {} num_cores: {} experts_per_core_range: {} "
-        "sender_cores: {} num_idle_cores: {} K_base: {} K_extra: {}",
+        "sender_cores: {} num_idle_cores: {} idle_cores_per_sender: {} senders_with_extra_idle: {}",
         hidden_size,
         num_cores,
         experts_per_core_range,
         sender_cores,
         num_idle_cores,
-        K_base,
-        K_extra);
+        idle_cores_per_sender,
+        senders_with_extra_idle);
 
     auto zero_init_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
     auto zero_init_barrier_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
@@ -318,7 +318,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         detail::create_tensor_cb(
             program,
             sender_core_grid,
-            output_tensor,
+            output_tensor,  // dispatched_buffer and output_tensor have same page size
             /*buffering_factor=*/rw_buffering,
             /*cb_id=*/tt::CBIndex::c_4,
             "output_for_writer");
@@ -465,13 +465,19 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     };
     std::vector<SenderMcastCfg> sender_mcast_cfgs(num_cores);
     if (is_tile_layout) {
+        // Compute per-sender NOC multicast bounding box (min/max x,y over idle cores)
+        // and collect individual idle core NOC coordinates for semaphore signaling.
         for (uint32_t s = 0; s < num_cores; s++) {
             TT_FATAL(!sender_idle_groups[s].empty(), "Sender {} has no idle cores assigned", s);
             auto& cfg = sender_mcast_cfgs[s];
+
+            // Initialize bounding box from the first idle core in the group
             auto first_noc =
                 mesh_device->virtual_core_from_logical_core(sender_idle_groups[s][0], tt::CoreType::WORKER);
             cfg.mcast_start_x = cfg.mcast_end_x = first_noc.x;
             cfg.mcast_start_y = cfg.mcast_end_y = first_noc.y;
+
+            // Expand bounding box to cover all idle cores and record each core's NOC coords
             for (const auto& ic : sender_idle_groups[s]) {
                 auto noc = mesh_device->virtual_core_from_logical_core(ic, tt::CoreType::WORKER);
                 cfg.mcast_start_x = std::min(cfg.mcast_start_x, (uint32_t)noc.x);
@@ -513,7 +519,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         }
     }
 
-    // cb_factor reduces CB size to fit L1: Blackhole has more L1, Wormhole needs 4x reduction
+    // cb_factor reduces CB size to fit L1: Wormhole needs 4x reduction
     uint32_t cb_factor;
     {
         const auto arch = mesh_device->arch();
@@ -665,7 +671,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         uint32_t output_aligned_page_size = detail::get_aligned_page_size(output_tensor);
         std::vector<uint32_t> zi_compile_time_args = {
             output_aligned_page_size,
-            num_cores,  // num_sender_cores = num_cores: each idle core signals all sender cores
+            num_cores,  // num_sender_cores = num_cores: each idle core signals all sender cores that its zero-init
+                        // portion is done and output pages are initializer with 0 for that chip
             static_cast<uint32_t>(tt::CBIndex::c_6),
         };
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(zi_compile_time_args);
