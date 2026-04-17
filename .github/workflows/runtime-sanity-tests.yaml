@@ -1,8 +1,18 @@
-name: "(Single-card) Fast dispatch frequent tests"
+name: "(Runtime) Sanity Tests"
 
 on:
   workflow_dispatch:
     inputs:
+      wormhole:
+        description: "Run on Wormhole"
+        required: false
+        type: boolean
+        default: true
+      blackhole:
+        description: "Run on Blackhole"
+        required: false
+        type: boolean
+        default: true
       platform:
         required: false
         type: choice
@@ -27,25 +37,6 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-  workflow_call:
-    inputs:
-      platform:
-        required: false
-        type: string
-        default: "Ubuntu 22.04"
-        description: "Platform to build and test"
-      build-type:
-        required: false
-        type: string
-        default: "Release"
-        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
-      enable-lto:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable Link Time Optimization (LTO)"
-  schedule:
-    - cron: "0 */4 * * *"
 
 jobs:
   build-artifact:
@@ -56,13 +47,22 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      build-wheel: true
       enable-lto: ${{ inputs.enable-lto || false }}
-  fd-nightly:
+
+  runtime-sanity-tests:
     needs: build-artifact
-    uses: ./.github/workflows/fast-dispatch-frequent-tests-impl.yaml
+    uses: ./.github/workflows/runtime-sanity-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: >-
+        ${{
+          github.event_name == 'schedule'
+            && 'wh_n150_civ2,bh_p150b_civ2,bh_quietbox,bh_loudbox'
+            || format('{0}{1}',
+              inputs.wormhole && 'wh_n150_civ2' || '',
+              inputs.blackhole && format('{0}bh_p150b_civ2,bh_quietbox,bh_loudbox',
+                inputs.wormhole && ',' || '') || ''
+            )
+        }}
