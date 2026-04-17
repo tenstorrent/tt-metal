@@ -175,7 +175,7 @@
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
   model: mistral-7b
   skus:
-    wh_llmbox_perf:
+    wh_n150:
       timeout: 12
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz

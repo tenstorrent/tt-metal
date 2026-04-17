@@ -314,7 +314,7 @@
     pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: mistral-7b
   skus:
-    wh_llmbox_perf:
+    wh_n150:
       timeout: 7
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
