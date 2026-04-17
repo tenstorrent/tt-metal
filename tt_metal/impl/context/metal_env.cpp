@@ -284,6 +284,7 @@ void MetalEnvImpl::teardown_fabric_config() {
         constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
 
         auto& control_plane = this->get_control_plane();
+        uint32_t total_force_reset_count = 0;
         for (const ChipId chip_id : cluster.all_chip_ids()) {
             if (builder_context.get_num_fabric_initialized_routers(chip_id) == 0) {
                 continue;
@@ -298,6 +299,7 @@ void MetalEnvImpl::teardown_fabric_config() {
             const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
             const auto active_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
+            uint32_t chip_force_reset_count = 0;
             for (const auto& [chan_id, _direction] : active_eth_channels) {
                 const auto eth_logical_core =
                     cluster.get_soc_desc(chip_id).get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
@@ -326,6 +328,8 @@ void MetalEnvImpl::teardown_fabric_config() {
                         // the still-running firmware generates NOC traffic that causes "unsafe ARC
                         // access" errors when the next process opens the devices. The ERISC firmware
                         // will be properly re-initialized on the next fabric bring-up.
+                        ++chip_force_reset_count;
+                        ++total_force_reset_count;
                         const auto virtual_eth_coord =
                             cluster.get_virtual_coordinate_from_logical_coordinates(
                                 chip_id, eth_logical_core, CoreType::ETH);
@@ -343,6 +347,24 @@ void MetalEnvImpl::teardown_fabric_config() {
                     }
                 }
             }
+            if (chip_force_reset_count > 0) {
+                log_warning(
+                    tt::LogMetal,
+                    "[teardown_fabric_config] chip {} force-reset {} / {} ETH channels due to teardown timeout",
+                    chip_id,
+                    chip_force_reset_count,
+                    active_eth_channels.size());
+            }
+        }
+        if (total_force_reset_count > 0) {
+            log_warning(
+                tt::LogMetal,
+                "[teardown_fabric_config] total force-reset channels across all chips: {}",
+                total_force_reset_count);
+        } else {
+            log_info(
+                tt::LogMetal,
+                "[teardown_fabric_config] all ETH router channels terminated cleanly (0 force-resets)");
         }
     }
 
