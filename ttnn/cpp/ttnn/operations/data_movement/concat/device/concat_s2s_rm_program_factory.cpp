@@ -39,16 +39,8 @@ ConcatS2SRMProgramFactory::cached_program_t ConcatS2SRMProgramFactory::create(
     using namespace tt::tt_metal;
 
     const std::vector<Tensor>& input_tensors = tensor_args.input_tensors;
-    const uint32_t dim = operation_attributes.dim;
     Tensor& output = tensor_return_value;
-    const unsigned int groups = operation_attributes.groups;
-    TT_FATAL(dim == 3, "Sharded concat RM only supports dim=3");
-    TT_FATAL(groups == 1 || dim == 3, "Sharded concat RM only supports groups > 1 when dim=3");
-
-    TT_FATAL(
-        input_tensors.size() == 2 && input_tensors[0].padded_shape()[-1] % groups == 0 &&
-            input_tensors[1].padded_shape()[-1] % groups == 0,
-        "Input channels must both be evenly divisible by groups");
+    const uint32_t groups = static_cast<uint32_t>(operation_attributes.groups);
 
     Program program = CreateProgram();
 

@@ -34,10 +34,8 @@ ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::cre
     using namespace tt::tt_metal;
 
     const auto& input_tensors = tensor_args.input_tensors;
-    const uint32_t dim = operation_attributes.dim;
     Tensor& output = tensor_return_value;
-    TT_FATAL(dim == 2 || dim == 3, "Sharded concat only supports dim=2 or 3");
-    const bool is_height_concat = dim == 2;
+    const bool is_height_concat = 2 == operation_attributes.dim;
 
     Program program = CreateProgram();
 
