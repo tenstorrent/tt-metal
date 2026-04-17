@@ -21,6 +21,9 @@ def device_params(request, galaxy_type):
         "T3K": (1, 8),
         "TG": (8, 4),
         "P150": (1, 1),
+        "P300": (1, 2),
+        "P150x4": (1, 4),
+        "P150x8": (1, 8),
     }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     is_single_device = (mesh_device == (1, 1)) if isinstance(mesh_device, tuple) else (mesh_device == 1)
 
