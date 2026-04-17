@@ -61,6 +61,12 @@ class TtDroidNet:
         self._norm_shift = ttnn.from_torch(
             shift, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
         )
+        # Cache of the on-device net/inp tiles from the last
+        # extract_features call — lets update() skip torch↔device
+        # roundtrips when ii indexes the first n_edges frames (identity).
+        self._cached_net_tt = None
+        self._cached_inp_tt = None
+        self._cached_shape = None  # (b, n, h, w)
 
     # ------------------------------------------------------------------
     # extract_features
@@ -94,6 +100,12 @@ class TtDroidNet:
         net_tt = ttnn.tanh(net_tt)
         inp_tt = ttnn.relu(inp_tt)
 
+        # Stash on-device net/inp tiles so update() can slice them by
+        # ii directly without a torch roundtrip.
+        self._cached_net_tt = net_tt
+        self._cached_inp_tt = inp_tt
+        self._cached_shape = (b, n, ch_, cw_)
+
         fmaps = _unpack_tile_nhwc_to_nchw(fmaps_tt, bn, fh, fw, 128).view(b, n, 128, fh, fw)
         net = _unpack_tile_nhwc_to_nchw(net_tt, bn, ch_, cw_, 128).view(b, n, 128, ch_, cw_)
         inp = _unpack_tile_nhwc_to_nchw(inp_tt, bn, ch_, cw_, 128).view(b, n, 128, ch_, cw_)
@@ -109,13 +121,40 @@ class TtDroidNet:
         """
         b, n_edges, nc, h, w = net.shape
         bn = b * n_edges
-        net_bn = net.view(bn, nc, h, w)
-        inp_bn = inp.view(bn, -1, h, w)
         corr_bn = corr.view(bn, -1, h, w)
         flow_bn = flow.view(bn, -1, h, w)
 
-        net_tt = _pack_nchw_to_tile_nhwc(net_bn, self.device)
-        inp_tt = _pack_nchw_to_tile_nhwc(inp_bn, self.device)
+        # Fast path: if extract_features was just called and `ii` is
+        # the identity prefix arange(n_edges), slice the cached
+        # on-device tile instead of downloading+re-uploading.
+        use_cache = False
+        if self._cached_net_tt is not None and self._cached_shape is not None:
+            cb, cn, ch, cw = self._cached_shape
+            if cb == b and ch == h and cw == w and n_edges <= cn:
+                ii_list = ii.tolist() if hasattr(ii, "tolist") else list(ii)
+                if ii_list == list(range(n_edges)):
+                    use_cache = True
+
+        if use_cache:
+            cn_total = self._cached_shape[1]
+            if n_edges == cn_total:
+                net_tt = self._cached_net_tt
+                inp_tt = self._cached_inp_tt
+            else:
+                # Slice the first n_edges frames from packed (1,1,cn*h*w,128).
+                rows = n_edges * h * w
+                net_tt = ttnn.slice(
+                    self._cached_net_tt, [0, 0, 0, 0], [1, 1, rows, 128]
+                )
+                inp_tt = ttnn.slice(
+                    self._cached_inp_tt, [0, 0, 0, 0], [1, 1, rows, 128]
+                )
+        else:
+            net_bn = net.view(bn, nc, h, w)
+            inp_bn = inp.view(bn, -1, h, w)
+            net_tt = _pack_nchw_to_tile_nhwc(net_bn, self.device)
+            inp_tt = _pack_nchw_to_tile_nhwc(inp_bn, self.device)
+
         corr_tt = _pack_nchw_to_tile_nhwc(corr_bn, self.device)
         flow_tt = _pack_nchw_to_tile_nhwc(flow_bn, self.device)
 
