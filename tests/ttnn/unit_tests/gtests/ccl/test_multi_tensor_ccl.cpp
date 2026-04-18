@@ -310,11 +310,13 @@ TEST_F(MeshDevice1x4Fixture, DISABLED_AllGatherReturnedTensorNoHang) {
 // traverse two ETH hops, doubling the probability that the TX queue is busy when
 // teardown is requested.
 //
-// Fix (Option B, fabric_erisc_router.cpp + fabric_erisc_router_speedy_path.hpp):
-//   Both ETH TXQ spin loops in send_next_data() and run_sender_channel_step_speedy()
-//   now call has_worker_teardown_request() and return early if teardown is pending,
-//   intentionally skipping the remote_update_ptr_val() call (safe: the connection
-//   is being torn down and state is reset on re-init).
+// Fix (erisc_datamover_builder.cpp + fabric_erisc_router.cpp + speedy_path.hpp):
+//   ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA is now always true.  The teardown escape hatch
+//   lives ONLY in the pre-send TXQ spin (before eth_send_packet_bytes_unsafe()).
+//   The post-send drain has NO early-exit: returning after the send would leave the
+//   in-flight packet orphaned; remote ERISC still delivers it to destination Tensix L1,
+//   overwriting the next dispatch program's BRISC .text (observed: mismatch at 0x8220
+//   on all 8 devices, causing hangs in iteration 2+).
 //
 // Without the fix, this test hangs on iteration 1 or 2 with a T3K mesh.
 TEST_F(MeshDevice2x4Fabric1DFixture, AllGatherEthTxqTeardownRace) {

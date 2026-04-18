@@ -615,14 +615,13 @@ FORCE_INLINE void send_next_data(
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
-        // Same as above: yield to teardown rather than spinning indefinitely waiting for the
-        // post-send TXQ drain. The remote credit update (remote_update_ptr_val) is skipped
-        // intentionally — the connection is being torn down and state will be reset.
-        if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
-            if (sender_worker_interface.has_worker_teardown_request()) {
-                return;
-            }
-        }
+        // Post-send TXQ drain: NO teardown early-exit here.
+        // The packet is already committed to the ETH link via eth_send_packet_bytes_unsafe().
+        // Returning early would leave the packet in-flight; the remote ERISC will still deliver
+        // it to the destination Tensix L1 — which may have been reloaded with the next dispatch
+        // program by then, causing L1 corruption (BRISC .text mismatch).
+        // The pre-send spin (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA, always true) is where we safely
+        // bail on teardown before any packet is committed.
         // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
         __asm__ volatile(".4byte 0x0100000F");
     };

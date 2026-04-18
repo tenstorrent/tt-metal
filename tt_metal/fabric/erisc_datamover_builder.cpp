@@ -893,7 +893,13 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     // TODO: promote to user-configurable parameter (user could be just control plane based on arch in this case)
     // specifies if we do spin waits on eth_txq_busy in send_next_data
-    const bool eth_txq_spin_wait_send_next_data = false;
+    // Must be true so the pre-send TXQ spin has a teardown escape hatch: if teardown is
+    // requested while the TXQ is congested we bail BEFORE eth_send_packet_bytes_unsafe(),
+    // keeping connection state consistent.  The post-send drain has NO teardown early-exit
+    // (see fabric_erisc_router.cpp / fabric_erisc_router_speedy_path.hpp) because by then
+    // the packet is committed to the ETH link and must drain to avoid stale NOC writes
+    // corrupting the next dispatch program's L1 on the remote Tensix.
+    const bool eth_txq_spin_wait_send_next_data = true;
     const bool eth_txq_spin_wait_receiver_send_completion_ack = false;
 
     // TODO: allow specification per eth txq
