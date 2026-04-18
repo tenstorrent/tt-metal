@@ -29,7 +29,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
@@ -593,7 +593,7 @@ void run_single_core_reduce_program(
 
 using namespace unit_tests::compute::reduce;
 
-TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeReduceH) {
     if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
@@ -635,7 +635,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeReduceW) {
     std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -674,7 +674,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHW) {
     std::vector<uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -716,7 +716,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHMathOnly) {
     if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
@@ -759,7 +759,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWMathOnly) {
     std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -798,7 +798,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixComputeReduceHWMathOnly) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHWMathOnly) {
     std::vector<uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -841,7 +841,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHWMathOnly) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixComputeReduceWTinyTiles) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWTinyTiles) {
     tt_metal::Tile tile_shape = tt_metal::Tile({TILE_HEIGHT / 2, TILE_WIDTH});
     std::vector<uint32_t> shape = {1, 1, 1 * tile_shape.get_tile_shape()[0], 13 * tile_shape.get_tile_shape()[1]};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], tile_shape.get_tile_shape()[1]};

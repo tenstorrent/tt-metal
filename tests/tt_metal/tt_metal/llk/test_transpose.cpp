@@ -25,7 +25,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -300,7 +300,7 @@ void run_single_core_transpose(
 
 }  // namespace unit_tests::compute::transpose
 
-TEST_F(MeshDeviceFixture, TensixComputeTransposeWH) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeTransposeWH) {
     unit_tests::compute::transpose::TransposeConfig test_config = {
         .short_init = false,
         .transpose_dest = false,
@@ -310,7 +310,7 @@ TEST_F(MeshDeviceFixture, TensixComputeTransposeWH) {
     unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
 }
 
-TEST_F(MeshDeviceFixture, TensixComputeTransposeWHShortInit) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeTransposeWHShortInit) {
     unit_tests::compute::transpose::TransposeConfig test_config = {
         .short_init = true,
         .transpose_dest = false,
@@ -320,7 +320,7 @@ TEST_F(MeshDeviceFixture, TensixComputeTransposeWHShortInit) {
     unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
 }
 
-TEST_F(MeshDeviceFixture, TensixComputeTransposeWHDest) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeTransposeWHDest) {
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
         GTEST_SKIP() << "TensixComputeTransposeWHDest not implemented for Quasar yet";
     }

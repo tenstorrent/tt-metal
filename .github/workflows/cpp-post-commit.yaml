@@ -45,6 +45,11 @@ on:
         required: false
         type: boolean
         default: false
+      test-group-name:
+        required: false
+        default: ""
+        type: string
+        description: "If set, only run the test group matching this name. Empty runs all groups (after nightly filter)."
 jobs:
   define-cpp-tests:
     runs-on: ubuntu-latest
@@ -56,6 +61,7 @@ jobs:
           [[
             { name: "ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor', nightly: true, auto-triage: true, hang-detection-timeout: 10.0 },
             { name: "Nightly TTNN university lab examples", cmd: './build/test/ttnn/lab_examples/test_lab_eltwise_binary && ./build/test/ttnn/lab_examples/test_lab_multicast', nightly: true, auto-triage: true },
+            { name: "llk", cmd: './build/test/tt_metal/unit_tests_llk --gtest_filter=$GTEST_FILTER', nightly: false, auto-triage: true },
           ]]
     steps:
       - name: Compute tests
@@ -71,6 +77,13 @@ jobs:
 
           requested_cpp_tests=$(jq --argjson nightly_run "${{ inputs.nightly-run }}" '[.[] | select(.nightly == $nightly_run)]' <<< "$requested_cpp_tests")
           echo "[info] after filtering for requested workflow tests: $requested_cpp_tests"
+
+          # Optionally narrow to a single named test group (e.g. when the PR gate calls us just for 'llk').
+          FILTER_NAME="${{ inputs.test-group-name }}"
+          if [ -n "$FILTER_NAME" ]; then
+            requested_cpp_tests=$(jq --arg name "$FILTER_NAME" '[.[] | select(.name == $name)]' <<< "$requested_cpp_tests")
+            echo "[info] after filtering by test-group-name='$FILTER_NAME': $requested_cpp_tests"
+          fi
 
           # If a test needs to run in merge-gate, filter will be added to include only those tests here
 

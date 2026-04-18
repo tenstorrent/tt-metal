@@ -573,9 +573,11 @@ jobs:
       test_splits: 1
       pytest_markers: "quasar"
 
-  # LLK Slow Dispatch Unit Tests — split by arch so wormhole-only / blackhole-only changes do not
+  # LLK Fast Dispatch Unit Tests — split by arch so wormhole-only / blackhole-only changes do not
   # schedule the other arch (common / shared test-infra / LLK CI still run both, like llk-test-*).
-  llk-sd-unit-tests-wormhole:
+  # The LLK unit-test binary is dispatch-agnostic (see LLK* fixtures in
+  # tests/tt_metal/tt_metal/llk/llk_device_fixture.hpp); nightly still runs it under slow dispatch.
+  llk-fd-unit-tests-wormhole:
     needs: [ build, find-changed-files ]
     if: ${{
         github.event.action != 'destroyed' &&
@@ -585,17 +587,16 @@ jobs:
          needs.find-changed-files.outputs.llk-common-changed == 'true')
       }}
     secrets: inherit
-    uses: ./.github/workflows/build-and-unit-tests.yaml
+    uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: wormhole_b0
       runner-label: N150
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       test-group-name: llk
       enable-llk-asserts: true
 
-  llk-sd-unit-tests-blackhole:
+  llk-fd-unit-tests-blackhole:
     needs: [ build, find-changed-files ]
     if: ${{
         github.event.action != 'destroyed' &&
@@ -605,13 +606,12 @@ jobs:
          needs.find-changed-files.outputs.llk-common-changed == 'true')
       }}
     secrets: inherit
-    uses: ./.github/workflows/build-and-unit-tests.yaml
+    uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: blackhole
       runner-label: P150
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       test-group-name: llk
       enable-llk-asserts: true
 
@@ -640,8 +640,8 @@ jobs:
       - llk-test-wormhole
       - llk-test-blackhole
       - llk-build-quasar
-      - llk-sd-unit-tests-wormhole
-      - llk-sd-unit-tests-blackhole
+      - llk-fd-unit-tests-wormhole
+      - llk-fd-unit-tests-blackhole
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
@@ -653,6 +653,6 @@ jobs:
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             model-charts-sync, build-docs,
             llk-test-wormhole, llk-test-blackhole, llk-build-quasar,
-            llk-sd-unit-tests-wormhole, llk-sd-unit-tests-blackhole
+            llk-fd-unit-tests-wormhole, llk-fd-unit-tests-blackhole
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
