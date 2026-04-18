@@ -300,25 +300,34 @@ class TtSuperPoint:
         s, _, _ = self.conv_score_a(encoded, enc_h, enc_w, b)
         s, _, _ = self.conv_score_b(s, enc_h, enc_w, b)
 
-        # Descriptor branch
+        # Descriptor branch — L2-normalize on device (last axis is 256, which is
+        # tile-aligned, so softmax padding concerns from the 65-channel score
+        # branch don't apply here).
         d, _, _ = self.conv_desc_a(encoded, enc_h, enc_w, b)
         d, _, _ = self.conv_desc_b(d, enc_h, enc_w, b)
+        d_sq = ttnn.multiply(d, d)
+        d_sum = ttnn.sum(d_sq, dim=-1, keepdim=True)
+        ttnn.deallocate(d_sq)
+        d_inv = ttnn.rsqrt(d_sum)
+        ttnn.deallocate(d_sum)
+        d_norm = ttnn.multiply(d, d_inv)
+        ttnn.deallocate(d_inv)
+        ttnn.deallocate(d)
 
         # Bring both back to host as torch tensors in NCHW.
         scores_nhwc = ttnn.to_torch(s).reshape(b, enc_h, enc_w, KEYPOINT_DIM)
-        descriptors_nhwc = ttnn.to_torch(d).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
+        descriptors_nhwc = ttnn.to_torch(d_norm).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
 
         scores_nchw = scores_nhwc.permute(0, 3, 1, 2).contiguous().float()
         descriptors_nchw = descriptors_nhwc.permute(0, 3, 1, 2).contiguous().float()
 
-        # Host-side softmax over channel dim (matches reference exactly)
+        # Host-side softmax over channel dim (65 channels → tile padding would
+        # corrupt on-device softmax; cheap enough to do on host).
         scores_nchw = torch.softmax(scores_nchw, dim=1)
-        # Host-side L2 normalize over descriptor dim
-        descriptors_nchw = F.normalize(descriptors_nchw, p=2, dim=1)
 
         ttnn.deallocate(encoded)
         ttnn.deallocate(s)
-        ttnn.deallocate(d)
+        ttnn.deallocate(d_norm)
         ttnn.deallocate(tt_in)
 
         return scores_nchw, descriptors_nchw
