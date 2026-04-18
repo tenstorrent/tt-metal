@@ -21,7 +21,11 @@
 
 namespace tt::llrt::internal_ {
 void wait_until_cores_done(
-    ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms);
+    ChipId device_id,
+    int run_state,
+    std::unordered_set<CoreCoord>& not_done_phys_cores,
+    int timeout_ms = 0,
+    bool skip_dispatch_alert = false);
 }  // namespace tt::llrt::internal_
 
 namespace tt::tt_metal {
