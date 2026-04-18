@@ -264,7 +264,7 @@ def create_decoder_golden_tensors(
     indirect=True,
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-@pytest.mark.parametrize("num_internal_iterations", [1])
+@pytest.mark.parametrize("num_internal_iterations", [3])
 @pytest.mark.parametrize(
     "expert_upload_mode",
     [

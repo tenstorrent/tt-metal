@@ -1665,6 +1665,9 @@ class AttentionBlock:
             ("mla_ms_in_cb", mla_ms_in_cb),
             ("mla_out_o_cb", mla_out_o_cb),
             ("mla_out_ms_cb", mla_out_ms_cb),
+            ("mla_out_final_cb", mla_out_final_cb),  # DEBUG: for DPRINT
+            ("mla_interm_out_cb", mla_interm_out_cb),  # DEBUG: for DPRINT
+            ("mla_interm_ms_cb", mla_interm_ms_cb),  # DEBUG: for DPRINT
         ]
         mla_brisc_named_compile_time_args = [
             ("St", St),

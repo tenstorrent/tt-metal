@@ -46,6 +46,7 @@
 
 #include "../../../unified_kernels/moe_gather.hpp"
 #include "../../../unified_kernels/deepseek_moe_gate.hpp"
+#include "api/debug/dprint.h"
 #if defined(COMPILE_FOR_TRISC)
 #undef REDUCE_OP
 #undef REDUCE_DIM
@@ -2032,6 +2033,7 @@ void kernel_main() {
         true>
         moe_mcast;
 
+    uint32_t iteration = 0;
     auto mla_body = [&]() __attribute__((always_inline)) {
         // ========================================================================
         // CCL Broadcast (optional, skip if single-device mode)
@@ -2266,12 +2268,113 @@ void kernel_main() {
             // ====================================================================
             // Flash MLA: Compute
             // ====================================================================
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (Core::is_mla_core) {
+                if (iteration < 3) {
+                    constexpr uint32_t cb_id_pre = get_named_compile_time_arg_val("mla_out_final_cb");
+                    volatile tt_l1_ptr uint32_t* p_pre =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id_pre));
+                    uint32_t cksum_pre = 0;
+                    for (uint32_t i = 0; i < 256; i++) {
+                        cksum_pre ^= p_pre[i];
+                    }
+                    DPRINT << "DBG iter=" << iteration << " PRE_mla_out_xor256: " << HEX() << cksum_pre
+                           << " head4=" << p_pre[0] << " " << p_pre[1] << " " << p_pre[2] << " " << p_pre[3]
+                           << " cur_pos=" << cur_pos << " local_cur_pos=" << local_cur_pos << ENDL();
+                    constexpr uint32_t kin_cb_pre = get_named_compile_time_arg_val("mla_k_in_cb");
+                    volatile tt_l1_ptr uint32_t* kin_pre =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(kin_cb_pre));
+                    uint32_t kcksum_pre_a = 0, kcksum_pre_b = 0, kcksum_pre_c = 0;
+                    for (uint32_t i = 0; i < 2048; i++) {
+                        kcksum_pre_a ^= kin_pre[i];
+                    }
+                    for (uint32_t i = 2048; i < 4096; i++) {
+                        kcksum_pre_b ^= kin_pre[i];
+                    }
+                    for (uint32_t i = 4096; i < 6144; i++) {
+                        kcksum_pre_c ^= kin_pre[i];
+                    }
+                    DPRINT << "DBG iter=" << iteration << " PRE_mla_k_xorFULL: " << HEX() << kcksum_pre_a << " "
+                           << kcksum_pre_b << " " << kcksum_pre_c << ENDL();
+                }
+            }
+#endif
             {
                 DeviceZoneScopedN("FLASH_MLA");
                 FlashMLAOp flash_mla;
                 flash_mla.set_local_cur_pos(flash_mla_args, local_cur_pos);
                 flash_mla(flash_mla_args);
             }
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (Core::is_mla_core) {
+                if (iteration < 3) {
+                    constexpr uint32_t q_cb = get_named_compile_time_arg_val("mla_q_in_cb");
+                    volatile tt_l1_ptr uint32_t* q = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(q_cb));
+                    DPRINT << "DBG iter=" << iteration << " mla_q_in: " << HEX() << q[0] << " " << q[1] << " " << q[2]
+                           << " " << q[3] << ENDL();
+                    constexpr uint32_t cb_id = get_named_compile_time_arg_val("mla_out_final_cb");
+                    volatile tt_l1_ptr uint32_t* p =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id));
+                    DPRINT << "DBG iter=" << iteration << " mla_out: " << HEX() << p[0] << " " << p[1] << " " << p[2]
+                           << " " << p[3] << ENDL();
+                    {
+                        uint32_t cksum = 0;
+                        for (uint32_t i = 0; i < 256; i++) {
+                            cksum ^= p[i];
+                        }
+                        DPRINT << "DBG iter=" << iteration << " mla_out_xor256: " << HEX() << cksum << ENDL();
+                        DPRINT << "DBG iter=" << iteration << " mla_out_mid: " << HEX() << p[128] << " " << p[129]
+                               << " " << p[130] << " " << p[131] << ENDL();
+                    }
+                    constexpr uint32_t io_cb = get_named_compile_time_arg_val("mla_interm_out_cb");
+                    volatile tt_l1_ptr uint32_t* io =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(io_cb));
+                    DPRINT << "DBG iter=" << iteration << " interm_out: " << HEX() << io[0] << " " << io[1] << " "
+                           << io[2] << " " << io[3] << ENDL();
+                    constexpr uint32_t ims_cb = get_named_compile_time_arg_val("mla_interm_ms_cb");
+                    volatile tt_l1_ptr uint32_t* ims =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(ims_cb));
+                    DPRINT << "DBG iter=" << iteration << " interm_ms: " << HEX() << ims[0] << " " << ims[1] << " "
+                           << ims[2] << " " << ims[3] << ENDL();
+                    constexpr uint32_t oin_cb = get_named_compile_time_arg_val("mla_out_in_cb");
+                    volatile tt_l1_ptr uint32_t* oin =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(oin_cb));
+                    DPRINT << "DBG iter=" << iteration << " out_in: " << HEX() << oin[0] << " " << oin[1] << " "
+                           << oin[2] << " " << oin[3] << ENDL();
+                    constexpr uint32_t oms_cb = get_named_compile_time_arg_val("mla_out_ms_cb");
+                    volatile tt_l1_ptr uint32_t* oms =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(oms_cb));
+                    DPRINT << "DBG iter=" << iteration << " out_ms: " << HEX() << oms[0] << " " << oms[1] << " "
+                           << oms[2] << " " << oms[3] << ENDL();
+                    constexpr uint32_t k_cb = get_named_compile_time_arg_val("mla_k_in_cb");
+                    volatile tt_l1_ptr uint32_t* kin =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(k_cb));
+                    DPRINT << "DBG iter=" << iteration << " mla_k_in_a: " << HEX() << kin[0] << " " << kin[1] << " "
+                           << kin[2] << " " << kin[3] << ENDL();
+                    DPRINT << "DBG iter=" << iteration << " mla_k_in_b: " << HEX() << kin[256] << " " << kin[257] << " "
+                           << kin[258] << " " << kin[259] << ENDL();
+                    DPRINT << "DBG iter=" << iteration << " mla_k_in_c: " << HEX() << kin[512] << " " << kin[513] << " "
+                           << kin[514] << " " << kin[515] << ENDL();
+                    {
+                        uint32_t kcksum_post_a = 0, kcksum_post_b = 0, kcksum_post_c = 0;
+                        for (uint32_t i = 0; i < 2048; i++) {
+                            kcksum_post_a ^= kin[i];
+                        }
+                        for (uint32_t i = 2048; i < 4096; i++) {
+                            kcksum_post_b ^= kin[i];
+                        }
+                        for (uint32_t i = 4096; i < 6144; i++) {
+                            kcksum_post_c ^= kin[i];
+                        }
+                        DPRINT << "DBG iter=" << iteration << " POST_mla_k_xorFULL: " << HEX() << kcksum_post_a << " "
+                               << kcksum_post_b << " " << kcksum_post_c << ENDL();
+                    }
+                    DPRINT << "DBG iter=" << iteration << " ptrs: q=" << HEX() << get_read_ptr(q_cb)
+                           << " k=" << get_read_ptr(k_cb) << " io=" << get_read_ptr(io_cb)
+                           << " ims=" << get_read_ptr(ims_cb) << " out=" << get_read_ptr(cb_id) << ENDL();
+                }
+            }
+#endif
         } else {
             // This device has no sequence data (e.g. SP2/SP3 with seq_len = 2047 and per_device_chunk_size = 1024).
             // Push dummy tiles into the hand-off CBs so SDPA reduce does not hang.
@@ -2291,6 +2394,17 @@ void kernel_main() {
                 deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
                 sdpa_reduce_worker(sdpa_reduce_worker_args);
             }
+#if defined(COMPILE_FOR_BRISC)
+            if constexpr (Core::is_sdpa_worker_core) {
+                if (iteration < 3) {
+                    constexpr uint32_t cb_id = get_named_compile_time_arg_val("sdpa_cb_l_out");
+                    volatile tt_l1_ptr uint32_t* p =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id));
+                    DPRINT << "DBG iter=" << iteration << " sdpa_out: " << HEX() << p[0] << " " << p[1] << " " << p[2]
+                           << " " << p[3] << ENDL();
+                }
+            }
+#endif
             if constexpr (Core::is_sdpa_forwarder_core) {
                 deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
                 sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
@@ -2317,6 +2431,17 @@ void kernel_main() {
             }
 #endif
         }
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_matmul4_core) {
+            if (iteration < 3) {
+                constexpr uint32_t cb_id = get_named_compile_time_arg_val("matmul4_in0");
+                volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id));
+                DPRINT << "DBG iter=" << iteration << " mm4_in0: " << HEX() << p[0] << " " << p[1] << " " << p[2] << " "
+                       << p[3] << ENDL();
+            }
+        }
+#endif
+
         // ========================================================================
         // Matmul4: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
         // ========================================================================
@@ -2325,6 +2450,18 @@ void kernel_main() {
             deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
             matmul4(matmul4_args);
         }
+
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_matmul4_core) {
+            if (iteration < 3) {
+                constexpr uint32_t cb_id = get_named_compile_time_arg_val("matmul4_out");
+                cb_wait_front(cb_id, 1);
+                volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id));
+                DPRINT << "DBG iter=" << iteration << " mm4_out: " << HEX() << p[0] << " " << p[1] << " " << p[2] << " "
+                       << p[3] << ENDL();
+            }
+        }
+#endif
 
         // ========================================================================
         // Gather2: matmul4 cores (kv_b2 grid) -> gather core (12, 9)
@@ -2371,6 +2508,18 @@ void kernel_main() {
             deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_allreduce_sender_core, true, true> gather3;
             gather3(gather3_args);
         }
+
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::is_allreduce_sender_core) {
+            if (iteration < 3) {
+                constexpr uint32_t cb_id = get_named_compile_time_arg_val("allreduce_local_data_cb_id");
+                cb_wait_front(cb_id, 1);
+                volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id));
+                DPRINT << "DBG iter=" << iteration << " gather3: " << HEX() << p[0] << " " << p[1] << " " << p[2] << " "
+                       << p[3] << ENDL();
+            }
+        }
+#endif
 
         // ========================================================================
         // CCL All-Reduce: Exchange [1, 7168] between devices
@@ -2752,7 +2901,6 @@ void kernel_main() {
 
     constexpr uint32_t persistent_mode = get_named_compile_time_arg_val("persistent_mode");
     constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
-    uint32_t iteration = 0;
     while (true) {
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (persistent_mode) {
@@ -2769,7 +2917,7 @@ void kernel_main() {
         mla_body();
         unified_kernels::reconfig_cb_interfaces(moe_cb_config);
 #if defined(COMPILE_FOR_BRISC)
-        *pos_ptr += 1;
+        // *pos_ptr += 1;  // DEBUG: disabled to isolate state carryover
 #endif
         setup_moe_sharded_buffers();
         moe_body();
