@@ -157,6 +157,12 @@ class TtSuperPoint:
         for block_idx, block in enumerate(encoder.conv_blocks):
             add_pooling = block.pool is not None
             ns = slice_per_block[block_idx]
+            # Block 0 dominates compute (~11B MACs on conv_b alone at 480×640).
+            # bfloat8_b weights here save the most cycles; downstream layers
+            # stay bf16 to protect PCC through the deep accumulation chain.
+            block_kwargs = dict(enc_kwargs)
+            if block_idx == 0:
+                block_kwargs["weights_dtype"] = ttnn.bfloat8_b
             self.enc_convs.append(
                 (
                     TtConv2D(
@@ -169,7 +175,7 @@ class TtSuperPoint:
                         device=device,
                         activation="relu",
                         num_slices=ns,
-                        **enc_kwargs,
+                        **block_kwargs,
                     ),
                     TtConv2D(
                         block.conv_b.weight,
@@ -181,7 +187,7 @@ class TtSuperPoint:
                         device=device,
                         activation="relu",
                         num_slices=ns,
-                        **enc_kwargs,
+                        **block_kwargs,
                     ),
                     add_pooling,
                 )
