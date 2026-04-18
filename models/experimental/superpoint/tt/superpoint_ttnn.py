@@ -279,30 +279,35 @@ class TtSuperPoint:
                 cur_w //= 2
         return x, cur_h, cur_w
 
-    def _run_device(self, pixel_values: torch.Tensor):
-        """Run conv-heavy portion on device, returning host tensors for post-proc."""
-        b, _, h, w = pixel_values.shape
-        nhwc = self._preprocess_host(pixel_values)
-        tt_in = ttnn.from_torch(
-            nhwc,
+    def allocate_input(self, batch_size: int = 1) -> ttnn.Tensor:
+        """Allocate a persistent DRAM tensor matching the expected input shape."""
+        shape = (1, 1, batch_size * self.input_height * self.input_width, 1)
+        dummy = torch.zeros(shape, dtype=torch.float32)
+        return ttnn.from_torch(
+            dummy,
             dtype=ttnn.bfloat16,
             device=self.device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Encoder trunk
+    def load_input(self, tt_in: ttnn.Tensor, pixel_values: torch.Tensor) -> None:
+        """Copy host pixel data into a preallocated device input tensor."""
+        nhwc = self._preprocess_host(pixel_values)
+        host = ttnn.from_torch(nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy_host_to_device_tensor(host, tt_in)
+
+    def run_device_compute(self, tt_in: ttnn.Tensor, b: int = 1):
+        """Device-only forward; returns (s, d_norm) device tensors in TILE layout.
+
+        Keeps `tt_in` alive for trace replay (does not deallocate).
+        """
+        h, w = self.input_height, self.input_width
         encoded, enc_h, enc_w = self._encoder_forward(tt_in, h, w, b)
 
-        # Score branch — conv on device, softmax on host (65 channels are not
-        # tile-aligned so on-device softmax includes padding zeros and corrupts
-        # the distribution).
         s, _, _ = self.conv_score_a(encoded, enc_h, enc_w, b)
         s, _, _ = self.conv_score_b(s, enc_h, enc_w, b)
 
-        # Descriptor branch — L2-normalize on device (last axis is 256, which is
-        # tile-aligned, so softmax padding concerns from the 65-channel score
-        # branch don't apply here).
         d, _, _ = self.conv_desc_a(encoded, enc_h, enc_w, b)
         d, _, _ = self.conv_desc_b(d, enc_h, enc_w, b)
         d_sq = ttnn.multiply(d, d)
@@ -313,19 +318,26 @@ class TtSuperPoint:
         d_norm = ttnn.multiply(d, d_inv)
         ttnn.deallocate(d_inv)
         ttnn.deallocate(d)
+        ttnn.deallocate(encoded)
 
-        # Bring both back to host as torch tensors in NCHW.
+        return s, d_norm
+
+    def _run_device(self, pixel_values: torch.Tensor):
+        """Untraced path: allocate input, compute, read back, host post-proc."""
+        b, _, h, w = pixel_values.shape
+        tt_in = self.allocate_input(batch_size=b)
+        self.load_input(tt_in, pixel_values)
+
+        s, d_norm = self.run_device_compute(tt_in, b)
+        enc_h = h // 8
+        enc_w = w // 8
         scores_nhwc = ttnn.to_torch(s).reshape(b, enc_h, enc_w, KEYPOINT_DIM)
         descriptors_nhwc = ttnn.to_torch(d_norm).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
 
         scores_nchw = scores_nhwc.permute(0, 3, 1, 2).contiguous().float()
         descriptors_nchw = descriptors_nhwc.permute(0, 3, 1, 2).contiguous().float()
-
-        # Host-side softmax over channel dim (65 channels → tile padding would
-        # corrupt on-device softmax; cheap enough to do on host).
         scores_nchw = torch.softmax(scores_nchw, dim=1)
 
-        ttnn.deallocate(encoded)
         ttnn.deallocate(s)
         ttnn.deallocate(d_norm)
         ttnn.deallocate(tt_in)
