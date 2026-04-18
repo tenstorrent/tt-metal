@@ -183,8 +183,9 @@ class AttentionBlock:
     @staticmethod
     def get_num_semaphores(num_links=1):
         # 16 from pre/post-SDPA pipeline internals (includes ccl_sync),
+        # 11 additional globals replacing the previously-local post-SDPA / SDPA forwarder semaphores,
         # plus broadcast semaphores.
-        non_bcast_num_semaphores = 16
+        non_bcast_num_semaphores = 16 + 11
         bcast_num_semaphores = DeepseekMinimalBroadcast.get_num_semaphores(num_links=num_links)
         return non_bcast_num_semaphores + bcast_num_semaphores
 
@@ -666,15 +667,6 @@ class AttentionBlock:
         )  # Header + max payload
         sdpa_fwd_r2_buffer_offset = sdpa_fwd_slots_per_round * sdpa_fwd_slot_size
 
-        # SDPA semaphore ID for scatter arrival (new semaphore)
-        scatter_arrival_semaphore_id = 7  # After existing semaphores 0-6
-
-        # SDPA forwarder semaphore IDs (on forwarder cores, signaled by workers)
-        sdpa_fwd_r1_sem_id = 8
-        sdpa_fwd_r2_sem_id = 9
-        sdpa_bwd_r1_sem_id = 10
-        sdpa_bwd_r2_sem_id = 11
-
         sdpa_scale_fp32_bits = float_to_uint32(sdpa_scale)
 
         # ========================================================================
@@ -728,15 +720,8 @@ class AttentionBlock:
         has_residual = 1
 
         # ========================================================================
-        # Semaphore IDs
+        # Semaphore addresses (all global semaphores)
         # ========================================================================
-        gather2_noc0_receiver_semaphore_id = 0
-        gather2_noc1_receiver_semaphore_id = 1
-        mcast3_data_receiver_semaphore_id = 2
-        gather3_noc0_receiver_semaphore_id = 3
-        gather3_noc1_receiver_semaphore_id = 4
-        gather3_completion_semaphore_id = 5  # Gather3 signals, CCL sender waits
-
         # Semaphore IDs for mcast synchronization
         mcast_data_sender_semaphore_addr = ttnn.get_global_semaphore_address(
             attention_block_semaphores[semaphore_index]
@@ -809,6 +794,46 @@ class AttentionBlock:
         ccl_sync_semaphore = attention_block_semaphores[semaphore_index]
         semaphore_index += 1
         ccl_sync_semaphore_addr = ttnn.get_global_semaphore_address(ccl_sync_semaphore)
+
+        # Post-SDPA pipeline semaphores (formerly local, now global so they share the
+        # same address on every core and can be used uniformly across the device grid).
+        gather2_noc0_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+        gather2_noc1_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+        mcast3_data_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+        gather3_noc0_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+        gather3_noc1_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+        gather3_completion_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+        scatter_arrival_semaphore_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
+
+        # SDPA forwarder semaphores (workers signal these to forwarders).
+        sdpa_fwd_r1_sem_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
+        sdpa_fwd_r2_sem_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
+        sdpa_bwd_r1_sem_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
+        sdpa_bwd_r2_sem_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
+
         assert semaphore_index == len(attention_block_semaphores), "Unexpected attention_block semaphore consumption"
 
         # Calculate mcast data size in bytes (RMSNorm output = num_tiles * tile_size)
@@ -1684,7 +1709,7 @@ class AttentionBlock:
             ("gather2_dest_noc_x", gather_dest_noc_core.x),
             ("gather2_dest_noc_y", gather_dest_noc_core.y),
             ("gather2_data_size_bytes", gather2_data_size_bytes),
-            ("gather2_receiver_semaphore_id", gather2_noc0_receiver_semaphore_id),
+            ("gather2_receiver_semaphore_addr", gather2_noc0_receiver_semaphore_addr),
             ("gather2_src_cb", matmul4_out_cb),
             ("gather2_src_num_pages", gather2_src_num_pages),
             ("gather2_sender_grid_start_x", 0),
@@ -1693,7 +1718,7 @@ class AttentionBlock:
             ("gather2_sender_grid_end_y", 0),
             ("gather2_row_major", 1),
             # Mcast3 receiver
-            ("mcast3_data_receiver_semaphore", mcast3_data_receiver_semaphore_id),
+            ("mcast3_data_receiver_semaphore_addr", mcast3_data_receiver_semaphore_addr),
             ("mcast3_dst_cb", matmul5_in0_cb),
             ("mcast3_dst_num_pages", mcast3_dst_num_pages),
             # Matmul5
@@ -1706,7 +1731,7 @@ class AttentionBlock:
             ("gather3_dest_noc_x", gather_dest_noc_core.x),
             ("gather3_dest_noc_y", gather_dest_noc_core.y),
             ("gather3_data_size_bytes", gather3_data_size_bytes),
-            ("gather3_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
+            ("gather3_receiver_semaphore_addr", gather3_noc0_receiver_semaphore_addr),
             ("gather3_src_cb", matmul5_out_cb),
             ("gather3_src_num_pages", gather3_src_num_pages),
             ("gather3_sender_grid_start_x", 0),
@@ -1720,7 +1745,7 @@ class AttentionBlock:
             ("ccl_sender_tensor_page_size", ccl_page_size_bytes),
             ("ccl_sender_data_noc_x", ccl_receiver_noc_core.x),
             ("ccl_sender_data_noc_y", ccl_receiver_noc_core.y),
-            ("ccl_sender_gather3_completion_semaphore_id", gather3_completion_semaphore_id),
+            ("ccl_sender_gather3_completion_semaphore_addr", gather3_completion_semaphore_addr),
             # CCL receiver (NCRISC waits for remote data)
             ("ccl_receiver_cb_in1", ccl_remote_data_cb),
             ("ccl_receiver_cb_in2", gather3_dst_cb),  # Local data from gather3
@@ -1753,7 +1778,7 @@ class AttentionBlock:
                 ("sdpa_fwd_slot_size", sdpa_fwd_slot_size),
                 ("sdpa_fwd_r2_buffer_offset", sdpa_fwd_r2_buffer_offset),
                 # Scatter arrival semaphore
-                ("scatter_arrival_semaphore_id", scatter_arrival_semaphore_id),
+                ("scatter_arrival_semaphore_addr", scatter_arrival_semaphore_addr),
                 # Input NOC coord
                 ("input_noc_coord_x", input_noc_coord.x),
                 ("input_noc_coord_y", input_noc_coord.y),
@@ -1772,12 +1797,12 @@ class AttentionBlock:
             # Gather2 receiver
             ("gather2_noc0_num_senders", gather2_noc0_num_senders),
             ("gather2_noc1_num_senders", gather2_noc1_num_senders),
-            ("gather2_noc0_receiver_semaphore_id", gather2_noc0_receiver_semaphore_id),
-            ("gather2_noc1_receiver_semaphore_id", gather2_noc1_receiver_semaphore_id),
+            ("gather2_noc0_receiver_semaphore_addr", gather2_noc0_receiver_semaphore_addr),
+            ("gather2_noc1_receiver_semaphore_addr", gather2_noc1_receiver_semaphore_addr),
             ("gather2_dst_cb", gather2_dst_cb),
             ("gather2_dst_num_pages", gather2_dst_num_pages),
             # Mcast3 sender
-            ("mcast3_data_receiver_semaphore", mcast3_data_receiver_semaphore_id),
+            ("mcast3_data_receiver_semaphore_addr", mcast3_data_receiver_semaphore_addr),
             ("mcast3_data_size_bytes", mcast3_data_size_bytes),
             ("mcast3_src_cb", gather2_dst_cb),
             ("mcast3_src_num_pages", mcast3_src_num_pages),
@@ -1785,12 +1810,12 @@ class AttentionBlock:
             # Gather3 receiver
             ("gather3_noc0_num_senders", gather3_noc0_num_senders),
             ("gather3_noc1_num_senders", gather3_noc1_num_senders),
-            ("gather3_noc0_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
-            ("gather3_noc1_receiver_semaphore_id", gather3_noc1_receiver_semaphore_id),
+            ("gather3_noc0_receiver_semaphore_addr", gather3_noc0_receiver_semaphore_addr),
+            ("gather3_noc1_receiver_semaphore_addr", gather3_noc1_receiver_semaphore_addr),
             ("gather3_dst_cb", gather3_dst_cb),
             ("gather3_dst_num_pages", gather3_dst_num_pages),
             # Gather3 completion signal for CCL sender synchronization
-            ("gather3_completion_semaphore_id", gather3_completion_semaphore_id),
+            ("gather3_completion_semaphore_addr", gather3_completion_semaphore_addr),
             ("ccl_sender_noc_x", ccl_sender_noc_core.x),
             ("ccl_sender_noc_y", ccl_sender_noc_core.y),
             # CCL sender (BRISC sends via fabric)
@@ -1837,7 +1862,7 @@ class AttentionBlock:
                 ("sdpa_scatter_face_size", sdpa_scatter_face_size),
                 ("sdpa_scatter_row_face_size", sdpa_scatter_row_face_size),
                 ("sdpa_scatter_num_rows", sdpa_scatter_num_rows),
-                ("scatter_arrival_semaphore_id", scatter_arrival_semaphore_id),
+                ("scatter_arrival_semaphore_addr", scatter_arrival_semaphore_addr),
                 # SDPA forwarder params
                 ("sdpa_fwd_slots_per_round", sdpa_fwd_slots_per_round),
                 ("sdpa_fwd_slot_size", sdpa_fwd_slot_size),
@@ -2863,85 +2888,9 @@ class AttentionBlock:
         sdpa_out_interm_running_offset_post_sdpa += sdpa_l_out_cb_descriptor.total_size
         post_sdpa_cb_list.append(sdpa_l_out_cb_descriptor)
 
-        # ========================================================================
-        # Semaphore descriptors
-        # ========================================================================
-        gather2_noc0_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=gather2_noc0_receiver_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        gather2_noc1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=gather2_noc1_receiver_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        mcast3_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=mcast3_data_receiver_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        gather3_noc0_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=gather3_noc0_receiver_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        gather3_noc1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=gather3_noc1_receiver_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        semaphore_list = [
-            gather2_noc0_semaphore_descriptor,
-            gather2_noc1_semaphore_descriptor,
-            mcast3_receiver_semaphore_descriptor,
-            gather3_noc0_semaphore_descriptor,
-            gather3_noc1_semaphore_descriptor,
-        ]
-        gather3_completion_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=gather3_completion_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        semaphore_list.append(gather3_completion_semaphore_descriptor)
-
-        # SDPA scatter arrival semaphore (for matmul4 cores to wait for scatter data)
-        scatter_arrival_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=scatter_arrival_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        semaphore_list.append(scatter_arrival_semaphore_descriptor)
-
-        # SDPA forwarder semaphores (workers signal these to forwarders)
-        sdpa_fwd_r1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=sdpa_fwd_r1_sem_id,
-            core_ranges=sdpa_forwarder_grid,
-            initial_value=0,
-        )
-        sdpa_fwd_r2_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=sdpa_fwd_r2_sem_id,
-            core_ranges=sdpa_forwarder_grid,
-            initial_value=0,
-        )
-        sdpa_bwd_r1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=sdpa_bwd_r1_sem_id,
-            core_ranges=sdpa_forwarder_grid,
-            initial_value=0,
-        )
-        sdpa_bwd_r2_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=sdpa_bwd_r2_sem_id,
-            core_ranges=sdpa_forwarder_grid,
-            initial_value=0,
-        )
-        semaphore_list.extend(
-            [
-                sdpa_fwd_r1_semaphore_descriptor,
-                sdpa_fwd_r2_semaphore_descriptor,
-                sdpa_bwd_r1_semaphore_descriptor,
-                sdpa_bwd_r2_semaphore_descriptor,
-            ]
-        )
+        # All post-SDPA / SDPA forwarder semaphores are now global (allocated up-front
+        # in attention_block_semaphores), so no per-program SemaphoreDescriptors are needed.
+        semaphore_list = []
 
         kv_cache_tensor_accessor_args = ttnn.TensorAccessorArgs(ref_kv_cache_tensor)
         brisc_compile_time_args = kv_cache_tensor_accessor_args.get_compile_time_args()
@@ -3586,14 +3535,14 @@ class AttentionBlock:
                     if is_type_a:
                         # R1 config: FWD forwarder (BRISC buffer region) → forward neighbor
                         r1_fwd_buffer_base = forwarder_buffer_base
-                        r1_fwd_sem_id = sdpa_fwd_r1_sem_id  # Forward R1 semaphore (ID 8)
+                        r1_fwd_sem_addr = sdpa_fwd_r1_sem_addr  # Forward R1 (global) semaphore
                         r1_slot_idx = fwd_r1_count[link_idx] * sdpa_slots_per_worker
                         fwd_r1_count[link_idx] += 1
                         r1_fwd_slot_addr = r1_fwd_buffer_base + r1_slot_idx * sdpa_fwd_slot_size
                         r1_dst_fabric_node_id = fwd_fabric_node_id  # Type A sends R1 to forward neighbor
                         # R2 config: BWD forwarder (NCRISC buffer region) → backward neighbor
                         r2_fwd_buffer_base = forwarder_buffer_base + ncrisc_buffer_offset
-                        r2_fwd_sem_id = sdpa_bwd_r2_sem_id  # Backward R2 semaphore (ID 11)
+                        r2_fwd_sem_addr = sdpa_bwd_r2_sem_addr  # Backward R2 (global) semaphore
                         r2_slot_idx = bwd_r2_count[link_idx] * sdpa_slots_per_worker
                         bwd_r2_count[link_idx] += 1
                         r2_fwd_slot_addr = (
@@ -3603,14 +3552,14 @@ class AttentionBlock:
                     else:
                         # R1 config: BWD forwarder (NCRISC buffer region) → backward neighbor
                         r1_fwd_buffer_base = forwarder_buffer_base + ncrisc_buffer_offset
-                        r1_fwd_sem_id = sdpa_bwd_r1_sem_id  # Backward R1 semaphore (ID 10)
+                        r1_fwd_sem_addr = sdpa_bwd_r1_sem_addr  # Backward R1 (global) semaphore
                         r1_slot_idx = bwd_r1_count[link_idx] * sdpa_slots_per_worker
                         bwd_r1_count[link_idx] += 1
                         r1_fwd_slot_addr = r1_fwd_buffer_base + r1_slot_idx * sdpa_fwd_slot_size
                         r1_dst_fabric_node_id = bwd_fabric_node_id  # Type B sends R1 to backward neighbor
                         # R2 config: FWD forwarder (BRISC buffer region) → forward neighbor
                         r2_fwd_buffer_base = forwarder_buffer_base
-                        r2_fwd_sem_id = sdpa_fwd_r2_sem_id  # Forward R2 semaphore (ID 9)
+                        r2_fwd_sem_addr = sdpa_fwd_r2_sem_addr  # Forward R2 (global) semaphore
                         r2_slot_idx = fwd_r2_count[link_idx] * sdpa_slots_per_worker
                         fwd_r2_count[link_idx] += 1
                         r2_fwd_slot_addr = (
@@ -3632,10 +3581,10 @@ class AttentionBlock:
                         fwd_core_noc.x,  # fwd_core_x (NOC coordinates)
                         fwd_core_noc.y,  # fwd_core_y (NOC coordinates)
                         r1_fwd_slot_addr,  # r1_fwd_slot_addr
-                        r1_fwd_sem_id,  # r1_fwd_sem_id
+                        r1_fwd_sem_addr,  # r1_fwd_sem_addr
                         r1_slot_idx,  # r1_base_slot_idx
                         r2_fwd_slot_addr,  # r2_fwd_slot_addr
-                        r2_fwd_sem_id,  # r2_fwd_sem_id
+                        r2_fwd_sem_addr,  # r2_fwd_sem_addr
                         r2_slot_idx,  # r2_base_slot_idx
                         scatter_dest_l1_addr,  # scatter_dest_l1_addr
                     ]
@@ -3700,14 +3649,14 @@ class AttentionBlock:
                     sdpa_forwarder_brisc_base_args[(fwd_core.x, fwd_core.y)] = [
                         forwarder_buffer_base,
                         0,
-                        sdpa_fwd_r1_sem_id,
-                        sdpa_fwd_r2_sem_id,
+                        sdpa_fwd_r1_sem_addr,
+                        sdpa_fwd_r2_sem_addr,
                     ]
                     sdpa_forwarder_ncrisc_base_args[(fwd_core.x, fwd_core.y)] = [
                         forwarder_buffer_base,
                         ncrisc_buffer_offset,
-                        sdpa_bwd_r1_sem_id,
-                        sdpa_bwd_r2_sem_id,
+                        sdpa_bwd_r1_sem_addr,
+                        sdpa_bwd_r2_sem_addr,
                     ]
 
                 sdpa_ctx = {
