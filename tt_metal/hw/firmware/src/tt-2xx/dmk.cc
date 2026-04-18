@@ -87,14 +87,23 @@ uint32_t _start() {
         // Setup after the go signal so the previous kernel has completed.
         num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
         my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
-        DPRINT << "num_sw_threads 0x: " << HEX() << num_sw_threads << ENDL();
-        DPRINT << "my_thread_id.  0x: " << HEX() << my_thread_id << ENDL();
+        DPRINT << "Before painting the stack: " << ENDL();
+        DPRINT << "num_sw_threads 0x:" << HEX() << num_sw_threads << ENDL();
+        DPRINT << "my_thread_id.  0x:" << HEX() << my_thread_id << ENDL();
 
         // Paint stack after all thread_local writes and CRT init are done.
         mark_stack_usage();
 
-        DPRINT << "num_sw_threads 0x: " << HEX() << num_sw_threads << ENDL();
-        DPRINT << "my_thread_id.  0x: " << HEX() << my_thread_id << ENDL();
+        DPRINT << "After painting the stack: " << ENDL();
+        DPRINT << "num_sw_threads 0x:" << HEX() << num_sw_threads << ENDL();
+        DPRINT << "my_thread_id.  0x:" << HEX() << my_thread_id << ENDL();
+        extern thread_local uint32_t __stack_base_lwm[];
+        uint32_t sp_val;
+        asm("mv %0,sp" : "=r"(sp_val));
+        DPRINT << "stack pointer (sp)    : " << HEX() << sp_val << ENDL();
+        DPRINT << "stack base            : " << HEX() << (uintptr_t)__stack_base_lwm << ENDL();
+        DPRINT << "addr of num_sw_threads: " << HEX() << (uintptr_t)&num_sw_threads << ENDL();
+        DPRINT << "addr of my_thread_id. : " << HEX() << (uintptr_t)&my_thread_id << ENDL();
 
         EARLY_RETURN_FOR_DEBUG
 
