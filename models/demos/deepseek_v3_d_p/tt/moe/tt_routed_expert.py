@@ -367,10 +367,10 @@ class TtRoutedExpert(LightweightModule):
                 self.down_projs[local_expert],
                 out=ttnn.narrow(expert_outputs, dim=0, start=local_expert, length=1),
             )
-            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
+            # logger.debug(f"Expert {local_expert}: output shape {output.shape}")
 
         # Shape: (experts_per_chip, max_tokens, emb_dim)
-        logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+        # logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
 
         return expert_outputs
 

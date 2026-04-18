@@ -3,8 +3,6 @@
 
 
 import torch
-from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -32,7 +30,7 @@ class TtMoERoutingSetup(LightweightModule):
         seq_len_per_chip: int,
         num_experts_per_tok: int,
     ):
-        signpost(header="MoERoutingSetup")
+        # signpost(header="MoERoutingSetup")
 
         if isinstance(ttnn_top_k_experts_indices, torch.Tensor):
             mesh_mapper = ttnn.ShardTensor2dMesh(
@@ -85,7 +83,7 @@ class TtMoERoutingSetup(LightweightModule):
 
         if len(ttnn_top_k_experts_indices.shape) == 3:
             ttnn_top_k_experts_indices = ttnn.squeeze(ttnn_top_k_experts_indices, 0)
-        logger.debug(f"{ttnn_top_k_experts_indices.shape=}")
+        # logger.debug(f"{ttnn_top_k_experts_indices.shape=}")
 
         # Squeeze to rank 1 — masked_bincount doesn't support rank 2
         if len(self.experts_in_dispatch_group.shape) != 1:
@@ -93,7 +91,7 @@ class TtMoERoutingSetup(LightweightModule):
                 self.experts_in_dispatch_group.shape[0] == 1
             ), "Expected first dimension to be 1 after sharding expert dispatch table"
             self.experts_in_dispatch_group = ttnn.squeeze(self.experts_in_dispatch_group, 0)
-        logger.debug(f"{self.experts_in_dispatch_group.shape=}")
+        # logger.debug(f"{self.experts_in_dispatch_group.shape=}")
 
         expert_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(
             ttnn_top_k_experts_indices, self.experts_in_dispatch_group, num_routed_experts, num_experts_per_tok
@@ -105,6 +103,6 @@ class TtMoERoutingSetup(LightweightModule):
             num_links=self.num_links,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        signpost(header="moe_gate_calculate_dispatch_offsets")
+        # signpost(header="moe_gate_calculate_dispatch_offsets")
 
         return dispatch_offsets, total_counts_per_expert, expert_histograms

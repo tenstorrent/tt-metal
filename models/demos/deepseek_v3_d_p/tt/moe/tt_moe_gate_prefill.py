@@ -11,7 +11,6 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -356,8 +355,8 @@ class TtMoEGatePrefill(LightweightModule):
         ), f"Expected per-device dim {self.config.dim // n_tp_devices}, got {per_device_dim}"
         config_key = (self.config.sp_dim, per_device_dim)
         program_config = self.config.mm_configs.get(config_key)
-        if program_config is None:
-            logger.warning(f"[MoeGate] No matmul program config for {config_key}, using TTNN default")
+        # if program_config is None:
+        #     logger.warning(f"[MoeGate] No matmul program config for {config_key}, using TTNN default")
 
         logits = ttnn.matmul(
             x,
@@ -419,15 +418,15 @@ class TtMoEGatePrefill(LightweightModule):
         logger.debug(f"[MoeGate] fallback_mode={mode.value}")
 
         # ---- Phase 1: Logits (matmul) ----
-        signpost(header="moe_gate_linear")
+        # signpost(header="moe_gate_linear")
         if mode in (GateComputeMode.DEVICE, GateComputeMode.HOST_GROUPED_GATE):
             logits = self._device_matmul(x)
         else:  # HOST_MATMUL, HOST_ALL
             host_logits = self._host_matmul(x)
-        signpost(header="moe_gate_linear")
+        # signpost(header="moe_gate_linear")
 
         # ---- Phase 2: Grouped gate ----
-        signpost(header="moe_gate_grouped_gate")
+        # signpost(header="moe_gate_grouped_gate")
         if mode == GateComputeMode.DEVICE:
             ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate(logits)
 
@@ -446,10 +445,10 @@ class TtMoEGatePrefill(LightweightModule):
             ttnn_scores = self._host_scores_to_device(host_scores)
             ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
             logits = self._host_logits_to_device(host_logits)
-        signpost(header="moe_gate_grouped_gate")
+        # signpost(header="moe_gate_grouped_gate")
 
         # ---- Phase 3: Routing setup ----
-        signpost(header="moe_gate_calculate_dispatch_offsets")
+        # signpost(header="moe_gate_calculate_dispatch_offsets")
         ttnn_top_k_experts_indices = ttnn.to_layout(ttnn_top_k_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
 
         dispatch_offsets, total_counts_per_expert, _ = self.routing_setup(
@@ -458,6 +457,6 @@ class TtMoEGatePrefill(LightweightModule):
             seq_len_per_chip=self.config.sp_dim,
             num_experts_per_tok=self.config.n_activated_experts,
         )
-        signpost(header="moe_gate_calculate_dispatch_offsets")
+        # signpost(header="moe_gate_calculate_dispatch_offsets")
 
         return (ttnn_scores, ttnn_top_k_experts_indices, logits, dispatch_offsets, total_counts_per_expert)

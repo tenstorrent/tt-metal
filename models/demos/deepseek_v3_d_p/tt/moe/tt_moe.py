@@ -326,7 +326,9 @@ class TtMoe(LightweightModule):
             - intermediates: TtMoEIntermediates if return_intermediates=True, else None
         """
         logger.debug(f"[TtMoe.forward] INPUT SHAPES:")
-        logger.debug(f"  x.shape={x.shape}")
+        # logger.debug(f"  x.shape={x.shape}")
+        return_intermediates = None
+        logger.debug(f"Return intermediates = {return_intermediates}")
 
         # ========================================
         # Gate: compute weights/indices/offsets/counts from x
@@ -341,9 +343,9 @@ class TtMoe(LightweightModule):
 
         # DEBUG
         # Print full token counts per expert for monitoring
-        _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
-        _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
-        _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
+        # _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
+        # _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
+        # _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
         # logger.info(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
 
         # Gate outputs uint16 indices; dispatch requires int32.
@@ -365,8 +367,8 @@ class TtMoe(LightweightModule):
         weights = ttnn.reshape(scores, (batch_dim, seq_dim, scores.shape[-1]))
         indices = ttnn.reshape(indices_raw, (batch_dim, seq_dim, indices_raw.shape[-1]))
 
-        logger.debug(f"  weights.shape={weights.shape}")
-        logger.debug(f"  indices.shape={indices.shape}")
+        # logger.debug(f"  weights.shape={weights.shape}")
+        # logger.debug(f"  indices.shape={indices.shape}")
 
         # ========================================
         # Step 0: All-gather x to get full emb_dim (replicated across TP axis)
@@ -384,7 +386,7 @@ class TtMoe(LightweightModule):
             )
         else:
             x_full = x  # No TP sharding, x already has full emb_dim
-        logger.debug(f"[TtMoe.forward] x_full (after all_gather) shape: {x_full.shape}")
+        # logger.debug(f"[TtMoe.forward] x_full (after all_gather) shape: {x_full.shape}")
 
         # ========================================
         # Step 1: Shared expert (enabled)
@@ -392,10 +394,10 @@ class TtMoe(LightweightModule):
         # Shared expert expects replicated input (full emb_dim)
         # Convert x_full to TILE_LAYOUT for shared expert
         x_full_tiled = ttnn.to_layout(x_full, ttnn.TILE_LAYOUT)
-        logger.debug(f"[TtMoe.forward] x_full_tiled shape: {x_full_tiled.shape}")
+        # logger.debug(f"[TtMoe.forward] x_full_tiled shape: {x_full_tiled.shape}")
 
         shared_output = self.shared_expert(x_full_tiled)
-        logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
+        # logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
 
         # ========================================
         # Step 2: Dispatch (enabled)
@@ -409,7 +411,7 @@ class TtMoe(LightweightModule):
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
         )
-        logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
+        # logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
 
         # ========================================
         # Step 3: Routed experts (enabled)
@@ -419,34 +421,34 @@ class TtMoe(LightweightModule):
         # Squeeze the first two dimensions
         dispatched_buffer_squeezed = ttnn.squeeze(dispatched_buffer, dim=0)
         dispatched_buffer_squeezed = ttnn.squeeze(dispatched_buffer_squeezed, dim=0)
-        logger.debug(f"[TtMoe.forward] dispatched_buffer_squeezed shape: {dispatched_buffer_squeezed.shape}")
+        # logger.debug(f"[TtMoe.forward] dispatched_buffer_squeezed shape: {dispatched_buffer_squeezed.shape}")
 
         # Convert dispatched_buffer to TILE_LAYOUT for routed experts
         dispatched_buffer_tiled = ttnn.to_layout(dispatched_buffer_squeezed, ttnn.TILE_LAYOUT)
-        logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
+        # logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
 
         expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts)
-        logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
+        # logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
         # Add back the batch dimensions for combine
         # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
         expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
         expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
-        logger.debug(f"[TtMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
+        # logger.debug(f"[TtMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
 
         # ========================================
         # Step 4: Combine (enabled)
         # ========================================
         # Combine expects ROW_MAJOR input
         expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
-        logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
+        # logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
 
         combined_output = self.combine_module(
             expert_outputs_rm,
             metadata,
             tt_expert_token_counts,
         )
-        logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape}")
+        # logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape}")
 
         # ========================================
         # Step 5: Reduce (fused weighted sum over topk + reduce-scatter for TP sharding)
@@ -458,12 +460,12 @@ class TtMoe(LightweightModule):
         # 1. Fused weighted sum over topk (dim=3): reads ROW_MAJOR, outputs TILE_LAYOUT
         # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
         routed_output = self.reduce_module(combined_output, weights=weights)
-        logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
+        # logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
 
         # Remove extra batch dimensions to match shared_output shape
         # (1, 1, 256, 512) -> (1, 256, 512)
         routed_output = ttnn.squeeze(routed_output, dim=0)
-        logger.debug(f"[TtMoe.forward] routed_output (squeezed) shape: {routed_output.shape}")
+        # logger.debug(f"[TtMoe.forward] routed_output (squeezed) shape: {routed_output.shape}")
 
         # ========================================
         # Step 6: Final output
@@ -471,11 +473,11 @@ class TtMoe(LightweightModule):
         # final_output = routed_output + shared_output
         # Both should be in TILE_LAYOUT with shape (dispatch_group_size, seq_len_per_chip, emb_dim)
         final_output = ttnn.add(routed_output, shared_output)
-        logger.debug(f"[TtMoe.forward] final_output (tiled) shape: {final_output.shape}")
+        # logger.debug(f"[TtMoe.forward] final_output (tiled) shape: {final_output.shape}")
 
         # Convert to ROW_MAJOR for output consistency
         final_output = ttnn.to_layout(final_output, ttnn.ROW_MAJOR_LAYOUT)
-        logger.debug(f"[TtMoe.forward] Final output shape: {final_output.shape}")
+        # logger.debug(f"[TtMoe.forward] Final output shape: {final_output.shape}")
 
         # Build intermediates if requested
         intermediates = None

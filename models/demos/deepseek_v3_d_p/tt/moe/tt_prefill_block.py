@@ -314,14 +314,25 @@ class TtPrefillBlock(LightweightModule):
             (output_tensor, kv_cache) where kv_cache is a host tensor or None
         """
         # --- Attention ---
+        logger.debbug(f"attn norm start")
         attn_norm_out = self.attn_norm(x)
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug(f"attn norm end, mla start")
+
         mla_out = self.mla.forward(attn_norm_out, rope_tensors, kvpe_cache, cache_user_idx=cache_layer_idx)
         ttnn.deallocate(attn_norm_out)
         x = ttnn.add(x, mla_out)
         ttnn.deallocate(mla_out)
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug(f"mla end, ffn norm start")
 
         # --- FFN ---
         ffn_norm_out = self.ffn_norm(x)
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug(f"ffn norm end, moe start")
 
         if self.is_moe:
             ffn_out = self._moe_path(ffn_norm_out)
@@ -329,11 +340,16 @@ class TtPrefillBlock(LightweightModule):
             ffn_out = self._dense_ffn_path(ffn_norm_out)
 
         ttnn.deallocate(ffn_norm_out)
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug(f"ffn end, adding residual")
         x = ttnn.add(x, ffn_out)
         ttnn.deallocate(ffn_out)
 
-        kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
-        return x, kv_cache
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug(f"layer end")
+        return x, None
 
     def _moe_path(self, ffn_norm_out: ttnn.Tensor) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE."""
