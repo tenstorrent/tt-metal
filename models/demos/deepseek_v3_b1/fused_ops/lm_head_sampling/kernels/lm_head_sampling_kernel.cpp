@@ -1034,6 +1034,21 @@ void kernel_main() {
 
             cb_reserve_back(eh_gather_dst_cb, eh_gather_num_pages);
             cb_push_back(eh_gather_dst_cb, eh_gather_num_pages);
+
+            if constexpr (Core::enable_mtp && eh_gather_num_pages > 0) {
+                invalidate_l1_cache();
+                uint32_t gather_base = get_read_ptr(eh_gather_dst_cb);
+                constexpr uint32_t tile_bytes = 64;
+                constexpr uint32_t pages_per_chunk = eh_gather_num_pages / 8;
+                for (uint32_t chunk = 0; chunk < 8; chunk++) {
+                    uint32_t chunk_offset = chunk * pages_per_chunk * tile_bytes;
+                    auto* bp = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(gather_base + chunk_offset);
+                    DPRINT << "mtp_logits C" << chunk << ":";
+                    for (uint32_t i = 0; i < 8; i++) DPRINT << " " << BF16(bp[i]);
+                    DPRINT << ENDL();
+                }
+            }
+
             cb_wait_front(argmax_socket_cb, 1);
             uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
             write_token_metadata_to_socket_cb(
@@ -1078,7 +1093,9 @@ void kernel_main() {
             volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
             invalidate_l1_cache();
+            DPRINT << "spec token id=" << spec_token_id << ENDL();
             uint32_t base_token_id = metadata_ptr->tok0_id;
+            DPRINT << "base token id=" << base_token_id << ENDL();
             uint32_t base_token_type = metadata_ptr->tok0_type;
             uint32_t base_token_pos = metadata_ptr->tok0_pos + 1;
             uint32_t slot_id = metadata_ptr->slot_id;

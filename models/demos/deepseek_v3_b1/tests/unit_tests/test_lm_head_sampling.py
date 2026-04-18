@@ -17,6 +17,7 @@ In single-device mode (skip_ccl=True): CCL is skipped and the input is used dire
 import os
 import re
 import statistics
+import time
 from pathlib import Path
 
 import pytest
@@ -1033,7 +1034,7 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
 
         _h_var = torch_input.float().pow(2).mean(-1, keepdim=True)
         _h_norm = torch_input.float() * torch.rsqrt(_h_var + 1e-6) * torch_h_gamma.float()
-        _tok_emb = torch_embedding[base_token, :].unsqueeze(0).float()
+        _tok_emb = torch_embedding[iteration, :].unsqueeze(0).float()
         _e_var = _tok_emb.pow(2).mean(-1, keepdim=True)
         _e_norm = _tok_emb * torch.rsqrt(_e_var + 1e-6) * torch_e_gamma.float()
         _concat = torch.cat([_e_norm, _h_norm], dim=-1)
@@ -1082,6 +1083,13 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
             f"[GOLDEN] iter {iteration} reduced_logits first8: {_red_head}",
             flush=True,
         )
+        for _chunk in range(8):
+            _c_start = _chunk * _n_per_core
+            _c_vals = " ".join(f"{_reduced_logits[0, _c_start + i].item():.4f}" for i in range(8))
+            print(
+                f"[GOLDEN] iter {iteration} mtp_logits C{_chunk}: {_c_vals}",
+                flush=True,
+            )
 
         spec_token_tensor, _ = LMHeadSampling.golden(
             _reduced_logits,
@@ -4909,6 +4917,7 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
             tok1_type = 0
             tok1_pos = 0
 
+            round_trip_times_us = []
             for iteration in range(iterations):
                 print(f"[TEST P{pid}] iter {iteration} write_token", flush=True)
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
@@ -4922,9 +4931,13 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
+                t_start = time.perf_counter()
                 pipeline.write_token(token_tensor)
                 print(f"[TEST P{pid}] iter {iteration} read_output", flush=True)
                 pipeline.read_output(output_tensor)
+                t_end = time.perf_counter()
+                round_trip_us = (t_end - t_start) * 1e6
+                round_trip_times_us.append(round_trip_us)
                 print(f"[TEST P{pid}] iter {iteration} to_torch", flush=True)
                 raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
 
@@ -4945,9 +4958,23 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
                 print(
                     f"[TEST P{pid}] iter {iteration} "
                     f"t0={tok0_id}/{type_name.get(tok0_type,'?')} "
-                    f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
-                    f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
-                    f"golden base token={expected_base} golden spec token={expected_spec}",
+                    f"t1={tok1_id}/{type_name.get(tok1_type,'?')} "
+                    f"t0 pos={tok0_pos} t1 pos={tok1_pos} "
+                    f"golden base={expected_base} spec={expected_spec} "
+                    f"round_trip={round_trip_us:.0f}us ({round_trip_us/1000:.2f}ms)",
+                    flush=True,
+                )
+            if round_trip_times_us:
+                avg_us = statistics.mean(round_trip_times_us)
+                med_us = statistics.median(round_trip_times_us)
+                mn_us = min(round_trip_times_us)
+                mx_us = max(round_trip_times_us)
+                print(
+                    f"[TEST P{pid}] round-trip stats over {len(round_trip_times_us)} iters: "
+                    f"avg={avg_us:.0f}us ({avg_us/1000:.2f}ms) "
+                    f"median={med_us:.0f}us ({med_us/1000:.2f}ms) "
+                    f"min={mn_us:.0f}us ({mn_us/1000:.2f}ms) "
+                    f"max={mx_us:.0f}us ({mx_us/1000:.2f}ms)",
                     flush=True,
                 )
         print(f"[TEST P{pid}] all iterations done, barrier", flush=True)
