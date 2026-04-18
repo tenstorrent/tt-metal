@@ -166,8 +166,15 @@ run_t3000_ttnn_tests() {
   # FABRIC_2D open/close cycles to catch accumulated ERISC state (CI Iters 3-5).
   # Scenarios J/K (AsyncTeardownFabric1DQuiesceFixture) test FABRIC_1D quiesce_devices()
   # with has_tensix_mux=false — the iter12 regression path that Scenarios H/I miss.
-  timeout 240 ./build/test/tt_metal/distributed/distributed_unit_tests \
-    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*' ; fail+=$?
+  # Scenario L (AsyncTeardownFabric2DRepeatFixture.Fabric2DSlowKernelTeardownRace) fills
+  # the gap between Scenario F (slow kernel, no ERISC) and Scenario D (ERISC, blank kernel):
+  # FABRIC_2D + busy_spin = both ERISC EDM and BRISC active when close() fires.
+  # Scenario M (AsyncTeardownKillPredecessorFixture) is the CRITICAL missing test:
+  # fork()+SIGKILL simulates predecessor test being killed; ERISCs left in ACTIVE state;
+  # parent re-opens → terminate_stale_erisc_routers() ACTIVE path exercised for the first
+  # time. This is the exact CI failure scenario the fix was written to handle. (+15s wait)
+  timeout 360 ./build/test/tt_metal/distributed/distributed_unit_tests \
+    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*' ; fail+=$?
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
