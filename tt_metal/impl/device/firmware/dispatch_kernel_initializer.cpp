@@ -251,7 +251,7 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
         // This allows the device handles to be properly released, enabling subsequent
         // device opens and tt-smi resets to succeed.
         try {
-            tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
+            tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0, false);
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal,
