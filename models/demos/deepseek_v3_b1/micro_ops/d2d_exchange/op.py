@@ -479,6 +479,14 @@ class SocketInterface:
                 ],
             )
 
+        print(
+            f"[D2D_MU DIAG] num_upstream={num_upstream} "
+            f"upstream_page_size={self.upstream_page_size} "
+            f"page_size(downstream)={self.page_size} "
+            f"total_upstream_bytes={num_upstream * self.upstream_page_size} "
+            f"match={'YES' if num_upstream * self.upstream_page_size == self.page_size else 'NO (MISMATCH!)'}",
+            flush=True,
+        )
         kernel_ct_args = [
             downstream_socket_config_addr,  # 0: sender_socket_config_addr
             num_upstream,  # 1: num_upstream_sockets

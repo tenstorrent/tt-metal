@@ -1335,6 +1335,8 @@ class MoeRoutedExpertOp:
             for shard_idx, core in enumerate(reduce_worker_cores_list):
                 reduce_core_to_shard_idx[(core.x, core.y)] = shard_idx
 
+            reduce_downstream_socket_page_size = down_proj_width_per_core * reduce_element_size
+
             reduce_params = {
                 "sem_round1_addr": reduce_sem_round1_addr,
                 "sem_round2_addr": reduce_sem_round2_addr,
@@ -1345,6 +1347,7 @@ class MoeRoutedExpertOp:
                 "payload_size_bytes": reduce_payload_size_bytes,
                 "slot_size_bytes": reduce_slot_size_bytes,
                 "compute_tile_size": reduce_compute_tile_size,
+                "downstream_socket_page_size": reduce_downstream_socket_page_size,
                 "worker_cores_list": reduce_worker_cores_list,
                 "num_workers": reduce_num_workers,
                 "num_workers_per_column": reduce_num_workers_per_column,
@@ -1699,6 +1702,7 @@ class MoeRoutedExpertOp:
             ("reduce_r2_buffer_offset", ctx.reduce_params["r2_buf_offset"] if ctx.reduce_params else 0),
             ("reduce_ncrisc_buffer_offset", ctx.reduce_params["ncrisc_buf_offset"] if ctx.reduce_params else 0),
             ("reduce_is_exit_column", 0),
+            ("reduce_is_residual_device", 0),
             # Broadcast / Forward (base CT args, always present)
             ("bcast_pkt_cb", ctx.bcast_pkt_cb if (ctx.enable_bcast or ctx.enable_forward) else 0),
             ("bcast_ncrisc_common_rt_arg_base", 0),
@@ -1819,6 +1823,9 @@ class MoeRoutedExpertOp:
             ("reduce_total_num_workers", ctx.reduce_params["num_workers"] if ctx.reduce_params else 0),
             ("reduce_persistent_fabric_signal_enable", 0),
             ("reduce_is_exit_column", 0),
+            ("reduce_is_residual_device", 0),
+            ("reduce_output_core_noc_x", 0),
+            ("reduce_output_core_noc_y", 0),
             # Broadcast / Forward (base CT args, always present)
             ("bcast_pkt_cb", ctx.bcast_pkt_cb if (ctx.enable_bcast or ctx.enable_forward) else 0),
             # Forward BRISC CT args
@@ -1917,6 +1924,7 @@ class MoeRoutedExpertOp:
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
             ("reduce_reload_cb", ctx.reduce_reload_cb),
             ("reduce_is_exit_column", 0),
+            ("reduce_is_residual_device", 0),
         ]
         return ncrisc_named_compile_time_args, brisc_named_compile_time_args, trisc_named_compile_time_args
 
@@ -4190,8 +4198,24 @@ class MoeOp:
 
         is_exit_col = 1 if (self.exit_column is not None and col == self.exit_column) else 0
 
-        # Socket page size for downstream sending (only exit column sends downstream)
-        socket_page_size = rp["payload_size_bytes"] if (self.downstream_sockets and is_exit_col) else 0
+        # Output core physical NOC coordinates (workers write to this core)
+        output_shard_spec = out_tensor.memory_config().shard_spec
+        output_core_logical = output_shard_spec.grid.ranges()[0].start
+        output_core_phys = routed_ctx.device.worker_core_from_logical_core(output_core_logical)
+
+        # Socket page size for downstream sending (only exit column sends downstream).
+        # Use the unpadded per-shard size so that N_workers * socket_page_size == K * element_size.
+        socket_page_size = rp["downstream_socket_page_size"] if (self.downstream_sockets and is_exit_col) else 0
+        if is_exit_col and self.downstream_sockets:
+            print(
+                f"[MoE DIAG] chip_id={chip_id} row={row} col={col} "
+                f"reduce_socket_page_size={socket_page_size} "
+                f"reduce_payload_size_bytes(padded)={rp['payload_size_bytes']} "
+                f"downstream_socket_page_size(unpadded)={rp['downstream_socket_page_size']} "
+                f"num_workers={rp['num_workers']} "
+                f"total_socket_bytes={rp['num_workers']}*{socket_page_size}={rp['num_workers']*socket_page_size}",
+                flush=True,
+            )
 
         def _update_brisc_ct(name, value):
             for i, (n, _v) in enumerate(self.brisc_args):
@@ -4214,7 +4238,16 @@ class MoeOp:
         _update_brisc_ct("reduce_is_exit_column", is_exit_col)
         _update_ncrisc_ct("reduce_is_exit_column", is_exit_col)
         _update_trisc_ct("reduce_is_exit_column", is_exit_col)
+        _update_brisc_ct("reduce_output_core_noc_x", output_core_phys.x)
+        _update_brisc_ct("reduce_output_core_noc_y", output_core_phys.y)
         _update_brisc_ct("reduce_socket_page_size", socket_page_size)
+
+        # Only ONE device adds the residual before the reduce so it is counted
+        # exactly once in the cross-device sum (same semantics as main's ROOT1).
+        is_residual_device = 1 if chip_id == 0 else 0
+        _update_brisc_ct("reduce_is_residual_device", is_residual_device)
+        _update_ncrisc_ct("reduce_is_residual_device", is_residual_device)
+        _update_trisc_ct("reduce_is_residual_device", is_residual_device)
 
         # Persistent signal: designate chip_id==0 as the aggregator device
         is_persistent_device = (
@@ -4377,8 +4410,21 @@ class MoeOp:
                     device_sockets = self.downstream_sockets[chip_id]
                     if isinstance(device_sockets, list):
                         socket_config_addr = device_sockets[shard_idx].get_config_buffer_address()
+                        print(
+                            f"[MoE DIAG] chip_id={chip_id} worker_idx={worker_idx} "
+                            f"shard_idx={shard_idx} core=({core.x},{core.y}) "
+                            f"socket_config_addr=0x{socket_config_addr:x} "
+                            f"num_downstream_sockets={len(device_sockets)}",
+                            flush=True,
+                        )
                     else:
                         socket_config_addr = device_sockets.get_config_buffer_address()
+                        print(
+                            f"[MoE DIAG] chip_id={chip_id} worker_idx={worker_idx} "
+                            f"shard_idx={shard_idx} core=({core.x},{core.y}) "
+                            f"socket_config_addr=0x{socket_config_addr:x} (single socket)",
+                            flush=True,
+                        )
 
                 worker_agg_sem_addr = 0
                 worker_agg_noc_x = 0
@@ -4420,6 +4466,7 @@ class MoeOp:
                     0,  # 26 persistent_dst_mesh_id (local signal)
                     0,  # 27 persistent_dst_chip_id (local signal)
                     persistent_dst_sem_addr if is_persistent_agg else 0,  # 28
+                    shard_idx,  # 29
                 ]
                 reduce_brisc_per_core_args.append((core, worker_args))
 

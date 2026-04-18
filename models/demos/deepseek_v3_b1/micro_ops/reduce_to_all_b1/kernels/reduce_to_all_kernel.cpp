@@ -26,7 +26,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("packet_cb"),
         get_named_compile_time_arg_val("payload_size_bytes"),
         get_named_compile_time_arg_val("r2_buffer_offset"),
-        get_named_compile_time_arg_val("ncrisc_buffer_offset")>;
+        get_named_compile_time_arg_val("ncrisc_buffer_offset"),
+        get_named_compile_time_arg_val("is_exit_column")>;
 
     ReduceToAll::ReaderArgs rt_args{};
     if constexpr (CTArgs::is_fabric_core == 0) {
@@ -57,7 +58,15 @@ void kernel_main() {
         get_named_compile_time_arg_val("slots_per_direction"),
         get_named_compile_time_arg_val("r2_buffer_offset"),
         get_named_compile_time_arg_val("ncrisc_buffer_offset"),
-        get_named_compile_time_arg_val("r3_buffer_offset")>;
+        get_named_compile_time_arg_val("r3_buffer_offset"),
+        0,  // socketPageSize (unused in standalone)
+        0,  // totalNumWorkers (unused in standalone)
+        0,  // persistentFabricSignalEnable (unused in standalone)
+        get_named_compile_time_arg_val("is_exit_column"),
+        0,  // useRawSemAddrs (use get_semaphore for program-local sems)
+        1,  // isReduceToAll: all devices send AND receive R3
+        get_named_compile_time_arg_val("output_core_noc_x"),
+        get_named_compile_time_arg_val("output_core_noc_y")>;
 
     ReduceToAll::WorkerWriterArgs rt_args{};
     if constexpr (CTArgs::is_fabric_core == 0) {
@@ -91,6 +100,7 @@ void kernel_main() {
             0,                                         // persistent_dst_mesh_id
             0,                                         // persistent_dst_chip_id
             0,                                         // persistent_dst_sem_addr
+            get_arg_val<uint32_t>(19),                 // shard_idx
         };
     }
 
@@ -101,7 +111,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("received_cb"),
         get_named_compile_time_arg_val("scratch_cb"),
         get_named_compile_time_arg_val("reload_cb"),
-        get_named_compile_time_arg_val("is_fabric_core")>;
+        get_named_compile_time_arg_val("is_fabric_core"),
+        get_named_compile_time_arg_val("is_exit_column")>;
 
     ReduceToAll::ComputeArgs rt_args{};
     deepseek_compute_kernel_init();

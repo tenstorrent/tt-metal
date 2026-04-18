@@ -178,6 +178,11 @@ class ReduceToAllB1:
                 r2_recv_l1 = intermediate_base + payload_size_bytes
                 r3_recv_l1 = intermediate_base + 2 * payload_size_bytes
 
+                # Output core physical NOC coordinates
+                output_shard_spec = output_tensor_device.memory_config().shard_spec
+                output_core_logical = output_shard_spec.grid.ranges()[0].start
+                output_core_phys = device.worker_core_from_logical_core(output_core_logical)
+
                 # A/B split: half workers per link in each type
                 slots_per_direction = num_workers_per_link // 2
 
@@ -193,14 +198,13 @@ class ReduceToAllB1:
 
                 # Gather per-link info
                 links = []
-                num_cols = len(sorted_columns)
-                for col_idx, x in enumerate(sorted_columns):
+                for link_idx, x in enumerate(sorted_columns):
                     cores_for_link = column_to_cores[x]
                     fc = column_to_fabric_core[x]
                     fc_phys = device.worker_core_from_logical_core(fc)
                     links.append(
                         {
-                            "link_idx": 0 if col_idx < num_cols // 2 else 1,
+                            "link_idx": link_idx,
                             "cores": cores_for_link,
                             "fc": fc,
                             "fc_phys": fc_phys,
@@ -218,6 +222,7 @@ class ReduceToAllB1:
                     ("payload_size_bytes", payload_size_bytes),
                     ("r2_buffer_offset", r2_buf_offset),
                     ("ncrisc_buffer_offset", ncrisc_buf_offset),
+                    ("is_exit_column", 1),
                     ("num_loop_iters", num_iterations),
                 ]
 
@@ -240,6 +245,9 @@ class ReduceToAllB1:
                     ("r2_buffer_offset", r2_buf_offset),
                     ("ncrisc_buffer_offset", ncrisc_buf_offset),
                     ("r3_buffer_offset", r3_buf_offset),
+                    ("is_exit_column", 1),
+                    ("output_core_noc_x", output_core_phys.x),
+                    ("output_core_noc_y", output_core_phys.y),
                     ("num_loop_iters", num_iterations),
                 ]
 
@@ -249,6 +257,7 @@ class ReduceToAllB1:
                     ("received_cb", received_cb),
                     ("scratch_cb", scratch_cb),
                     ("reload_cb", reload_cb),
+                    ("is_exit_column", 1),
                     ("num_loop_iters", num_iterations),
                 ]
 
@@ -259,13 +268,15 @@ class ReduceToAllB1:
                 brisc_per_core_args = []
                 ncrisc_per_core_args = []
 
+                # Build core → global shard index mapping
+                core_to_shard_idx = {}
+                for idx, core in enumerate(input_cores_list):
+                    core_to_shard_idx[(core.x, core.y)] = idx
+
                 for link_info in links:
                     fc_phys = link_info["fc_phys"]
                     fc = link_info["fc"]
 
-                    # Direction configs — mirrors sdpa_reduce_to_all DirectionConfig
-                    # FWD: buffer starts at packet_cb base (offset 0)
-                    # BWD: buffer starts at ncrisc_buf_offset
                     class DirCfg:
                         def __init__(self, r1_sem, r2_sem, buf_base_offset):
                             self.r1_sem = r1_sem
@@ -301,6 +312,7 @@ class ReduceToAllB1:
                         r3_slot_off = r3_buf_offset + worker_idx * slot_size_bytes
                         r3_slot_b = 1 << worker_idx
 
+                        shard_idx = core_to_shard_idx[(core.x, core.y)]
                         worker_args = [
                             fc_phys.x,  # 0
                             fc_phys.y,  # 1
@@ -321,6 +333,7 @@ class ReduceToAllB1:
                             r3_slot_off,  # 16
                             r3_slot_b,  # 17
                             r3_fwd_sem_id,  # 18 (sem ID, resolved via get_semaphore)
+                            shard_idx,  # 19
                         ]
                         brisc_per_core_args.append((core, worker_args))
 

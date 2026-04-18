@@ -96,7 +96,7 @@ class SDPA:
     KV_CACHE_SHARD_HEIGHT = 256
     KVPE_DIM = 576
     OUT_INTERM_SHARD_HEIGHT = 40
-    OUT_INTERM_SHARD_WIDTH = 544
+    OUT_INTERM_SHARD_WIDTH = 1024
 
 
 class Tiles:
@@ -109,7 +109,7 @@ class Tiles:
 class TestConfig:
     NUM_ITERATIONS = 100
     NUM_DEVICES_4x2 = 8  # for 4x2 mesh tests
-    REDUCE_ROOT_COORD = (1, 1)
+    REDUCE_ROOT_COORD = (1, 0)
     REDUCE_NUM_ROUNDS = 3
     REDUCE_NUM_SEMAPHORES = 4
 
@@ -449,7 +449,9 @@ def create_routed_expert_tensors(
                 device, state_dict, layer_idx, is_moe, from_torch_kwargs
             )
         else:
-            attn = prepare_attention_weights(bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
+            attn = prepare_attention_weights(
+                device, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True
+            )
             ttnn_gate_mm_weights = attn.gate_mm
             ttnn_rmsnorm_gamma = attn.ffn_norm
     if ttnn_gate_mm_weights is not None:
@@ -994,7 +996,7 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D})],
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y})],
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
@@ -1211,6 +1213,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
         semaphores=moe_semaphores,
         noc_mode=noc_mode,
+        exit_column=0,
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -1651,6 +1654,7 @@ def test_mlp_with_reduce(
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
         semaphores=moe_semaphores,
         noc_mode=noc_mode,
+        exit_column=0,
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"MoeOp no-routing with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")

@@ -258,7 +258,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_payload_size_bytes"),
                 get_named_compile_time_arg_val("reduce_r2_buffer_offset"),
                 get_named_compile_time_arg_val("reduce_ncrisc_buffer_offset"),
-                get_named_compile_time_arg_val("reduce_is_exit_column")>;
+                get_named_compile_time_arg_val("reduce_is_exit_column"),
+                1>;  // useRawSemAddrs: MoE uses global semaphore addresses directly
 
             deepseek_b1_ops::ReduceToAllB1::ReaderArgs reduce_rt_args{};
 #endif
@@ -561,7 +562,11 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_socket_page_size"),
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
                 get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable"),
-                get_named_compile_time_arg_val("reduce_is_exit_column")>;
+                get_named_compile_time_arg_val("reduce_is_exit_column"),
+                1,  // useRawSemAddrs
+                0,  // isReduceToAll
+                get_named_compile_time_arg_val("reduce_output_core_noc_x"),
+                get_named_compile_time_arg_val("reduce_output_core_noc_y")>;
 
             deepseek_b1_ops::ReduceToAllB1::WorkerWriterArgs reduce_rt_args{};
             // Populated below after struct initialization
@@ -704,6 +709,7 @@ void kernel_main() {
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 26),  // persistent_dst_mesh_id
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 27),  // persistent_dst_chip_id
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 28),  // persistent_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 29),  // shard_idx
         };
     }
 #endif
@@ -1339,12 +1345,12 @@ void kernel_main() {
         }
 
         // 11d. Shared: Residual Add — matmul_out + shard(residual) on 112 cores
-        //      With reduce-to-all every device holds the full sum, so every device
-        //      performs the residual add (the sum already accounts for all devices).
+        //      Only one device adds the residual so it is counted exactly once
+        //      after the cross-device reduce sum.
         {
             DeviceZoneScopedN("SHARED_RESIDUAL_ADD");
 #ifdef ENABLE_REDUCE_TO_ALL
-            constexpr bool skip_residual_add = false;
+            constexpr bool skip_residual_add = get_named_compile_time_arg_val("reduce_is_residual_device") == 0;
             deepseek_b1_ops::ResidualAdd::
                 Op<Moe::Shared::ResidualAddCTArgs, Core::Shared::is_mcast_receiver_core, skip_residual_add>
                     shared_residual_add;
@@ -1446,6 +1452,7 @@ void kernel_main() {
 
         if constexpr (persistent_mode == 0) {
             if (iteration >= num_iterations) {
+                DPRINT << "MOE: completed " << iteration << " iterations, exiting\n";
                 break;
             }
         }
@@ -1457,5 +1464,8 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+#endif
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
+    DPRINT << "MOE: kernel done\n";
 #endif
 }

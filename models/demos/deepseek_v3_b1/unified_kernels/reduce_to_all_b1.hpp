@@ -65,7 +65,8 @@ struct ReduceToAllB1 {
         uint32_t payloadSizeBytes,
         uint32_t r2BufferOffset,
         uint32_t ncriscBufferOffset,
-        uint32_t isExitColumn = 0>
+        uint32_t isExitColumn = 0,
+        uint32_t useRawSemAddrs = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t local_cb = localCb;
@@ -78,6 +79,7 @@ struct ReduceToAllB1 {
         static constexpr uint32_t r2_buffer_offset = r2BufferOffset;
         static constexpr uint32_t ncrisc_buffer_offset = ncriscBufferOffset;
         static constexpr uint32_t is_exit_column = isExitColumn;
+        static constexpr uint32_t use_raw_sem_addrs = useRawSemAddrs;
 
         static constexpr uint32_t all_sent_mask =
             (slotsPerDirection == 32) ? 0xFFFF'FFFFu : ((1u << slotsPerDirection) - 1u);
@@ -106,7 +108,11 @@ struct ReduceToAllB1 {
         uint32_t socketPageSize = 0,
         uint32_t totalNumWorkers = 0,
         uint32_t persistentFabricSignalEnable = 0,
-        uint32_t isExitColumn = 0>
+        uint32_t isExitColumn = 0,
+        uint32_t useRawSemAddrs = 0,
+        uint32_t isReduceToAll = 0,
+        uint32_t outputCoreNocX = 0,
+        uint32_t outputCoreNocY = 0>
     struct WriterCTArgs {
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t payload_size_bytes = payloadSizeBytes;
@@ -132,6 +138,10 @@ struct ReduceToAllB1 {
         static constexpr uint32_t total_num_workers = totalNumWorkers;
         static constexpr uint32_t persistent_fabric_signal_enable = persistentFabricSignalEnable;
         static constexpr uint32_t is_exit_column = isExitColumn;
+        static constexpr uint32_t use_raw_sem_addrs = useRawSemAddrs;
+        static constexpr uint32_t is_reduce_to_all = isReduceToAll;
+        static constexpr uint32_t output_core_noc_x = outputCoreNocX;
+        static constexpr uint32_t output_core_noc_y = outputCoreNocY;
 
         static constexpr uint32_t all_sent_mask =
             (slotsPerDirection == 32) ? 0xFFFF'FFFFu : ((1u << slotsPerDirection) - 1u);
@@ -203,6 +213,7 @@ struct ReduceToAllB1 {
         uint32_t persistent_dst_mesh_id;
         uint32_t persistent_dst_chip_id;
         uint32_t persistent_dst_sem_addr;
+        uint32_t shard_idx;
     };
 
     struct ComputeArgs {};
@@ -302,8 +313,15 @@ struct ReduceToAllB1 {
                 const uint32_t r2_base = buf_base + CTArgs::r2_buffer_offset;
 
                 size_t arg_idx = 0;
-                const uint32_t r1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-                const uint32_t r2_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+                uint32_t r1_sem_addr;
+                uint32_t r2_sem_addr;
+                if constexpr (CTArgs::use_raw_sem_addrs) {
+                    r1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+                    r2_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+                } else {
+                    r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+                    r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+                }
 
                 auto bwd_sender =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
@@ -405,9 +423,18 @@ struct ReduceToAllB1 {
                 const uint32_t r3_base = buf_base + CTArgs::r3_buffer_offset;
 
                 size_t arg_idx = 0;
-                const uint32_t r1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-                const uint32_t r2_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-                const uint32_t r3_sem_addr_val = get_arg_val<uint32_t>(arg_idx++);
+                uint32_t r1_sem_addr;
+                uint32_t r2_sem_addr;
+                uint32_t r3_sem_addr_val;
+                if constexpr (CTArgs::use_raw_sem_addrs) {
+                    r1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+                    r2_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+                    r3_sem_addr_val = get_arg_val<uint32_t>(arg_idx++);
+                } else {
+                    r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+                    r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+                    r3_sem_addr_val = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+                }
 
                 auto fwd_sender =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
@@ -438,7 +465,7 @@ struct ReduceToAllB1 {
                 noc_async_full_barrier();
                 DPRINT << "FD\n";
 
-                if constexpr (!CTArgs::is_exit_column) {
+                if constexpr (!CTArgs::is_exit_column || CTArgs::is_reduce_to_all) {
                     auto r3_sender =
                         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
                     r3_sender.open();
@@ -569,6 +596,24 @@ struct ReduceToAllB1 {
                     cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                     uint32_t data_addr = get_read_ptr(CTArgs::scratch_cb);
 
+                    if constexpr (CTArgs::is_reduce_to_all) {
+                        // Reduce-to-all: also send R3 to FC for cross-column forwarding
+                        send_to_forwarder(
+                            packet_header,
+                            static_cast<uint16_t>(CTArgs::r3_dst_chip_id),
+                            static_cast<uint16_t>(CTArgs::r3_dst_mesh_id),
+                            my_noc_x,
+                            my_noc_y,
+                            args.r3_dst_l1_addr,
+                            args.r3_dst_sem_addr,
+                            data_addr,
+                            args.fc_noc_x,
+                            args.fc_noc_y,
+                            args.r3_slot_offset,
+                            args.r3_sem_addr,
+                            args.r3_slot_bit);
+                    }
+
                     cb_reserve_back(CTArgs::reload_cb, CTArgs::num_tiles);
                     uint32_t reload_wr = get_write_ptr(CTArgs::reload_cb);
                     uint64_t reload_noc = get_noc_addr(my_noc_x, my_noc_y, reload_wr);
@@ -583,7 +628,8 @@ struct ReduceToAllB1 {
                 {
                     cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                     uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
-                    uint64_t output_noc = get_noc_addr(my_noc_x, my_noc_y, args.output_base_addr);
+                    uint32_t dst_addr = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
+                    uint64_t output_noc = get_noc_addr(CTArgs::output_core_noc_x, CTArgs::output_core_noc_y, dst_addr);
                     noc_async_write(src_addr, output_noc, CTArgs::payload_size_bytes);
                     noc_async_write_barrier();
 
@@ -592,7 +638,8 @@ struct ReduceToAllB1 {
                             SocketSenderInterface sender_socket =
                                 create_sender_socket_interface(args.socket_config_addr);
                             set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size);
-                            DPRINT << "WSR\n";
+                            DPRINT << "WSR sp=" << (uint32_t)CTArgs::socket_page_size
+                                   << " pl=" << (uint32_t)CTArgs::payload_size_bytes << "\n";
                             socket_reserve_pages(sender_socket, 1);
                             DPRINT << "WSRd\n";
                             sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
@@ -634,8 +681,10 @@ struct ReduceToAllB1 {
                 }
                 DPRINT << "WDN\n";
             }
-            // Note: do NOT cb_pop_front(local_cb) here — TRISC is the
-            // sole consumer and already pops it after computing R1_sum.
+
+            if constexpr (SkipLocalCbPush) {
+                cb_pop_front(CTArgs::local_cb, CTArgs::num_tiles);
+            }
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

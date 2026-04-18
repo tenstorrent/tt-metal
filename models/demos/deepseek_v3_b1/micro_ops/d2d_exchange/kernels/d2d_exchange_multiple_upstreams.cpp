@@ -139,7 +139,10 @@ void kernel_main() {
         receiver_sockets[i] = create_receiver_socket_interface(receiver_socket_config_addrs[i]);
         set_receiver_socket_page_size(receiver_sockets[i], upstream_page_size);
     }
-    DPRINT << "D2D_MU init ok\n";
+    DPRINT << "D2D_MU init ok"
+           << " ps=" << (uint32_t)page_size << " ups=" << (uint32_t)upstream_page_size
+           << " n=" << (uint32_t)num_upstream_sockets
+           << " total=" << (uint32_t)(num_upstream_sockets * upstream_page_size) << "\n";
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,
@@ -165,14 +168,16 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
+    // Prepare packet headers and routes at init, but DEFER open() until first
+    // worker data arrives.  The ring-reduce FCs hold fabric connections that
+    // would collide with ours; by the time any worker pushes, those FCs have
+    // already closed their connections.
+    bool fabric_sender_opened = false;
     if constexpr (use_fabric_on_sender) {
         downstream_data_packet_header_addr =
             reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
         downstream_data_packet_header_addr_2 = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             get_write_ptr(fabric_packet_header_cb_id) + sizeof(PACKET_HEADER_TYPE));
-
-        downstream_fabric_connection.open();
-        downstream_fabric_connection_2.open();
 
         fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
@@ -192,6 +197,31 @@ void kernel_main() {
 
     while (!terminated) {
         socket_reserve_pages(sender_socket, 1);
+        /*
+        {
+            uint32_t reserve_bytes = 1 * sender_socket.page_size;
+            volatile tt_l1_ptr uint32_t* bytes_acked_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_socket.bytes_acked_base_addr);
+            uint32_t bytes_acked_end =
+                sender_socket.bytes_acked_base_addr + sender_socket.num_downstreams * bytes_acked_size_bytes;
+            while (reinterpret_cast<uint32_t>(bytes_acked_ptr) < bytes_acked_end) {
+                uint32_t bytes_free;
+                do {
+                    invalidate_l1_cache();
+                    if (termination_semaphore[0] == 1) {
+                        terminated = true;
+                        break;
+                    }
+                    bytes_free = sender_socket.downstream_fifo_total_size -
+                                 (sender_socket.bytes_sent - *bytes_acked_ptr);
+                } while (bytes_free < reserve_bytes);
+                if (terminated) break;
+                bytes_acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    reinterpret_cast<uint32_t>(bytes_acked_ptr) + bytes_acked_size_bytes);
+            }
+        }
+        if (terminated) break;
+        */
 
         invalidate_l1_cache();
         if (termination_semaphore[0] == 1) {
@@ -209,6 +239,13 @@ void kernel_main() {
                 break;
             }
             if (!(processed_mask & (1 << worker_idx)) && socket_wait_for_pages(receiver_sockets[worker_idx], 1, 1000)) {
+                if constexpr (use_fabric_on_sender) {
+                    if (!fabric_sender_opened) {
+                        downstream_fabric_connection.open();
+                        downstream_fabric_connection_2.open();
+                        fabric_sender_opened = true;
+                    }
+                }
                 DPRINT << "gw" << worker_idx << "\n";
                 uint32_t l1_read_addr = receiver_sockets[worker_idx].read_ptr;
                 uint64_t dst_addr = dst_addr_base + worker_idx * upstream_page_size;
@@ -263,8 +300,10 @@ void kernel_main() {
     }
 
     if constexpr (use_fabric_on_sender) {
-        downstream_fabric_connection.close();
-        downstream_fabric_connection_2.close();
+        if (fabric_sender_opened) {
+            downstream_fabric_connection.close();
+            downstream_fabric_connection_2.close();
+        }
     }
     DPRINT << "D2D_MU done\n";
 }
