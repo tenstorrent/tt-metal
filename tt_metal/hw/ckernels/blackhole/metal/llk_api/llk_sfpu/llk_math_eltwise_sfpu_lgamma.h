@@ -15,17 +15,16 @@ namespace ckernel {
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_lgamma_stirling_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::lgamma, APPROXIMATE>(
-        sfpu::lgamma_stirling_init<APPROXIMATE, is_fp32_dest_acc_en>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::lgamma>(sfpu::lgamma_stirling_init<APPROXIMATE, is_fp32_dest_acc_en>);
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_lgamma_stirling(uint32_t dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_lgamma_stirling<APPROXIMATE, is_fp32_dest_acc_en>, dst_index, vector_mode);
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_ternary_sfpu_lgamma_adjusted_init() {
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::lgamma>();
 }
@@ -37,7 +36,7 @@ inline void llk_math_eltwise_ternary_sfpu_lgamma_adjusted(
     uint32_t dst_index2,
     uint32_t dst_index3,
     int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_ternary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_ternary_sfpu_params_(
         ckernel::sfpu::calculate_lgamma_adjusted<APPROXIMATE, is_fp32_dest_acc_en>,
         dst_index0,
         dst_index1,
@@ -48,14 +47,13 @@ inline void llk_math_eltwise_ternary_sfpu_lgamma_adjusted(
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_binary_sfpu_lgamma_stirling_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::lgamma, APPROXIMATE>(
-        sfpu::lgamma_stirling_init<APPROXIMATE, is_fp32_dest_acc_en>);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::lgamma>(sfpu::lgamma_stirling_init<APPROXIMATE, is_fp32_dest_acc_en>);
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_binary_sfpu_lgamma_stirling(
     uint32_t dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         sfpu::calculate_lgamma_stirling_fp32<APPROXIMATE, is_fp32_dest_acc_en>,
         dst_index0,
         dst_index1,

@@ -56,8 +56,7 @@ inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
  *   - Results written to specified Dst register
  */
 inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
-    MATH(_llk_math_eltwise_unary_sfpu_params_<false>(
-        smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta));
+    MATH(_llk_math_eltwise_unary_sfpu_params_(smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta));
 }
 
 void kernel_main() {

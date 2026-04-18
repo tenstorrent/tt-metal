@@ -10,7 +10,7 @@
 #include "llk_math_eltwise_ternary_sfpu.h"
 #include "llk_sfpu_types.h"
 
-template <bool APPROXIMATE, typename Callable, typename... Args>
+template <typename Callable, typename... Args>
 inline void _llk_math_eltwise_ternary_sfpu_params_(
     Callable&& sfpu_func,
     std::uint32_t dst_index_in0,
