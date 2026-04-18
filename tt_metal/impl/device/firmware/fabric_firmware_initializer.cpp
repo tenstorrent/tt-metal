@@ -207,10 +207,17 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
     }
 
-    // Fix B: Poll each master ETH router for EDMStatus::TERMINATED before returning.
-    // Without this poll, the next init's configure_fabric_cores() can clear L1 and load new
-    // firmware while old firmware is still running — leaving ERISCs in a zombie state
-    // (edm_status = RUNNING) that confuses the next session's handshake.
+    // Fix B: Poll ALL active ETH router channels per device for EDMStatus::TERMINATED before
+    // returning. Without this poll, the next init's configure_fabric_cores() can clear L1 and
+    // load new firmware while old firmware is still running — leaving ERISCs in a zombie state
+    // (edm_status = RUNNING) that causes the next session's AllGather to hang.
+    //
+    // Previously this only polled the *master* router per device, but slave routers on
+    // non-master channels (e.g. channels 1-3 on each device in FABRIC_1D) could still be
+    // running real EDM firmware when teardown returned.  That left edm_status=0x49705180
+    // (ACTIVE) on all slave channels, which terminate_stale_erisc_routers then detected
+    // at the next init — but 50ms was too short to drain the still-live firmware, so new
+    // firmware was loaded over actively-running ERISC code, corrupting L1 on iteration 2.
     {
         const auto router_sync_address = builder_ctx.get_fabric_router_sync_address_and_status().first;
         constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
@@ -221,57 +228,66 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
                 continue;
             }
-            const auto master_chan = builder_ctx.get_fabric_master_router_chan(dev->id());
-            auto master_logical_core =
-                cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(master_chan, CoordSystem::LOGICAL);
 
-            std::vector<uint32_t> status_buf(1, 0);
-            const auto start = std::chrono::steady_clock::now();
-            uint32_t spin_counter = 0;
-            bool terminated = false;
-            while (true) {
-                detail::ReadFromDeviceL1(dev, master_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
-                if (status_buf[0] == terminated_val) {
-                    terminated = true;
-                    break;
-                }
-                const auto elapsed =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
-                        .count();
-                if (elapsed > teardown_timeout_ms) {
-                    break;
-                }
-                if (++spin_counter >= kSpinsBetweenSleeps) {
-                    spin_counter = 0;
-                    std::this_thread::sleep_for(std::chrono::microseconds(100));
-                } else {
-                    ttsl::pause();
-                }
-            }
+            // Poll ALL active fabric ETH channels (not just master) — slave routers each run
+            // their own firmware instance and must be confirmed terminated independently.
+            const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+            const auto& active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
 
-            if (!terminated) {
-                log_warning(
-                    tt::LogMetal,
-                    "FabricFirmwareInitializer::teardown: Device {} master ETH router (chan={}) did not "
-                    "terminate within {}ms (status=0x{:08x}) — asserting ERISC reset to prevent "
-                    "stale firmware racing with next init's L1 clear",
-                    dev->id(),
-                    master_chan,
-                    teardown_timeout_ms,
-                    status_buf[0]);
-                try {
-                    const auto virtual_eth_coord = cluster_.get_virtual_coordinate_from_logical_coordinates(
-                        dev->id(), master_logical_core, CoreType::ETH);
-                    cluster_.assert_risc_reset_at_core(
-                        tt_cxy_pair(dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
-                } catch (const std::exception& e) {
+            for (const auto& [eth_chan_id, direction] : active_channels) {
+                const auto eth_logical_core =
+                    cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+
+                std::vector<uint32_t> status_buf(1, 0);
+                const auto start = std::chrono::steady_clock::now();
+                uint32_t spin_counter = 0;
+                bool terminated = false;
+                while (true) {
+                    detail::ReadFromDeviceL1(
+                        dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+                    if (status_buf[0] == terminated_val) {
+                        terminated = true;
+                        break;
+                    }
+                    const auto elapsed =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - start)
+                            .count();
+                    if (elapsed > teardown_timeout_ms) {
+                        break;
+                    }
+                    if (++spin_counter >= kSpinsBetweenSleeps) {
+                        spin_counter = 0;
+                        std::this_thread::sleep_for(std::chrono::microseconds(100));
+                    } else {
+                        ttsl::pause();
+                    }
+                }
+
+                if (!terminated) {
                     log_warning(
                         tt::LogMetal,
-                        "FabricFirmwareInitializer::teardown: assert_risc_reset_at_core failed on "
-                        "Device {} master chan={}: {}",
+                        "FabricFirmwareInitializer::teardown: Device {} ETH chan={} did not "
+                        "terminate within {}ms (status=0x{:08x}) — asserting ERISC reset to prevent "
+                        "stale firmware racing with next init's L1 clear",
                         dev->id(),
-                        master_chan,
-                        e.what());
+                        eth_chan_id,
+                        teardown_timeout_ms,
+                        status_buf[0]);
+                    try {
+                        const auto virtual_eth_coord = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                            dev->id(), eth_logical_core, CoreType::ETH);
+                        cluster_.assert_risc_reset_at_core(
+                            tt_cxy_pair(dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogMetal,
+                            "FabricFirmwareInitializer::teardown: assert_risc_reset_at_core failed on "
+                            "Device {} chan={}: {}",
+                            dev->id(),
+                            eth_chan_id,
+                            e.what());
+                    }
                 }
             }
         }
