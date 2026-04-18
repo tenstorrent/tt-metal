@@ -77,6 +77,10 @@ class TtCombineModule(LightweightModule):
         Returns:
             output: Combined output tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim)
         """
+        logger.debug(f"Pre combine sync")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+
         logger.debug(f"Running combine")
         ttnn.synchronize_device(self.mesh_device)
         ttnn.distributed_context_barrier()
