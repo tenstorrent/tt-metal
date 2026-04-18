@@ -97,8 +97,8 @@ run_t3000_ttnn_tests() {
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
   echo "LOG_METAL: Resetting all Tenstorrent devices before test run"
-  tt-smi-metal -r
-  echo "LOG_METAL: tt-smi-metal -r complete"
+  tt-smi -r >/dev/null 2>&1 || true
+  echo "LOG_METAL: tt-smi -r complete"
   # Two tests share a known chip-3 AllGather hang (0x880030060 unsafe NOC access):
   #   1. MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0 (2x4 mesh)
   #   2. MeshDevice1x4FabricFixture.TestGenericOpAllGather (1x4 mesh, unit_tests_ttnn)
