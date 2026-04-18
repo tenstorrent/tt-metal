@@ -10,10 +10,25 @@ and provides a builder to create configurations from preprocessed parameters.
 """
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Dict, List, Tuple
 
 import ttnn
-from models.tt_cnn.tt.builder import AutoShardedStrategyConfiguration, Conv2dConfiguration, MaxPool2dConfiguration
+from models.tt_cnn.tt.builder import (
+    AutoShardedStrategyConfiguration,
+    BlockShardedStrategyConfiguration,
+    Conv2dConfiguration,
+    HeightShardedStrategyConfiguration,
+    MaxPool2dConfiguration,
+)
+
+
+class OptimizationLevel(str, Enum):
+    """Optimization presets for progressively tuned TTNN execution."""
+
+    STAGE1 = "stage1"
+    STAGE2 = "stage2"
+    STAGE3 = "stage3"
 
 
 @dataclass
@@ -111,6 +126,7 @@ class TtAttentionDenseUNetConfigBuilder:
         growth_rate: int = 16,
         num_layers_per_block: Tuple[int, ...] = (4, 4, 4, 4),
         compression: float = 0.5,
+        optimization_level: OptimizationLevel = OptimizationLevel.STAGE2,
     ):
         self.parameters = parameters
         self.in_channels = in_channels
@@ -123,6 +139,7 @@ class TtAttentionDenseUNetConfigBuilder:
         self.num_layers_per_block = num_layers_per_block
         self.compression = compression
         self.num_encoder_blocks = len(num_layers_per_block)
+        self.optimization_level = optimization_level
 
     def build_configs(self) -> TtAttentionDenseUNetConfigs:
         """Build complete model configuration."""
@@ -341,7 +358,12 @@ class TtAttentionDenseUNetConfigBuilder:
 
         weight = params["weight"]
         bias = params["bias"]
-        strategy = AutoShardedStrategyConfiguration()
+        strategy = self._select_conv_sharding_strategy(
+            input_height=input_height,
+            input_width=input_width,
+            kernel_size=kernel_size,
+            out_channels=out_channels,
+        )
         activation = None
         if (
             params_key == "conv0"
@@ -374,6 +396,37 @@ class TtAttentionDenseUNetConfigBuilder:
             enable_act_double_buffer=enable_act_double_buffer,
             sharding_strategy=strategy,
         )
+
+    def _select_conv_sharding_strategy(
+        self, input_height: int, input_width: int, kernel_size: Tuple[int, int], out_channels: int
+    ):
+        """
+        Pick a sharding strategy based on optimization level and tensor geometry.
+
+        Stage1 keeps auto sharding, Stage2 prefers height sharding, and
+        Stage3 uses block sharding for larger feature maps.
+        """
+        if self.optimization_level == OptimizationLevel.STAGE1:
+            return AutoShardedStrategyConfiguration()
+
+        feature_area = input_height * input_width
+        is_pointwise = kernel_size == (1, 1)
+
+        if self.optimization_level == OptimizationLevel.STAGE2:
+            if feature_area >= 32 * 32:
+                return HeightShardedStrategyConfiguration(reshard_if_not_optimal=True, act_block_h_override=32)
+            return AutoShardedStrategyConfiguration()
+
+        # Stage3: bias toward stronger spatial parallelism on larger maps.
+        if feature_area >= 64 * 64 and not is_pointwise:
+            return BlockShardedStrategyConfiguration(
+                reshard_if_not_optimal=True,
+                act_block_h_override=32,
+                act_block_w_div=2,
+            )
+        if feature_area >= 32 * 32 or out_channels >= 96:
+            return HeightShardedStrategyConfiguration(reshard_if_not_optimal=True, act_block_h_override=32)
+        return AutoShardedStrategyConfiguration()
 
     def _create_pool_config(
         self,
@@ -534,6 +587,7 @@ def create_configs_from_parameters(
     batch_size: int = 1,
     init_features: int = 32,
     growth_rate: int = 16,
+    optimization_level: OptimizationLevel = OptimizationLevel.STAGE2,
 ) -> TtAttentionDenseUNetConfigs:
     """
     Create Attention DenseUNet configuration from preprocessed parameters.
@@ -547,6 +601,7 @@ def create_configs_from_parameters(
         batch_size: Batch size
         init_features: Initial number of features
         growth_rate: DenseNet growth rate
+        optimization_level: Optimization preset (stage1/stage2/stage3)
 
     Returns:
         TtAttentionDenseUNetConfigs object
@@ -561,6 +616,7 @@ def create_configs_from_parameters(
         batch_size=batch_size,
         init_features=init_features,
         growth_rate=growth_rate,
+        optimization_level=optimization_level,
     )
 
     return builder.build_configs()

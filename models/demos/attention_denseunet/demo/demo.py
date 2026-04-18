@@ -12,11 +12,13 @@ and visualize the segmentation results.
 import argparse
 import os
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
 from loguru import logger
+from PIL import Image
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
@@ -27,7 +29,7 @@ from models.demos.attention_denseunet.tt.common import (
     ATTENTION_DENSEUNET_TRACE_SIZE,
     create_preprocessor,
 )
-from models.demos.attention_denseunet.tt.config import create_configs_from_parameters
+from models.demos.attention_denseunet.tt.config import OptimizationLevel, create_configs_from_parameters
 from models.demos.attention_denseunet.tt.model import create_model_from_configs
 
 DEFAULT_RESOLUTION = (256, 256)
@@ -40,9 +42,6 @@ PRED_DIR = os.path.join(DEMO_DIR, "pred")
 def create_sample_input(batch_size: int = 1, resolution: tuple = DEFAULT_RESOLUTION):
     """
     Create a sample input tensor for demo purposes.
-
-    In a real scenario, this would load an actual image.
-
     Args:
         batch_size: Number of images in batch
         resolution: (height, width) of input images
@@ -53,6 +52,16 @@ def create_sample_input(batch_size: int = 1, resolution: tuple = DEFAULT_RESOLUT
     height, width = resolution
     sample_input = torch.randn(batch_size, INPUT_CHANNELS, height, width)
     return sample_input
+
+
+def load_image_as_tensor(image_path: str, resolution: tuple = DEFAULT_RESOLUTION) -> torch.Tensor:
+    """
+    Load an RGB image and convert to normalized NCHW tensor.
+    """
+    height, width = resolution
+    image = Image.open(image_path).convert("RGB").resize((width, height))
+    image_np = np.asarray(image).astype(np.float32) / 255.0
+    return torch.from_numpy(image_np).permute(2, 0, 1).unsqueeze(0)
 
 
 def prepare_ttnn_input(
@@ -144,27 +153,42 @@ def save_segmentation_visualization(input_tensor: torch.Tensor, prediction: torc
         prediction: Predicted segmentation mask
         output_path: Path to save visualization
     """
-    try:
-        from skimage.io import imsave
+    pred_np = prediction.detach().cpu().numpy()[0, 0]
+    probs = 1.0 / (1.0 + np.exp(-pred_np))
+    mask_05 = (probs > 0.5).astype(np.uint8) * 255
+    adaptive_threshold = float(probs.mean())
+    mask_adaptive = (probs > adaptive_threshold).astype(np.uint8) * 255
+    prob_img = (np.clip(probs, 0.0, 1.0) * 255.0).astype(np.uint8)
 
-        pred_np = prediction.detach().cpu().numpy()
-        mask = (pred_np[0, 0] > 0.5).astype(np.uint8) * 255
-        imsave(output_path, mask)
-        logger.info(f"Saved segmentation result to: {output_path}")
+    output_base = Path(output_path)
+    output_base.parent.mkdir(parents=True, exist_ok=True)
 
-    except ImportError:
-        logger.warning("skimage not available, skipping visualization save")
-        np_path = output_path.replace(".png", ".npy")
-        np.save(np_path, prediction.detach().cpu().numpy())
-        logger.info(f"Saved prediction as numpy to: {np_path}")
+    Image.fromarray(mask_05).save(output_base.with_name(output_base.stem + "_mask_0p5.png"))
+    Image.fromarray(mask_adaptive).save(output_base.with_name(output_base.stem + "_mask_adaptive.png"))
+    Image.fromarray(prob_img).save(output_base.with_name(output_base.stem + "_prob.png"))
+
+    input_rgb = (input_tensor[0].detach().cpu().permute(1, 2, 0).numpy() * 255.0).clip(0, 255).astype(np.uint8)
+    overlay = input_rgb.copy()
+    overlay[..., 0] = np.maximum(overlay[..., 0], mask_adaptive)
+    Image.fromarray(overlay).save(output_base.with_name(output_base.stem + "_overlay.png"))
+
+    logger.info(
+        f"Saved outputs to {output_base.parent}: "
+        f"{output_base.stem}_mask_0p5.png, {output_base.stem}_mask_adaptive.png, "
+        f"{output_base.stem}_prob.png, {output_base.stem}_overlay.png"
+    )
+    logger.info(f"Probability stats min={probs.min():.4f}, max={probs.max():.4f}, mean={probs.mean():.4f}")
 
 
 def run_attention_denseunet_demo(
     device: ttnn.Device,
     reset_seeds,
     use_pytorch: bool = False,
+    optimization_level: OptimizationLevel = OptimizationLevel.STAGE2,
     batch_size: int = 1,
     resolution: tuple = DEFAULT_RESOLUTION,
+    input_tensor: torch.Tensor | None = None,
+    output_name: str = "demo_result.png",
 ):
     """
     Run the Attention DenseUNet demo.
@@ -181,8 +205,11 @@ def run_attention_denseunet_demo(
     logger.info(f"  Batch size: {batch_size}")
     logger.info(f"  Backend: {'PyTorch' if use_pytorch else 'TTNN'}")
     os.makedirs(PRED_DIR, exist_ok=True)
-    logger.info("Creating sample input...")
-    sample_input = create_sample_input(batch_size, resolution)
+    if input_tensor is None:
+        logger.info("Creating sample input...")
+        sample_input = create_sample_input(batch_size, resolution)
+    else:
+        sample_input = input_tensor
     start_time = time.time()
     logger.info("Loading reference model...")
     reference_model = create_attention_denseunet()
@@ -206,13 +233,14 @@ def run_attention_denseunet_demo(
             input_height=resolution[0],
             input_width=resolution[1],
             batch_size=batch_size,
+            optimization_level=optimization_level,
         )
 
         ttnn_model = create_model_from_configs(configs, device)
         logger.info(f"TTNN model initialized in {time.time() - start_time:.2f}s")
         prediction = run_ttnn_inference(ttnn_model, sample_input, batch_size, resolution, device, configs)
 
-    output_path = os.path.join(PRED_DIR, "demo_result.png")
+    output_path = os.path.join(PRED_DIR, output_name)
     save_segmentation_visualization(sample_input, prediction, output_path)
 
     logger.info("Demo completed successfully!")
@@ -233,7 +261,7 @@ def run_attention_denseunet_demo(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("use_pytorch", [True])
+@pytest.mark.parametrize("use_pytorch", [False, True])
 def test_attention_denseunet_demo(device: ttnn.Device, reset_seeds, batch_size: int, use_pytorch: bool):
     """
     Pytest entry point for running the demo.
@@ -246,22 +274,50 @@ def test_attention_denseunet_demo(device: ttnn.Device, reset_seeds, batch_size: 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Attention DenseUNet Demo")
     parser.add_argument("--pytorch", action="store_true", help="Use PyTorch model instead of TTNN")
+    parser.add_argument(
+        "--optimization-level",
+        type=str,
+        choices=[level.value for level in OptimizationLevel],
+        default=OptimizationLevel.STAGE2.value,
+        help="Optimization preset for TTNN backend",
+    )
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size")
     parser.add_argument("--resolution", type=int, nargs=2, default=[256, 256], help="Input resolution (height width)")
+    parser.add_argument("--image", type=str, default=None, help="Input image path for single-image demo")
+    parser.add_argument("--output-name", type=str, default="demo_result.png", help="Base output filename")
     args = parser.parse_args()
+    resolution = tuple(args.resolution)
+    image_tensor = load_image_as_tensor(args.image, resolution) if args.image else None
+
     if args.pytorch:
         logger.info("Running in PyTorch-only mode (no device required)")
-        resolution = tuple(args.resolution)
-        sample_input = create_sample_input(args.batch_size, resolution)
-        model = create_attention_denseunet()
-        model.eval()
-
-        with torch.no_grad():
-            output = model(sample_input)
-
-        logger.info(f"Input shape: {sample_input.shape}")
-        logger.info(f"Output shape: {output.shape}")
-        logger.info("Demo completed!")
+        run_attention_denseunet_demo(
+            device=None,
+            reset_seeds=None,
+            use_pytorch=True,
+            batch_size=args.batch_size,
+            resolution=resolution,
+            input_tensor=image_tensor,
+            output_name=args.output_name,
+        )
     else:
-        logger.info("For TTNN execution, run via pytest:")
-        logger.info("  pytest models/demos/attention_denseunet/demo/demo.py -v")
+        logger.info("Running TTNN demo directly")
+        device = ttnn.open_device(
+            device_id=0,
+            l1_small_size=ATTENTION_DENSEUNET_L1_SMALL_SIZE,
+            trace_region_size=ATTENTION_DENSEUNET_TRACE_SIZE,
+            num_command_queues=2,
+        )
+        try:
+            run_attention_denseunet_demo(
+                device=device,
+                reset_seeds=None,
+                use_pytorch=False,
+                optimization_level=OptimizationLevel(args.optimization_level),
+                batch_size=args.batch_size,
+                resolution=resolution,
+                input_tensor=image_tensor,
+                output_name=args.output_name,
+            )
+        finally:
+            ttnn.close_device(device)
