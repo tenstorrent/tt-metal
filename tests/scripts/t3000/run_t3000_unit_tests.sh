@@ -96,6 +96,9 @@ run_t3000_ttnn_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
+  echo "LOG_METAL: Resetting all Tenstorrent devices before test run"
+  tt-smi-metal -r
+  echo "LOG_METAL: tt-smi-metal -r complete"
   # MultiCQFabricMeshDevice2x4Fixture tests (AsyncExecutionWorksCQ0, CQ0CQ1,
   # MultithreadCQ0) have a known chip-3 AllGather hang: Tensix workers on far
   # N300 chips (non-MMIO) perform an unsafe NOC access at 0x880030060 during
