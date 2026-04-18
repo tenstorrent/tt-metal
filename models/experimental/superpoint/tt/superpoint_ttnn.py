@@ -152,11 +152,15 @@ class TtSuperPoint:
             math_fidelity=ttnn.MathFidelity.HiFi2,
             fp32_dest_acc_en=True,
         )
+        # Block 0 convs at 480×640 benefit from a smaller activation block
+        # height so the CB fits comfortably and each core gets useful work.
+        act_block_per_block = (32, None, None, None)
         in_ch = 1
         self.enc_convs = []
         for block_idx, block in enumerate(encoder.conv_blocks):
             add_pooling = block.pool is not None
             ns = slice_per_block[block_idx]
+            abh = act_block_per_block[block_idx]
             self.enc_convs.append(
                 (
                     TtConv2D(
@@ -169,6 +173,7 @@ class TtSuperPoint:
                         device=device,
                         activation="relu",
                         num_slices=ns,
+                        act_block_h_override=abh,
                         **enc_kwargs,
                     ),
                     TtConv2D(
@@ -181,6 +186,7 @@ class TtSuperPoint:
                         device=device,
                         activation="relu",
                         num_slices=ns,
+                        act_block_h_override=abh,
                         **enc_kwargs,
                     ),
                     add_pooling,
