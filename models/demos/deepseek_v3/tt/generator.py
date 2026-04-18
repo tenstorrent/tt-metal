@@ -240,6 +240,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.batch_size_per_row = batch_size_per_row
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
 
+        # self.hf_config.num_hidden_layers = 5
+        logger.info(f"Overriding num_hidden_layers to {self.hf_config.num_hidden_layers}")
+
         # Configure sampling
         self._validate_and_initialize_sampling(sampling_params, sample_on_device, enable_trace, enable_mtp)
 
@@ -304,7 +307,60 @@ class DeepseekGenerator(WarmupForwardMixin):
         self._prepare_weight_configs(cache_dir)
         self._assert_mtp_available()
 
-    def _get_prefill_warmup_prompt_lens(self) -> list[int]:
+    def warmup_model(self, prompts: Iterable[str]):
+        if not self.vllm_context:
+            # phase 1: warmup prefill and decode without trace
+            logger.info("Phase 1: Warmup prefill without trace")
+            max_prompt_len = max(len(prompt) for prompt in prompts)
+            self._warmup_model_prefill_demo(max_prompt_len)
+
+            logger.info(
+                f"Phase 1: Warmup decode without trace enable_trace: {False} sample_on_device: {self.sample_on_device}"
+            )
+            self._warmup_model_decode_demo(enable_trace=False, sample_on_device=self.sample_on_device)
+
+            # if self.enable_trace:
+            logger.info(
+                f"Phase 2: Warmup decode with trace enable_trace: {True} sample_on_device: {self.sample_on_device}"
+            )
+            # phase 2: warmup decode with trace (deepseek does not support prefill with trace)
+            self._warmup_model_decode_demo(enable_trace=True, sample_on_device=self.sample_on_device)
+
+            logger.info("Warmup completed in demo mode")
+        else:
+            logger.info("vLLM runs its own warmup, no need to warmup explicitly")
+
+    def _warmup_model_prefill_demo(self, max_prompt_len: int):
+        self.warmup_model_prefill(
+            kv_cache=None,
+            enable_trace=False,
+            can_sample_on_device=False,
+            non_greedy_decoding_on_device=False,
+            max_prompt_len=max_prompt_len,
+        )
+
+    def _warmup_model_decode_demo(self, enable_trace: bool, sample_on_device: bool):
+        warmup_tokens = torch.zeros(self.batch_size, dtype=torch.int32)
+        warmup_start_pos = torch.zeros(self.batch_size, dtype=torch.int32)
+        decode_logits = self.decode_forward(
+            tokens=warmup_tokens,
+            start_pos=warmup_start_pos,
+            enable_trace=enable_trace,
+            page_table=None,
+            sample_on_device=sample_on_device,
+        )
+
+        if sample_on_device:
+            pred_tokens_device = self._sample_tokens_device(decode_logits, enable_trace=enable_trace)
+            pred_tokens = self._tokens_from_device(
+                pred_tokens_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
+            )
+            logger.info("_warmup_model_decode_demo completed with sample_on_device=True")
+        else:
+            pred_tokens = self._sample_on_host(decode_logits)
+            logger.info("_warmup_model_decode_demo completed with sample_on_device=False")
+
+    def _get_prefill_warmup_prompt_lens(self, max_prompt_len: int = 0) -> list[int]:
         """Build and cache supported prefill warmup lengths.
 
         The list starts at ``ttnn.TILE_SIZE`` and doubles each step
@@ -316,10 +372,13 @@ class DeepseekGenerator(WarmupForwardMixin):
             return self._prefill_warmup_prompt_lens
         prompt_lens_set: set[int] = set()
         prompt_len = ttnn.TILE_SIZE
-        while prompt_len <= self.hf_config.max_seq_len:
+        upper_bound = max_prompt_len if max_prompt_len > 0 else self.hf_config.max_seq_len
+        # upper_bound set to next multiple of 32
+        upper_bound = (upper_bound // ttnn.TILE_SIZE + 1) * ttnn.TILE_SIZE
+        while prompt_len <= upper_bound:
             prompt_lens_set.add(prompt_len)
             prompt_len *= 2
-        prompt_lens_set.add(self.hf_config.max_seq_len)
+        prompt_lens_set.add(upper_bound)
         self._prefill_warmup_prompt_lens = sorted(prompt_lens_set)
         return self._prefill_warmup_prompt_lens
 
@@ -1787,6 +1846,10 @@ class DeepseekGenerator(WarmupForwardMixin):
         self._prepare_run_configs("decode")
         profiler.end("preparing_decode_config")
 
+        profiler.start("warming_up_model")
+        self.warmup_model(prompts)
+        profiler.end("warming_up_model")
+
         # Tokenize using HF chat template (or use pre-tokenized prompt ids for teacher-forcing / exact alignment)
         profiler.start("tokenizing")
         if pre_tokenized is not None:
@@ -2817,6 +2880,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         # vLLM sets it in decode/prefill calls only, so we need to set it here too.
         self.enable_trace = enable_trace
 
+        logger.info(f"Decode forward called with enable_trace: {enable_trace}, sample_on_device: {sample_on_device}")
+
         if not enable_trace:
             return self._decode_step(tokens, start_pos, page_table, sample_on_device)
         else:
@@ -2936,17 +3001,23 @@ class DeepseekGenerator(WarmupForwardMixin):
         num_pages = max(1, (prompt_len + page_size - 1) // page_size)
         return torch.arange(num_pages, dtype=torch.int32).unsqueeze(0)
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
+    def warmup_model_prefill(
+        self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device, max_prompt_len: int = 0
+    ) -> None:
         if enable_trace:
             logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator; skipping warmup.")
             return
 
         user_id = 0
+        logger.info(
+            f"Prefill warmup run with user_id={user_id}, {self._get_prefill_warmup_prompt_lens(max_prompt_len)}"
+        )
         for sample_on_device in [False, True]:
-            for prompt_len in self._get_prefill_warmup_prompt_lens():
+            for prompt_len in self._get_prefill_warmup_prompt_lens(max_prompt_len):
                 tokens = torch.zeros(1, prompt_len, dtype=torch.int32)
                 # TODO: MTP path warmup needed?
                 page_table = self._build_warmup_page_table(prompt_len)
+                logger.info(f"Prefill warmup run with seq_len={prompt_len} sample_on_device={sample_on_device}")
                 prefill_logits = self._prefill(
                     tokens=tokens,
                     user_id=user_id,
