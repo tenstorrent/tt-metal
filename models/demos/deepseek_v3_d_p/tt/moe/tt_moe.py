@@ -340,6 +340,11 @@ class TtMoe(LightweightModule):
 
         scores, indices, gate_logits, tt_expert_offsets, tt_expert_token_counts = self.gate(x_for_gate)
         ttnn.deallocate(x_for_gate)  # x_for_gate is L1 height sharded and no longer needed.
+        gate_logits = (
+            ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
+            if return_intermediates
+            else ttnn.deallocate(gate_logits)
+        )  # gate_logits is only used for debugging/intermediates, move to DRAM or deallocate immediately
 
         # DEBUG
         # Print full token counts per expert for monitoring
@@ -377,40 +382,42 @@ class TtMoe(LightweightModule):
         # Both shared_expert and dispatch need full emb_dim, so all-gather first
         # Only needed if there are multiple devices in TP axis (axis 1)
         if self.mesh_device.shape[1] > 1:
-            x_full = ttnn.all_gather(
+            x = ttnn.all_gather(
                 x,
                 dim=-1,  # Gather along emb_dim
                 cluster_axis=1,  # Gather across axis 1 (TP axis)
                 num_links=self.col_num_links,
                 topology=self.col_topology,
             )
-        else:
-            x_full = x  # No TP sharding, x already has full emb_dim
-        logger.debug(f"[TtMoe.forward] x_full (after all_gather) shape: {x_full.shape}")
+        logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
         # ========================================
         # Step 1: Shared expert (enabled)
         # ========================================
         # Shared expert expects replicated input (full emb_dim)
-        # Convert x_full to TILE_LAYOUT for shared expert
-        x_full_tiled = ttnn.to_layout(x_full, ttnn.TILE_LAYOUT)
-        logger.debug(f"[TtMoe.forward] x_full_tiled shape: {x_full_tiled.shape}")
+        # Convert x to TILE_LAYOUT for shared expert
+        x_tiled = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        logger.debug(f"[TtMoe.forward] x_tiled shape: {x_tiled.shape}")
 
-        shared_output = self.shared_expert(x_full_tiled)
+        shared_output = self.shared_expert(x_tiled)
+        ttnn.deallocate(x_tiled)  # x_tiled is only used for shared expert, deallocate immediately
         logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
 
         # ========================================
         # Step 2: Dispatch (enabled)
         # ========================================
-        # Dispatch expects full emb_dim on each device (x_full already has this)
+        # Dispatch expects full emb_dim on each device (x already has this)
 
         dispatched_buffer, metadata = self.dispatch_module(
-            x_full,
+            x,
             scores,
             indices,
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
         )
+        ttnn.deallocate(x)
+        scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
+        indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
 
         # ========================================
