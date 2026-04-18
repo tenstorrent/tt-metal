@@ -361,7 +361,7 @@ class TestCacheEntryStructure:
 
         assert isinstance(entry, _CacheEntry)
         assert entry.cached_descriptor is not None
-        assert isinstance(entry.semaphores, tuple)
+        assert isinstance(entry.sem_specs, tuple)
         assert isinstance(entry.kernel_labels, tuple)
         assert entry.output_sources, "expected non-empty output_sources when branches have outputs"
         assert entry.merged_input_len is not None and entry.merged_input_len >= 1
@@ -375,8 +375,8 @@ class TestCacheEntryStructure:
 
         entry = next(iter(_BUILD_CACHE.values()))
         assert not isinstance(entry.cached_descriptor, ttnn.Tensor)
-        for s in entry.semaphores:
-            assert not isinstance(s, ttnn.Tensor)
+        for spec in entry.sem_specs:
+            assert not isinstance(spec, ttnn.Tensor)
 
 
 # ===========================================================================

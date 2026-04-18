@@ -14,8 +14,8 @@ program_cache_key / descriptor hash)``.  Max entries controlled by
 ``TT_METAL_FUSION_BUILD_CACHE_MAX_ENTRIES`` (default 256).  Cache lookup
 never accesses :attr:`OpDescriptor.descriptor`.
 
-The cache stores only the fused ``ProgramDescriptor``, semaphores, kernel labels,
-and an output-source map — **no IO tensors**. On a cache hit, a fresh
+The cache stores only the fused ``ProgramDescriptor``, semaphore allocation specs,
+kernel labels, and an output-source map — **no IO tensors or L1 buffers**. On a cache hit, a fresh
 :class:`FusedOp` is constructed from the cached descriptor and the caller's
 current branch ops' tensors. This avoids pinning device buffers in the cache.
 
@@ -64,6 +64,7 @@ from models.experimental.ops.descriptors.op_descriptor import (
     is_op_descriptor,
 )
 from models.experimental.ops.descriptors.fusion.common import (
+    _SemaphoreSpec,
     _get_risc_type,
 )
 
@@ -95,17 +96,20 @@ class _CacheEntry:
     """Stored in ``_BUILD_CACHE``.  Fully initialized at construction, immutable thereafter.
 
     Contains everything needed to dispatch a fused program on cache hit
-    without re-running codegen/merge.  No tensor references are held.
+    without re-running codegen/merge.  No tensor references or live L1
+    buffers are held — barrier semaphores are stored as allocation specs
+    (``sem_specs``) and re-allocated ephemerally at each dispatch.
 
-    The cached ``ProgramDescriptor`` may have stale buffer addresses (CB buffer
-    pointers and runtime arg values) after the original tensors are freed.
-    ``address_slots`` (opaque C++ ``AddressSlots``) records every descriptor
-    position that references an IO tensor so ``fusion_dispatch_op`` can
-    refresh them from live tensors before dispatch.
+    The cached ``ProgramDescriptor`` may have stale buffer/semaphore
+    addresses (CB buffer pointers and runtime arg values) after the
+    original tensors/semaphores are freed.  ``address_slots`` (opaque C++
+    ``AddressSlots``) records every descriptor position that references an
+    IO tensor or semaphore address so the dispatch path can refresh them
+    from live objects before dispatch.
     """
 
     cached_descriptor: Any  # ProgramDescriptor — dispatched via fusion_dispatch_op on hit
-    semaphores: tuple  # Keeps GlobalSemaphore L1 alive
+    sem_specs: Tuple[_SemaphoreSpec, ...]  # Allocation blueprints for ephemeral barrier semaphores
     kernel_labels: tuple  # For _apply_kernel_dir file naming
     # (op_idx, tensor_idx) per merged output; None when the fused op has no outputs.
     output_sources: Optional[Tuple[Tuple[int, int], ...]]
@@ -220,14 +224,18 @@ def _coerce_mutable_io_opdescriptor(op: OpDescriptor) -> OpDescriptor:
     return OpDescriptor(op.descriptor, ins, outs)
 
 
-def _compute_address_slots(desc, io_tensors):
+def _compute_address_slots(desc, io_tensors, sem_addrs=()):
     """Compute the full address-slot mapping (opaque C++ ``AddressSlots``).
 
     Called once at build time when buffer pointers and runtime arg addresses
     are still valid.  Uses the same address-matching logic as
     ``discover_address_slots`` in the program factory.
+
+    If ``sem_addrs`` is provided, runtime arg positions matching those
+    semaphore addresses are also recorded so they can be patched with
+    fresh addresses on each dispatch (ephemeral semaphores).
     """
-    return ttnn._ttnn.operations.experimental.compute_address_slots(desc, io_tensors)
+    return ttnn._ttnn.operations.experimental.compute_address_slots(desc, io_tensors, list(sem_addrs))
 
 
 def _cache_build_result(
@@ -237,6 +245,7 @@ def _cache_build_result(
     address_slots,
     default_results: List,
     device,
+    sem_specs: Tuple[_SemaphoreSpec, ...] = (),
 ) -> _CacheEntry:
     """Record a fully-initialized cache entry from a freshly-built FusedOp.
 
@@ -247,6 +256,10 @@ def _cache_build_result(
     ``address_slots`` must be pre-computed (while addresses are valid) and
     already set on *fused_op*.  Stored in the cache so ``fusion_dispatch_op``
     can refresh all stale addresses from live IO tensors before dispatch.
+
+    ``sem_specs`` stores allocation blueprints for barrier semaphores.
+    No live ``GlobalSemaphore`` objects are held in the cache — semaphores
+    are allocated ephemerally at each dispatch from these specs.
     """
     desc = fused_op.descriptor
     if desc.custom_program_hash is None:
@@ -302,7 +315,7 @@ def _cache_build_result(
 
     return _CacheEntry(
         cached_descriptor=desc,
-        semaphores=fused_op.semaphores,
+        sem_specs=sem_specs,
         kernel_labels=fused_op.kernel_labels,
         output_sources=output_sources,
         merged_input_len=len(fused_op.input_tensors),
@@ -357,7 +370,7 @@ def _fused_op_from_cache_entry(entry: _CacheEntry, ops: List) -> "FusedOp":
     desc = entry.cached_descriptor
     return FusedOp(
         op=OpDescriptor(desc, all_inputs, all_outputs),
-        semaphores=entry.semaphores,
+        sem_specs=entry.sem_specs,
         kernel_labels=entry.kernel_labels,
         rebind_output_sources=entry.output_sources,
         branch_ops=tuple(ops),
@@ -534,6 +547,21 @@ def _cleanup_persistent_ops(ops) -> None:
                 op.output_tensors = []
 
 
+def _allocate_ephemeral_semaphores(device, sem_specs):
+    """Allocate fresh barrier semaphores from specs, return (sem_refs, addresses).
+
+    The returned ``sem_refs`` list keeps the ``GlobalSemaphore`` objects alive
+    through the dispatch call.  After dispatch completes (command queue
+    ordering guarantees the program finishes before deallocation), the refs
+    go out of scope and L1 is freed.
+    """
+    if not sem_specs:
+        return [], []
+    sems = [ttnn.create_global_semaphore(device, spec.core_ranges, spec.initial_value) for spec in sem_specs]
+    addrs = [ttnn.get_global_semaphore_address(s) for s in sems]
+    return sems, addrs
+
+
 def _container_run(container: Any, results, device=None, kernel_dir: Optional[str] = None):
     """Shared implementation for :meth:`Sequential.run` / :meth:`Parallel.run`.
 
@@ -565,7 +593,8 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
         and getattr(container, "_cached_entry_gen", -1) == _BUILD_CACHE_GEN
     ):
         inputs = _gather_inputs(container._cached_ops)
-        outputs = entry.dispatch_state.dispatch(inputs)
+        _ephemeral_sems, sem_addrs = _allocate_ephemeral_semaphores(inputs[0].device(), entry.sem_specs)
+        outputs = entry.dispatch_state.dispatch(inputs, sem_addrs)
         _cleanup_persistent_ops(container._cached_ops)
         return _filter_results(outputs, container._default_results, results)
 
@@ -577,7 +606,8 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
     if entry is not None:
         if entry.dispatch_state is not None:
             inputs = _gather_inputs(ops)
-            outputs = entry.dispatch_state.dispatch(inputs)
+            _ephemeral_sems, sem_addrs = _allocate_ephemeral_semaphores(inputs[0].device(), entry.sem_specs)
+            outputs = entry.dispatch_state.dispatch(inputs, sem_addrs)
             container._cached_entry = entry
             container._cached_entry_gen = _BUILD_CACHE_GEN
             return _filter_results(outputs, container._default_results, results)
@@ -621,8 +651,11 @@ def _filter_results(outputs, default_results, results):
 class FusedOp:
     """Result of ``Sequential``/``Parallel``.``build()``.
 
-    Holds a merged ``OpDescriptor`` (fused ``ProgramDescriptor`` + IO lists) and
-    keeps references to global semaphores used by the fused program.
+    Holds a merged ``OpDescriptor`` (fused ``ProgramDescriptor`` + IO lists).
+    ``semaphores`` keeps build-time ``GlobalSemaphore`` refs alive for the
+    initial ``launch()``; ``sem_specs`` stores allocation blueprints so
+    subsequent launches can allocate fresh ephemeral semaphores (no persistent
+    L1 pinning).
 
     **Launch:** :meth:`launch` refreshes merged IO from the branch ops stored at
     ``build()`` time, then dispatches (in-place branch tensor updates are picked
@@ -635,6 +668,7 @@ class FusedOp:
     __slots__ = (
         "op",
         "semaphores",
+        "sem_specs",
         "kernel_labels",
         "_rebind_output_sources",
         "_branch_ops",
@@ -645,6 +679,7 @@ class FusedOp:
         self,
         op: OpDescriptor,
         semaphores: Tuple[Any, ...] = (),
+        sem_specs: Tuple[_SemaphoreSpec, ...] = (),
         kernel_labels: Tuple[str, ...] = (),
         *,
         rebind_output_sources: Optional[Tuple[Tuple[int, int], ...]] = None,
@@ -653,6 +688,7 @@ class FusedOp:
     ):
         self.op = op
         self.semaphores = semaphores
+        self.sem_specs = sem_specs
         self.kernel_labels = kernel_labels
         # Empty tuple is not None but would skip outputs in refresh_merged_io (same bug as missing map).
         if rebind_output_sources is not None and len(rebind_output_sources) == 0:
@@ -893,13 +929,14 @@ class Sequential:
                 OpDescriptor(r.descriptor, list(r.input_tensors), list(r.output_tensors))
             ),
             semaphores=r.semaphores,
+            sem_specs=r.sem_specs,
             kernel_labels=r.kernel_labels,
             rebind_output_sources=rebind_src,
             branch_ops=tuple(ops),
         )
         fused.refresh_merged_io(list(ops))
         io_tensors = list(fused.input_tensors) + list(fused.output_tensors)
-        fused._address_slots = _compute_address_slots(fused.descriptor, io_tensors)
+        fused._address_slots = _compute_address_slots(fused.descriptor, io_tensors, r.sem_addrs)
 
         _build_cache_put(
             cache_key,
@@ -910,6 +947,7 @@ class Sequential:
                 fused._address_slots,
                 self._default_results,
                 cache_device,
+                sem_specs=r.sem_specs,
             ),
         )
 
@@ -1064,6 +1102,7 @@ class Parallel:
                 OpDescriptor(r.descriptor, list(r.input_tensors), list(r.output_tensors))
             ),
             semaphores=r.semaphores,
+            sem_specs=r.sem_specs,
             kernel_labels=r.kernel_labels,
             rebind_output_sources=rebind_src,
             branch_ops=tuple(ops),
@@ -1072,7 +1111,7 @@ class Parallel:
         # ordering matches what launch() will see (single source of truth).
         fused.refresh_merged_io(list(ops))
         io_tensors = list(fused.input_tensors) + list(fused.output_tensors)
-        fused._address_slots = _compute_address_slots(fused.descriptor, io_tensors)
+        fused._address_slots = _compute_address_slots(fused.descriptor, io_tensors, r.sem_addrs)
 
         _build_cache_put(
             cache_key,
@@ -1083,6 +1122,7 @@ class Parallel:
                 fused._address_slots,
                 self._default_results,
                 cache_device,
+                sem_specs=r.sem_specs,
             ),
         )
 

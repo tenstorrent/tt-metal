@@ -78,21 +78,46 @@ struct CBSlot {
     std::uint32_t io_tensor_index;
 };
 
+/// Slot: a per-core runtime arg that holds a barrier semaphore L1 address.
+/// ``sem_index`` is an index into the flat semaphore address vector passed
+/// at dispatch time (order matches the build-time allocation order).
+struct SemaphoreRTArgSlot {
+    std::uint32_t kernel_idx;
+    CoreCoord core;
+    std::uint32_t arg_idx;
+    std::uint32_t sem_index;
+};
+
 /// Complete mapping of every position in a ProgramDescriptor that references
-/// an IO tensor address.  Computed once at build time via ``compute_address_slots``
-/// (when addresses are valid), held opaquely by Python, and passed back to
-/// ``fusion_dispatch_op`` on each launch to refresh stale values.
+/// an IO tensor address or a barrier semaphore address.  Computed once at
+/// build time via ``compute_address_slots`` (when addresses are valid), held
+/// opaquely by Python, and passed back to ``fusion_dispatch_op`` on each
+/// launch to refresh stale values.
 struct AddressSlots {
     std::vector<PerCoreRTArgSlot> per_core_rt_arg_slots;
     std::vector<CommonRTArgSlot> common_rt_arg_slots;
     std::vector<CBSlot> cb_slots;
+    std::vector<SemaphoreRTArgSlot> sem_rt_arg_slots;
 };
 
-/// Compute the full address-slot mapping.  Must be called while buffer pointers
-/// and runtime arg addresses are valid (at build time, before tensors are freed).
-/// Same address-matching logic as ``discover_address_slots`` in the program factory.
+/// Find the semaphore whose address matches *value*, or nullopt.
+inline std::optional<std::uint32_t> find_semaphore_index(
+    std::uint32_t value, const std::vector<std::uint32_t>& sem_addrs) {
+    for (size_t i = 0; i < sem_addrs.size(); ++i) {
+        if (sem_addrs[i] == value) {
+            return static_cast<std::uint32_t>(i);
+        }
+    }
+    return std::nullopt;
+}
+
+/// Compute the full address-slot mapping for both IO tensors and barrier
+/// semaphores.  Must be called while buffer pointers and semaphore addresses
+/// are valid (at build time, before tensors/semaphores are freed).
 inline AddressSlots compute_address_slots(
-    const tt::tt_metal::ProgramDescriptor& desc, const std::vector<Tensor>& io_tensors) {
+    const tt::tt_metal::ProgramDescriptor& desc,
+    const std::vector<Tensor>& io_tensors,
+    const std::vector<std::uint32_t>& sem_addrs = {}) {
     AddressSlots slots;
     auto tensor_addrs = collect_io_tensor_addresses(io_tensors);
 
@@ -103,6 +128,9 @@ inline AddressSlots compute_address_slots(
                 if (auto ti = find_io_tensor_index(args[ai], tensor_addrs)) {
                     slots.per_core_rt_arg_slots.push_back(
                         {static_cast<uint32_t>(ki), coord, static_cast<uint32_t>(ai), *ti});
+                } else if (auto si = find_semaphore_index(args[ai], sem_addrs)) {
+                    slots.sem_rt_arg_slots.push_back(
+                        {static_cast<uint32_t>(ki), coord, static_cast<uint32_t>(ai), *si});
                 }
             }
         }
@@ -148,6 +176,25 @@ inline void patch_stale_descriptor(
     }
     for (const auto& slot : slots.cb_slots) {
         desc.cbs[slot.cb_idx].buffer = io_tensors[slot.io_tensor_index].buffer();
+    }
+}
+
+/// Patch barrier semaphore L1 addresses in a ProgramDescriptor's runtime args.
+/// Called before each dispatch with freshly-allocated semaphore addresses so
+/// that semaphore buffers can be ephemeral (allocated before dispatch, freed
+/// after dispatch completes via command queue ordering).
+inline void patch_semaphore_addresses(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const std::vector<SemaphoreRTArgSlot>& slots,
+    const std::vector<std::uint32_t>& sem_addresses) {
+    for (const auto& slot : slots) {
+        auto& rt_args = desc.kernels[slot.kernel_idx].runtime_args;
+        for (auto& [core, args] : rt_args) {
+            if (core == slot.core) {
+                args[slot.arg_idx] = sem_addresses[slot.sem_index];
+                break;
+            }
+        }
     }
 }
 

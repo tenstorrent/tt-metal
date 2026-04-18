@@ -127,7 +127,8 @@ public:
         mesh_desc_.mesh_programs.emplace_back(ttnn::MeshCoordinateRange(mesh_device_->shape()), program_descriptor);
     }
 
-    std::vector<Tensor> dispatch(const std::vector<Tensor>& inputs) {
+    std::vector<Tensor> dispatch(
+        const std::vector<Tensor>& inputs, const std::vector<std::uint32_t>& sem_addresses = {}) {
         auto outputs = allocate_outputs(mesh_device_, output_specs_, shared_output_map_);
 
         std::vector<Tensor> io_tensors;
@@ -136,6 +137,9 @@ public:
         io_tensors.insert(io_tensors.end(), outputs.begin(), outputs.end());
 
         auto& desc = mesh_desc_.mesh_programs.back().second;
+        if (!sem_addresses.empty()) {
+            patch_semaphore_addresses(desc, address_slots_.sem_rt_arg_slots, sem_addresses);
+        }
         patch_stale_descriptor(desc, io_tensors, address_slots_);
         (void)ttnn::prim::fusion_dispatch_op(io_tensors, mesh_desc_);
 
@@ -167,6 +171,7 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
         &compute_address_slots,
         nb::arg("program_descriptor"),
         nb::arg("io_tensors"),
+        nb::arg("sem_addrs") = std::vector<std::uint32_t>{},
         R"doc(
         Compute the full address-slot mapping for a ProgramDescriptor.
 
@@ -175,6 +180,10 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
         address-matching logic as ``discover_address_slots`` in the program
         factory.  The returned ``AddressSlots`` should be passed to
         ``fusion_dispatch_op`` on each launch.
+
+        If ``sem_addrs`` is provided, runtime arg positions matching those
+        addresses are recorded as semaphore slots (patched separately from
+        tensor addresses on each dispatch).
         )doc");
 
     mod.def(
@@ -270,8 +279,10 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
         Caches MeshProgramDescriptor (patched in-place) and output allocation
         metadata.  Holds no tensors and no Python objects.
 
-        ``dispatch(inputs)`` takes deduped inputs, allocates ephemeral outputs,
-        patches, dispatches, and returns outputs.
+        ``dispatch(inputs, sem_addresses)`` takes deduped inputs, allocates
+        ephemeral outputs, patches semaphore and tensor addresses, dispatches,
+        and returns outputs.  ``sem_addresses`` provides fresh L1 addresses for
+        barrier semaphores so they can be ephemeral (freed after dispatch).
     )doc")
         .def(
             nb::init<
@@ -287,7 +298,11 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
             nb::arg("program_descriptor"),
             nb::arg("address_slots"),
             nb::arg("mesh_device"))
-        .def("dispatch", &FusionDispatchState::dispatch, nb::arg("inputs"));
+        .def(
+            "dispatch",
+            &FusionDispatchState::dispatch,
+            nb::arg("inputs"),
+            nb::arg("sem_addresses") = std::vector<std::uint32_t>{});
 }
 
 }  // namespace ttnn::operations::experimental::fusion::detail
