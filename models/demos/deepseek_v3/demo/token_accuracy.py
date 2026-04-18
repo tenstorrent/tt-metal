@@ -23,81 +23,118 @@ class TokenAccuracy:
     """
     Teacher forcing helper backed by the HF-generated reference .refpt file.
 
-    Expected payload keys (your current refpt format):
-      - prompt_tokens: Tensor [1, prompt_len]
-      - generated_tokens: Tensor [1, gen_len]  (ground-truth continuation)
-      - top5_tokens: Tensor [L, 5] where L = prompt_len + gen_len
-      - tf_prompt_len: int
+    Supports two payload formats:
+
+    **Single-entry (legacy)**::
+
+        {
+            "prompt_tokens":    Tensor [1, P],
+            "generated_tokens": Tensor [1, G],
+            "top5_tokens":      Tensor [L, 5],   # L = P + G
+            "tf_prompt_len":    int,
+        }
+
+    **Multi-entry** (``format_version == "multi_prompt_v1"``)::
+
+        {
+            "format_version": "multi_prompt_v1",
+            "entries": [
+                {
+                    "prompt_tokens":    Tensor [1, P_i],
+                    "generated_tokens": Tensor [1, G_i],
+                    "top5_tokens":      Tensor [L_i, 5],
+                    "tf_prompt_len":    int,
+                    ...
+                },
+                ...
+            ],
+            # backward-compat top-level keys copied from entries[0]
+            "prompt_tokens": ...,
+            ...
+        }
+
+    All per-user methods accept a *user_idx* keyword (default ``0``) so that
+    existing single-entry callers keep working unchanged.
     """
 
     def __init__(self, reference_file: str | Path, prompt_len: Optional[int] = None) -> None:
         self.reference_file = Path(reference_file)
         payload = torch.load(self.reference_file, weights_only=False)
 
-        # --- Validate payload shape invariants (keeps teacher forcing alignment unambiguous) ---
-        required = ("prompt_tokens", "generated_tokens", "top5_tokens", "tf_prompt_len")
-        missing = [k for k in required if k not in payload]
-        if missing:
-            raise KeyError(f"Reference file missing keys: {missing}. File={self.reference_file}")
+        # ---- Detect single vs multi-entry ----
+        raw_entries = payload.get("entries")
+        if isinstance(raw_entries, list) and raw_entries:
+            self._entries = raw_entries
+        else:
+            self._entries = [payload]
 
-        self.prompt_tokens = payload["prompt_tokens"]  # [1, P]
-        self.generated_tokens = payload["generated_tokens"]  # [1, G]
-        self.top5_tokens = payload["top5_tokens"]  # [P+G, 5]
-        self.tf_prompt_len = int(payload["tf_prompt_len"])
+        self._num_entries = len(self._entries)
 
-        if (
-            not isinstance(self.prompt_tokens, torch.Tensor)
-            or self.prompt_tokens.dim() != 2
-            or self.prompt_tokens.shape[0] != 1
-        ):
-            raise ValueError(
-                f"prompt_tokens must be a Tensor of shape [1, P], got {type(self.prompt_tokens)} {getattr(self.prompt_tokens,'shape',None)}"
-            )
-        if (
-            not isinstance(self.generated_tokens, torch.Tensor)
-            or self.generated_tokens.dim() != 2
-            or self.generated_tokens.shape[0] != 1
-        ):
-            raise ValueError(
-                f"generated_tokens must be a Tensor of shape [1, G], got {type(self.generated_tokens)} {getattr(self.generated_tokens,'shape',None)}"
-            )
-        if (
-            not isinstance(self.top5_tokens, torch.Tensor)
-            or self.top5_tokens.dim() != 2
-            or self.top5_tokens.shape[1] != 5
-        ):
-            raise ValueError(
-                f"top5_tokens must be a Tensor of shape [L, 5], got {type(self.top5_tokens)} {getattr(self.top5_tokens,'shape',None)}"
-            )
+        # ---- Per-entry validated data ----
+        self._prompt_1d_list: List[torch.Tensor] = []
+        self._gt_gen_1d_list: List[torch.Tensor] = []
+        self._reference_1d_list: List[torch.Tensor] = []
+        self._top5_tokens_list: List[torch.Tensor] = []
+        self._tf_prompt_len_list: List[int] = []
 
-        file_prompt_len = int(self.prompt_tokens.shape[1])
-        file_gen_len = int(self.generated_tokens.shape[1])
-        expected_L = file_prompt_len + file_gen_len
-        if int(self.top5_tokens.shape[0]) != expected_L:
-            raise ValueError(
-                f"top5_tokens length mismatch: expected L={expected_L} (=prompt {file_prompt_len} + gen {file_gen_len}), got {int(self.top5_tokens.shape[0])}"
-            )
-        if self.tf_prompt_len != file_prompt_len:
-            raise ValueError(
-                f"tf_prompt_len in file ({self.tf_prompt_len}) != prompt_tokens length ({file_prompt_len}). File={self.reference_file}"
-            )
+        for idx, entry in enumerate(self._entries):
+            required = ("prompt_tokens", "generated_tokens", "top5_tokens", "tf_prompt_len")
+            missing = [k for k in required if k not in entry]
+            if missing:
+                raise KeyError(f"Entry {idx} missing keys: {missing}. File={self.reference_file}")
+
+            pt = entry["prompt_tokens"]
+            gt = entry["generated_tokens"]
+            t5 = entry["top5_tokens"]
+            tfl = int(entry["tf_prompt_len"])
+
+            if not isinstance(pt, torch.Tensor) or pt.dim() != 2 or pt.shape[0] != 1:
+                raise ValueError(
+                    f"Entry {idx}: prompt_tokens must be [1, P], got {type(pt)} {getattr(pt, 'shape', None)}"
+                )
+            if not isinstance(gt, torch.Tensor) or gt.dim() != 2 or gt.shape[0] != 1:
+                raise ValueError(
+                    f"Entry {idx}: generated_tokens must be [1, G], got {type(gt)} {getattr(gt, 'shape', None)}"
+                )
+            if not isinstance(t5, torch.Tensor) or t5.dim() != 2 or t5.shape[1] != 5:
+                raise ValueError(
+                    f"Entry {idx}: top5_tokens must be [L, 5], got {type(t5)} {getattr(t5, 'shape', None)}"
+                )
+
+            p1d = pt[0].to(torch.long).contiguous()
+            g1d = gt[0].to(torch.long).contiguous()
+
+            self._prompt_1d_list.append(p1d)
+            self._gt_gen_1d_list.append(g1d)
+            self._reference_1d_list.append(torch.cat([p1d, g1d], dim=0))
+            self._top5_tokens_list.append(t5)
+            self._tf_prompt_len_list.append(tfl)
+
+        # ---- Backward-compat aliases for entry 0 ----
+        e0 = self._entries[0]
+        self.prompt_tokens = e0["prompt_tokens"]
+        self.generated_tokens = e0["generated_tokens"]
+        self.top5_tokens = self._top5_tokens_list[0]
+        self.tf_prompt_len = self._tf_prompt_len_list[0]
+        self._prompt_1d = self._prompt_1d_list[0]
+        self._gt_gen_1d = self._gt_gen_1d_list[0]
+        self._reference_1d = self._reference_1d_list[0]
 
         if prompt_len is not None and int(prompt_len) != self.tf_prompt_len:
             raise ValueError(f"prompt_len arg ({prompt_len}) != tf_prompt_len in file ({self.tf_prompt_len})")
 
-        # Flatten to 1D for convenience
-        self._prompt_1d = self.prompt_tokens[0].to(torch.long).contiguous()
-        self._gt_gen_1d = self.generated_tokens[0].to(torch.long).contiguous()
-        self._reference_1d = torch.cat([self._prompt_1d, self._gt_gen_1d], dim=0)
+        # ---- Per-user state ----
+        self._pred_tokens_list: List[List[int]] = [[] for _ in range(self._num_entries)]
+        self._cursor_list: List[int] = [0] * self._num_entries
+        # Legacy alias (same list object as _pred_tokens_list[0])
+        self._pred_tokens = self._pred_tokens_list[0]
+        self._cursor = 0
 
-        # Collected TT predictions (one per generated token position)
-        self._pred_tokens: List[int] = []
-        self._cursor = 0  # how many GT tokens have been consumed/forced
-
-        # Optional token id metadata for nicer debugging / fallbacks
+        # ---- EOS / token metadata ----
         meta = payload.get("token_ids_meta", {}) if isinstance(payload.get("token_ids_meta", {}), dict) else {}
         self.eos_id: Optional[int] = int(meta["eos_id"]) if "eos_id" in meta and meta["eos_id"] is not None else None
 
+        # ---- TopK candidates (single-entry only) ----
         self.topk_candidate_k = 0
         self.topk_candidate_generated_prefix_len = 0
         self.topk_candidate_token_ids: Optional[torch.Tensor] = None
@@ -137,23 +174,45 @@ class TokenAccuracy:
             self.topk_candidate_token_ids = token_ids.to(torch.long).contiguous()
             self.topk_candidate_probs = probs.to(torch.float32).contiguous()
 
+    # ---- Properties ----
+
+    @property
+    def num_entries(self) -> int:
+        return self._num_entries
+
+    # ---- Reset ----
+
     def reset(self) -> None:
-        """Reset internal cursor/prediction buffer so the same instance can be reused safely."""
-        self._pred_tokens.clear()
+        """Reset internal cursor/prediction buffer for all users."""
+        for lst in self._pred_tokens_list:
+            lst.clear()
+        for i in range(self._num_entries):
+            self._cursor_list[i] = 0
         self._cursor = 0
 
-    def get_prompt_token_ids(self) -> List[int]:
-        return self._prompt_1d.tolist()
+    # ---- Per-user accessors ----
 
-    def num_gt_tokens(self) -> int:
-        return int(self._gt_gen_1d.numel())
+    def get_prompt_token_ids(self, user_idx: int = 0) -> List[int]:
+        idx = min(user_idx, self._num_entries - 1)
+        return self._prompt_1d_list[idx].tolist()
 
-    def num_pred_tokens(self) -> int:
-        return len(self._pred_tokens)
+    def num_gt_tokens(self, user_idx: int = 0) -> int:
+        idx = min(user_idx, self._num_entries - 1)
+        return int(self._gt_gen_1d_list[idx].numel())
+
+    def num_pred_tokens(self, user_idx: int = 0) -> int:
+        idx = min(user_idx, self._num_entries - 1)
+        return len(self._pred_tokens_list[idx])
+
+    def get_predicted_tokens(self, user_idx: int = 0) -> List[int]:
+        idx = min(user_idx, self._num_entries - 1)
+        return list(self._pred_tokens_list[idx])
+
+    # ---- Garbage-token helpers (single-entry / user 0 only) ----
 
     def _resolve_pred_tokens(self, pred_tokens: Optional[List[int]] = None) -> List[int]:
         if pred_tokens is None:
-            return self._pred_tokens
+            return self._pred_tokens_list[0]
         return [int(tok) for tok in pred_tokens]
 
     def has_garbage_check(self) -> bool:
@@ -164,7 +223,7 @@ class TokenAccuracy:
             return 0
         return min(
             len(self._resolve_pred_tokens(pred_tokens)),
-            self.num_gt_tokens(),
+            self.num_gt_tokens(0),
             self.topk_candidate_generated_prefix_len,
         )
 
@@ -199,9 +258,9 @@ class TokenAccuracy:
                     "generated_step": step,
                     "position": pos,
                     "predicted_id": tt_pred,
-                    "true_id": int(self._gt_gen_1d[step].item()),
-                    "context_token_ids": self._reference_1d[context_start:pos].tolist(),
-                    "top5_ids": self.top5_tokens[pos].tolist(),
+                    "true_id": int(self._gt_gen_1d_list[0][step].item()),
+                    "context_token_ids": self._reference_1d_list[0][context_start:pos].tolist(),
+                    "top5_ids": self._top5_tokens_list[0][pos].tolist(),
                     "topk_k": self.topk_candidate_k,
                     "topk_tail_prob": float(candidate_probs_row[-1].item()),
                     "topk_head_ids": candidate_ids[: min(5, len(candidate_ids))],
@@ -255,32 +314,43 @@ class TokenAccuracy:
             )
         return lines
 
-    def collect_predicted_tokens(self, tt_pred_token: int) -> int:
+    # ---- Core teacher-forcing interface ----
+
+    def collect_predicted_tokens(self, tt_pred_token: int, *, user_idx: int = 0) -> int:
         """
-        Record TT's predicted token for the *next* generated position,
+        Record TT's predicted token for the *next* generated position of *user_idx*,
         and return the ground-truth token to force into TT decode.
         """
-        if self._cursor >= self.num_gt_tokens():
-            # If TT generates beyond GT length, just keep returning EOS-ish
-            self._pred_tokens.append(int(tt_pred_token))
+        idx = min(user_idx, self._num_entries - 1)
+        gt_gen = self._gt_gen_1d_list[idx]
+        cursor = self._cursor_list[idx]
+
+        if cursor >= int(gt_gen.numel()):
+            self._pred_tokens_list[idx].append(int(tt_pred_token))
             if self.eos_id is not None:
                 return int(self.eos_id)
-            return int(self._gt_gen_1d[-1].item())
+            return int(gt_gen[-1].item())
 
-        self._pred_tokens.append(int(tt_pred_token))
-        forced = int(self._gt_gen_1d[self._cursor].item())
-        self._cursor += 1
+        self._pred_tokens_list[idx].append(int(tt_pred_token))
+        forced = int(gt_gen[cursor].item())
+        self._cursor_list[idx] = cursor + 1
         return forced
 
-    def compute_accuracy(self) -> Dict[str, float]:
+    def compute_accuracy(self, user_idx: int = 0) -> Dict[str, float]:
         """
-        Accuracy vs HF baseline top5_tokens:
+        Accuracy vs top5_tokens for user *user_idx*:
           For generated step i:
             - sequence position = tf_prompt_len + i
-            - HF top-1 token = top5_tokens[pos][0]
-            - HF top-5 tokens = top5_tokens[pos][:]
+            - top-1 token = top5_tokens[pos][0]
+            - top-5 tokens = top5_tokens[pos][:]
         """
-        total = min(len(self._pred_tokens), self.num_gt_tokens())
+        idx = min(user_idx, self._num_entries - 1)
+        preds = self._pred_tokens_list[idx]
+        gt_gen = self._gt_gen_1d_list[idx]
+        t5 = self._top5_tokens_list[idx]
+        tfl = self._tf_prompt_len_list[idx]
+
+        total = min(len(preds), int(gt_gen.numel()))
         if total == 0:
             return {"top1": 0.0, "top5": 0.0, "matches_top1": 0, "matches_top5": 0, "total": 0}
 
@@ -288,10 +358,10 @@ class TokenAccuracy:
         matches_top5 = 0
 
         for i in range(total):
-            pos = self.tf_prompt_len + i
-            hf_top5 = self.top5_tokens[pos].tolist()
+            pos = tfl + i
+            hf_top5 = t5[pos].tolist()
             hf_top1 = hf_top5[0]
-            tt_pred = int(self._pred_tokens[i])
+            tt_pred = int(preds[i])
 
             if tt_pred == hf_top1:
                 matches_top1 += 1
