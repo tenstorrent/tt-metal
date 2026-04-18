@@ -9,6 +9,7 @@
 
 #include <core_descriptor.hpp>
 #include <host_api.hpp>
+#include "llrt/llrt.hpp"
 #include <initializer_list>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
@@ -461,6 +462,14 @@ bool Device::close() {
     log_trace(tt::LogMetal, "Closing device {}", this->id_);
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
+    }
+
+    if (llrt::is_binary_write_tracking_enabled()) {
+        bool readback_pass = llrt::validate_binary_writes_on_device(this->id_);
+        if (!readback_pass) {
+            log_error(tt::LogMetal, "Binary readback validation FAILED on device {} during close", this->id_);
+        }
+        llrt::clear_tracked_binary_writes(this->id_);
     }
 
     this->disable_and_clear_program_cache();

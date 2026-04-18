@@ -35,6 +35,291 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
+namespace {
+
+struct BinaryWriteRecord {
+    std::vector<uint32_t> data;
+    uint64_t address;
+    uint64_t generation;  // incremented on each write, used to detect stale snapshots
+};
+
+struct CoreKey {
+    tt::ChipId chip_id;
+    CoreCoord core;
+    uint64_t address;
+
+    bool operator==(const CoreKey& other) const {
+        return chip_id == other.chip_id && core == other.core && address == other.address;
+    }
+};
+
+struct CoreKeyHash {
+    std::size_t operator()(const CoreKey& k) const {
+        auto h1 = std::hash<tt::ChipId>{}(k.chip_id);
+        auto h2 = std::hash<std::size_t>{}(k.core.x);
+        auto h3 = std::hash<std::size_t>{}(k.core.y);
+        auto h4 = std::hash<uint64_t>{}(k.address);
+        h1 ^= h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2);
+        h1 ^= h3 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2);
+        h1 ^= h4 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2);
+        return h1;
+    }
+};
+
+struct PerChipValidationThread {
+    std::thread thread;
+    std::atomic<bool> stop_requested{false};
+};
+
+struct BinaryWriteTracker {
+    std::mutex mutex;
+    std::unordered_map<CoreKey, BinaryWriteRecord, CoreKeyHash> records;
+    std::atomic<uint64_t> global_generation{0};
+
+    std::mutex threads_mutex;
+    std::unordered_map<tt::ChipId, std::unique_ptr<PerChipValidationThread>> validation_threads;
+
+    static BinaryWriteTracker& instance() {
+        static BinaryWriteTracker tracker;
+        return tracker;
+    }
+
+    void record_write(
+        tt::ChipId chip_id, const CoreCoord& core, uint64_t address, const uint32_t* data, uint32_t len_words) {
+        std::lock_guard<std::mutex> lock(mutex);
+        CoreKey key{chip_id, core, address};
+        uint64_t gen = global_generation.fetch_add(1, std::memory_order_relaxed);
+        records[key] = BinaryWriteRecord{
+            std::vector<uint32_t>(data, data + len_words),
+            address,
+            gen,
+        };
+    }
+
+    void clear_chip(tt::ChipId chip_id) {
+        std::lock_guard<std::mutex> lock(mutex);
+        std::erase_if(records, [chip_id](const auto& pair) { return pair.first.chip_id == chip_id; });
+    }
+
+    // Take a snapshot of all records for a chip (under lock), so validation can run without holding the lock.
+    std::vector<std::pair<CoreKey, BinaryWriteRecord>> snapshot_chip(tt::ChipId chip_id) {
+        std::lock_guard<std::mutex> lock(mutex);
+        std::vector<std::pair<CoreKey, BinaryWriteRecord>> result;
+        for (const auto& [key, record] : records) {
+            if (key.chip_id == chip_id) {
+                result.emplace_back(key, record);
+            }
+        }
+        return result;
+    }
+
+    // Check if a record's generation still matches (i.e., it hasn't been overwritten since the snapshot).
+    bool is_record_current(const CoreKey& key, uint64_t snapshot_generation) {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto it = records.find(key);
+        return it != records.end() && it->second.generation == snapshot_generation;
+    }
+};
+
+bool binary_write_tracking_enabled() {
+    static bool enabled = std::getenv("TT_METAL_BINARY_READBACK_ON_CLOSE") != nullptr;
+    return enabled;
+}
+
+uint32_t get_validation_interval_ms() {
+    const char* env = std::getenv("TT_METAL_BINARY_READBACK_INTERVAL_MS");
+    if (env) {
+        return static_cast<uint32_t>(std::stoul(env));
+    }
+    return 5000;
+}
+
+// Core validation logic, works on a snapshot. Returns (checked, failed, skipped).
+// When check_generation is true, records that have been overwritten since the snapshot are skipped
+// (avoids false positives when programs are actively being dispatched).
+struct ValidationResult {
+    uint32_t checked;
+    uint32_t failed;
+    uint32_t skipped;
+};
+
+ValidationResult validate_snapshot(
+    tt::ChipId chip_id,
+    const std::vector<std::pair<CoreKey, BinaryWriteRecord>>& snapshot,
+    const char* context,
+    bool check_generation) {
+    uint32_t checked = 0;
+    uint32_t failed = 0;
+    uint32_t skipped = 0;
+
+    for (const auto& [key, record] : snapshot) {
+        uint32_t size_bytes = record.data.size() * sizeof(uint32_t);
+        std::vector<uint32_t> read_data(record.data.size());
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            read_data.data(), size_bytes, tt_cxy_pair(chip_id, key.core), key.address);
+
+        if (read_data != record.data) {
+            // Before reporting, check if this record was overwritten by a newer write.
+            if (check_generation && !BinaryWriteTracker::instance().is_record_current(key, record.generation)) {
+                skipped++;
+                continue;
+            }
+
+            checked++;
+            failed++;
+
+            uint32_t first_mismatch_idx = 0;
+            for (uint32_t i = 0; i < record.data.size(); i++) {
+                if (read_data[i] != record.data[i]) {
+                    first_mismatch_idx = i;
+                    break;
+                }
+            }
+
+            log_error(
+                tt::LogLLRuntime,
+                "[{}] Binary readback MISMATCH on chip {} core {} addr 0x{:x}: "
+                "size={} words, first mismatch at word {} (expected 0x{:08x}, got 0x{:08x})",
+                context,
+                chip_id,
+                key.core.str(),
+                key.address,
+                record.data.size(),
+                first_mismatch_idx,
+                record.data[first_mismatch_idx],
+                read_data[first_mismatch_idx]);
+        } else {
+            checked++;
+        }
+    }
+
+    return {checked, failed, skipped};
+}
+
+void validation_thread_fn(tt::ChipId chip_id, PerChipValidationThread* state) {
+    uint32_t interval_ms = get_validation_interval_ms();
+    uint64_t iteration = 0;
+
+    log_info(
+        tt::LogLLRuntime,
+        "Binary readback validation thread started for chip {} (interval={}ms)",
+        chip_id,
+        interval_ms);
+
+    while (!state->stop_requested.load(std::memory_order_relaxed)) {
+        // Sleep in small increments so we can respond to stop quickly
+        for (uint32_t elapsed = 0; elapsed < interval_ms && !state->stop_requested.load(std::memory_order_relaxed);
+             elapsed += 100) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        if (state->stop_requested.load(std::memory_order_relaxed)) {
+            break;
+        }
+
+        iteration++;
+        auto snapshot = BinaryWriteTracker::instance().snapshot_chip(chip_id);
+        if (snapshot.empty()) {
+            continue;
+        }
+
+        auto result = validate_snapshot(chip_id, snapshot, "periodic", true);
+
+        if (result.failed > 0) {
+            log_error(
+                tt::LogLLRuntime,
+                "Periodic binary validation iteration {} on chip {}: {}/{} regions FAILED ({} skipped as stale)",
+                iteration,
+                chip_id,
+                result.failed,
+                result.checked,
+                result.skipped);
+        } else {
+            log_debug(
+                tt::LogLLRuntime,
+                "Periodic binary validation iteration {} on chip {}: {}/{} regions OK ({} skipped as stale)",
+                iteration,
+                chip_id,
+                result.checked,
+                result.checked,
+                result.skipped);
+        }
+    }
+
+    log_info(tt::LogLLRuntime, "Binary readback validation thread stopped for chip {}", chip_id);
+}
+
+}  // anonymous namespace
+
+bool is_binary_write_tracking_enabled() { return binary_write_tracking_enabled(); }
+
+void start_binary_validation_thread(tt::ChipId chip_id) {
+    auto& tracker = BinaryWriteTracker::instance();
+    std::lock_guard<std::mutex> lock(tracker.threads_mutex);
+    if (tracker.validation_threads.count(chip_id)) {
+        return;
+    }
+    auto ctx = std::make_unique<PerChipValidationThread>();
+    auto* raw = ctx.get();
+    ctx->thread = std::thread(validation_thread_fn, chip_id, raw);
+    tracker.validation_threads[chip_id] = std::move(ctx);
+}
+
+void stop_binary_validation_thread(tt::ChipId chip_id) {
+    auto& tracker = BinaryWriteTracker::instance();
+    std::unique_ptr<PerChipValidationThread> ctx;
+    {
+        std::lock_guard<std::mutex> lock(tracker.threads_mutex);
+        auto it = tracker.validation_threads.find(chip_id);
+        if (it == tracker.validation_threads.end()) {
+            return;
+        }
+        ctx = std::move(it->second);
+        tracker.validation_threads.erase(it);
+    }
+    ctx->stop_requested.store(true, std::memory_order_relaxed);
+    if (ctx->thread.joinable()) {
+        ctx->thread.join();
+    }
+}
+
+bool validate_binary_writes_on_device(tt::ChipId chip_id) {
+    if (!binary_write_tracking_enabled()) {
+        return true;
+    }
+
+    // Stop the periodic thread first so we don't race with the final validation
+    stop_binary_validation_thread(chip_id);
+
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(chip_id);
+
+    auto snapshot = BinaryWriteTracker::instance().snapshot_chip(chip_id);
+    auto result = validate_snapshot(chip_id, snapshot, "close", false);
+
+    if (result.checked > 0) {
+        log_info(
+            tt::LogLLRuntime,
+            "Final binary readback validation on chip {}: checked {} regions, {} passed, {} failed",
+            chip_id,
+            result.checked,
+            result.checked - result.failed,
+            result.failed);
+    }
+
+    return result.failed == 0;
+}
+
+void clear_tracked_binary_writes(tt::ChipId chip_id) {
+    stop_binary_validation_thread(chip_id);
+    BinaryWriteTracker::instance().clear_chip(chip_id);
+}
+
+static thread_local int suppress_tracking_depth = 0;
+
+SuppressBinaryTracking::SuppressBinaryTracking() { suppress_tracking_depth++; }
+SuppressBinaryTracking::~SuppressBinaryTracking() { suppress_tracking_depth--; }
+bool SuppressBinaryTracking::is_suppressed() { return suppress_tracking_depth > 0; }
+
 const ll_api::memory& get_risc_binary(
     const std::string& path,
     ll_api::memory::Loading loading,
@@ -241,6 +526,10 @@ void write_binary_to_address(const ll_api::memory& mem, tt::ChipId chip_id, cons
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t /*addr*/, uint32_t len_words) {
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), address);
+        if (binary_write_tracking_enabled() && !SuppressBinaryTracking::is_suppressed()) {
+            BinaryWriteTracker::instance().record_write(chip_id, core, address, &*mem_ptr, len_words);
+            start_binary_validation_thread(chip_id);
+        }
     });
 }
 

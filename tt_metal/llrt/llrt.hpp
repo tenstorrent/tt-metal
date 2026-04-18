@@ -61,6 +61,30 @@ bool test_load_multicast_write_risc_binary(
 
 void write_binary_to_address(const ll_api::memory& mem, ChipId chip_id, const CoreCoord& core, uint32_t address);
 
+// Returns true if binary write tracking is enabled (via TT_METAL_BINARY_READBACK_ON_CLOSE env var).
+// Set TT_METAL_BINARY_READBACK_INTERVAL_MS to control the periodic check interval (default: 5000ms).
+bool is_binary_write_tracking_enabled();
+
+// Reads back all tracked binaries from device and validates they match what was written.
+// Returns true if all binaries match. Logs errors for any mismatches.
+bool validate_binary_writes_on_device(ChipId chip_id);
+
+// Clears all tracked binary writes for a given chip and stops its periodic validation thread.
+void clear_tracked_binary_writes(ChipId chip_id);
+
+// Start periodic background validation for a chip. Called automatically on first write if enabled.
+void start_binary_validation_thread(ChipId chip_id);
+
+// Stop periodic background validation for a chip. Called by clear_tracked_binary_writes.
+void stop_binary_validation_thread(ChipId chip_id);
+
+// RAII guard to suppress binary write tracking (e.g., during dispatch firmware init).
+struct SuppressBinaryTracking {
+    SuppressBinaryTracking();
+    ~SuppressBinaryTracking();
+    static bool is_suppressed();
+};
+
 namespace internal_ {
 
 void wait_until_cores_done(

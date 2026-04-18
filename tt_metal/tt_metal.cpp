@@ -872,6 +872,13 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
         detail::DispatchStateCheck(false);
     }
 
+    // Suppress binary write tracking for dispatch firmware init writes — those kernels stay
+    // resident and modify their own L1, so readback will always show expected divergence.
+    std::optional<llrt::SuppressBinaryTracking> suppress_guard;
+    if (force_slow_dispatch) {
+        suppress_guard.emplace();
+    }
+
     auto device_id = device->id();
 
     // Individual device allocators don't track mesh buffer allocations, so use the
