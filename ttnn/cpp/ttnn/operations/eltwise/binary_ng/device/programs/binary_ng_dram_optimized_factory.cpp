@@ -41,6 +41,36 @@ uint32_t get_noc_max_burst_size(const ttnn::MeshDevice& mesh_device) {
     return noc_max_burst_size;
 }
 
+uint32_t compute_num_batches(const ttnn::operations::binary_ng::BinaryNgInputs& args) {
+    return args.input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B ? 1
+                                                                            : 2;  // perf tuning parameter, default  = 2
+}
+
+uint32_t compute_num_tiles_per_batches(
+    const ttnn::operations::binary_ng::BinaryNgParams& operation_attributes,
+    const ttnn::operations::binary_ng::BinaryNgInputs& args,
+    const ttnn::Tensor& output) {
+    auto* device = args.input_tensor_a.device();
+    auto dtype = tt::tt_metal::datatype_to_dataformat_converter(args.input_tensor_a.dtype());
+
+    uint32_t single_tile_size = tt::tile_size(dtype);
+
+    const auto b_data_format =
+        args.input_tensor_b.has_value() ? datatype_to_dataformat_converter(args.input_tensor_b->dtype()) : dtype;
+    const auto c_data_format = datatype_to_dataformat_converter(output.dtype());
+
+    // With fp32_dest_acc_en the DST register file holds only 4 tiles (vs 16 for 16-bit).
+    // The SFPU binary section interleaves LHS/RHS in DST using 2*n_tiles slots,
+    // so large_chunk (= num_batches * num_tiles_per_batch) must stay <= 2 for 32-bit.
+    // num_tiles_per_batch = 4 supposed to match NOC_MAX_BURST_SIZE (bytes)
+    bool fp32_dest_acc_en =
+        ttnn::operations::binary_ng::program::is_fp32_dest_acc_en(dtype, b_data_format, c_data_format);
+
+    return fp32_dest_acc_en or operation_attributes.is_sfpu
+               ? 1
+               : CMAKE_UNIQUE_NAMESPACE::get_noc_max_burst_size(*(device->get_mesh_device())) / (single_tile_size);
+}
+
 template <bool initialize_args>
 inline void set_eltwise_binary_runtime_args_for_dram_cores(
     tt::tt_metal::Program& program,
@@ -50,7 +80,9 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
     const tt::tt_metal::KernelHandle reader_kernel_id,
     const tt::tt_metal::KernelHandle writer_kernel_id,
     const tt::tt_metal::KernelHandle compute_kernel_id,
-    const CoreRangeSet& all_device_cores) {
+    const CoreRangeSet& all_device_cores,
+    const uint32_t num_batches,
+    const uint32_t num_tiles_per_batch) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::constants;
@@ -111,10 +143,20 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
         }
 
         std::vector<uint32_t> reader_args_vec = {
-            a_tensor.buffer()->address(), b_tensor.buffer()->address(), core_id, num_tiles_per_core, vc};
+            a_tensor.buffer()->address(),
+            b_tensor.buffer()->address(),
+            core_id,
+            num_tiles_per_core,
+            num_tiles_per_batch,
+            num_batches};
 
-        std::vector<uint32_t> compute_args_vec = {num_tiles_per_core, vc};
-        std::vector<uint32_t> writer_args_vec = {output.buffer()->address(), core_id, num_tiles_per_core, vc};
+        std::vector<uint32_t> compute_args_vec = {
+            num_tiles_per_core,
+            num_tiles_per_batch,
+            num_batches,
+        };
+        std::vector<uint32_t> writer_args_vec = {
+            output.buffer()->address(), core_id, num_tiles_per_core, num_tiles_per_batch, num_batches};
 
         reader_args_array[core_id] = std::move(reader_args_vec);
         compute_args_array[core_id] = std::move(compute_args_vec);
@@ -153,6 +195,9 @@ std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
         return "Subtile broadcast type is not supported for DRAM optimized program";
     }
 
+    if (operation_attributes.dtype.has_value() && operation_attributes.dtype.value() != a.dtype()) {
+        return "Output dtype mismatch";
+    }
     auto* device = a.device();
     if (device->get_active_sub_device_manager_id() != device->get_default_sub_device_manager_id()) {
         return "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id";
@@ -359,17 +404,10 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     loop (line 48‑51), so it's fine.
     */
 
-    const uint32_t num_batches = args.input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B
-                                     ? 1
-                                     : 2;  // perf tuning parameter, default  = 2
-    // With fp32_dest_acc_en the DST register file holds only 4 tiles (vs 16 for 16-bit).
-    // The SFPU binary section interleaves LHS/RHS in DST using 2*n_tiles slots,
-    // so large_chunk (= num_batches * num_tiles_per_batch) must stay <= 2 for 32-bit.
-    // num_tiles_per_batch = 4 supposed to match NOC_MAX_BURST_SIZE (bytes)
+    const uint32_t num_batches = CMAKE_UNIQUE_NAMESPACE::compute_num_batches(args);
+
     const uint32_t num_tiles_per_batch =
-        fp32_dest_acc_en or operation_attributes.is_sfpu
-            ? 1
-            : CMAKE_UNIQUE_NAMESPACE::get_noc_max_burst_size(*(device->get_mesh_device())) / (single_tile_size);
+        CMAKE_UNIQUE_NAMESPACE::compute_num_tiles_per_batches(operation_attributes, args, output);
 
     const uint32_t num_tiles_per_cb = 2 * num_tiles_per_batch * num_batches;
     log_info(
@@ -395,8 +433,6 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     std::vector<uint32_t> reader_compile_time_vec = {
         a_tensor_cb,
         b_tensor_cb,
-        num_batches,
-        num_tiles_per_batch,
     };
     tt::tt_metal::TensorAccessorArgs(args.input_tensor_a.buffer()).append_to(reader_compile_time_vec);
     tt::tt_metal::TensorAccessorArgs(args.input_tensor_b->buffer()).append_to(reader_compile_time_vec);
@@ -414,7 +450,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     /***************   WRITER KERNEL ***************/
     // TODO: We can't use num_batches and num_tiles_per_batch as compile time aruments, the op expect one kernels for
     // tensors with different shapes.
-    std::vector<uint32_t> writer_compile_time_vec = {output_cb_index, num_batches, num_tiles_per_batch};
+    std::vector<uint32_t> writer_compile_time_vec = {output_cb_index};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_vec);
 
     std::map<std::string, std::string> writer_defines;
@@ -524,8 +560,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     // TODO: Don't hardcode num_batches and num_tiles_per_batch, that should be runtime args, when device compute hash,
     // that info is not taken into account
     std::vector<uint32_t> compute_compile_time_vec = {
-        num_batches,
-        num_tiles_per_batch,
+
     };
     std::string compute_kernel_path = operation_attributes.is_sfpu ? "compute/eltwise_binary_sfpu_dram_optimized.cpp"
                                                                    : "compute/eltwise_binary_dram_optimized.cpp";
@@ -572,7 +607,9 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
         reader_kernel_id,
         writer_kernel_id,
         compute_kernel_id,
-        dram_optimal_cores);
+        dram_optimal_cores,
+        num_batches,
+        num_tiles_per_batch);
     return {
         std::move(program),
         {reader_kernel_id,
@@ -589,7 +626,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
 
 void BinaryNgDramOptimizedProgram::override_runtime_arguments(
     cached_program_t& cached_program,
-    const BinaryNgParams& /*operation_attributes*/,
+    const BinaryNgParams& operation_attributes,
     const BinaryNgInputs& tensor_args,
     Tensor& tensor_return_value) {
     const auto& sh_var = cached_program.shared_variables;
@@ -602,6 +639,8 @@ void BinaryNgDramOptimizedProgram::override_runtime_arguments(
         sh_var.reader_kernel_id,
         sh_var.writer_kernel_id,
         sh_var.eltwise_kernel_id,
-        sh_var.dram_device_cores);
+        sh_var.dram_device_cores,
+        CMAKE_UNIQUE_NAMESPACE::compute_num_batches(tensor_args),
+        CMAKE_UNIQUE_NAMESPACE::compute_num_tiles_per_batches(operation_attributes, tensor_args, tensor_return_value));
 }
 }  // namespace ttnn::operations::binary_ng::program

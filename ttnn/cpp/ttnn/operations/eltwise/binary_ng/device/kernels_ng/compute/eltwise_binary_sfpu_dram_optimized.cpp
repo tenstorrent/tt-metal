@@ -28,10 +28,9 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 
 void kernel_main() {
-    constexpr uint32_t num_batches = get_compile_time_arg_val(0);
-    constexpr uint32_t num_tiles_per_batch = get_compile_time_arg_val(1);
-
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t num_batches = get_arg_val<uint32_t>(1);
+    uint32_t num_tiles_per_batch = get_arg_val<uint32_t>(2);
 
     constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs = tt::CBIndex::c_1;

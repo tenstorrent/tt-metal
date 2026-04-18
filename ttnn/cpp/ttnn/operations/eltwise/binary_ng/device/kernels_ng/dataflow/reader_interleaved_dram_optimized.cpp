@@ -12,17 +12,15 @@ void kernel_main() {
     constexpr auto cb_a = get_compile_time_arg_val(0);
     constexpr auto cb_b = get_compile_time_arg_val(1);
 
-    constexpr uint32_t num_batches = get_compile_time_arg_val(2);
-    constexpr uint32_t num_tiles_per_batch = get_compile_time_arg_val(3);
-
-    constexpr auto src_a_args = TensorAccessorArgs<4>();
+    constexpr auto src_a_args = TensorAccessorArgs<2>();
     constexpr auto src_b_args = TensorAccessorArgs<src_a_args.next_compile_time_args_offset()>();
 
     const uint32_t a_addr = get_arg_val<uint32_t>(0);
     const uint32_t b_addr = get_arg_val<uint32_t>(1);
     const uint32_t tile_ofs = get_arg_val<uint32_t>(2);
     const uint32_t num_tiles = get_arg_val<uint32_t>(3);
-    const uint32_t vc = get_arg_val<uint32_t>(4);
+    const uint32_t num_batches = get_arg_val<uint32_t>(4);
+    const uint32_t num_tiles_per_batch = get_arg_val<uint32_t>(5);
 
     if (num_tiles == 0) {
         return;
@@ -98,12 +96,12 @@ void kernel_main() {
 
         noc_async_read_set_trid(trid);
 
-        noc_async_read_one_packet_set_state<true>(a_noc_addr, transfer_sz, vc);
+        noc_async_read_one_packet_set_state<true>(a_noc_addr, transfer_sz);
         noc_async_read_one_packet_with_state_with_trid(a_noc_addr, a_addr_ofs, a_cb_ptr, trid);
         a_addr_ofs += transfer_sz;
         a_cb_ptr = next_a_cb_addr(a_cb_ptr, chunk);
 
-        noc_async_read_one_packet_set_state<true>(b_noc_addr, transfer_sz, vc);
+        noc_async_read_one_packet_set_state<true>(b_noc_addr, transfer_sz);
         noc_async_read_one_packet_with_state_with_trid(b_noc_addr, b_addr_ofs, b_cb_ptr, trid);
         b_addr_ofs += transfer_sz;
         b_cb_ptr = next_b_cb_addr(b_cb_ptr, chunk);
