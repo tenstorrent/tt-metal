@@ -150,6 +150,7 @@ jobs:
       llk-sfpi-changed: ${{ steps.find-changes.outputs.llk-sfpi-changed }}
       llk-quasar-changed: ${{ steps.find-changes.outputs.llk-quasar-changed }}
       llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
+      llk-unit-tests-changed: ${{ steps.find-changes.outputs.llk-unit-tests-changed }}
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
     steps:
@@ -584,7 +585,8 @@ jobs:
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-common-changed == 'true')
+         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-unit-tests-changed == 'true')
       }}
     secrets: inherit
     uses: ./.github/workflows/cpp-post-commit.yaml
@@ -603,7 +605,8 @@ jobs:
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-common-changed == 'true')
+         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-unit-tests-changed == 'true')
       }}
     secrets: inherit
     uses: ./.github/workflows/cpp-post-commit.yaml
