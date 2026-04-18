@@ -217,7 +217,8 @@ class ColParallelLinear(Module):
                 parallel_config.tensor_parallel.mesh_axis
             )
             per_device_k = x.padded_shape[-1]
-            num_buffers = min(48, max(8, 49152 // max(per_device_k, 1)))
+            max_buffers = 24 if is_blackhole() else 48
+            num_buffers = min(max_buffers, max(8, 49152 // max(per_device_k, 1)))
             outputs = ttnn.experimental.all_gather_minimal_matmul_async(
                 input_tensor=x,
                 weight_tensor=weight,
