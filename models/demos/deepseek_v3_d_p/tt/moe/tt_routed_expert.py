@@ -339,7 +339,11 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
         """
-        logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
+        # logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
+
+        logger.debug(f"Start routed experts")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
 
         # Convert input to activations dtype if needed
         if dispatched_buffer.dtype != self.activations_dtype:
@@ -352,14 +356,15 @@ class TtRoutedExpert(LightweightModule):
 
         expert_outputs = ttnn.empty_like(dispatched_buffer)
         for local_expert in range(self.experts_per_chip):
-            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
+            # signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
 
             # Extract tokens for this expert
             # Shape: (1, max_tokens, emb_dim)
             tokens = ttnn.narrow(dispatched_buffer, dim=0, start=local_expert, length=1)
-            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
+            # logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
             # Run FFN
+
             output = self._expert_ffn(
                 tokens,
                 self.gate_projs[local_expert],
@@ -367,10 +372,17 @@ class TtRoutedExpert(LightweightModule):
                 self.down_projs[local_expert],
                 out=ttnn.narrow(expert_outputs, dim=0, start=local_expert, length=1),
             )
+            ttnn.synchronize_device(self.mesh_device)
+            ttnn.distributed_context_barrier()
+            logger.debug(f"Expert {local_expert}: completed FFN")
             # logger.debug(f"Expert {local_expert}: output shape {output.shape}")
 
         # Shape: (experts_per_chip, max_tokens, emb_dim)
         # logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug(f"Finished routed experts")
 
         return expert_outputs
 

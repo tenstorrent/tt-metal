@@ -168,7 +168,7 @@ class TtDispatchModule(LightweightModule):
             dispatched_buffer: Dispatched tokens of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
             metadata: Metadata tensor of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
         """
-        logger.debug(f"[TtDispatchModule.forward] INPUT SHAPES:")
+        # logger.debug(f"[TtDispatchModule.forward] INPUT SHAPES:")
         # logger.debug(f"  x.shape={x.shape}")
         # logger.debug(f"  weights.shape={weights.shape}")
         # logger.debug(f"  indices.shape={indices.shape}")
@@ -182,6 +182,7 @@ class TtDispatchModule(LightweightModule):
         # )
         # logger.debug(f"  cluster_axis={self.cluster_axis}, num_links={self.num_links}, topology={self.topology}")
 
+        logger.debug(f"Running dispatch")
         ttnn.synchronize_device(self.mesh_device)
         ttnn.distributed_context_barrier()
         (
@@ -203,6 +204,7 @@ class TtDispatchModule(LightweightModule):
             num_links=self.num_links,
             topology=self.topology,
         )
+        logger.debug(f"Finished dispatch")
         ttnn.synchronize_device(self.mesh_device)
         ttnn.distributed_context_barrier()
 

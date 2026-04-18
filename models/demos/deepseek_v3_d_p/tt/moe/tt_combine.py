@@ -11,6 +11,8 @@ This is a TTNN wrapper around the prefill_combine operation, which performs the 
 logic as the PyTorch reference implementation but on Tenstorrent hardware.
 """
 
+from loguru import logger
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -75,6 +77,9 @@ class TtCombineModule(LightweightModule):
         Returns:
             output: Combined output tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim)
         """
+        logger.debug(f"Running combine")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
         output = ttnn.experimental.deepseek_prefill.combine(
             dispatched_buffer,
             dispatched_metadata,
@@ -89,4 +94,7 @@ class TtCombineModule(LightweightModule):
             memory_config=self.memory_config,
             init_zeros=self.init_zeros,
         )
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug(f"Combine complete")
         return output

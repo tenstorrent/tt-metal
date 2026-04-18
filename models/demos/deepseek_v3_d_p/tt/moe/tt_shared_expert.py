@@ -277,7 +277,7 @@ class TtSharedExpert(LightweightModule):
             Output tensor [batch, seq_len, emb_dim / num_devices]
         """
         batch_size = x.shape[0]
-        logger.debug(f"Forward pass: input shape={x.shape}, batch_size={batch_size}")
+        # logger.debug(f"Forward pass: input shape={x.shape}, batch_size={batch_size}")
 
         # Verify input is replicated (full emb_dim) when multiple mesh columns
         if self.mesh_device.shape[1] > 1:
@@ -299,7 +299,7 @@ class TtSharedExpert(LightweightModule):
             x.shape[-1] == self.gate_proj.shape[-2]
         ), f"Matmul shape mismatch: x[-1]={x.shape[-1]} != gate_proj[-2]={self.gate_proj.shape[-2]}"
         gate_out = ttnn.matmul(x, self.gate_proj, compute_kernel_config=self.compute_kernel_config)
-        logger.debug(f"After gate_proj matmul: {gate_out.shape}")
+        # logger.debug(f"After gate_proj matmul: {gate_out.shape}")
 
         # Step 2: Up projection
         # x: [batch, seq_len, emb_dim]
@@ -309,7 +309,7 @@ class TtSharedExpert(LightweightModule):
             x.shape[-1] == self.up_proj.shape[-2]
         ), f"Matmul shape mismatch: x[-1]={x.shape[-1]} != up_proj[-2]={self.up_proj.shape[-2]}"
         up_out = ttnn.matmul(x, self.up_proj, compute_kernel_config=self.compute_kernel_config)
-        logger.debug(f"After up_proj matmul: {up_out.shape}")
+        # logger.debug(f"After up_proj matmul: {up_out.shape}")
 
         # Step 3: SiLU activation and element-wise multiplication (fused)
         # activated = silu(gate_out) * up_out
@@ -319,7 +319,7 @@ class TtSharedExpert(LightweightModule):
             up_out,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
         )
-        logger.debug(f"After SiLU fusion: {activated.shape}")
+        # logger.debug(f"After SiLU fusion: {activated.shape}")
 
         # Step 4: Down projection
         # activated: [batch, seq_len, hidden_dim / num_devices]
@@ -329,7 +329,7 @@ class TtSharedExpert(LightweightModule):
             activated.shape[-1] == self.down_proj.shape[-2]
         ), f"Matmul shape mismatch: activated[-1]={activated.shape[-1]} != down_proj[-2]={self.down_proj.shape[-2]}"
         output_full = ttnn.matmul(activated, self.down_proj, compute_kernel_config=self.compute_kernel_config)
-        logger.debug(f"After down_proj matmul: {output_full.shape}")
+        # logger.debug(f"After down_proj matmul: {output_full.shape}")
 
         # Step 5: Reduce-scatter output across mesh columns
         if self.mesh_device.shape[1] > 1:
@@ -342,6 +342,6 @@ class TtSharedExpert(LightweightModule):
             )
         else:
             output = output_full  # No need to reduce-scatter if only one device in mesh column - there is no TP
-        logger.debug(f"After reduce_scatter: {output.shape}")
+        # logger.debug(f"After reduce_scatter: {output.shape}")
 
         return output
