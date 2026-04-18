@@ -72,7 +72,7 @@ SEQ_LEN_100_K = 100 * 1024
             },
             2,
             ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(32, 4), topology="mesh-32x4"),
+            # marks=pytest.mark.requires_mesh_topology(mesh_shape=(32, 4), topology="mesh-32x4"),
             id="mesh-32x4",
         ),
     ],
