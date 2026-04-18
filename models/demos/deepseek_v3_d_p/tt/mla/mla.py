@@ -704,7 +704,11 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
-        logger.debug("Running ring SDPA: is_balanced =", self.is_balanced)
+        logger.debug(f"Pre ring sdpa sync")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+
+        logger.debug(f"Running ring SDPA: is_balanced = {self.is_balanced}")
         ttnn.synchronize_device(self.mesh_device)
         ttnn.distributed_context_barrier()
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
