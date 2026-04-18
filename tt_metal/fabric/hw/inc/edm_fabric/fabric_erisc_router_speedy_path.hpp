@@ -120,7 +120,7 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
                 while (busy) {
                     // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
-                    __asm__ volatile(".4byte 0x0100000F");
+                    __asm__ volatile("nop"); /* was: .4byte 0x0100000F (RISC-V PAUSE hint) */
                     busy = internal_::eth_txq_is_busy(sender_txq_id);
                     // Yield to teardown: spinning indefinitely on a congested ETH TX queue
                     // (e.g. flow-control deadlock) prevents close_finish() from completing.
@@ -152,7 +152,7 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
                 // Teardown bail is handled exclusively in the pre-send spin above
                 // (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA, always true), before any send.
                 // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
-                __asm__ volatile(".4byte 0x0100000F");
+                __asm__ volatile("nop"); /* was: .4byte 0x0100000F (RISC-V PAUSE hint) */
                 busy = internal_::eth_txq_is_busy(sender_txq_id);
             };
             remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);

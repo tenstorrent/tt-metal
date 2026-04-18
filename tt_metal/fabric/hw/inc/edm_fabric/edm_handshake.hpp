@@ -166,7 +166,7 @@ FORCE_INLINE void sender_side_start(
     eth_wait_receiver_done(HS_CONTEXT_SWITCH_TIMEOUT);
     while (eth_txq_is_busy()) {
         // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
-        __asm__ volatile(".4byte 0x0100000F");
+        __asm__ volatile("nop"); /* was: .4byte 0x0100000F (RISC-V PAUSE hint) */
     }
     eth_send_bytes(handshake_register_address, handshake_register_address, 16);
 }
@@ -199,7 +199,7 @@ FORCE_INLINE void receiver_side_finish(
     eth_wait_for_bytes(16, HS_CONTEXT_SWITCH_TIMEOUT);
     while (eth_txq_is_busy()) {
         // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
-        __asm__ volatile(".4byte 0x0100000F");
+        __asm__ volatile("nop"); /* was: .4byte 0x0100000F (RISC-V PAUSE hint) */
     }
     eth_receiver_channel_done(0);
 }
