@@ -241,10 +241,6 @@ const std::unordered_set<CoreCoord>& DispatchKernelInitializer::get_virtual_disp
 
 void DispatchKernelInitializer::wait_for_dispatch_cores() const {
     for (auto* dev : devices_) {
-        if (!dev->is_mmio_capable()) {
-            continue;
-        }
-
         auto dispatch_cores = get_virtual_dispatch_cores(dev->id());
         log_info(tt::LogMetal, "[dispatch_teardown] wait_for_dispatch_cores device={} num_cores={}", dev->id(), dispatch_cores.size());
         // Wrap in try-catch so that device close continues even if dispatch cores fail or timeout.
