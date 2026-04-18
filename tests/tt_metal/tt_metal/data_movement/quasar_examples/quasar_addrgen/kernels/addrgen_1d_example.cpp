@@ -13,10 +13,10 @@
 #include <cstdint>
 
 constexpr uint32_t src_base = 0x10000;
-constexpr uint64_t src_stride = 2048;
+constexpr uint64_t src_stride = 4096;  // 2 tiles × 2048 B — skips 1 tile between each access
 
 constexpr uint32_t dst_base = 0x20000;
-constexpr uint64_t dst_stride = 2048;
+constexpr uint64_t dst_stride = 4096;
 
 void kernel_main() {
     constexpr uint32_t src_stride_en = get_compile_time_arg_val(0);

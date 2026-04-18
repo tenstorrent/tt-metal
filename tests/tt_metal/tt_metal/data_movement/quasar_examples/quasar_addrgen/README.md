@@ -22,12 +22,14 @@ flowchart TD
 
 Only the **inner loop** is active. Addresses step linearly from base.
 
-**Src:** `base=0x10000`, stride=2048 &nbsp;|&nbsp; **Dst:** `base=0x20000`, stride=2048
+**Src:** `base=0x10000`, stride=4096 (2 tiles) &nbsp;|&nbsp; **Dst:** `base=0x20000`, stride=4096 (2 tiles)
 
 | step | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
 |------|---|---|---|---|---|---|---|---|---|---|
-| **src** | `0x10000` | `0x10800` | `0x11000` | `0x11800` | `0x12000` | `0x12800` | `0x13000` | `0x13800` | `0x14000` | `0x14800` |
-| **dst** | `0x20000` | `0x20800` | `0x21000` | `0x21800` | `0x22000` | `0x22800` | `0x23000` | `0x23800` | `0x24000` | `0x24800` |
+| **src** | `0x10000` | `0x11000` | `0x12000` | `0x13000` | `0x14000` | `0x15000` | `0x16000` | `0x17000` | `0x18000` | `0x19000` |
+| **dst** | `0x20000` | `0x21000` | `0x22000` | `0x23000` | `0x24000` | `0x25000` | `0x26000` | `0x27000` | `0x28000` | `0x29000` |
+
+> **Tile size: 2048 B.** Each box is one 2048 B tile. `inner_stride = 4096 B = 2 × 2048 B` — every 2nd tile is visited, 1 skipped between each step.
 
 ![](1D_stride.png)
 
