@@ -78,7 +78,7 @@ class MoEGate(AbstractModule):
         }
 
     @classmethod
-    def create_shared_state(
+    def create_state(
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
@@ -113,20 +113,18 @@ class MoEGate(AbstractModule):
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (num_device_cores, 1, 1))
-        ttnn_output_tensor = ttnn.to_memory_config(ttnn_output_tensor, memory_config=input_output_mem_config)
 
         ttnn_output_indices = ttnn.zeros(
             shape=(1, 32, 32),
             dtype=ttnn.uint16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (num_device_cores, 1, 1))
-        ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
 
         ttnn_input_indices = ttnn.arange(
             start=0,
@@ -134,7 +132,7 @@ class MoEGate(AbstractModule):
             step=1,
             dtype=ttnn.int32,
             device=mesh_device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
         ttnn_input_indices = ttnn.unsqueeze(ttnn_input_indices, dim=0)
@@ -143,7 +141,7 @@ class MoEGate(AbstractModule):
         ttnn_input_indices = ttnn.typecast(ttnn_input_indices, dtype=ttnn.uint16)
         ttnn_input_indices = ttnn.to_layout(ttnn_input_indices, ttnn.ROW_MAJOR_LAYOUT)
         ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (num_device_cores, 1, 1))
-        ttnn_input_indices = ttnn.to_layout(ttnn_input_indices, ttnn.TILE_LAYOUT, memory_config=input_output_mem_config)
+        ttnn_input_indices = ttnn.to_layout(ttnn_input_indices, ttnn.TILE_LAYOUT)
 
         return {
             "gate_routing": {
@@ -320,24 +318,24 @@ class MoEGate(AbstractModule):
             ttnn_output_tensor,
             slice_start=[0, 0, 0],
             slice_end=[batch_size_per_iter, 32, 32],
-            memory_config=input_output_mem_config,
         )
+        ttnn_output_tensor = ttnn.to_memory_config(ttnn_output_tensor, memory_config=input_output_mem_config)
 
         ttnn_input_indices = cfg["gate_routing"]["ttnn_input_indices"]
         ttnn_input_indices = ttnn.slice(
             ttnn_input_indices,
             slice_start=[0, 0, 0],
             slice_end=[batch_size_per_iter, 16, 16],
-            memory_config=input_output_mem_config,
         )
+        ttnn_input_indices = ttnn.to_memory_config(ttnn_input_indices, memory_config=input_output_mem_config)
 
         ttnn_output_indices = cfg["gate_routing"]["ttnn_output_indices"]
         ttnn_output_indices = ttnn.slice(
             ttnn_output_indices,
             slice_start=[0, 0, 0],
             slice_end=[batch_size_per_iter, 32, 32],
-            memory_config=input_output_mem_config,
         )
+        ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
 
         # we can only have one token per core at a time
         # this loop is designed to handle the huge batch size (4096)
