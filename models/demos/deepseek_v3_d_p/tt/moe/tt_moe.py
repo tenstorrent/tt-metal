@@ -325,10 +325,10 @@ class TtMoe(LightweightModule):
             - final_output: MoE output with same sharding as input
             - intermediates: TtMoEIntermediates if return_intermediates=True, else None
         """
-        logger.debug(f"[TtMoe.forward] INPUT SHAPES:")
+        # logger.debug(f"[TtMoe.forward] INPUT SHAPES:")
         # logger.debug(f"  x.shape={x.shape}")
         return_intermediates = None
-        logger.debug(f"Return intermediates = {return_intermediates}")
+        # logger.debug(f"Return intermediates = {return_intermediates}")
 
         # ========================================
         # Gate: compute weights/indices/offsets/counts from x
@@ -339,8 +339,13 @@ class TtMoe(LightweightModule):
         if self.gate_input_mem_config is not None:
             x_for_gate = ttnn.to_memory_config(x_for_gate, self.gate_input_mem_config)
 
+        logger.debug("Moe gate out start")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
         scores, indices_raw, gate_logits, tt_expert_offsets, tt_expert_token_counts = self.gate(x_for_gate)
-
+        logger.debug("Moe gate out end")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
         # DEBUG
         # Print full token counts per expert for monitoring
         # _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
@@ -396,7 +401,13 @@ class TtMoe(LightweightModule):
         x_full_tiled = ttnn.to_layout(x_full, ttnn.TILE_LAYOUT)
         # logger.debug(f"[TtMoe.forward] x_full_tiled shape: {x_full_tiled.shape}")
 
+        logger.debug("Moe shared expert start")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
         shared_output = self.shared_expert(x_full_tiled)
+        logger.debug("Moe shared expert start")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
         # logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
 
         # ========================================
@@ -404,6 +415,9 @@ class TtMoe(LightweightModule):
         # ========================================
         # Dispatch expects full emb_dim on each device (x_full already has this)
 
+        logger.debug("Moe shared dispatch start")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
         dispatched_buffer, metadata = self.dispatch_module(
             x_full,
             weights,
@@ -411,6 +425,9 @@ class TtMoe(LightweightModule):
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
         )
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug("Moe shared dispatch end")
         # logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
 
         # ========================================
@@ -427,7 +444,13 @@ class TtMoe(LightweightModule):
         dispatched_buffer_tiled = ttnn.to_layout(dispatched_buffer_squeezed, ttnn.TILE_LAYOUT)
         # logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
 
+        logger.debug("Moe routed start")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
         expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts)
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug("Moe routed end")
         # logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
         # Add back the batch dimensions for combine
@@ -443,11 +466,17 @@ class TtMoe(LightweightModule):
         expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
         # logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
 
+        logger.debug("Moe combine start")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
         combined_output = self.combine_module(
             expert_outputs_rm,
             metadata,
             tt_expert_token_counts,
         )
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug("Moe combine end")
         # logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape}")
 
         # ========================================
@@ -459,7 +488,13 @@ class TtMoe(LightweightModule):
         # TtReduceModule uses fused post_combine_reduce kernel:
         # 1. Fused weighted sum over topk (dim=3): reads ROW_MAJOR, outputs TILE_LAYOUT
         # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
+        logger.debug("Moe reduce start")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
         routed_output = self.reduce_module(combined_output, weights=weights)
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug("Moe reduce end")
         # logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
 
         # Remove extra batch dimensions to match shared_output shape
@@ -509,5 +544,9 @@ class TtMoe(LightweightModule):
                 routed_output=routed_output,
                 expert_token_counts=tt_expert_token_counts,
             )
+
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug("Moe end")
 
         return final_output, intermediates

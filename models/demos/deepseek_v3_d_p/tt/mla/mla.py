@@ -704,7 +704,7 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
-        print("Running ring SDPA: is_balanced =", self.is_balanced)
+        logger.debug("Running ring SDPA: is_balanced =", self.is_balanced)
         ttnn.synchronize_device(self.mesh_device)
         ttnn.distributed_context_barrier()
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -735,7 +735,7 @@ class ttMLA:
         )
         ttnn.synchronize_device(self.mesh_device)
         ttnn.distributed_context_barrier()
-        print("Done with ring SDPA")
+        logger.debug("Done with ring SDPA")
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(

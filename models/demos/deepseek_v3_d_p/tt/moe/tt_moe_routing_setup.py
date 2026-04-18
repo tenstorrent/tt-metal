@@ -32,6 +32,10 @@ class TtMoERoutingSetup(LightweightModule):
     ):
         # signpost(header="MoERoutingSetup")
 
+        logger.debug("Moe routing setup start")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+
         if isinstance(ttnn_top_k_experts_indices, torch.Tensor):
             mesh_mapper = ttnn.ShardTensor2dMesh(
                 self.mesh_device,
@@ -104,5 +108,9 @@ class TtMoERoutingSetup(LightweightModule):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         # signpost(header="moe_gate_calculate_dispatch_offsets")
+
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug("Moe routing setup end")
 
         return dispatch_offsets, total_counts_per_expert, expert_histograms

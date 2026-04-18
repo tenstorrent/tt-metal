@@ -415,7 +415,10 @@ class TtMoEGatePrefill(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         mode = self.fallback_mode
-        logger.debug(f"[MoeGate] fallback_mode={mode.value}")
+        # logger.debug(f"[MoeGate] fallback_mode={mode.value}")
+        logger.debug("Moe gate forward start")
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
 
         # ---- Phase 1: Logits (matmul) ----
         # signpost(header="moe_gate_linear")
@@ -458,5 +461,7 @@ class TtMoEGatePrefill(LightweightModule):
             num_experts_per_tok=self.config.n_activated_experts,
         )
         # signpost(header="moe_gate_calculate_dispatch_offsets")
-
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        logger.debug("Moe gate forward end")
         return (ttnn_scores, ttnn_top_k_experts_indices, logits, dispatch_offsets, total_counts_per_expert)
