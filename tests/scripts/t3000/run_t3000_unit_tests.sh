@@ -161,8 +161,10 @@ run_t3000_ttnn_tests() {
   # that Scenarios A/B/C (FabricConfig::DISABLED) bypass entirely.
   # Scenario E (RepeatedFabric2DTeardownCycles) stress-tests 2 consecutive
   # FABRIC_2D open/close cycles to catch accumulated ERISC state (CI Iters 3-5).
+  # Scenarios J/K (AsyncTeardownFabric1DQuiesceFixture) test FABRIC_1D quiesce_devices()
+  # with has_tensix_mux=false — the iter12 regression path that Scenarios H/I miss.
   timeout 240 ./build/test/tt_metal/distributed/distributed_unit_tests \
-    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*' ; fail+=$?
+    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*' ; fail+=$?
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
