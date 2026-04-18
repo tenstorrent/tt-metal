@@ -25,7 +25,7 @@ from models.demos.attention_denseunet.tt.common import (
     ATTENTION_DENSEUNET_TRACE_SIZE,
     create_preprocessor,
 )
-from models.demos.attention_denseunet.tt.config import create_configs_from_parameters
+from models.demos.attention_denseunet.tt.config import OptimizationLevel, create_configs_from_parameters
 from models.demos.attention_denseunet.tt.model import create_model_from_configs
 
 
@@ -79,6 +79,7 @@ def test_attention_denseunet_inference(device: ttnn.Device, reset_seeds, batch_s
         input_height=height,
         input_width=width,
         batch_size=batch_size,
+        optimization_level=OptimizationLevel.STAGE2,
     )
     logger.info("Creating TTNN model...")
     ttnn_model = create_model_from_configs(configs, device)
@@ -98,9 +99,9 @@ def test_attention_denseunet_inference(device: ttnn.Device, reset_seeds, batch_s
     assert (
         output_torch.shape == output_ttnn_torch.shape
     ), f"Shape mismatch: PyTorch {output_torch.shape} vs TTNN {output_ttnn_torch.shape}"
-    pcc_value = comp_pcc(output_torch, output_ttnn_torch)
+    pcc_passed, pcc_value = comp_pcc(output_torch, output_ttnn_torch, ATTENTION_DENSEUNET_PCC)
     logger.info(f"PCC: {pcc_value}")
-    assert pcc_value >= ATTENTION_DENSEUNET_PCC, f"PCC {pcc_value} is below threshold {ATTENTION_DENSEUNET_PCC}"
+    assert pcc_passed, f"PCC {pcc_value} is below threshold {ATTENTION_DENSEUNET_PCC}"
 
     logger.info("✓ Test passed!")
 
@@ -137,6 +138,7 @@ def test_model_initialization(device: ttnn.Device, reset_seeds, batch_size: int)
         input_height=256,
         input_width=256,
         batch_size=batch_size,
+        optimization_level=OptimizationLevel.STAGE2,
     )
     ttnn_model = create_model_from_configs(configs, device)
     assert ttnn_model is not None

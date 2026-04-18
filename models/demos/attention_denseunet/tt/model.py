@@ -35,49 +35,41 @@ def concatenate_features(x1: ttnn.Tensor, x2: ttnn.Tensor, use_row_major_layout=
     Returns:
         Concatenated tensor
     """
-    assert (
-        x1.shape[:-1] == x2.shape[:-1]
-    ), f"Spatial dimensions must match for concatenation (got {x1.shape} and {x2.shape})"
-
-    if not x2.is_sharded() and x1.is_sharded():
-        input_core_grid = x1.memory_config().shard_spec.grid
-        input_shard_shape = x1.memory_config().shard_spec.shape
-        input_shard_spec = ttnn.ShardSpec(input_core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-        input_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
-        )
-        x2 = ttnn.to_memory_config(x2, input_memory_config)
-
-    if x1.is_sharded():
-        output_core_grid = x1.memory_config().shard_spec.grid
-        output_shard_shape = (
-            x1.memory_config().shard_spec.shape[0],
-            x1.memory_config().shard_spec.shape[1] + x2.memory_config().shard_spec.shape[1],
-        )
-        output_shard_spec = ttnn.ShardSpec(output_core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-        output_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
-        )
-    else:
-        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    x1_prefix = (x1.shape[0], x1.shape[1], x1.shape[2])
+    x2_prefix = (x2.shape[0], x2.shape[1], x2.shape[2])
+    assert x1_prefix == x2_prefix, f"Spatial dimensions must match for concatenation (got {x1.shape} and {x2.shape})"
 
     if use_row_major_layout:
+        # Keep concat inputs in a uniform interleaved DRAM layout to avoid
+        # mixed sharded/interleaved concat failures.
+        x1 = ttnn.to_memory_config(x1, ttnn.DRAM_MEMORY_CONFIG)
+        x2 = ttnn.to_memory_config(x2, ttnn.DRAM_MEMORY_CONFIG)
         x1_rm = ttnn.to_layout(x1, ttnn.ROW_MAJOR_LAYOUT)
         x2_rm = ttnn.to_layout(x2, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(x1)
-        ttnn.deallocate(x2)
 
-        concatenated = ttnn.concat([x1_rm, x2_rm], dim=3, memory_config=output_memory_config)
-        ttnn.deallocate(x1_rm)
-        ttnn.deallocate(x2_rm)
+        concatenated = ttnn.concat([x1_rm, x2_rm], dim=3)
 
-        concat_tiled = ttnn.to_layout(concatenated, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(concatenated)
+        concat_tiled = ttnn.to_layout(concatenated, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         return concat_tiled
     else:
+        if x1.is_sharded() != x2.is_sharded():
+            x1 = ttnn.to_memory_config(x1, ttnn.DRAM_MEMORY_CONFIG)
+            x2 = ttnn.to_memory_config(x2, ttnn.DRAM_MEMORY_CONFIG)
+            output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        elif x1.is_sharded():
+            output_core_grid = x1.memory_config().shard_spec.grid
+            output_shard_shape = (
+                x1.memory_config().shard_spec.shape[0],
+                x1.memory_config().shard_spec.shape[1] + x2.memory_config().shard_spec.shape[1],
+            )
+            output_shard_spec = ttnn.ShardSpec(output_core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+            output_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
+            )
+        else:
+            output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
         concatenated = ttnn.concat([x1, x2], dim=3, memory_config=output_memory_config)
-        ttnn.deallocate(x1)
-        ttnn.deallocate(x2)
         return concatenated
 
 
@@ -371,7 +363,9 @@ class TtAttentionDenseUNet:
         Returns:
             Preprocessed tensor in HWC format
         """
-        output = ttnn.experimental.convert_to_hwc(x)
+        # Use an explicit permutation instead of convert_to_hwc because
+        # convert_to_hwc currently requires sharded input tensors.
+        output = ttnn.permute(x, (0, 1, 3, 2))
         if deallocate_input_activation:
             ttnn.deallocate(x)
         return output
@@ -406,7 +400,7 @@ class TtAttentionDenseUNet:
             x = concatenate_features(x, attended_skip, use_row_major_layout=True)
             x = decoder(x)
         output = self.conv_out(x)
-        output = ttnn.experimental.convert_to_chw(output, dtype=ttnn.bfloat16)
+        output = ttnn.permute(output, (0, 1, 3, 2))
 
         return output
 
