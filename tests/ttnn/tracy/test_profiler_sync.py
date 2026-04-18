@@ -5,6 +5,7 @@
 import pytest
 import torch
 from loguru import logger
+from models.common.utility_functions import skip_with_llk_assert
 
 import ttnn
 
@@ -39,6 +40,7 @@ def test_with_ops(device):
     output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8))
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_mesh_device(
     mesh_device,
 ):

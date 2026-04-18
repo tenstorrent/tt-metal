@@ -36,5 +36,6 @@ def test_global_circular_buffer(device):
     run_global_circular_buffer(device)
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_global_circular_buffer_mesh(mesh_device):
     run_global_circular_buffer(mesh_device)

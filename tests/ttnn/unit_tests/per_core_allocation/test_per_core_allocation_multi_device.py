@@ -118,6 +118,7 @@ def test_per_core_independent_addresses_across_devices(mesh_device):
     ), f"Expected same initial address on all devices, got {[f'{a:#x}' for a in addrs]}"
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_per_core_then_lockstep_no_overlap(mesh_device):
     """Per-core first, then lockstep. No overlap on any device."""
     core = ttnn.CoreCoord(0, 0)

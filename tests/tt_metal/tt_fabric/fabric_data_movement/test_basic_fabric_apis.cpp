@@ -695,27 +695,35 @@ TEST_F(NightlyFabric2DTensixFixture, TestMeshFabricMulticastNocMux) {
 
 // UDM Mode Tests - test udm api changes for 2D
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastWriteEast) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled. Issue #42596");
     UDMFabricUnicastCommon(this, NocPacketType::NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::E, 1));
 }
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastWriteWest) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled. Issue #42596");
     UDMFabricUnicastCommon(this, NocPacketType::NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::W, 1));
 }
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteEast) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled. Issue #42596");
     UDMFabricUnicastCommon(this, NocPacketType::NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::E, 1));
 }
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteWest) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled. Issue #42596");
     UDMFabricUnicastCommon(this, NocPacketType::NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::W, 1));
 }
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncEast) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled. Issue #42596");
     UDMFabricUnicastCommon(this, NocPacketType::NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::E, 1));
 }
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncWest) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled. Issue #42596");
     UDMFabricUnicastCommon(this, NocPacketType::NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::W, 1));
 }
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricReadEast) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled. Issue #42596");
     UDMFabricUnicastCommon(this, NocPacketType::NOC_UNICAST_READ, std::make_tuple(RoutingDirection::E, 1));
 }
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricReadWest) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled. Issue #42596");
     UDMFabricUnicastCommon(this, NocPacketType::NOC_UNICAST_READ, std::make_tuple(RoutingDirection::W, 1));
 }
 
