@@ -983,4 +983,119 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, QuiesceDevicesTimingBoundStressTest) 
     }
 }
 
+// ---------------------------------------------------------------------------
+// Scenario J: rescue_stuck_dispatch_cores() — stuck dispatch core recovery.
+//
+// rescue_stuck_dispatch_cores() fires when wait_until_cores_done() times out
+// during device close. This happens on FABRIC_2D teardown when dispatch cores
+// (DISPATCH_S/DISPATCH_D) are spinning on stream_wrap_gt/stream_wrap_ge waiting
+// for worker completion counts that will never arrive because the ERISC fabric
+// was already torn down before the dispatch drain completed.
+//
+// Trigger mechanism:
+//   1. Open FABRIC_2D mesh device — dispatch streams are configured and live.
+//   2. Dispatch a ~10s busy-spin kernel (blocking=false) — kernel guaranteed to
+//      still be executing on device when close() fires.
+//   3. Close immediately — DispatchKernelInitializer::teardown() sequence:
+//        a. terminate_command_queues(): send TERMINATE to CQs
+//        b. wait_for_dispatch_cores(): wait for dispatch cores RUN_MSG_GO→DONE.
+//           If dispatch cores are stuck on stream completions from ERISC channels
+//           that fabric teardown already killed, wait_until_cores_done() throws
+//           → catch block calls rescue_stuck_dispatch_cores():
+//              i.  Write 0xFFFF to STREAM_REMOTE_DEST_BUF_SIZE_REG on every
+//                  dispatch stream — satisfies any pending stream_wrap_gt/ge
+//              ii. 5ms pause for firmware to observe the unblocked registers
+//        c. process_termination_signals(): send TERMINATE to each dispatch core
+//   4. Re-open with FABRIC_2D and dispatch a blocking workload — confirms the
+//      device recovered cleanly from the rescue path.
+//
+// Warning check: these log lines indicate rescue_stuck_dispatch_cores fired:
+//   "Exception waiting for dispatch cores ... Attempting rescue of stuck dispatch cores"
+//   "rescue_stuck_dispatch_cores: Device N core (x,y) injected count=0xffff on M streams"
+// Search CI job logs for "rescue_stuck_dispatch_cores" to confirm the path exercised.
+//
+// Note: rescue fires when the busy-spin kernel is still executing at teardown.
+// If dispatch drains before teardown starts (very fast hardware), close() succeeds
+// cleanly without rescue — the test still passes, verifying the happy path works.
+//
+// Pass = close() completes + device re-opens + blocking dispatch finishes in <90s.
+// Fail = hang (watchdog), crash during close(), or crash during re-open.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DRepeatFixture, RescueStuckDispatchCores) {
+    // ~10s busy-spin on WH BRISC@1.2GHz — far longer than any teardown drain
+    // timeout, guaranteeing the kernel is still running when close() fires.
+    constexpr uint32_t kSpinIters = 100'000'000;
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    auto device_range = MeshCoordinateRange(mesh_device_->shape());
+    auto mesh_shape = mesh_device_->shape();
+
+    // Phase 1: dispatch long-running kernel with blocking=false.
+    // With FABRIC_2D active, dispatch streams are live.  When close() runs,
+    // ERISC fabric is torn down first, leaving dispatch cores waiting for stream
+    // completions from ERISC channels that are already dead.
+    {
+        Program program;
+        auto kernel_id = CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/busy_spin.cpp",
+            cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        SetRuntimeArgs(program, kernel_id, CoreCoord{0, 0}, {kSpinIters});
+
+        auto workload = MeshWorkload();
+        workload.add_program(device_range, std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(
+            tt::LogTest,
+            "[Scenario J] Dispatching {}-iter busy-spin kernel on FABRIC_2D (blocking=false) — "
+            "kernel will still be running when close() fires",
+            kSpinIters);
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        // NO Finish() — close() fires while kernel is still spinning.
+    }
+
+    // Phase 2: close immediately while the kernel is still executing.
+    // Expect: wait_for_dispatch_cores() times out → rescue_stuck_dispatch_cores()
+    // writes 0xFFFF to all dispatch stream SIZE registers → 5ms pause →
+    // process_termination_signals() exits dispatch cores cleanly.
+    //
+    // Log lines that confirm rescue fired (search CI output):
+    //   "Attempting rescue of stuck dispatch cores."
+    //   "rescue_stuck_dispatch_cores: Device N core (x,y) injected count=0xffff on M streams"
+    log_info(tt::LogTest, "[Scenario J] Closing FABRIC_2D mesh device — rescue_stuck_dispatch_cores may trigger");
+    mesh_device_->close();
+    mesh_device_.reset();
+    log_info(tt::LogTest, "[Scenario J] close() returned cleanly (rescue fired or dispatch drained fast)");
+
+    // Phase 3: re-open with FABRIC_2D — exercises compile_and_configure_fabric()
+    // and terminate_stale_erisc_routers() on any residual state.
+    // If rescue left corrupted dispatch register state, MeshDevice::create would
+    // hang or crash here.
+    log_info(tt::LogTest, "[Scenario J] Re-opening FABRIC_2D mesh device to verify clean recovery");
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    mesh_device_ = MeshDevice::create(
+        MeshDeviceConfig(mesh_shape),
+        config_.l1_small_size,
+        config_.trace_region_size,
+        config_.num_cqs,
+        DispatchCoreConfig{},
+        {},
+        config_.worker_l1_size);
+
+    // Phase 4: blocking dispatch proves dispatch infrastructure is fully operational
+    // after rescue.  If any stream register state was left corrupted by the rescue
+    // writes, this dispatch would hang in the CQ wait loop.
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario J] Verification dispatch after rescue (blocking=true)");
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+        log_info(tt::LogTest, "[Scenario J] PASSED — dispatch operational after rescue_stuck_dispatch_cores");
+    }
+}
+
 }  // namespace tt::tt_metal::distributed::test
