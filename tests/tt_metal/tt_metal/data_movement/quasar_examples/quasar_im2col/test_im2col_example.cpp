@@ -49,9 +49,10 @@ bool run_im2col_test(
     return true;
 }
 
-constexpr auto kIm2Col = "tests/tt_metal/tt_metal/data_movement/quasar_im2col/kernels/addrgen_im2col_example.cpp";
+constexpr auto kIm2Col =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_im2col/kernels/addrgen_im2col_example.cpp";
 constexpr auto kIm2ColDilation1 =
-    "tests/tt_metal/tt_metal/data_movement/quasar_im2col/kernels/addrgen_im2col_dilation1_example.cpp";
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_im2col/kernels/addrgen_im2col_dilation1_example.cpp";
 
 }  // namespace unit_tests::dm::quasar_im2col
 

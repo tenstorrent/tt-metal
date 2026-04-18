@@ -51,14 +51,18 @@ bool run_addrgen_test(
     return true;
 }
 
-constexpr auto k1D = "tests/tt_metal/tt_metal/data_movement/quasar_addrgen/kernels/addrgen_1d_example.cpp";
-constexpr auto k2D = "tests/tt_metal/tt_metal/data_movement/quasar_addrgen/kernels/addrgen_2d_example.cpp";
-constexpr auto kFace = "tests/tt_metal/tt_metal/data_movement/quasar_addrgen/kernels/addrgen_face_example.cpp";
+constexpr auto k1D =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/addrgen_1d_example.cpp";
+constexpr auto k2D =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/addrgen_2d_example.cpp";
+constexpr auto kFace =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/addrgen_face_example.cpp";
 constexpr auto kInterleaved =
-    "tests/tt_metal/tt_metal/data_movement/quasar_addrgen/kernels/addrgen_interleaved_example.cpp";
-constexpr auto kIm2Col = "tests/tt_metal/tt_metal/data_movement/quasar_addrgen/kernels/addrgen_im2col_example.cpp";
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/addrgen_interleaved_example.cpp";
+constexpr auto kIm2Col =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/addrgen_im2col_example.cpp";
 constexpr auto kIm2ColDilation1 =
-    "tests/tt_metal/tt_metal/data_movement/quasar_addrgen/kernels/addrgen_im2col_dilation1_example.cpp";
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/addrgen_im2col_dilation1_example.cpp";
 
 }  // namespace unit_tests::dm::quasar_addrgen
 

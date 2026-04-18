@@ -23,8 +23,10 @@ bool should_skip_test() {
     return std::getenv("TT_METAL_SIMULATOR") == nullptr;
 }
 
-constexpr auto kIdmaBasic = "tests/tt_metal/tt_metal/data_movement/quasar_idma/kernels/idma_basic_example.cpp";
-constexpr auto kIdma1DStrided = "tests/tt_metal/tt_metal/data_movement/quasar_idma/kernels/idma_1d_strided_example.cpp";
+constexpr auto kIdmaBasic =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_idma/kernels/idma_basic_example.cpp";
+constexpr auto kIdma1DStrided =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_idma/kernels/idma_1d_strided_example.cpp";
 
 static void run_kernel(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
