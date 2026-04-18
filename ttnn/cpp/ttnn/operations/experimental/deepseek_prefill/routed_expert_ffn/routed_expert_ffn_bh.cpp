@@ -1,0 +1,126 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "routed_expert_ffn_common.hpp"
+
+#include "tt-metalium/math.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+
+namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
+
+ttnn::Tensor routed_expert_ffn_bh(
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& gate_proj,
+    const ttnn::Tensor& up_proj,
+    const ttnn::Tensor& down_proj,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    std::optional<ttnn::Tensor> output) {
+    // Device compute grid
+    const auto grid_size = x.device()->compute_with_storage_grid_size();
+    const uint32_t GRID_X = grid_size.x;
+    const uint32_t GRID_Y = grid_size.y;
+
+    // Derive tile dimensions from tensor shapes
+    const auto& x_shape = x.padded_shape();
+    const auto& gate_shape = gate_proj.padded_shape();
+    const auto& down_shape = down_proj.padded_shape();
+
+    const uint32_t M_tiles = x_shape[-2] / ttnn::TILE_SIZE;
+    const uint32_t N_gate_tiles = gate_shape[-1] / ttnn::TILE_SIZE;
+    const uint32_t K_down_tiles = down_shape[-2] / ttnn::TILE_SIZE;
+    const uint32_t N_down_tiles = down_shape[-1] / ttnn::TILE_SIZE;
+
+    // --- Gate/Up matmul config ---
+    const uint32_t gate_up_grid_y = std::min(tt::div_up(M_tiles, 4u), GRID_Y);
+    const uint32_t gate_up_per_core_M = tt::div_up(M_tiles, gate_up_grid_y);
+    const uint32_t gate_up_per_core_N = tt::div_up(N_gate_tiles, GRID_X);
+
+    // Empirically optimal on 14x10 grid
+    const uint32_t gate_up_in0_bw = 16;
+    const uint32_t gate_up_sub_w = gate_up_per_core_N;
+
+    auto gate_up_grid = CoreRangeSet({CoreRange({0, 0}, {GRID_X - 1, gate_up_grid_y - 1})});
+
+    auto gate_up_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
+        .compute_with_storage_grid_size = {GRID_X, gate_up_grid_y},
+        .in0_block_w = gate_up_in0_bw,
+        .out_subblock_h = 1,
+        .out_subblock_w = gate_up_sub_w,
+        .out_block_h = gate_up_per_core_M,
+        .out_block_w = gate_up_per_core_N,
+        .per_core_M = gate_up_per_core_M,
+        .per_core_N = gate_up_per_core_N,
+        .transpose_mcast = false,
+        .fuse_batch = false,
+    };
+
+    auto gate_up_shard = tt::tt_metal::ShardSpec(
+        gate_up_grid, {gate_up_per_core_M * ttnn::TILE_SIZE, gate_up_per_core_N * ttnn::TILE_SIZE});
+    auto gate_up_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, gate_up_shard};
+
+    auto gate_result = ttnn::matmul(
+        /*input_tensor_a=*/x,
+        /*input_tensor_b=*/gate_proj,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
+        /*memory_config=*/gate_up_mem,
+        /*dtype=*/std::nullopt,
+        /*program_config=*/gate_up_config,
+        /*activation=*/std::string("silu"),
+        /*compute_kernel_config=*/compute_kernel_config);
+
+    auto up_result = ttnn::matmul(
+        /*input_tensor_a=*/x,
+        /*input_tensor_b=*/up_proj,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
+        /*memory_config=*/gate_up_mem,
+        /*dtype=*/std::nullopt,
+        /*program_config=*/gate_up_config,
+        /*activation=*/std::nullopt,
+        /*compute_kernel_config=*/compute_kernel_config);
+
+    ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
+    up_result.deallocate();
+
+    // --- Down matmul config ---
+    const uint32_t down_grid_y = std::min(tt::div_up(M_tiles, 4u), GRID_Y);
+    const uint32_t down_per_core_M = tt::div_up(M_tiles, down_grid_y);
+    const uint32_t down_per_core_N = tt::div_up(N_down_tiles, GRID_X);
+
+    const uint32_t down_in0_bw = best_in0_block_w(
+        K_down_tiles, down_per_core_M, down_per_core_N, gate_result, down_proj, compute_kernel_config, x.dtype());
+
+    const uint32_t down_sub_w = largest_divisor(down_per_core_N, 8);
+
+    auto down_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
+        .compute_with_storage_grid_size = {GRID_X, down_grid_y},
+        .in0_block_w = down_in0_bw,
+        .out_subblock_h = 1,
+        .out_subblock_w = down_sub_w,
+        .out_block_h = down_per_core_M,
+        .out_block_w = down_per_core_N,
+        .per_core_M = down_per_core_M,
+        .per_core_N = down_per_core_N,
+        .transpose_mcast = false,
+        .fuse_batch = false,
+    };
+
+    return ttnn::matmul(
+        /*input_tensor_a=*/gate_result,
+        /*input_tensor_b=*/down_proj,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
+        /*memory_config=*/std::nullopt,
+        /*dtype=*/std::nullopt,
+        /*program_config=*/down_config,
+        /*activation=*/std::nullopt,
+        /*compute_kernel_config=*/compute_kernel_config,
+        /*core_grid=*/std::nullopt,
+        /*output_tile=*/std::nullopt,
+        /*optional_output_tensor=*/std::move(output));
+}
+
+}  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail
