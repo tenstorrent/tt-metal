@@ -569,4 +569,110 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RepeatedFabric2DTeardownCycles) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Scenario F: Slow-kernel async teardown — guaranteed real race condition.
+//
+// Problem with Scenarios A/B/C: blank kernels finish in ~1µs. By the time
+// host calls close() (~10µs of C++ overhead after EnqueueMeshWorkload returns),
+// the kernel is already done. There is no actual race — it's a clean teardown.
+//
+// This test dispatches a busy-spin kernel that runs for ~8ms on device,
+// which is long enough to guarantee it is still executing when close() fires.
+// This creates a deterministic async-dispatch teardown race without needing
+// an external SIGKILL.
+//
+// Pass = re-open succeeds + blocking workload completes + buffer round-trip
+//        matches in < 30s.
+// Fail = hang (watchdog), crash on re-open, or data corruption.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownRaceFixture, SlowKernelAsyncTeardownRace) {
+    // 1M volatile iterations ≈ 8ms on WH BRISC @1.2 GHz.
+    // Far longer than the ~10µs host overhead between EnqueueMeshWorkload and close().
+    constexpr uint32_t kSpinIters = 1'000'000;
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    auto device_range = MeshCoordinateRange(mesh_device_->shape());
+
+    // Phase 1: dispatch slow kernel — guaranteed to be running when close() fires.
+    {
+        Program program;
+        auto kernel_id = CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/busy_spin.cpp",
+            cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        SetRuntimeArgs(program, kernel_id, CoreCoord{0, 0}, {kSpinIters});
+
+        auto workload = MeshWorkload();
+        workload.add_program(device_range, std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(
+            tt::LogTest,
+            "[Scenario F] Dispatching busy-spin kernel ({} iters ≈ 8ms) — will still be running at close()",
+            kSpinIters);
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        // NO Finish() — close() fires while kernel is still spinning.
+    }
+
+    // Phase 2: close immediately while kernel is guaranteed to still be running.
+    log_info(tt::LogTest, "[Scenario F] Closing mesh device — kernel still executing (real race)");
+    auto mesh_shape = mesh_device_->shape();
+    mesh_device_->close();
+    mesh_device_.reset();
+
+    // Phase 3: re-open — exercises terminate_stale_erisc_routers / force-reset paths.
+    log_info(tt::LogTest, "[Scenario F] Re-opening mesh device after slow-kernel async teardown");
+    mesh_device_ = MeshDevice::create(
+        MeshDeviceConfig(mesh_shape),
+        config_.l1_small_size,
+        config_.trace_region_size,
+        config_.num_cqs,
+        DispatchCoreConfig{},
+        {},
+        config_.worker_l1_size);
+
+    // Phase 4: blocking dispatch verifies the device re-initialised cleanly.
+    {
+        Program program;
+        CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario F] Verification blocking dispatch");
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    }
+
+    // Phase 5: buffer round-trip to detect data-path corruption.
+    {
+        auto& cq = mesh_device_->mesh_command_queue();
+        uint32_t page_size = 1024;
+        auto local_config =
+            DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        auto global_shape = Shape2D{
+            static_cast<uint32_t>(mesh_device_->num_rows()),
+            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto dist_config = ShardedBufferConfig{
+            .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
+            .global_buffer_shape = global_shape,
+            .shard_shape = Shape2D{1, 1}};
+        auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
+        size_t n_words = page_size / sizeof(uint32_t) * mesh_device_->num_rows() * mesh_device_->num_cols();
+        std::vector<uint32_t> src(n_words);
+        for (size_t i = 0; i < n_words; i++) {
+            src[i] = static_cast<uint32_t>(0xFACE0000 | (i & 0xFFFF));
+        }
+        EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
+        std::vector<uint32_t> dst;
+        EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
+        ASSERT_EQ(dst.size(), src.size()) << "[Scenario F] Buffer size mismatch after slow-kernel teardown";
+        for (size_t i = 0; i < src.size(); i++) {
+            ASSERT_EQ(dst[i], src[i]) << "[Scenario F] Corruption at index " << i;
+        }
+        log_info(tt::LogTest, "[Scenario F] Buffer round-trip clean — no data corruption after guaranteed race");
+    }
+}
+
 }  // namespace tt::tt_metal::distributed::test
