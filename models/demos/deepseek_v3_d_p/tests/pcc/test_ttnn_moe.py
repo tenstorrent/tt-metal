@@ -136,6 +136,10 @@ def test_ttnn_moe(
     Both TtMoe and TorchMoe create their gate internally from gate_weights
     and run forward(x) end-to-end. Validation compares intermediates directly.
     """
+
+    mesh_device.disable_and_clear_program_cache()  # temporary disabling program cache; because cached all gather semaphores at wrong place cause this test case to OOM
+    # pytest  models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-linear-8-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
+
     profiler.clear()
     profiler.start("test_ttnn_moe")
 
@@ -256,8 +260,10 @@ def test_ttnn_moe(
         topology=topology,
         routed_expert_weights=all_routed_weights,
         shared_expert_weights=shared_expert_weights,
-        activations_dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
+        routed_expert_activations_dtype=ttnn.bfloat8_b,
+        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        shared_expert_activations_dtype=ttnn.bfloat16,
+        shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_weights=gate_weights,
         gate_fallback_mode=gate_fallback_mode,
     )
