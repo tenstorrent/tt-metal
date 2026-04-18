@@ -143,7 +143,7 @@ class TtSuperPoint:
         # Per-block DRAM slicing to keep L1 circular buffers within budget at 480×640.
         # Block resolutions (H x W) with batch=1, image 480x640:
         #   block 0: 480x640, block 1: 240x320, block 2: 120x160, block 3: 60x80
-        slice_per_block = (4, 2, 1, 1)
+        slice_per_block = (2, 1, 1, 1)
         # Encoder precision: HiFi2 + bfloat16 weights to keep PCC ≥ 99% through
         # 8 conv layers feeding softmax/L2-norm heads. bfloat8 + LoFi drops score
         # PCC to ~0.70.
