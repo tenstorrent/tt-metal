@@ -608,6 +608,7 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
             inputs = _gather_inputs(ops)
             _ephemeral_sems, sem_addrs = _allocate_ephemeral_semaphores(inputs[0].device(), entry.sem_specs)
             outputs = entry.dispatch_state.dispatch(inputs, sem_addrs)
+            _cleanup_persistent_ops(ops)
             container._cached_entry = entry
             container._cached_entry_gen = _BUILD_CACHE_GEN
             return _filter_results(outputs, container._default_results, results)
