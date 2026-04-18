@@ -36,6 +36,7 @@ CPMAddPackage(
     PATCHES
         blake3_install_dir.patch
     OPTIONS
+        "BUILD_SHARED_LIBS OFF"
         "BLAKE3_USE_TBB OFF"
         "BLAKE3_FETCH_TBB OFF"
         "BUILD_TESTING OFF"
