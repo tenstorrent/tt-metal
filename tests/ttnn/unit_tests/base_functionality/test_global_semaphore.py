@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
+from models.common.utility_functions import skip_with_llk_assert
 
 
 def run_global_semaphore(device):
@@ -37,5 +38,6 @@ def test_global_semaphore(device):
     run_global_semaphore(device)
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_global_semaphore_mesh(mesh_device):
     run_global_semaphore(mesh_device)
