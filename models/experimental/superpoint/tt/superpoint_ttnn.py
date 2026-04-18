@@ -46,6 +46,10 @@ class TtConv2D:
         weights_dtype=ttnn.bfloat8_b,
         activation_dtype=ttnn.bfloat16,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        num_slices: int = 1,
+        act_block_h_override: int | None = None,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en: bool = False,
     ) -> None:
         self.device = device
         self.in_channels = in_channels
@@ -70,15 +74,27 @@ class TtConv2D:
             deallocate_activation=False,
             output_layout=ttnn.TILE_LAYOUT,
         )
+        if act_block_h_override is not None:
+            self.conv_config.act_block_h_override = act_block_h_override
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
+            math_fidelity=math_fidelity,
+            fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=True,
         )
         self.activation_dtype = activation_dtype
+        if num_slices > 1:
+            self.slice_config = ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dDRAMSliceHeight,
+                num_slices=num_slices,
+            )
+        else:
+            self.slice_config = ttnn.Conv2dL1FullSliceConfig
 
     def __call__(self, x, input_height: int, input_width: int, batch_size: int = 1):
+        # DRAM-sliced conv requires the input tensor to live in DRAM.
+        if self.slice_config is not ttnn.Conv2dL1FullSliceConfig:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x, [out_h, out_w], [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -95,7 +111,7 @@ class TtConv2D:
             dilation=self.dilation,
             groups=self.groups,
             conv_config=self.conv_config,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=self.slice_config,
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
@@ -124,10 +140,23 @@ class TtSuperPoint:
         enc_hidden = torch_model.config.encoder_hidden_sizes
 
         # Encoder: 4 conv blocks of (conv_a -> relu -> conv_b -> relu [-> pool])
+        # Per-block DRAM slicing to keep L1 circular buffers within budget at 480×640.
+        # Block resolutions (H x W) with batch=1, image 480x640:
+        #   block 0: 480x640, block 1: 240x320, block 2: 120x160, block 3: 60x80
+        slice_per_block = (8, 4, 2, 1)
+        # Encoder precision: HiFi2 + bfloat16 weights to keep PCC ≥ 99% through
+        # 8 conv layers feeding softmax/L2-norm heads. bfloat8 + LoFi drops score
+        # PCC to ~0.70.
+        enc_kwargs = dict(
+            weights_dtype=ttnn.bfloat16,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=True,
+        )
         in_ch = 1
         self.enc_convs = []
         for block_idx, block in enumerate(encoder.conv_blocks):
             add_pooling = block.pool is not None
+            ns = slice_per_block[block_idx]
             self.enc_convs.append(
                 (
                     TtConv2D(
@@ -139,6 +168,8 @@ class TtSuperPoint:
                         padding=1,
                         device=device,
                         activation="relu",
+                        num_slices=ns,
+                        **enc_kwargs,
                     ),
                     TtConv2D(
                         block.conv_b.weight,
@@ -149,11 +180,21 @@ class TtSuperPoint:
                         padding=1,
                         device=device,
                         activation="relu",
+                        num_slices=ns,
+                        **enc_kwargs,
                     ),
                     add_pooling,
                 )
             )
             in_ch = enc_hidden[block_idx]
+
+        # Head configs: keep precision higher on heads (softmax + L2-norm are
+        # numerically sensitive vs. the encoder ReLU chain).
+        head_kwargs = dict(
+            weights_dtype=ttnn.bfloat16,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=True,
+        )
 
         # Score decoder
         kp = torch_model.keypoint_decoder
@@ -166,6 +207,7 @@ class TtSuperPoint:
             padding=1,
             device=device,
             activation="relu",
+            **head_kwargs,
         )
         self.conv_score_b = TtConv2D(
             kp.conv_score_b.weight,
@@ -176,6 +218,7 @@ class TtSuperPoint:
             padding=0,
             device=device,
             activation=None,
+            **head_kwargs,
         )
 
         # Descriptor decoder
@@ -189,6 +232,7 @@ class TtSuperPoint:
             padding=1,
             device=device,
             activation="relu",
+            **head_kwargs,
         )
         self.conv_desc_b = TtConv2D(
             desc.conv_descriptor_b.weight,
@@ -199,6 +243,7 @@ class TtSuperPoint:
             padding=0,
             device=device,
             activation=None,
+            **head_kwargs,
         )
 
     @staticmethod
@@ -238,37 +283,42 @@ class TtSuperPoint:
         """Run conv-heavy portion on device, returning host tensors for post-proc."""
         b, _, h, w = pixel_values.shape
         nhwc = self._preprocess_host(pixel_values)
-        tt_in = ttnn.from_torch(nhwc, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_in = ttnn.from_torch(
+            nhwc,
+            dtype=ttnn.bfloat16,
+            device=self.device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         # Encoder trunk
         encoded, enc_h, enc_w = self._encoder_forward(tt_in, h, w, b)
 
-        # Score branch
+        # Score branch — conv on device, softmax on host (65 channels are not
+        # tile-aligned so on-device softmax includes padding zeros and corrupts
+        # the distribution).
         s, _, _ = self.conv_score_a(encoded, enc_h, enc_w, b)
         s, _, _ = self.conv_score_b(s, enc_h, enc_w, b)
-        # Softmax over channel dim (last axis in NHWC)
-        s = ttnn.softmax(s, dim=-1)
 
         # Descriptor branch
         d, _, _ = self.conv_desc_a(encoded, enc_h, enc_w, b)
         d, _, _ = self.conv_desc_b(d, enc_h, enc_w, b)
-        # L2 normalize across descriptor dim (last axis in NHWC)
-        sq = ttnn.multiply(d, d)
-        denom = ttnn.sum(sq, dim=-1, keepdim=True)
-        denom = ttnn.rsqrt(denom)
-        d_norm = ttnn.multiply(d, denom)
 
         # Bring both back to host as torch tensors in NCHW.
         scores_nhwc = ttnn.to_torch(s).reshape(b, enc_h, enc_w, KEYPOINT_DIM)
-        descriptors_nhwc = ttnn.to_torch(d_norm).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
+        descriptors_nhwc = ttnn.to_torch(d).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
 
-        scores_nchw = scores_nhwc.permute(0, 3, 1, 2).contiguous()
-        descriptors_nchw = descriptors_nhwc.permute(0, 3, 1, 2).contiguous()
+        scores_nchw = scores_nhwc.permute(0, 3, 1, 2).contiguous().float()
+        descriptors_nchw = descriptors_nhwc.permute(0, 3, 1, 2).contiguous().float()
+
+        # Host-side softmax over channel dim (matches reference exactly)
+        scores_nchw = torch.softmax(scores_nchw, dim=1)
+        # Host-side L2 normalize over descriptor dim
+        descriptors_nchw = F.normalize(descriptors_nchw, p=2, dim=1)
 
         ttnn.deallocate(encoded)
         ttnn.deallocate(s)
         ttnn.deallocate(d)
-        ttnn.deallocate(d_norm)
         ttnn.deallocate(tt_in)
 
         return scores_nchw, descriptors_nchw
@@ -289,13 +339,14 @@ class TtSuperPoint:
             max_mask = max_mask | (new_max_mask & (~supp_mask))
         return torch.where(max_mask, scores, zeros)
 
-    def _decode_keypoints(self, scores_nchw: torch.Tensor):
+    def _decode_keypoints(self, scores_nchw: torch.Tensor, apply_nms: bool = True):
         # Drop the dustbin (last channel), fold 8x8 -> full-res
         scores = scores_nchw[:, :-1]  # (B, 64, h, w)
         b, _, fh, fw = scores.shape
         scores = scores.permute(0, 2, 3, 1).reshape(b, fh, fw, 8, 8)
         scores = scores.permute(0, 1, 3, 2, 4).reshape(b, fh * 8, fw * 8)
-        scores = self._simple_nms(scores, self.nms_radius)
+        if apply_nms:
+            scores = self._simple_nms(scores, self.nms_radius)
         return scores
 
     def _extract_keypoints_single(self, scores_1hw: torch.Tensor):
@@ -333,7 +384,8 @@ class TtSuperPoint:
 
     def forward(self, pixel_values: torch.Tensor):
         scores_nchw, descriptors_nchw = self._run_device(pixel_values)
-        scores_full = self._decode_keypoints(scores_nchw)
+        scores_pre_nms = self._decode_keypoints(scores_nchw, apply_nms=False)
+        scores_full = self._simple_nms(scores_pre_nms, self.nms_radius)
 
         b, _, h, w = pixel_values.shape
         list_keypoints, list_scores, list_descriptors = [], [], []
@@ -361,5 +413,6 @@ class TtSuperPoint:
             "descriptors": descriptors_t,
             "mask": mask_t,
             "raw_scores_map": scores_full,
+            "raw_scores_pre_nms": scores_pre_nms,
             "raw_descriptors_map": descriptors_nchw,
         }

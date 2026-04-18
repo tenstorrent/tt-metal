@@ -75,15 +75,21 @@ def test_superpoint_benchmark(device, height, width):
     elapsed = time.perf_counter() - t0
     fps = n_iter / elapsed
 
-    # Accuracy: PCC on raw score & descriptor maps (shape-stable)
-    ref_scores = ref.scores  # (B, K_ref)
-    tt_scores = tt_out["scores"]
-    # Raw dense maps (more stable than dynamic keypoint sets)
-    tt_score_map = tt_out["raw_scores_map"]  # (B, H, W)
+    # Accuracy: PCC on pre-NMS dense score map and pre-norm descriptor map.
+    # NMS is a max-filter whose output flips under small perturbations, so
+    # post-NMS PCC is a poor measure of model-output quality. We compare the
+    # raw dense maps against the reference torch computation.
+    tt_score_pre = tt_out["raw_scores_pre_nms"]  # (B, H*8, W*8)
     with torch.no_grad():
-        # recreate the torch reference dense score map
         enc = torch_model.encoder(torch_model.extract_one_channel_pixel_values(pixel_values))[0]
-        ref_scores_dense = torch_model.keypoint_decoder._get_pixel_scores(enc)
+        # Mirror torch _get_pixel_scores but stop before simple_nms.
+        ks = torch_model.keypoint_decoder.relu(torch_model.keypoint_decoder.conv_score_a(enc))
+        ks = torch_model.keypoint_decoder.conv_score_b(ks)
+        ks = torch.nn.functional.softmax(ks, 1)[:, :-1]
+        batch_size_, _, h_, w_ = ks.shape
+        ks = ks.permute(0, 2, 3, 1).reshape(batch_size_, h_, w_, 8, 8)
+        ref_score_pre = ks.permute(0, 1, 3, 2, 4).reshape(batch_size_, h_ * 8, w_ * 8)
+
         ref_desc_full = torch.nn.functional.normalize(
             torch_model.descriptor_decoder.conv_descriptor_b(
                 torch_model.descriptor_decoder.relu(torch_model.descriptor_decoder.conv_descriptor_a(enc))
@@ -92,7 +98,7 @@ def test_superpoint_benchmark(device, height, width):
             dim=1,
         )
 
-    score_pcc = _pcc(tt_score_map, ref_scores_dense)
+    score_pcc = _pcc(tt_score_pre, ref_score_pre)
     desc_pcc = _pcc(tt_out["raw_descriptors_map"], ref_desc_full)
     accuracy = min(score_pcc, desc_pcc) * 100.0
 
@@ -110,5 +116,5 @@ def test_superpoint_benchmark(device, height, width):
     print(f"peak_dram={peak_dram}")
 
     # Test invariants (soft): require compile to succeed and produce finite outputs
-    assert torch.isfinite(tt_score_map).all()
+    assert torch.isfinite(tt_score_pre).all()
     assert torch.isfinite(tt_out["raw_descriptors_map"]).all()
