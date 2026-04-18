@@ -211,10 +211,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     device_id,
                     e.what());
             } catch (...) {
-                log_warning(
-                    tt::LogAlways,
-                    "teardown: assert_cores failed for device {} with unknown exception type",
-                    device_id);
+                // log_warning(tt::LogAlways, "teardown: assert_cores failed for device {} with unknown exception type", device_id);
             }
             try {
                 cluster_.l1_barrier(device_id);
@@ -225,10 +222,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     device_id,
                     e.what());
             } catch (...) {
-                log_warning(
-                    tt::LogAlways,
-                    "teardown: l1_barrier failed for device {} with unknown exception type",
-                    device_id);
+                // log_warning(tt::LogAlways, "teardown: l1_barrier failed for device {} with unknown exception type", device_id);
             }
         }
         // Set internal routing to false to exit active ethernet FW & go back to base FW
@@ -441,12 +435,9 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
                     // Already confirmed relay is dead for this device — no point attempting
                     // reads that will each block for 5 seconds before throwing. All remaining
                     // ETH cores on this device are treated as stale and force-reset.
-                    log_warning(
-                        tt::LogAlways,
-                        "reset_cores: skipping read for device {} core {} "
-                        "(relay already confirmed dead). Treating core as stale.",
-                        device_id,
-                        virtual_core.str());
+                    // Skipping per-core log here — the initial erisc_app_still_running() failure
+                    // already reports relay dead and all subsequent cores as stale. Per-core
+                    // repetition adds noise without new information.
                     still_running = true;
                 } else {
                     // erisc_app_still_running() reads from the ETH core via Cluster::read_core().
@@ -467,23 +458,12 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
                         relay_dead = true;
                         still_running = true;
                     } catch (...) {
-                        log_warning(
-                            tt::LogAlways,
-                            "reset_cores: erisc_app_still_running() failed for device {} core {} "
-                            "(unknown exception). Treating all ETH cores on this device as stale.",
-                            device_id,
-                            virtual_core.str());
+                        // UMD throws std::runtime_error (caught above); catch(...) is a safety net only.
                         relay_dead = true;
                         still_running = true;
                     }
                 }
                 if (still_running) {
-                    log_info(
-                        tt::LogMetal,
-                        "While initializing device {}, active ethernet dispatch core {} detected as still "
-                        "running, issuing exit signal.",
-                        device_id,
-                        virtual_core.str());
                     if (relay_dead) {
                         // Relay is dead — erisc_send_exit_signal() would also block for 5s
                         // before throwing. Skip it; the core goes straight to force-reset.
@@ -509,12 +489,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
                                 e.what());
                             relay_dead = true;
                         } catch (...) {
-                            log_warning(
-                                tt::LogAlways,
-                                "reset_cores: erisc_send_exit_signal() failed for device {} core {} "
-                                "(unknown exception). Core will be force-reset.",
-                                device_id,
-                                virtual_core.str());
+                            // UMD throws std::runtime_error (caught above); catch(...) is a safety net only.
                             relay_dead = true;
                         }
                     }
@@ -582,12 +557,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
                             id_and_cores.first,
                             reset_err.what());
                     } catch (...) {
-                        log_warning(
-                            tt::LogAlways,
-                            "Failed to force-reset stale ETH core {} on device {} (unknown exception type). "
-                            "Worker L1 may be corrupted by stale ERISC traffic.",
-                            virtual_core.str(),
-                            id_and_cores.first);
+                        // UMD throws std::runtime_error (caught above); catch(...) is a safety net only.
                     }
                 }
             }
