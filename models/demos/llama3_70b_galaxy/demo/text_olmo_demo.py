@@ -248,28 +248,14 @@ def run_olmo_demo(
         use_prefill_trace = prefill_enable_trace and max_encoded_prompt_len <= max_trace_seqlen
 
         # ── Prefill warmup (first batch only) ────────────────────────────
-        # No sampling_params: OLMo's on-device sampling during prefill passes V
-        # with wrong head count to paged_fused_update_cache, causing hang.
+        # For traced ISLs we do a compile prefill here to pre-populate the specific
+        # ISL's trace slot. For long ISLs (>max_trace_seqlen) the real prefill runs
+        # eagerly (no trace) and doesn't need any explicit warmup — the first real
+        # prefill below is the only one.
         if batch_idx == 0:
             logger.info(f"Starting prefill warmup (trace={use_prefill_trace}, ISL={max_encoded_prompt_len})...")
             profiler.start("compile_prefill", iteration=batch_idx)
-            if not use_prefill_trace:
-                # Long ISL (>4K): warmup with short tokens, then mode-cycle
-                # to release prefill CCL trace buffers (decode→prefill with no alloc).
-                warmup_tokens = torch.zeros(1, 128, dtype=torch.long)
-                warmup_lens = torch.tensor([128])
-                generator.prefill_forward_text(
-                    warmup_tokens,
-                    page_table=page_table,
-                    kv_cache=tt_kv_cache,
-                    prompt_lens=warmup_lens,
-                    enable_trace=True,
-                )
-                model.switch_mode("decode")
-                model.allocate_prefill_buffers = False
-                model.switch_mode("prefill")
-                model.allocate_prefill_buffers = True
-            else:
+            if use_prefill_trace:
                 toks = generator.prefill_forward_text(
                     input_tokens_prefill_pt,
                     page_table=page_table,
@@ -495,7 +481,7 @@ def run_olmo_demo(
             1,
             128,
             True,
-            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
             {"temperature": 0.0, "top_p": 0.08},
             False,
             64,
@@ -509,7 +495,7 @@ def run_olmo_demo(
             32,
             128,
             True,
-            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
             {"temperature": 0.0, "top_p": 0.08},
             False,
             3,
@@ -523,7 +509,7 @@ def run_olmo_demo(
             32,
             50,
             True,
-            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
             {"temperature": 0.0, "top_p": 0.08},
             False,
             1,
@@ -537,7 +523,7 @@ def run_olmo_demo(
             1,
             50,
             True,
-            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
             {"temperature": 0.0, "top_p": 0.08},
             False,
             1,
@@ -613,6 +599,20 @@ def run_olmo_demo(
             64,
             False,
         ),
+        (  # aime-b1: AIME 2024 problem, batch=1, HF-recommended sampling (temp=0.6, top_p=0.95, no top_k), 32K decode budget
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_aime_test.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            32768,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0.6, "top_p": 0.95, "seed": 42},
+            True,  # stop_at_eos: stop when model finishes thinking
+            64,
+            False,
+        ),
         (  # stress-test: Long stability run
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",
             True,
@@ -621,7 +621,7 @@ def run_olmo_demo(
             32,
             500000,
             True,
-            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
             {"temperature": 0.0, "top_p": 0.08},
             False,
             64,
@@ -639,6 +639,7 @@ def run_olmo_demo(
         "long-16k-b1",
         "long-32k-b1",
         "long-64k-b1",
+        "aime-b1",
         "stress-test",
     ],
 )

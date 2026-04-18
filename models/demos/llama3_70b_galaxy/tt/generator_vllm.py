@@ -157,7 +157,7 @@ def initialize_vllm_text_transformer_olmo(
     tt_data_parallel,
     mesh_device,
     max_batch_size,
-    max_seq_len=8192,
+    max_seq_len=33280,
     n_layers=None,
     dtype=ttnn.bfloat8_b,
     optimizations=LlamaOptimizations.performance,
@@ -312,6 +312,13 @@ class OLMo3ForCausalLM(Generator):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # OLMo uses split-sampling (decode trace captures model ops only; sampling runs
+        # eagerly outside the trace) but without the sampling module's own internal trace.
+        # enable_internal_trace=True would cause the sampling module to call
+        # begin_trace_capture inside the decode trace replay, causing a nested trace error.
+        # With enable_internal_trace=False, sampling is called eagerly after each decode
+        # trace execution, which is correct and matches the OLMo demo path.
+        self.model.enable_internal_trace = False
 
     @classmethod
     def initialize_vllm_model(
@@ -319,7 +326,7 @@ class OLMo3ForCausalLM(Generator):
         hf_config,
         mesh_device,
         max_batch_size,
-        max_seq_len=8192,
+        max_seq_len=33280,
         n_layers=None,
         tt_data_parallel=1,
         optimizations=None,
@@ -342,7 +349,28 @@ class OLMo3ForCausalLM(Generator):
         return self.model_args.model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
-        return super().prefill_forward_text(*args, **kwargs)
+        # Root-cause fix: never run on-device sampling during prefill for OLMo.
+        #
+        # The shared Generator.prefill_forward_text on-device-sampling branch
+        # does: switch_mode("decode") -> sampling_module.reset_sampling_params
+        # -> reset_prompt_tokens -> reset_output_state -> seed_manager.reset_seed.
+        # reset_sampling_params calls reset_trace() whenever force_argmax_sampling
+        # flips (models/common/sampling/generator.py L202-203), which wipes every
+        # decode sampling trace captured during warmup. The previous workaround
+        # (cycling modes and clearing decode/sampling traces after every request)
+        # just triggered recapture on the next request, defeating warmup entirely.
+        #
+        # With sampling_params=None, prefill_forward_text sets return_logits=True
+        # (generator.py L172), skips the on-device-sampling block, and leaves
+        # decode + sampling module state untouched. Decode traces captured during
+        # warmup stay valid across prefill->decode for every subsequent request.
+        # Host-side argmax on the single last-token logits vector is cheap and
+        # is what text_olmo_demo.py already does (verified up to 32K ISL).
+        # Sampling params (temperature, top_k, top_p, penalties) are still
+        # honored on-device from the second token onwards via decode sampling.
+        kwargs.pop("sampling_params", None)
+        logits = super().prefill_forward_text(*args, **kwargs)
+        return logits[:, -1, :].argmax(dim=-1)
 
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward(*args, **kwargs)

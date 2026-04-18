@@ -1,5 +1,56 @@
 # OLMo-3.1-32B Bring-up Log
 
+## Session: 2026-04-17
+
+### Status: tt-inference-server WORKING UP TO 32K ISL — Server loads, warmup completes, benchmarks running
+
+### Summary
+
+Enabled tt-inference-server for OLMo3 with warmup-only trace capture. Fixed three bugs blocking server startup:
+
+1. **DEBUG_PREFILL_OPS=1 env var** — Left from previous debugging session, caused `ttnn.synchronize_device` inside prefill trace capture → TT_FATAL. Fix: unset the env var before launching server.
+
+2. **enable_internal_trace=True (default)** — During decode trace execution, the sampling module would try to capture its own trace, creating a nested `begin_trace_capture`. Fix: set `self.model.enable_internal_trace = False` in `OLMo3ForCausalLM.__init__` so sampling runs eagerly outside the decode trace (same pattern as Llama with split_sampling=True but no internal trace).
+
+3. **max_context=32768 too tight** — ISL=32768 + OSL=128 = 32896 > 32768, causing "Bad Request" for 32K benchmarks. Fix: bumped `max_context` and `max_seq_len` to 33280 (32768 + 512 headroom).
+
+### Benchmark Results (server path, 2026-04-17)
+
+| ISL | Concurrency | TTFT (ms) | TPOT (ms) | Throughput (tok/s) |
+|-----|-------------|-----------|-----------|---------------------|
+| 128 | batch-1 | 108 | 46.4 | 21.3 |
+| 128 | batch-32 | 2623 | 50.6 | 452.8 (b32 via 64-prompt run) |
+| 4K | batch-1 | 1254 | 48.9 | 17.2 |
+| 4K | batch-32 | 24246 | 179.9 | 59.0 |
+| 8K | batch-1 | 2480 | 49.1 | 14.7 |
+| 16K | batch-1 | 4882 | 50.0 | 11.4 |
+| 32K | batch-1 | 12948 | 54.4 | 18.4 |
+| 49K | batch-1 | 22126 | 56.0 | 17.9 (from olmo_4k_benchmarks, may hit 64K OOM) |
+
+### Files Modified
+
+1. **models/demos/llama3_70b_galaxy/tt/generator_vllm.py** — `OLMo3ForCausalLM.__init__`: set `model.enable_internal_trace=False`; bumped `max_seq_len` default to 33280 in both `initialize_vllm_text_transformer_olmo` and `initialize_vllm_model`.
+2. **tt-inference-server/workflows/model_spec.py** — OLMo DeviceModelSpec: bumped `max_context` from 32768 → 33280.
+3. **tt-inference-server/benchmarking/benchmark_targets/model_performance_reference.json** — Replaced OLMo entry with focused set: b1+b32 for ISL 128/4K, b1 for 8K/16K/32K (removed 1K/2K/8K-b32 noise).
+
+### Key Findings
+
+1. **Trace capture for server**: The server calls `warmup_model_prefill(enable_trace=True)` + `warmup_model_decode(enable_trace=True)`. Both now work without modification to generator.py shared code.
+
+2. **Prefill host-side argmax**: `OLMo3ForCausalLM.prefill_forward` pops `sampling_params` and returns `logits.argmax(-1)`, preventing on-device sampling in prefill from invalidating decode traces.
+
+3. **Sampling in decode**: With `enable_split_sampling=True` (default) and `enable_internal_trace=False` (our fix), decode trace captures model ops only; sampling runs eagerly afterward via `model.sampling.sample(logits, enable_trace=False)`.
+
+4. **4K batch-32 is slow**: TTFT=24246ms and TPOT=179ms for batch-32 at 4K is worse than expected. Likely because `max_concurrency=32` forces 32 concurrent requests at ISL=4096, which exceeds the eager prefill bucket (4096 is at the trace boundary). To investigate.
+
+### Next Steps
+
+1. Restart server with `max_seq_len=33280` / `max_context=33280` to re-run 32K benchmark
+2. Investigate 4K batch-32 slow TTFT (24246ms vs 13000ms target)
+3. 64K ISL support (fabric deadlock on Device 7 — pre-existing issue)
+
+---
+
 ## Session: 2026-04-16
 
 ### Status: text_olmo_demo.py WORKING — Generator prefill + decode for batch-1 and batch-32 (short ISL)
