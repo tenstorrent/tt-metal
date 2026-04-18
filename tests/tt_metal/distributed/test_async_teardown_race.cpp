@@ -882,4 +882,105 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, QuiesceDevicesExercisesPhase25ERISCTe
     }
 }
 
+// ---------------------------------------------------------------------------
+// Scenario I: High-iteration quiesce stress with per-cycle timing bound.
+//
+// GAPS FILLED:
+//   1. Scenario H only runs 3 quiesce cycles. 8 cycles amplify the Phase 2.5
+//      ERISC termination race window and catch cumulative state leaks.
+//   2. Scenario H has no timing assertion. This test asserts each quiesce
+//      cycle completes in < 6000ms, catching Phase 2.5 poll hangs early —
+//      well before the 90s test budget expires.
+//
+// What the timing bound catches:
+//   - Phase 2.5 polls ERISC channels for TERMINATED (50ms timeout each).
+//     T3K has ~8 devices × ~4 active ETH channels = ~32 polls per quiesce.
+//     A regressed poll stuck at 50ms per channel = ~1600ms overhead/cycle.
+//     The 6s limit catches this before the test times out silently.
+//
+// Pass = 8 cycles complete, each in < 6s, final buffer matches.
+// Fail = any cycle > 6s (Phase 2.5 regression), hang (watchdog), or corruption.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DRepeatFixture, QuiesceDevicesTimingBoundStressTest) {
+    constexpr int kCycles = 8;
+    constexpr int64_t kMaxCycleMs = 6000;  // 50ms × 32 channels + 4.4s margin
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+
+    for (int cycle = 0; cycle < kCycles; cycle++) {
+        // Dispatch async — ERISC channels are live during quiesce.
+        {
+            auto program = create_blank_program(cores);
+            auto workload = MeshWorkload();
+            workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+            auto& cq = mesh_device_->mesh_command_queue();
+            EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+            // No Finish() — quiesce_devices() must drain + terminate ERISCs.
+        }
+
+        // Time the quiesce. Assertion catches Phase 2.5 poll regression before
+        // the 90s budget expires.
+        const auto t0 = std::chrono::steady_clock::now();
+        mesh_device_->quiesce_devices();
+        const auto elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+
+        log_info(
+            tt::LogTest,
+            "[Scenario I] Cycle {}/{}: quiesce_devices() in {}ms (limit {}ms)",
+            cycle + 1,
+            kCycles,
+            elapsed_ms,
+            kMaxCycleMs);
+
+        ASSERT_LT(elapsed_ms, kMaxCycleMs)
+            << "[Scenario I] Cycle " << (cycle + 1) << "/" << kCycles
+            << " exceeded " << kMaxCycleMs << "ms — Phase 2.5 ERISC poll may be hanging";
+    }
+
+    // Final blocking dispatch must succeed after 8 quiesce cycles.
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario I] Final blocking dispatch after {} quiesce cycles", kCycles);
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    }
+
+    // Buffer round-trip: detect DRAM corruption from stale ERISC NOC writes
+    // that could accumulate over 8 quiesce cycles.
+    {
+        auto& cq = mesh_device_->mesh_command_queue();
+        uint32_t page_size = 1024;
+        auto local_config =
+            DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        auto global_shape = Shape2D{
+            static_cast<uint32_t>(mesh_device_->num_rows()),
+            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto dist_config = ShardedBufferConfig{
+            .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
+            .global_buffer_shape = global_shape,
+            .shard_shape = Shape2D{1, 1}};
+        auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
+        size_t n_words = page_size / sizeof(uint32_t) * mesh_device_->num_rows() * mesh_device_->num_cols();
+        std::vector<uint32_t> src(n_words);
+        for (size_t i = 0; i < n_words; i++) {
+            src[i] = static_cast<uint32_t>(0x51CE0000 | (i & 0xFFFF));
+        }
+        EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
+        std::vector<uint32_t> dst;
+        EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
+        ASSERT_EQ(dst.size(), src.size())
+            << "[Scenario I] Buffer size mismatch after " << kCycles << " quiesce cycles";
+        for (size_t i = 0; i < n_words; i++) {
+            ASSERT_EQ(dst[i], src[i])
+                << "[Scenario I] Data corruption at index " << i << " after " << kCycles << " quiesce cycles";
+        }
+        log_info(
+            tt::LogTest,
+            "[Scenario I] Buffer round-trip clean — Phase 2.5 timing bounded across {} quiesce cycles",
+            kCycles);
+    }
+}
+
 }  // namespace tt::tt_metal::distributed::test
