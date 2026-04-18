@@ -132,6 +132,7 @@ def test_per_core_then_lockstep_no_overlap(mesh_device):
     _assert_cross_device_consistency(t_pc, [core])
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_lockstep_then_per_core_no_overlap(mesh_device):
     """Lockstep first, then per-core. No overlap on any device."""
     core = ttnn.CoreCoord(0, 0)
@@ -148,6 +149,7 @@ def test_lockstep_then_per_core_no_overlap(mesh_device):
 # --- Multi-core tests ---
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_multi_core_per_core_all_cores(mesh_device):
     """Per-core allocation across all compute cores on mesh, each core independent."""
     grid = mesh_device.compute_with_storage_grid_size()
@@ -170,6 +172,7 @@ def test_multi_core_per_core_all_cores(mesh_device):
     assert t.is_allocated()
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_multi_core_per_core_then_lockstep_no_overlap(mesh_device):
     """Per-core on 4 cores, then lockstep on same 4 cores. No overlap on any device/core."""
     num_cores = 4
@@ -193,6 +196,7 @@ def test_multi_core_per_core_then_lockstep_no_overlap(mesh_device):
 # --- Interleaved alloc/free patterns ---
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_interleaved_per_core_and_lockstep(mesh_device):
     """Interleave per-core and lockstep allocations across multiple cores.
     Verify no overlaps on any core on any device."""
@@ -245,6 +249,7 @@ def test_interleaved_per_core_and_lockstep(mesh_device):
         assert t.is_allocated(), f"{label} should still be allocated"
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_tetris_allocation_on_mesh(mesh_device):
     """Tetris-style alloc/free/realloc across 4 cores on mesh.
     Validates no overlap on same core and cross-device consistency."""
@@ -305,6 +310,7 @@ def test_tetris_allocation_on_mesh(mesh_device):
 # --- Dealloc/realloc tests ---
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_dealloc_per_core_then_lockstep_reuses_space(mesh_device):
     """Allocate per-core, deallocate, then lockstep gets the same address (space reused)."""
     core = ttnn.CoreCoord(0, 0)
@@ -319,6 +325,7 @@ def test_dealloc_per_core_then_lockstep_reuses_space(mesh_device):
     assert ls_addr == pc_addr, f"Expected lockstep to reuse freed per-core address {pc_addr:#x}, got {ls_addr:#x}"
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_dealloc_lockstep_then_per_core_reuses_space(mesh_device):
     """Allocate lockstep, deallocate, then per-core gets the same address (space reused)."""
     core = ttnn.CoreCoord(0, 0)
@@ -333,6 +340,7 @@ def test_dealloc_lockstep_then_per_core_reuses_space(mesh_device):
     assert pc_addr == ls_addr, f"Expected per-core to reuse freed lockstep address {ls_addr:#x}, got {pc_addr:#x}"
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_multi_core_dealloc_realloc(mesh_device):
     """Allocate per-core across all cores, dealloc, realloc — same addresses per device."""
     grid = mesh_device.compute_with_storage_grid_size()
@@ -363,6 +371,7 @@ def test_multi_core_dealloc_realloc(mesh_device):
 # --- All cores stress test ---
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_all_cores_lockstep_then_per_core_then_reverse(mesh_device):
     """Phase 1: lockstep → per-core on all cores (no overlap per device).
     Phase 2: deallocate all → per-core → lockstep (deps non-empty)."""
@@ -410,6 +419,7 @@ def test_all_cores_lockstep_then_per_core_then_reverse(mesh_device):
 # --- Triangle pattern (proves independent per-bank state) ---
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_triangle_per_core_then_uniform(mesh_device):
     """Triangle per-core on all cores, then uniform per-core.
     Addresses form inverse triangle, consistent across devices, no overlap."""
@@ -483,6 +493,7 @@ def _allocate_per_core_on_device(mesh_device, coord, core, shard_bytes):
     return ttnn._ttnn.tensor.experimental_to_single_device(host_tensor, mesh_device, coord, mem_config)
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_single_device_loopback(mesh_device):
     """Write data to a single device within the mesh and read it back.
     Verifies the full round-trip: host → single device → host."""
@@ -502,6 +513,7 @@ def test_single_device_loopback(mesh_device):
         )
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_divergent_per_device_then_lockstep(mesh_device):
     """Allocate different-sized per-core tensors on each device independently,
     causing divergent allocator states. Then lockstep must get the same address
@@ -552,6 +564,7 @@ def test_divergent_per_device_then_lockstep(mesh_device):
     ), f"Device 1: overlap per_core=[{addr1:#x}, +{per_device_sizes[1]}) vs lockstep=[{ls_addrs[1]:#x}, +{ls_size})"
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_divergent_multi_core_per_device_then_lockstep(mesh_device):
     """Multiple cores, different sizes per device, then lockstep.
     Simulates TP compressed weights across cores."""

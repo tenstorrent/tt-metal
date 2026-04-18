@@ -6,6 +6,8 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import skip_with_llk_assert
+
 
 def run_global_circular_buffer(device):
     sender_cores = [ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 2)]
