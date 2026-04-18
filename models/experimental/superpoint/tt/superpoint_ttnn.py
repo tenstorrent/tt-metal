@@ -50,7 +50,6 @@ class TtConv2D:
         act_block_h_override: int | None = None,
         math_fidelity=ttnn.MathFidelity.LoFi,
         fp32_dest_acc_en: bool = False,
-        deallocate_activation: bool = True,
     ) -> None:
         self.device = device
         self.in_channels = in_channels
@@ -72,7 +71,7 @@ class TtConv2D:
             weights_dtype=weights_dtype,
             activation=act,
             shard_layout=shard_layout,
-            deallocate_activation=deallocate_activation,
+            deallocate_activation=False,
             output_layout=ttnn.TILE_LAYOUT,
         )
         if act_block_h_override is not None:
@@ -197,8 +196,7 @@ class TtSuperPoint:
             fp32_dest_acc_en=True,
         )
 
-        # Score decoder — conv_score_a reads encoded, which is also read by
-        # conv_desc_a, so we must not deallocate it.
+        # Score decoder
         kp = torch_model.keypoint_decoder
         self.conv_score_a = TtConv2D(
             kp.conv_score_a.weight,
@@ -209,7 +207,6 @@ class TtSuperPoint:
             padding=1,
             device=device,
             activation="relu",
-            deallocate_activation=False,
             **head_kwargs,
         )
         self.conv_score_b = TtConv2D(
@@ -319,10 +316,10 @@ class TtSuperPoint:
         # Host-side L2 normalize over descriptor dim
         descriptors_nchw = F.normalize(descriptors_nchw, p=2, dim=1)
 
-        # `encoded` and `tt_in` were already deallocated by downstream convs
-        # (deallocate_activation=True); only free the final outputs here.
+        ttnn.deallocate(encoded)
         ttnn.deallocate(s)
         ttnn.deallocate(d)
+        ttnn.deallocate(tt_in)
 
         return scores_nchw, descriptors_nchw
 
