@@ -449,13 +449,17 @@ void Device::quiesce_and_restart_fabric_workers() {
     }
 
     auto tensix_config_mode = MetalContext::instance().get_fabric_tensix_config();
-    if (tensix_config_mode == tt::tt_fabric::FabricTensixConfig::DISABLED) {
+    const bool has_tensix_mux = (tensix_config_mode != tt::tt_fabric::FabricTensixConfig::DISABLED);
+    if (!has_tensix_mux) {
         log_info(
             tt::LogMetal,
-            "quiesce_and_restart_fabric_workers: Device {} early-return at guard L431: "
-            "FabricTensixConfig::DISABLED (no Tensix MUX cores to restart)",
+            "quiesce_and_restart_fabric_workers: Device {} FabricTensixConfig::DISABLED — "
+            "no Tensix MUX cores; running ERISC-only path (Phase 2.5 + Phase 3 ETH cores only). "
+            "Phases 1/2/4 (Tensix MUX) are skipped.",
             this->id());
-        return;
+        // Do NOT return: Phase 2.5 (ERISC termination) is still required to drain in-flight ETH
+        // packets before Phase 3 overwrites ERISC L1. Without it, orphaned packets corrupt the
+        // next iteration's BRISC .text at 0x8220, causing hangs in AllGather teardown races.
     }
 
     const auto& control_plane = MetalContext::instance().get_control_plane();
@@ -471,36 +475,39 @@ void Device::quiesce_and_restart_fabric_workers() {
         return;
     }
 
-    const auto& tensix_config = builder_ctx.get_tensix_config();
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(this->id());
     const auto& active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
     MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
 
     // Phase 1: Send IMMEDIATELY_TERMINATE to each MUX worker core
-    for (const auto& [eth_chan_id, direction] : active_channels) {
-        auto core_id = tensix_config.get_core_id_for_channel(this->id(), eth_chan_id);
-        auto [term_addr, term_signal] = tensix_config.get_termination_address_and_signal(core_id);
-        std::vector<uint32_t> term_buf(1, term_signal);
-        auto mux_core = tensix_config.get_core_for_channel(this->id(), eth_chan_id);
+    // Skipped in ETH-only fabric mode (FabricTensixConfig::DISABLED) — no Tensix MUX workers exist.
+    if (has_tensix_mux) {
+        const auto& tensix_config = builder_ctx.get_tensix_config();
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            auto core_id = tensix_config.get_core_id_for_channel(this->id(), eth_chan_id);
+            auto [term_addr, term_signal] = tensix_config.get_termination_address_and_signal(core_id);
+            std::vector<uint32_t> term_buf(1, term_signal);
+            auto mux_core = tensix_config.get_core_for_channel(this->id(), eth_chan_id);
 
-        // Diagnostic: log pre-terminate status so we can confirm the MUX was READY_FOR_TRAFFIC
-        // (not already dead/stuck) before we send the termination signal.
-        auto config = tensix_config.get_config(core_id);
-        uint32_t status_addr_p1 = static_cast<uint32_t>(config->get_status_address());
-        std::vector<uint32_t> pre_status(1, 0);
-        detail::ReadFromDeviceL1(this, mux_core, status_addr_p1, 4, pre_status, CoreType::WORKER);
-        log_info(
-            tt::LogMetal,
-            "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 1: pre-terminate status=0x{:08x}",
-            this->id(),
-            eth_chan_id,
-            pre_status[0]);
+            // Diagnostic: log pre-terminate status so we can confirm the MUX was READY_FOR_TRAFFIC
+            // (not already dead/stuck) before we send the termination signal.
+            auto config = tensix_config.get_config(core_id);
+            uint32_t status_addr_p1 = static_cast<uint32_t>(config->get_status_address());
+            std::vector<uint32_t> pre_status(1, 0);
+            detail::ReadFromDeviceL1(this, mux_core, status_addr_p1, 4, pre_status, CoreType::WORKER);
+            log_info(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 1: pre-terminate status=0x{:08x}",
+                this->id(),
+                eth_chan_id,
+                pre_status[0]);
 
-        detail::WriteToDeviceL1(this, mux_core, term_addr, term_buf, CoreType::WORKER);
+            detail::WriteToDeviceL1(this, mux_core, term_addr, term_buf, CoreType::WORKER);
+        }
+
+        env_impl.get_cluster().l1_barrier(this->id());
     }
-
-    env_impl.get_cluster().l1_barrier(this->id());
 
     // Phase 2: Poll each MUX core until its status is TERMINATED.
     //
@@ -510,82 +517,86 @@ void Device::quiesce_and_restart_fabric_workers() {
     // router path in MetalEnvImpl::teardown_fabric_config and force-reset the stuck Tensix
     // MUX core so the next bring-up starts from a clean state. The caller continues to
     // re-configure and re-launch the fabric workers in Phase 3.
-    for (const auto& [eth_chan_id, direction] : active_channels) {
-        auto core_id = tensix_config.get_core_id_for_channel(this->id(), eth_chan_id);
-        auto config = tensix_config.get_config(core_id);
-        uint32_t status_addr = static_cast<uint32_t>(config->get_status_address());
-        auto mux_core = tensix_config.get_core_for_channel(this->id(), eth_chan_id);
+    // Skipped in ETH-only fabric mode (FabricTensixConfig::DISABLED) — no Tensix MUX workers exist.
+    if (has_tensix_mux) {
+        const auto& tensix_config = builder_ctx.get_tensix_config();
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            auto core_id = tensix_config.get_core_id_for_channel(this->id(), eth_chan_id);
+            auto config = tensix_config.get_config(core_id);
+            uint32_t status_addr = static_cast<uint32_t>(config->get_status_address());
+            auto mux_core = tensix_config.get_core_for_channel(this->id(), eth_chan_id);
 
-        std::vector<uint32_t> status_buf(1, 0);
-        const auto start = std::chrono::steady_clock::now();
-        constexpr uint32_t timeout_ms = 5000;
-        constexpr uint32_t kSpinsBetweenSleeps = 64;
-        uint32_t spin_counter = 0;
-        bool terminated = false;
-        while (true) {
-            detail::ReadFromDeviceL1(this, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
-            if (status_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED)) {
-                terminated = true;
-                break;
+            std::vector<uint32_t> status_buf(1, 0);
+            const auto start = std::chrono::steady_clock::now();
+            constexpr uint32_t timeout_ms = 5000;
+            constexpr uint32_t kSpinsBetweenSleeps = 64;
+            uint32_t spin_counter = 0;
+            bool terminated = false;
+            while (true) {
+                detail::ReadFromDeviceL1(this, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
+                if (status_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED)) {
+                    terminated = true;
+                    break;
+                }
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+                if (elapsed > timeout_ms) {
+                    break;
+                }
+                if (++spin_counter >= kSpinsBetweenSleeps) {
+                    spin_counter = 0;
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                } else {
+                    ttsl::pause();
+                }
             }
-            const auto elapsed =
-                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-            if (elapsed > timeout_ms) {
-                break;
-            }
-            if (++spin_counter >= kSpinsBetweenSleeps) {
-                spin_counter = 0;
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
-            } else {
-                ttsl::pause();
-            }
-        }
 
-        log_info(
-            tt::LogMetal,
-            "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2: {} (status=0x{:08x})",
-            this->id(),
-            eth_chan_id,
-            terminated ? "TERMINATED cleanly" : "TIMEOUT",
-            status_buf[0]);
-
-        if (!terminated) {
-            log_warning(
+            log_info(
                 tt::LogMetal,
-                "quiesce_and_restart_fabric_workers: Timeout waiting for fabric MUX TERMINATED on "
-                "Device {} eth_chan {} (status=0x{:08x}), force-resetting Tensix MUX to prevent "
-                "stale NOC traffic into worker L1",
+                "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2: {} (status=0x{:08x})",
                 this->id(),
                 eth_chan_id,
+                terminated ? "TERMINATED cleanly" : "TIMEOUT",
                 status_buf[0]);
-        }
 
-        // Always halt the MUX BRISC before Phase 3 overwrites its L1, regardless of whether
-        // termination was clean or timed out.
-        //
-        // The CCL MUX kernel writes TERMINATED *before* close_finish() completes (close_finish
-        // spins on worker_teardown_addr waiting for the ERISC ACK).  So even when Phase 2 sees
-        // a clean TERMINATED, the BRISC is still running close_finish().  If we proceed directly
-        // to Phase 3's ConfigureDeviceWithProgram, the still-running BRISC executes whatever
-        // instructions now reside in its overwritten L1, generating invalid NOC traffic — including
-        // writes to ARC_RESET_SCRATCH_ADDR (0x880030060) — that corrupt ERISC or ARC state.
-        //
-        // Halting the core here makes Phase 3's L1 overwrite safe.  The BRISC will be deasserted
-        // after write_launch_msg_to_core in Phase 3, which starts the new CCL MUX kernel from its
-        // reset vector with clean state.
-        try {
-            const auto virtual_mux_coord = env_impl.get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                this->id(), mux_core, CoreType::WORKER);
-            env_impl.get_cluster().assert_risc_reset_at_core(
-                tt_cxy_pair(this->id(), virtual_mux_coord), tt::umd::RiscType::ALL);
-        } catch (const std::exception& e) {
-            log_warning(
-                tt::LogMetal,
-                "quiesce_and_restart_fabric_workers: assert_risc_reset_at_core failed on Device {} "
-                "eth_chan {}: {}",
-                this->id(),
-                eth_chan_id,
-                e.what());
+            if (!terminated) {
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Timeout waiting for fabric MUX TERMINATED on "
+                    "Device {} eth_chan {} (status=0x{:08x}), force-resetting Tensix MUX to prevent "
+                    "stale NOC traffic into worker L1",
+                    this->id(),
+                    eth_chan_id,
+                    status_buf[0]);
+            }
+
+            // Always halt the MUX BRISC before Phase 3 overwrites its L1, regardless of whether
+            // termination was clean or timed out.
+            //
+            // The CCL MUX kernel writes TERMINATED *before* close_finish() completes (close_finish
+            // spins on worker_teardown_addr waiting for the ERISC ACK).  So even when Phase 2 sees
+            // a clean TERMINATED, the BRISC is still running close_finish().  If we proceed directly
+            // to Phase 3's ConfigureDeviceWithProgram, the still-running BRISC executes whatever
+            // instructions now reside in its overwritten L1, generating invalid NOC traffic — including
+            // writes to ARC_RESET_SCRATCH_ADDR (0x880030060) — that corrupt ERISC or ARC state.
+            //
+            // Halting the core here makes Phase 3's L1 overwrite safe.  The BRISC will be deasserted
+            // after write_launch_msg_to_core in Phase 3, which starts the new CCL MUX kernel from its
+            // reset vector with clean state.
+            try {
+                const auto virtual_mux_coord = env_impl.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                    this->id(), mux_core, CoreType::WORKER);
+                env_impl.get_cluster().assert_risc_reset_at_core(
+                    tt_cxy_pair(this->id(), virtual_mux_coord), tt::umd::RiscType::ALL);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: assert_risc_reset_at_core failed on Device {} "
+                    "eth_chan {}: {}",
+                    this->id(),
+                    eth_chan_id,
+                    e.what());
+            }
         }
     }
 
@@ -770,69 +781,73 @@ void Device::quiesce_and_restart_fabric_workers() {
     //
     // Use the same bounded-poll + force-reset pattern as Phase 2 so a stuck MUX can
     // never hang the host indefinitely.
-    for (const auto& [eth_chan_id, direction] : active_channels) {
-        auto core_id = tensix_config.get_core_id_for_channel(this->id(), eth_chan_id);
-        auto config = tensix_config.get_config(core_id);
-        uint32_t status_addr = static_cast<uint32_t>(config->get_status_address());
-        auto mux_core = tensix_config.get_core_for_channel(this->id(), eth_chan_id);
+    // Skipped in ETH-only fabric mode (FabricTensixConfig::DISABLED) — no Tensix MUX workers exist.
+    if (has_tensix_mux) {
+        const auto& tensix_config = builder_ctx.get_tensix_config();
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            auto core_id = tensix_config.get_core_id_for_channel(this->id(), eth_chan_id);
+            auto config = tensix_config.get_config(core_id);
+            uint32_t status_addr = static_cast<uint32_t>(config->get_status_address());
+            auto mux_core = tensix_config.get_core_for_channel(this->id(), eth_chan_id);
 
-        std::vector<uint32_t> status_buf(1, 0);
-        const auto start = std::chrono::steady_clock::now();
-        constexpr uint32_t timeout_ms = 5000;
-        constexpr uint32_t kSpinsBetweenSleeps = 64;
-        uint32_t spin_counter = 0;
-        bool ready = false;
-        while (true) {
-            detail::ReadFromDeviceL1(this, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
-            if (status_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC)) {
-                ready = true;
-                break;
+            std::vector<uint32_t> status_buf(1, 0);
+            const auto start = std::chrono::steady_clock::now();
+            constexpr uint32_t timeout_ms = 5000;
+            constexpr uint32_t kSpinsBetweenSleeps = 64;
+            uint32_t spin_counter = 0;
+            bool ready = false;
+            while (true) {
+                detail::ReadFromDeviceL1(this, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
+                if (status_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC)) {
+                    ready = true;
+                    break;
+                }
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+                if (elapsed > timeout_ms) {
+                    break;
+                }
+                if (++spin_counter >= kSpinsBetweenSleeps) {
+                    spin_counter = 0;
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                } else {
+                    ttsl::pause();
+                }
             }
-            const auto elapsed =
+
+            const auto p4_elapsed =
                 std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-            if (elapsed > timeout_ms) {
-                break;
-            }
-            if (++spin_counter >= kSpinsBetweenSleeps) {
-                spin_counter = 0;
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
-            } else {
-                ttsl::pause();
-            }
-        }
-
-        const auto p4_elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-        log_info(
-            tt::LogMetal,
-            "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 4: {} in {}ms (status=0x{:08x})",
-            this->id(),
-            eth_chan_id,
-            ready ? "READY_FOR_TRAFFIC" : "TIMEOUT",
-            p4_elapsed,
-            status_buf[0]);
-
-        if (!ready) {
-            log_warning(
+            log_info(
                 tt::LogMetal,
-                "quiesce_and_restart_fabric_workers: Timeout waiting for fabric MUX READY_FOR_TRAFFIC on "
-                "Device {} eth_chan {} (status=0x{:08x}), force-resetting Tensix MUX core",
+                "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 4: {} in {}ms (status=0x{:08x})",
                 this->id(),
                 eth_chan_id,
+                ready ? "READY_FOR_TRAFFIC" : "TIMEOUT",
+                p4_elapsed,
                 status_buf[0]);
-            try {
-                const auto virtual_mux_coord = env_impl.get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                    this->id(), mux_core, CoreType::WORKER);
-                env_impl.get_cluster().assert_risc_reset_at_core(
-                    tt_cxy_pair(this->id(), virtual_mux_coord), tt::umd::RiscType::ALL);
-            } catch (const std::exception& e) {
+
+            if (!ready) {
                 log_warning(
                     tt::LogMetal,
-                    "quiesce_and_restart_fabric_workers: assert_risc_reset_at_core failed on Device {} "
-                    "eth_chan {}: {}",
+                    "quiesce_and_restart_fabric_workers: Timeout waiting for fabric MUX READY_FOR_TRAFFIC on "
+                    "Device {} eth_chan {} (status=0x{:08x}), force-resetting Tensix MUX core",
                     this->id(),
                     eth_chan_id,
-                    e.what());
+                    status_buf[0]);
+                try {
+                    const auto virtual_mux_coord = env_impl.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                        this->id(), mux_core, CoreType::WORKER);
+                    env_impl.get_cluster().assert_risc_reset_at_core(
+                        tt_cxy_pair(this->id(), virtual_mux_coord), tt::umd::RiscType::ALL);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: assert_risc_reset_at_core failed on Device {} "
+                        "eth_chan {}: {}",
+                        this->id(),
+                        eth_chan_id,
+                        e.what());
+                }
             }
         }
     }
