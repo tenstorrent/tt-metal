@@ -5,9 +5,6 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
 
 #include <cstdint>
 
