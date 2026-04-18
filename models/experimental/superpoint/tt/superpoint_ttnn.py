@@ -291,11 +291,20 @@ class TtSuperPoint:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def load_input(self, tt_in: ttnn.Tensor, pixel_values: torch.Tensor) -> None:
-        """Copy host pixel data into a preallocated device input tensor."""
+    def load_input(
+        self,
+        tt_in: ttnn.Tensor,
+        pixel_values: torch.Tensor,
+        cq_id: int = 0,
+    ) -> None:
+        """Copy host pixel data into a preallocated device input tensor.
+
+        Pass ``cq_id=1`` to issue the H2D on the data-movement queue so it can
+        overlap with a compute trace running on queue 0.
+        """
         nhwc = self._preprocess_host(pixel_values)
         host = ttnn.from_torch(nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.copy_host_to_device_tensor(host, tt_in)
+        ttnn.copy_host_to_device_tensor(host, tt_in, cq_id=cq_id)
 
     def run_device_compute(self, tt_in: ttnn.Tensor, b: int = 1):
         """Device-only forward; returns (s, d_norm) device tensors in TILE layout.

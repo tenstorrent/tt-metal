@@ -62,7 +62,13 @@ def _device_to_host_post(tt_model, s, d_norm, b, h, w):
 @pytest.mark.parametrize("height,width", [(480, 640)])
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 32 * 1024, "trace_region_size": TRACE_REGION_SIZE}],
+    [
+        {
+            "l1_small_size": 32 * 1024,
+            "trace_region_size": TRACE_REGION_SIZE,
+            "num_command_queues": 2,
+        }
+    ],
     indirect=True,
 )
 def test_superpoint_benchmark(device, height, width):
@@ -104,12 +110,20 @@ def test_superpoint_benchmark(device, height, width):
     ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
     tt_scores_nchw, tt_desc_nchw = _device_to_host_post(tt_model, s, d_norm, b, height, width)
 
-    # Timed iterations — pure traced loop.
+    # Timed iterations — traced replay with H2D overlapped on CQ1.
+    # CQ0 runs the trace (compute); CQ1 loads the next frame. Events keep the
+    # compute and DMA queues correctly ordered around the shared input tensor.
     n_iter = int(os.environ.get("SP_N_ITER", "10"))
     t0 = time.perf_counter()
+    write_event = None
     for _ in range(n_iter):
-        tt_model.load_input(tt_in, pixel_values)
+        if write_event is not None:
+            ttnn.wait_for_event(0, write_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+        compute_event = ttnn.record_event(device, 0)
+        ttnn.wait_for_event(1, compute_event)
+        tt_model.load_input(tt_in, pixel_values, cq_id=1)
+        write_event = ttnn.record_event(device, 1)
     ttnn.synchronize_device(device)
     # One D2H per batch (the post-proc is identical across iters for this test).
     _ = _device_to_host_post(tt_model, s, d_norm, b, height, width)
