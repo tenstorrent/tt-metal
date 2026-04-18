@@ -133,10 +133,13 @@ def run(
     # and output_tile (a Tile object that can't be auto-parsed from dict).
     parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile"})
 
-    # Skip traced program_config but keep sharded memory configs. Model-traced
-    # sweeps run on the same architecture, so the shard specs are valid. Clearing
-    # them causes the tracer to record DRAM/INTERLEAVED instead of the traced
-    # L1/SHARDED config, failing validation.
+    # When program_config is None, sharded input_b (weights) can cause TT_FATAL
+    # since the matmul requires INTERLEAVED weights without a program config.
+    # Clear input_b to DRAM in that case. Keep input_a and output configs as traced
+    # so the tracer records the original sharded layouts for validation.
+    if program_config is None:
+        if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
+            input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
