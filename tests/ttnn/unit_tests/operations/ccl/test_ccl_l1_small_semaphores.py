@@ -27,14 +27,33 @@ def print_l1_small_buffers(device, name):
     print_buffers(device, name, ttnn.BufferType.L1_SMALL)
 
 
+def run_ccl_op(ccl_op, tensor_b, use_l1_small):
+    if ccl_op == "all_gather":
+        return ttnn.all_gather(
+            tensor_b,
+            dim=3,
+            topology=ttnn.Topology.Linear,
+            use_l1_small_for_semaphores=use_l1_small,
+        )
+    elif ccl_op == "reduce_scatter":
+        return ttnn.reduce_scatter(
+            tensor_b,
+            dim=3,
+            topology=ttnn.Topology.Linear,
+            use_l1_small_for_semaphores=use_l1_small,
+        )
+    else:
+        raise ValueError(f"Unknown ccl_op: {ccl_op}")
+
+
 @pytest.mark.parametrize(
     "device_params",
-    # [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 1024}],
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 512}],
     indirect=True,
 )
+@pytest.mark.parametrize("ccl_op", ["all_gather", "reduce_scatter"])
 @pytest.mark.parametrize("use_l1_small", [False, True], ids=["l1_default", "l1_small"])
-def test_all_gather_l1_small_semaphores(mesh_device, device_params, use_l1_small):
+def test_ccl_l1_small_semaphores(mesh_device, device_params, ccl_op, use_l1_small):
     if mesh_device.get_num_devices() < 2:
         pytest.skip("Test requires at least 2 devices")
 
@@ -59,27 +78,29 @@ def test_all_gather_l1_small_semaphores(mesh_device, device_params, use_l1_small
     )
 
     # Tensor B: [512, 1024] in DRAM
+    # all_gather needs sharded input; reduce_scatter needs replicated input
+    # (reduce_scatter with sharded [1,1,512,128] on dim=3 across 8 devices
+    #  would produce [1,1,512,16] which is not tile-aligned)
+    if ccl_op == "all_gather":
+        mesh_mapper_b = ttnn.ShardTensorToMesh(mesh_device, dim=3)
+    else:
+        mesh_mapper_b = ttnn.ReplicateTensorToMesh(mesh_device)
     tensor_b = ttnn.from_torch(
         torch.randn(1, 1, 512, 1024),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        mesh_mapper=mesh_mapper_b,
     )
 
-    print_l1_buffers(mesh_device, "before_all_gather")
-    print_l1_small_buffers(mesh_device, "before_all_gather")
-    # All-gather — creates semaphores in L1 or L1_SMALL (cached in program cache)
-    logger.info(f"Running all_gather with use_l1_small_for_semaphores={use_l1_small}")
-    output = ttnn.all_gather(
-        tensor_b,
-        dim=3,
-        topology=ttnn.Topology.Linear,
-        use_l1_small_for_semaphores=use_l1_small,
-    )
-    print_l1_buffers(mesh_device, "after_all_gather")
-    print_l1_small_buffers(mesh_device, "after_all_gather")
+    print_l1_buffers(mesh_device, f"before_{ccl_op}")
+    print_l1_small_buffers(mesh_device, f"before_{ccl_op}")
+    # CCL op — creates semaphores in L1 or L1_SMALL (cached in program cache)
+    logger.info(f"Running {ccl_op} with use_l1_small_for_semaphores={use_l1_small}")
+    output = run_ccl_op(ccl_op, tensor_b, use_l1_small)
+    print_l1_buffers(mesh_device, f"after_{ccl_op}")
+    print_l1_small_buffers(mesh_device, f"after_{ccl_op}")
     ttnn.synchronize_device(mesh_device)
 
     # Free tensors A, B, and output
