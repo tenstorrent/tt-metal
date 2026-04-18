@@ -482,11 +482,21 @@ def _materialize_chain(items, edges: List[Tuple[int, int, int, int]], ops=None) 
 
 
 def _gather_inputs(ops) -> List:
-    """Deduplicate input tensors across ops by identity."""
+    """Deduplicate input tensors across ops by identity.
+
+    Raises ``RuntimeError`` if any input slot is ``None``, which means
+    ``run()`` was called without a preceding ``update()`` after a
+    persistent dispatch cleared the activation slots.
+    """
     seen: Set[int] = set()
     inputs: List = []
     for op in ops:
-        for t in op.input_tensors:
+        for i, t in enumerate(op.input_tensors):
+            if t is None:
+                raise RuntimeError(
+                    f"Input slot {i} of descriptor '{op.name}' is None. "
+                    f"Call update() on this descriptor before run()."
+                )
             tid = id(t)
             if tid not in seen:
                 inputs.append(t)
@@ -507,7 +517,13 @@ def _build_run_cache_key(container, ops, device):
 
 
 def _cleanup_persistent_ops(ops) -> None:
-    """Clear updated activation slots after persistent dispatch."""
+    """Clear updated activation slots after persistent dispatch.
+
+    Sets activation inputs to ``None`` (zero L1 pinning between calls)
+    and clears ``_updated_indices`` / ``output_tensors``.  The next
+    ``run()`` requires ``update()`` on every descriptor whose activations
+    were cleared; ``_gather_inputs`` enforces this with a ``RuntimeError``.
+    """
     for op in ops:
         updated = op._updated_indices
         if updated:
@@ -529,7 +545,9 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
     computation entirely.  Guarded by ``_cached_entry_gen == _BUILD_CACHE_GEN``
     so that ``clear_build_cache()`` invalidates stale entries without
     needing to track live containers.  After dispatch, updated activation
-    slots are cleared (zero L1 pinning between calls).
+    slots are cleared (zero L1 pinning between calls); the next ``run()``
+    requires ``update()`` on every descriptor whose activations were
+    consumed.
 
     **Inline warm path** (cache hit, first call on this container instance):
     computes the cache key from ``container._topo_fp`` and

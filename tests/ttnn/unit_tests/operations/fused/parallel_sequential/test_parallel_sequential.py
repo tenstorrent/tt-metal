@@ -1792,9 +1792,9 @@ class TestDeepSeekV3:
             q=rms_norm.rms_norm(program_config=s["q_pc"], **q_norm_kw),
             kv=rms_norm.rms_norm(program_config=s["kv_pc"], **kv_norm_kw),
         )
-        fused_persistent.q.update(tt_q_base)
-        fused_persistent.kv.update(tt_kv_base)
         for _ in range(2):
+            fused_persistent.q.update(tt_q_base)
+            fused_persistent.kv.update(tt_kv_base)
             fused_persistent.run()
 
         for _ in range(2):
