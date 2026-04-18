@@ -675,4 +675,95 @@ TEST_F(AsyncTeardownRaceFixture, SlowKernelAsyncTeardownRace) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Scenario G: Event recording on WORKER dispatch (1CQ) does not issue a
+// DISPATCH_S WAIT, verifying the regression fix for commit f1caf807b7.
+//
+// Background:
+//   Commit 9f260fb8d2 extended `issue_record_event_commands` to send a
+//   DISPATCH_S WAIT for all `dispatch_s_enabled` configs — including WORKER
+//   dispatch on T3K/N300 (1CQ, dispatch_s + dispatch_d on same Tensix core).
+//   On WORKER dispatch, dispatch_d's CLEAR_STREAM clears the stream register
+//   before dispatch_s reads it, so dispatch_s hangs forever at the WAIT.
+//
+//   Fix (f1caf807b7): gate the DISPATCH_S WAIT on `distributed_dispatcher`
+//   (true only for ETH 1CQ, where dispatch_s and dispatch_d are on DIFFERENT
+//   cores). For WORKER dispatch (DISTRIBUTED_DISPATCHER=0), no WAIT is issued.
+//
+// This test exercises `enqueue_record_event_to_host()` — the host-side call
+// that eventually calls `issue_record_event_commands` — on a 1CQ WORKER
+// dispatch mesh device. It must complete within 30s; any hang indicates the
+// DISPATCH_S WAIT guard is broken.
+//
+// Uses `AsyncTeardownRaceFixture` (1CQ) which selects WORKER dispatch on T3K.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownRaceFixture, WorkerDispatchEventRecordingDoesNotHang) {
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    auto device_range = MeshCoordinateRange(mesh_device_->shape());
+    auto& cq = mesh_device_->mesh_command_queue();
+
+    // Round 1: dispatch async, then record event to host.
+    // enqueue_record_event_to_host() → issue_record_event_commands() on the
+    // host side. On WORKER dispatch, the dispatch_s guard must NOT emit a WAIT.
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(device_range, std::move(program));
+        log_info(tt::LogTest, "[Scenario G] Round 1: async dispatch + enqueue_record_event_to_host");
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+
+        // This call triggers issue_record_event_commands. Pre-fix: hangs on WORKER
+        // dispatch because DISPATCH_S receives a WAIT after dispatch_d already
+        // cleared the stream. Post-fix: no DISPATCH_S WAIT issued for WORKER dispatch.
+        auto event = cq.enqueue_record_event_to_host();
+        (void)event;  // host already waited inside enqueue_record_event_to_host
+        log_info(tt::LogTest, "[Scenario G] Round 1: event completed — no DISPATCH_S hang");
+    }
+
+    // Round 2: a second independent program + event to check no residual state.
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(device_range, std::move(program));
+        log_info(tt::LogTest, "[Scenario G] Round 2: second async dispatch + event record");
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        auto event2 = cq.enqueue_record_event_to_host();
+        (void)event2;
+        log_info(tt::LogTest, "[Scenario G] Round 2: event completed — no accumulated state");
+    }
+
+    // Final: blocking dispatch + buffer round-trip to confirm clean CQ state.
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(device_range, std::move(program));
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+
+        uint32_t page_size = 1024;
+        auto local_config =
+            DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        auto global_shape = Shape2D{
+            static_cast<uint32_t>(mesh_device_->num_rows()),
+            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto dist_config = ShardedBufferConfig{
+            .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
+            .global_buffer_shape = global_shape,
+            .shard_shape = Shape2D{1, 1}};
+        auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
+        size_t n_words = page_size / sizeof(uint32_t) * mesh_device_->num_rows() * mesh_device_->num_cols();
+        std::vector<uint32_t> src(n_words);
+        for (size_t i = 0; i < n_words; i++) {
+            src[i] = static_cast<uint32_t>(0xC0DE0000 | (i & 0xFFFF));
+        }
+        EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
+        std::vector<uint32_t> dst;
+        EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
+        ASSERT_EQ(dst.size(), src.size()) << "[Scenario G] Buffer size mismatch";
+        for (size_t i = 0; i < src.size(); i++) {
+            ASSERT_EQ(dst[i], src[i]) << "[Scenario G] Data corruption at index " << i;
+        }
+        log_info(tt::LogTest, "[Scenario G] Buffer round-trip clean — WORKER dispatch event recording is safe");
+    }
+}
+
 }  // namespace tt::tt_metal::distributed::test
