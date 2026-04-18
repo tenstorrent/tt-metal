@@ -11,6 +11,8 @@ Uses HF DeepseekV3Model layer as the reference: creates a model with random weig
 extracts those weights into our TT state_dict format, and compares forward passes.
 """
 
+import time
+
 import pytest
 import torch
 from loguru import logger
@@ -173,12 +175,35 @@ def test_prefill_block(
 
     rank = ttnn.distributed_context_get_rank()
     logger.info("Running TtPrefillBlock forward...")
+    group_size = 58
+    group_start_time = time.time()
+
     for i in range(num_iterations):
+        # Start of new group
+        if i % group_size == 0:
+            group_start_time = time.time()
+            logger.info(
+                f"Rank: {rank} Starting group {i // group_size + 1} (iterations {i+1}-{min(i+group_size, num_iterations)})"
+            )
+
         logger.info(f"Rank: {rank} Iteration {i+1}/{num_iterations} start fwd pass")
+        iteration_start = time.time()
         tt_output, _ = block(tt_input, rope_tensors, tt_kvpe_cache, return_kv_cache=False)
         ttnn.deallocate(tt_output)
         ttnn.synchronize_device(mesh_device)
         ttnn.distributed_context_barrier()
-        logger.info(f"Rank: {rank} Iteration {i+1}/{num_iterations} completed")
+        iteration_end = time.time()
+        iteration_time = iteration_end - iteration_start
+        logger.info(f"Rank: {rank} Iteration {i+1}/{num_iterations} completed in {iteration_time:.3f}s")
+
+        # End of group or last iteration
+        if (i + 1) % group_size == 0 or i == num_iterations - 1:
+            group_end_time = time.time()
+            group_time = group_end_time - group_start_time
+            group_num = i // group_size + 1
+            actual_group_size = group_size if (i + 1) % group_size == 0 else (i % group_size) + 1
+            logger.info(
+                f"Rank: {rank} Group {group_num} ({actual_group_size} iterations) completed in {group_time:.3f}s"
+            )
 
     logger.info("Forward pass loop completed successfully")
