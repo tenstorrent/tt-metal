@@ -39,6 +39,14 @@ class TtParallelEmbedding(LightweightModule):
     """
 
     @staticmethod
+    def check_cache_complete(cache_path: Path) -> bool:
+        """Check if embedding weight cache files exist."""
+        if not list(cache_path.glob("embed_weight*.tensorbin")):
+            logger.debug("TTNN cache missing: embed_weight")
+            return False
+        return True
+
+    @staticmethod
     def _convert_and_cache_weight(
         torch_weight: torch.Tensor,
         vocab_size: int,
