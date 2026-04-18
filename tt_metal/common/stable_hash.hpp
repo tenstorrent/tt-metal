@@ -37,11 +37,6 @@ public:
     uint64_t digest() const;
 
 private:
-    // Pimpl: keeps the BLAKE3 type out of this public header, and lets us
-    // avoid reasoning about placement-new / implicit object lifetime for a
-    // C-struct embedded in a byte buffer. The cost is one small heap
-    // allocation per StableHasher, which is immaterial for this class's
-    // cache-key-derivation use cases.
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
