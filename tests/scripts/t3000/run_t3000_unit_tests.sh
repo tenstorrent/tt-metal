@@ -115,8 +115,11 @@ run_t3000_ttnn_tests() {
   # validates the ERISC race condition fixes on this branch. Keep this at the
   # top of the list so any new predecessor failure is caught early.
   # See tests/scripts/t3000/repro_ccl_cq0_hang.sh.
-  ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh ; fail+=$?
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn ; fail+=$?
+  # --solo: skip the predecessor (unit_tests_ttnn_ccl_ops) here — it runs again
+  # below at full coverage. Running it twice (641s each) consumed the entire
+  # budget before unit_tests_ttnn could complete.
+  ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh --solo ; fail+=$?
+  timeout 900 ./build/test/ttnn/unit_tests_ttnn ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_tensor ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; fail+=$?
