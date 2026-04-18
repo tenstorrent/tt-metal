@@ -24,8 +24,8 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
 
     // Convert to float for reciprocal computation
     // Handle 2^31 edge case where sign-magnitude conversion yields negative
-    sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
-    sfpi::vFloat b_f = sfpi::int32_to_float(b, 0);
+    sfpi::vFloat a_f = sfpi::int32_to_float(a, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat b_f = sfpi::int32_to_float(b, sfpi::RoundMode::NearestEven);
     v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
     v_endif;
     v_if(b_f < 0.0f) { b_f = TWO_POW_31; }
@@ -50,8 +50,8 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     sfpi::vInt r = a - qb;
 
     // Compute correction for approximation error: correction = |r| / b
-    sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
-    sfpi::vInt correction = sfpi::float_to_uint16(r_f * inv_b_f, 0);
+    sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), sfpi::RoundMode::NearestEven);
+    sfpi::vInt correction = sfpi::float_to_uint16(r_f * inv_b_f, sfpi::RoundMode::NearestEven);
 
     // Compute correction * b (full 32-bit result from 24-bit multiplies)
     sfpi::vInt tmp_lo = __builtin_rvtt_sfpmul24(correction.get(), b.get(), 0);
@@ -153,7 +153,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        result = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        result = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
     }
 
     return result;

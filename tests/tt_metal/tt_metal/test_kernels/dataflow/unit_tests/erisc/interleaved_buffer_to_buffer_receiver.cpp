@@ -18,7 +18,7 @@ void kernel_main() {
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
 
     constexpr auto dst_args = TensorAccessorArgs<1>();
-    const auto s = TensorAccessor(dst_args, dst_addr, page_size);
+    const auto s = TensorAccessor(dst_args, dst_addr);
     uint32_t elements_per_page = page_size / sizeof(std::uint32_t);
 
     experimental::Noc noc;

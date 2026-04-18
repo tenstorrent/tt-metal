@@ -98,12 +98,9 @@ void kernel_main() {
 
     const uint32_t sync_semaphore_addr = get_semaphore(sync_semaphore_id);
 
-    const auto dense_token_maps_addrgen =
-        TensorAccessor(dense_token_maps_ta_args, dense_token_maps_addr, dense_token_maps_page_size_bytes);
-    const auto token_counts_addrgen =
-        TensorAccessor(dense_token_counts_ta_args, dense_token_counts_addr, token_counts_page_size_bytes);
-    const auto token_activations_addrgen =
-        TensorAccessor(token_activations_ta_args, token_activations_addr, token_activations_page_size_bytes);
+    const auto dense_token_maps_addrgen = TensorAccessor(dense_token_maps_ta_args, dense_token_maps_addr);
+    const auto token_counts_addrgen = TensorAccessor(dense_token_counts_ta_args, dense_token_counts_addr);
+    const auto token_activations_addrgen = TensorAccessor(token_activations_ta_args, token_activations_addr);
 
     // wait for metadata to be ready
     auto* sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_semaphore_addr);

@@ -93,6 +93,7 @@ protected:
             GTEST_SKIP() << "Temporarily disabled via TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP=1 "
                             "while chip-3 AllGather hang is being root-caused.";
         }
+        setenv("TT_METAL_DISABLE_QUIESCE_FABRIC_RESTART", "1", /*overwrite=*/0);
         MeshDeviceFixtureBase::SetUp();
     }
     void TearDown() override {

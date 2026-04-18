@@ -311,8 +311,7 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
         constexpr int vector_mode_exp = (int)VectorMode::None;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
-                exp_packthread_tile<true, true, false, false, InputClamping::None, iterations>(
-                    dst_index++, vector_mode_exp);
+                exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
             }
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -686,7 +685,7 @@ static void sdpa_inner_loop_step(
     uint32_t q_index_offset = 0;
     uint32_t kt_index_offset = 0;
 
-    exp_packthread_tile_init<true, true, scale_fp32, InputClamping::None>();
+    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
 
     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
     cb_reserve_back(cb_qkt_im, Sq_chunk_t * KT_stride);
@@ -973,7 +972,7 @@ static void sdpa_inner_loop_step(
         // When Sq_chunk_t is not divisible by qktv_h, the last iteration handles the
         // remainder row(s) with a smaller V matmul height.
         constexpr uint32_t total_v_row_groups = qktv_q_num_subblocks + (has_qktv_remainder ? 1 : 0);
-        exp_packthread_tile_init<EXP_APPROX_MODE, false>();
+        exp_packthread_tile_init<EXP_APPROX_MODE>();
         for (uint32_t q_subblock = 1; q_subblock < total_v_row_groups; ++q_subblock) {
             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
             const bool is_remainder_iter = has_qktv_remainder && (q_subblock == qktv_q_num_subblocks);

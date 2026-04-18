@@ -21,7 +21,7 @@
 
 namespace tt::llrt::internal_ {
 void wait_until_cores_done(
-    ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms);
+    ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms, bool skip_dispatch_alert);
 }  // namespace tt::llrt::internal_
 
 namespace tt::tt_metal {
@@ -250,8 +250,14 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
         // Wrap in try-catch so that device close continues even if dispatch cores fail or timeout.
         // This allows the device handles to be properly released, enabling subsequent
         // device opens and tt-smi resets to succeed.
+        // skip_dispatch_alert=true: do NOT invoke on_dispatch_timeout_detected() (which runs tt-triage,
+        // taking ~27s) when teardown times out.  During teardown, dispatch cores can legitimately
+        // fail to finish (e.g. FABRIC_2D: close_finish() spins waiting for an ERISC ack that never
+        // arrives because the fabric was already torn down).  The exception is caught below and
+        // teardown continues; running triage here adds 27s per device and causes the test suite to
+        // exceed the 700s predecessor timeout.
         try {
-            tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
+            tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0, true);
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal,

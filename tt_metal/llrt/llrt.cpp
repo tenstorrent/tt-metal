@@ -266,6 +266,16 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& 
             core_status.data(), core_status.size(), {static_cast<size_t>(chip_id), core}, go_msg_addr & ~0x3);
         uint8_t run = core_status.view().signal();
         if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
+            // RUN_MSG_INIT is a valid transitional state on the INIT→GO→DONE path.
+            // A process killed mid-initialization leaves ETH dispatch cores with mailbox=INIT.
+            // This can be observed regardless of what run_state we're waiting for:
+            //   - waiting for GO:   predecessor killed before GO was issued
+            //   - waiting for DONE: stale ETH cores never progressed past INIT
+            // In both cases treat it as "not done yet" so the caller's timeout can fire
+            // and fall through to force-reset rather than crashing with TT_FATAL.
+            if (run == tt_metal::dev_msgs::RUN_MSG_INIT) {
+                return false;
+            }
             fprintf(
                 stderr,
                 "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",
@@ -313,7 +323,11 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
 }  // namespace
 
 void wait_until_cores_done(
-    tt::ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms) {
+    tt::ChipId device_id,
+    int run_state,
+    std::unordered_set<CoreCoord>& not_done_phys_cores,
+    int timeout_ms,
+    bool skip_dispatch_alert) {
     // poll the cores until the set of not done cores is empty
     [[maybe_unused]] int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
@@ -339,7 +353,9 @@ void wait_until_cores_done(
                 }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
 
-                tt::tt_metal::MetalContext::instance().on_dispatch_timeout_detected();
+                if (!skip_dispatch_alert) {
+                    tt::tt_metal::MetalContext::instance().on_dispatch_timeout_detected();
+                }
 
                 TT_THROW(
                     "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",

@@ -68,9 +68,11 @@ run_step() {
     echo "[repro] ${name}: $*" | tee -a "${log_file}"
     echo "[repro] log: ${log_file}" | tee -a "${log_file}"
     echo "================================================================" | tee -a "${log_file}"
-    # Hard wall-clock ceiling is 5 minutes per step; relies on in-process
+    # Hard wall-clock ceiling per step; relies on in-process
     # TT_METAL_OPERATION_TIMEOUT_SECONDS firing first for useful diagnostics.
-    timeout 300 "$@" 2>&1 | tee -a "${log_file}"
+    # 700s: unit_tests_ttnn_ccl_ops has 19 FabricSendRecv params (~24s each)
+    # + ReduceScatterSmall (~29s) = ~485s total; 700s gives safe headroom.
+    timeout 700 "$@" 2>&1 | tee -a "${log_file}"
     local rc="${PIPESTATUS[0]}"
     echo "[repro] ${name}: exit=${rc}" | tee -a "${log_file}"
     return "${rc}"
