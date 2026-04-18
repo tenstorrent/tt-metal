@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/common.h"
+#include "sanitizer/api.h"
 #include "llk_assert.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -38,7 +39,11 @@ ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __buil
         MATH((llk_math_reconfig_remap(true /*remap_enable*/)));
     }
 #endif
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
+    {
+        // Reconfiguring format here breaks the sanitizer's init/execute contract; silence those errors.
+        LLK_SAN_SILENT_ZONE();
+        PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
+    }
     PACK((
         llk_pack_untilize_init<block_ct_dim, full_ct_dim, false /*diagonal*/, narrow_row, row_num_datums, dense>(ocb)));
     PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false /*diagonal*/>()));
@@ -76,7 +81,11 @@ pack_untilize_dest_init_impl(
 // original behavior of this compatibility overload.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-    PACK((llk_pack_reconfig_data_format_disaggregated<DST_ACCUM_MODE>(ocb, face_r_dim, num_faces)));
+    {
+        // Reconfiguring format here breaks the sanitizer's init/execute contract; silence those errors.
+        LLK_SAN_SILENT_ZONE();
+        PACK((llk_pack_reconfig_data_format_disaggregated<DST_ACCUM_MODE>(ocb, face_r_dim, num_faces)));
+    }
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false /*diagonal*/, narrow_row, row_num_datums, dense>(
         ocb, face_r_dim, num_faces)));
 #pragma GCC diagnostic pop
