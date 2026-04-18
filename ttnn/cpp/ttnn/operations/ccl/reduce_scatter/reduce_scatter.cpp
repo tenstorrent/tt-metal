@@ -30,7 +30,8 @@ ttnn::Tensor reduce_scatter(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    bool use_l1_small_for_semaphores) {
     // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call reduce-scatter on cluster_axis=1, then
     // reduce-scatter on cluster_axis=0
     if (cluster_axis == std::nullopt) {
@@ -51,7 +52,8 @@ ttnn::Tensor reduce_scatter(
                     chunks_per_sync,
                     num_workers_per_link,
                     num_buffers_per_channel,
-                    compute_kernel_config);
+                    compute_kernel_config,
+                    use_l1_small_for_semaphores);
             }
             return tensor;
         }
@@ -93,7 +95,8 @@ ttnn::Tensor reduce_scatter(
                chunks_per_sync,
                num_workers_per_link,
                num_buffers_per_channel,
-               compute_kernel_config)
+               compute_kernel_config,
+               use_l1_small_for_semaphores)
         .at(1);  // first is the intermediate tensor
 }
 
