@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/common.h"
+#include "sanitizer/api.h"
 #include "llk_assert.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -68,9 +69,13 @@ ALWI void pack_untilize_dest_init(
 #ifdef ARCH_BLACKHOLE
     // Needed for setting swizzle_32b:
     MATH((llk_math_reconfig_remap(true)));
-#endif  // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
-    PACK(
-        (llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(ocb, face_r_dim, num_faces)));
+
+#endif // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
+    {
+        LLK_SAN_SILENT_ZONE();
+        PACK((llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(
+            ocb, face_r_dim, num_faces)));
+    }
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(
         ocb, face_r_dim, num_faces)));
     PACK((llk_init_packer_dest_offset_registers<true, false>()));
