@@ -766,4 +766,120 @@ TEST_F(AsyncTeardownRaceFixture, WorkerDispatchEventRecordingDoesNotHang) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Scenario H: quiesce_devices() with FABRIC_2D active — exercises Phase 2.5 ERISC termination.
+//
+// CRITICAL GAP FILLED: Scenarios A-G test FabricFirmwareInitializer::teardown() (device close
+// path). NONE test quiesce_and_restart_fabric_workers() — the Phase 2.5 fix that stopped the
+// AllGatherEthTxqTeardownRace hang.
+//
+// Root cause of the CI failure (AI-JOURNAL iter10):
+//   AllGather iter1 passes; iter2 hangs because quiesce_and_restart_fabric_workers() Phase 3
+//   calls configure_fabric_cores() which overwrites every active ERISC's L1 BEFORE the ERISC
+//   has finished draining its ETH TXQ. The ERISC then runs corrupted firmware, generates
+//   invalid NOC traffic at 0x880030060, and the next AllGather hangs in completion queue wait.
+//
+// Fix (Phase 2.5 in device.cpp): before Phase 3 (L1 overwrite), send TERMINATE to each active
+// ERISC channel and poll for EDMStatus::TERMINATED (500ms timeout). Only then overwrite L1.
+//
+// This test verifies Phase 2.5 directly:
+//   1. Open FABRIC_2D mesh device (ERISC EDM firmware running on all active channels).
+//   2. Dispatch a blank workload (async) — ERISC channels are live.
+//   3. Call quiesce_devices() — triggers quiesce_and_restart_fabric_workers() which MUST
+//      terminate ERISC channels (Phase 2.5) before overwriting their L1 (Phase 3).
+//   4. Repeat N times to amplify any race in the termination poll.
+//   5. Final blocking dispatch + buffer round-trip confirm no accumulated state corruption.
+//
+// Pass = all quiesce cycles complete + buffer matches in <30s.
+// Fail = hang (watchdog), crash in quiesce_and_restart_fabric_workers, or data corruption.
+//
+// Note: device stays OPEN between quiesce cycles (unlike Scenarios D/E which close + reopen).
+// This mirrors the actual AllGather use-case where a single MeshDevice session runs multiple
+// CCL iterations separated by quiesce_devices().
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DRepeatFixture, QuiesceDevicesExercisesPhase25ERISCTermination) {
+    constexpr int kCycles = 3;
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+
+    for (int cycle = 0; cycle < kCycles; cycle++) {
+        log_info(
+            tt::LogTest,
+            "[Scenario H] Cycle {}/{}: async dispatch + quiesce_devices() — exercises Phase 2.5",
+            cycle + 1,
+            kCycles);
+
+        // Dispatch async: ERISC EDM firmware is actively running.
+        // No Finish() — quiesce_devices() must wait internally AND terminate ERISC before L1 clear.
+        {
+            auto program = create_blank_program(cores);
+            auto workload = MeshWorkload();
+            workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+            auto& cq = mesh_device_->mesh_command_queue();
+            EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        }
+
+        // quiesce_devices() → quiesce_internal() → quiesce_and_restart_fabric_workers():
+        //   Phase 1: send TERMINATE to Tensix MUX cores (skipped if FabricTensixConfig::DISABLED)
+        //   Phase 2: poll Tensix MUX TERMINATED
+        //   Phase 2.5 (FIX): send TERMINATE to each ERISC channel and poll TERMINATED
+        //   Phase 3: configure_fabric_cores() — overwrite ERISC L1 with new firmware
+        //   Phase 4: wait for ERISC READY_FOR_TRAFFIC
+        //
+        // Pre-fix: Phase 3 ran without Phase 2.5 guard → ERISC still running when L1 cleared
+        //          → corrupted program → invalid NOC traffic → next dispatch hangs.
+        mesh_device_->quiesce_devices();
+
+        log_info(tt::LogTest, "[Scenario H] Cycle {}/{}: quiesce_devices() returned cleanly", cycle + 1, kCycles);
+    }
+
+    // Final verification: blocking dispatch must complete after N quiesce cycles.
+    // If Phase 2.5 is broken, one of the quiesce cycles above would have corrupted ERISC state
+    // and this dispatch would hang in completion_queue_wait_front (exit=124 in CI).
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario H] Final blocking dispatch after {} quiesce cycles", kCycles);
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    }
+
+    // Buffer round-trip: detect DRAM corruption from stale ERISC NOC writes.
+    // Without Phase 2.5, a zombie ERISC can write stale packet data to device DRAM at any
+    // time during Phase 3 or after, corrupting the buffer we're about to read back.
+    {
+        auto& cq = mesh_device_->mesh_command_queue();
+        uint32_t page_size = 1024;
+        auto local_config =
+            DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        auto global_shape = Shape2D{
+            static_cast<uint32_t>(mesh_device_->num_rows()),
+            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto dist_config = ShardedBufferConfig{
+            .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
+            .global_buffer_shape = global_shape,
+            .shard_shape = Shape2D{1, 1}};
+
+        auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
+        size_t n_words = page_size / sizeof(uint32_t) * mesh_device_->num_rows() * mesh_device_->num_cols();
+        std::vector<uint32_t> src(n_words);
+        for (size_t i = 0; i < n_words; i++) {
+            src[i] = static_cast<uint32_t>(0xA11E0000 | (i & 0xFFFF));
+        }
+        EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
+        std::vector<uint32_t> dst;
+        EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
+        ASSERT_EQ(dst.size(), src.size())
+            << "[Scenario H] Buffer size mismatch after " << kCycles << " quiesce cycles";
+        for (size_t i = 0; i < n_words; i++) {
+            ASSERT_EQ(dst[i], src[i])
+                << "[Scenario H] Data corruption at index " << i << " after " << kCycles << " quiesce cycles";
+        }
+        log_info(
+            tt::LogTest,
+            "[Scenario H] Buffer round-trip clean — Phase 2.5 ERISC termination working across {} quiesce cycles",
+            kCycles);
+    }
+}
+
 }  // namespace tt::tt_metal::distributed::test
