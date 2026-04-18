@@ -204,9 +204,9 @@ class TtDispatchModule(LightweightModule):
             num_links=self.num_links,
             topology=self.topology,
         )
-        logger.debug(f"Finished dispatch")
         ttnn.synchronize_device(self.mesh_device)
         ttnn.distributed_context_barrier()
+        logger.debug(f"Finished dispatch")
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape
         tt_dispatched_metadata_shape = tt_dispatch_metadata.shape
