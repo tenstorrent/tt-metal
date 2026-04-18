@@ -72,15 +72,9 @@ void issue_record_event_commands(
         MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
     tt::tt_metal::DeviceCommandCalculator calculator;
     for (uint32_t i = 0; i + 1 < num_worker_counters; ++i) {
-        if (distributed_dispatcher) {
-            calculator.add_dispatch_wait();  // DISPATCH_SUBORDINATE wait (forwards worker count to DISPATCH_MASTER)
-        }
         calculator.add_dispatch_wait();
     }
     if (num_worker_counters > 0) {
-        if (distributed_dispatcher) {
-            calculator.add_dispatch_wait();  // DISPATCH_SUBORDINATE wait before the final prefetch-stall
-        }
         calculator.add_dispatch_wait_with_prefetch_stall();
     }
 
@@ -144,26 +138,13 @@ void issue_record_event_commands(
                                     (clear_count ? CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM : 0) |
                                     ((i == num_worker_counters - 1) ? CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER : 0);
 
-        if (distributed_dispatcher) {
-            // In distributed-dispatcher mode (ETH 1CQ), DISPATCH_S (subordinate) and DISPATCH_D
-            // (master) run on DIFFERENT cores. DISPATCH_S owns the worker-done stream registers;
-            // DISPATCH_D cannot see them directly. We must first send a wait to DISPATCH_S so it
-            // forwards the current worker count to DISPATCH_D, then send the wait to DISPATCH_D so
-            // it blocks until that count is reached. We use WAIT_STREAM only (no CLEAR_STREAM) so
-            // cumulative worker tracking on DISPATCH_S is preserved.
-            //
-            // For WORKER dispatch (dispatch_s_enabled=true, distributed_dispatcher=false),
-            // DISPATCH_S and DISPATCH_D run on the SAME Tensix core (NCRISC + BRISC) and share
-            // stream registers. Workers write done signals to the shared stream; DISPATCH_D reads
-            // it directly. Sending a DISPATCH_S wait here would race: DISPATCH_D might clear the
-            // shared stream before DISPATCH_S reads it, causing DISPATCH_S to spin forever.
-            command_sequence.add_dispatch_wait(
-                CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
-                0,
-                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                expected_num_workers_completed[offset_index],
-                DispatcherSelect::DISPATCH_SUBORDINATE);
-        }
+        // In distributed-dispatcher mode (ETH 1CQ), DISPATCH_S forwards worker completion
+        // counts to DISPATCH_D continuously in its cb_acquire_pages_dispatch_s() loop.  An
+        // explicit DISPATCH_S WAIT here is unnecessary — DISPATCH_D's own WAIT_STREAM will
+        // block until DISPATCH_S has forwarded the required count.  Inserting a DISPATCH_S
+        // WAIT would cause a hard timeout whenever workers are slow (the tight spin loop in
+        // process_dispatch_s_wait_cmd does not call update_worker_completion_count_on_dispatch_d,
+        // so other streams stall, and the 5-second CI watchdog fires).
 
         if (i == num_worker_counters - 1) {
             command_sequence.add_dispatch_wait_with_prefetch_stall(
