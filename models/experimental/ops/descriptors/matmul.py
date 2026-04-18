@@ -115,10 +115,9 @@ def matmul(
     )
 
     return OpDescriptor(
-        program_descriptor,
-        {"input_a": input_a, "input_b": input_b},
-        list(output_tensors),
-        "matmul",
+        descriptor=program_descriptor,
+        input_tensors={"input_a": input_a, "input_b": input_b},
+        output_tensors=list(output_tensors),
     )
 
 

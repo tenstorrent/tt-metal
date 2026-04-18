@@ -57,7 +57,6 @@ def slice(
         descriptor=descriptor,
         input_tensors={"input_tensor": input_tensor},
         output_tensors=[output_tensor],
-        name="slice",
     )
 
 

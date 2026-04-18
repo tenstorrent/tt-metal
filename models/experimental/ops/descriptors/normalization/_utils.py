@@ -102,7 +102,6 @@ def _create_layernorm_op_descriptor(
 
     outputs = LazyOutputList([None], _alloc_outputs)
     cr_arg = None if input_tensor.is_sharded() else core_range_set
-    op_name = "rms_norm" if norm_type == ttnn.LayerNormType.RMSNORM else "layer_norm"
 
     def _run_factory():
         out = outputs[0]
@@ -113,6 +112,5 @@ def _create_layernorm_op_descriptor(
         factory_fn=_run_factory,
         input_tensors=inputs,
         output_tensors=outputs,
-        name=op_name,
         program_cache_key=program_cache_key,
     )

@@ -502,8 +502,11 @@ class OpDescriptor:
                             input_names=input_names_tuple,
                         )
 
-                    # Cache miss — full construction.
+                    # Cache miss — full construction.  The decorator
+                    # owns the name; override whatever the factory set.
                     desc = fn(*args, **kwargs)
+                    if name:
+                        desc.name = name
 
                     # Populate cache for next call.
                     input_name_map = []
