@@ -73,7 +73,6 @@ class TtConv2D:
             shard_layout=shard_layout,
             deallocate_activation=False,
             output_layout=ttnn.TILE_LAYOUT,
-            reallocate_halo_output=True,
         )
         if act_block_h_override is not None:
             self.conv_config.act_block_h_override = act_block_h_override
