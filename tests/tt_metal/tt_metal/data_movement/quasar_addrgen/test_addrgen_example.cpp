@@ -54,6 +54,11 @@ bool run_addrgen_test(
 constexpr auto k1D = "tests/tt_metal/tt_metal/data_movement/quasar_addrgen/kernels/addrgen_1d_example.cpp";
 constexpr auto k2D = "tests/tt_metal/tt_metal/data_movement/quasar_addrgen/kernels/addrgen_2d_example.cpp";
 constexpr auto kFace = "tests/tt_metal/tt_metal/data_movement/quasar_addrgen/kernels/addrgen_face_example.cpp";
+constexpr auto kInterleaved =
+    "tests/tt_metal/tt_metal/data_movement/quasar_addrgen/kernels/addrgen_interleaved_example.cpp";
+constexpr auto kIm2Col = "tests/tt_metal/tt_metal/data_movement/quasar_addrgen/kernels/addrgen_im2col_example.cpp";
+constexpr auto kIm2ColDilation1 =
+    "tests/tt_metal/tt_metal/data_movement/quasar_addrgen/kernels/addrgen_im2col_dilation1_example.cpp";
 
 }  // namespace unit_tests::dm::quasar_addrgen
 
@@ -133,6 +138,33 @@ TEST_F(QuasarAddrgenOps, Face_Both) {
     }
     EXPECT_TRUE(
         unit_tests::dm::quasar_addrgen::run_addrgen_test(devices_[0], unit_tests::dm::quasar_addrgen::kFace, 1, 1, 32));
+}
+
+TEST_F(QuasarAddrgenOps, Interleaved_Banking) {
+    if (unit_tests::dm::quasar_addrgen::should_skip_test()) {
+        GTEST_SKIP() << "Test requires Quasar simulator";
+    }
+    // 4 banks x 10 inner steps = 40 total addresses
+    EXPECT_TRUE(unit_tests::dm::quasar_addrgen::run_addrgen_test(
+        devices_[0], unit_tests::dm::quasar_addrgen::kInterleaved, 0, 0, 40));
+}
+
+TEST_F(QuasarAddrgenOps, Im2Col_General) {
+    if (unit_tests::dm::quasar_addrgen::should_skip_test()) {
+        GTEST_SKIP() << "Test requires Quasar simulator";
+    }
+    // Image 8x4, kernel 3x3, dilation=1, stride=1: 2 out_rows x 6 out_cols x 9 patch = 108
+    EXPECT_TRUE(unit_tests::dm::quasar_addrgen::run_addrgen_test(
+        devices_[0], unit_tests::dm::quasar_addrgen::kIm2Col, 0, 0, 108));
+}
+
+TEST_F(QuasarAddrgenOps, Im2Col_Dilation1_FaceLoop) {
+    if (unit_tests::dm::quasar_addrgen::should_skip_test()) {
+        GTEST_SKIP() << "Test requires Quasar simulator";
+    }
+    // Same image/kernel as Im2Col_General, face loop replaces the SW output-row loop
+    EXPECT_TRUE(unit_tests::dm::quasar_addrgen::run_addrgen_test(
+        devices_[0], unit_tests::dm::quasar_addrgen::kIm2ColDilation1, 0, 0, 108));
 }
 
 }  // namespace tt::tt_metal

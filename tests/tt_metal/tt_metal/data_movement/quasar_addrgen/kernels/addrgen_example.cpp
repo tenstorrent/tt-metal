@@ -66,7 +66,9 @@ void kernel_main() {
         setup_dest_outer_loop_addrgen_0(dst_2d_outer_cfg);
     }
 
-    /* Main loop to generate addresses */
+    /* For real NOC transfers peek/pop are not needed — replace this loop body with:
+     *   push_both_addrgen_0();
+     *   issue_transaction_cmdbuf_0; */
     for (uint32_t i = 0; i < num_of_addresses; ++i) {
         uint64_t src_addr = peek_src_addrgen_0();
         uint64_t dest_addr = peek_dest_addrgen_0();

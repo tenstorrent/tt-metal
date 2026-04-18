@@ -34,4 +34,6 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     matmul/test_matmul_1d.cpp
     matmul/test_matmul_1d_v2.cpp
     quasar_addrgen/test_addrgen_example.cpp
+    quasar_im2col/test_im2col_example.cpp
+    quasar_idma/test_idma_example.cpp
 )

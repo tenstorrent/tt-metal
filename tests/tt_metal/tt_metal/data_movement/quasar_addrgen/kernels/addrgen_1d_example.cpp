@@ -35,15 +35,12 @@ void kernel_main() {
         setup_dest_inner_loop_addrgen_0(dst_stride, num_of_addresses * dst_stride);
     }
 
+    /* For real NOC transfers peek/pop are not needed — replace this loop body with:
+     *   push_both_addrgen_0();
+     *   issue_transaction_cmdbuf_0; */
     for (uint32_t i = 0; i < num_of_addresses; ++i) {
-        /* If used with NOC, there is no need to first read addresses from address generator */
         uint64_t src_addr = peek_src_addrgen_0();
         uint64_t dest_addr = peek_dest_addrgen_0();
-        /* We need to use push if we need addresses in cmd buffers
-        if not needed, pop will just make hw generate new address and discard them */
-        // push_both_addrgen_0();
-        /* This will issue the transaction command buffer with the addresses */
-        // issue_transaction_cmdbuf_0
         pop_src_addrgen_0();
         pop_dest_addrgen_0();
         DPRINT << "  Source address: " << HEX() << (uint32_t)src_addr << " Destination address: " << HEX()
