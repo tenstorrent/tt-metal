@@ -91,22 +91,6 @@ class MoEGate(AbstractModule):
         Returns:
             ModelState containing input_indices, output_indices and output_tensor for each MoE layer
         """
-        grid = mesh_device.compute_with_storage_grid_size()
-        num_device_cores = grid.x * grid.y
-        core_grid = ttnn.num_cores_to_corerangeset(
-            num_device_cores,
-            ttnn.CoreCoord(grid.x, grid.y),
-            row_wise=True,
-        )
-        input_output_shard_shape = (32, 32)
-        input_output_shard_spec = ttnn.ShardSpec(
-            core_grid,
-            input_output_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        input_output_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_output_shard_spec
-        )
 
         ttnn_output_tensor = ttnn.zeros(
             shape=(1, 32, 32),
