@@ -410,7 +410,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         lightweight_mask ? (lightweight_causal ? 2 : 1) : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
-    uint32_t out0_t = Sq_chunk_t * vDHt;
+    uint32_t out0_t = Sq_chunk_t * vDHt;  // finalized below once out_out_subblock_h is known
     uint32_t scale_tiles = 1;
     uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
     uint32_t attention_sink_tiles = use_attention_sink ? Sq_chunk_t : 0;  // One column vector per Q chunk
@@ -439,6 +439,24 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
+
+    // Streaming path: cb_out is filled / drained one row-group at a time, so size it to a
+    // small ping-pong of groups rather than the full Q chunk. Mirror the kernel's qktv_h bump
+    // (compute_streaming.hpp: h=1 with 2*w<=dst_size and Sq_chunk_t>=2 gets bumped to 2).
+    const uint32_t streaming_effective_qktv_h =
+        (out_out_subblock_h == 1 && 2 * out_out_subblock_w <= dst_size && Sq_chunk_t >= 2) ? 2u : out_out_subblock_h;
+    // 2 groups = pure ping-pong (1 pending SALAD slot + 1 matmul-in-flight slot), no writer slack.
+    // Minimum sizing that preserves the reserve invariant (cb_size >= qktv_h*vDHt + cur_h*vDHt).
+    constexpr uint32_t streaming_out0_groups = 2;
+    if (use_streaming_compute) {
+        out0_t = streaming_out0_groups * streaming_effective_qktv_h * vDHt;
+    }
+    log_debug(
+        tt::LogOp,
+        "cb_out streaming: groups={} qktv_h_eff={} out0_t(final)={}",
+        streaming_out0_groups,
+        streaming_effective_qktv_h,
+        out0_t);
 
     log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
@@ -577,7 +595,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
         sliding_window_size.value_or(0),
-        (std::uint32_t)(lightweight_mask),  // arg 20: lightweight mask (causal or streaming padded)
+        (std::uint32_t)(lightweight_mask),       // arg 20: lightweight mask (causal or streaming padded)
+        (std::uint32_t)(use_streaming_compute),  // arg 21: enable row-grouped cb_out drain
+        out_out_subblock_h,                      // arg 22: host sbh for row-grouped drain
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);

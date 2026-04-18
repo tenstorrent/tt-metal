@@ -864,7 +864,13 @@ static void sdpa_inner_loop_step(
 
         // V wait deferred: don't block here. The sub_exp drain loop below
         // doesn't touch V, so the reader's V DMA can overlap with the drain.
-        cb_reserve_back(out_cb, qktv_output_num_tiles);
+        // Per-group reserve: cb_out is a 2-slot ping-pong (see host `streaming_out0_groups`).
+        // At any point we hold at most two slots — one pending SALAD slot (previous group)
+        // and one matmul-in-flight slot (current group).
+        // qktv_output_num_tiles stays defined for downstream callers that reference it,
+        // but we reserve a slot at a time here instead of the whole chunk.
+        (void)qktv_output_num_tiles;
+        cb_reserve_back(out_cb, qktv_h * vDHt);
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
         {
@@ -999,6 +1005,14 @@ static void sdpa_inner_loop_step(
             } else {
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
             }
+            // Two slots touched from current wr_ptr: previous group (pending SALAD) at
+            // offset [0 .. qktv_h*vDHt) and the current matmul at offset
+            // [qktv_h*vDHt .. qktv_h*vDHt + cur_h*vDHt). cb_reserve_back only guarantees
+            // N tiles of free space ahead of wr_ptr, so we must reserve the full span
+            // we're about to write, not just the new slot. cb_out is sized to exactly
+            // this span (2 groups, see host `streaming_out0_groups`), so this correctly
+            // back-pressures against the writer instead of deadlocking.
+            cb_reserve_back(out_cb, (qktv_h + cur_h) * vDHt);
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;

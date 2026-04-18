@@ -1104,6 +1104,77 @@ void write_block(
     cb_pop_front(cb_out, out_chunk_tiles);
 }
 
+// Row-grouped drain: waits/pops sbh tile-rows at a time, so cb_out can be sized to a small
+// multiple of sbh*cols instead of the full Q chunk. Compute may push groups larger than sbh
+// (e.g. qktv_h=2 while host sbh=1) — cb_wait_front is >= so we still unblock correctly and
+// pop sbh at a time regardless of push granularity.
+//
+// total_rows: rows compute actually pushes (= Sq_chunk_t). write_rows: rows to emit to DRAM
+// (capped at valid_Sqt for padded chunks). Rows in [write_rows, total_rows) are popped but
+// not written, so the CB still drains completely and compute doesn't deadlock on reserve.
+template <typename TensorAccessorType>
+void write_block_row_grouped(
+    const TensorAccessorType& out_writer,
+    const uint32_t cb_out,
+    const uint32_t total_rows,
+    const uint32_t write_rows,
+    const uint32_t cols,
+    const uint32_t out_tile_id,
+    const uint32_t tile_bytes,
+    const uint32_t sbh,
+    const uint32_t barrier_threshold) {
+    const uint32_t row_tiles = sbh * cols;
+    const uint32_t num_row_groups = total_rows / sbh;
+    const uint32_t remainder_rows = total_rows - num_row_groups * sbh;
+    uint32_t tile_id = out_tile_id;
+    uint32_t barrier_count = 0;
+    uint32_t rows_drained = 0;
+
+    for (uint32_t rg = 0; rg < num_row_groups; ++rg) {
+        cb_wait_front(cb_out, row_tiles);
+        uint32_t l1_read_addr = get_read_ptr(cb_out);
+        for (uint32_t r = 0; r < sbh; ++r) {
+            if (rows_drained < write_rows) {
+                for (uint32_t col = 0; col < cols; ++col) {
+                    noc_async_write_tile(tile_id, out_writer, l1_read_addr + col * tile_bytes);
+                    ++tile_id;
+                    if (++barrier_count == barrier_threshold) {
+                        noc_async_writes_flushed();
+                        barrier_count = 0;
+                    }
+                }
+            }
+            l1_read_addr += cols * tile_bytes;
+            ++rows_drained;
+        }
+        // Flush before pop so compute can safely reuse the L1 slot.
+        noc_async_writes_flushed();
+        cb_pop_front(cb_out, row_tiles);
+    }
+    if (remainder_rows) {
+        const uint32_t tail_tiles = remainder_rows * cols;
+        cb_wait_front(cb_out, tail_tiles);
+        uint32_t l1_read_addr = get_read_ptr(cb_out);
+        for (uint32_t r = 0; r < remainder_rows; ++r) {
+            if (rows_drained < write_rows) {
+                for (uint32_t col = 0; col < cols; ++col) {
+                    noc_async_write_tile(tile_id, out_writer, l1_read_addr + col * tile_bytes);
+                    ++tile_id;
+                    if (++barrier_count == barrier_threshold) {
+                        noc_async_writes_flushed();
+                        barrier_count = 0;
+                    }
+                }
+            }
+            l1_read_addr += cols * tile_bytes;
+            ++rows_drained;
+        }
+        noc_async_writes_flushed();
+        cb_pop_front(cb_out, tail_tiles);
+    }
+    noc_async_write_barrier();
+}
+
 template <uint32_t tile_bytes>
 void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t source_tile_addr) {
     /*
