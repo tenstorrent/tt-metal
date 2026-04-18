@@ -114,6 +114,8 @@ class MoEGate(AbstractModule):
             ModelState containing input_indices, output_indices and output_tensor for each MoE layer
         """
 
+        grid = mesh_device.compute_with_storage_grid_size()
+        num_device_cores = grid.x * grid.y
         ttnn_output_tensor = ttnn.zeros(
             shape=(1, 32, 32),
             dtype=ttnn.bfloat16,
