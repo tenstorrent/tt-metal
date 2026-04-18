@@ -52,6 +52,6 @@ ALWI void bitwise_xor_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void binary_bitwise_tile_init() { MATH((llk_math_eltwise_binary_sfpu_bitwise_init<APPROX>())); }
+ALWI void binary_bitwise_tile_init() { MATH((llk_math_eltwise_binary_sfpu_bitwise_init())); }
 
 }  // namespace ckernel

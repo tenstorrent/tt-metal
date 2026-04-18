@@ -34,7 +34,7 @@ inline void pack_init_activation() {};
 
 template <>
 inline void pack_init_activation<MoEActivationFunction::SWIGLU>() {
-    PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
+    PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
 };
 
 template <>
@@ -56,8 +56,8 @@ inline void pack_compute_activation<MoEActivationFunction::SILU>() {
 
 template <>
 inline void pack_compute_activation<MoEActivationFunction::SWIGLU>() {
-    PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(0, 1, 0)));
-    PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(2, 3, 2)));
+    PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(0, 1, 0)));
+    PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
 };
 
 }  // namespace detail

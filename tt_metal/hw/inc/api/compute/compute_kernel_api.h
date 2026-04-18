@@ -182,7 +182,7 @@ ALWI void tanh_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void signbit_tile_init() { MATH((llk_math_eltwise_unary_sfpu_signbit_init<APPROX>())); }
+ALWI void signbit_tile_init() { MATH((llk_math_eltwise_unary_sfpu_signbit_init())); }
 
 // clang-format off
 /**
@@ -203,7 +203,7 @@ ALWI void signbit_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_signbi
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void signbit_tile_int32_init() { MATH((llk_math_eltwise_unary_sfpu_signbit_int32_init<APPROX>())); }
+ALWI void signbit_tile_int32_init() { MATH((llk_math_eltwise_unary_sfpu_signbit_int32_init())); }
 
 // clang-format off
 /**
@@ -240,7 +240,7 @@ ALWI void abs_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs<APPROX
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void abs_tile_init() { MATH((llk_math_eltwise_unary_sfpu_abs_init<APPROX>())); }
+ALWI void abs_tile_init() { MATH((llk_math_eltwise_unary_sfpu_abs_init())); }
 
 // clang-format off
 /**
@@ -279,7 +279,7 @@ ALWI void sign_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_sign<APPR
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sign_tile_init() { MATH((llk_math_eltwise_unary_sfpu_sign_init<APPROX>())); }
+ALWI void sign_tile_init() { MATH((llk_math_eltwise_unary_sfpu_sign_init())); }
 
 // clang-format off
 /**
@@ -300,7 +300,7 @@ ALWI void square_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_square<
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void square_tile_init() { MATH((llk_math_eltwise_unary_sfpu_square_init<APPROX>())); }
+ALWI void square_tile_init() { MATH((llk_math_eltwise_unary_sfpu_square_init())); }
 
 // clang-format off
 /**
@@ -321,7 +321,7 @@ ALWI void tiled_prod_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_til
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void tiled_prod_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tiled_prod_init<APPROX>())); }
+ALWI void tiled_prod_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tiled_prod_init())); }
 
 // POWER : y = x^(const param0)
 // clang-format off
@@ -346,7 +346,7 @@ ALWI void power_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPROX>())); }
+ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init())); }
 
 // POWER_ITERATIVE : y = x^(const param0)
 // clang-format off
@@ -373,7 +373,7 @@ ALWI void power_iterative_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void power_iterative_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_iterative_init<APPROX>())); }
+ALWI void power_iterative_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_iterative_init())); }
 
 // clang-format off
 // exp2 : y = 2 ^ x  ==> [y = exp(x * log(2))]
@@ -420,7 +420,7 @@ ALWI void heaviside_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void heaviside_tile_init() { MATH((llk_math_eltwise_unary_sfpu_heaviside_init<APPROX>())); }
+ALWI void heaviside_tile_init() { MATH((llk_math_eltwise_unary_sfpu_heaviside_init())); }
 
 // expm1 : (exp(x) - 1)
 // clang-format off
@@ -677,7 +677,8 @@ ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
         "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
 
     // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
-    MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst, ct_dim, rt_dim, VectorMode::RC_custom)));
+    MATH((llk_math_eltwise_unary_sfpu_reduce<pool_type, reduce_dim, format>(
+        idst, ct_dim, rt_dim, VectorMode::RC_custom)));
 }
 
 /**
@@ -698,7 +699,7 @@ ALWI void sfpu_reduce_init() {
             format == DataFormat::UInt16 || format == DataFormat::Float16_b,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
 
-    MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, pool_type, format>()));
+    MATH((llk_math_eltwise_unary_sfpu_reduce_init<pool_type, format>()));
 }
 
 // clang-format off
@@ -795,7 +796,7 @@ ALWI void unary_max_int32_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_max_int32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_max_int32_init<APPROX>())); }
+ALWI void unary_max_int32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_max_int32_init())); }
 
 // unary_max : if x > value --> x, else value
 // clang-format off
@@ -820,7 +821,7 @@ ALWI void unary_max_uint32_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_max_uint32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_max_uint32_init<APPROX>())); }
+ALWI void unary_max_uint32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_max_uint32_init())); }
 
 // unary_max : if x > value --> x, else value
 // clang-format off
@@ -845,7 +846,7 @@ ALWI void unary_max_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_max_init<APPROX>())); }
+ALWI void unary_max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_max_init())); }
 
 // clang-format off
 /**
@@ -869,7 +870,7 @@ ALWI void alt_complex_rotate90_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void alt_complex_rotate90_tile_init() { MATH((llk_math_eltwise_unary_sfpu_alt_complex_rotate90_init<APPROX>())); }
+ALWI void alt_complex_rotate90_tile_init() { MATH((llk_math_eltwise_unary_sfpu_alt_complex_rotate90_init())); }
 
 // unary_min : if x < value --> x, else value
 // clang-format off
@@ -894,7 +895,7 @@ ALWI void unary_min_int32_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_min_int32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_min_int32_init<APPROX>())); }
+ALWI void unary_min_int32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_min_int32_init())); }
 
 // unary_min : if x < value --> x, else value
 // clang-format off
@@ -919,7 +920,7 @@ ALWI void unary_min_uint32_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_min_uint32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_min_uint32_init<APPROX>())); }
+ALWI void unary_min_uint32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_min_uint32_init())); }
 
 // unary_min : if x < value --> x, else value
 // clang-format off
@@ -944,7 +945,7 @@ ALWI void unary_min_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_min_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_min_init<APPROX>())); }
+ALWI void unary_min_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_min_init())); }
 
 ALWI uint32_t get_compute_special_value_flags() {
     uint32_t ret_val = 0;

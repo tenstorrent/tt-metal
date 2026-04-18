@@ -9,9 +9,8 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_sub_int_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>();
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8, DataFormat DATA_FORMAT, bool SIGN_MAGNITUDE_FORMAT = false>
@@ -22,7 +21,7 @@ inline void llk_math_eltwise_binary_sfpu_sub_int(
         "Unsupported data format for sub_int. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::_sub_int_<APPROXIMATE, ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>,
         dst_index0,
         dst_index1,
