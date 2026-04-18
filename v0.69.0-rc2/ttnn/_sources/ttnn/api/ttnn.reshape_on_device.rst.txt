@@ -1,0 +1,8 @@
+﻿ttnn.reshape\_on\_device
+========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.reshape_on_device:
+
+.. autooperation:: ttnn.reshape_on_device
