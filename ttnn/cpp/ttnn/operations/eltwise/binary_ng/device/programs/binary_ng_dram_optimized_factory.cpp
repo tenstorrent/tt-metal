@@ -16,6 +16,14 @@
 
 #include <tt-metalium/work_split.hpp>
 
+#include <tt-metalium/dispatch_core_query.hpp>
+
+#include <cstdlib>
+#include <limits>
+#include <optional>
+#include <unordered_set>
+#include <algorithm>
+
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
@@ -150,6 +158,13 @@ std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
         return "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id";
     }
 
+    /*
+    The problem: that "optimal DRAM bank → logical worker" mapping is a fixed physical layout. When dispatch_core_axis =
+    COL, the fast‑dispatch firmware reserves a column of Tensix cores; if any of the DRAM‑bank‑adjacent workers happen
+    to land in that reserved column, the subsequent CreateKernel placement collides with a dispatch core and
+    ProgramImpl::compile fatally asserts. In the ROW configuration those same workers are outside the dispatch row, so
+    the identical program compiles fine. That's exactly why only the COL parametrization fails.
+    */
     if (!operation_attributes.memory_config.is_dram()) {
         return "Memory config must be DRAM";
     }
@@ -232,10 +247,79 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
 
     auto all_worker_cores_ordered =
         device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
+
+    // The DRAM-bank-adjacent worker list is a fixed physical layout. Depending on DispatchCoreAxis
+    // (ROW vs. COL), some of those cores can be reserved as dispatch cores and are therefore both
+    // illegal for kernel placement and outside the compute-with-storage grid. Build the set of
+    // available compute cores from compute_with_storage_grid_size() (which already excludes
+    // dispatch-reserved rows/columns), optionally subtract any additional known dispatch cores,
+    // and, for any DRAM-bank worker that is not usable or is a duplicate, substitute the nearest
+    // free worker core so that every DRAM bank still has a 1:1 core assignment.
+    const auto compute_grid = device->compute_with_storage_grid_size();
+    const auto& dispatch_cores = tt::tt_metal::get_logical_dispatch_cores_on_user_chips();
+
+    std::vector<CoreCoord> available_workers_vec;
+    available_workers_vec.reserve(compute_grid.x * compute_grid.y);
+    for (uint32_t y = 0; y < compute_grid.y; ++y) {
+        for (uint32_t x = 0; x < compute_grid.x; ++x) {
+            CoreCoord w{x, y};
+            if (std::ranges::find(dispatch_cores, w) == dispatch_cores.end()) {
+                available_workers_vec.push_back(w);
+            }
+        }
+    }
+    std::unordered_set<CoreCoord> available_set(available_workers_vec.begin(), available_workers_vec.end());
+
+    auto find_nearest_free_worker = [&](const CoreCoord& target,
+                                        const std::unordered_set<CoreCoord>& used) -> std::optional<CoreCoord> {
+        std::optional<CoreCoord> best;
+        int best_dist = std::numeric_limits<int>::max();
+        int best_dx = std::numeric_limits<int>::max();
+        for (const auto& w : available_workers_vec) {
+            if (used.contains(w)) {
+                continue;
+            }
+            int dx = std::abs(static_cast<int>(w.x) - static_cast<int>(target.x));
+            int dy = std::abs(static_cast<int>(w.y) - static_cast<int>(target.y));
+            int dist = dx + dy;
+            // Prefer the closest core; on ties prefer the one with the smallest column delta
+            // (DRAM banks run along columns on WH/BH, so staying in the same row preserves locality).
+            if (dist < best_dist || (dist == best_dist && dx < best_dx)) {
+                best_dist = dist;
+                best_dx = dx;
+                best = w;
+            }
+        }
+        return best;
+    };
+
+    std::unordered_set<CoreCoord> used_cores;
     std::vector<CoreRange> core_ranges;
     core_ranges.reserve(all_worker_cores_ordered.size());
     for (const auto& c : all_worker_cores_ordered) {
-        core_ranges.emplace_back(CoreCoord(c.x, c.y), CoreCoord(c.x, c.y));
+        CoreCoord chosen = c;
+        const bool is_reserved = !available_set.contains(c);
+        const bool is_duplicate = used_cores.contains(c);
+        if (is_reserved || is_duplicate) {
+            auto replacement = find_nearest_free_worker(c, used_cores);
+            TT_FATAL(
+                replacement.has_value(),
+                "No free worker core available to substitute for DRAM-bank-adjacent core ({}, {}){}.",
+                c.x,
+                c.y,
+                is_reserved ? " (reserved as dispatch core)" : " (duplicate)");
+            log_warning(
+                tt::LogOp,
+                "DRAM-bank-adjacent core ({}, {}) is {}; substituting nearest free worker ({}, {}).",
+                c.x,
+                c.y,
+                is_reserved ? "reserved as dispatch" : "already used",
+                replacement->x,
+                replacement->y);
+            chosen = *replacement;
+        }
+        used_cores.insert(chosen);
+        core_ranges.emplace_back(chosen, chosen);
     }
     auto dram_optimal_cores = CoreRangeSet(core_ranges);
 
@@ -253,7 +337,31 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
         args.input_tensor_b.has_value() ? datatype_to_dataformat_converter(args.input_tensor_b->dtype()) : dtype;
     const auto c_data_format = datatype_to_dataformat_converter(output.dtype());
     bool fp32_dest_acc_en = is_fp32_dest_acc_en(dtype, b_data_format, c_data_format);
-    constexpr uint32_t num_batches = 2;  // perf tuning parameter, default  = 2
+
+    /*
+    WH NOC_MAX_BURST_SIZE = 8192 bytes (single‑packet limit).
+    For bf8: single_tile_size = 1088 → num_tiles_per_batch = 8192/1088 = 7. ✓
+    But large_chunk = num_batches * num_tiles_per_batch = 2 * 7 = 14 tiles = 15232 bytes — exceeds 8192 bytes. ✗
+    The reader issues a single noc_async_read_one_packet for the whole large_chunk (see lines 97, 101‑102 of
+    reader_interleaved_dram_optimized.cpp), but the API docstring says:
+
+    Initiates an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE.
+
+    When the size exceeds the burst limit, the NOC transfers at most one burst worth and leaves the rest undefined. So
+    for bf8 on WH, tiles 7‑13 of every large_chunk contain stale CB contents, which gets added to the matmul result →
+    0.958 PCC.
+
+    This would also be broken on bf16 (4*2=8 tiles = 16384 bytes > 8192), but
+    test_addmm_square_matrices[matrix_size=512-dtype=bfloat16] was never actually run in your last session — only the
+    bf8 case was.
+
+    The writer has a different pattern — it issues n_tiles_proc separate noc_async_write(... tile_size ...) calls in a
+    loop (line 48‑51), so it's fine.
+    */
+
+    const uint32_t num_batches = args.input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B
+                                     ? 1
+                                     : 2;  // perf tuning parameter, default  = 2
     // With fp32_dest_acc_en the DST register file holds only 4 tiles (vs 16 for 16-bit).
     // The SFPU binary section interleaves LHS/RHS in DST using 2*n_tiles slots,
     // so large_chunk (= num_batches * num_tiles_per_batch) must stay <= 2 for 32-bit.
