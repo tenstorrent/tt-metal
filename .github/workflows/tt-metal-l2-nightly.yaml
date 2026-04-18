@@ -353,6 +353,29 @@ jobs:
       gtest_filter: "*NIGHTLY_*"
       nightly-run: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+  # SD LLK Unit Tests — preserves slow-dispatch coverage for the LLK gtest binary.
+  # The PR gate runs the same binary in fast dispatch (see llk-fd-unit-tests-* in pr-gate.yaml);
+  # this job keeps the slow-dispatch path exercised and is the only place the
+  # LLKMeshDeviceFixtureSlowDispatchOnly tests actually execute.
+  llk-sd-unit-tests:
+    needs: [build-artifact, generate-arch-matrix]
+    if: |
+      (github.event_name == 'schedule' || inputs.run_sd_unit_tests) &&
+      needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-sd-fd-tests) }}
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      test-group-name: llk
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # TTNN Tutorials
   test-ttnn-tutorials:
     needs: [build-artifact, generate-arch-matrix]
