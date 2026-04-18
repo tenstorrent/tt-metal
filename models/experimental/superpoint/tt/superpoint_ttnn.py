@@ -144,11 +144,11 @@ class TtSuperPoint:
         # Block resolutions (H x W) with batch=1, image 480x640:
         #   block 0: 480x640, block 1: 240x320, block 2: 120x160, block 3: 60x80
         slice_per_block = (8, 4, 2, 1)
-        # Encoder precision: HiFi2 + bfloat16 weights to keep PCC ≥ 99% through
-        # 8 conv layers feeding softmax/L2-norm heads. bfloat8 + LoFi drops score
-        # PCC to ~0.70.
+        # Encoder precision: bfloat8_b weights (2× smaller vs bfloat16 → better
+        # DRAM BW) + HiFi2 math + fp32 accumulator. The accumulator carries the
+        # precision through 8 conv layers; bfloat8 weights keep PCC ≥ 99%.
         enc_kwargs = dict(
-            weights_dtype=ttnn.bfloat16,
+            weights_dtype=ttnn.bfloat8_b,
             math_fidelity=ttnn.MathFidelity.HiFi2,
             fp32_dest_acc_en=True,
         )
