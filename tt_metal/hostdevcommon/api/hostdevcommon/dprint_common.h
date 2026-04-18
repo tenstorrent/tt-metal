@@ -73,7 +73,7 @@ static_assert(DPrintTypeID_Count < 64, "Exceeded number of dprint types");
 constexpr uint32_t DEBUG_PRINT_SERVER_STARTING_MAGIC = 0x98989898;
 constexpr uint32_t DEBUG_PRINT_SERVER_DISABLED_MAGIC = 0xf8f8f8f8;
 constexpr uint32_t DEVICE_PRINT_RESET_BUFFER_MAGIC = 0xF0E1D2C3;
-constexpr uint32_t DEVICE_PRINT_WRITE_STALL_FLAG = 1 << 31;
+constexpr uint32_t DEVICE_PRINT_WRITE_STALL_FLAG = 1u << 31;
 
 #define ATTR_PACK __attribute__((packed))
 
