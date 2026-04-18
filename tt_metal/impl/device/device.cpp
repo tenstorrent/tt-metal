@@ -589,6 +589,115 @@ void Device::quiesce_and_restart_fabric_workers() {
         }
     }
 
+    // Phase 2.5: Terminate ERISC fabric routers before re-loading firmware.
+    //
+    // The Tensix MUX BRISC was halted in Phase 2, but the ERISC routers were not
+    // explicitly told to stop.  Phase 3 calls configure_fabric_cores() which
+    // unconditionally overwrites every active ERISC's L1 with fresh firmware.  If an
+    // ERISC is still executing (e.g. draining the ETH TXQ after a send) when its L1 is
+    // overwritten, it continues running with corrupted program state and generates invalid
+    // NOC traffic — including writes to ARC scratch (0x880030060) — that corrupts device
+    // state and causes the next iteration's AllGather to hang.
+    //
+    // We send the TERMINATE signal directly to each active ERISC channel and wait for
+    // it to write EDMStatus::TERMINATED before proceeding.  On timeout we log a warning
+    // and continue — configure_fabric_cores() will still safely overwrite L1 and boot
+    // fresh firmware.  We do NOT assert_risc_reset_at_core on WH: resetting an ERISC
+    // tears down the ETH PHY link and breaks non-MMIO L1 access for the whole mesh.
+    {
+        const auto [erisc_term_addr, erisc_term_signal] =
+            builder_ctx.get_fabric_router_termination_address_and_signal();
+        const auto router_sync_addr =
+            builder_ctx.get_fabric_router_sync_address_and_status().first;
+        constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+        constexpr uint32_t erisc_timeout_ms = 500;
+        constexpr uint32_t kSpinsBetweenSleeps = 64;
+
+        std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(erisc_term_signal));
+
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            const auto eth_logical_core = env_impl.get_cluster()
+                                              .get_soc_desc(this->id())
+                                              .get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+
+            std::vector<uint32_t> status_buf(1, 0);
+            detail::ReadFromDeviceL1(this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+
+            if (status_buf[0] == 0 || status_buf[0] == terminated_val) {
+                log_info(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                    "ERISC already clean (status=0x{:08x}), skipping",
+                    this->id(),
+                    eth_chan_id,
+                    status_buf[0]);
+                continue;
+            }
+
+            log_info(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                "ERISC active (status=0x{:08x}), sending TERMINATE",
+                this->id(),
+                eth_chan_id,
+                status_buf[0]);
+
+            detail::WriteToDeviceL1(this, eth_logical_core, erisc_term_addr, term_buf, CoreType::ETH);
+
+            const auto start = std::chrono::steady_clock::now();
+            uint32_t spin_counter = 0;
+            bool terminated = false;
+            while (true) {
+                detail::ReadFromDeviceL1(
+                    this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                if (status_buf[0] == terminated_val) {
+                    terminated = true;
+                    break;
+                }
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - start)
+                        .count();
+                if (elapsed > erisc_timeout_ms) {
+                    break;
+                }
+                if (++spin_counter >= kSpinsBetweenSleeps) {
+                    spin_counter = 0;
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                } else {
+                    ttsl::pause();
+                }
+            }
+
+            const auto p25_elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start)
+                    .count();
+            if (terminated) {
+                log_info(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                    "ERISC TERMINATED in {}ms",
+                    this->id(),
+                    eth_chan_id,
+                    p25_elapsed);
+            } else {
+                // Do NOT assert_risc_reset_at_core on WH ERISCs: resetting tears down the
+                // ETH PHY link, breaking non-MMIO L1 access for the entire mesh.
+                // configure_fabric_cores() in Phase 3 will safely overwrite L1.
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                    "ERISC did not terminate within {}ms (status=0x{:08x}) — continuing "
+                    "without reset (WH: resetting ERISC tears down ETH PHY link)",
+                    this->id(),
+                    eth_chan_id,
+                    erisc_timeout_ms,
+                    status_buf[0]);
+            }
+        }
+    }
+
     // Phase 3: Re-configure and re-launch the fabric workers
     // Reset termination signals, clear channel state, and re-send launch messages
     // for WORKER cores in the fabric program.
