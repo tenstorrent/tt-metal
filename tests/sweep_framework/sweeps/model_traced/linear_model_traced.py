@@ -301,6 +301,9 @@ def run(
         if transpose_b:
             linear_kwargs["transpose_b"] = transpose_b
 
+        if memory_config is not None:
+            linear_kwargs["memory_config"] = memory_config
+
         if dtype is not None:
             linear_kwargs["dtype"] = dtype
 

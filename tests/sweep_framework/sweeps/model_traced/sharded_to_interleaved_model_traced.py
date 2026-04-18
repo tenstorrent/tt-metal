@@ -98,6 +98,11 @@ def run(
     else:
         s2i_output_config = None
 
+    # Only pass output config if it's interleaved (sharded_to_interleaved requires interleaved output)
+    if s2i_output_config is not None and hasattr(s2i_output_config, "memory_layout"):
+        if s2i_output_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            s2i_output_config = None
+
     # Remove output_memory_config / memory_config from op_kwargs since we pass it positionally
     op_kwargs.pop("output_memory_config", None)
     op_kwargs.pop("memory_config", None)
