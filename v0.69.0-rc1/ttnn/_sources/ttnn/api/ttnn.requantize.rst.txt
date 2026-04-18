@@ -1,0 +1,8 @@
+﻿ttnn.requantize
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.requantize:
+
+.. autooperation:: ttnn.requantize
