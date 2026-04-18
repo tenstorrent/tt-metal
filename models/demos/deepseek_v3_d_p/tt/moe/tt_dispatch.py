@@ -182,6 +182,8 @@ class TtDispatchModule(LightweightModule):
         # )
         # logger.debug(f"  cluster_axis={self.cluster_axis}, num_links={self.num_links}, topology={self.topology}")
 
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
         (
             tt_dispatched_buffer,
             tt_dispatch_metadata,
@@ -201,6 +203,8 @@ class TtDispatchModule(LightweightModule):
             num_links=self.num_links,
             topology=self.topology,
         )
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape
         tt_dispatched_metadata_shape = tt_dispatch_metadata.shape

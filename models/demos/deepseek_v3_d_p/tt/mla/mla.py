@@ -705,6 +705,8 @@ class ttMLA:
         )
 
         print("Running ring SDPA: is_balanced =", self.is_balanced)
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
             tt_kvpe,
@@ -731,6 +733,9 @@ class ttMLA:
             scale=self.scale,
             is_balanced=self.is_balanced,
         )
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        print("Done with ring SDPA")
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(
