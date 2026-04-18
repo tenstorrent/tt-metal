@@ -133,17 +133,20 @@ def run(
     # and output_tile (a Tile object that can't be auto-parsed from dict).
     parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile"})
 
-    # When program_config is None, sharded configs computed for the original device
-    # may be invalid.  Clear input_b to DRAM (matmul requires INTERLEAVED weights
-    # without a program config) and clear sharded output/memory configs so they
-    # don't get passed as kwargs.
+    # When program_config is None (grid-based configs dropped), the shard_spec in
+    # memory configs was computed for the original device and is invalid. Clear sharded
+    # configs so ttnn.linear auto-determines compatible settings.
     if program_config is None:
-        if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
-            input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
         if memory_config is not None and "SHARDED" in str(memory_config):
             memory_config = None
         if output_memory_config is not None and "SHARDED" in str(output_memory_config):
             output_memory_config = None
+        if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
+            input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        if input_a_memory_config is not None and "SHARDED" in str(input_a_memory_config):
+            input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        if "memory_config" in parsed_op_kwargs and "SHARDED" in str(parsed_op_kwargs["memory_config"]):
+            del parsed_op_kwargs["memory_config"]
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
