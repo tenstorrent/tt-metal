@@ -314,7 +314,7 @@ class TtPrefillBlock(LightweightModule):
             (output_tensor, kv_cache) where kv_cache is a host tensor or None
         """
         # --- Attention ---
-        logger.debbug(f"attn norm start")
+        logger.debug(f"attn norm start")
         attn_norm_out = self.attn_norm(x)
         ttnn.synchronize_device(self.mesh_device)
         ttnn.distributed_context_barrier()
