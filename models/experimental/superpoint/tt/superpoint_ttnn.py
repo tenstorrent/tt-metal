@@ -154,9 +154,18 @@ class TtSuperPoint:
         )
         in_ch = 1
         self.enc_convs = []
+        # Block 3 (60×80, 128ch) has enough channels to benefit from 2D sharding;
+        # the other blocks stay HEIGHT_SHARDED (wider spatial, fewer channels).
+        block_shard = (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )
         for block_idx, block in enumerate(encoder.conv_blocks):
             add_pooling = block.pool is not None
             ns = slice_per_block[block_idx]
+            shard = block_shard[block_idx]
             self.enc_convs.append(
                 (
                     TtConv2D(
@@ -169,6 +178,7 @@ class TtSuperPoint:
                         device=device,
                         activation="relu",
                         num_slices=ns,
+                        shard_layout=shard,
                         **enc_kwargs,
                     ),
                     TtConv2D(
@@ -181,6 +191,7 @@ class TtSuperPoint:
                         device=device,
                         activation="relu",
                         num_slices=ns,
+                        shard_layout=shard,
                         **enc_kwargs,
                     ),
                     add_pooling,
