@@ -83,8 +83,10 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
 
     pos_args = extract_positional_args(kwargs)
-    dim0 = dim0 or pos_args.get(1, 0)
-    dim1 = dim1 or pos_args.get(2, 1)
+    if dim0 is None:
+        dim0 = pos_args.get(1, 0)
+    if dim1 is None:
+        dim1 = pos_args.get(2, 1)
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
@@ -128,7 +130,33 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **op_kwargs)
+    try:
+        output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **op_kwargs)
+    except Exception as e:
+        err_str = str(e)
+        if "must not exceed number of cores" in err_str or "circular buffers" in err_str:
+            if not is_host:
+                if is_mesh_device and input_a_tensor_placement:
+                    input_tensor_a = create_tensor_on_mesh(
+                        torch_input_tensor_a,
+                        device,
+                        input_a_dtype,
+                        input_a_layout,
+                        ttnn.DRAM_MEMORY_CONFIG,
+                        input_a_tensor_placement,
+                    )
+                else:
+                    input_tensor_a = ttnn.from_torch(
+                        torch_input_tensor_a,
+                        dtype=input_a_dtype,
+                        layout=input_a_layout,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+            fallback_kwargs = {k: v for k, v in op_kwargs.items() if k != "memory_config"}
+            output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **fallback_kwargs)
+        else:
+            raise
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
