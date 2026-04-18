@@ -28,6 +28,7 @@ jobs:
       wormhole: ${{ steps.set.outputs.wormhole }}
       blackhole: ${{ steps.set.outputs.blackhole }}
       common: ${{ steps.set.outputs.common }}
+      sfpi: ${{ steps.set.outputs.sfpi }}
       performance: ${{ steps.set.outputs.performance }}
     steps:
       - name: Checkout code
@@ -47,6 +48,9 @@ jobs:
                 - 'tt_metal/tt-llk/tt_llk_blackhole/**'
               common:
                 - 'tt_metal/tt-llk/common/**'
+              sfpi:
+                - 'tt_metal/sfpi-info.sh'
+                - 'tt_metal/sfpi-version'
               performance:
                 - 'tt_metal/tt-llk/**/*perf**'
                 - 'tt_metal/tt-llk/**/*profiler**'
@@ -58,11 +62,13 @@ jobs:
             echo "wormhole=true" >> $GITHUB_OUTPUT
             echo "blackhole=true" >> $GITHUB_OUTPUT
             echo "common=true" >> $GITHUB_OUTPUT
+            echo "sfpi=true" >> $GITHUB_OUTPUT
             echo "performance=true" >> $GITHUB_OUTPUT
           else
             echo "wormhole=${{ steps.filter.outputs.wormhole }}" >> $GITHUB_OUTPUT
             echo "blackhole=${{ steps.filter.outputs.blackhole }}" >> $GITHUB_OUTPUT
             echo "common=${{ steps.filter.outputs.common }}" >> $GITHUB_OUTPUT
+            echo "sfpi=${{ steps.filter.outputs.sfpi }}" >> $GITHUB_OUTPUT
             echo "performance=${{ steps.filter.outputs.performance }}" >> $GITHUB_OUTPUT
           fi
 
@@ -78,6 +84,7 @@ jobs:
     needs: [build-images, detect-changes]
     if: ${{ needs.detect-changes.outputs.wormhole == 'true' ||
             needs.detect-changes.outputs.common == 'true' ||
+            needs.detect-changes.outputs.sfpi == 'true' ||
             needs.detect-changes.outputs.performance == 'true' ||
             github.event_name == 'workflow_dispatch' ||
             github.event_name == 'workflow_call' }}
@@ -96,6 +103,7 @@ jobs:
     needs: [build-images, detect-changes]
     if: ${{ needs.detect-changes.outputs.blackhole == 'true' ||
             needs.detect-changes.outputs.common == 'true' ||
+            needs.detect-changes.outputs.sfpi == 'true' ||
             needs.detect-changes.outputs.performance == 'true' ||
             github.event_name == 'workflow_dispatch' ||
             github.event_name == 'workflow_call' }}
