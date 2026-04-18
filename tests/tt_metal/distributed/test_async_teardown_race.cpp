@@ -319,4 +319,113 @@ TEST_F(AsyncTeardownMultiCQFixture, MultiCQAsyncDispatchThenTeardown) {
     log_info(tt::LogTest, "[Scenario C] Both CQs clean after multi-CQ async teardown");
 }
 
+// ---------------------------------------------------------------------------
+// Fixture: async dispatch with FABRIC_2D active, to test the ETH-router
+// teardown poll ("Fix B" in FabricFirmwareInitializer::teardown()).
+//
+// Why FabricConfig::DISABLED is insufficient for Scenarios A/B/C:
+//   MeshDevice::close() calls FabricFirmwareInitializer::teardown(). With
+//   DISABLED config, teardown() exits early (lines 84-90 of
+//   fabric_firmware_initializer.cpp) before reaching the ETH-router
+//   TERMINATED poll or the Tensix MUX termination logic. So Scenarios A/B/C
+//   never exercise the code paths that matter for the CI failures (which all
+//   use FABRIC_2D via unit_tests_ttnn_ccl_ops as predecessor).
+//
+// This fixture uses FABRIC_2D so teardown() exercises:
+//   1. Tensix MUX TERMINATED poll (with force-reset on timeout)
+//   2. Master ETH router TERMINATED poll (with force-reset on timeout)
+//   3. compile_and_configure_fabric() → terminate_stale_erisc_routers() on re-init
+//   4. wait_for_fabric_router_sync() — full ERISC handshake verification
+//
+// Requires >= 2 devices (FABRIC_2D requires a multi-chip topology).
+// Skips gracefully on single-chip systems.
+// ---------------------------------------------------------------------------
+class AsyncTeardownFabric2DFixture : public MeshDeviceFixtureBase {
+protected:
+    AsyncTeardownFabric2DFixture()
+        : MeshDeviceFixtureBase(Config{
+              .num_cqs = 1,
+              .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+              .test_budget_ms = 30000,
+          }) {}
+
+    void SetUp() override {
+        // FABRIC_2D requires >= 2 devices; skip gracefully on single-chip CI runners.
+        const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
+        if (num_devices < 2) {
+            GTEST_SKIP() << "AsyncTeardownFabric2DFixture requires >= 2 devices (FABRIC_2D)";
+        }
+        MeshDeviceFixtureBase::SetUp();
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Scenario D: async dispatch with FABRIC_2D active → immediate close → re-init.
+//
+// Exercises code paths that Scenarios A/B/C (FabricConfig::DISABLED) skip:
+//   - FabricFirmwareInitializer::teardown() ETH router TERMINATED poll
+//   - Force-reset of master ETH router on teardown timeout
+//   - terminate_stale_erisc_routers() on re-init (detects leftover EDM state)
+//   - wait_for_fabric_router_sync() ERISC handshake verification
+//
+// This is the closest deterministic proxy for the actual CI failure:
+//   predecessor unit_tests_ttnn_ccl_ops (FABRIC_2D) → async dispatch →
+//   SIGKILL → stale ERISCs on non-MMIO chips → AsyncExecutionWorksCQ0 hangs.
+//
+// Pass = device re-opens cleanly, blocking dispatch completes in < 30s.
+// Fail = hang (watchdog kills), crash during re-init, or TT_FATAL.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DFixture, Fabric2DAsyncDispatchThenReinit) {
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    auto device_range = MeshCoordinateRange(mesh_device_->shape());
+    auto mesh_shape = mesh_device_->shape();
+
+    // Phase 1: async dispatch with FABRIC_2D ERISCs active.
+    // No Finish() — ERISC fabric ops may still be draining when close() is called.
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(device_range, std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario D] Dispatching blank workload on FABRIC_2D mesh (blocking=false)");
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    }
+
+    // Phase 2: close mesh device — exercises FabricFirmwareInitializer::teardown():
+    //   (a) Tensix MUX TERMINATED poll (skipped when FabricTensixConfig::DISABLED)
+    //   (b) Master ETH router TERMINATED poll with force-reset on timeout
+    log_info(tt::LogTest, "[Scenario D] Closing FABRIC_2D mesh device without waiting for async workload");
+    mesh_device_->close();
+    mesh_device_.reset();
+    // post_teardown() resets MetalContext fabric config to DISABLED internally.
+
+    // Phase 3: re-open with FABRIC_2D — exercises compile_and_configure_fabric()
+    //   → terminate_stale_erisc_routers() on any residual ERISC state
+    //   → wait_for_fabric_router_sync() full handshake verification.
+    log_info(tt::LogTest, "[Scenario D] Re-opening FABRIC_2D mesh device");
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    mesh_device_ = MeshDevice::create(
+        MeshDeviceConfig(mesh_shape),
+        config_.l1_small_size,
+        config_.trace_region_size,
+        config_.num_cqs,
+        DispatchCoreConfig{},
+        {},
+        config_.worker_l1_size);
+
+    // Phase 4: blocking dispatch verifies freshly loaded ERISCs are operational.
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        auto new_range = MeshCoordinateRange(mesh_device_->shape());
+        workload.add_program(new_range, std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario D] Dispatching verification workload (blocking=true)");
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+        log_info(tt::LogTest, "[Scenario D] FABRIC_2D re-init + dispatch completed cleanly");
+    }
+}
+
 }  // namespace tt::tt_metal::distributed::test

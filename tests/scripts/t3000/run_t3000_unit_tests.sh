@@ -141,6 +141,14 @@ run_t3000_ttnn_tests() {
   pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
   pytest tests/ttnn/distributed/test_data_parallel_example.py ; fail+=$?
   pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; fail+=$?
+  # Targeted async-dispatch + teardown race condition regression tests.
+  # Validates fixes for the ERISC stale firmware race (AI-JOURNAL.md Pass A-F).
+  # Run at the end: a failure here points at the teardown/reinit path, not CCL ops.
+  # Scenario D (Fabric2DAsyncDispatchThenReinit) exercises the ETH-router
+  # TERMINATED poll in FabricFirmwareInitializer::teardown() — the code path
+  # that Scenarios A/B/C (FabricConfig::DISABLED) bypass entirely.
+  timeout 120 ./build/test/tt_metal/distributed/distributed_unit_tests \
+    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*' ; fail+=$?
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
