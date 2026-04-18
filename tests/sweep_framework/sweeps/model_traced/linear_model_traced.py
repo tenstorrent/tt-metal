@@ -143,8 +143,6 @@ def run(
             output_memory_config = None
         if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
             input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        if input_a_memory_config is not None and "SHARDED" in str(input_a_memory_config):
-            input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
         if "memory_config" in parsed_op_kwargs and "SHARDED" in str(parsed_op_kwargs["memory_config"]):
             del parsed_op_kwargs["memory_config"]
 
