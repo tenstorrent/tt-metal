@@ -95,7 +95,7 @@
     TT_METAL_SLOW_DISPATCH_MODE=1 pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
   model: deepseek_decode
   skus:
-    bh_p150b_civ2_viommu:
+    bh_galaxy:
       timeout: 20
   owner_id: U03HY7MK4BT
   team: models
@@ -105,7 +105,7 @@
     pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
   model: deepseek_decode
   skus:
-    bh_p150b_civ2_viommu:
+    bh_galaxy_perf:
       timeout: 20
   owner_id: U03HY7MK4BT
   team: models
