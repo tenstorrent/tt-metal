@@ -8,7 +8,19 @@
 
 // L1 to L1 send
 void kernel_main() {
-    // Compile-time arguments
+#ifdef ARCH_QUASAR
+    // Quasar: use named compile-time args (Metal 2.0 API)
+    constexpr uint32_t mst_base_addr = get_named_compile_time_arg_val("mst_base_addr");
+    constexpr uint32_t sub_base_addr = get_named_compile_time_arg_val("sub_base_addr");
+    constexpr uint32_t num_of_transactions = get_named_compile_time_arg_val("num_transactions");
+    constexpr uint32_t pages_per_transaction = get_named_compile_time_arg_val("pages_per_tx");
+    constexpr uint32_t bytes_per_page = get_named_compile_time_arg_val("bytes_per_page");
+    constexpr uint32_t test_id = get_named_compile_time_arg_val("test_id");
+    constexpr uint32_t num_subordinates = get_named_compile_time_arg_val("num_subordinates");
+    constexpr bool is_linked = get_named_compile_time_arg_val("is_linked");
+    constexpr bool loopback = get_named_compile_time_arg_val("loopback");
+#else
+    // WH/BH: use indexed compile-time args (legacy API)
     constexpr uint32_t mst_base_addr = get_compile_time_arg_val(0);
     constexpr uint32_t sub_base_addr = get_compile_time_arg_val(1);
     constexpr uint32_t num_of_transactions = get_compile_time_arg_val(2);
@@ -18,6 +30,7 @@ void kernel_main() {
     constexpr uint32_t num_subordinates = get_compile_time_arg_val(6);
     constexpr bool is_linked = get_compile_time_arg_val(7);
     constexpr bool loopback = get_compile_time_arg_val(8);
+#endif
     uint32_t start_x = get_compile_time_arg_val(9);
     uint32_t start_y = get_compile_time_arg_val(10);
     uint32_t end_x = get_compile_time_arg_val(11);

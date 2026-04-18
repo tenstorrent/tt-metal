@@ -7,7 +7,18 @@
 
 // L1 to L1 send
 void kernel_main() {
-    // Compile-time arguments
+#ifdef ARCH_QUASAR
+    // Quasar: use named compile-time args (Metal 2.0 API)
+    constexpr uint32_t l1_local_addr = get_named_compile_time_arg_val("l1_addr");
+    constexpr uint32_t num_of_transactions = get_named_compile_time_arg_val("num_transactions") < 16
+                                                 ? get_named_compile_time_arg_val("num_transactions")
+                                                 : 15;
+    constexpr uint32_t bytes_per_transaction = get_named_compile_time_arg_val("bytes_per_tx");
+    constexpr uint32_t test_id = get_named_compile_time_arg_val("test_id");
+    constexpr uint32_t packed_sub0_core_coordinates = get_named_compile_time_arg_val("sub0_coords");
+    constexpr uint32_t packed_sub1_core_coordinates = get_named_compile_time_arg_val("sub1_coords");
+#else
+    // WH/BH: use indexed compile-time args (legacy API)
     constexpr uint32_t l1_local_addr = get_compile_time_arg_val(0);
     constexpr uint32_t num_of_transactions =
         get_compile_time_arg_val(1) < 16 ? get_compile_time_arg_val(1) : 15;  // to avoid trid 0
@@ -15,6 +26,7 @@ void kernel_main() {
     constexpr uint32_t test_id = get_compile_time_arg_val(3);
     constexpr uint32_t packed_sub0_core_coordinates = get_compile_time_arg_val(4);
     constexpr uint32_t packed_sub1_core_coordinates = get_compile_time_arg_val(5);
+#endif
 
     // Runtime arguments
     uint32_t sub0_receiver_x_coord = packed_sub0_core_coordinates >> 16;

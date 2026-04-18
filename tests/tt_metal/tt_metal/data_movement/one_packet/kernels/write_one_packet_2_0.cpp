@@ -9,9 +9,17 @@
 #include "experimental/endpoints.h"
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    // Quasar: use named compile-time args (Metal 2.0 API)
+    constexpr uint32_t num_packets = get_named_compile_time_arg_val("num_packets");
+    constexpr uint32_t packet_size_bytes = get_named_compile_time_arg_val("packet_size");
+    constexpr uint32_t test_id = get_named_compile_time_arg_val("test_id");
+#else
+    // WH/BH: use indexed compile-time args (legacy API)
     constexpr uint32_t num_packets = get_compile_time_arg_val(0);
     constexpr uint32_t packet_size_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t test_id = get_compile_time_arg_val(2);
+#endif
 
     uint32_t master_l1_addr = get_arg_val<uint32_t>(0);
     uint32_t subordinate_l1_addr = get_arg_val<uint32_t>(1);

@@ -15,9 +15,17 @@ void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t l1_addr = get_arg_val<uint32_t>(1);
 
+#ifdef ARCH_QUASAR
+    // Quasar: use named compile-time args (Metal 2.0 API)
+    constexpr uint32_t num_of_transactions = get_named_compile_time_arg_val("num_transactions");
+    constexpr uint32_t num_banks = get_named_compile_time_arg_val("num_banks");
+    constexpr uint32_t pages_per_bank = get_named_compile_time_arg_val("pages_per_bank");
+#else
+    // WH/BH: use indexed compile-time args (legacy API)
     constexpr uint32_t num_of_transactions = get_compile_time_arg_val(0);
     constexpr uint32_t num_banks = get_compile_time_arg_val(1);
     constexpr uint32_t pages_per_bank = get_compile_time_arg_val(2);
+#endif
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t test_id = get_compile_time_arg_val(4);
     constexpr uint32_t num_of_trids = get_compile_time_arg_val(5);

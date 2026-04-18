@@ -33,6 +33,10 @@
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_cluster.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
@@ -369,6 +373,8 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 // 2. `invalidate_cache` is false: hang because periodic HW cache flush is default disabled
 // 3. `invalidate_cache` is false and env var `TT_METAL_ENABLE_HW_CACHE_INVALIDATION` is set: pass
 TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
+    using namespace tt::tt_metal::experimental::metal2_host_api;
+
     CoreCoord core{0, 0};
     const auto& mesh_device = devices_.at(0);
     auto* const device = mesh_device->get_devices()[0];
@@ -380,57 +386,53 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     uint32_t value_to_write = 39;
     bool invalidate_cache =
         true;  // To make sure this test passes on CI set this to true but can be modified for local debug
+
+    // Create program using Metal 2.0 API - no architecture branching needed
+    ProgramSpec spec{
+        .program_id = "l1_data_cache_test",
+        .kernels = {
+            KernelSpec{
+                .unique_id = "poll_l1_kernel",
+                .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/poll_l1.cpp",
+                .target_nodes = NodeCoord{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)},
+                .num_threads = 1,
+                .config_spec =
+                    DataMovementConfiguration{
+                        .gen1_data_movement_config =
+                            DataMovementConfiguration::Gen1DataMovementConfig{
+                                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                                .noc = tt_metal::NOC::NOC_0,
+                                .noc_mode = tt_metal::NOC_MODE::DM_DEDICATED_NOC},
+                        .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{}}},
+            KernelSpec{
+                .unique_id = "write_to_break_poll_kernel",
+                .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/write_to_break_poll.cpp",
+                .target_nodes = NodeCoord{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)},
+                .num_threads = 1,
+                .config_spec = DataMovementConfiguration{
+                    .gen1_data_movement_config =
+                        DataMovementConfiguration::Gen1DataMovementConfig{
+                            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                            .noc = tt_metal::NOC::NOC_1,
+                            .noc_mode = tt_metal::NOC_MODE::DM_DEDICATED_NOC},
+                    .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{}}}}};
+
+    tt_metal::Program program = MakeProgramFromSpec(spec);
+
+    // Create semaphore (still use old API for now)
+    uint32_t sem0_id = tt_metal::CreateSemaphore(program, core, 0);
+
+    // Set runtime args using old API (Metal 2.0 runtime args need kernel handles)
+    // Note: We'd need to get kernel handles from the program to use new API
+    // For now, use SetRuntimeArgs with kernel ID 0 and 1
+    tt_metal::SetRuntimeArgs(
+        program, 0, core, {l1_unreserved_base, value_to_write, sem0_id, (uint32_t)invalidate_cache});
+    tt_metal::SetRuntimeArgs(program, 1, core, {l1_unreserved_base, value_to_write, sem0_id});
+
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
-
-    uint32_t sem0_id = tt_metal::CreateSemaphore(program_, core, 0);
-
-    // Create kernel0 - branch by architecture
-    tt_metal::KernelHandle kernel0;
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        // Quasar path: Use experimental API
-        kernel0 = experimental::quasar::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/poll_l1.cpp",
-            core,
-            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
-    } else {
-        // WH/BH path: Use legacy API
-        kernel0 = tt_metal::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/poll_l1.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0});
-    }
-
-    tt_metal::SetRuntimeArgs(
-        program_, kernel0, core, {l1_unreserved_base, value_to_write, sem0_id, (uint32_t)invalidate_cache});
-
-    // Create kernel1 - branch by architecture
-    tt_metal::KernelHandle kernel1;
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        // Quasar path: Use experimental API
-        kernel1 = experimental::quasar::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/write_to_break_poll.cpp",
-            core,
-            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
-    } else {
-        // WH/BH path: Use legacy API
-        kernel1 = tt_metal::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/write_to_break_poll.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::NOC_1});
-    }
-
-    tt_metal::SetRuntimeArgs(program_, kernel1, core, {l1_unreserved_base, value_to_write, sem0_id});
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
