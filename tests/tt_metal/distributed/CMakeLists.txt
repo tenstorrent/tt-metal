@@ -21,6 +21,7 @@ target_sources(
         test_mesh_events.cpp
         test_mesh_trace.cpp
         test_thread_pool.cpp
+        test_async_teardown_race.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
