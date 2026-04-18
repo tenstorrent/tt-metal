@@ -37,8 +37,8 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
             v_else { pos_in1 = in1; }
             v_endif;
 
-            sfpi::vFloat float_in0 = sfpi::int32_to_float(pos_in0, 0);
-            sfpi::vFloat float_in1 = sfpi::int32_to_float(pos_in1, 0);
+            sfpi::vFloat float_in0 = sfpi::int32_to_float(pos_in0, sfpi::RoundMode::NearestEven);
+            sfpi::vFloat float_in1 = sfpi::int32_to_float(pos_in1, sfpi::RoundMode::NearestEven);
             result = float_in0 * _sfpu_reciprocal_<2>(float_in1);
             result = sfpi::setsgn(result, in0 ^ in1);
         }

@@ -10,6 +10,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/types.hpp"
+#include "device/kernels/moe_ring_common.h"
 
 namespace ttnn::experimental {
 
@@ -29,8 +30,8 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::CoreRangeSet>& mux_core_range_set,
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
-    const std::optional<ttnn::GlobalSemaphore>& optional_cross_device_semaphore);
-
+    const std::optional<ttnn::GlobalSemaphore>& optional_cross_device_semaphore,
+    const std::optional<::detail::MoEActivationFunction>& activation_type = std::nullopt);
 
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device);
 
