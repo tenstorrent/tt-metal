@@ -155,8 +155,10 @@ run_t3000_ttnn_tests() {
   # Scenario D (Fabric2DAsyncDispatchThenReinit) exercises the ETH-router
   # TERMINATED poll in FabricFirmwareInitializer::teardown() — the code path
   # that Scenarios A/B/C (FabricConfig::DISABLED) bypass entirely.
-  timeout 120 ./build/test/tt_metal/distributed/distributed_unit_tests \
-    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*' ; fail+=$?
+  # Scenario E (RepeatedFabric2DTeardownCycles) stress-tests 2 consecutive
+  # FABRIC_2D open/close cycles to catch accumulated ERISC state (CI Iters 3-5).
+  timeout 240 ./build/test/tt_metal/distributed/distributed_unit_tests \
+    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*' ; fail+=$?
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))

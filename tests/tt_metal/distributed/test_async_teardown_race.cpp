@@ -428,4 +428,145 @@ TEST_F(AsyncTeardownFabric2DFixture, Fabric2DAsyncDispatchThenReinit) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Fixture: same as AsyncTeardownFabric2DFixture but with a 90-second watchdog
+// for multi-cycle tests. FABRIC_2D init + teardown per cycle takes ~10-15s on
+// T3K; 2 cycles + final verification needs ~40s worst-case, which exceeds the
+// 30s budget used for single-cycle tests.
+// ---------------------------------------------------------------------------
+class AsyncTeardownFabric2DRepeatFixture : public MeshDeviceFixtureBase {
+protected:
+    AsyncTeardownFabric2DRepeatFixture()
+        : MeshDeviceFixtureBase(Config{
+              .num_cqs = 1,
+              .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+              .test_budget_ms = 90000,  // 90s for multi-cycle FABRIC_2D stress
+          }) {}
+
+    void SetUp() override {
+        const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
+        if (num_devices < 2) {
+            GTEST_SKIP() << "AsyncTeardownFabric2DRepeatFixture requires >= 2 devices (FABRIC_2D)";
+        }
+        MeshDeviceFixtureBase::SetUp();
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Scenario E: Multiple FABRIC_2D open/async-dispatch/close cycles.
+//
+// Stress test for accumulated ERISC state across consecutive FABRIC_2D sessions.
+// CI Iterations 3-5 showed that FABRIC_2D sessions (each using ETH channels for
+// fabric routing) left stale edm_status values on ETH channels after teardown,
+// causing the next session to hang during fabric bring-up. This test runs N
+// back-to-back FABRIC_2D open/async-dispatch/close cycles to surface any
+// session-to-session state leak.
+//
+// Each cycle:
+//   1. Opens a FABRIC_2D mesh device (loads ERISC EDM firmware on all ETH chans)
+//   2. Dispatches a blank workload (blocking=false — workload may still be in
+//      flight when close() is called)
+//   3. Closes the device; FabricFirmwareInitializer::teardown() sends TERMINATE
+//      to master ETH routers and polls for EDMStatus::TERMINATED (5s timeout,
+//      force-reset on timeout)
+//   4. If not the last cycle, re-opens with FABRIC_2D for the next iteration
+//
+// Final cycle: re-opens FABRIC_2D, dispatches a blocking workload, and performs
+// a buffer round-trip to verify no ERISC L1 corruption accumulated across
+// the N sessions.
+//
+// Note: blank kernels do NOT actually route data through ERISC fabric channels,
+// so this test checks the teardown/reinit state-machine cleanness, not fabric
+// correctness. See AsyncExecutionWorksCQ0 for the full end-to-end signal.
+//
+// Pass = all cycles complete + buffer matches in <30s.
+// Fail = hang (watchdog), crash on any re-open, or data corruption.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DRepeatFixture, RepeatedFabric2DTeardownCycles) {
+    constexpr int kCycles = 2;
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+
+    for (int cycle = 0; cycle < kCycles; cycle++) {
+        log_info(tt::LogTest, "[Scenario E] FABRIC_2D cycle {}/{} — async dispatch + close", cycle + 1, kCycles);
+        auto mesh_shape = mesh_device_->shape();
+
+        // Phase 1: async dispatch (no Finish) — ERISC firmware is live when close() runs.
+        {
+            auto program = create_blank_program(cores);
+            auto workload = MeshWorkload();
+            workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+            auto& cq = mesh_device_->mesh_command_queue();
+            EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        }
+
+        // Phase 2: close — teardown() sends TERMINATE to master ETH routers and polls.
+        mesh_device_->close();
+        mesh_device_.reset();
+
+        // Phase 3: re-open with FABRIC_2D for the next cycle or final verification.
+        // SetFabricConfig must be called before MeshDevice::create; post_teardown()
+        // already reset it to DISABLED so we must set it again here.
+        log_info(tt::LogTest, "[Scenario E] Re-opening FABRIC_2D mesh device (cycle {})", cycle + 1);
+        tt_fabric::SetFabricConfig(
+            tt_fabric::FabricConfig::FABRIC_2D,
+            tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        mesh_device_ = MeshDevice::create(
+            MeshDeviceConfig(mesh_shape),
+            config_.l1_small_size,
+            config_.trace_region_size,
+            config_.num_cqs,
+            DispatchCoreConfig{},
+            {},
+            config_.worker_l1_size);
+    }
+
+    // Final verification: blocking dispatch confirms ERISC state is clean after kCycles.
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario E] Final blocking dispatch after {} FABRIC_2D cycles", kCycles);
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    }
+
+    // Buffer round-trip: detect DRAM/L1 corruption from stale ERISC NOC traffic.
+    {
+        auto& cq = mesh_device_->mesh_command_queue();
+        uint32_t page_size = 1024;
+        auto local_config =
+            DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        auto global_shape = Shape2D{
+            static_cast<uint32_t>(mesh_device_->num_rows()),
+            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto shard_shape = Shape2D{1, 1};
+        auto dist_config = ShardedBufferConfig{
+            .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
+            .global_buffer_shape = global_shape,
+            .shard_shape = shard_shape};
+
+        auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
+
+        size_t n_words = page_size / sizeof(uint32_t) * mesh_device_->num_rows() * mesh_device_->num_cols();
+        std::vector<uint32_t> src(n_words);
+        for (size_t i = 0; i < n_words; i++) {
+            src[i] = static_cast<uint32_t>(0xBEEF0000 | (i & 0xFFFF));
+        }
+        EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
+
+        std::vector<uint32_t> dst;
+        EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
+
+        ASSERT_EQ(dst.size(), src.size()) << "Buffer size mismatch after " << kCycles << " FABRIC_2D cycles";
+        for (size_t i = 0; i < src.size(); i++) {
+            ASSERT_EQ(dst[i], src[i])
+                << "Corruption at index " << i << " after " << kCycles << " FABRIC_2D async teardown cycles";
+        }
+        log_info(
+            tt::LogTest,
+            "[Scenario E] Buffer round-trip clean after {} FABRIC_2D cycles — no accumulated ERISC state corruption",
+            kCycles);
+    }
+}
+
 }  // namespace tt::tt_metal::distributed::test
