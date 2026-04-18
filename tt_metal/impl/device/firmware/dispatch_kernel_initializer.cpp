@@ -4,6 +4,7 @@
 
 #include "dispatch_kernel_initializer.hpp"
 
+#include <thread>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -262,11 +263,74 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
             log_warning(
                 tt::LogMetal,
                 "Device {}: Exception waiting for dispatch cores to finish during teardown. "
-                "Continuing with cleanup. Error: {}",
+                "Attempting rescue of stuck dispatch cores. Error: {}",
                 dev->id(),
                 e.what());
+            rescue_stuck_dispatch_cores(dev);
         }
         log_info(tt::LogMetal, "[dispatch_teardown] wait_for_dispatch_cores device={} done", dev->id());
+    }
+}
+
+void DispatchKernelInitializer::rescue_stuck_dispatch_cores(IDevice* device) const {
+    // During teardown, dispatch cores (DISPATCH_S / DISPATCH_D) can get stuck spinning on
+    // STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX, waiting for a worker completion count
+    // that will never arrive because fabric was already torn down.
+    //
+    // To unblock: write a large value to STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX on each
+    // dispatch stream. Writing to SIZE *sets* (not increments) the SPACE_AVAILABLE register,
+    // satisfying any pending stream_wrap_gt/stream_wrap_ge comparison in the firmware wait loop.
+    //
+    // After unblocking, the termination signal path (process_termination_signals) will cleanly
+    // shut down the cores.
+
+    const auto& hal = descriptor_->hal();
+    CoreType dispatch_core_type = dispatch_core_manager_.get_dispatch_core_type();
+    const auto& mem_map = *dispatch_mem_map_[enchantum::to_underlying(dispatch_core_type)];
+
+    const uint32_t overlay_start = hal.get_noc_overlay_start_addr();
+    const uint32_t stream_reg_space = hal.get_noc_stream_reg_space_size();
+    const uint32_t buf_size_reg_idx = hal.get_noc_stream_remote_dest_buf_size_reg_index();
+    const uint32_t num_streams = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
+
+    // 0xFFFF is the maximum 16-bit value.  The firmware uses 17-bit wrapping arithmetic
+    // (stream_wrap_gt / stream_wrap_ge with MEM_WORD_ADDR_WIDTH shift), so any count <= 0xFFFF
+    // will be satisfied when SPACE_AVAILABLE is set to 0xFFFF.
+    const uint32_t rescue_count = 0xFFFF;
+
+    const auto& termination_cores = dispatch_topology_->get_registered_termination_cores(device->id());
+    for (const auto& info : termination_cores) {
+        for (uint32_t i = 0; i < num_streams; i++) {
+            uint32_t stream_id = mem_map.get_dispatch_stream_index(i);
+            uint32_t reg_addr = overlay_start + (stream_id * stream_reg_space) + (buf_size_reg_idx << 2);
+            std::vector<uint32_t> val{rescue_count};
+            try {
+                detail::WriteToDeviceL1(device, info.logical_core, reg_addr, val, info.core_type);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "rescue_stuck_dispatch_cores: Device {} core ({},{}) stream={} write failed: {}",
+                    device->id(),
+                    info.logical_core.x,
+                    info.logical_core.y,
+                    stream_id,
+                    e.what());
+            }
+        }
+        log_warning(
+            tt::LogMetal,
+            "rescue_stuck_dispatch_cores: Device {} core ({},{}) injected count={:#x} on {} streams",
+            device->id(),
+            info.logical_core.x,
+            info.logical_core.y,
+            rescue_count,
+            num_streams);
+    }
+
+    // Brief pause to let firmware observe the unblocked stream registers and advance
+    // past the wait loop before we send the termination signal.
+    if (!termination_cores.empty()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
 
