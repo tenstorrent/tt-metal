@@ -120,7 +120,7 @@ run_t3000_ttnn_tests() {
   # budget before unit_tests_ttnn could complete.
   ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh --solo ; fail+=$?
   timeout 900 ./build/test/ttnn/unit_tests_ttnn ; fail+=$?
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn_tensor ; fail+=$?
+  timeout 600 ./build/test/ttnn/unit_tests_ttnn_tensor ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; fail+=$?

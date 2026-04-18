@@ -256,8 +256,11 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
         // arrives because the fabric was already torn down).  The exception is caught below and
         // teardown continues; running triage here adds 27s per device and causes the test suite to
         // exceed the 700s predecessor timeout.
+        // Use 200ms explicit timeout instead of 0 (which inherits TT_METAL_OPERATION_TIMEOUT_SECONDS=5)
+        // to avoid adding 5s per-device overhead to every test teardown — this is purely waste since
+        // the exception is caught and teardown continues regardless.
         try {
-            tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0, true);
+            tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 200, true);
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal,
