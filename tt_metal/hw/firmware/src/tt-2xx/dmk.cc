@@ -87,9 +87,14 @@ uint32_t _start() {
         // Setup after the go signal so the previous kernel has completed.
         num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
         my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
+        DPRINT << "num_sw_threads 0x: " << HEX() << num_sw_threads << ENDL();
+        DPRINT << "my_thread_id.  0x: " << HEX() << my_thread_id << ENDL();
 
         // Paint stack after all thread_local writes and CRT init are done.
         mark_stack_usage();
+
+        DPRINT << "num_sw_threads 0x: " << HEX() << num_sw_threads << ENDL();
+        DPRINT << "my_thread_id.  0x: " << HEX() << my_thread_id << ENDL();
 
         EARLY_RETURN_FOR_DEBUG
 

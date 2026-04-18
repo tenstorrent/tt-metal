@@ -8,6 +8,9 @@
 #include "experimental/endpoints.h"
 #include "internal/firmware_common.h"
 #include "api/compile_time_args.h"
+#ifdef ARCH_QUASAR
+#include "api/kernel_thread_globals.h"
+#endif
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 #include "internal/ethernet/tunneling.h"
 #endif
