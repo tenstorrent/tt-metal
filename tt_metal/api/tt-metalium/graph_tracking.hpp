@@ -51,7 +51,7 @@ public:
     IGraphProcessor() = default;
 
     // Returns false for background processors that are always
-    // registered but should not make is_graph_capture_active() return true.
+    // registered but should not make GraphTracker::is_enabled() return true.
     virtual bool is_capture_processor() const { return true; }
 
     virtual void track_allocate(const tt::tt_metal::Buffer* /*buffer*/) {};
