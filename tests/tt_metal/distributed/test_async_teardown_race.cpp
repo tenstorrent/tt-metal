@@ -24,8 +24,14 @@
 // and provide clear pass/fail signal in under 60 seconds.
 
 #include <gtest/gtest.h>
+#include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
+#include <cstring>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -984,55 +990,284 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, QuiesceDevicesTimingBoundStressTest) 
 }
 
 // ---------------------------------------------------------------------------
-// Scenario J: rescue_stuck_dispatch_cores() — stuck dispatch core recovery.
+// Fixture: quiesce_devices() with FABRIC_1D active — tests the ETH-only path
+// through quiesce_and_restart_fabric_workers().
 //
-// rescue_stuck_dispatch_cores() fires when wait_until_cores_done() times out
-// during device close. This happens on FABRIC_2D teardown when dispatch cores
-// (DISPATCH_S/DISPATCH_D) are spinning on stream_wrap_gt/stream_wrap_ge waiting
-// for worker completion counts that will never arrive because the ERISC fabric
-// was already torn down before the dispatch drain completed.
+// WHY THIS FIXTURE EXISTS (critical gap vs AsyncTeardownFabric2DRepeatFixture):
+//   Scenarios H & I use FABRIC_2D (FabricTensixConfig::ENABLED → has_tensix_mux=true),
+//   which exercises Phases 1/2/2.5/3/4 in quiesce_and_restart_fabric_workers().
 //
-// Trigger mechanism:
-//   1. Open FABRIC_2D mesh device — dispatch streams are configured and live.
-//   2. Dispatch a ~10s busy-spin kernel (blocking=false) — kernel guaranteed to
-//      still be executing on device when close() fires.
-//   3. Close immediately — DispatchKernelInitializer::teardown() sequence:
-//        a. terminate_command_queues(): send TERMINATE to CQs
-//        b. wait_for_dispatch_cores(): wait for dispatch cores RUN_MSG_GO→DONE.
-//           If dispatch cores are stuck on stream completions from ERISC channels
-//           that fabric teardown already killed, wait_until_cores_done() throws
-//           → catch block calls rescue_stuck_dispatch_cores():
-//              i.  Write 0xFFFF to STREAM_REMOTE_DEST_BUF_SIZE_REG on every
-//                  dispatch stream — satisfies any pending stream_wrap_gt/ge
-//              ii. 5ms pause for firmware to observe the unblocked registers
-//        c. process_termination_signals(): send TERMINATE to each dispatch core
-//   4. Re-open with FABRIC_2D and dispatch a blocking workload — confirms the
-//      device recovered cleanly from the rescue path.
+//   FABRIC_1D uses FabricTensixConfig::DISABLED → has_tensix_mux=false.
+//   Phases 1/2/4 (Tensix MUX) are SKIPPED — only Phase 2.5 (ERISC TERMINATE poll)
+//   and Phase 3 (re-configure ERISC L1) run.
 //
-// Warning check: these log lines indicate rescue_stuck_dispatch_cores fired:
-//   "Exception waiting for dispatch cores ... Attempting rescue of stuck dispatch cores"
-//   "rescue_stuck_dispatch_cores: Device N core (x,y) injected count=0xffff on M streams"
-// Search CI job logs for "rescue_stuck_dispatch_cores" to confirm the path exercised.
+//   This is exactly the code path that regressed in iter12 (commit b7b19dc905):
+//   an early-return guard at FabricTensixConfig::DISABLED prevented Phase 2.5
+//   from running → ERISCs not terminated → stale firmware ran concurrently with
+//   new L1 load → AllGather hung at iteration 2.
 //
-// Note: rescue fires when the busy-spin kernel is still executing at teardown.
-// If dispatch drains before teardown starts (very fast hardware), close() succeeds
-// cleanly without rescue — the test still passes, verifying the happy path works.
+//   Without a FABRIC_1D-specific test, that regression would be invisible to
+//   Scenarios H/I (which pass with or without the FABRIC_1D fix).
 //
-// Pass = close() completes + device re-opens + blocking dispatch finishes in <90s.
-// Fail = hang (watchdog), crash during close(), or crash during re-open.
+// Requires >= 2 devices (FABRIC_1D needs ETH routing between chips).
 // ---------------------------------------------------------------------------
-TEST_F(AsyncTeardownFabric2DRepeatFixture, RescueStuckDispatchCores) {
-    // ~10s busy-spin on WH BRISC@1.2GHz — far longer than any teardown drain
-    // timeout, guaranteeing the kernel is still running when close() fires.
-    constexpr uint32_t kSpinIters = 100'000'000;
+class AsyncTeardownFabric1DQuiesceFixture : public MeshDeviceFixtureBase {
+protected:
+    AsyncTeardownFabric1DQuiesceFixture()
+        : MeshDeviceFixtureBase(Config{
+              .num_cqs = 1,
+              .fabric_config = tt_fabric::FabricConfig::FABRIC_1D,
+              .test_budget_ms = 90000,  // 90s: FABRIC_1D init ~5-10s, 5 cycles max ~60s
+          }) {}
+
+    void SetUp() override {
+        const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
+        if (num_devices < 2) {
+            GTEST_SKIP() << "AsyncTeardownFabric1DQuiesceFixture requires >= 2 devices (FABRIC_1D needs ETH routing)";
+        }
+        MeshDeviceFixtureBase::SetUp();
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Scenario J: FABRIC_1D quiesce_devices() — Phase 2.5 runs in ETH-only path.
+//
+// GAPS FILLED vs Scenarios H/I (FABRIC_2D quiesce):
+//   1. Exercises quiesce_and_restart_fabric_workers() with has_tensix_mux=false
+//      (FabricTensixConfig::DISABLED). Phases 1/2/4 are skipped; only Phase 2.5
+//      and Phase 3 run. This is the FABRIC_1D code path.
+//   2. Would catch a regression of the iter12 bug: if someone re-introduces an
+//      early-return at the FabricTensixConfig::DISABLED guard, FABRIC_2D tests
+//      (H/I) would still pass but this test would hang.
+//   3. Mirrors the exact dispatch pattern of MeshDevice1x4FabricFixture (uses
+//      FABRIC_1D + blank kernels + quiesce_devices between iterations), which is
+//      the test that exposed the original AllGather hang.
+//
+// The test dispatches async → calls quiesce_devices() 3 times without blocking
+// Finish(). Each quiesce cycle must complete Phase 2.5 (ERISC TERMINATE poll)
+// in FABRIC_1D mode, then re-configure ERISC L1 (Phase 3). A final blocking
+// dispatch and buffer round-trip verify no ERISC state was corrupted.
+//
+// Pass = 3 quiesce cycles complete, final dispatch succeeds, buffer matches.
+// Fail = hang (90s watchdog), crash in quiesce_and_restart_fabric_workers, or
+//        data corruption indicating stale ERISC NOC traffic.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric1DQuiesceFixture, QuiesceDevicesPhase25ERISCTerminationFabric1D) {
+    constexpr int kCycles = 3;
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+
+    for (int cycle = 0; cycle < kCycles; cycle++) {
+        log_info(
+            tt::LogTest,
+            "[Scenario J] Cycle {}/{}: FABRIC_1D async dispatch + quiesce_devices() — Phase 2.5 ETH-only path",
+            cycle + 1,
+            kCycles);
+
+        // Dispatch async — ERISCs are live in FABRIC_1D mode during quiesce.
+        // No Finish() — quiesce_devices() must: poll ERISC TERMINATED (Phase 2.5),
+        // then overwrite ERISC L1 with new firmware (Phase 3). If Phase 2.5 is
+        // skipped (has_tensix_mux=false guard regression), Phase 3 races with
+        // still-running ERISC firmware → L1 corruption → next dispatch hangs.
+        {
+            auto program = create_blank_program(cores);
+            auto workload = MeshWorkload();
+            workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+            auto& cq = mesh_device_->mesh_command_queue();
+            EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        }
+
+        // quiesce_and_restart_fabric_workers (FABRIC_1D / has_tensix_mux=false):
+        //   Phase 1: SKIPPED (no Tensix MUX)
+        //   Phase 2: SKIPPED (no Tensix MUX)
+        //   Phase 2.5 (FIX): send TERMINATE to each ERISC channel, poll TERMINATED
+        //   Phase 3: configure_fabric_cores() — overwrite ERISC L1 with new firmware
+        //   Phase 4: SKIPPED (no Tensix MUX READY_FOR_TRAFFIC)
+        mesh_device_->quiesce_devices();
+
+        log_info(tt::LogTest, "[Scenario J] Cycle {}/{}: quiesce_devices() returned cleanly", cycle + 1, kCycles);
+    }
+
+    // Final blocking dispatch must complete — if any quiesce cycle left a zombie ERISC
+    // (Phase 2.5 missing), this dispatch hangs in completion_queue_wait_front (exit=124).
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario J] Final blocking dispatch after {} FABRIC_1D quiesce cycles", kCycles);
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    }
+
+    // Buffer round-trip: detect DRAM corruption from stale ERISC NOC writes after
+    // incomplete Phase 2.5 termination in FABRIC_1D mode.
+    {
+        auto& cq = mesh_device_->mesh_command_queue();
+        uint32_t page_size = 1024;
+        auto local_config =
+            DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        auto global_shape = Shape2D{
+            static_cast<uint32_t>(mesh_device_->num_rows()),
+            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto dist_config = ShardedBufferConfig{
+            .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
+            .global_buffer_shape = global_shape,
+            .shard_shape = Shape2D{1, 1}};
+
+        auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
+        size_t n_words = page_size / sizeof(uint32_t) * mesh_device_->num_rows() * mesh_device_->num_cols();
+        std::vector<uint32_t> src(n_words);
+        for (size_t i = 0; i < n_words; i++) {
+            src[i] = static_cast<uint32_t>(0xFA1D0000 | (i & 0xFFFF));  // 0xFA1D = "FA1D" (FABRIC_1D)
+        }
+        EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
+        std::vector<uint32_t> dst;
+        EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
+        ASSERT_EQ(dst.size(), src.size())
+            << "[Scenario J] Buffer size mismatch after " << kCycles << " FABRIC_1D quiesce cycles";
+        for (size_t i = 0; i < n_words; i++) {
+            ASSERT_EQ(dst[i], src[i])
+                << "[Scenario J] Data corruption at index " << i << " after " << kCycles
+                << " FABRIC_1D quiesce cycles — stale ERISC NOC write corrupted DRAM";
+        }
+        log_info(
+            tt::LogTest,
+            "[Scenario J] Buffer round-trip clean — FABRIC_1D Phase 2.5 ERISC termination working across {} cycles",
+            kCycles);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario K: FABRIC_1D quiesce timing-bound stress — per-cycle bound detects
+// Phase 2.5 poll regressions in the has_tensix_mux=false path.
+//
+// GAPS FILLED vs Scenario J:
+//   1. Scenario J runs 3 quiesce cycles with no timing assertion. This test runs
+//      5 cycles with a per-cycle bound (5000ms) to catch Phase 2.5 regressions
+//      early — before the 90s test budget expires silently.
+//   2. FABRIC_1D has fewer active channels per device than FABRIC_2D (ring-only
+//      ETH routing vs full mesh), so the timing characteristics differ. An
+//      independent bound tuned to FABRIC_1D is needed.
+//
+// Per-cycle timing bound:
+//   FABRIC_1D T3K: ~4 devices × ~2 active ETH channels = ~8 polls per quiesce.
+//   Phase 2.5 poll timeout = 50ms/channel → worst-case regressed = ~400ms overhead.
+//   5000ms limit gives 12.5× headroom over worst-case normal (50ms × 8 channels)
+//   while catching a stuck poll before the 90s test budget expires.
+//
+// Pass = 5 cycles complete, each in < 5s, final buffer matches.
+// Fail = any cycle > 5s (Phase 2.5 poll regression), hang (watchdog), or corruption.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric1DQuiesceFixture, QuiesceDevicesTimingBoundFabric1D) {
+    constexpr int kCycles = 5;
+    constexpr int64_t kMaxCycleMs = 5000;  // 50ms × 8 channels + 4.6s margin
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+
+    for (int cycle = 0; cycle < kCycles; cycle++) {
+        // Dispatch async — FABRIC_1D ERISCs are live during quiesce.
+        {
+            auto program = create_blank_program(cores);
+            auto workload = MeshWorkload();
+            workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+            auto& cq = mesh_device_->mesh_command_queue();
+            EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+            // No Finish() — quiesce_devices() must drain + terminate ERISCs.
+        }
+
+        // Time the quiesce cycle. Assertion catches Phase 2.5 FABRIC_1D regression
+        // before the 90s test budget expires.
+        const auto t0 = std::chrono::steady_clock::now();
+        mesh_device_->quiesce_devices();
+        const auto elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+
+        log_info(
+            tt::LogTest,
+            "[Scenario K] Cycle {}/{}: FABRIC_1D quiesce_devices() in {}ms (limit {}ms)",
+            cycle + 1,
+            kCycles,
+            elapsed_ms,
+            kMaxCycleMs);
+
+        ASSERT_LT(elapsed_ms, kMaxCycleMs)
+            << "[Scenario K] Cycle " << (cycle + 1) << "/" << kCycles
+            << " exceeded " << kMaxCycleMs << "ms — FABRIC_1D Phase 2.5 ERISC poll may be hanging";
+    }
+
+    // Final blocking dispatch must succeed after 5 FABRIC_1D quiesce cycles.
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario K] Final blocking dispatch after {} FABRIC_1D quiesce cycles", kCycles);
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    }
+
+    // Buffer round-trip: detect DRAM corruption from stale ERISC NOC writes
+    // that could accumulate over 5 FABRIC_1D quiesce cycles.
+    {
+        auto& cq = mesh_device_->mesh_command_queue();
+        uint32_t page_size = 1024;
+        auto local_config =
+            DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        auto global_shape = Shape2D{
+            static_cast<uint32_t>(mesh_device_->num_rows()),
+            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto dist_config = ShardedBufferConfig{
+            .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
+            .global_buffer_shape = global_shape,
+            .shard_shape = Shape2D{1, 1}};
+        auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
+        size_t n_words = page_size / sizeof(uint32_t) * mesh_device_->num_rows() * mesh_device_->num_cols();
+        std::vector<uint32_t> src(n_words);
+        for (size_t i = 0; i < n_words; i++) {
+            src[i] = static_cast<uint32_t>(0x1D1D0000 | (i & 0xFFFF));  // "1D1D" for FABRIC_1D stress
+        }
+        EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
+        std::vector<uint32_t> dst;
+        EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
+        ASSERT_EQ(dst.size(), src.size())
+            << "[Scenario K] Buffer size mismatch after " << kCycles << " FABRIC_1D quiesce cycles";
+        for (size_t i = 0; i < n_words; i++) {
+            ASSERT_EQ(dst[i], src[i])
+                << "[Scenario K] Data corruption at index " << i << " after " << kCycles
+                << " FABRIC_1D quiesce cycles";
+        }
+        log_info(
+            tt::LogTest,
+            "[Scenario K] Buffer round-trip clean — FABRIC_1D timing-bound quiesce across {} cycles",
+            kCycles);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario L: FABRIC_2D async dispatch with guaranteed-running slow kernel.
+//
+// GAPS FILLED vs existing scenarios:
+//   - Scenario F: slow kernel + FabricConfig::DISABLED → ERISC firmware NOT
+//     active. Teardown skips ETH router termination entirely.
+//   - Scenario D: FABRIC_2D + blank kernel → kernel completes in ~1µs; by
+//     the time host's close() fires (~10µs overhead) the kernel is done.
+//     Not a real race on the BRISC side.
+//   - This test: FABRIC_2D + busy_spin (~8ms) → BOTH ERISC EDM firmware AND
+//     BRISC worker are executing when close() fires. Tests whether teardown
+//     correctly terminates ERISC routers while BRISC is still active.
+//
+// What this exercises beyond Scenario D:
+//   FabricFirmwareInitializer::teardown() sends TERMINATE to each ERISC ETH
+//   router while an active BRISC worker may be using the NOC. This checks for
+//   NOC contention between BRISC NOC writes and ERISC teardown state changes.
+//
+// Pass = re-open succeeds + blocking dispatch completes + buffer matches.
+// Fail = hang (90s watchdog), crash on teardown or re-open, data corruption.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DRepeatFixture, Fabric2DSlowKernelTeardownRace) {
+    constexpr uint32_t kSpinIters = 1'000'000;  // ~8ms on WH BRISC @1.2GHz
     auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
     auto mesh_shape = mesh_device_->shape();
 
-    // Phase 1: dispatch long-running kernel with blocking=false.
-    // With FABRIC_2D active, dispatch streams are live.  When close() runs,
-    // ERISC fabric is torn down first, leaving dispatch cores waiting for stream
-    // completions from ERISC channels that are already dead.
+    // Phase 1: dispatch busy_spin on FABRIC_2D — BRISC spinning + ERISC EDM active simultaneously.
     {
         Program program;
         auto kernel_id = CreateKernel(
@@ -1041,37 +1276,25 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RescueStuckDispatchCores) {
             cores,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
         SetRuntimeArgs(program, kernel_id, CoreCoord{0, 0}, {kSpinIters});
-
         auto workload = MeshWorkload();
         workload.add_program(device_range, std::move(program));
         auto& cq = mesh_device_->mesh_command_queue();
         log_info(
             tt::LogTest,
-            "[Scenario J] Dispatching {}-iter busy-spin kernel on FABRIC_2D (blocking=false) — "
-            "kernel will still be running when close() fires",
+            "[Scenario L] FABRIC_2D: dispatching busy-spin ({} iters ~8ms) — "
+            "ERISC EDM + BRISC both active at close()",
             kSpinIters);
         EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
-        // NO Finish() — close() fires while kernel is still spinning.
     }
 
-    // Phase 2: close immediately while the kernel is still executing.
-    // Expect: wait_for_dispatch_cores() times out → rescue_stuck_dispatch_cores()
-    // writes 0xFFFF to all dispatch stream SIZE registers → 5ms pause →
-    // process_termination_signals() exits dispatch cores cleanly.
-    //
-    // Log lines that confirm rescue fired (search CI output):
-    //   "Attempting rescue of stuck dispatch cores."
-    //   "rescue_stuck_dispatch_cores: Device N core (x,y) injected count=0xffff on M streams"
-    log_info(tt::LogTest, "[Scenario J] Closing FABRIC_2D mesh device — rescue_stuck_dispatch_cores may trigger");
+    // Phase 2: close immediately — FabricFirmwareInitializer::teardown() must
+    // terminate ERISC routers while BRISC worker may still be executing.
+    log_info(tt::LogTest, "[Scenario L] Closing FABRIC_2D device — BRISC spinning + ERISC active");
     mesh_device_->close();
     mesh_device_.reset();
-    log_info(tt::LogTest, "[Scenario J] close() returned cleanly (rescue fired or dispatch drained fast)");
 
-    // Phase 3: re-open with FABRIC_2D — exercises compile_and_configure_fabric()
-    // and terminate_stale_erisc_routers() on any residual state.
-    // If rescue left corrupted dispatch register state, MeshDevice::create would
-    // hang or crash here.
-    log_info(tt::LogTest, "[Scenario J] Re-opening FABRIC_2D mesh device to verify clean recovery");
+    // Phase 3: re-open FABRIC_2D — terminate_stale_erisc_routers() + wait_for_fabric_router_sync().
+    log_info(tt::LogTest, "[Scenario L] Re-opening FABRIC_2D mesh device after slow-kernel race");
     tt_fabric::SetFabricConfig(
         tt_fabric::FabricConfig::FABRIC_2D,
         tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
@@ -1084,17 +1307,225 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RescueStuckDispatchCores) {
         {},
         config_.worker_l1_size);
 
-    // Phase 4: blocking dispatch proves dispatch infrastructure is fully operational
-    // after rescue.  If any stream register state was left corrupted by the rescue
-    // writes, this dispatch would hang in the CQ wait loop.
+    // Phase 4: blocking dispatch verifies freshly loaded ERISC firmware is operational.
     {
         auto program = create_blank_program(cores);
         auto workload = MeshWorkload();
         workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
         auto& cq = mesh_device_->mesh_command_queue();
-        log_info(tt::LogTest, "[Scenario J] Verification dispatch after rescue (blocking=true)");
+        log_info(tt::LogTest, "[Scenario L] Verification blocking dispatch");
         EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
-        log_info(tt::LogTest, "[Scenario J] PASSED — dispatch operational after rescue_stuck_dispatch_cores");
+    }
+
+    // Phase 5: buffer round-trip — detect DRAM corruption from stale ERISC NOC writes
+    // that could occur if ERISC teardown raced with BRISC NOC activity.
+    {
+        auto& cq = mesh_device_->mesh_command_queue();
+        uint32_t page_size = 1024;
+        auto local_config =
+            DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        auto global_shape = Shape2D{
+            static_cast<uint32_t>(mesh_device_->num_rows()),
+            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto dist_config = ShardedBufferConfig{
+            .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
+            .global_buffer_shape = global_shape,
+            .shard_shape = Shape2D{1, 1}};
+        auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
+        size_t n_words = page_size / sizeof(uint32_t) * mesh_device_->num_rows() * mesh_device_->num_cols();
+        std::vector<uint32_t> src(n_words);
+        for (size_t i = 0; i < n_words; i++) {
+            src[i] = static_cast<uint32_t>(0xFA2D0000 | (i & 0xFFFF));  // "FA2D" = FABric_2D
+        }
+        EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
+        std::vector<uint32_t> dst;
+        EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
+        ASSERT_EQ(dst.size(), src.size()) << "[Scenario L] Buffer size mismatch after FABRIC_2D slow-kernel race";
+        for (size_t i = 0; i < n_words; i++) {
+            ASSERT_EQ(dst[i], src[i])
+                << "[Scenario L] Corruption at index " << i
+                << " — stale ERISC NOC write during BRISC-active teardown";
+        }
+        log_info(tt::LogTest, "[Scenario L] Buffer round-trip clean — FABRIC_2D slow-kernel teardown race OK");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fixture + Scenario M: SIGKILL predecessor leaves stale ERISC routers.
+//
+// CRITICAL GAP: ALL previous tests close the device via close() which calls
+// FabricFirmwareInitializer::teardown() → TERMINATE → poll → TERMINATED.
+// At re-open, terminate_stale_erisc_routers() always sees TERMINATED status
+// and returns immediately — the log_warning + TERMINATE + poll inner path
+// is NEVER exercised.
+//
+// This test uses fork() + SIGKILL to simulate the exact CI failure:
+//   predecessor opens FABRIC_2D → dispatches async → SIGKILL'd (no teardown)
+//   → ERISCs left in ACTIVE state → next session opens → compile_and_configure_
+//   fabric() → terminate_stale_erisc_routers() finds ACTIVE ERISCs → sends
+//   TERMINATE → polls 50ms → configure_fabric_cores() loads new firmware.
+//
+// This is the EXACT path the fix in compile_and_configure_fabric() was written
+// to protect; previously untested.
+//
+// Timing on T3K FABRIC_2D:
+//   child MeshDevice::create(): ~10-13s (fabric router sync timeout = 10s)
+//   parent sleep before SIGKILL: 15s (5s margin above sync timeout)
+//   parent re-open: ~10-13s
+//   Total: ~30-35s — fits within 120s watchdog.
+//
+// Pass = parent re-opens (terminate_stale_erisc_routers warns + recovers),
+//        blocking dispatch completes, buffer round-trip matches.
+// Fail = hang during re-open (>120s), crash in terminate_stale_erisc_routers,
+//        or buffer corruption from stale ERISC NOC write after recovery.
+// ---------------------------------------------------------------------------
+class AsyncTeardownKillPredecessorFixture : public MeshDeviceFixtureBase {
+protected:
+    AsyncTeardownKillPredecessorFixture()
+        : MeshDeviceFixtureBase(Config{
+              .num_cqs = 1,
+              .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+              .test_budget_ms = 120000,  // 15s wait + 13s child-init + 13s parent-reinit + margin
+          }) {}
+
+    void SetUp() override {
+        const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
+        if (num_devices < 2) {
+            GTEST_SKIP() << "AsyncTeardownKillPredecessorFixture requires >= 2 devices (FABRIC_2D)";
+        }
+        MeshDeviceFixtureBase::SetUp();
+    }
+};
+
+TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorERISCRecovery) {
+    // Step 1: close fixture device before forking. fork() inherits parent state;
+    // closing first ensures child inherits a clean MetalContext (no open devices).
+    auto mesh_shape = mesh_device_->shape();
+    log_info(tt::LogTest, "[Scenario M] Closing fixture device before fork");
+    mesh_device_->close();
+    mesh_device_.reset();
+
+    // Step 2: fork child to simulate a predecessor test.
+    pid_t child_pid = ::fork();
+    ASSERT_NE(child_pid, -1) << "[Scenario M] fork() failed: " << strerror(errno);
+
+    if (child_pid == 0) {
+        // ---- CHILD: simulate predecessor test --------------------------------
+        // Opens FABRIC_2D, dispatches async workload (ERISCs → ACTIVE), spins.
+        // Parent SIGKILLs us, leaving ERISCs in ACTIVE state with no teardown.
+        // Use _exit() — never run C++ destructors or atexit handlers that could
+        // corrupt parent address space (fork gives copy-on-write pages).
+        try {
+            tt_fabric::SetFabricConfig(
+                tt_fabric::FabricConfig::FABRIC_2D,
+                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+            auto child_device = MeshDevice::create(
+                MeshDeviceConfig(mesh_shape),
+                config_.l1_small_size,
+                config_.trace_region_size,
+                config_.num_cqs,
+                DispatchCoreConfig{},
+                {},
+                config_.worker_l1_size);
+            // Dispatch busy_spin async — BRISC spinning + ERISC EDM ACTIVE.
+            constexpr uint32_t kSpinIters = 1'000'000;
+            auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+            Program program;
+            auto kernel_id = CreateKernel(
+                program,
+                "tt_metal/kernels/dataflow/busy_spin.cpp",
+                cores,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            SetRuntimeArgs(program, kernel_id, CoreCoord{0, 0}, {kSpinIters});
+            auto workload = MeshWorkload();
+            workload.add_program(MeshCoordinateRange(child_device->shape()), std::move(program));
+            auto& cq = child_device->mesh_command_queue();
+            EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+            // ERISCs are now ACTIVE. Spin until SIGKILL'd — never run teardown.
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        } catch (...) {
+            _exit(2);  // init failed — parent will re-open and terminate_stale_erisc_routers skips
+        }
+        _exit(0);  // unreachable
+    }
+
+    // ---- PARENT: wait for child to reach ACTIVE ERISC state, then SIGKILL ---
+    // Fabric router sync timeout = 10s; add 5s margin for dispatch latency.
+    log_info(
+        tt::LogTest, "[Scenario M] Waiting 15s for child (pid={}) to complete FABRIC_2D init + ACTIVE ERISCs",
+        child_pid);
+    std::this_thread::sleep_for(std::chrono::seconds(15));
+
+    log_info(tt::LogTest, "[Scenario M] SIGKILLing child pid={} — ERISCs left in ACTIVE state", child_pid);
+    ::kill(child_pid, SIGKILL);
+    int wstatus = 0;
+    ::waitpid(child_pid, &wstatus, 0);
+    log_info(
+        tt::LogTest, "[Scenario M] Child exited (status=0x{:08x}) — proceeding to re-open",
+        static_cast<uint32_t>(wstatus));
+
+    // Step 3: re-open FABRIC_2D. compile_and_configure_fabric() calls
+    // terminate_stale_erisc_routers() which should find ACTIVE ERISCs, send
+    // TERMINATE, poll for TERMINATED, then load fresh EDM firmware.
+    log_info(tt::LogTest, "[Scenario M] Re-opening FABRIC_2D (terminate_stale_erisc_routers should warn+recover)");
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    mesh_device_ = MeshDevice::create(
+        MeshDeviceConfig(mesh_shape),
+        config_.l1_small_size,
+        config_.trace_region_size,
+        config_.num_cqs,
+        DispatchCoreConfig{},
+        {},
+        config_.worker_l1_size);
+
+    // Step 4: verification dispatch.
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario M] Verification blocking dispatch after SIGKILL predecessor recovery");
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+        log_info(tt::LogTest, "[Scenario M] Dispatch completed — stale ERISC recovery succeeded");
+    }
+
+    // Step 5: buffer round-trip — detect DRAM corruption from stale ERISC NOC writes
+    // that could have occurred between SIGKILL and re-initialization.
+    {
+        auto& cq = mesh_device_->mesh_command_queue();
+        uint32_t page_size = 1024;
+        auto local_config =
+            DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        auto global_shape = Shape2D{
+            static_cast<uint32_t>(mesh_device_->num_rows()),
+            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto dist_config = ShardedBufferConfig{
+            .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
+            .global_buffer_shape = global_shape,
+            .shard_shape = Shape2D{1, 1}};
+        auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
+        size_t n_words = page_size / sizeof(uint32_t) * mesh_device_->num_rows() * mesh_device_->num_cols();
+        std::vector<uint32_t> src(n_words);
+        for (size_t i = 0; i < n_words; i++) {
+            src[i] = static_cast<uint32_t>(0x5A1E0000 | (i & 0xFFFF));  // "STALE" predecessor
+        }
+        EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
+        std::vector<uint32_t> dst;
+        EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
+        ASSERT_EQ(dst.size(), src.size()) << "[Scenario M] Buffer size mismatch after SIGKILL predecessor recovery";
+        for (size_t i = 0; i < n_words; i++) {
+            ASSERT_EQ(dst[i], src[i])
+                << "[Scenario M] Corruption at index " << i
+                << " — stale ERISC NOC write after SIGKILL + terminate_stale_erisc_routers recovery";
+        }
+        log_info(
+            tt::LogTest,
+            "[Scenario M] Buffer round-trip clean — terminate_stale_erisc_routers() ACTIVE path verified");
     }
 }
 

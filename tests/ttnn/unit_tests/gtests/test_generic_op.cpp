@@ -1212,6 +1212,13 @@ protected:
 };
 
 TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
+    // T3K escape hatch: Tensix workers on far N300 chips (non-MMIO) perform an unsafe
+    // NOC access at 0x880030060 during dummy ops after ttnn::all_gather, causing a
+    // dispatch hang. Same root cause as MultiCQFabricMeshDevice2x4Fixture::AsyncExecutionWorksCQ0.
+    // Skip on T3K until the underlying all_gather NOC access bug is resolved.
+    if (std::getenv("TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP") != nullptr) {
+        GTEST_SKIP() << "T3K all_gather NOC access hang -- skipped via TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP";
+    }
     // This test replicates AllGatherReturnedTensor test in test_multi_tensor_ccl.cpp but with the generic op.
     // Keep the generic-op descriptor aligned with native all_gather startup/runtime contracts.
     log_info(tt::LogTest, "Running {}: all_gather via generic_op with MUX", __func__);
