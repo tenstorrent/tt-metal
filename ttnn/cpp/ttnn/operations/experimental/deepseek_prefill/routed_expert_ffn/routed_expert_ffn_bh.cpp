@@ -18,15 +18,24 @@ ttnn::Tensor routed_expert_ffn_bh(
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
-    // Use the device's full compute grid. gate/up is output-sharded with
-    // per_core_N = div_up(N_gate, GRID_X), which is legal because input A is
-    // DRAM-interleaved (the "no padding" / Kt-divisibility asserts only fire
-    // for sharded input A). The multiply then reshards the block-sharded
-    // gate_result + up_result into L1 interleaved, after which down can run
-    // with an unsharded input A — no divisor constraint on in0_block_w.
+    // Blackhole compute grid is fixed at 11x8 = 88 cores. All configs below
+    // are tuned for this grid; bail loudly if the device can't supply it.
+    // gate/up is output-sharded with per_core_N = div_up(N_gate, GRID_X),
+    // which is legal because input A is DRAM-interleaved (the "no padding"
+    // / Kt-divisibility asserts only fire for sharded input A). The multiply
+    // then reshards the block-sharded gate_result + up_result into L1
+    // interleaved, after which down runs with an unsharded input A — no
+    // divisor constraint on in0_block_w.
+    constexpr uint32_t GRID_X = 11;
+    constexpr uint32_t GRID_Y = 8;
     const auto grid_size = x.device()->compute_with_storage_grid_size();
-    const uint32_t GRID_X = grid_size.x;
-    const uint32_t GRID_Y = grid_size.y;
+    TT_FATAL(
+        grid_size.x >= GRID_X && grid_size.y >= GRID_Y,
+        "routed_expert_ffn_bh: expected at least {}x{} compute grid, got {}x{}",
+        GRID_X,
+        GRID_Y,
+        grid_size.x,
+        grid_size.y);
 
     const auto& x_shape = x.padded_shape();
     const auto& gate_shape = gate_proj.padded_shape();
