@@ -80,7 +80,8 @@ ttnn::Tensor reduce_scatter(
             chunks_per_sync,
             num_workers_per_link,
             num_buffers_per_channel,
-            compute_kernel_config);
+            compute_kernel_config,
+            use_l1_small_for_semaphores);
     }
     return ttnn::prim::reduce_scatter(
                input_tensor,

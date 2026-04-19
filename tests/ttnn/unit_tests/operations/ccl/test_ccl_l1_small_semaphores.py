@@ -42,8 +42,38 @@ def run_ccl_op(ccl_op, tensor_b, use_l1_small):
             topology=ttnn.Topology.Linear,
             use_l1_small_for_semaphores=use_l1_small,
         )
+    elif ccl_op == "composite_all_gather":
+        # ROW_MAJOR layout triggers the composite_all_gather path internally
+        return ttnn.all_gather(
+            tensor_b,
+            dim=3,
+            topology=ttnn.Topology.Linear,
+            use_l1_small_for_semaphores=use_l1_small,
+        )
+    elif ccl_op == "composite_reduce_scatter":
+        # ROW_MAJOR layout triggers the composite_reduce_scatter path internally
+        return ttnn.reduce_scatter(
+            tensor_b,
+            dim=3,
+            topology=ttnn.Topology.Linear,
+            use_l1_small_for_semaphores=use_l1_small,
+        )
+    elif ccl_op == "all_broadcast":
+        return ttnn.all_broadcast(
+            tensor_b,
+            topology=ttnn.Topology.Linear,
+            use_l1_small_for_semaphores=use_l1_small,
+        )
     else:
         raise ValueError(f"Unknown ccl_op: {ccl_op}")
+
+
+def deallocate_output(output):
+    if isinstance(output, (list, tuple)):
+        for t in output:
+            t.deallocate(True)
+    else:
+        output.deallocate(True)
 
 
 @pytest.mark.parametrize(
@@ -51,7 +81,9 @@ def run_ccl_op(ccl_op, tensor_b, use_l1_small):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 512}],
     indirect=True,
 )
-@pytest.mark.parametrize("ccl_op", ["all_gather", "reduce_scatter"])
+@pytest.mark.parametrize(
+    "ccl_op", ["all_gather", "reduce_scatter", "composite_all_gather", "composite_reduce_scatter", "all_broadcast"]
+)
 @pytest.mark.parametrize("use_l1_small", [False, True], ids=["l1_default", "l1_small"])
 def test_ccl_l1_small_semaphores(mesh_device, device_params, ccl_op, use_l1_small):
     if mesh_device.get_num_devices() < 2:
@@ -78,17 +110,25 @@ def test_ccl_l1_small_semaphores(mesh_device, device_params, ccl_op, use_l1_smal
     )
 
     # Tensor B: [512, 1024] in DRAM
-    # all_gather needs sharded input; reduce_scatter needs replicated input
+    # all_gather/composite_all_gather need sharded input
+    # reduce_scatter/composite_reduce_scatter/all_broadcast need replicated input
+    # composite_* variants use ROW_MAJOR layout to trigger the composite path
     # (reduce_scatter with sharded [1,1,512,128] on dim=3 across 8 devices
     #  would produce [1,1,512,16] which is not tile-aligned)
-    if ccl_op == "all_gather":
+    if ccl_op in ("all_gather", "composite_all_gather"):
         mesh_mapper_b = ttnn.ShardTensorToMesh(mesh_device, dim=3)
     else:
         mesh_mapper_b = ttnn.ReplicateTensorToMesh(mesh_device)
+
+    if ccl_op in ("composite_all_gather", "composite_reduce_scatter"):
+        layout_b = ttnn.ROW_MAJOR_LAYOUT
+    else:
+        layout_b = ttnn.TILE_LAYOUT
+
     tensor_b = ttnn.from_torch(
         torch.randn(1, 1, 512, 1024),
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=layout_b,
         device=mesh_device,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         mesh_mapper=mesh_mapper_b,
@@ -106,7 +146,7 @@ def test_ccl_l1_small_semaphores(mesh_device, device_params, ccl_op, use_l1_smal
     # Free tensors A, B, and output
     tensor_a.deallocate(True)
     tensor_b.deallocate(True)
-    output.deallocate(True)
+    deallocate_output(output)
 
     print_l1_buffers(mesh_device, "before_tensor_c")
     print_l1_small_buffers(mesh_device, "before_tensor_c")

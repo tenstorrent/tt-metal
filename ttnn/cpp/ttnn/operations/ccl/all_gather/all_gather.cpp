@@ -72,7 +72,7 @@ ttnn::Tensor all_gather(
     if (composite_common::use_composite_all_gather(input_tensor, dim, memory_config)) {
         TT_FATAL(!sub_core_grid.has_value(), "Composite OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
-            input_tensor, dim, num_links_, memory_config_, subdevice_id, cluster_axis);
+            input_tensor, dim, num_links_, memory_config_, subdevice_id, cluster_axis, use_l1_small_for_semaphores);
     }
     return ttnn::prim::all_gather(
         input_tensor,
