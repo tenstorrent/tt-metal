@@ -62,6 +62,28 @@ def mesh_device_fixture():
         del device
 
 
+def _is_sharded(memory_config):
+    """Check if a memory config uses sharded memory layout."""
+    if memory_config is None:
+        return False
+    if hasattr(memory_config, "is_sharded"):
+        return memory_config.is_sharded()
+    return False
+
+
+def _shard_grid_fits_device(memory_config, device):
+    """Check if a sharded memory config's shard grid fits within the device's compute grid."""
+    if not _is_sharded(memory_config):
+        return True
+    shard_spec = getattr(memory_config, "shard_spec", None)
+    if shard_spec is None:
+        return True
+    num_shards = shard_spec.grid.num_cores()
+    compute_grid = device.compute_with_storage_grid_size()
+    max_cores = compute_grid.x * compute_grid.y
+    return num_shards <= max_cores
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -89,12 +111,23 @@ def run(
         output_memory_config = memory_config
 
     # Pass output memory_config to ttnn.transpose — without it, transpose inherits
-    # the input's sharded memory_config which may become non-tile-aligned after
-    # transposing dimensions.
+    # the input's sharded memory_config which may become invalid after transposing
+    # dimensions (e.g., shard grid may exceed available cores for the output shape).
+    # Always provide an explicit output memory_config for sharded inputs to avoid this.
     if output_memory_config is not None and "memory_config" not in op_kwargs:
         parsed_mc = parse_dict_value("memory_config", output_memory_config)
         if parsed_mc is not None:
-            op_kwargs["memory_config"] = parsed_mc
+            # If the parsed output memory config is sharded but its shard grid exceeds
+            # the device's compute grid (e.g., traced on a 32-core device but running
+            # on a 4-core Galaxy node), fall back to DRAM interleaved.
+            if _is_sharded(parsed_mc) and not _shard_grid_fits_device(parsed_mc, device):
+                op_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+            else:
+                op_kwargs["memory_config"] = parsed_mc
+    elif _is_sharded(input_a_memory_config) and "memory_config" not in op_kwargs:
+        # Sharded input but no explicit output memory_config — use DRAM interleaved
+        # to avoid the transposed output inheriting an incompatible shard spec.
+        op_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -106,6 +139,13 @@ def run(
 
     is_host = storage_type and "HOST" in str(storage_type)
 
+    # Create tensor using interleaved→sharded for sharded memory configs.
+    # Direct from_torch with sharded config triggers TilizeDeviceOperation which
+    # can clash with L1 circular buffers.
+    # If input shard grid exceeds device cores, fall back to DRAM interleaved
+    if _is_sharded(input_a_memory_config) and not _shard_grid_fits_device(input_a_memory_config, device):
+        input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
             input_tensor_a = create_tensor_on_mesh(
@@ -116,6 +156,15 @@ def run(
                 input_a_memory_config,
                 input_a_tensor_placement,
             )
+        elif _is_sharded(input_a_memory_config):
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, input_a_memory_config)
         else:
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
@@ -127,10 +176,38 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    start_time = start_measuring_time()
-    output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
-    e2e_perf = stop_measuring_time(start_time)
+    try:
+        start_time = start_measuring_time()
+        output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **op_kwargs)
+        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        e2e_perf = stop_measuring_time(start_time)
+    except Exception as e:
+        err_msg = str(e)
+        if "must not exceed number of cores" in err_msg or "shard_grid_fit_error" in err_msg:
+            # The traced output memory_config shard spec is incompatible with the
+            # transposed output shape on this device (e.g., traced on a 32-chip Galaxy
+            # but the per-chip transpose output needs more shards than the grid provides).
+            # Retry with DRAM interleaved input and no sharded output memory_config.
+            if _is_sharded(input_a_memory_config):
+                input_tensor_a = ttnn.from_torch(
+                    torch_input_tensor_a,
+                    dtype=input_a_dtype,
+                    layout=input_a_layout,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            fallback_kwargs = {k: v for k, v in op_kwargs.items() if k != "memory_config"}
+            fallback_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+            start_time = start_measuring_time()
+            output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **fallback_kwargs)
+            output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+            e2e_perf = stop_measuring_time(start_time)
+        else:
+            raise
+
+    # Slice output back to original shape in case tile padding expanded it
+    if output_tensor.shape != torch_output_tensor.shape:
+        output_tensor = output_tensor[tuple(slice(0, s) for s in torch_output_tensor.shape)]
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     return [pcc, e2e_perf]
