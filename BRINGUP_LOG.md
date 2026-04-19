@@ -1,5 +1,59 @@
 # OLMo-3.1-32B Bring-up Log
 
+## Session: 2026-04-18
+
+### Status: 32K WORKING — 64K OPEN — Accuracy workaround in place
+
+### Summary
+
+Debugging session focused on 64K ISL hang and accuracy issue for long generation.
+
+### CCL State Confirmed (llama_ccl.py)
+
+Verified that `ring_reduce_scatter` for OLMo uses synchronous `ttnn.reduce_scatter` (not
+`reduce_scatter_minimal_async`). Previous sessions had introduced an incorrect revert that
+used `reduce_scatter_minimal_async` with `barrier_semaphore=None`, which caused NOC hangs.
+Fully synchronous CCL for all three OLMo prefill paths is confirmed working:
+- `ring_reduce_scatter`: `ttnn.reduce_scatter`, Ring, num_links=1, subdevice_id=None
+- `ring_all_gather`: `ttnn.all_gather`, Ring, num_links=1
+- `line_all_gather`: `ttnn.all_gather`, Linear, num_links=1
+
+### Warmup State Confirmed (generator.py)
+
+Ascending warmup (8K → 16K → 32K) auto-configured from `max_seq_len`. This is the
+known-working state for 32K cold-start. Warmup primes the ring fabric sync CCL signals
+before the actual inference prefill.
+
+### 64K Investigation
+
+Attempted single 64K warmup (instead of 8K→16K→32K ascending). Test could not complete
+because device lost 6/32 chips (NOC hang from prior run, `tt-smi -glx_reset` failed).
+64K remains an open issue — documented in `OLMO_OPEN_ISSUES.md`.
+
+### Accuracy Issue Documented
+
+Confirmed root cause and workaround for long-generation garbage output:
+- **Root cause**: `bfloat8_b` KV cache precision accumulation corrupts logits at ~530 decode steps
+- **Confirmed**: bfloat16 KV cache extended coherent generation to 4630 steps
+- **Blocker**: `paged_fill_cache` does not support bfloat16 for long ISLs (hangs at 32K)
+- **Workaround**: `sliding_window_size=None` for decode → coherent to ~3680 steps
+- Full details + reproduce steps in `OLMO_OPEN_ISSUES.md`
+
+### Files Modified
+
+1. **models/demos/llama3_70b_galaxy/tt/llama_ccl.py** — comment improvements only (no logic change)
+2. **models/demos/llama3_70b_galaxy/tt/generator.py** — restored known-working 3-step ascending warmup; improved comments
+3. **models/demos/llama3_70b_galaxy/OLMO_OPEN_ISSUES.md** — NEW: documents 64K hang and accuracy issues with reproduce steps
+4. **models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_aime_test.json** — NEW: AIME 2024 I/5 eval prompt
+
+### Block Hash
+
+- `llama_ccl.py`: sync CCL guards for OLMo prefill (reduce_scatter + all_gather × 3 paths)
+- `generator.py`: ascending warmup [8192, 16384, 32768]
+- PCC: N/A (session focused on hang debugging and documentation)
+
+---
+
 ## Session: 2026-04-17
 
 ### Status: tt-inference-server WORKING UP TO 32K ISL — Server loads, warmup completes, benchmarks running
