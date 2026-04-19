@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
 #include "../scatter_bf16_reduction_common.hpp"
 
 #include <array>
@@ -173,11 +171,8 @@ void kernel_main() {
                 input_offset * sizeof(input_std_type),
                 input_chunk_length * sizeof(input_std_type),
                 input_stick_id);
-            experimental::CircularBuffer input_cb(ctas.input_cb);
-            experimental::CircularBuffer fp32_temp_cb(ctas.fp32_temp_cb);
-            experimental::CircularBuffer output_cb(ctas.output_cb);
-            input_cb.wait_front(ONE_PAGE);
-            fp32_temp_cb.reserve_back(ONE_PAGE);
+            cb_wait_front(ctas.input_cb, ONE_PAGE);
+            cb_reserve_back(ctas.fp32_temp_cb, ONE_PAGE);
 
             copy_input_to_fp32_temp(ctas.input_cb, ctas.fp32_temp_cb, input_chunk_length);
 
@@ -206,10 +201,8 @@ void kernel_main() {
                         source_offset * sizeof(input_std_type),
                         source_chunk_length * sizeof(input_std_type),
                         index_stick_id);
-                    experimental::CircularBuffer index_cb(ctas.index_cb);
-                    experimental::CircularBuffer source_cb(ctas.source_cb);
-                    index_cb.wait_front(ONE_PAGE);
-                    source_cb.wait_front(ONE_PAGE);
+                    cb_wait_front(ctas.index_cb, ONE_PAGE);
+                    cb_wait_front(ctas.source_cb, ONE_PAGE);
                     scatter_along_chunk<index_std_type>(
                         ctas.input_cb,
                         ctas.index_cb,
@@ -221,20 +214,20 @@ void kernel_main() {
                         input_chunk_length,
                         index_chunk_length,
                         scatter_reduction_type);
-                    source_cb.pop_front(ONE_PAGE);
-                    index_cb.pop_front(ONE_PAGE);
+                    cb_pop_front(ctas.source_cb, ONE_PAGE);
+                    cb_pop_front(ctas.index_cb, ONE_PAGE);
                 }
             }
 
-            input_cb.pop_front(ONE_PAGE);
-            fp32_temp_cb.push_back(ONE_PAGE);
-            fp32_temp_cb.wait_front(ONE_PAGE);
-            output_cb.reserve_back(ONE_PAGE);
+            cb_pop_front(ctas.input_cb, ONE_PAGE);
+            cb_push_back(ctas.fp32_temp_cb, ONE_PAGE);
+            cb_wait_front(ctas.fp32_temp_cb, ONE_PAGE);
+            cb_reserve_back(ctas.output_cb, ONE_PAGE);
 
             // third phase: push to the output cb with fp32->bf16 conversion
             copy_fp32_temp_to_output(ctas.fp32_temp_cb, ctas.output_cb, input_chunk_length);
-            fp32_temp_cb.pop_front(ONE_PAGE);
-            output_cb.push_back(ONE_PAGE);
+            cb_pop_front(ctas.fp32_temp_cb, ONE_PAGE);
+            cb_push_back(ctas.output_cb, ONE_PAGE);
         }
         next_inplace<N>(coord, input_dims);
     }
