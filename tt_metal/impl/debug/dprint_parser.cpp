@@ -502,7 +502,7 @@ public:
     std::string_view format_message(
         uint32_t info_id, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer) override;
 
-    std::string elf_path;
+    const std::string& get_elf_path() const override { return elf_path; }
 
 private:
     struct EnumInfo {
@@ -556,6 +556,7 @@ private:
     const EnumInfo* get_enum_info(std::string_view type_name);
     void load_enum_info_from_dwarf();
 
+    std::string elf_path;
     ll_api::ElfFile elf_file;
     std::span<std::byte> format_strings_info_bytes;
     uint64_t format_strings_info_address{};
@@ -586,19 +587,8 @@ DevicePrintParserImpl<PointerSize>::DevicePrintParserImpl(const std::string& elf
 
 struct DevicePrintParserDeleter {
     void operator()(DevicePrintParser* parser) const {
-        // Both DevicePrintParserImpl<4> and DevicePrintParserImpl<8> have elf_path as a public member.
-        // Use a helper to retrieve it without knowing which template instantiation we have.
-        auto try_erase = [&](auto* impl) {
-            if (impl) {
-                DevicePrintParser::parser_cache.erase(impl->elf_path);
-                delete impl;
-                return true;
-            }
-            return false;
-        };
-        if (!try_erase(dynamic_cast<DevicePrintParserImpl<4>*>(parser))) {
-            try_erase(dynamic_cast<DevicePrintParserImpl<8>*>(parser));
-        }
+        DevicePrintParser::parser_cache.erase(parser->get_elf_path());
+        delete parser;
     }
 };
 
@@ -606,9 +596,13 @@ static uint8_t read_elf_pointer_size(const std::string& path) {
     std::ifstream elf_stream(path, std::ios::binary);
     uint8_t ei_class = 0;
     if (elf_stream.seekg(4) && elf_stream.read(reinterpret_cast<char*>(&ei_class), 1)) {
-        return (ei_class == 2) ? 8 : 4;
+        switch (ei_class) {
+            case 1: return 4;  // 32-bit ELF
+            case 2: return 8;  // 64-bit ELF
+            default: TT_THROW("Unknown ELF class {} in file {}", ei_class, path);
+        }
     }
-    return 4;  // Default to 32-bit
+    TT_THROW("Failed to read ELF class from file {}", path);
 }
 
 std::shared_ptr<DevicePrintParser> DevicePrintParser::get_parser_for_elf(const std::string& elf_path) {

@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -97,6 +98,8 @@ public:
 
     virtual std::string_view format_message(
         uint32_t info_id, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer) = 0;
+
+    virtual const std::string& get_elf_path() const = 0;
 
 private:
     static std::map<std::string, std::weak_ptr<DevicePrintParser>> parser_cache;
