@@ -331,6 +331,8 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         }
 
         // Force-reset any channels that did not terminate within the global deadline.
+        // GAP 5: Record force-reset channels so the next verify_all_fabric_channels_healthy()
+        // can distinguish "was force-reset" from "corrupt from prior crash".
         for (const auto& ch : pending) {
             std::vector<uint32_t> status_buf(1, 0);
             detail::ReadFromDeviceL1(
@@ -344,6 +346,10 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 ch.eth_chan_id,
                 teardown_timeout_ms,
                 status_buf[0]);
+            {
+                std::lock_guard<std::mutex> lock(force_reset_channels_mutex_);
+                force_reset_channels_.emplace(ch.dev->id(), ch.eth_chan_id);
+            }
             try {
                 const auto virtual_eth_coord = cluster_.get_virtual_coordinate_from_logical_coordinates(
                     ch.dev->id(), ch.eth_logical_core, CoreType::ETH);
@@ -363,6 +369,8 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
 
     devices_.clear();
     initialized_.clear();
+    // Don't clear force_reset_channels_ here — preserve it for the next session's
+    // verify_all_fabric_channels_healthy() to use for degraded-channel diagnostics.
     init_done.erase(key);
 }
 

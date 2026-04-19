@@ -5,6 +5,9 @@
 #pragma once
 
 #include <atomic>
+#include <mutex>
+#include <set>
+#include <utility>
 
 #include "device/device_impl.hpp"
 #include "firmware_initializer.hpp"
@@ -57,6 +60,14 @@ private:
     tt::tt_fabric::ControlPlane& control_plane_;
     std::vector<Device*> devices_;
     std::atomic_flag initialized_;
+
+    // GAP 5: Track channels that were force-reset during teardown.
+    // On the next verify_all_fabric_channels_healthy() call, channels that were force-reset
+    // in a previous session are expected to fail — log them as "degraded" rather than
+    // "corrupt from prior crash" to aid diagnosis.
+    // Key: (device_id, eth_chan_id).
+    mutable std::mutex force_reset_channels_mutex_;
+    std::set<std::pair<ChipId, uint32_t>> force_reset_channels_;
 };
 
 }  // namespace tt::tt_metal
