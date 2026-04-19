@@ -91,7 +91,10 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config,
+        keep_none=True,
+        extra_kwargs={"memory_config": memory_config},
+    )
 
     # V2 vectors provide page_table as a named tensor (page_table_*) instead of input_c_*
     page_table_kwargs = extract_named_tensor_kwargs(kwargs, "page_table")

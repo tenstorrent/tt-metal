@@ -154,7 +154,9 @@ def run(
     if output_memory_config is not None and "SHARDED" in str(output_memory_config):
         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config,
+        keep_none=True,
+    )
 
     # Clear sharded memory_config from op_kwargs too
 

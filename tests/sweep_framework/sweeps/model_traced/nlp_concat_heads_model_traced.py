@@ -80,7 +80,9 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config,
+        keep_none=True,
+    )
 
     # memory_config is a legitimate op kwarg for nlp_concat_heads (controls output layout).
     # build_op_kwargs strips it by default, so re-add from traced kwargs if present.

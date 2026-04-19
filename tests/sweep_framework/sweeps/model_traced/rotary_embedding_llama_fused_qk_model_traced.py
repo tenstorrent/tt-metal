@@ -207,7 +207,9 @@ def run(
     if not input_e_tensor_placement:
         input_e_tensor_placement = None
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config,
+        keep_none=True,
+    )
 
     # Extract shapes for all 5 inputs.
     # V2 loader puts shapes as separate keys: input_b_shape, input_c_shape, etc.

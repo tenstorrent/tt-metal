@@ -351,7 +351,9 @@ def run(
 
     is_mesh_device = hasattr(device, "get_num_devices")
     input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None)
-    op_kwargs = build_op_kwargs(_kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(_kwargs, output_memory_config=output_memory_config,
+        keep_none=True,
+    )
 
     # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)
     if input_shape is None and input_a_shape is not None:

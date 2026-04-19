@@ -85,6 +85,8 @@ def run(
         kwargs,
         exclude={"starts", "ends", "steps", "slice_dim", "num_devices"},
         output_memory_config=output_memory_config,
+        keep_none=True,
+        extra_kwargs={"memory_config": memory_config, "dtype": dtype},
     )
 
     if output_memory_config is None and memory_config is not None:

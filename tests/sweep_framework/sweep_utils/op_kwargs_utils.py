@@ -223,6 +223,8 @@ def build_op_kwargs(
     exclude: Optional[Set[str]] = None,
     include_only: Optional[Set[str]] = None,
     output_memory_config: Any = None,
+    keep_none: bool = False,
+    extra_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Extract actual op kwargs from the full test vector kwargs.
 
@@ -243,18 +245,26 @@ def build_op_kwargs(
         exclude: Additional keys to exclude (op-specific, e.g., keys already handled)
         include_only: If set, only include these specific keys (overrides default filtering)
         output_memory_config: Unused, kept for backward compatibility.
+        keep_none: If True, keep kwargs whose value is None (needed for
+            model-traced validation where the model explicitly passed None).
+        extra_kwargs: Additional key-value pairs to merge into the result after
+            filtering.  Useful for re-injecting named params (e.g. memory_config,
+            dtype) that were captured by the run() signature and thus absent
+            from **kwargs.  Values are parsed through :func:`parse_dict_value`.
+            ``__ABSENT__`` sentinels and (when *keep_none* is False) None values
+            are still skipped.
 
     Returns:
         Dict of parsed op kwargs ready to pass as **op_kwargs to the ttnn op.
-        None values and ``__ABSENT__`` sentinels are excluded.
+        None values (unless *keep_none*) and ``__ABSENT__`` sentinels are excluded.
     """
     all_keys = set(kwargs.keys())
     exclude = exclude or set()
     op_kwargs = {}
 
     for key, value in kwargs.items():
-        # Skip None values
-        if value is None:
+        # Skip None values (unless keep_none is set)
+        if value is None and not keep_none:
             continue
 
         # Skip __ABSENT__ sentinel values (parameter not present in traced config)
@@ -278,6 +288,22 @@ def build_op_kwargs(
         parsed = parse_dict_value(key, value)
         if parsed is not None:
             op_kwargs[key] = parsed
+        elif keep_none and value is None:
+            # Preserve explicit None when keep_none is set
+            op_kwargs[key] = None
+
+    # Merge extra_kwargs (re-injected named params like memory_config, dtype)
+    if extra_kwargs:
+        for key, value in extra_kwargs.items():
+            if value == "__ABSENT__":
+                continue
+            if value is None and not keep_none:
+                continue
+            parsed = parse_dict_value(key, value)
+            if parsed is not None:
+                op_kwargs[key] = parsed
+            elif keep_none and value is None:
+                op_kwargs[key] = None
 
     return op_kwargs
 

@@ -79,7 +79,9 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config,
+        keep_none=True,
+    )
 
     pos_args = extract_positional_args(kwargs)
     traced_output_mem_config = pos_args.get(1, None)
