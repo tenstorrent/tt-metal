@@ -243,7 +243,7 @@ FORCE_INLINE void receiver_send_completion_ack(
     if constexpr (CHECK_BUSY) {
         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
             // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
-            __asm__ volatile("nop"); /* was: .4byte 0x0100000F (RISC-V PAUSE hint) */
+            __asm__ volatile(".4byte 0x0100000F");
         };
     }
     receiver_channel_response_credit_sender.send_completion_credit(src_id, num_completions);
@@ -255,7 +255,7 @@ FORCE_INLINE void receiver_send_received_ack(
     if constexpr (CHECK_BUSY) {
         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
             // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
-            __asm__ volatile("nop"); /* was: .4byte 0x0100000F (RISC-V PAUSE hint) */
+            __asm__ volatile(".4byte 0x0100000F");
         };
     }
     receiver_channel_response_credit_sender.send_ack_credit(src_id);
