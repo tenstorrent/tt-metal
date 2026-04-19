@@ -1161,7 +1161,7 @@ class TTNNClipVisionEmbeddings(TTNNModule):
         return embeddings
 
 
-@trace_enabled
+@trace_disabled
 class TTNNVitModel(TTNNModule):
     """Vision Transformer Model using TTNN operations."""
 

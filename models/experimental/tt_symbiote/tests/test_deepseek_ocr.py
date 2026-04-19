@@ -31,7 +31,7 @@ from models.experimental.tt_symbiote.modules.conv import TTNNConv2dNHWC, TTNNIma
 from models.experimental.tt_symbiote.modules.moe import TTNNDeepseekV2MoE
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
-from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun, _TRACE_DISABLED_CLASSES
+from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from tqdm import tqdm
 
@@ -81,8 +81,6 @@ def _install_vision_cache(model):
         import torch.nn.functional as F
 
         def _cached_sam_forward(x):
-            pass
-
             if "sam" in _vision_cache:
                 return ttnn.from_torch(
                     _vision_cache["sam"],
@@ -222,7 +220,6 @@ def test_deepseek_ocr(device):
 
     use_traced = os.environ.get("TT_SYMBIOTE_RUN_MODE", "").upper() == "TRACED"
     if use_traced:
-        _TRACE_DISABLED_CLASSES.add(TTNNModule)
         TracedRun.configure(device=device)
 
     modules1 = register_module_replacement_dict(model, nn_to_nn, model_config=None)
@@ -293,13 +290,15 @@ def test_deepseek_ocr(device):
     def _reset_between_runs():
         ttnn.synchronize_device(device)
         paged_cache.reset()
-        TTNNConv2dNHWC.CACHED_TTCNN.clear()
-        _clear_all_device_caches()
-        device.disable_and_clear_program_cache()
-        device.enable_program_cache()
+        if not use_traced:
+            TTNNConv2dNHWC.CACHED_TTCNN.clear()
+            _clear_all_device_caches()
+            device.disable_and_clear_program_cache()
+            device.enable_program_cache()
 
-    # Warmup: two infer() calls fill the program cache and populate vision cache.
-    # Vision outputs are cached from the first call; subsequent calls replay them.
+    # Warmup runs fill the program cache and populate vision cache.
+    # In TRACED mode the TracedRun lifecycle also progresses:
+    #   run 0 → warmup forward, run 1 → trace capture, run 2 → trace replay.
     model.infer(**{**infer_kwargs, "eval_mode": True})
     _reset_between_runs()
 
@@ -308,7 +307,6 @@ def test_deepseek_ocr(device):
 
     # Real run
     DispatchManager.clear_timings()
-    _reset_between_runs()
     res = model.infer(**{**infer_kwargs, "save_results": True})
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
