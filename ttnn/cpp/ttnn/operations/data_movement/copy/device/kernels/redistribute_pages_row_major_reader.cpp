@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 FORCE_INLINE uint32_t u32_min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
@@ -27,15 +26,12 @@ void kernel_main() {
     constexpr uint32_t bytes_per_input_subblock = get_compile_time_arg_val(8);
     constexpr uint32_t bytes_per_output_subblock = get_compile_time_arg_val(9);
 
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in1(cb_id_in1);
-
     constexpr auto src_args = TensorAccessorArgs<10>();
     const auto accessor_src = TensorAccessor(src_args, src_addr);
 
     const uint32_t elements_per_output_subblock = bytes_per_output_subblock / bytes_per_element;
     const uint32_t elements_per_input_subblock = bytes_per_input_subblock / bytes_per_element;
-    cb_in0.reserve_back(1);
+    cb_reserve_back(cb_id_in0, 1);
 
     // To help understand the logic of this kernel, here is a visualization of what a subblock looks like in the
     // input/output tensor: When the tensor page is not too large (i.e., does not cause a CB OOM error), the subblock
@@ -54,7 +50,7 @@ void kernel_main() {
     // Thus, the start of a page will always align with the start of a subblock. This is required to guarantee
     // aligned noc reads/writes.
 
-    const uint32_t input_l1_write_addr = cb_in0.get_write_ptr();
+    const uint32_t input_l1_write_addr = get_write_ptr(cb_id_in0);
 
     for (uint32_t row = start_row; row < start_row + num_rows_to_process; ++row) {
         uint32_t input_start_column = 0;
@@ -77,7 +73,8 @@ void kernel_main() {
                 uint32_t l1_output_subblock_write_addr_offset;
                 uint32_t l1_input_subblock_read_addr_offset;
                 if (output_start_column >= input_start_column) {
-                    cb_in1.reserve_back(
+                    cb_reserve_back(
+                        cb_id_in1,
                         1);  // We are writing a new output subblock, so we need to reserve a slot on the output cb
                     bytes_to_write_to_output_subblock =
                         (output_end_column - output_start_column + 1) * bytes_per_element;
@@ -95,7 +92,7 @@ void kernel_main() {
                 }
 
                 uint32_t l1_output_subblock_write_addr =
-                    cb_in1.get_write_ptr();  // write the output subblock to the output cb
+                    get_write_ptr(cb_id_in1);  // write the output subblock to the output cb
                 tt::data_movement::common::tt_memmove<false, false, true, 0>(
                     l1_output_subblock_write_addr + l1_output_subblock_write_addr_offset,
                     input_l1_write_addr + l1_input_subblock_read_addr_offset,
@@ -128,13 +125,14 @@ void kernel_main() {
                     output_end_column);  // output end column should be the minimum of the next output page end column,
                                          // the end column of the next output subblock and the end of the tensor row
                 // We have processed the entire output subblock, so we must commit it to the output cb
-                cb_in1.push_back(1);
+                cb_push_back(cb_id_in1, 1);
             } else {  // Case where we are finishing reading in an input subblock
                 uint32_t bytes_to_write_to_output_subblock;
                 uint32_t l1_output_subblock_write_addr_offset;
                 uint32_t l1_input_subblock_read_addr_offset;
                 if (output_start_column >= input_start_column) {
-                    cb_in1.reserve_back(
+                    cb_reserve_back(
+                        cb_id_in1,
                         1);  // We are writing a new output subblock, so we need to reserve a slot on the output cb
                     bytes_to_write_to_output_subblock =
                         (input_end_column - output_start_column + 1) * bytes_per_element;
@@ -148,7 +146,7 @@ void kernel_main() {
                 }
 
                 uint32_t l1_output_subblock_write_addr =
-                    cb_in1.get_write_ptr();  // Write the output subblock to the output cb
+                    get_write_ptr(cb_id_in1);  // Write the output subblock to the output cb
                 tt::data_movement::common::tt_memmove<false, false, true, 0>(
                     l1_output_subblock_write_addr + l1_output_subblock_write_addr_offset,
                     input_l1_write_addr + l1_input_subblock_read_addr_offset,
@@ -169,7 +167,7 @@ void kernel_main() {
         }
     }
 
-    cb_in0.push_back(1);
-    cb_in0.wait_front(1);
-    cb_in0.pop_front(1);
+    cb_push_back(cb_id_in0, 1);
+    cb_wait_front(cb_id_in0, 1);
+    cb_pop_front(cb_id_in0, 1);
 }
