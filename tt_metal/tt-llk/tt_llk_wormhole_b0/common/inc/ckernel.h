@@ -18,11 +18,6 @@
 // MT: This should be dissolved and moved to the appropriate place
 #include "tensix.h"
 
-// compiler hints
-#define LIKELY(condition)   __builtin_expect(static_cast<bool>(condition), 1)
-#define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
-#define UNREACHABLE()       __builtin_unreachable()
-
 #define UNROLL_LOOP(factor) GCC unroll factor
 
 #ifndef EN_DEST_DOUBLE_BUFFERING

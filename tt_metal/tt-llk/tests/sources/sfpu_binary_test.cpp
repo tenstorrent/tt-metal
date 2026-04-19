@@ -71,15 +71,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             i, formats.math, formats.math);
     }
 
-    _llk_math_eltwise_binary_sfpu_init_<SfpuType::add1>();
+    test_utils::call_binary_sfpu_operation_init<APPROX_MODE, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>();
 
     // Note: argument passed to _llk_math_eltwise_binary_sfpu_start_ is dest index of first operand, and
     // argument passed of _calculate_sfpu_binary_ is dest index of the second operand
 
-    _llk_math_eltwise_binary_sfpu_start_<DstSync::SyncHalf>(0);
-    test_utils::call_binary_sfpu_operation<APPROX_MODE, SFPU_BINARY_OPERATION, 32, formats.math>(0, 1, 0);
-
-    _llk_math_eltwise_binary_sfpu_done_();
+    test_utils::call_binary_sfpu_operation<APPROX_MODE, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>(
+        0 /* dst_index_in0 */, 1 /* dst_index_in1 */, 0 /* dst_index_out */);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
