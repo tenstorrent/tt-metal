@@ -454,10 +454,9 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather2_dest_noc_x"),
                 get_named_compile_time_arg_val("gather2_dest_noc_y"),
                 get_named_compile_time_arg_val("gather2_data_size_bytes"),
-                get_semaphore(
-                    get_named_compile_time_arg_val("gather2_noc_idx") == 0
-                        ? get_named_compile_time_arg_val("gather2_noc0_receiver_semaphore_id")
-                        : get_named_compile_time_arg_val("gather2_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather2_noc_idx") == 0
+                    ? get_named_compile_time_arg_val("gather2_noc0_receiver_semaphore_addr")
+                    : get_named_compile_time_arg_val("gather2_noc1_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("gather2_src_cb"),
                 get_named_compile_time_arg_val("gather2_src_num_pages"),
                 get_named_compile_time_arg_val("gather2_sender_grid_start_x"),
@@ -476,7 +475,7 @@ void kernel_main() {
     deepseek_b1_ops::Mcast::DMArgs mcast3_args{
         .sender = {},
         .receiver = {
-            get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
+            get_named_compile_time_arg_val("mcast3_data_receiver_semaphore_addr"),
             get_named_compile_time_arg_val("mcast3_dst_cb"),
             get_named_compile_time_arg_val("mcast3_dst_num_pages"),
         }};
@@ -490,7 +489,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather3_dest_noc_x"),
         get_named_compile_time_arg_val("gather3_dest_noc_y"),
         get_named_compile_time_arg_val("gather3_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("gather3_receiver_semaphore_addr")),
+        get_named_compile_time_arg_val("gather3_noc_idx") == 0
+            ? get_named_compile_time_arg_val("gather3_noc0_receiver_semaphore_addr")
+            : get_named_compile_time_arg_val("gather3_noc1_receiver_semaphore_addr"),
         get_named_compile_time_arg_val("gather3_src_cb"),
         get_named_compile_time_arg_val("gather3_src_num_pages"),
         get_named_compile_time_arg_val("gather3_grid_start_x"),
@@ -575,8 +576,8 @@ void kernel_main() {
         sdpa_reduce_forwarder_args = {
             .buffer_base = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
-            .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r1_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
         uint32_t fabric_args_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_forwarder_args.rta_offset = per_core_rta_arg_idx;
@@ -847,8 +848,8 @@ void kernel_main() {
             {
                 get_named_compile_time_arg_val("gather2_noc0_num_senders"),
                 get_named_compile_time_arg_val("gather2_noc1_num_senders"),
-                get_semaphore(get_named_compile_time_arg_val("gather2_noc0_receiver_semaphore_id")),
-                get_semaphore(get_named_compile_time_arg_val("gather2_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather2_noc0_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("gather2_noc1_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("gather2_dst_cb"),
                 get_named_compile_time_arg_val("gather2_dst_num_pages"),
             },
@@ -865,7 +866,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
                 get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
-                get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast3_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("mcast3_data_size_bytes"),
                 mcast3_src_cb,
                 get_named_compile_time_arg_val("mcast3_src_num_pages"),
@@ -878,8 +879,8 @@ void kernel_main() {
     deepseek_b1_ops::GatherReduce::ReceiverArgs gather3_args{
         get_named_compile_time_arg_val("gather3_noc0_num_senders"),
         get_named_compile_time_arg_val("gather3_noc1_num_senders"),
-        get_semaphore(get_named_compile_time_arg_val("gather3_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("gather3_noc1_receiver_semaphore_id")),
+        get_named_compile_time_arg_val("gather3_noc0_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("gather3_noc1_receiver_semaphore_addr"),
         get_named_compile_time_arg_val("gather3_dst_cb"),
         get_named_compile_time_arg_val("gather3_dst_num_tiles"),
     };
@@ -942,15 +943,15 @@ void kernel_main() {
             .fwd_core_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .fwd_core_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r1_fwd_slot_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .r1_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r1_fwd_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r1_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r2_fwd_slot_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .r2_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r2_fwd_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r2_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .scatter_dest_l1_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx),
             // scatter_arrival_enabled=1, so we need to pass the semaphore address
-            .scatter_arrival_sem_addr = get_semaphore(get_named_compile_time_arg_val("scatter_arrival_semaphore_id")),
+            .scatter_arrival_sem_addr = get_named_compile_time_arg_val("scatter_arrival_semaphore_addr"),
         };
         per_core_rta_arg_idx += SdpaReduceWorkerCTArgs::scatter_num_rows * 2;  // x, y value per dest
     }
@@ -965,8 +966,8 @@ void kernel_main() {
         sdpa_reduce_forwarder_args = {
             .buffer_base = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
-            .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r1_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
         uint32_t fabric_args_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_forwarder_args.rta_offset = per_core_rta_arg_idx;
@@ -2430,20 +2431,20 @@ void kernel_main() {
                 deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
                 sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-                constexpr uint32_t ccl_sync_sem_addr = get_named_compile_time_arg_val("ccl_sync_semaphore_addr");
-                constexpr uint32_t input_noc_coord_x = get_named_compile_time_arg_val("input_noc_coord_x");
-                constexpr uint32_t input_noc_coord_y = get_named_compile_time_arg_val("input_noc_coord_y");
-                uint64_t ccl_sync_sem_noc_addr = get_noc_addr(input_noc_coord_x, input_noc_coord_y, ccl_sync_sem_addr);
+                constexpr uint32_t ccl_sync_sem_addr = get_named_compile_time_arg_val("ccl_sync_semaphore2_addr");
+                constexpr uint32_t ccl_sender_noc_x = get_named_compile_time_arg_val("ccl_sender_noc_x");
+                constexpr uint32_t ccl_sender_noc_y = get_named_compile_time_arg_val("ccl_sender_noc_y");
+                uint64_t ccl_sync_sem_noc_addr = get_noc_addr(ccl_sender_noc_x, ccl_sender_noc_y, ccl_sync_sem_addr);
                 noc_semaphore_inc(ccl_sync_sem_noc_addr, 1);
                 noc_async_atomic_barrier();
 #endif
             }
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (Core::is_matmul4_core) {
-                constexpr uint32_t scatter_arrival_semaphore_id =
-                    get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
+                constexpr uint32_t scatter_arrival_semaphore_addr =
+                    get_named_compile_time_arg_val("scatter_arrival_semaphore_addr");
                 volatile tt_l1_ptr uint32_t* scatter_arrival_sem_addr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scatter_arrival_semaphore_id));
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scatter_arrival_semaphore_addr);
                 noc_semaphore_wait(scatter_arrival_sem_addr, 1);
                 noc_semaphore_set(scatter_arrival_sem_addr, 0);
                 constexpr uint32_t matmul4_in0 = get_named_compile_time_arg_val("matmul4_in0");
@@ -2520,19 +2521,26 @@ void kernel_main() {
             deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceWriterCTArgs> ccl_writer;
             ccl_writer(ccl_sender_args);
 
-            constexpr uint32_t ccl_sync_sem_addr = get_named_compile_time_arg_val("ccl_sync_semaphore_addr");
+            // All-Gather: transport sender (BRISC=fwd, NCRISC=bwd)
+            {
+                DeviceZoneScopedN("ALLGATHER_TRANSPORT");
+                deepseek_b1_ops::AllGather::TransportSender<AllGatherTransportCT> allgather_sender;
+                volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_named_compile_time_arg_val("ccl_sync_semaphore2_addr"));
+                noc_semaphore_wait(ccl_sync_sem, 2 * get_named_compile_time_arg_val("sdpa_fwd_num_cores"));
+                allgather_sender(allgather_transport_args);
+                // R2 active waits for the other risc to finish, so it's safe to reset the semaphore here.
+                if constexpr (AllGatherTransportCT::r2_active) {
+                    noc_semaphore_set(ccl_sync_sem, 0);
+                }
+            }
+
+            constexpr uint32_t ccl_sync_sem_addr = get_named_compile_time_arg_val("ccl_sync_semaphore2_addr");
             constexpr uint32_t input_noc_coord_x = get_named_compile_time_arg_val("input_noc_coord_x");
             constexpr uint32_t input_noc_coord_y = get_named_compile_time_arg_val("input_noc_coord_y");
             uint64_t ccl_sync_sem_noc_addr = get_noc_addr(input_noc_coord_x, input_noc_coord_y, ccl_sync_sem_addr);
             noc_semaphore_inc(ccl_sync_sem_noc_addr, 1);
             noc_async_atomic_barrier();
-
-            // All-Gather: transport sender (BRISC=fwd, NCRISC=bwd)
-            {
-                DeviceZoneScopedN("ALLGATHER_TRANSPORT");
-                deepseek_b1_ops::AllGather::TransportSender<AllGatherTransportCT> allgather_sender;
-                allgather_sender(allgather_transport_args);
-            }
 #endif
         }
 
@@ -2578,11 +2586,8 @@ void kernel_main() {
             ccl_compute(ccl_compute_args);
 #elif defined(COMPILE_FOR_BRISC)
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
-            noc_semaphore_wait(
-                ccl_sync_sem,
-                2 * get_named_compile_time_arg_val("sdpa_fwd_num_cores") +
-                    2 * get_named_compile_time_arg_val("num_ccl_sender_cores"));
+                get_named_compile_time_arg_val("ccl_sync_semaphore2_addr"));
+            noc_semaphore_wait(ccl_sync_sem, 2 * get_named_compile_time_arg_val("num_ccl_sender_cores"));
             noc_semaphore_set(ccl_sync_sem, 0);
 #endif
         }
