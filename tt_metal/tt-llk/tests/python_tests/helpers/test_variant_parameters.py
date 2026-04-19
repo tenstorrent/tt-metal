@@ -190,6 +190,14 @@ class DISABLE_SRC_ZERO_FLAG(TemplateParameter):
 
 
 @dataclass
+class FILL_BITCAST(TemplateParameter):
+    enabled: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool fill_bitcast = {str(self.enabled).lower()};"
+
+
+@dataclass
 class MATH_FIDELITY(TemplateParameter):
     math_fidelity: MathFidelity
 
