@@ -105,7 +105,7 @@ class TtPatchTSMixerBatchNorm:
         self.base = base_address
         self.eps = eps
 
-        # shapes: [1, D, 1, 1] as required by ttnn.bach_norm
+        # shapes: [1, D, 1, 1] as required by ttnn.batch_norm
         self.weight = parameters[f"{self.base}.norm.weight"]  # (1, D, 1, 1)
         self.bias = parameters[f"{self.base}.norm.bias"]  # (1, D, 1, 1)
         self.mean = parameters[f"{self.base}.norm.running_mean"]  # (1, D, 1, 1)
@@ -631,9 +631,6 @@ class TtPatchTSMixerBlock:
         return x, all_hidden_states
 
 
-import ttnn
-
-
 class TtPatchTSMixerForecastHead:
     """
     TTNN equivalent of PatchTSMixerForecastHead.
@@ -872,8 +869,6 @@ class TtPatchTSMixerPatchify:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         Np = self.num_patches
-        P = self.patch_length
-
         # NOTE: TTNN gather limitation - requires matching dimensions
         # Ideally: gather with x=(B,1,L,C) and idx=(B,Np,P,C) using broadcasting
         # Reality: gather requires x=(B,Np,L,C) to match idx=(B,Np,P,C) on Np dimension
