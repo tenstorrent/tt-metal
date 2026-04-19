@@ -404,7 +404,7 @@ def render_report(report: ValidationReport) -> str:
 
     # Detailed diffs (truncated to avoid exceeding GitHub step summary 1MB limit)
     if report.diffed:
-        max_detailed_entries = 20
+        max_detailed_entries = 100
         shown = report.diffed[:max_detailed_entries]
         remaining = len(report.diffed) - max_detailed_entries
 
