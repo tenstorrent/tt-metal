@@ -5,9 +5,6 @@
 
 #pragma once
 
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-
 constexpr uint32_t ONE_PAGE = 1;
 
 // supported reduction methods for scatter to be applied for source values coming from recurring indices
@@ -124,16 +121,14 @@ FORCE_INLINE void load_to_cb(
     const uint32_t& offset_bytes,
     const uint32_t& chunk_size_bytes,
     const uint32_t& stick_id) {
-    experimental::CircularBuffer cb_exp(cb);
-    cb_exp.reserve_back(ONE_PAGE);
+    cb_reserve_back(cb, ONE_PAGE);
     const uint64_t source_noc_address = get_noc_addr(stick_id, addr_gtor);
-    const uint32_t l1_write_address = cb_exp.get_write_ptr();
+    const uint32_t l1_write_address = get_write_ptr(cb);
 
-    // Use legacy NOC API for raw address reads
     noc_async_read(source_noc_address + offset_bytes, l1_write_address, chunk_size_bytes);
     noc_async_read_barrier();
 
-    cb_exp.push_back(ONE_PAGE);
+    cb_push_back(cb, ONE_PAGE);
 }
 
 // this function is supposed to write either a whole stick or part of it (76800 elements)
@@ -144,14 +139,12 @@ FORCE_INLINE void write_to_output(
     const uint32_t& offset_bytes,
     const uint32_t& chunk_size_bytes,
     const uint32_t& stick_id) {
-    experimental::CircularBuffer cb_exp(cb);
-    cb_exp.wait_front(ONE_PAGE);
+    cb_wait_front(cb, ONE_PAGE);
     const uint64_t destination_noc_address = get_noc_addr(stick_id, addr_gtor);
-    const uint32_t l1_read_address = cb_exp.get_read_ptr();
+    const uint32_t l1_read_address = get_read_ptr(cb);
 
-    // Use legacy NOC API for raw address writes
     noc_async_write(l1_read_address, destination_noc_address + offset_bytes, chunk_size_bytes);
     noc_async_write_barrier();
 
-    cb_exp.pop_front(ONE_PAGE);
+    cb_pop_front(cb, ONE_PAGE);
 }

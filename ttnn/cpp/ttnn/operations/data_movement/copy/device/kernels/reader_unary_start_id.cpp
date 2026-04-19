@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
@@ -14,7 +13,6 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_in0 = 0;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
@@ -47,11 +45,11 @@ void kernel_main() {
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        cb_in0.reserve_back(onetile);
-        uint32_t l1_write_addr = cb_in0.get_write_ptr();
+        cb_reserve_back(cb_id_in0, onetile);
+        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         uint64_t src_noc_addr = s.get_noc_addr(i);
         noc_async_read(src_noc_addr, l1_write_addr, tile_bytes);
         noc_async_read_barrier();
-        cb_in0.push_back(onetile);
+        cb_push_back(cb_id_in0, onetile);
     }
 }
