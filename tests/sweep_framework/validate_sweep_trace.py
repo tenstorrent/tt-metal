@@ -66,6 +66,14 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
             # sub_core_grids: None is noise
             if k == "sub_core_grids" and v is None:
                 continue
+            # Strip top-level keys with None values — they are semantically
+            # equivalent to absent keys.  The V2 loader sometimes produces
+            # None for keys not present in the master trace, and the master
+            # trace sometimes records explicit None for optional parameters
+            # (e.g. dtype, core_grid, global_cb, sub_device_id).  Treating
+            # None and absent as identical avoids false-positive diffs.
+            if v is None and _parent_key == "":
+                continue
             result[k] = normalize(v, _parent_key=k)
         return result
     if isinstance(obj, list):

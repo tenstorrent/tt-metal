@@ -89,9 +89,9 @@ def run(
     # V2 loader uses "__ABSENT__" sentinel for keys missing from a config.
     # None is a valid value (master trace may have dtype=None explicitly).
     extra_kw = {}
-    if memory_config is not None and memory_config != "__ABSENT__":
+    if memory_config != "__ABSENT__":
         extra_kw["memory_config"] = memory_config
-    if dtype is not None and dtype != "__ABSENT__":
+    if dtype != "__ABSENT__":
         extra_kw["dtype"] = dtype
     op_kwargs = build_op_kwargs(
         kwargs, exclude={"scalar"}, output_memory_config=output_memory_config,
