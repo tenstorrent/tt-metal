@@ -38,6 +38,11 @@ private:
     // Wait for fabric router handshake on all devices.
     void wait_for_fabric_router_sync(uint32_t timeout_ms) const;
 
+    // Verify ALL active ERISC channels are healthy after fabric init.
+    // wait_for_fabric_router_sync only checks the master channel; this checks every channel
+    // to detect persistent ERISC corruption that would cause dispatch hangs later.
+    void verify_all_fabric_channels_healthy() const;
+
     // Compute the fabric router sync timeout from runtime options.
     uint32_t get_fabric_router_sync_timeout_ms() const;
 

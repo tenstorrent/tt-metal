@@ -94,6 +94,12 @@ void FabricFirmwareInitializer::init(
 void FabricFirmwareInitializer::configure() {
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         wait_for_fabric_router_sync(get_fabric_router_sync_timeout_ms());
+        // After the master-channel handshake passes, verify ALL active ERISC channels are
+        // healthy.  Persistent corruption (e.g. 0x49705180 from a prior process crash) on
+        // non-master channels is invisible to wait_for_fabric_router_sync but will cause
+        // dispatch hangs when the test tries to use those fabric paths.  Fail-fast here
+        // instead of letting the test hang for minutes.
+        verify_all_fabric_channels_healthy();
     }
     initialized_.test_and_set();
 }
@@ -632,6 +638,56 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
         }
 
         wait_for_handshake(dev);
+    }
+}
+
+void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
+    const auto& fabric_context = control_plane_.get_fabric_context();
+    const auto& builder_context = fabric_context.get_builder_context();
+    const auto [router_sync_address, expected_status] = builder_context.get_fabric_router_sync_address_and_status();
+
+    // Check ALL active ERISC channels on every device — not just the master channel.
+    // wait_for_fabric_router_sync() only polls the master channel, which can pass even when
+    // non-master channels are still in a corrupt state (e.g. 0x49705180 from a prior process
+    // crash).  If we let those through, dispatch cores will hang later when they try to push
+    // commands through the broken fabric path, causing 5s+ timeouts followed by 16+ minutes
+    // of triage scripts — all wasted time.
+    //
+    // Fail-fast: if any channel is NOT at expected_status, throw now so the test fails
+    // immediately with a clear diagnostic instead of hanging.
+    uint32_t total_bad = 0;
+    for (auto* dev : devices_) {
+        if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
+            continue;
+        }
+        const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+        const auto& active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            const auto eth_logical_core =
+                cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+            std::vector<uint32_t> status_buf(1, 0);
+            detail::ReadFromDeviceL1(dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+            if (status_buf[0] != expected_status) {
+                log_error(
+                    tt::LogMetal,
+                    "verify_all_fabric_channels_healthy: Device {} chan={} edm_status=0x{:08x} "
+                    "(expected 0x{:08x}) — channel did NOT recover from prior corruption",
+                    dev->id(),
+                    eth_chan_id,
+                    status_buf[0],
+                    expected_status);
+                total_bad++;
+            }
+        }
+    }
+
+    if (total_bad > 0) {
+        TT_THROW(
+            "Fabric health check failed: {} ERISC channel(s) did not reach expected status "
+            "after initialization. This usually means the previous process left ERISCs in an "
+            "unrecoverable state (corrupt L1). A tt-smi chip reset is required to recover. "
+            "See #42429.",
+            total_bad);
     }
 }
 
