@@ -11,6 +11,7 @@ operations:
       - type: "Fpu"
         operation: "Datacopy"
         unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
       - type: "UnarySfpu"
         operation: "Exp"
         approximation_mode: false
@@ -30,6 +31,6 @@ operations:
         operation: "Elwmul"
         unpacker: "UnpackerA"
         reuse_dest: "DEST_TO_SRCB"
+        math_fidelity: "LoFi"
     packer: "Packer"
-    math_fidelity: "LoFi"
     block_size: [32, 32]

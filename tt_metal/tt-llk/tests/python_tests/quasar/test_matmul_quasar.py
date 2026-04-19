@@ -6,8 +6,6 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
-    MAX_TILES_16_BIT_DEST,
-    MAX_TILES_32_BIT_DEST,
     TILE_DIM,
     MatmulGolden,
     TransposeGolden,
@@ -21,10 +19,12 @@ from helpers.llk_params import (
     Transpose,
     format_dict,
 )
-from helpers.matmul_sweep import (
-    generate_tile_dims,
+from helpers.matmul_sweep import generate_tile_dims
+from helpers.param_config import (
+    DEST_SYNC_TILE_LIMITS,
+    input_output_formats,
+    parametrize,
 )
-from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode, TestConfig
@@ -41,24 +41,21 @@ from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
 kt_dims = [1, 2, 4]
-matmul_dimensions_32_bit_dest = [
+matmul_dimensions_dest_sync = [
     (
         [mt_dim * TILE_DIM, kt_dim * TILE_DIM],
         [kt_dim * TILE_DIM, nt_dim * TILE_DIM],
-        DestAccumulation.Yes,
+        dest_acc,
+        dest_sync,
     )
-    for mt_dim in range(1, MAX_TILES_32_BIT_DEST + 1)
-    for nt_dim in range(1, MAX_TILES_32_BIT_DEST // mt_dim + 1)
-    for kt_dim in kt_dims
-]
-matmul_dimensions_16_bit_dest = [
-    (
-        [mt_dim * TILE_DIM, kt_dim * TILE_DIM],
-        [kt_dim * TILE_DIM, nt_dim * TILE_DIM],
-        DestAccumulation.No,
+    for dest_sync in (DestSync.Half, DestSync.Full)
+    for dest_acc in (DestAccumulation.Yes, DestAccumulation.No)
+    for max_tiles in (
+        DEST_SYNC_TILE_LIMITS[dest_sync]
+        // (2 if dest_acc == DestAccumulation.Yes else 1),
     )
-    for mt_dim in range(1, MAX_TILES_16_BIT_DEST + 1)
-    for nt_dim in range(1, MAX_TILES_16_BIT_DEST // mt_dim + 1)
+    for mt_dim in range(1, max_tiles + 1)
+    for nt_dim in range(1, max_tiles // mt_dim + 1)
     for kt_dim in kt_dims
 ]
 
@@ -80,21 +77,21 @@ MATMUL_FORMAT = input_output_formats(
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ],
-    dimensions_dest_acc=matmul_dimensions_32_bit_dest + matmul_dimensions_16_bit_dest,
+    dimensions_dest_acc_dest_sync=matmul_dimensions_dest_sync,
     format=MATMUL_FORMAT,
-    dest_sync_mode=[DestSync.Half, DestSync.Full],
     transpose=[Transpose.No],
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
     math_fidelity,
-    dimensions_dest_acc,
+    dimensions_dest_acc_dest_sync,
     format,
     implied_math_format,
-    dest_sync_mode,
     transpose,
 ):
-    input_A_dimensions, input_B_dimensions, dest_acc = dimensions_dest_acc
+    input_A_dimensions, input_B_dimensions, dest_acc, dest_sync_mode = (
+        dimensions_dest_acc_dest_sync
+    )
 
     torch_format = format_dict[format.output_format]
 
@@ -180,7 +177,6 @@ def test_matmul(
     )
 
     res_from_L1 = configuration.run().result
-
     assert len(res_from_L1) == len(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"

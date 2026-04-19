@@ -17,10 +17,8 @@ void kernel_main() {
     uint32_t cb_id{16};
     const auto cb_id_output = cb_id++;
 
-    const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-
     constexpr auto output_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(output_args, output_addr, output_tile_bytes);
+    const auto s = TensorAccessor(output_args, output_addr);
 
     const auto start_tile_idx = tile_offset;
     const auto output_l1_read_addr = get_read_ptr(cb_id_output);

@@ -6,13 +6,13 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_remainder_int32.h"
+#include "ckernel_sfpu_binary_remainder.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
 
 // FMOD = a - trunc(a / b) * b
-// Implemented using 32-bit integer remainder kernel (see ckernel_sfpu_remainder_int32.h)
+// Implemented using 32-bit integer remainder kernel (see ckernel_sfpu_binary_remainder.h)
 sfpi_inline void calculate_fmod_int32_body(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -52,14 +52,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     // Compute a/b = a * (1/b)
     sfpi::vFloat div_result = a * recip;
 
-    // Compute trunc(a/b)
-    // Input in LReg0, output in LReg1. LReg2/LReg3 are clobbered by _trunc_body_(),
-    // so we must read them to inform the SFPI register allocator they are not immediately available.
-    sfpi::l_reg[sfpi::LRegs::LReg0] = div_result;
-    _trunc_body_();
-    sfpi::vFloat trunc_div = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vFloat tmp2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vFloat tmp3 = sfpi::l_reg[sfpi::LRegs::LReg3];
+    sfpi::vFloat trunc_div = _trunc_body_(div_result);
 
     // Compute fmod = a - trunc(a/b) * b
     sfpi::vFloat result = a - trunc_div * b;
@@ -111,7 +104,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        result = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        result = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
     }
 
     return result;

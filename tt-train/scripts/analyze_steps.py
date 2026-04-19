@@ -84,15 +84,37 @@ def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, flo
         last_loss = summary[-1]["loss"]
         last_loss_msg = "Last loss"
 
+    step_times = [step_info["step_time"] for step_info in summary]
     # Exclude first two steps to avoid warmup/cold-start bias in timing.
-    average_step_time = np.mean([step_info["step_time"] for step_info in summary[2:]])
+    average_step_time = np.mean(step_times[2:])
+
+    # Use for insight
+    step_time_1st = step_times[0]
+    step_time_2nd = step_times[1]
+
+    # More refined step time information
+    step_time_p50 = np.percentile(step_times, 50)
+    step_time_p95 = np.percentile(step_times, 95)
+    step_time_p99 = np.percentile(step_times, 99)
 
     print("\n--- Step Information ---")
     print(f"  Total steps:   {num_steps}")
     print(f"  {last_loss_msg}:   {last_loss:,.2f}")
     print(f"  Average iteration time excluding first two steps:   {average_step_time:,.2f} ms")
+    print(f"  First and second step time:   {step_time_1st:,.2f} ms, {step_time_2nd:,.2f} ms")
+    print(f"  Median step time:   {step_time_p50:,.2f} ms")
+    print(f"  Step time at P95:   {step_time_p95:,.2f} ms")
+    print(f"  Step time at P99:   {step_time_p99:,.2f} ms")
 
-    breakdown = {"last_loss": last_loss, "average_iteration_time_ms": average_step_time}
+    breakdown = {
+        "last_loss": last_loss,
+        "average_iteration_time_ms": average_step_time,
+        "step_time_1st": step_time_1st,
+        "step_time_2nd": step_time_2nd,
+        "step_time_p50": step_time_p50,
+        "step_time_p95": step_time_p95,
+        "step_time_p99": step_time_p99,
+    }
 
     return breakdown
 
