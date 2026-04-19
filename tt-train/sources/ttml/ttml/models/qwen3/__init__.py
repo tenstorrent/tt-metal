@@ -150,6 +150,7 @@ class Qwen3(AbstractModuleBase):
         mask: ttml.autograd.Tensor,
         past_key_values=None,
         new_tokens: Optional[int] = None,
+        **kwargs,
     ) -> ttml.autograd.Tensor:
         TILE_SIZE = 32
         input_shape = input.shape()

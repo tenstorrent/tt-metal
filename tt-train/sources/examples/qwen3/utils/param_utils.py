@@ -99,8 +99,10 @@ def build_weight_mapping_single(config, root_prefix, tie_word_embeddings):
     mapping = {}
     transforms = {}
 
-    mapping["model.embed_tokens.weight"] = f"{root_prefix}/tok_emb/weight"
-    if not tie_word_embeddings:
+    if tie_word_embeddings:
+        mapping["model.embed_tokens.weight"] = f"{root_prefix}/fc/weight"
+    else:
+        mapping["model.embed_tokens.weight"] = f"{root_prefix}/tok_emb/weight"
         mapping["lm_head.weight"] = f"{root_prefix}/fc/weight"
 
     for i in range(config.num_hidden_layers):
