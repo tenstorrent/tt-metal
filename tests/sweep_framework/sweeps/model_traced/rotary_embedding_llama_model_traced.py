@@ -351,7 +351,13 @@ def run(
 
     is_mesh_device = hasattr(device, "get_num_devices")
     input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = _kwargs.get("input_b_tensor_placement", None)
+    input_c_tensor_placement = _kwargs.get("input_c_tensor_placement", None)
+    input_d_tensor_placement = _kwargs.get("input_d_tensor_placement", None)
+    # Exclude memory_config: rotary_embedding_llama uses output_memory_config explicitly
+    # and the master trace doesn't record memory_config as a kwarg.
     op_kwargs = build_op_kwargs(_kwargs, output_memory_config=output_memory_config,
+        exclude={"memory_config"},
     )
 
     # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)
@@ -589,13 +595,13 @@ def run(
                 input_a_tensor_placement,
             )
             cos_cache_tt = create_tensor_on_mesh(
-                torch_cos_cache, device, input_b_dtype, input_b_layout, input_b_memory_config, input_a_tensor_placement
+                torch_cos_cache, device, input_b_dtype, input_b_layout, input_b_memory_config, input_b_tensor_placement
             )
             sin_cache_tt = create_tensor_on_mesh(
-                torch_sin_cache, device, input_c_dtype, input_c_layout, input_c_memory_config, input_a_tensor_placement
+                torch_sin_cache, device, input_c_dtype, input_c_layout, input_c_memory_config, input_c_tensor_placement
             )
             trans_mat_tt = create_tensor_on_mesh(
-                torch_trans_mat, device, input_d_dtype, input_d_layout, input_d_memory_config, input_a_tensor_placement
+                torch_trans_mat, device, input_d_dtype, input_d_layout, input_d_memory_config, input_d_tensor_placement
             )
         else:
             input_tensor_a = ttnn.from_torch(

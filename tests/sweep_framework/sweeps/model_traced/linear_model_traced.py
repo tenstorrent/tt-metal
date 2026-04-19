@@ -329,9 +329,9 @@ def run(
             except Exception:
                 output_tensor = ttnn.matmul(ttnn_a, ttnn_b)
     else:
-        linear_kwargs = {
-            "bias": ttnn_bias,
-        }
+        linear_kwargs = {}
+        if ttnn_bias is not None:
+            linear_kwargs["bias"] = ttnn_bias
         if transpose_a:
             linear_kwargs["transpose_a"] = transpose_a
         if transpose_b:

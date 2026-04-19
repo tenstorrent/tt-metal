@@ -80,7 +80,7 @@ def run(
         extra_kwargs={"memory_config": memory_config},
     )  # op_kwargs available but op does not accept extra kwargs
 
-    if output_memory_config is None and memory_config is not None:
+    if output_memory_config is None and memory_config is not None and memory_config != "__ABSENT__":
         output_memory_config = memory_config
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

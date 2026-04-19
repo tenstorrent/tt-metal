@@ -90,7 +90,7 @@ def run(
         output_dtype = parse_dtype(output_dtype)
     if output_dtype is None:
         output_dtype = ttnn.float32
-    if output_memory_config is None and memory_config is not None:
+    if output_memory_config is None and memory_config is not None and memory_config != "__ABSENT__":
         output_memory_config = memory_config
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
