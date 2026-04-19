@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
@@ -13,10 +12,9 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    experimental::CircularBuffer cb_out(cb_id_out);
 
 #ifdef OUT_SHARDED
-    cb_out.wait_front(num_tiles);
+    cb_wait_front(cb_id_out, num_tiles);
 #else
 
     // single-tile ublocks
@@ -49,12 +47,12 @@ void kernel_main() {
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        cb_out.wait_front(onetile);
-        uint32_t l1_read_addr = cb_out.get_read_ptr();
+        cb_wait_front(cb_id_out, onetile);
+        uint32_t l1_read_addr = get_read_ptr(cb_id_out);
         uint64_t dest_noc_addr = s.get_noc_addr(i);
         noc_async_write(l1_read_addr, dest_noc_addr, tile_bytes);
         noc_async_write_barrier();
-        cb_out.pop_front(onetile);
+        cb_pop_front(cb_id_out, onetile);
     }
 #endif
 }
