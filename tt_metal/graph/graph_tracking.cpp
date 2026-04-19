@@ -4,6 +4,7 @@
 
 #include <graph_tracking.hpp>
 
+#include <algorithm>
 #include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -16,7 +17,9 @@ GraphTracker& GraphTracker::instance() {
     return tracker;
 }
 
-bool GraphTracker::is_enabled() const { return (not processors.empty()); }
+bool GraphTracker::is_enabled() const {
+    return std::any_of(processors.begin(), processors.end(), [](const auto& p) { return p->is_capture_processor(); });
+}
 
 void GraphTracker::push_processor(const std::shared_ptr<IGraphProcessor>& new_processor) {
     processors.push_back(new_processor);
