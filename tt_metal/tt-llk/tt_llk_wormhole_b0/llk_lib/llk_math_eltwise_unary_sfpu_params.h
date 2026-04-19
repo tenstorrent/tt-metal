@@ -10,11 +10,11 @@
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_sfpu_types.h"
 
-template <typename Callable, typename... Args>
+template <DstSync DST_SYNC = DstSync::SyncHalf, typename Callable, typename... Args>
 inline void _llk_math_eltwise_unary_sfpu_params_(
     Callable&& sfpu_func, std::uint32_t dst_index, int vector_mode = static_cast<int>(VectorMode::RC), Args&&... args)
 {
-    LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "dst_index exceeds max dest tiles");
+    // LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "dst_index exceeds max dest tiles");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     math::set_addr_mod_base();

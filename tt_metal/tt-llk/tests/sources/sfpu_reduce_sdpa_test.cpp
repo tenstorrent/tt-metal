@@ -123,7 +123,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     ckernel::sfpu::_init_reduce_max_col_subblock_4x2_<DataFormat::Float16_b>();
 
-    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
+    _llk_math_eltwise_unary_sfpu_start_(0);
     ckernel::sfpu::_reduce_max_col_subblock_4x2_prologue_();
     ckernel::sfpu::_calculate_reduce_max_col_subblock_4x2_<PoolType::MAX, REDUCE_COL, DataFormat::Float16_b>(BLOCK_RT_DIM);
 
