@@ -136,27 +136,22 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     # Handle pre-allocated indices_tensor if present in traced config.
-    # The master trace records indices_tensor metadata when the model provides one.
-    indices_tensor_raw = kwargs.get("indices_tensor", "__ABSENT__")
-    if indices_tensor_raw != "__ABSENT__" and indices_tensor_raw is not None:
-        # Create a pre-allocated indices tensor matching the traced config.
-        # indices_tensor is an input with pre-computed index values.
+    # V2 loader decomposes indices_tensor into indices_tensor_shape, indices_tensor_dtype, etc.
+    indices_tensor_shape = kwargs.get("indices_tensor_shape", None)
+    if indices_tensor_shape is not None:
         try:
-            if isinstance(indices_tensor_raw, dict):
-                idx_shape = indices_tensor_raw.get("original_shape", list(shape))
-                idx_dtype_str = indices_tensor_raw.get("original_dtype", "DataType.UINT16")
-                idx_dtype = ttnn.uint16 if "UINT16" in str(idx_dtype_str) else ttnn.uint32
-            else:
-                idx_shape = list(shape)
-                idx_dtype = ttnn.uint16
+            idx_shape = tuple(indices_tensor_shape) if isinstance(indices_tensor_shape, (list, tuple)) else indices_tensor_shape
+            idx_dtype = kwargs.get("indices_tensor_dtype", ttnn.uint16)
+            idx_layout = kwargs.get("indices_tensor_layout", ttnn.TILE_LAYOUT)
+            idx_mem_config = kwargs.get("indices_tensor_memory_config", ttnn.DRAM_MEMORY_CONFIG)
             # Create indices tensor with sequential values
             torch_indices = torch.arange(0, torch.tensor(idx_shape).prod().item(), dtype=torch.int32).reshape(idx_shape) % idx_shape[-1]
             indices_ttnn = ttnn.from_torch(
                 torch_indices,
                 dtype=idx_dtype,
-                layout=ttnn.TILE_LAYOUT,
+                layout=idx_layout,
                 device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=idx_mem_config,
             )
             op_kwargs["indices_tensor"] = indices_ttnn
         except Exception:

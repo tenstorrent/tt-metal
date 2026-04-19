@@ -349,23 +349,21 @@ def run(
         if compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
-        # Pass core_grid when present in traced config (including None).
-        # V2 loader gives "__ABSENT__" for keys missing from a config, None for
-        # keys explicitly set to None in master. We pass None through so the
-        # re-tracer records it, matching the master trace.
-        if core_grid != "__ABSENT__":
+        # Only pass core_grid when it has a real value.
+        # V2 loader gives None even for configs where master doesn't have core_grid,
+        # so passing None would cause the re-tracer to record an extra key.
+        if core_grid is not None and core_grid != "__ABSENT__":
             linear_kwargs["core_grid"] = core_grid
 
         if activation is not None:
             linear_kwargs["activation"] = activation
 
-        # Pass sub_device_id and global_cb when present in traced config (including None).
-        # V2 loader gives "__ABSENT__" for keys missing from a config, None for
-        # keys explicitly set to None in master. We pass None through so the
-        # re-tracer records it, matching the master trace.
-        if sub_device_id != "__ABSENT__":
+        # Only pass sub_device_id and global_cb when they have real values.
+        # V2 loader gives None even for configs where master doesn't have these keys,
+        # so passing None would cause the re-tracer to record extra keys.
+        if sub_device_id is not None and sub_device_id != "__ABSENT__":
             linear_kwargs["sub_device_id"] = sub_device_id
-        if global_cb != "__ABSENT__":
+        if global_cb is not None and global_cb != "__ABSENT__":
             linear_kwargs["global_cb"] = global_cb
 
         linear_kwargs.update(parsed_op_kwargs)

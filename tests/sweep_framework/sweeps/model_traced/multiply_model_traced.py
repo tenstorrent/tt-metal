@@ -130,15 +130,18 @@ def run(
                 op_kwargs["input_tensor_a_activations"] = parsed_activations
 
     # Handle pre-allocated output_tensor if present in traced config.
-    output_tensor_raw = kwargs.get("output_tensor", "__ABSENT__")
-    if output_tensor_raw != "__ABSENT__" and output_tensor_raw is not None and isinstance(output_tensor_raw, dict):
+    # V2 loader decomposes output_tensor into output_tensor_shape, output_tensor_dtype, etc.
+    output_tensor_shape = kwargs.get("output_tensor_shape", None)
+    if output_tensor_shape is not None:
         try:
-            out_shape = output_tensor_raw.get("original_shape", list(input_a_shape))
-            out_dtype = input_a_dtype  # Default to input dtype
+            out_shape = tuple(output_tensor_shape) if isinstance(output_tensor_shape, (list, tuple)) else output_tensor_shape
+            out_dtype = kwargs.get("output_tensor_dtype", input_a_dtype)
+            out_layout = kwargs.get("output_tensor_layout", input_a_layout)
+            out_mem_config = kwargs.get("output_tensor_memory_config", input_a_memory_config)
             torch_out = torch.zeros(out_shape, dtype=torch.float32)
             output_preallocated = ttnn.from_torch(
-                torch_out, dtype=out_dtype, layout=input_a_layout,
-                device=device, memory_config=input_a_memory_config,
+                torch_out, dtype=out_dtype, layout=out_layout,
+                device=device, memory_config=out_mem_config,
             )
             op_kwargs["output_tensor"] = output_preallocated
         except Exception:
