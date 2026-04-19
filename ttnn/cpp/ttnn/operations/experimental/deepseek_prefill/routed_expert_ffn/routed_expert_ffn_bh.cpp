@@ -5,6 +5,7 @@
 #include "routed_expert_ffn_common.hpp"
 
 #include "tt-metalium/math.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 
@@ -17,12 +18,16 @@ ttnn::Tensor routed_expert_ffn_bh(
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
-    // Device compute grid
+    // Use the device's full compute grid. gate/up is output-sharded with
+    // per_core_N = div_up(N_gate, GRID_X), which is legal because input A is
+    // DRAM-interleaved (the "no padding" / Kt-divisibility asserts only fire
+    // for sharded input A). The multiply then reshards the block-sharded
+    // gate_result + up_result into L1 interleaved, after which down can run
+    // with an unsharded input A — no divisor constraint on in0_block_w.
     const auto grid_size = x.device()->compute_with_storage_grid_size();
     const uint32_t GRID_X = grid_size.x;
     const uint32_t GRID_Y = grid_size.y;
 
-    // Derive tile dimensions from tensor shapes
     const auto& x_shape = x.padded_shape();
     const auto& gate_shape = gate_proj.padded_shape();
     const auto& down_shape = down_proj.padded_shape();
@@ -37,8 +42,10 @@ ttnn::Tensor routed_expert_ffn_bh(
     const uint32_t gate_up_per_core_M = tt::div_up(M_tiles, gate_up_grid_y);
     const uint32_t gate_up_per_core_N = tt::div_up(N_gate_tiles, GRID_X);
 
-    // Empirically optimal on 14x10 grid
+    // Empirically optimal on Blackhole
     const uint32_t gate_up_in0_bw = 16;
+    // Sharded output requires out_subblock_w == per_core_N OR out_subblock_h == 1.
+    // Choose (1, per_core_N) — matches the reference configuration.
     const uint32_t gate_up_sub_w = gate_up_per_core_N;
 
     auto gate_up_grid = CoreRangeSet({CoreRange({0, 0}, {GRID_X - 1, gate_up_grid_y - 1})});
@@ -82,17 +89,35 @@ ttnn::Tensor routed_expert_ffn_bh(
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
-    ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
+    // multiply + reshard in one step: block-sharded inputs → L1 interleaved output.
+    // The interleaved result drops the shard-grid coverage so the downstream down
+    // matmul sees the logical Kt = N_gate_tiles, unsharded.
+    auto activated = ttnn::multiply(
+        /*lhs=*/gate_result,
+        /*rhs=*/up_result,
+        /*output_dtype=*/std::nullopt,
+        /*memory_config=*/ttnn::L1_MEMORY_CONFIG);
+
+    gate_result.deallocate();
     up_result.deallocate();
 
     // --- Down matmul config ---
+    // Input A is L1-interleaved (not sharded) so in0_block_w only needs to
+    // divide K_down_tiles — full flexibility for best_in0_block_w.
     const uint32_t down_grid_y = std::min(tt::div_up(M_tiles, 4u), GRID_Y);
     const uint32_t down_per_core_M = tt::div_up(M_tiles, down_grid_y);
     const uint32_t down_per_core_N = tt::div_up(N_down_tiles, GRID_X);
 
     const uint32_t down_in0_bw = best_in0_block_w(
-        K_down_tiles, down_per_core_M, down_per_core_N, gate_result, down_proj, compute_kernel_config, x.dtype());
+        /*K_tiles=*/K_down_tiles,
+        /*per_core_M=*/down_per_core_M,
+        /*per_core_N=*/down_per_core_N,
+        /*input_tensor_a=*/activated,
+        /*input_tensor_b=*/down_proj,
+        /*compute_kernel_config=*/compute_kernel_config,
+        /*output_dtype=*/x.dtype());
 
+    // Cap subblock to fit dest register (h*w <= 8)
     const uint32_t down_sub_w = largest_divisor(down_per_core_N, 8);
 
     auto down_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
@@ -109,7 +134,7 @@ ttnn::Tensor routed_expert_ffn_bh(
     };
 
     return ttnn::matmul(
-        /*input_tensor_a=*/gate_result,
+        /*input_tensor_a=*/activated,
         /*input_tensor_b=*/down_proj,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
