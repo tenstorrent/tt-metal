@@ -24,6 +24,7 @@
 #include "llrt/tt_cluster.hpp"
 #include <distributed/mesh_device_impl.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -281,6 +282,15 @@ void PinnedMemoryImpl::drain_barrier_events() {
         // close_impl(), so the operations behind these events are complete.  See Finding B.3.
         if (event.device() && event.device()->is_initialized()) {
             distributed::EventSynchronize(event);
+        } else {
+            // GAP 9: Log when skipping an event on an uninitialized device.
+            // The DMA behind this event may not have completed — the event was enqueued
+            // but the device was closed before we could synchronize.  ~FDMeshCommandQueue()
+            // should have flushed outstanding work, but log anyway for post-mortem diagnosis.
+            log_warning(
+                tt::LogMetal,
+                "drain_barrier_events: skipping event (id={}) on uninitialized/null device — DMA may not be complete",
+                event.device() ? event.id() : 0);
         }
         barrier_events_.pop_front();
     }
