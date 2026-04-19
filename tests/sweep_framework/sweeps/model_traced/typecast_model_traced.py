@@ -83,11 +83,17 @@ def run(
     )
 
     pos_args = extract_positional_args(kwargs)
-    output_dtype = output_dtype or kwargs.get("dtype", pos_args.get(1, ttnn.float32))
-    if isinstance(output_dtype, dict):
-        output_dtype = parse_dtype(output_dtype.get("repr", ""))
-    elif isinstance(output_dtype, str):
-        output_dtype = parse_dtype(output_dtype)
+    # Determine output dtype: explicit param > kwargs dtype > positional arg1 > default
+    # Use chained `or` so that None values (V2 loader filler) fall through correctly.
+    raw_dtype = output_dtype or kwargs.get("dtype") or pos_args.get(1)
+    if raw_dtype is None:
+        raw_dtype = ttnn.float32
+    if isinstance(raw_dtype, dict):
+        output_dtype = parse_dtype(raw_dtype.get("repr", ""))
+    elif isinstance(raw_dtype, str):
+        output_dtype = parse_dtype(raw_dtype)
+    else:
+        output_dtype = raw_dtype
     if output_dtype is None:
         output_dtype = ttnn.float32
     if output_memory_config is None and memory_config is not None and memory_config != "__ABSENT__":
@@ -169,8 +175,11 @@ def run(
 
     start_time = start_measuring_time()
     # Pass dtype as kwarg or positional to match how master trace captured it.
-    # If arg1 is in the sweep vector, master traced it positionally; otherwise as kwarg.
-    if "arg1" in kwargs:
+    # V2 loader uses "__ABSENT__" for keys missing from a config, but fills None
+    # for keys present in other configs.  A non-None arg1 means the master trace
+    # used positional; otherwise it used the dtype= kwarg.
+    has_positional_arg1 = kwargs.get("arg1") is not None and kwargs.get("arg1") != "__ABSENT__"
+    if has_positional_arg1:
         output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
     else:
         output_tensor = ttnn.typecast(input_tensor_a, dtype=output_dtype, **op_kwargs)

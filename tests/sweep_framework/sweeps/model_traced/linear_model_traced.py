@@ -351,10 +351,12 @@ def run(
         if activation is not None:
             linear_kwargs["activation"] = activation
 
-        # Pass sub_device_id and global_cb if they were in the traced config (even as None)
-        if sub_device_id != "__ABSENT__":
+        # Pass sub_device_id and global_cb only when they have non-None values.
+        # The V2 loader fills None for all configs (even those that didn't have these
+        # params in the master trace), so passing None would create extra_key diffs.
+        if sub_device_id != "__ABSENT__" and sub_device_id is not None:
             linear_kwargs["sub_device_id"] = sub_device_id
-        if global_cb != "__ABSENT__":
+        if global_cb != "__ABSENT__" and global_cb is not None:
             linear_kwargs["global_cb"] = global_cb
 
         linear_kwargs.update(parsed_op_kwargs)

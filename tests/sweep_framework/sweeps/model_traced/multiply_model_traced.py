@@ -85,8 +85,16 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
+    # Only include memory_config/dtype in extra_kwargs when they have non-None values.
+    # The V2 loader fills None for all configs (including those where the master trace
+    # didn't pass them), which would create extra_key diffs in validation.
+    extra_kw = {}
+    if memory_config is not None and memory_config != "__ABSENT__":
+        extra_kw["memory_config"] = memory_config
+    if dtype is not None and dtype != "__ABSENT__":
+        extra_kw["dtype"] = dtype
     op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config,
-        extra_kwargs={"memory_config": memory_config, "dtype": dtype},
+        extra_kwargs=extra_kw,
     )
 
     # Handle fused activations (e.g., SILU) from traced config
@@ -126,19 +134,24 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_a)
 
+    # Determine if fused activation (e.g., SILU) applies to input_tensor_a
+    has_silu_activation = "input_tensor_a_activations" in op_kwargs
+
     # Check if this is a scalar multiply operation (shape_b is None or scalar is provided)
     if shape_b is None or scalar is not None:
         # Tensor-scalar multiply: use the scalar value directly.
         # The scalar may come from 'scalar' kwarg, 'arg1' param, or default to 2.0.
         scalar_value = scalar if scalar is not None else (arg1 if arg1 is not None else 2.0)
-        torch_output_tensor = torch.mul(torch_input_tensor_a, scalar_value)
+        golden_a = torch.nn.functional.silu(torch_input_tensor_a) if has_silu_activation else torch_input_tensor_a
+        torch_output_tensor = torch.mul(golden_a, scalar_value)
         is_scalar_multiply = True
     else:
         # Tensor-tensor multiply: generate second tensor
         torch_input_tensor_b = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(shape_b)
-        torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
+        golden_a = torch.nn.functional.silu(torch_input_tensor_a) if has_silu_activation else torch_input_tensor_a
+        torch_output_tensor = torch.mul(golden_a, torch_input_tensor_b)
         is_scalar_multiply = False
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch

@@ -85,9 +85,17 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
+    # Only include memory_config/dtype when they have non-None values.
+    # V2 loader fills None for all configs (including those where master trace
+    # didn't pass them), which would create extra_key diffs in validation.
+    extra_kw = {}
+    if memory_config is not None and memory_config != "__ABSENT__":
+        extra_kw["memory_config"] = memory_config
+    if dtype is not None and dtype != "__ABSENT__":
+        extra_kw["dtype"] = dtype
     op_kwargs = build_op_kwargs(
         kwargs, exclude={"scalar"}, output_memory_config=output_memory_config,
-        extra_kwargs={"memory_config": memory_config, "dtype": dtype},
+        extra_kwargs=extra_kw,
     )
 
     # V2 format provides separate shapes for each input
