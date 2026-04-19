@@ -170,6 +170,8 @@ def run(
             scalar_value = 0.0
 
         torch_condition = torch.randint(0, 2, shape_a, dtype=torch.float32)
+        b_layout = input_b_layout if input_b_layout is not None else input_a_layout
+        b_mem_config = input_b_memory_config if input_b_memory_config is not None else input_a_memory_config
         torch_input_b = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(shape_a)
@@ -188,17 +190,17 @@ def run(
                 )
             if is_mesh_device and input_b_tensor_placement:
                 input_tensor_b = create_tensor_on_mesh(
-                    torch_input_b, device, input_b_dtype, input_b_layout,
-                    input_b_memory_config, input_b_tensor_placement,
+                    torch_input_b, device, input_b_dtype, b_layout,
+                    b_mem_config, input_b_tensor_placement,
                 )
             else:
                 input_tensor_b = ttnn.from_torch(
-                    torch_input_b, dtype=input_b_dtype, layout=input_b_layout,
-                    device=device, memory_config=input_b_memory_config,
+                    torch_input_b, dtype=input_b_dtype, layout=b_layout,
+                    device=device, memory_config=b_mem_config,
                 )
         else:
             condition_tensor = ttnn.from_torch(torch_condition, dtype=input_a_dtype, layout=input_a_layout)
-            input_tensor_b = ttnn.from_torch(torch_input_b, dtype=input_b_dtype, layout=input_b_layout)
+            input_tensor_b = ttnn.from_torch(torch_input_b, dtype=input_b_dtype, layout=b_layout)
 
         start_time = start_measuring_time()
         output_tensor = ttnn.where(condition_tensor, input_tensor_b, scalar_value, **op_kwargs)
