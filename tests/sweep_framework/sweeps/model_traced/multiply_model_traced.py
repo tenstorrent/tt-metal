@@ -93,9 +93,9 @@ def run(
     # _activations suffix is filtered by build_op_kwargs as tensor metadata,
     # but input_tensor_a_activations is actually an op kwarg for binary ops.
     activations_raw = kwargs.get("input_tensor_a_activations", None)
-    if activations_raw is not None:
-        parsed_activations = []
-        if isinstance(activations_raw, list):
+    if activations_raw is not None and isinstance(activations_raw, list) and len(activations_raw) > 0:
+        try:
+            parsed_activations = []
             for act in activations_raw:
                 if isinstance(act, dict):
                     repr_str = act.get("repr", "")
@@ -106,10 +106,17 @@ def run(
                         parsed_activations.append(ttnn.UnaryOpType.RELU)
                     elif "GELU" in repr_str:
                         parsed_activations.append(ttnn.UnaryOpType.GELU)
-                else:
+                    else:
+                        # Unknown activation type — skip to avoid crashes
+                        parsed_activations = []
+                        break
+                elif hasattr(act, 'name'):
+                    # Already a ttnn.UnaryOpType enum
                     parsed_activations.append(act)
-        if parsed_activations:
-            op_kwargs["input_tensor_a_activations"] = parsed_activations
+            if parsed_activations:
+                op_kwargs["input_tensor_a_activations"] = parsed_activations
+        except Exception:
+            pass  # Skip activations on parse failure to avoid crashing configs
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

@@ -138,8 +138,9 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # Only pass step if non-default (not all 1s) to match master trace behavior
-    if arg3 is not None and not all(s == 1 for s in slice_step):
+    # Only pass step when it was explicitly in the traced config (arg3 is not None).
+    # When arg3 is None, the master trace didn't pass step, so we shouldn't either.
+    if arg3 is not None:
         output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
     else:
         output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, **op_kwargs)
