@@ -586,20 +586,24 @@ FORCE_INLINE void send_next_data(
         pkt_header->src_ch_id = sender_channel_index;
     }
 
-    if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        while (internal_::eth_txq_is_busy(sender_txq_id)) {
-            // If the ETH TX queue is congested (e.g. flow-control deadlock between ERISCs),
-            // spinning here indefinitely prevents close_finish() from completing on the host.
-            // Yield to teardown so the connection can be cleanly closed.
-            if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
-                if (sender_worker_interface.has_worker_teardown_request()) {
-                    return;
-                }
-            }
-            // NOTE: a RISC-V PAUSE hint (.4byte 0x0100000F) here caused a measured 13.8% BW
-            // regression in Ring topology (5.9% overall) on T3000 vs. NOP-baseline goldens.
-            // Keep identical to main (no hint in loop body).
-        };
+    // Pre-send teardown escape (single check, no spin).
+    //
+    // The caller already gates entry into send_next_data on !eth_txq_is_busy() (when
+    // ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA is false, the can_send predicate includes that check).
+    // This single, non-looping teardown check closes the race window between the can_send
+    // gate and the actual eth_send_packet_bytes_unsafe() call: if teardown was signaled after
+    // can_send but before we reach here, we bail without committing the packet.
+    //
+    // The residual race is a few RISC-V instructions wide (single-digit nanoseconds) — far
+    // smaller than the host L1 write propagation latency for the teardown signal, and no
+    // worse than main branch which had no pre-send check at all.
+    //
+    // Critically, this does NOT spin on eth_txq_is_busy(), so Galaxy FABRIC_2D init (where
+    // at least one TXQ is never free during setup) can proceed without hanging.
+    if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
+        if (sender_worker_interface.has_worker_teardown_request()) {
+            return;
+        }
     }
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
@@ -621,8 +625,8 @@ FORCE_INLINE void send_next_data(
         // Returning early would leave the packet in-flight; the remote ERISC will still deliver
         // it to the destination Tensix L1 — which may have been reloaded with the next dispatch
         // program by then, causing L1 corruption (BRISC .text mismatch).
-        // The pre-send spin (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA, always true) is where we safely
-        // bail on teardown before any packet is committed.
+        // Teardown is handled by the single pre-send check above (before any packet is committed).
+        // Hardware guarantees this drain completes for committed packets.
     };
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
 }

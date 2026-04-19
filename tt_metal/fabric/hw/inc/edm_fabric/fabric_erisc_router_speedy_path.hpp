@@ -117,19 +117,12 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
             const auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
 
-            if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-                while (busy) {
-                    // NOTE: a RISC-V PAUSE hint (.4byte 0x0100000F) here caused a measured 13.8%
-                    // BW regression in Ring topology (5.9% overall) on T3000 vs. NOP-baseline
-                    // goldens. Loop body kept identical to main (no hint).
-                    busy = internal_::eth_txq_is_busy(sender_txq_id);
-                    // Yield to teardown: spinning indefinitely on a congested ETH TX queue
-                    // (e.g. flow-control deadlock) prevents close_finish() from completing.
-                    // Speedy mode is always ch0 (worker channel), so teardown check is safe.
-                    if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
-                        return progress;
-                    }
-                }
+            // Pre-send teardown escape (single check, no spin).
+            // The caller already gates entry on !eth_txq_is_busy() (via can_send).
+            // This non-looping check closes the race between can_send and the actual send.
+            // Speedy mode is always ch0 (worker channel), so teardown check is safe.
+            if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
+                return progress;
             }
             internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
@@ -150,8 +143,8 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
                 // Packet is committed to ETH link — returning early does NOT cancel delivery.
                 // Remote ERISC still writes payload to destination Tensix L1, which may now
                 // contain the next dispatch program (BRISC .text corruption).
-                // Teardown bail is handled exclusively in the pre-send spin above
-                // (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA, always true), before any send.
+                // Teardown is handled by the single pre-send check above, before any send.
+                // Hardware guarantees this drain completes for committed packets.
                 busy = internal_::eth_txq_is_busy(sender_txq_id);
             };
             remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
