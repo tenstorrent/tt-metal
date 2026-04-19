@@ -924,6 +924,12 @@ Each fabric router provides a mailbox region in its local SRAM, initialized by t
 
 All messages collected by the control plane are also archived to disk, creating a persistent log of fabric activity. In large-scale systems comprising thousands of chips, these logs are invaluable for diagnosing issues, tracing network behavior, and identifying root causes of failures.
 
+### Status Mailbox and Teardown Ordering
+
+The status mailbox is also used by the host control plane during fabric quiesce/restart cycles. When a workload completes and fabric firmware must be re-initialized (e.g., between consecutive test iterations), the host must poll the status mailbox of **every active ERISC channel** and confirm `EDMStatus::TERMINATED` before overwriting that channel's L1 with new firmware. Checking only a subset of channels (e.g., only the master channel) leaves other channels in an actively-running state, which will execute garbled code after their L1 is overwritten.
+
+For Tensix-side MUX cores, the same requirement applies: the host must poll for `EDMStatus::TERMINATED` before overwriting MUX L1. Note that on Wormhole, the MUX kernel may write `TERMINATED` to its mailbox before completing its `close_finish()` drain routine — so the host should additionally halt the BRISC via `assert_risc_reset_at_core()` after observing `TERMINATED`, ensuring no stale code runs during the subsequent L1 overwrite. After writing new firmware and launch messages, `deassert_risc_reset_at_core()` starts fresh execution.
+
 ## 7.2 Time To Live (TTL) <a id="ttl"></a>
 
 TT-Fabric may encounter packets that keep on circling the network and are not terminating. This can occur if the routing tables are misconfigured or corrupted. Such traffic can keep on living in the network forever and keep burning network resources. To avoid such patterns of traffic, TT-Fabric packets can have a TTL field. Data sender initializes TTL field to a conservative value that covers longest hop count any packet could encounter in TT-Fabric. At every network hop, fabric router decrements TTL by 1. Under normal conditions, a packet will reach its destination before TTL becomes 0 (expires). If for any reason a router sees a fabric packet with TTL parameter of 0, the packet is marked as expired, dropped, and drained from fabric. TT-Fabric also notifies Control Plane of the event.
