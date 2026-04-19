@@ -81,7 +81,7 @@ def run(
     input_c_layout=None,
     input_c_memory_config=None,
     output_memory_config=None,
-    memory_config=None,
+    memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     storage_type="StorageType::DEVICE",
     *,
     device,

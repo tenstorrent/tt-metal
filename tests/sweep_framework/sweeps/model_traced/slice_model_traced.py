@@ -66,12 +66,12 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config=None,
-    memory_config=None,
+    memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     storage_type="StorageType::DEVICE",
     arg1=None,  # May contain starts from V2 traced configs (positional)
     arg2=None,  # May contain ends from V2 traced configs (positional)
     arg3=None,  # May contain steps from V2 traced configs (positional)
-    dtype=None,  # Output dtype from V2 traced configs
+    dtype="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     use_legacy=None,  # Legacy mode flag from V2 traced configs
     *,
     device,

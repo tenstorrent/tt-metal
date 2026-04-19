@@ -92,8 +92,8 @@ def run(
     input_b_dtype,
     input_b_layout,
     input_b_memory_config,
-    dtype=None,  # output dtype
-    memory_config=None,  # output memory_config
+    dtype="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
+    memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     storage_type="StorageType::DEVICE",
     layout=None,  # Additional layout parameter from JSON
     weight_shape=None,  # Alternative weight shape parameter

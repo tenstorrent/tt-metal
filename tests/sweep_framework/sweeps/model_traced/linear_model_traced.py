@@ -78,8 +78,8 @@ def run(
     transpose_a=False,
     transpose_b=False,
     storage_type="StorageType::DEVICE",
-    memory_config=None,  # Alternative memory_config parameter
-    dtype=None,  # Output dtype
+    memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
+    dtype="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     core_grid=None,  # Core grid configuration
     program_config=None,  # Program configuration
     compute_kernel_config=None,  # Compute kernel configuration

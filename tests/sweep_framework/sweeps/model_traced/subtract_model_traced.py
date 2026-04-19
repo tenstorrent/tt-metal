@@ -89,8 +89,8 @@ def run(
     storage_type="StorageType::DEVICE",
     arg1=None,  # May contain scalar value from V2 traced configs
     use_legacy=None,  # Legacy mode flag from V2 traced configs
-    memory_config=None,  # Alternative memory_config parameter from V2 traced configs
-    dtype=None,  # Output dtype from V2 traced configs
+    memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
+    dtype="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     *,
     device,
     **kwargs,
