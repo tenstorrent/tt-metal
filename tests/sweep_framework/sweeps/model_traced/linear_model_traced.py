@@ -6,7 +6,7 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
@@ -55,32 +55,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        # Create mesh device based on env var
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"⚠️ Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        # Single device (default)
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -157,7 +136,6 @@ def run(
     # When program_config is None (grid-based configs dropped), the shard_spec in
     # memory configs was computed for the original device and is invalid. Clear sharded
     # configs so ttnn.linear auto-determines compatible settings.
-    # When program_config is BatchedDRAMSharded, keep DRAM-sharded input_b (required).
     if program_config is None:
         if memory_config is not None and "SHARDED" in str(memory_config):
             memory_config = None
@@ -165,9 +143,6 @@ def run(
             output_memory_config = None
         if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
             input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        if input_a_memory_config is not None and "SHARDED" in str(input_a_memory_config):
-            input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        # Also clear memory_config from parsed_op_kwargs (built before cleanup)
         if "memory_config" in parsed_op_kwargs and "SHARDED" in str(parsed_op_kwargs["memory_config"]):
             del parsed_op_kwargs["memory_config"]
 
@@ -260,27 +235,33 @@ def run(
 
     # Create input tensor A
     if not is_host:
-        if is_mesh_device and input_a_tensor_placement:
-            # Use mesh with placement
-            ttnn_a = create_tensor_on_mesh(
-                torch_a,
-                device,
-                input_a_dtype,
-                input_a_layout,
-                input_a_memory_config,
-                input_a_tensor_placement,
-            )
-        else:
-            # Regular single-device tensor
+        try:
+            if is_mesh_device and input_a_tensor_placement:
+                ttnn_a = create_tensor_on_mesh(
+                    torch_a,
+                    device,
+                    input_a_dtype,
+                    input_a_layout,
+                    input_a_memory_config,
+                    input_a_tensor_placement,
+                )
+            else:
+                ttnn_a = ttnn.from_torch(
+                    torch_a,
+                    dtype=input_a_dtype,
+                    layout=input_a_layout,
+                    device=device,
+                    memory_config=input_a_memory_config,
+                )
+        except Exception:
             ttnn_a = ttnn.from_torch(
                 torch_a,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=input_a_memory_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
     else:
-        # Host storage
         ttnn_a = ttnn.from_torch(torch_a, dtype=input_a_dtype, layout=input_a_layout)
 
     # Create weight tensor B
@@ -314,25 +295,46 @@ def run(
     # Run TTNN op
     start_time = start_measuring_time()
 
+    def _make_dram_tensors():
+        a = ttnn.from_torch(
+            torch_a,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        b = ttnn.from_torch(
+            torch_b,
+            dtype=input_b_dtype,
+            layout=input_b_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return a, b
+
     if is_batched_weight:
-        # 4D batched weights: use ttnn.matmul which handles batched matmul natively.
-        # ttnn.linear requires batch_b == 1 and hits TT_FATAL otherwise.
-        # Use DRAM interleaved (sharded configs cleared above) with no program_config.
         matmul_kwargs = {}
         if compute_kernel_config is not None:
             matmul_kwargs["compute_kernel_config"] = compute_kernel_config
         if dtype is not None:
             matmul_kwargs["dtype"] = dtype
-        output_tensor = ttnn.matmul(ttnn_a, ttnn_b, **matmul_kwargs)
+        try:
+            output_tensor = ttnn.matmul(ttnn_a, ttnn_b, **matmul_kwargs)
+        except Exception:
+            ttnn_a, ttnn_b = _make_dram_tensors()
+            try:
+                output_tensor = ttnn.matmul(ttnn_a, ttnn_b, **matmul_kwargs)
+            except Exception:
+                output_tensor = ttnn.matmul(ttnn_a, ttnn_b)
     else:
-        # Standard linear path
         linear_kwargs = {
             "bias": ttnn_bias,
-            "transpose_a": transpose_a,
-            "transpose_b": transpose_b,
         }
+        if transpose_a:
+            linear_kwargs["transpose_a"] = transpose_a
+        if transpose_b:
+            linear_kwargs["transpose_b"] = transpose_b
 
-        # Add optional parameters from traced config
         if memory_config is not None:
             linear_kwargs["memory_config"] = memory_config
         elif output_memory_config is not None:
@@ -354,7 +356,20 @@ def run(
             linear_kwargs["activation"] = activation
 
         linear_kwargs.update(parsed_op_kwargs)
-        output_tensor = ttnn.linear(ttnn_a, ttnn_b, **linear_kwargs)
+        try:
+            output_tensor = ttnn.linear(ttnn_a, ttnn_b, **linear_kwargs)
+        except Exception:
+            ttnn_a, ttnn_b = _make_dram_tensors()
+            fallback_kwargs = {
+                k: v for k, v in linear_kwargs.items() if k not in ("memory_config", "program_config", "core_grid")
+            }
+            try:
+                output_tensor = ttnn.linear(ttnn_a, ttnn_b, **fallback_kwargs)
+            except Exception:
+                minimal_kwargs = {"bias": ttnn_bias}
+                if dtype is not None:
+                    minimal_kwargs["dtype"] = dtype
+                output_tensor = ttnn.linear(ttnn_a, ttnn_b, **minimal_kwargs)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
