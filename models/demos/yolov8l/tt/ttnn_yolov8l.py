@@ -9,7 +9,7 @@ import ttnn
 from models.demos.yolov8l.tt.tt_yolov8l_utils import ttnn_decode_bboxes
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
-SHARDED_CONCAT_L1_FALLBACK_THRESHOLD_BYTES = 128 * 1024
+SHARDED_CONCAT_L1_FALLBACK_THRESHOLD_BYTES = 0  # Force DRAM path for 640x640 (only 12 cores, not 64)
 
 with open("models/demos/yolov8l/tt/configs.json", "r") as file:
     configs = json.load(file)
@@ -27,34 +27,15 @@ def to_row_major_if_needed(tensor):
 
 
 def sharded_concat_sppf(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
-    shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
-
-    input_sharded_memory_configs = []
-
-    for i in range(len(input_tensors)):
-        input_sharded_memory_config = ttnn.create_sharded_memory_config(
-            (shard_height, input_tensors[i].shape[-1]),
-            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            use_height_and_width_as_shard_shape=True,
-        )
-        input_sharded_memory_configs.append(input_sharded_memory_config)
-
-    sharded_inputs = [
-        ttnn.to_memory_config(tensor, config) for tensor, config in zip(input_tensors, input_sharded_memory_configs)
-    ]
-
-    total_width = sum(tensor.shape[-1] for tensor in input_tensors)
-    out_sharded_memory_config = ttnn.create_sharded_memory_config(
-        (shard_height, total_width),
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-    output = ttnn.concat(sharded_inputs, dim, memory_config=out_sharded_memory_config)
+    # Use DRAM interleaved concat to avoid 64-core assumption
+    dram_tensors = []
+    for tensor in input_tensors:
+        if tensor.is_sharded():
+            dram_tensors.append(ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG))
+        else:
+            dram_tensors.append(ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG))
+    output = ttnn.concat(dram_tensors, dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
-
     return output
 
 

@@ -5,9 +5,10 @@
 YOLO video/image demo on Tenstorrent device(s).
 
 Supports three modes:
-  Single model  – YOLOv8s or YOLOv11s on one device (default).
+  Single model  – YOLOv8s, YOLOv11s, or YOLOv8L on one device (default).
+                  YOLOv8L runs natively at 1280×1280.
   Dual model    – YOLOv8s + YOLOv11s side-by-side on two devices (--dual).
-  Unified demo  – Side-by-side + large-model (YOLOv8L SAHI 4-device) with
+  Unified demo  – Side-by-side + large-model (native YOLOv8L 1280×1280) with
                   browser-based mode switching (--unified).
 
 In dual/unified mode each model runs in its own **subprocess** (separate UMD
@@ -23,6 +24,12 @@ Usage (single model, YOLOv11s):
     python models/demos/yolo_eval/unified_video_demo.py \\
         --model yolov11s \\
         --video models/demos/yolo_eval/sample_images/14025986_640x640_29fps.mp4 \\
+        --device-id 0 --serve --port 9090 --pre-letterboxed
+
+Usage (single model, YOLOv8L at native 1280×1280):
+    python models/demos/yolo_eval/unified_video_demo.py \\
+        --model yolov8l \\
+        --video models/demos/yolo_eval/sample_images/14025986_1280x1280_29fps.mp4 \\
         --device-id 0 --serve --port 9090 --pre-letterboxed
 
 Usage (dual model, side-by-side):
@@ -56,8 +63,32 @@ import cv2
 import numpy as np
 import torch
 
-_INPUT_RES = (640, 640)
+_INPUT_RES_640 = (640, 640)
+_INPUT_RES_1280 = (1280, 1280)
 _EMA_ALPHA = 0.15
+
+
+_CONF_FLOOR = {
+    "yolov8l": 0.50,
+}
+
+
+def _input_res_for_model(model: str) -> tuple[int, int]:
+    if model == "yolov8l":
+        return _INPUT_RES_1280
+    return _INPUT_RES_640
+
+
+def _effective_conf(model: str, user_conf: float) -> float:
+    """Return the effective confidence threshold, respecting the per-model floor.
+
+    At 1280x1280 with bfloat8, near-zero class logits produce sigmoid ≈ 0.50.
+    A low --conf (e.g. 0.25) lets thousands of these through.
+    """
+    floor = _CONF_FLOOR.get(model, 0.0)
+    if user_conf < floor:
+        return floor
+    return user_conf
 
 
 # ---------------------------------------------------------------------------
@@ -75,8 +106,8 @@ def parse_args() -> argparse.Namespace:
         "--model",
         type=str,
         default="yolov8s",
-        choices=["yolov8s", "yolov11s"],
-        help="Which model to run in single-model mode (default: yolov8s).",
+        choices=["yolov8s", "yolov11s", "yolov8l"],
+        help="Which model to run in single-model mode (default: yolov8s). " "yolov8l runs natively at 1280x1280.",
     )
     p.add_argument(
         "--unified", action="store_true", help="Unified demo: side-by-side + large-model mode toggle via browser UI."
@@ -102,7 +133,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--pre-letterboxed",
         action="store_true",
-        help="Input is already 640x640 letterboxed — skip resize, draw on 640x640.",
+        help="Input is already letterboxed to the model's input resolution "
+        "(640x640 or 1280x1280 for yolov8l) — skip resize. "
+        "Padding regions are auto-detected and filtered.",
     )
     # Internal: used by --dual to launch a headless worker subprocess
     p.add_argument("--_worker", action="store_true", help=argparse.SUPPRESS)
@@ -115,7 +148,7 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 
-def letterbox(img: np.ndarray, target: tuple[int, int] = _INPUT_RES) -> np.ndarray:
+def letterbox(img: np.ndarray, target: tuple[int, int] = _INPUT_RES_640) -> np.ndarray:
     h, w = img.shape[:2]
     r = min(target[0] / h, target[1] / w)
     new_w, new_h = int(round(w * r)), int(round(h * r))
@@ -128,9 +161,11 @@ def letterbox(img: np.ndarray, target: tuple[int, int] = _INPUT_RES) -> np.ndarr
     return cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
 
 
-def frame_to_tensor(bgr: np.ndarray, skip_letterbox: bool = False) -> torch.Tensor:
-    """BGR frame -> [1,3,640,640] float32 NCHW tensor."""
-    lb = bgr if skip_letterbox else letterbox(bgr, _INPUT_RES)
+def frame_to_tensor(
+    bgr: np.ndarray, skip_letterbox: bool = False, input_res: tuple[int, int] = _INPUT_RES_640
+) -> torch.Tensor:
+    """BGR frame -> [1,3,H,W] float32 NCHW tensor (default 640x640, or 1280x1280 for yolov8l)."""
+    lb = bgr if skip_letterbox else letterbox(bgr, input_res)
     rgb = lb[:, :, ::-1].transpose(2, 0, 1)  # HWC BGR -> CHW RGB
     return torch.from_numpy(np.ascontiguousarray(rgb)).float().unsqueeze(0) / 255.0
 
@@ -138,6 +173,55 @@ def frame_to_tensor(bgr: np.ndarray, skip_letterbox: bool = False) -> torch.Tens
 # ---------------------------------------------------------------------------
 # Post-processing: NMS + draw
 # ---------------------------------------------------------------------------
+
+
+def _detect_content_bounds(frame: np.ndarray, min_var: float = 80.0) -> tuple[int, int, int, int] | None:
+    """Detect the content region in a letterboxed frame using pixel variance.
+
+    Padding rows/columns are nearly uniform (low variance), while content
+    rows have varied pixel values (high variance).  This is robust regardless
+    of the actual padding colour (gray 114, black 0, etc.).
+
+    Returns (y_top, y_bot, x_left, x_right) in pixel coords, or None if the
+    frame appears to have no padding (content fills the full frame).
+    """
+    h, w = frame.shape[:2]
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    row_var = gray.var(axis=1)
+    col_var = gray.var(axis=0)
+
+    y_top = 0
+    for y in range(h):
+        if row_var[y] > min_var:
+            y_top = y
+            break
+
+    y_bot = h
+    for y in range(h - 1, -1, -1):
+        if row_var[y] > min_var:
+            y_bot = y + 1
+            break
+
+    x_left = 0
+    for x in range(w):
+        if col_var[x] > min_var:
+            x_left = x
+            break
+
+    x_right = w
+    for x in range(w - 1, -1, -1):
+        if col_var[x] > min_var:
+            x_right = x + 1
+            break
+
+    content_h = y_bot - y_top
+    content_w = x_right - x_left
+    if content_h >= h and content_w >= w:
+        return None
+    if content_h < h * 0.4 or content_w < w * 0.4:
+        return None
+    return (y_top, y_bot, x_left, x_right)
 
 
 def _xywh2xyxy(x: torch.Tensor) -> torch.Tensor:
@@ -161,7 +245,14 @@ def nms_and_draw(
     conf_thres: float,
     iou_thres: float,
     class_names: list[str],
+    input_res: int = 640,
+    content_bounds: tuple[int, int, int, int] | None = None,
 ) -> np.ndarray:
+    """Run NMS and draw boxes.  ``content_bounds`` is an optional
+    (y_top, y_bot, x_left, x_right) region in *model-input* pixel coords;
+    detections whose centre falls outside this region are dropped (useful
+    for filtering false positives on letterbox padding).
+    """
     import torchvision
 
     if isinstance(preds, (list, tuple)):
@@ -174,9 +265,9 @@ def nms_and_draw(
 
     img = orig_bgr.copy()
     oh, ow = img.shape[:2]
-    gain = min(640 / oh, 640 / ow)
-    pad_x = round((640 - ow * gain) / 2 - 0.1)
-    pad_y = round((640 - oh * gain) / 2 - 0.1)
+    gain = min(input_res / oh, input_res / ow)
+    pad_x = round((input_res - ow * gain) / 2 - 0.1)
+    pad_y = round((input_res - oh * gain) / 2 - 0.1)
 
     for xi in range(preds.shape[0]):
         x = preds[xi][xc[xi]]
@@ -187,6 +278,16 @@ def nms_and_draw(
         x = torch.cat((box, conf, j.float()), 1)[conf.view(-1) > conf_thres]
         if x.shape[0] == 0:
             continue
+
+        if content_bounds is not None:
+            yt, yb, xl, xr = content_bounds
+            cx = (x[:, 0] + x[:, 2]) / 2
+            cy = (x[:, 1] + x[:, 3]) / 2
+            inside = (cx >= xl) & (cx <= xr) & (cy >= yt) & (cy <= yb)
+            x = x[inside]
+            if x.shape[0] == 0:
+                continue
+
         c = x[:, 5:6] * 7680
         i = torchvision.ops.nms(x[:, :4] + c, x[:, 4], iou_thres)
         x = x[i[:300]]
@@ -226,7 +327,8 @@ def draw_hud(img: np.ndarray, model_name: str, fps: float, color: tuple[int, int
 # ---------------------------------------------------------------------------
 
 _SERVER_SCRIPT = str(Path(__file__).resolve().parent / "_mjpeg_server.py")
-_SAHI_WORKER_SCRIPT = str(Path(__file__).resolve().parent / "_yolov8l_sahi_worker.py")
+# Previously used for SAHI slicing mode; kept for reference.
+# _SAHI_WORKER_SCRIPT = str(Path(__file__).resolve().parent / "_yolov8l_sahi_worker.py")
 
 
 def start_server_single(host: str, port: int, frame_file: str, mode_file: str | None = None) -> subprocess.Popen:
@@ -283,6 +385,12 @@ def _build_model(model: str, device):
         print("[init] Building YOLOv11sPerformantRunner...", flush=True)
         runner = YOLOv11sPerformantRunner(device)
         return "YOLOv11s", runner
+    elif model == "yolov8l":
+        from models.demos.yolov8l.runner.performant_runner import YOLOv8lPerformantRunner
+
+        print("[init] Building YOLOv8lPerformantRunner (1280x1280)...", flush=True)
+        runner = YOLOv8lPerformantRunner(device, device_batch_size=1, inp_h=1280, inp_w=1280)
+        return "YOLOv8L", runner
     else:
         from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
 
@@ -297,6 +405,14 @@ def _device_params(model: str) -> dict:
         from models.demos.yolov11s.common import YOLOV11S_L1_SMALL_SIZE
 
         return dict(l1_small_size=YOLOV11S_L1_SMALL_SIZE, trace_region_size=6434816, num_command_queues=2)
+    elif model == "yolov8l":
+        from models.demos.yolov8l.common import yolov8l_l1_small_size_for_res
+
+        return dict(
+            l1_small_size=yolov8l_l1_small_size_for_res(1280, 1280),
+            trace_region_size=35000000,
+            num_command_queues=2,
+        )
     else:
         from models.demos.yolov8s.common import YOLOV8S_L1_SMALL_SIZE
 
@@ -381,7 +497,14 @@ def _run_single(args):
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    print(f"Running {model_name}... press Ctrl+C to stop.", flush=True)
+    input_res = _input_res_for_model(args.model)
+    conf = _effective_conf(args.model, args.conf)
+    if conf != args.conf:
+        print(f"[{model_name}] Raising conf threshold {args.conf} -> {conf} (bfloat8 floor)", flush=True)
+
+    content_bounds = None
+
+    print(f"Running {model_name} (input {input_res[0]}x{input_res[1]})... press Ctrl+C to stop.", flush=True)
     ema_dev_fps = 0.0
     first = True
 
@@ -391,19 +514,36 @@ def _run_single(args):
             if bgr is None:
                 break
 
-            inp = frame_to_tensor(bgr, skip_letterbox=args.pre_letterboxed)
+            if first:
+                content_bounds = _detect_content_bounds(bgr)
+                if content_bounds:
+                    print(
+                        f"[{model_name}] Detected content region: "
+                        f"y=[{content_bounds[0]}, {content_bounds[1]}] "
+                        f"x=[{content_bounds[2]}, {content_bounds[3]}]",
+                        flush=True,
+                    )
+
+            inp = frame_to_tensor(bgr, skip_letterbox=args.pre_letterboxed, input_res=input_res)
 
             t_dev = time.perf_counter()
             preds = runner.run(torch_input_tensor=inp)
-            # YOLOv11s runner uses blocking=False; sync before reading output
-            if args.model == "yolov11s":
+            if args.model in ("yolov11s", "yolov8l"):
                 ttnn.synchronize_device(device)
             dt_dev = time.perf_counter() - t_dev
 
             if isinstance(preds, (list, tuple)):
                 preds = preds[0]
             preds_torch = ttnn.to_torch(preds, dtype=torch.float32)
-            annotated = nms_and_draw(preds_torch, bgr, args.conf, args.iou, coco_names)
+            annotated = nms_and_draw(
+                preds_torch,
+                bgr,
+                conf,
+                args.iou,
+                coco_names,
+                input_res=input_res[0],
+                content_bounds=content_bounds,
+            )
 
             if first:
                 ema_dev_fps = 1.0 / max(dt_dev, 1e-9)
@@ -811,9 +951,9 @@ def _run_unified(args):
     def _start_large_model():
         nonlocal proc_sahi
 
-        print("[unified] Starting large-model mode (YOLOv8L SAHI)...", flush=True)
+        print("[unified] Starting large-model mode (native YOLOv8L 1280x1280)...", flush=True)
 
-        _write_loading_placeholder(unified_frame, "Loading YOLOv8L (4-device SAHI)...")
+        _write_loading_placeholder(unified_frame, "Loading YOLOv8L (1280x1280)...")
 
         video_1280 = args.video_1280
         if not video_1280:
@@ -830,40 +970,62 @@ def _run_unified(args):
                 print("[unified] WARNING: no 1280x1280 video found, using original video", flush=True)
                 video_1280 = args.video
 
-        env_sahi = {**os.environ, "TT_VISIBLE_DEVICES": "0,1,2,3"}
+        env_v8l = {**os.environ, "TT_VISIBLE_DEVICES": str(args.device_id)}
+
+        large_model_worker_args = [
+            "--conf",
+            str(args.conf),
+            "--iou",
+            str(args.iou),
+            "--jpeg-quality",
+            str(args.jpeg_quality),
+            "--_worker",
+        ] + (["--pre-letterboxed"] if args.pre_letterboxed else [])
 
         proc_sahi = subprocess.Popen(
             [
                 sys.executable,
                 "-u",
-                _SAHI_WORKER_SCRIPT,
+                this_script,
+                "--model",
+                "yolov8l",
                 "--video",
                 video_1280,
-                "--frame-file",
+                "--device-id",
+                "0",
+                "--_frame-file",
                 unified_frame,
-                "--conf",
-                str(args.conf),
-                "--iou",
-                str(args.iou),
-                "--jpeg-quality",
-                str(args.jpeg_quality),
-                "--device-ids",
-                "0,1,2,3",
-            ],
+            ]
+            + large_model_worker_args,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            env=env_sahi,
+            env=env_v8l,
         )
-        print("[unified] Waiting for SAHI worker to initialize...", flush=True)
-        _wait_for_ready(proc_sahi, "SAHI")
-        _threading.Thread(target=_pipe_output, args=(proc_sahi, "SAHI"), daemon=True).start()
+        print("[unified] Waiting for YOLOv8L to initialize...", flush=True)
+        _wait_for_ready(proc_sahi, "YOLOv8L")
+        _threading.Thread(target=_pipe_output, args=(proc_sahi, "YOLOv8L"), daemon=True).start()
 
         print("[unified] Large-model running.", flush=True)
+
+        # --- Old SAHI 4-device slicing approach (kept for reference) ---
+        # env_sahi = {**os.environ, "TT_VISIBLE_DEVICES": "0,1,2,3"}
+        # proc_sahi = subprocess.Popen(
+        #     [
+        #         sys.executable, "-u", _SAHI_WORKER_SCRIPT,
+        #         "--video", video_1280, "--frame-file", unified_frame,
+        #         "--conf", str(args.conf), "--iou", str(args.iou),
+        #         "--jpeg-quality", str(args.jpeg_quality),
+        #         "--device-ids", "0,1,2,3",
+        #     ],
+        #     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env_sahi,
+        # )
+        # _wait_for_ready(proc_sahi, "SAHI")
+        # _threading.Thread(target=_pipe_output, args=(proc_sahi, "SAHI"), daemon=True).start()
 
     def _stop_large_model():
         nonlocal proc_sahi
         print("[unified] Stopping large-model worker...", flush=True)
-        _terminate_proc(proc_sahi, "SAHI worker")
+        _terminate_proc(proc_sahi, "YOLOv8L worker")
         proc_sahi = None
         time.sleep(2)  # let kernel release TT device locks before new workers start
 
@@ -892,7 +1054,7 @@ def _run_unified(args):
                 _write_mode_file(mode_file, f"loading:{new_mode}")
                 if new_mode == "large-model":
                     _stop_side_by_side()
-                    _write_loading_placeholder(unified_frame, "Loading YOLOv8L (4-device SAHI)...")
+                    _write_loading_placeholder(unified_frame, "Loading YOLOv8L (1280x1280)...")
                     _start_large_model()
                 elif new_mode == "side-by-side":
                     _stop_large_model()
@@ -919,7 +1081,7 @@ def _run_unified(args):
         print("[unified] Shutting down everything...", flush=True)
         if compositor_stop:
             compositor_stop.set()
-        for p, label in [(proc_v8, "YOLOv8s"), (proc_v11, "YOLOv11s"), (proc_sahi, "SAHI"), (http_proc, "HTTP")]:
+        for p, label in [(proc_v8, "YOLOv8s"), (proc_v11, "YOLOv11s"), (proc_sahi, "YOLOv8L"), (http_proc, "HTTP")]:
             _terminate_proc(p, label)
 
         for f in (

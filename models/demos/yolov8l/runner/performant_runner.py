@@ -2,6 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
+import torch
+
 import ttnn
 from models.demos.yolov8l.runner.performant_runner_infra import YOLOv8lPerformanceRunnerInfra
 
@@ -94,6 +98,23 @@ class YOLOv8lPerformantRunner:
         ttnn.end_trace_capture(self.device, self.tid, cq_id=0)
         # assert trace_input_addr == self.input_tensor.buffer_address()
 
+    def _setup_staging_buffer(self):
+        """Create a staging buffer for pipelined D2H.
+
+        Uses ``ttnn.clone`` to create a copy at a separate DRAM address with
+        the same layout/memory-config as the model output.  During pipelined
+        execution, CQ1 reads from staging while CQ0 writes to the trace's
+        fixed output address — no conflict because they're at different addrs.
+        """
+        output = self.runner_infra.output_tensor[0]
+        # Clone preserves layout (TILE) and memory config (interleaved DRAM)
+        self.dram_staging = ttnn.clone(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Events: staging_ready (CQ0: staging written), read_done (CQ1: D2H finished)
+        self.staging_ready_event = ttnn.record_event(self.device, 0)
+        self.read_done_event = ttnn.record_event(self.device, 1)
+        self._pipeline_frame = 0
+
     def _execute_yolov8l_trace_2cqs_inference(self, tt_inputs_host=None):
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
         ttnn.wait_for_event(1, self.op_event)
@@ -108,9 +129,130 @@ class YOLOv8lPerformantRunner:
 
         return self.runner_infra.output_tensor
 
+    # ------------------------------------------------------------------
+    # Original synchronous API (unchanged)
+    # ------------------------------------------------------------------
+
     def run(self, torch_input_tensor):
+        t0 = time.perf_counter()
         tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
-        return self._execute_yolov8l_trace_2cqs_inference(tt_inputs_host)
+        t1 = time.perf_counter()
+        result = self._execute_yolov8l_trace_2cqs_inference(tt_inputs_host)
+        t2 = time.perf_counter()
+        self.last_timing = {
+            "host_prep_ms": (t1 - t0) * 1000,
+            "h2d_and_trace_ms": (t2 - t1) * 1000,
+        }
+        return result
+
+    # ------------------------------------------------------------------
+    # Pipelined API: overlaps D2H(N-1) with compute(N)
+    # ------------------------------------------------------------------
+
+    def prepare_input(self, torch_input_tensor):
+        """CPU-only host prep: convert torch tensor to ttnn host buffer.
+
+        Uses ``from_host_shards`` with per-shard ``from_torch`` calls.
+        The 24 ``from_torch`` calls are the bottleneck (~18ms in a thread),
+        but this format produces hugepage-backed shards that are required
+        for efficient D2H (22ms vs 35ms with mesh_mapper format).
+
+        Safe to call while D2H is in progress on CQ1 — no device commands.
+        Returns the host tensor for use in ``enqueue_frame``.
+        """
+        t0 = time.perf_counter()
+        tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
+        self._last_host_prep_ms = (time.perf_counter() - t0) * 1000
+        return tt_inputs_host
+
+    def enqueue_frame(self, tt_inputs_host=None):
+        """Queue H2D + staging copy + reshard + trace.  Non-blocking.
+
+        If ``tt_inputs_host`` is None, uses the last prepared input.
+        Must be called after ``prepare_input`` (or pass the result directly).
+        """
+        t0 = time.perf_counter()
+        # Queue H2D on CQ1
+        ttnn.wait_for_event(1, self.op_event)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
+        self.write_event = ttnn.record_event(self.device, 1)
+
+        # CQ0: wait for H2D, then copy prev output → staging, then compute
+        ttnn.wait_for_event(0, self.write_event)
+
+        # Copy previous output to staging (safe: staging not read by CQ1 yet)
+        if self._pipeline_frame > 0:
+            ttnn.wait_for_event(0, self.read_done_event)  # prev D2H released staging
+            ttnn.deallocate(self.dram_staging)
+            self.dram_staging = ttnn.clone(
+                self.runner_infra.output_tensor[0],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.staging_ready_event = ttnn.record_event(self.device, 0)
+
+        # Reshard input + start trace (all on CQ0, after reshard-to-staging)
+        self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        self.op_event = ttnn.record_event(self.device, 0)
+        ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
+
+        t_queue = (time.perf_counter() - t0) * 1000
+        self._pipeline_frame += 1
+        self.last_timing = {
+            "host_prep_ms": self._last_host_prep_ms,
+            "queue_ms": t_queue,
+        }
+
+    def submit(self, torch_input_tensor):
+        """Host-prep + queue H2D + reshard-to-staging + compute.  Non-blocking.
+
+        Convenience wrapper around ``prepare_input`` + ``enqueue_frame``.
+        """
+        tt_inputs_host = self.prepare_input(torch_input_tensor)
+        self.enqueue_frame(tt_inputs_host)
+
+    def get_result(self, mesh_composer=None):
+        """D2H previous frame's staging buffer on CQ1.  Blocks host.
+
+        While the host blocks here, CQ0 is executing the current frame's
+        trace in parallel — this is where the overlap happens.
+
+        Returns ``None`` on the very first call (no previous frame yet).
+        """
+        if self._pipeline_frame <= 1:
+            return None
+
+        t0 = time.perf_counter()
+        composer = mesh_composer or self.mesh_composer
+        ttnn.wait_for_event(1, self.staging_ready_event)
+        result = ttnn.to_torch(
+            self.dram_staging,
+            dtype=torch.float32,
+            mesh_composer=composer,
+            device=self.device,
+            cq_id=1,
+        )
+        self.read_done_event = ttnn.record_event(self.device, 1)
+        self.last_timing["d2h_ms"] = (time.perf_counter() - t0) * 1000
+        return result
+
+    def flush_pipeline(self, mesh_composer=None):
+        """Get the last frame's result after the final ``submit`` call.
+
+        Syncs the device, reshards the final output to staging, and D2Hs.
+        """
+        ttnn.synchronize_device(self.device)
+        ttnn.deallocate(self.dram_staging)
+        self.dram_staging = ttnn.clone(
+            self.runner_infra.output_tensor[0],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        composer = mesh_composer or self.mesh_composer
+        return ttnn.to_torch(
+            self.dram_staging,
+            dtype=torch.float32,
+            mesh_composer=composer,
+            device=self.device,
+        )
 
     def release(self):
         ttnn.release_trace(self.device, self.tid)

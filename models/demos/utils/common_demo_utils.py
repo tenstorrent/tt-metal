@@ -364,8 +364,8 @@ def get_mesh_mappers(device):
 
 
 # Postprocessing pipeline for object detection
-def postprocess(preds, img, orig_imgs, batch, names):
-    args = {"conf": 0.25, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
+def postprocess(preds, img, orig_imgs, batch, names, conf=0.25, iou=0.7):
+    args = {"conf": conf, "iou": iou, "agnostic_nms": False, "max_det": 300, "classes": None}
 
     preds = non_max_suppression(
         preds,
