@@ -9,7 +9,7 @@ import tempfile
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
-from models.common.utility_functions import is_single_chip, ti_skip
+from models.common.utility_functions import is_single_chip, ti_skip, skip_with_llk_assert
 
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
@@ -43,11 +43,7 @@ def test_multi_device_subset_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
     ttnn.close_mesh_device(multi_device)
 
 
-def test_multi_device_open_close_full_mesh_device_fixture(mesh_device):
-    """Using `mesh_device` pytest fixture defined in conftest.py"""
-    pass
-
-
+@skip_with_llk_assert("Too large with LLK_ASSERT in CI. Issue #42596")
 def test_multi_device_open_close_full_mesh_device_fixture(mesh_device):
     """Using `mesh_device` pytest fixture defined in conftest.py"""
     pass
