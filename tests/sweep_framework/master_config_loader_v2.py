@@ -1383,14 +1383,15 @@ class MasterConfigLoader:
                         # It's a tensor - parse and store
                         parsed_dtype = self.parse_dtype(tensor_config.dtype)
                         parsed_layout = self.parse_layout(tensor_config.layout)
-                        parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
-
-                        # Skip this config if memory_config parsing returned None
-                        # (happens with mesh-sharded tensors missing grid info)
-                        if parsed_mem_config is None:
-                            raise ValueError(
-                                f"Memory config parsing returned None (likely mesh-sharded tensor without grid)"
+                        try:
+                            parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
+                        except (ValueError, KeyError, TypeError) as mem_err:
+                            config_hash_display = config_hash[:16] + "..." if config_hash else "unknown"
+                            logger.warning(
+                                f"⚠️ Memory config for arg{arg_idx} in config_hash={config_hash_display} "
+                                f"failed to parse ({mem_err}) — falling back to DRAM_MEMORY_CONFIG"
                             )
+                            parsed_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
                         positional_tensors.append(
                             {
@@ -1414,11 +1415,15 @@ class MasterConfigLoader:
                     if tensor_config:
                         parsed_dtype = self.parse_dtype(tensor_config.dtype)
                         parsed_layout = self.parse_layout(tensor_config.layout)
-                        parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
-
-                        if parsed_mem_config is None:
-                            logger.warning(f"⚠️ Skipping named tensor kwarg '{key}' due to unparseable memory_config")
-                            continue
+                        try:
+                            parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
+                        except (ValueError, KeyError, TypeError) as mem_err:
+                            config_hash_display = config_hash[:16] + "..." if config_hash else "unknown"
+                            logger.warning(
+                                f"⚠️ Named tensor kwarg '{key}' in config_hash={config_hash_display} "
+                                f"mem_config parse failed ({mem_err}) — falling back to DRAM"
+                            )
+                            parsed_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
                         config_dict[f"{key}_shape"] = tuple(tensor_config.shape)
                         config_dict[f"{key}_dtype"] = parsed_dtype

@@ -41,9 +41,6 @@ if model_traced_params:
 
 
 def invalidate_vector(test_vector) -> tuple:
-    storage_type = test_vector.get("storage_type")
-    if storage_type and "HOST" in str(storage_type):
-        return True, "HOST storage operation: CPU-side preprocessing, not a device operation to test"
     return False, None
 
 
@@ -126,15 +123,11 @@ def run(
     if isinstance(padding, list):
         padding = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in padding)
 
-    if not is_mesh_device or not input_a_tensor_placement:
-        input_tensor = ttnn.from_torch(
-            torch_input,
-            dtype=input_a_dtype,
-            layout=input_a_layout,
-            device=device,
-            memory_config=input_a_memory_config,
-        )
-    else:
+    is_host = storage_type and "HOST" in str(storage_type)
+
+    if is_host:
+        input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
+    elif is_mesh_device and input_a_tensor_placement:
         input_tensor = create_tensor_on_mesh(
             torch_input,
             device,
@@ -142,6 +135,14 @@ def run(
             input_a_layout,
             input_a_memory_config,
             input_a_tensor_placement,
+        )
+    else:
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=input_a_memory_config,
         )
 
     start_time = start_measuring_time()

@@ -66,6 +66,13 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     meaningful configuration difference.
     """
     if isinstance(obj, dict):
+        # Distributed tensor dicts (args carrying device-side tensor values
+        # such as slice start/end coordinates on a multi-device mesh) cannot
+        # be meaningfully compared with the sweep's host-side coordinate
+        # lists.  Normalize them to a sentinel so they match any non-None
+        # counterpart rather than producing a spurious diff.
+        if obj.get("type") in ("ttnn.Tensor",) and "tensor_placement" in obj:
+            return "__DEVICE_TENSOR__"
         # Normalize Shape dicts: {'type': 'Shape', 'value': 'Shape([1, 1, 32, 1])'}
         # → plain list [1, 1, 32, 1] for comparison with sweep trace arrays.
         if obj.get("type") == "Shape" and "value" in obj:
@@ -156,9 +163,17 @@ def _classify(path: str) -> str:
     return "value"
 
 
+_DEVICE_TENSOR = "__DEVICE_TENSOR__"
+
+
 def deep_diff(master: Any, sweep: Any, prefix: str = "") -> list[Diff]:
     """Produce a list of leaf-level diffs between two normalized argument trees."""
     diffs: list[Diff] = []
+
+    # Device tensor sentinels match anything — the actual values live on the
+    # device and cannot be compared from JSON alone.
+    if master == _DEVICE_TENSOR or sweep == _DEVICE_TENSOR:
+        return diffs
 
     if isinstance(master, dict) and isinstance(sweep, dict):
         all_keys = sorted(set(master.keys()) | set(sweep.keys()))
