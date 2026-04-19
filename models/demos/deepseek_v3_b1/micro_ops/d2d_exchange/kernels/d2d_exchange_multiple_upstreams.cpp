@@ -176,7 +176,6 @@ void kernel_main() {
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection;
-    DPRINT << "D2D EXCHANGE MULTIPLE UPSTREAMS KERNEL START" << ENDL();
 
     if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection =
@@ -191,9 +190,7 @@ void kernel_main() {
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
     set_sender_socket_page_size(sender_socket, downstream_page_size);
-    DPRINT << "SENDER SOCKET PAGE SIZE: " << downstream_page_size << ENDL();
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
-    DPRINT << "UPSTREAM PAGE SIZE: " << upstream_page_size << ENDL();
     constexpr uint32_t last_upstream_page_size = upstream_page_size + forward_metadata_size_bytes;
 
     SocketReceiverInterface receiver_sockets[num_sockets_this_risc];
@@ -205,7 +202,6 @@ void kernel_main() {
         const uint32_t rx_page_size = upstream_page_size;
 #endif
         set_receiver_socket_page_size(receiver_sockets[i], rx_page_size);
-        DPRINT << "SOCKET " << i << " PAGE SIZE: " << rx_page_size << ENDL();
     }
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(

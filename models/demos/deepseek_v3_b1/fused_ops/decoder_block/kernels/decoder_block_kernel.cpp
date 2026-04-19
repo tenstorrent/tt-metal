@@ -640,9 +640,6 @@ void kernel_main() {
         get_common_arg_val<uint32_t>(metadata_addr_common_rta_idx),
         get_common_arg_val<uint32_t>(metadata_addr_common_rta_idx),
     };
-    DPRINT << "metadata : " << mcast_metadata_args.input_data_addr << ENDL();
-    DPRINT << "metadata : " << mcast_metadata_args.mcast_receiver_data_addr << ENDL();
-    DPRINT << "metadata : " << mcast_metadata_args.data_size_bytes << ENDL();
 
     // Mcast CB indices from named compile-time args
     constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
@@ -2781,11 +2778,7 @@ void kernel_main() {
     constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
     uint32_t iteration = 0;
     while (true) {
-#ifdef COMPILE_FOR_BRISC
-        if (iteration % 128 == 0) {
-            DPRINT << "ITERATION: " << iteration << ENDL();
-        }
-#endif
+        // DPRINT << "ITERATION: " << iteration << ENDL();
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (persistent_mode) {
             constexpr bool is_bcast_root = get_named_compile_time_arg_val("bcast_is_root") == 1;

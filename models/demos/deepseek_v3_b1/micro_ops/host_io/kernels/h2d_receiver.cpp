@@ -5,7 +5,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "pcie_noc_utils.h"
-#include "api/debug/dprint.h"
 
 // Get this value from MeshSocket struct on host
 constexpr uint32_t recv_socket_config_addr = get_compile_time_arg_val(0);
@@ -123,8 +122,8 @@ FORCE_INLINE void send_pages_over_socket(
 }
 
 void kernel_main() {
-    DPRINT << "Starting h2d receiver kernel" << ENDL();
-    DEVICE_PRINT("Starting h2d receiver kernel\n");
+    // DPRINT << "Starting h2d receiver kernel" << ENDL();
+    // DEVICE_PRINT("Starting h2d receiver kernel\n");
     size_t rt_args_idx = 0;
 
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;

@@ -61,7 +61,6 @@
 #include "../../../unified_kernels/dram_streaming_matmul.hpp"
 #include "../../../unified_kernels/gather.hpp"
 #include "../../../metadata/metadata.hpp"
-#include "api/debug/dprint.h"
 
 // ============================================================================
 // Core role flags (set per core group by UnifiedCompileTimeCoreDescriptor in op.py)
@@ -575,10 +574,8 @@ void kernel_main() {
         if constexpr (Core::persistent_mode && is_root && Core::is_input_core) {
             auto next_iteration_semaphore =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
-            DPRINT << ">next_iteration_sem" << ENDL();
             noc_semaphore_wait(next_iteration_semaphore, 1);
             noc_semaphore_set(next_iteration_semaphore, 0);
-            DPRINT << "next_iteration_sem" << ENDL();
         }
 #endif
 
@@ -587,10 +584,8 @@ void kernel_main() {
         if constexpr (Core::is_input_core && !Core::skip_ccl) {
             auto* bcast_turn_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(Core::fabric_gate_bcast_turn_semaphore_id));
-            DPRINT << ">bcast_turn_sem" << ENDL();
             noc_semaphore_wait(bcast_turn_sem, 1);
             noc_semaphore_set(bcast_turn_sem, 0);
-            DPRINT << "bcast_turn_sem<" << ENDL();
         }
 #endif
 
@@ -609,14 +604,12 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
         // Device-local fabric gate (post-bcast release to argmax side).
         if constexpr (Core::is_input_core && !Core::skip_ccl) {
-            DPRINT << ">ax turn_sem inc" << ENDL();
             auto argmax_turn_sem_noc_addr = get_noc_addr(
                 Core::fabric_gate_argmax_noc_x,
                 Core::fabric_gate_argmax_noc_y,
                 get_semaphore(Core::fabric_gate_argmax_turn_semaphore_id));
             noc_semaphore_inc(argmax_turn_sem_noc_addr, 1);
             noc_async_atomic_barrier();
-            DPRINT << "<ax turn_sem inc" << ENDL();
         }
 #endif
 
@@ -677,11 +670,8 @@ void kernel_main() {
             auto* argmax_turn_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(Core::fabric_gate_argmax_turn_semaphore_id));
 
-            DPRINT << ">ax turn_sem" << ENDL();
             noc_semaphore_wait(argmax_turn_sem, 1);
-            DPRINT << ">ax turn_sem set" << ENDL();
             noc_semaphore_set(argmax_turn_sem, 0);
-            DPRINT << "<ax turn_sem" << ENDL();
         }
 #endif
 
@@ -700,7 +690,6 @@ void kernel_main() {
     // ====================================================================
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_argmax_final_core) {
-            DPRINT << ">mtp token write" << ENDL();
             uint64_t dst = get_noc_addr(mtp_input_core_noc_x, mtp_input_core_noc_y, mtp_token_addr);
             noc_async_write(mtp_argmax_output_addr, dst, 4);
             noc_async_write_barrier();
@@ -710,18 +699,15 @@ void kernel_main() {
                 get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
             noc_semaphore_inc(sem_addr, 1);
             noc_async_atomic_barrier();
-            DPRINT << ">mtp token write done" << ENDL();
         }
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_input_core) {
-            DPRINT << ">mtp token read" << ENDL();
             volatile tt_l1_ptr uint32_t* mtp_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
             noc_semaphore_wait(mtp_ready_sem, 1);
             noc_semaphore_set(mtp_ready_sem, 0);
-            DPRINT << ">mtp token read done" << ENDL();
         }
 #endif
 
@@ -730,8 +716,6 @@ void kernel_main() {
         // ====================================================================
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_input_core) {
-            DPRINT << ">el" << ENDL();
-
             constexpr uint32_t embedding_size_bytes = get_named_compile_time_arg_val("embedding_size_bytes");
             constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t emb_cb = get_named_compile_time_arg_val("embedding_cb");
@@ -752,7 +736,6 @@ void kernel_main() {
             noc_async_read(embedding_addr_gen.get_noc_addr(token_id), get_write_ptr(emb_cb), embedding_size_bytes);
             noc_async_read_barrier();
             cb_push_back(emb_cb, e_num_tiles);
-            DPRINT << "<el" << ENDL();
         }
 #endif
 
@@ -765,10 +748,8 @@ void kernel_main() {
 #if defined(COMPILE_FOR_TRISC)
         if constexpr (Core::is_rmsnorm_core) {
             {
-                DPRINT << "h_rmsnorm start" << ENDL();
                 deepseek_b1_ops::RMSNorm::Op<HRMSNormCTArgs, Core::is_rmsnorm_core, true> h_rmsnorm;
                 DeviceZoneScopedN("MTP_H_RMSNORM");
-                DPRINT << ">mtp h_rmsnorm start" << ENDL();
                 PACK(({
                     uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("rmsnorm_h_output_cb");
                     auto& iface = get_local_cb_interface(mcast_eh_src_cb);
@@ -777,15 +758,11 @@ void kernel_main() {
                         mcast_eh_src_cb, eh_src_base + 14336);  // 14k bytes offset for h_norm
                 }));
                 h_rmsnorm(rmsnorm_args);
-                DPRINT << ">mtp h_rmsnorm done" << ENDL();
             }
             {
-                DPRINT << ">mtp e_rmsnorm start" << ENDL();
                 DeviceZoneScopedN("MTP_E_RMSNORM");
                 deepseek_b1_ops::RMSNorm::Op<ERMSNormCTArgs, Core::is_rmsnorm_core, true> e_rmsnorm;
-                DPRINT << "e_rmsnorm start" << ENDL();
                 e_rmsnorm(rmsnorm_args);
-                DPRINT << ">mtp e_rmsnorm done" << ENDL();
             }
         }
 #endif
@@ -807,12 +784,7 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_eh_matmul_core) {
-            constexpr uint32_t _eh_in0_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
             invalidate_l1_cache();
-            uint32_t _base = get_read_ptr(_eh_in0_cb);
-            volatile uint16_t* _p0 = reinterpret_cast<volatile uint16_t*>(_base);
-            volatile uint16_t* _p7168 = reinterpret_cast<volatile uint16_t*>(_base + 14336);
-            DPRINT << "EH_IN0[0]=" << BF16(_p0[0]) << " [7168]=" << BF16(_p7168[0]) << ENDL();
         }
 #endif
 
@@ -856,14 +828,12 @@ void kernel_main() {
 
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
             constexpr uint32_t argmax_socket_cb = get_named_compile_time_arg_val("argmax_socket_cb");
-            DPRINT << ">argmax wait front" << ENDL();
             cb_wait_front(argmax_socket_cb, 1);
             uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
 
             write_token_metadata_to_socket_cb(
                 eh_gather_dst_cb, base_token_id, base_token_type, base_token_pos, 0, 0, 0, input_pos_id, slot_id);
             cb_pop_front(argmax_socket_cb, 1);
-            DPRINT << ">argmax pop token done" << ENDL();
         }
 #endif
     };
@@ -955,37 +925,29 @@ void kernel_main() {
             Core::persistent_mode) {
             if constexpr (Core::is_base_stage) {
                 if constexpr (Core::enable_mtp) {
-                    DPRINT << ">mtp socket send" << ENDL();
                     constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
                     constexpr uint32_t eh_gather_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages") + 1;
                     constexpr uint32_t eh_gather_total_bytes =
                         get_named_compile_time_arg_val("gather_send_total_bytes");
-                    DPRINT << ">socket send from cb for base stage mtp" << ENDL();
                     unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                         sampling_args.socket_config_addr, eh_gather_dst_cb, eh_gather_num_pages, eh_gather_total_bytes);
-                    DPRINT << ">mtp socket send done" << ENDL();
                 } else {
-                    DPRINT << ">mtp socket send done" << ENDL();
                     unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                         sampling_args.socket_config_addr,
                         ArgmaxCTArgs::socket_cb_id,
                         1,
                         ArgmaxCTArgs::socket_page_size_bytes);
-                    DPRINT << ">mtp socket send done" << ENDL();
                 }
 
             } else if constexpr (Core::is_spec_stage) {
-                DPRINT << ">mtp socket send" << ENDL();
                 unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                     sampling_args.socket_config_addr,
                     ArgmaxCTArgs::socket_cb_id,
                     1,
                     ArgmaxCTArgs::socket_page_size_bytes);
-                DPRINT << ">mtp socket send done" << ENDL();
             }
             size_t fabric_arg_idx = sampling_op.persistent_fabric_arg_idx;
             sampling_op.send_persistent_next_iter_inc_via_fabric_brisc(sampling_args, fabric_arg_idx);
-            DPRINT << ">socket send from cb for stage done" << ENDL();
         }
 #endif
 

@@ -142,7 +142,6 @@ struct DRAMStreamingMatmul {
     private:
         void impl() {
 #if defined(COMPILE_FOR_NCRISC)
-            DPRINT << ">dsmm start" << ENDL();
             // ================================================================
             // NCRISC: Stream in1 from DRAM with pipelining (uses NOC_0)
             // ================================================================
@@ -160,9 +159,7 @@ struct DRAMStreamingMatmul {
             uint32_t expert_offset_bytes = 0;
             if constexpr (CTArgs::enable_indexing) {
                 // Wait for index tensor to be ready
-                DPRINT << ">dsmm wait front index" << ENDL();
                 cb_wait_front(CTArgs::cb_index, 1);
-                DPRINT << ">dsmm wait front index done" << ENDL();
 
                 // Read expert index from index tensor at specified offset (uint16)
                 uint32_t expert_idx;
@@ -202,10 +199,8 @@ struct DRAMStreamingMatmul {
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
 
-            DPRINT << ">dsmm reserve" << ENDL();
             cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
             l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
-            DPRINT << "<dsmm reserve" << ENDL();
             // CB base for boundary wrapping: compile-time addr when looping, runtime addr otherwise
             uint32_t cb_in1_base;
             if constexpr (ResetCBIn1) {
@@ -249,17 +244,13 @@ struct DRAMStreamingMatmul {
                 cb_push_back(CTArgs::cb_in1, CTArgs::subblock_k);
                 block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
             }
-            DPRINT << "<dsmm push" << ENDL();
             // Pop index CB after the last consumer is done reading
             if constexpr (PopIndex && CTArgs::enable_indexing) {
                 cb_pop_front(CTArgs::cb_index, 1);
             }
-            DPRINT << "<dsmm pop" << ENDL();
             // Optionally wait for compute to finish writing output
             if constexpr (WaitForOutput) {
-                DPRINT << ">dsmm wait front output" << ENDL();
                 cb_wait_front(CTArgs::cb_out, CTArgs::out_num_tiles);
-                DPRINT << ">dsmm wait front output done" << ENDL();
             }
 
 #elif defined(COMPILE_FOR_TRISC)

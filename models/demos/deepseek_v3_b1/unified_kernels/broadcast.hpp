@@ -117,10 +117,9 @@ struct Broadcast {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
-                        DPRINT << "SOCKET_WAIT_FOR_PAGES: " << args.socket_num_pages
-                               << " SOCKET_PAGE_SIZE: " << args.socket_page_size << ENDL();
+                        DEVICE_PRINT("Started\n");
                         socket_wait_for_pages(recv, args.socket_num_pages);
-                        DPRINT << "SOCKET_WAIT_FOR_PAGES_DONE" << ENDL();
+                        DEVICE_PRINT("Ended\n");
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         invalidate_l1_cache();
                         noc_async_read(
@@ -129,9 +128,7 @@ struct Broadcast {
                             args.socket_page_size,
                             1 - noc_index);
                         noc_async_read_barrier(1 - noc_index);
-                        DPRINT << "PUSH" << CTArgs::num_pages_to_read << ENDL();
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                        DPRINT << "pop pages" << ENDL();
                         socket_pop_pages(recv, args.socket_num_pages);
                         socket_notify_sender(recv, 1 - noc_index);
                         update_socket_config(recv);
@@ -199,18 +196,14 @@ struct Broadcast {
 
                     for (uint32_t chunk_idx = 0; chunk_idx < CTArgs::num_chunks; chunk_idx++) {
                         link_counters[current_link]++;
-                        DPRINT << "forward_chunks: link_idx=" << current_link << " chunk_idx=" << chunk_idx << " link_counters[current_link]=" << link_counters[current_link] << ENDL();
                         wait_for_link_chunk(current_link, link_counters[current_link]);
-                        DPRINT << "wfl chunk complete" << ENDL();
                         const uint32_t chunk_size = (chunk_idx < CTArgs::num_chunks - 1)
                                                         ? CTArgs::chunk_size_bytes
                                                         : CTArgs::last_chunk_size_bytes;
-                        DPRINT << "fwd cw done" << ENDL();
                         for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
                             const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + current_link;
                             send_chunk(connection_idx, current_link, src_base_addr, chunk_idx, chunk_size);
                         }
-                        DPRINT << "fwd chunk done" << ENDL();
 
                         if (++current_link == CTArgs::num_links) {
                             current_link = 0;
@@ -231,34 +224,26 @@ struct Broadcast {
                 // In the leaf case, num_links remains configured (> 0), wait/reset semantics are still
                 // preserved for non-root nodes, and no fabric send occurs due to zero neighbors.
                 if constexpr (CTArgs::is_root) {
-                    DPRINT << "WAIT" << CTArgs::num_pages_to_read << ENDL();
                     cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                     const uint32_t src = get_read_ptr(CTArgs::cb0_id);
                     constexpr uint32_t tensor_size_bytes =
                         (CTArgs::num_chunks - 1) * CTArgs::chunk_size_bytes + CTArgs::last_chunk_size_bytes;
-                    DPRINT << "WRITE" << tensor_size_bytes << ENDL();
                     noc_async_write(src, dst_noc_base, tensor_size_bytes);
                     auto no_wait = [&](uint32_t, uint32_t) {};
                     forward_chunks(src, no_wait);
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                    DPRINT << "POP" << ENDL();
                 } else {
-                    DPRINT << ">fc3d 7" << ENDL();
                     const uint32_t src = args.tensor_address0;
                     auto sem_wait = [&](uint32_t link_idx, uint32_t link_threshold) {
                         noc_semaphore_wait_min(sem_ptrs[link_idx], link_threshold);
                     };
                     forward_chunks(src, sem_wait);
-                    DPRINT << "forward_chunks done" << ENDL();
                     for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
-                        DPRINT << "link_idx=" << link_idx << " link_counters[link_idx]=" << link_counters[link_idx] << ENDL();
                         if (link_counters[link_idx] > 0) {
                             unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
                         }
                     }
-                    DPRINT << ">fc3d 8" << ENDL();
                 }
-                DPRINT << ">fc3d 9" << ENDL();
                 for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
                     connections[i].close();
                 }

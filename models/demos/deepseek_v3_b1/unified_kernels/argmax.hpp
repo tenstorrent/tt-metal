@@ -337,13 +337,6 @@ struct Sampling {
 #endif
 
         void impl(const RTArgs& args) {
-#if defined(COMPILE_FOR_BRISC)
-            if constexpr (IsFinalCore) {
-                DPRINT << "Defer Socket Output: " << static_cast<uint32_t>(CTArgs::defer_socket_output) << ENDL();
-                DPRINT << "Socket Mode: " << CTArgs::socket_mode << ENDL();
-            }
-#endif
-
 #if defined(COMPILE_FOR_NCRISC)
             const uint32_t slot_offset = CTArgs::sender_idx * CTArgs::winner_page_bytes;
             const uint32_t gather_addr =
@@ -460,13 +453,9 @@ struct Sampling {
             PacketHeaderPool::reset();
             if constexpr (!CTArgs::defer_socket_output) {
                 if constexpr (IsFinalCore && CTArgs::socket_mode == 1) {
-                    DPRINT << "Arg Max Send D2H Token From CB BRISC" << ENDL();
                     send_d2h_token_from_cb_brisc(args);
-                    DPRINT << "Arg Max Send D2H Token From CB BRISC done" << ENDL();
                 } else if constexpr (IsFinalCore && CTArgs::socket_mode == 2) {
-                    DPRINT << "Arg Max Send D2D Token From CB BRISC" << ENDL();
                     send_d2d_token_from_cb_brisc(args);
-                    DPRINT << "Arg Max Send D2D Token From CB BRISC done" << ENDL();
                 }
             }
             if constexpr (IsFinalCore && IsMeshSenderCore) {

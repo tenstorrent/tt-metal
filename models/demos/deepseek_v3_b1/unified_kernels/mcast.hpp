@@ -377,9 +377,7 @@ struct Mcast {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
-                DPRINT << ">mcast wait front" << ENDL();
                 cb_wait_front(args.src_cb, args.src_num_pages);
-                DPRINT << ">mcast send 1" << ENDL();
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
@@ -389,7 +387,6 @@ struct Mcast {
                     true,
                     true,
                     write_cmd_buf>(args.input_data_addr, args.mcast_receiver_data_addr, args.data_size_bytes);
-                DPRINT << ">mcast send 2" << ENDL();
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
@@ -399,31 +396,23 @@ struct Mcast {
                     true,
                     mcast_is_shared_write_cmd_buf,
                     write_reg_cmd_buf>(args.data_sender_semaphore_addr, args.data_receiver_semaphore_addr, 4);
-                DPRINT << ">mcast send 3" << ENDL();
                 noc_async_posted_writes_flushed();
-                DPRINT << ">mcast posted writes flushed" << ENDL();
                 if constexpr (pop_src) {
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
-                DPRINT << ">mcast pop front done" << ENDL();
             }
 #elif defined(COMPILE_FOR_NCRISC)
             // ================================================================
             // NCRISC - Receiver cores: reserve, wait, push (all in operator)
             // ================================================================
             if constexpr (IsReceiverCore) {
-                DPRINT << ">mcast recv 1" << ENDL();
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(args.data_receiver_semaphore_addr);
-                DPRINT << ">mcast recv 2, dst_cb=" << args.dst_cb << ", dst_num_pages=" << args.dst_num_pages << ENDL();
 
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
-                DPRINT << ">mcast recv 3" << ENDL();
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
-                DPRINT << ">mcast recv 4" << ENDL();
                 cb_push_back(args.dst_cb, args.dst_num_pages);
-                DPRINT << ">mcast recv 5" << ENDL();
             } else if constexpr (IsMcastGridCore) {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(args.data_receiver_semaphore_addr);

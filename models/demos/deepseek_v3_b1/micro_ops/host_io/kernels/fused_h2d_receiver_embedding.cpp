@@ -135,7 +135,7 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;
 
-    DPRINT << "H2D KERNEL START" << ENDL();
+    // DPRINT << "H2D KERNEL START" << ENDL();
     if constexpr (use_fabric) {
         downstream_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -155,7 +155,7 @@ void kernel_main() {
         set_sender_socket_page_size(sender_socket, (embedding_page_size + metadata_size_bytes));
         downstream_enc = get_downstream_encoding(sender_socket, 0);
     }
-    DPRINT << "H2D Page size: " << token_page_size << ENDL();
+    // DPRINT << "H2D Page size: " << token_page_size << ENDL();
     set_receiver_socket_page_size(receiver_socket, token_page_size);
 
     uint32_t read_addr_hi = receiver_socket.h2d.data_addr_hi;
@@ -200,11 +200,11 @@ void kernel_main() {
 
     while (true) {
         // Wait for pages in H2D socket
-        DPRINT << "H2D Waiting For Pages" << ENDL();
+        // DPRINT << "H2D Waiting For Pages" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
-        DPRINT << "H2D Waiting For Pages Done" << ENDL();
+        // DPRINT << "H2D Waiting For Pages Done" << ENDL();
         if constexpr (pull_from_host) {
             // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
@@ -251,9 +251,9 @@ void kernel_main() {
         } else {
             auto l1_read_addr = get_read_ptr(embedding_cb_index);
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
-            DPRINT << "H2D Reserving Pages" << ENDL();
+            // DPRINT << "H2D Reserving Pages" << ENDL();
             socket_reserve_pages(sender_socket, 1);
-            DPRINT << "H2D Reserving Pages Done" << ENDL();
+            // DPRINT << "H2D Reserving Pages Done" << ENDL();
             send_pages_over_socket(
                 sender_socket,
                 downstream_fabric_connection,
