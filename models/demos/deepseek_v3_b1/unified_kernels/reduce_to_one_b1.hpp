@@ -337,6 +337,28 @@ struct ReduceToOneB1 {
 
             // ROOT1: gather all shards to output tensor; each worker sends its shard downstream
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
+                // Notify the aggregator (or persistent forwarder) that this worker is done.
+                // Issued between socket_notify_receiver and socket_barrier in the socket branch
+                // so the downstream consumer can wake up while we wait for the socket ack.
+                auto signal_aggregator = [&]() __attribute__((always_inline)) {
+                    if (args.persistent_enable != 0) {
+                        volatile tt_l1_ptr uint32_t* agg_sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
+                        noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
+                        noc_semaphore_set(agg_sem_ptr, 0);
+
+                        uint64_t fc_sem = get_noc_addr(
+                            args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
+                        noc_semaphore_inc(fc_sem, 1);
+                        noc_async_atomic_barrier();
+                    } else if (args.agg_sem_l1_addr != 0) {
+                        uint64_t agg_sem_noc =
+                            get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
+                        noc_semaphore_inc(agg_sem_noc, 1);
+                        noc_async_atomic_barrier();
+                    }
+                };
+
                 if constexpr (CTArgs::enable_downstream_socket) {
                     constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
                     if (args.socket_config_addr != 0) {
@@ -358,6 +380,7 @@ struct ReduceToOneB1 {
 
                         socket_push_pages(sender_socket, 1);
                         socket_notify_receiver(sender_socket);
+                        signal_aggregator();
                         socket_barrier(sender_socket);
                         update_socket_config(sender_socket);
                     }
@@ -369,21 +392,7 @@ struct ReduceToOneB1 {
                     uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
                     noc_async_write<CTArgs::payload_size_bytes>(src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
                     noc_async_write_barrier();
-                }
-                if (args.persistent_enable != 0) {
-                    volatile tt_l1_ptr uint32_t* agg_sem_ptr =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
-                    noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
-                    noc_semaphore_set(agg_sem_ptr, 0);
-
-                    uint64_t fc_sem = get_noc_addr(
-                        args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
-                    noc_semaphore_inc(fc_sem, 1);
-                    noc_async_atomic_barrier();
-                } else if (args.agg_sem_l1_addr != 0) {
-                    uint64_t agg_sem_noc = get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
-                    noc_semaphore_inc(agg_sem_noc, 1);
-                    noc_async_atomic_barrier();
+                    signal_aggregator();
                 }
 
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
