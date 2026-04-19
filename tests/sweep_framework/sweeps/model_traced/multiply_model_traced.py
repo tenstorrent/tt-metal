@@ -72,6 +72,7 @@ def run(
     use_legacy=None,  # Legacy mode flag
     memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     dtype="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
+    input_tensor_a_activations="__ABSENT__",  # Fused activations (e.g., SILU) for binary ops
     *,
     device,
     **kwargs,  # Accept scalar, placements, traced_source, traced_machine_info, etc.
@@ -85,46 +86,51 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
-    # Only include memory_config/dtype when present in the traced config.
-    # V2 loader uses "__ABSENT__" sentinel for keys missing from a config.
-    # None is a valid value (master trace may have dtype=None explicitly).
+    # Only include memory_config/dtype when explicitly set in the traced config.
+    # V2 loader uses "__ABSENT__" for keys missing from a config, but sometimes
+    # fills None for absent keys too.  For multiply, master configs that match
+    # do NOT have dtype/memory_config, so we must filter both None and __ABSENT__
+    # to avoid injecting extra keys into the re-trace.
     extra_kw = {}
-    if memory_config != "__ABSENT__":
+    if memory_config is not None and memory_config != "__ABSENT__":
         extra_kw["memory_config"] = memory_config
-    if dtype != "__ABSENT__":
+    if dtype is not None and dtype != "__ABSENT__":
         extra_kw["dtype"] = dtype
     op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config,
         extra_kwargs=extra_kw,
     )
 
-    # Handle fused activations (e.g., SILU) from traced config
+    # Handle fused activations (e.g., SILU) from traced config.
+    # input_tensor_a_activations is now a named param to guarantee it's received
+    # from the V2 loader (not lost in **kwargs processing).
     # _activations suffix is filtered by build_op_kwargs as tensor metadata,
     # but input_tensor_a_activations is actually an op kwarg for binary ops.
-    activations_raw = kwargs.get("input_tensor_a_activations", None)
-    if activations_raw is not None and isinstance(activations_raw, list) and len(activations_raw) > 0:
-        try:
-            parsed_activations = []
-            for act in activations_raw:
-                if isinstance(act, dict):
-                    repr_str = act.get("repr", "")
-                    # Parse "UnaryOpType.SILU" -> ttnn.UnaryOpType.SILU
-                    if "SILU" in repr_str:
-                        parsed_activations.append(ttnn.UnaryOpType.SILU)
-                    elif "RELU" in repr_str:
-                        parsed_activations.append(ttnn.UnaryOpType.RELU)
-                    elif "GELU" in repr_str:
-                        parsed_activations.append(ttnn.UnaryOpType.GELU)
-                    else:
-                        # Unknown activation type — skip to avoid crashes
-                        parsed_activations = []
-                        break
-                elif hasattr(act, 'name'):
-                    # Already a ttnn.UnaryOpType enum
-                    parsed_activations.append(act)
-            if parsed_activations:
-                op_kwargs["input_tensor_a_activations"] = parsed_activations
-        except Exception:
-            pass  # Skip activations on parse failure to avoid crashing configs
+    if input_tensor_a_activations != "__ABSENT__" and input_tensor_a_activations is not None:
+        activations_raw = input_tensor_a_activations
+        if isinstance(activations_raw, list) and len(activations_raw) > 0:
+            try:
+                parsed_activations = []
+                for act in activations_raw:
+                    if isinstance(act, dict):
+                        repr_str = act.get("repr", "")
+                        # Parse "UnaryOpType.SILU" -> ttnn.UnaryOpType.SILU
+                        if "SILU" in repr_str:
+                            parsed_activations.append(ttnn.UnaryOpType.SILU)
+                        elif "RELU" in repr_str:
+                            parsed_activations.append(ttnn.UnaryOpType.RELU)
+                        elif "GELU" in repr_str:
+                            parsed_activations.append(ttnn.UnaryOpType.GELU)
+                        else:
+                            # Unknown activation type — skip to avoid crashes
+                            parsed_activations = []
+                            break
+                    elif hasattr(act, 'name'):
+                        # Already a ttnn.UnaryOpType enum
+                        parsed_activations.append(act)
+                if parsed_activations:
+                    op_kwargs["input_tensor_a_activations"] = parsed_activations
+            except Exception:
+                pass  # Skip activations on parse failure to avoid crashing configs
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

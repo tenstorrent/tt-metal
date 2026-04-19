@@ -359,7 +359,7 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 out_subblock_w=int(cfg.get("out_subblock_w", 1)),
                 per_core_M=int(cfg["per_core_M"]),
                 per_core_N=int(cfg["per_core_N"]),
-                fuse_batch=bool(cfg.get("fuse_batch", True)),
+                fuse_batch=bool(cfg.get("fuse_batch", False)),
                 mcast_in0=bool(cfg.get("mcast_in0", True)),
                 fused_activation=fused_activation,
             )

@@ -135,8 +135,15 @@ def run(
     # Use build_op_kwargs to parse dict values for op kwargs (compute_kernel_config, etc.).
     # Exclude program_config (handled above as named param), activation (used for golden too),
     # and output_tile (a Tile object that can't be auto-parsed from dict).
+    # Build extra_kwargs only with non-None, non-__ABSENT__ values to avoid
+    # injecting extra keys for configs where master doesn't have them.
+    linear_extra_kw = {}
+    if memory_config is not None and memory_config != "__ABSENT__":
+        linear_extra_kw["memory_config"] = memory_config
+    if dtype is not None and dtype != "__ABSENT__":
+        linear_extra_kw["dtype"] = dtype
     parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile", "program_config", "sub_device_id", "global_cb"},
-        extra_kwargs={"memory_config": memory_config, "dtype": dtype},
+        extra_kwargs=linear_extra_kw,
     )
 
     # Check if device is a mesh device (from fixture)
@@ -309,7 +316,7 @@ def run(
         matmul_kwargs = {}
         if compute_kernel_config is not None:
             matmul_kwargs["compute_kernel_config"] = compute_kernel_config
-        if dtype is not None:
+        if dtype is not None and dtype != "__ABSENT__":
             matmul_kwargs["dtype"] = dtype
         try:
             output_tensor = ttnn.matmul(ttnn_a, ttnn_b, **matmul_kwargs)
@@ -328,12 +335,12 @@ def run(
         if transpose_b:
             linear_kwargs["transpose_b"] = transpose_b
 
-        if memory_config is not None:
+        if memory_config is not None and memory_config != "__ABSENT__":
             linear_kwargs["memory_config"] = memory_config
         elif output_memory_config is not None:
             linear_kwargs["memory_config"] = output_memory_config
 
-        if dtype is not None:
+        if dtype is not None and dtype != "__ABSENT__":
             linear_kwargs["dtype"] = dtype
 
         if program_config is not None:
@@ -342,20 +349,20 @@ def run(
         if compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
-        # Pass core_grid when present in the traced config (even if None).
-        # __ABSENT__ means the config didn't have core_grid at all.
-        if core_grid != "__ABSENT__":
+        # Pass core_grid only when it has a real value.
+        # V2 loader may fill None for configs that don't have core_grid in master,
+        # so filter both None and __ABSENT__ to avoid injecting extra keys.
+        if core_grid is not None and core_grid != "__ABSENT__":
             linear_kwargs["core_grid"] = core_grid
 
         if activation is not None:
             linear_kwargs["activation"] = activation
 
-        # Pass sub_device_id and global_cb when present in the traced config.
-        # V2 loader uses "__ABSENT__" for keys missing from a config.
-        # None is a valid value (master trace has these as None explicitly).
-        if sub_device_id != "__ABSENT__":
+        # Pass sub_device_id and global_cb only when they have real values.
+        # V2 loader may fill None for absent keys, so filter both.
+        if sub_device_id is not None and sub_device_id != "__ABSENT__":
             linear_kwargs["sub_device_id"] = sub_device_id
-        if global_cb != "__ABSENT__":
+        if global_cb is not None and global_cb != "__ABSENT__":
             linear_kwargs["global_cb"] = global_cb
 
         linear_kwargs.update(parsed_op_kwargs)
