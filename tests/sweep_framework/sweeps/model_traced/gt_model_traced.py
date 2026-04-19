@@ -101,9 +101,30 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config,
+    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar", "output_tensor"}, output_memory_config=output_memory_config,
         extra_kwargs={"memory_config": memory_config, "dtype": dtype},
     )
+
+    # Handle pre-allocated output_tensor if present in traced config.
+    # The master trace records output_tensor metadata when the model provides one.
+    output_tensor_raw = kwargs.get("output_tensor", "__ABSENT__")
+    if output_tensor_raw != "__ABSENT__" and output_tensor_raw is not None and isinstance(output_tensor_raw, dict):
+        try:
+            out_shape = output_tensor_raw.get("original_shape", list(input_a_shape))
+            out_dtype_str = str(output_tensor_raw.get("original_dtype", "DataType.BFLOAT16"))
+            out_dtype = input_a_dtype  # Default to input dtype
+            if "BFLOAT16" in out_dtype_str:
+                out_dtype = ttnn.bfloat16
+            elif "BFLOAT8" in out_dtype_str:
+                out_dtype = ttnn.bfloat8_b
+            torch_out = torch.zeros(out_shape, dtype=torch.float32)
+            output_preallocated = ttnn.from_torch(
+                torch_out, dtype=out_dtype, layout=ttnn.TILE_LAYOUT,
+                device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            op_kwargs["output_tensor"] = output_preallocated
+        except Exception:
+            pass  # Skip pre-allocated output on failure
 
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = (

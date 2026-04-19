@@ -343,6 +343,7 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 per_core_M=int(cfg["per_core_M"]),
                 per_core_N=int(cfg["per_core_N"]),
                 transpose_mcast=bool(cfg.get("transpose_mcast", False)),
+                fuse_batch=bool(cfg.get("fuse_batch", True)),
                 fused_activation=fused_activation,
             )
             if cfg.get("out_block_h") is not None:

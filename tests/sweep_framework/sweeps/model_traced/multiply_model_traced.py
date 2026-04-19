@@ -96,7 +96,7 @@ def run(
         extra_kw["memory_config"] = memory_config
     if dtype is not None and dtype != "__ABSENT__":
         extra_kw["dtype"] = dtype
-    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config,
+    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar", "output_tensor"}, output_memory_config=output_memory_config,
         extra_kwargs=extra_kw,
     )
 
@@ -108,29 +108,41 @@ def run(
     if input_tensor_a_activations != "__ABSENT__" and input_tensor_a_activations is not None:
         activations_raw = input_tensor_a_activations
         if isinstance(activations_raw, list) and len(activations_raw) > 0:
-            try:
-                parsed_activations = []
-                for act in activations_raw:
-                    if isinstance(act, dict):
-                        repr_str = act.get("repr", "")
-                        # Parse "UnaryOpType.SILU" -> ttnn.UnaryOpType.SILU
-                        if "SILU" in repr_str:
-                            parsed_activations.append(ttnn.UnaryOpType.SILU)
-                        elif "RELU" in repr_str:
-                            parsed_activations.append(ttnn.UnaryOpType.RELU)
-                        elif "GELU" in repr_str:
-                            parsed_activations.append(ttnn.UnaryOpType.GELU)
-                        else:
-                            # Unknown activation type — skip to avoid crashes
-                            parsed_activations = []
-                            break
-                    elif hasattr(act, 'name'):
-                        # Already a ttnn.UnaryOpType enum
-                        parsed_activations.append(act)
-                if parsed_activations:
-                    op_kwargs["input_tensor_a_activations"] = parsed_activations
-            except Exception:
-                pass  # Skip activations on parse failure to avoid crashing configs
+            parsed_activations = []
+            for act in activations_raw:
+                if isinstance(act, dict):
+                    repr_str = act.get("repr", "")
+                    # Parse "UnaryOpType.SILU" -> ttnn.UnaryOpType.SILU
+                    if "SILU" in repr_str:
+                        parsed_activations.append(ttnn.UnaryOpType.SILU)
+                    elif "RELU" in repr_str:
+                        parsed_activations.append(ttnn.UnaryOpType.RELU)
+                    elif "GELU" in repr_str:
+                        parsed_activations.append(ttnn.UnaryOpType.GELU)
+                    else:
+                        # Unknown activation type — skip to avoid crashes
+                        parsed_activations = []
+                        break
+                elif hasattr(act, "name"):
+                    # Already a ttnn.UnaryOpType enum
+                    parsed_activations.append(act)
+            if parsed_activations:
+                op_kwargs["input_tensor_a_activations"] = parsed_activations
+
+    # Handle pre-allocated output_tensor if present in traced config.
+    output_tensor_raw = kwargs.get("output_tensor", "__ABSENT__")
+    if output_tensor_raw != "__ABSENT__" and output_tensor_raw is not None and isinstance(output_tensor_raw, dict):
+        try:
+            out_shape = output_tensor_raw.get("original_shape", list(input_a_shape))
+            out_dtype = input_a_dtype  # Default to input dtype
+            torch_out = torch.zeros(out_shape, dtype=torch.float32)
+            output_preallocated = ttnn.from_torch(
+                torch_out, dtype=out_dtype, layout=input_a_layout,
+                device=device, memory_config=input_a_memory_config,
+            )
+            op_kwargs["output_tensor"] = output_preallocated
+        except Exception:
+            pass  # Skip pre-allocated output on failure
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

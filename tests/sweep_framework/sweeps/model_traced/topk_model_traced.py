@@ -80,7 +80,7 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config,
+    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2", "indices_tensor"}, output_memory_config=output_memory_config,
         extra_kwargs={"memory_config": memory_config},
     )
 
@@ -134,6 +134,33 @@ def run(
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+
+    # Handle pre-allocated indices_tensor if present in traced config.
+    # The master trace records indices_tensor metadata when the model provides one.
+    indices_tensor_raw = kwargs.get("indices_tensor", "__ABSENT__")
+    if indices_tensor_raw != "__ABSENT__" and indices_tensor_raw is not None:
+        # Create a pre-allocated indices tensor matching the traced config.
+        # indices_tensor is an input with pre-computed index values.
+        try:
+            if isinstance(indices_tensor_raw, dict):
+                idx_shape = indices_tensor_raw.get("original_shape", list(shape))
+                idx_dtype_str = indices_tensor_raw.get("original_dtype", "DataType.UINT16")
+                idx_dtype = ttnn.uint16 if "UINT16" in str(idx_dtype_str) else ttnn.uint32
+            else:
+                idx_shape = list(shape)
+                idx_dtype = ttnn.uint16
+            # Create indices tensor with sequential values
+            torch_indices = torch.arange(0, torch.tensor(idx_shape).prod().item(), dtype=torch.int32).reshape(idx_shape) % idx_shape[-1]
+            indices_ttnn = ttnn.from_torch(
+                torch_indices,
+                dtype=idx_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            op_kwargs["indices_tensor"] = indices_ttnn
+        except Exception:
+            pass  # Skip indices_tensor creation on failure
 
     start_time = start_measuring_time()
     topk_result = ttnn.topk(input_tensor_a, k=k_val, dim=dim_val, **op_kwargs)
