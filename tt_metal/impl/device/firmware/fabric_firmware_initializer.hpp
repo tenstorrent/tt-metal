@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <unordered_set>
 
 #include "device/device_impl.hpp"
 #include "firmware_initializer.hpp"
@@ -38,9 +39,15 @@ private:
     // Wait for fabric router handshake on all devices.
     void wait_for_fabric_router_sync(uint32_t timeout_ms) const;
 
+    // Scan all active ERISC channels and return any devices that have at least one channel
+    // not at EDMStatus::READY_FOR_TRAFFIC.  Logs a warning for each bad channel found.
+    // Returns empty set if fabric config is DISABLED.
+    std::unordered_set<Device*> collect_unhealthy_devices() const;
+
     // Verify ALL active ERISC channels are healthy after fabric init.
     // wait_for_fabric_router_sync only checks the master channel; this checks every channel
     // to detect persistent ERISC corruption that would cause dispatch hangs later.
+    // Throws TT_THROW if any channels are not at READY_FOR_TRAFFIC.
     void verify_all_fabric_channels_healthy() const;
 
     // Compute the fabric router sync timeout from runtime options.
