@@ -237,7 +237,7 @@ void calculate_recip_first_column() {
             if constexpr (DST_ACCUM_MODE || APPROX) {
                 sfpi::dst_reg[0] = out;
             } else {
-                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, RoundMode::NearestEven));
             }
             sfpi::dst_reg += 2;
         }
@@ -252,7 +252,7 @@ void calculate_recip_first_column() {
                     sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
                 } else {
                     sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-                    sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+                    sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, RoundMode::NearestEven));
                 }
             }
 
@@ -263,8 +263,7 @@ void calculate_recip_first_column() {
 
 template <bool legacy_compat = true>
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROXIMATE*/>(
-        calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
+    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
 }
 #endif
 
@@ -850,7 +849,7 @@ void calculate_exponential_first_column() {
 
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
 void exp_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_(
         calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, (int)VectorMode::C);
 }
 #endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
@@ -945,7 +944,7 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
 
 template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
-    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_(
         calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE>, idst, vector_mode, scale_bf16);
 }
 #endif
@@ -1113,7 +1112,7 @@ void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
 }
 
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_(
         calculate_softplus_first_column<APPROX>, idst, (int)VectorMode::C, beta, beta_reciprocal, threshold);
 }
 #endif

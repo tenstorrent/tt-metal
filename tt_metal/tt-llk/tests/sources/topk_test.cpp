@@ -337,7 +337,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if (first_iteration)
                 {
                     // same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_local_sort from metal.
-                    _llk_math_eltwise_unary_sfpu_params_<APPROX>(
+                    _llk_math_eltwise_unary_sfpu_params_(
                         ckernel::sfpu::calculate_bitonic_topk_phases_steps<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>,
                         dst_index,
                         vector_mode,
@@ -350,7 +350,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 else
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    _llk_math_eltwise_unary_sfpu_params_<APPROX>(
+                    _llk_math_eltwise_unary_sfpu_params_(
                         ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>,
                         dst_index,
                         vector_mode,
@@ -362,7 +362,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
 
                 // Always a second operation.
-                _llk_math_eltwise_unary_sfpu_params_<APPROX>(
+                _llk_math_eltwise_unary_sfpu_params_(
                     ckernel::sfpu::calculate_bitonic_topk_merge<APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, TOPK_STABLE_SORT>,
                     dst_index,
                     vector_mode,
@@ -373,7 +373,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if (last_iteration)
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    _llk_math_eltwise_unary_sfpu_params_<APPROX>(
+                    _llk_math_eltwise_unary_sfpu_params_(
                         ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>,
                         dst_index,
                         vector_mode,
