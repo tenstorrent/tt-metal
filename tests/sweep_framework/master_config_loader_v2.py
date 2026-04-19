@@ -1266,6 +1266,13 @@ class MasterConfigLoader:
         - {"math_fidelity": ..., ...} -> kept as dict (compute_kernel_config)
         """
         if not isinstance(value, dict):
+            # Handle lists of enum dicts (e.g., input_tensor_a_activations)
+            if isinstance(value, list):
+                parsed_list = []
+                for item in value:
+                    parsed_item = MasterConfigLoader.parse_enum_value(item)
+                    parsed_list.append(parsed_item)
+                return parsed_list
             return value
 
         enum_type = value.get("type")
@@ -1307,6 +1314,24 @@ class MasterConfigLoader:
             if "COL_MAJOR" in repr_str:
                 return ttnn.ShardOrientation.COL_MAJOR
             return ttnn.ShardOrientation.ROW_MAJOR
+
+        if enum_type == "UnaryOpType":
+            repr_str = value.get("repr", "")
+            _unary_op_map = {
+                "SILU": ttnn.UnaryOpType.SILU,
+                "RELU": ttnn.UnaryOpType.RELU,
+                "GELU": ttnn.UnaryOpType.GELU,
+                "SIGMOID": ttnn.UnaryOpType.SIGMOID,
+                "EXP": ttnn.UnaryOpType.EXP,
+                "RECIP": ttnn.UnaryOpType.RECIP,
+                "SQRT": ttnn.UnaryOpType.SQRT,
+                "NEG": ttnn.UnaryOpType.NEG,
+            }
+            for name, enum_val in _unary_op_map.items():
+                if name in repr_str:
+                    return enum_val
+            # Unknown UnaryOpType — keep as dict for sweep test to handle
+            return value
 
         # CoreGrid, compute_kernel_config, program_config, etc. stay as dicts
         # so they survive JSON serialization. The sweep test's run() converts them.
@@ -1374,6 +1399,7 @@ class MasterConfigLoader:
                                 "layout": parsed_layout,
                                 "memory_config": parsed_mem_config,
                                 "tensor_placement": tensor_config.tensor_placement,
+                                "storage_type": getattr(tensor_config, "storage_type", "StorageType::DEVICE"),
                             }
                         )
                     else:
@@ -1428,6 +1454,10 @@ class MasterConfigLoader:
                     config_dict[f"input_{suffix}_layout"] = tensor["layout"]
                     config_dict[f"input_{suffix}_memory_config"] = tensor["memory_config"]
                     config_dict[f"input_{suffix}_tensor_placement"] = tensor.get("tensor_placement")
+
+                # Propagate storage_type from the first positional tensor (arg0)
+                # so sweep tests can distinguish HOST vs DEVICE tensors.
+                config_dict["storage_type"] = positional_tensors[0].get("storage_type", "StorageType::DEVICE")
 
                 if "output_memory_config" not in config_dict:
                     if "memory_config" in config_dict:

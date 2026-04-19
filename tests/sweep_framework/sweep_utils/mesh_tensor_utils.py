@@ -221,6 +221,18 @@ def create_tensor_on_mesh(
 
         entries = re.findall(r"Placement(?:Shard\(-?\d+\)|Replicate)", placement_str)
 
+        # Check if any shard dimension exceeds tensor rank and pad if needed.
+        # The master trace may record 2D tensors (e.g., [32, 128256]) with
+        # PlacementShard(2) or PlacementShard(3) referencing higher dims.
+        # Pad to 4D so the shard dims are valid.
+        shard_dims = [int(m.group(1)) for m in re.finditer(r"PlacementShard\((-?\d+)\)", placement_str)]
+        max_shard_dim = max((d if d >= 0 else d + torch_tensor.ndim for d in shard_dims), default=-1)
+        if max_shard_dim >= torch_tensor.ndim:
+            # Pad tensor to at least max_shard_dim + 1 dimensions
+            target_ndim = max(max_shard_dim + 1, 4)
+            while torch_tensor.ndim < target_ndim:
+                torch_tensor = torch_tensor.unsqueeze(0)
+
         dist_raw = tensor_placement.get("distribution_shape", "")
         if isinstance(dist_raw, str):
             try:

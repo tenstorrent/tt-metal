@@ -107,24 +107,27 @@ def run(
     # but input_tensor_a_activations is actually an op kwarg for binary ops.
     if input_tensor_a_activations != "__ABSENT__" and input_tensor_a_activations is not None:
         activations_raw = input_tensor_a_activations
-        if isinstance(activations_raw, list) and len(activations_raw) > 0:
+        # Normalize to list if single value
+        if not isinstance(activations_raw, list):
+            activations_raw = [activations_raw]
+        if len(activations_raw) > 0:
             parsed_activations = []
             for act in activations_raw:
                 if isinstance(act, dict):
                     repr_str = act.get("repr", "")
-                    # Parse "UnaryOpType.SILU" -> ttnn.UnaryOpType.SILU
-                    if "SILU" in repr_str:
-                        parsed_activations.append(ttnn.UnaryOpType.SILU)
-                    elif "RELU" in repr_str:
-                        parsed_activations.append(ttnn.UnaryOpType.RELU)
-                    elif "GELU" in repr_str:
-                        parsed_activations.append(ttnn.UnaryOpType.GELU)
-                    else:
-                        # Unknown activation type — skip to avoid crashes
+                    _act_map = {"SILU": ttnn.UnaryOpType.SILU, "RELU": ttnn.UnaryOpType.RELU,
+                                "GELU": ttnn.UnaryOpType.GELU, "SIGMOID": ttnn.UnaryOpType.SIGMOID}
+                    matched = False
+                    for name, enum_val in _act_map.items():
+                        if name in repr_str:
+                            parsed_activations.append(enum_val)
+                            matched = True
+                            break
+                    if not matched:
                         parsed_activations = []
                         break
-                elif hasattr(act, "name"):
-                    # Already a ttnn.UnaryOpType enum
+                elif hasattr(act, "name") or isinstance(act, ttnn.UnaryOpType):
+                    # Already a ttnn.UnaryOpType enum (V2 loader now parses these)
                     parsed_activations.append(act)
             if parsed_activations:
                 op_kwargs["input_tensor_a_activations"] = parsed_activations
