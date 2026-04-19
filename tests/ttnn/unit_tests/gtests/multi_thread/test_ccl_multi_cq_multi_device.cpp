@@ -137,10 +137,10 @@ protected:
             const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
             const auto active_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
             for (const auto& [chan_id, _direction] : active_eth_channels) {
-                const auto eth_logical_core =
-                    cluster.get_soc_desc(chip_id).get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
                 uint32_t status_word = 0;
                 try {
+                    const auto eth_logical_core =
+                        cluster.get_soc_desc(chip_id).get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
                     const auto status =
                         cluster.read_core<uint32_t>(chip_id, eth_logical_core, edm_status_address, sizeof(uint32_t));
                     status_word = status.empty() ? 0u : status[0];
