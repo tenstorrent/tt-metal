@@ -35,6 +35,13 @@ void EventSynchronize(const MeshEvent& event) {
         return;
     }
     for (const auto& coord : event.device_range()) {
+        // In multi-host meshes, event.device_range() spans all coordinates including remote
+        // ranks. Remote devices are not accessible from this host — the remote rank runs its
+        // own EventSynchronize and manages its local CQs. Skip non-local coordinates to
+        // avoid TT_FATAL("Cannot get device for remote device") in MeshDeviceViewImpl::get_device.
+        if (!event.device()->impl().is_local(coord)) {
+            continue;
+        }
         auto* physical_device = event.device()->impl().get_device(coord);
         auto& sysmem = physical_device->sysmem_manager();
         const auto cq_id = event.mesh_cq_id();
@@ -56,6 +63,10 @@ bool EventQuery(const MeshEvent& event) {
     }
     bool event_completed = true;
     for (const auto& coord : event.device_range()) {
+        // Skip remote coordinates — see comment in EventSynchronize above.
+        if (!event.device()->impl().is_local(coord)) {
+            continue;
+        }
         auto* physical_device = event.device()->impl().get_device(coord);
         event_completed &= physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) >= event.id();
     }
