@@ -109,6 +109,9 @@ ttnn::Tensor routed_expert_ffn_bh(
     const uint32_t down_per_core_M = tt::div_up(M_tiles, down_grid_y);
     const uint32_t down_per_core_N = tt::div_up(N_down_tiles, GRID_X);
 
+    // Input A is already in L1 so the matmul doesn't reserve a DRAM-side CB
+    // buffer — use the full L1 budget (no safety margin) so best_in0_block_w
+    // can pick a larger divisor of K and halve the K-loop iterations.
     const uint32_t down_in0_bw = best_in0_block_w(
         /*K_tiles=*/K_down_tiles,
         /*per_core_M=*/down_per_core_M,
@@ -116,7 +119,8 @@ ttnn::Tensor routed_expert_ffn_bh(
         /*input_tensor_a=*/activated,
         /*input_tensor_b=*/down_proj,
         /*compute_kernel_config=*/compute_kernel_config,
-        /*output_dtype=*/x.dtype());
+        /*output_dtype=*/x.dtype(),
+        /*l1_safety_margin=*/1.0f);
 
     // Cap subblock to fit dest register (h*w <= 8)
     const uint32_t down_sub_w = largest_divisor(down_per_core_N, 8);
