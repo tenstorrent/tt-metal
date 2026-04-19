@@ -63,7 +63,7 @@ bool is_known_edm_status(uint32_t status) {
 // Update kExpectedEdmStatusCount when adding a new case above.
 constexpr size_t kExpectedEdmStatusCount = 15;
 static_assert(
-    enchantum::enum_count<tt::tt_fabric::EDMStatus>() == kExpectedEdmStatusCount,
+    enchantum::count<tt::tt_fabric::EDMStatus> == kExpectedEdmStatusCount,
     "EDMStatus enum count changed — update is_known_edm_status() switch and kExpectedEdmStatusCount");
 
 }  // namespace
@@ -787,7 +787,7 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
             corrupt_count++;
         } else {
             // Valid EDMStatus but not READY_FOR_TRAFFIC — try to name it.
-            auto maybe_enum = enchantum::enum_cast<tt::tt_fabric::EDMStatus>(fc.actual_status);
+            auto maybe_enum = enchantum::cast<tt::tt_fabric::EDMStatus>(fc.actual_status);
             if (maybe_enum.has_value()) {
                 classification = fmt::format(
                     "STILL_INITIALIZING (status={})", enchantum::to_string(maybe_enum.value()));
