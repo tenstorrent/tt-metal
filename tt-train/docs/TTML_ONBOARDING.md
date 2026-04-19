@@ -389,16 +389,18 @@ ctx.close_device()
 
 ### **Dataset Preparation: Tokenization**
 
-Training configs come in two flavors based on their tokenizer type:
+Training configs come in two flavors, determined by the data file format:
 
-| Suffix | Tokenizer | Vocab size | Data format | Use case |
-|--------|-----------|-----------|-------------|----------|
-| `*_char.yaml` | Character | ~68-96 (auto) | Plain text (`.txt`) | Quick experiments, small models |
-| `*_bpe.yaml` | BPE (subword) | Model-specific (e.g. 32k, 50k) | Pre-tokenized (`.yaml`) | Realistic training, correct parameter counts |
+| Suffix | Data format | Vocab size | Use case |
+|--------|------------|-----------|----------|
+| `*_char.yaml` | Plain text (`.txt`) | Auto-detected from characters (~68-96) | Quick experiments, small models |
+| `*_bpe.yaml` | Pre-tokenized (`.yaml`) | From model config (e.g. 32k, 50k) | Realistic training, correct parameter counts |
 
-**Character tokenization** (`*_char` configs) works out of the box with `data/shakespeare.txt` — no preprocessing needed. The vocab is auto-generated from the text characters.
+The tokenization mode is detected automatically from the `data_path` file extension — no `tokenizer_type` field needed.
 
-**BPE tokenization** (`*_bpe` configs) requires a pre-tokenized dataset. Each model needs its own tokenized file because vocabularies differ. Use `tools/dataset_to_tokens.py` to generate one:
+**Character tokenization** (`*_char` configs) works out of the box with `data/shakespeare.txt` — no preprocessing needed. The vocab is auto-generated from the text characters. Model configs for char omit `vocab_size` (it's set automatically).
+
+**Pre-tokenized data** requires a tokenized dataset. Each model needs its own tokenized file because vocabularies differ. The model config must specify `vocab_size`, and the script validates that all token IDs in the data fit within it. Use `tools/dataset_to_tokens.py` to generate one:
 
 ```bash
 cd tt-train
@@ -419,7 +421,7 @@ python tools/dataset_to_tokens.py \
 
 The script produces a YAML file containing `tokenizer_vocab_size`, `data_length`, and the flat `tokens` list. The training script validates that all token IDs fit within the model's `vocab_size`.
 
-> **Important**: Using a tokenized dataset with the wrong model causes either a crash (token IDs out of bounds) or incorrect parameter counts. The `*_bpe` training configs are paired with the correct tokenized data for their model.
+> **Important**: Using a tokenized dataset with the wrong model causes either a crash (token IDs out of bounds) or incorrect parameter counts. Each pre-tokenized training config is paired with the correct tokenized data for its model.
 
 ### **Example 2: NanoGPT Training**
 
