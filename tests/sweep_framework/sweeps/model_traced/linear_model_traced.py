@@ -115,10 +115,10 @@ def run(
             if isinstance(dtype, dict)
             else parse_dict_value("dtype", {"type": "DataType", "repr": dtype})
         )
-    # Skip traced program_config: block dimensions and grid sizes are computed for the
-    # original device/mesh and don't match the test device. Let ttnn auto-compute.
-    # The fallback below clears sharded configs when program_config is None.
-    program_config = None
+    # Parse traced program_config — the sweep runs on the same N300 hardware,
+    # so block dimensions and grid sizes from the master trace are valid.
+    if isinstance(program_config, dict):
+        program_config = parse_dict_value("program_config", program_config)
 
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
@@ -128,25 +128,16 @@ def run(
     bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
     output_memory_config = dict_to_memory_config(kwargs.get("output_memory_config", None))
 
+    # Extract sub_device_id and global_cb from kwargs (master trace has these as None)
+    sub_device_id = kwargs.get("sub_device_id", "__ABSENT__")
+    global_cb = kwargs.get("global_cb", "__ABSENT__")
+
     # Use build_op_kwargs to parse dict values for op kwargs (compute_kernel_config, etc.).
-    # Exclude program_config (handled above), activation (used for golden too),
+    # Exclude program_config (handled above as named param), activation (used for golden too),
     # and output_tile (a Tile object that can't be auto-parsed from dict).
-    parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile"},
+    parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile", "program_config", "sub_device_id", "global_cb"},
         extra_kwargs={"memory_config": memory_config, "dtype": dtype},
     )
-
-    # When program_config is None (grid-based configs dropped), the shard_spec in
-    # memory configs was computed for the original device and is invalid. Clear sharded
-    # configs so ttnn.linear auto-determines compatible settings.
-    if program_config is None:
-        if memory_config is not None and "SHARDED" in str(memory_config):
-            memory_config = None
-        if output_memory_config is not None and "SHARDED" in str(output_memory_config):
-            output_memory_config = None
-        if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
-            input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        if "memory_config" in parsed_op_kwargs and "SHARDED" in str(parsed_op_kwargs["memory_config"]):
-            del parsed_op_kwargs["memory_config"]
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
@@ -351,11 +342,20 @@ def run(
         if compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
+        # Pass core_grid even when None if it was in the traced config
         if core_grid is not None:
             linear_kwargs["core_grid"] = core_grid
+        elif "core_grid" in kwargs:
+            linear_kwargs["core_grid"] = None
 
         if activation is not None:
             linear_kwargs["activation"] = activation
+
+        # Pass sub_device_id and global_cb if they were in the traced config (even as None)
+        if sub_device_id != "__ABSENT__":
+            linear_kwargs["sub_device_id"] = sub_device_id
+        if global_cb != "__ABSENT__":
+            linear_kwargs["global_cb"] = global_cb
 
         linear_kwargs.update(parsed_op_kwargs)
         try:

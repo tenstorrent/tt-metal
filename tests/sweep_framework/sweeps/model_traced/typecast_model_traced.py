@@ -136,11 +136,18 @@ def run(
     is_host = storage_type and "HOST" in str(storage_type)
 
     if not is_host:
-        if is_mesh_device:
-            # Typecast is element-wise: replicate to all devices and compare
-            # device-0 output against the original reference tensor.
-            # Using create_tensor_on_mesh with ShardTensor2dMesh repeats/shards
-            # the input, causing a mismatch when extracting device 0 only.
+        if is_mesh_device and input_a_tensor_placement:
+            # Use the traced placement to match master trace behavior
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        elif is_mesh_device:
+            # No placement info — replicate to all devices
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
