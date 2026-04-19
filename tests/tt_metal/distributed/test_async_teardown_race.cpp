@@ -37,6 +37,7 @@
 #include <vector>
 
 #include <experimental/fabric/fabric_types.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/cluster.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
