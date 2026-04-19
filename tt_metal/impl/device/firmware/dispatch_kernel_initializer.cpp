@@ -330,6 +330,25 @@ void DispatchKernelInitializer::rescue_stuck_dispatch_cores(IDevice* device) con
     // past the wait loop before we send the termination signal.
     if (!termination_cores.empty()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        // GAP 3: Post-rescue verification — re-attempt wait_until_cores_done with a short
+        // timeout to confirm the firmware actually advanced past the stuck wait loop.
+        // If it still hasn't advanced, log a warning but don't TT_THROW — the termination
+        // signal path (process_termination_signals) may still succeed.
+        auto dispatch_cores = get_virtual_dispatch_cores(device->id());
+        try {
+            tt::llrt::internal_::wait_until_cores_done(device->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 100, true);
+            log_info(
+                tt::LogMetal,
+                "rescue_stuck_dispatch_cores: Device {} dispatch cores successfully unblocked after rescue injection",
+                device->id());
+        } catch (...) {
+            log_warning(
+                tt::LogMetal,
+                "rescue_stuck_dispatch_cores: Device {} dispatch cores may still be stuck after rescue injection "
+                "— proceeding to process_termination_signals anyway",
+                device->id());
+        }
     }
 }
 
