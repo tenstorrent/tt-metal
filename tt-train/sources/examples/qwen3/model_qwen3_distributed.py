@@ -212,11 +212,12 @@ class DistributedQwen3Attention(AbstractModuleBase):
         self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
 
         rope_scaling = ttml.ops.rope.RopeScalingParams()
-        if config.rope_scaling_factor != 0.0 and config.rope_original_context_length != 0:
-            rope_scaling.original_context_length = config.rope_original_context_length
-            rope_scaling.scaling_factor = config.rope_scaling_factor
-            rope_scaling.high_freq_factor = config.rope_high_freq_factor
-            rope_scaling.low_freq_factor = config.rope_low_freq_factor
+        rs = config.rope_scaling
+        if rs.scaling_factor != 0.0 and rs.original_context_length != 0:
+            rope_scaling.original_context_length = rs.original_context_length
+            rope_scaling.scaling_factor = rs.scaling_factor
+            rope_scaling.high_freq_factor = rs.high_freq_factor
+            rope_scaling.low_freq_factor = rs.low_freq_factor
 
         self.rope_params = ttml.ops.rope.build_rope_params(
             sequence_length=config.max_position_embeddings,
