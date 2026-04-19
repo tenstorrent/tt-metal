@@ -660,6 +660,10 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      models-filter:
+        description: "Comma-separated model names to filter reconstruction (e.g. 'llama-3.2-1b,whisper'). Only used with Model Traced / Lead Models runs."
+        type: string
+        required: false
 
   schedule:
     - cron: "30 4 * * 0,1,2,4,5" # This cron schedule runs the workflow at 4:30 AM UTC on Sun, Mon, Tue, Thu, Fri (nightly runs)
@@ -692,6 +696,7 @@ jobs:
       build-type: ${{ steps.resolve.outputs.build-type }}
       enable-lto: ${{ steps.resolve.outputs.enable-lto }}
       tracy: ${{ steps.resolve.outputs.tracy }}
+      models-filter: ${{ steps.resolve.outputs.models-filter }}
     steps:
       - id: resolve
         run: |
@@ -745,6 +750,7 @@ jobs:
           echo "build-type=${{ github.event.inputs['build-type'] || 'Release' }}" >> $GITHUB_OUTPUT
           echo "enable-lto=${{ github.event.inputs['enable-lto'] || 'false' }}" >> $GITHUB_OUTPUT
           echo "tracy=$TRACY" >> $GITHUB_OUTPUT
+          echo "models-filter=${{ github.event.inputs.models-filter || '' }}" >> $GITHUB_OUTPUT
 
   display-workflow-options:
     name: 📋 Display workflow options
@@ -773,6 +779,7 @@ jobs:
           echo "│ Log Level:            ${{ needs.resolve-inputs.outputs.log-level }}"
           echo "│ Use Database:         ${{ needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)' }}"
           echo "│ Mesh Shape Filter:    ${{ needs.resolve-inputs.outputs.mesh-shape || 'none' }}"
+          echo "│ Models Filter:        ${{ needs.resolve-inputs.outputs.models-filter || 'none' }}"
           echo "│ Platform:             ${{ needs.resolve-inputs.outputs.platform }}"
           echo "│ Build Type:           ${{ needs.resolve-inputs.outputs.build-type }}"
           echo "│ Enable LTO:           ${{ needs.resolve-inputs.outputs.enable-lto }}"
@@ -826,20 +833,34 @@ jobs:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
           mkdir -p model_tracer/traced_operations
-          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
-            model_tracer/trace_selection_registry.yaml \
-            model_tracer/traced_operations/ttnn_operations_master.json \
+          CMD=(
+            python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest
+            model_tracer/trace_selection_registry.yaml
+            model_tracer/traced_operations/ttnn_operations_master.json
             lead_models
+          )
+          MODELS_FILTER="${{ needs.resolve-inputs.outputs.models-filter }}"
+          if [[ -n "$MODELS_FILTER" ]]; then
+            CMD+=(--models-filter "$MODELS_FILTER")
+          fi
+          "${CMD[@]}"
       - name: Generate JSON for model_traced run
         if: needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)'
         env:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
           mkdir -p model_tracer/traced_operations
-          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
-            model_tracer/trace_selection_registry.yaml \
-            model_tracer/traced_operations/ttnn_operations_master.json \
+          CMD=(
+            python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest
+            model_tracer/trace_selection_registry.yaml
+            model_tracer/traced_operations/ttnn_operations_master.json
             model_traced
+          )
+          MODELS_FILTER="${{ needs.resolve-inputs.outputs.models-filter }}"
+          if [[ -n "$MODELS_FILTER" ]]; then
+            CMD+=(--models-filter "$MODELS_FILTER")
+          fi
+          "${CMD[@]}"
       - name: Upload master JSON artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
