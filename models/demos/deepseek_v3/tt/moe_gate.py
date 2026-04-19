@@ -114,8 +114,6 @@ class MoEGate(AbstractModule):
             ModelState containing input_indices, output_indices and output_tensor for each MoE layer
         """
 
-        grid = mesh_device.compute_with_storage_grid_size()
-        num_device_cores = grid.x * grid.y
         ttnn_output_tensor = ttnn.zeros(
             shape=(1, 32, 32),
             dtype=ttnn.bfloat16,
@@ -123,7 +121,6 @@ class MoEGate(AbstractModule):
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (num_device_cores, 1, 1))
 
         ttnn_output_indices = ttnn.zeros(
             shape=(1, 32, 32),
@@ -132,7 +129,6 @@ class MoEGate(AbstractModule):
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (num_device_cores, 1, 1))
 
         ttnn_input_indices = ttnn.arange(
             start=0,
@@ -147,9 +143,6 @@ class MoEGate(AbstractModule):
         ttnn_input_indices = ttnn.reshape(ttnn_input_indices, (1, 16, 16))
         ttnn_input_indices = ttnn.transpose(ttnn_input_indices, dim1=-2, dim2=-1)
         ttnn_input_indices = ttnn.typecast(ttnn_input_indices, dtype=ttnn.uint16)
-        ttnn_input_indices = ttnn.to_layout(ttnn_input_indices, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (num_device_cores, 1, 1))
-        ttnn_input_indices = ttnn.to_layout(ttnn_input_indices, ttnn.TILE_LAYOUT)
 
         return {
             "gate_routing": {
@@ -323,27 +316,15 @@ class MoEGate(AbstractModule):
 
         # get the output tensor, input indices and output indices
         ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
-        ttnn_output_tensor = ttnn.slice(
-            ttnn_output_tensor,
-            slice_start=[0, 0, 0],
-            slice_end=[batch_size_per_iter, 32, 32],
-        )
+        ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (batch_size_per_iter, 1, 1))
         ttnn_output_tensor = ttnn.to_memory_config(ttnn_output_tensor, memory_config=input_output_mem_config)
 
         ttnn_input_indices = cfg["gate_routing"]["ttnn_input_indices"]
-        ttnn_input_indices = ttnn.slice(
-            ttnn_input_indices,
-            slice_start=[0, 0, 0],
-            slice_end=[batch_size_per_iter, 16, 16],
-        )
+        ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (batch_size_per_iter, 1, 1))
         ttnn_input_indices = ttnn.to_memory_config(ttnn_input_indices, memory_config=input_output_mem_config)
 
         ttnn_output_indices = cfg["gate_routing"]["ttnn_output_indices"]
-        ttnn_output_indices = ttnn.slice(
-            ttnn_output_indices,
-            slice_start=[0, 0, 0],
-            slice_end=[batch_size_per_iter, 32, 32],
-        )
+        ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (batch_size_per_iter, 1, 1))
         ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
 
         # we can only have one token per core at a time
