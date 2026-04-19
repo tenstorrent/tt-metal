@@ -89,17 +89,18 @@ ttnn::Tensor routed_expert_ffn_bh(
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
-    // multiply + reshard in one step: block-sharded inputs → L1 interleaved output.
-    // The interleaved result drops the shard-grid coverage so the downstream down
-    // matmul sees the logical Kt = N_gate_tiles, unsharded.
-    auto activated = ttnn::multiply(
-        /*lhs=*/gate_result,
-        /*rhs=*/up_result,
-        /*output_dtype=*/std::nullopt,
-        /*memory_config=*/ttnn::L1_MEMORY_CONFIG);
-
-    gate_result.deallocate();
+    // In-place multiply: writes into gate_result's block-sharded L1 buffer.
+    // Reshard to L1 interleaved afterwards so the down matmul sees an unsharded
+    // input A (logical Kt = N_gate_tiles, no divisor constraint on in0_block_w).
+    ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
     up_result.deallocate();
+
+    auto activated = ttnn::to_memory_config(
+        /*tensor=*/gate_result,
+        /*memory_config=*/ttnn::L1_MEMORY_CONFIG,
+        /*dtype=*/std::nullopt,
+        /*output_tensor=*/std::nullopt);
+    gate_result.deallocate();
 
     // --- Down matmul config ---
     // Input A is L1-interleaved (not sharded) so in0_block_w only needs to
