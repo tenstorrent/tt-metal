@@ -19,6 +19,10 @@ public:
     ShmTrackingProcessor();
     ~ShmTrackingProcessor() override = default;
 
+    // ShmTrackingProcessor is a permanent background processor; it must not
+    // cause is_graph_capture_active() to return true when no capture is in progress.
+    bool is_capture_processor() const override { return false; }
+
     void track_allocate(const Buffer* buffer) override;
     void track_deallocate(Buffer* buffer) override;
 
