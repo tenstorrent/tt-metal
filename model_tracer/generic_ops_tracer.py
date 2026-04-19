@@ -501,12 +501,20 @@ def _normalize_for_hash(obj):
             v = obj[k]
             if isinstance(v, str):
                 obj[k] = _strip_object_addresses(v)
+            elif isinstance(v, int) and not isinstance(v, bool) and abs(v) > 2**53:
+                # Large ints were originally Python floats (e.g. -sys.float_info.max)
+                # that lost their float type during JSON/DB round-trips.
+                # Convert back to float so json.dumps produces the same scientific
+                # notation as the original hash computation.
+                obj[k] = float(v)
             else:
                 _normalize_for_hash(v)
     elif isinstance(obj, list):
         for i, item in enumerate(obj):
             if isinstance(item, str):
                 obj[i] = _strip_object_addresses(item)
+            elif isinstance(item, int) and not isinstance(item, bool) and abs(item) > 2**53:
+                obj[i] = float(item)
             else:
                 _normalize_for_hash(item)
 
