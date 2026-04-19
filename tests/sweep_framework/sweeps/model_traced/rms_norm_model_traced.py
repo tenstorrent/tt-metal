@@ -98,6 +98,7 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config=None,
+    memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -112,23 +113,23 @@ def run(
     # auto-filters weight_* named tensor kwargs and infrastructure keys.
     # Exclude program_config because it needs custom parsing (LayerNorm-specific).
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config,
+        exclude={"program_config"},
+        extra_kwargs={"memory_config": memory_config},
     )
 
-    # Handle program_config with custom parser
-    program_config = kwargs.get("program_config")
-    if isinstance(program_config, dict):
-        program_config = dict_to_layernorm_program_config(program_config)
-    if program_config is not None:
-        op_kwargs["program_config"] = program_config
+    # Handle program_config with custom parser — preserve None if trace had it
+    program_config_raw = kwargs.get("program_config", "__ABSENT__")
+    if program_config_raw != "__ABSENT__":
+        if isinstance(program_config_raw, dict):
+            op_kwargs["program_config"] = dict_to_layernorm_program_config(program_config_raw)
+        else:
+            op_kwargs["program_config"] = program_config_raw  # Includes None
 
-    # Use named memory_config for output if output_memory_config not set
-    if output_memory_config is None and "memory_config" in op_kwargs:
-        output_memory_config = op_kwargs.pop("memory_config")
-    # If output_memory_config is explicitly set, remove duplicate memory_config from op_kwargs
-    elif "memory_config" in op_kwargs:
-        op_kwargs.pop("memory_config")
+    # If output_memory_config is explicitly set, use it as the op's memory_config
     if output_memory_config is not None:
         op_kwargs["memory_config"] = output_memory_config
+    # Otherwise, memory_config from the trace (via extra_kwargs) stays in op_kwargs as-is
+    # (including None if the trace explicitly had memory_config=None)
 
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 

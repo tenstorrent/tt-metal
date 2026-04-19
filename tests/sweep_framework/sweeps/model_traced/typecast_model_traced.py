@@ -161,7 +161,12 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
+    # Pass dtype as kwarg or positional to match how master trace captured it.
+    # If arg1 is in the sweep vector, master traced it positionally; otherwise as kwarg.
+    if "arg1" in kwargs:
+        output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
+    else:
+        output_tensor = ttnn.typecast(input_tensor_a, dtype=output_dtype, **op_kwargs)
     # Use device-0 extraction (no mesh composer) to get per-device output that
     # matches the per-device reference tensor.  Typecast is element-wise so each
     # device's output independently matches the reference.

@@ -84,6 +84,11 @@ def run(
 
     pos_args = extract_positional_args(kwargs)
     traced_output_mem_config = pos_args.get(1, None)
+    # Extract output dtype from positional arg2 if traced
+    traced_output_dtype = pos_args.get(2, None)
+    if isinstance(traced_output_dtype, dict):
+        from tests.sweep_framework.master_config_loader_v2 import parse_dtype
+        traced_output_dtype = parse_dtype(traced_output_dtype.get("repr", ""))
 
     # Determine the output memory config: prefer traced arg1 (positional), then explicit param
     if traced_output_mem_config is not None:
@@ -220,12 +225,14 @@ def run(
                 memory_config=input_a_memory_config,
             )
 
-    # Run sharded_to_interleaved (pass output config as positional arg to match master trace)
+    # Run sharded_to_interleaved (pass output config and dtype as positional args to match master trace)
     start_time = start_measuring_time()
+    s2i_args = [input_tensor]
     if s2i_output_config is not None:
-        output_tensor = ttnn.sharded_to_interleaved(input_tensor, s2i_output_config, **op_kwargs)
-    else:
-        output_tensor = ttnn.sharded_to_interleaved(input_tensor, **op_kwargs)
+        s2i_args.append(s2i_output_config)
+        if traced_output_dtype is not None:
+            s2i_args.append(traced_output_dtype)
+    output_tensor = ttnn.sharded_to_interleaved(*s2i_args, **op_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
     # Verify output is interleaved

@@ -89,6 +89,28 @@ def run(
         extra_kwargs={"memory_config": memory_config, "dtype": dtype},
     )
 
+    # Handle fused activations (e.g., SILU) from traced config
+    # _activations suffix is filtered by build_op_kwargs as tensor metadata,
+    # but input_tensor_a_activations is actually an op kwarg for binary ops.
+    activations_raw = kwargs.get("input_tensor_a_activations", None)
+    if activations_raw is not None:
+        parsed_activations = []
+        if isinstance(activations_raw, list):
+            for act in activations_raw:
+                if isinstance(act, dict):
+                    repr_str = act.get("repr", "")
+                    # Parse "UnaryOpType.SILU" -> ttnn.UnaryOpType.SILU
+                    if "SILU" in repr_str:
+                        parsed_activations.append(ttnn.UnaryOpType.SILU)
+                    elif "RELU" in repr_str:
+                        parsed_activations.append(ttnn.UnaryOpType.RELU)
+                    elif "GELU" in repr_str:
+                        parsed_activations.append(ttnn.UnaryOpType.GELU)
+                else:
+                    parsed_activations.append(act)
+        if parsed_activations:
+            op_kwargs["input_tensor_a_activations"] = parsed_activations
+
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = tuple(input_b_shape) if input_b_shape and isinstance(input_b_shape, (list, tuple)) else input_b_shape

@@ -89,13 +89,12 @@ def run(
         dim0 = pos_args.get(1, 0)
     if dim1 is None:
         dim1 = pos_args.get(2, 1)
-    if output_memory_config is None and memory_config is not None:
+    if output_memory_config is None and memory_config is not None and memory_config != "__ABSENT__":
         output_memory_config = memory_config
 
-    # Pass output memory_config to ttnn.transpose — without it, transpose inherits
-    # the input's sharded memory_config which may become non-tile-aligned after
-    # transposing dimensions.
-    if output_memory_config is not None and "memory_config" not in op_kwargs:
+    # Only inject output_memory_config as memory_config kwarg if the trace had memory_config.
+    # If memory_config was __ABSENT__ (not in trace), don't inject to match master behavior.
+    if memory_config != "__ABSENT__" and output_memory_config is not None and "memory_config" not in op_kwargs:
         parsed_mc = parse_dict_value("memory_config", output_memory_config)
         if parsed_mc is not None:
             op_kwargs["memory_config"] = parsed_mc
