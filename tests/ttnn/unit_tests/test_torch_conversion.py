@@ -1138,6 +1138,7 @@ def test_from_torch_sharded_tilize_dispatch_core_overlap(device):
     assert list(result.shape) == list(shape)
 
 
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize(
     "torch_dtype,ttnn_dtype,total_width,num_shards",
     [
