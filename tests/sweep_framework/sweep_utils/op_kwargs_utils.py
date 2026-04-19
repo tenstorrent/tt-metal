@@ -85,11 +85,11 @@ def _is_infrastructure_key(key: str) -> bool:
     # output_memory_config is handled separately by most sweep tests
     if key == "output_memory_config":
         return True
-    # memory_config from traced kwargs should not leak into op_kwargs.
-    # It is handled via the output_memory_config parameter in sweep module run() functions.
-    # Passing it through causes "incompatible function arguments" for ops that don't accept it.
-    if key == "memory_config":
-        return True
+    # memory_config from traced kwargs is kept by default so that model-traced
+    # sweep validation can replicate the exact kwargs the model passed.
+    # Sweep modules for ops that don't accept memory_config should add it to
+    # the exclude set when calling build_op_kwargs().
+    # (Previously filtered globally, which prevented validation match.)
     # Any key ending with _tensor_placement is tensor placement metadata
     if key.endswith("_tensor_placement"):
         return True
@@ -227,13 +227,12 @@ def build_op_kwargs(
     """Extract actual op kwargs from the full test vector kwargs.
 
     Filters out infrastructure keys, positional tensor params, named tensor kwargs,
-    output_memory_config, memory_config, and ``__ABSENT__`` sentinel values.
+    output_memory_config, and ``__ABSENT__`` sentinel values.
     Parses dict values into ttnn objects.
 
-    Note: ``memory_config`` is filtered out by default because most ops either
-    don't accept it or handle it via separate positional parameters.  Sweep
-    modules that need ``memory_config`` in op kwargs should add it explicitly
-    after calling this function.
+    Note: ``memory_config`` is now kept by default so that model-traced sweep
+    validation can replicate the exact kwargs the model passed.  Sweep modules
+    for ops that don't accept ``memory_config`` should add it to *exclude*.
 
     Note: Positional args (``arg0``, ``arg1``, …) are filtered out because they
     are positional parameters, not keyword arguments.  Use
