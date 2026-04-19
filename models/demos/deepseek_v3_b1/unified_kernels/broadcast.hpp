@@ -117,8 +117,8 @@ struct Broadcast {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
-                        socket_wait_for_pages(recv, args.socket_num_pages);
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                        socket_wait_for_pages(recv, args.socket_num_pages);
                         invalidate_l1_cache();
                         noc_async_read(
                             get_noc_addr(recv.read_ptr),
@@ -234,6 +234,7 @@ struct Broadcast {
                     noc_async_write(src, dst_noc_base, tensor_size_bytes);
                     auto no_wait = [&](uint32_t, uint32_t) {};
                     forward_chunks(src, no_wait);
+                    noc_async_writes_flushed();
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                 } else {
                     const uint32_t src = args.tensor_address0;

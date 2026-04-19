@@ -39,7 +39,11 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_uint32, get_pinned_optimal_dram_bank_to_logical_worker_assignment
+from models.demos.deepseek_v3_b1.utils import (
+    float_to_uint32,
+    get_pinned_optimal_dram_bank_to_logical_worker_assignment,
+    get_worker_noc_hop_distance,
+)
 
 
 class MoeSem:
@@ -65,7 +69,14 @@ class MoeSem:
     REDUCE_SYNC = 16
     REDUCE_AGG_SYNC = 17
     REDUCE_PERSISTENT_FABRIC_SIGNAL = 18
-    NUM_SEMAPHORES = 19
+    # NOC1 receiver semaphores for gathers that split senders across both NOCs.
+    # Each gather waits separately on its noc0 and noc1 receiver semaphores so the
+    # noc0 senders can't accidentally satisfy the noc1 wait (and vice versa).
+    DOWN_PROJ_GATHER_NOC1 = 19
+    AG_GATHER_NOC1 = 20
+    BG_GATHER_NOC1 = 21
+    OUTPUT_GATHER_NOC1 = 22
+    NUM_SEMAPHORES = 23
 
 
 @dataclass
@@ -808,7 +819,7 @@ class MoeRoutedExpertOp:
         mcast_data_sender_semaphore_addr = sem_addrs[MoeSem.MCAST_SENDER]
         mcast_data_receiver_semaphore_addr = sem_addrs[MoeSem.MCAST_DATA_RECEIVER]
         gather_noc0_receiver_semaphore_addr = sem_addrs[MoeSem.DOWN_PROJ_GATHER]
-        gather_noc1_receiver_semaphore_addr = sem_addrs[MoeSem.DOWN_PROJ_GATHER]
+        gather_noc1_receiver_semaphore_addr = sem_addrs[MoeSem.DOWN_PROJ_GATHER_NOC1]
         residual_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.RESIDUAL_MCAST_RECEIVER]
         expert_scale_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.EXPERT_SCALE_MCAST_RECEIVER]
         index_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.INDEX_MCAST_RECEIVER]
@@ -1647,9 +1658,15 @@ class MoeRoutedExpertOp:
             ("gather_dest_noc_x", ctx.gate_mm_gather_params["dest_noc_x"] if ctx.enable_routing else 0),
             ("gather_dest_noc_y", ctx.gate_mm_gather_params["dest_noc_y"] if ctx.enable_routing else 0),
             ("gather_data_size_bytes", ctx.gate_mm_gather_params["data_size_bytes"] if ctx.enable_routing else 0),
+            # Sender selects noc0 vs noc1 receiver semaphore at compile-time based on
+            # its per-core gate_mm_gather_noc_idx (matches the receiver wait counts).
             (
-                "gather_receiver_semaphore_addr",
-                ctx.gate_mm_gather_params["receiver_semaphore_addr"] if ctx.enable_routing else 0,
+                "gather_noc0_receiver_semaphore_addr",
+                ctx.gate_mm_gather_params["noc0_receiver_semaphore_addr"] if ctx.enable_routing else 0,
+            ),
+            (
+                "gather_noc1_receiver_semaphore_addr",
+                ctx.gate_mm_gather_params["noc1_receiver_semaphore_addr"] if ctx.enable_routing else 0,
             ),
             ("gather_src_cb", ctx.gate_mm_gather_params["src_cb"] if ctx.enable_routing else 0),
             ("gather_src_num_pages", ctx.gate_mm_gather_params["src_num_pages"] if ctx.enable_routing else 0),
@@ -1689,7 +1706,16 @@ class MoeRoutedExpertOp:
             ("down_proj_gather_dest_noc_x", ctx.down_proj_gather_params["dest_noc_x"]),
             ("down_proj_gather_dest_noc_y", ctx.down_proj_gather_params["dest_noc_y"]),
             ("down_proj_gather_data_size_bytes", ctx.down_proj_gather_params["data_size_bytes"]),
-            ("down_proj_gather_receiver_semaphore_addr", ctx.down_proj_gather_params["receiver_semaphore_addr"]),
+            # Sender selects noc0 vs noc1 receiver semaphore at compile-time based on
+            # its per-core down_proj_gather_noc_idx (matches the receiver wait counts).
+            (
+                "down_proj_gather_noc0_receiver_semaphore_addr",
+                ctx.down_proj_gather_params["noc0_receiver_semaphore_addr"],
+            ),
+            (
+                "down_proj_gather_noc1_receiver_semaphore_addr",
+                ctx.down_proj_gather_params["noc1_receiver_semaphore_addr"],
+            ),
             ("down_proj_gather_src_cb", ctx.down_proj_gather_params["src_cb"]),
             ("down_proj_gather_src_num_pages", ctx.down_proj_gather_params["src_num_pages"]),
             ("down_proj_gather_sender_grid_start_x", ctx.down_proj_gather_params["sender_grid_start_x"]),
@@ -2587,13 +2613,19 @@ class MoeSharedExpertOp:
             ("shared_gu_weights_cb", shared_ctx.gu_weights_cb),
             ("shared_gu_weights_num_pages", shared_ctx.gu_matmul_params["weights_num_pages"]),
             # Gate gather (A) receiver (MoeGather: receiver on NCRISC)
+            # noc0/noc1_num_senders are placeholders here — overwritten per-device by
+            # MoeOp._build_gather_noc_per_device based on optimal hop distance.
             ("shared_ag_noc0_num_senders", shared_ctx.num_compute_cores),
+            ("shared_ag_noc1_num_senders", 0),
             ("shared_ag_noc0_receiver_semaphore_addr", shared_ctx.ag_receiver_semaphore_addr),
             ("shared_ag_noc1_receiver_semaphore_addr", shared_ctx.ag_noc1_receiver_semaphore_addr),
             ("shared_ag_dst_cb", shared_ctx.group1_cb),
             ("shared_ag_dst_num_pages", shared_ctx.gated_reduce_params["kernel_tiles_per_k"]),
             # Up gather (B) receiver (MoeGather: receiver on NCRISC)
+            # noc0/noc1_num_senders are placeholders here — overwritten per-device by
+            # MoeOp._build_gather_noc_per_device based on optimal hop distance.
             ("shared_bg_noc0_num_senders", shared_ctx.num_compute_cores),
+            ("shared_bg_noc1_num_senders", 0),
             ("shared_bg_noc0_receiver_semaphore_addr", shared_ctx.bg_receiver_semaphore_addr),
             ("shared_bg_noc1_receiver_semaphore_addr", shared_ctx.bg_noc1_receiver_semaphore_addr),
             ("shared_bg_dst_cb", shared_ctx.group2_cb),
@@ -2619,7 +2651,10 @@ class MoeSharedExpertOp:
             ("shared_ag_dest_noc_x", shared_ctx.gather_dest_noc_core.x),
             ("shared_ag_dest_noc_y", shared_ctx.gather_dest_noc_core.y),
             ("shared_ag_data_size_bytes", shared_ctx.gu_gather_data_size_bytes),
-            ("shared_ag_receiver_semaphore_addr", shared_ctx.ag_receiver_semaphore_addr),
+            # Sender selects noc0 vs noc1 receiver semaphore at compile-time based on
+            # its per-core shared_ag_noc_idx (matches the receiver wait counts).
+            ("shared_ag_noc0_receiver_semaphore_addr", shared_ctx.ag_receiver_semaphore_addr),
+            ("shared_ag_noc1_receiver_semaphore_addr", shared_ctx.ag_noc1_receiver_semaphore_addr),
             ("shared_ag_src_cb", shared_ctx.gu_out_cb),
             ("shared_ag_src_num_pages", 1),
             ("shared_ag_receiver_data_addr", shared_ctx.ag_receiver_data_addr),
@@ -2627,7 +2662,10 @@ class MoeSharedExpertOp:
             ("shared_bg_dest_noc_x", shared_ctx.gather_dest_noc_core.x),
             ("shared_bg_dest_noc_y", shared_ctx.gather_dest_noc_core.y),
             ("shared_bg_data_size_bytes", shared_ctx.gu_gather_data_size_bytes),
-            ("shared_bg_receiver_semaphore_addr", shared_ctx.bg_receiver_semaphore_addr),
+            # Sender selects noc0 vs noc1 receiver semaphore at compile-time based on
+            # its per-core shared_bg_noc_idx (matches the receiver wait counts).
+            ("shared_bg_noc0_receiver_semaphore_addr", shared_ctx.bg_receiver_semaphore_addr),
+            ("shared_bg_noc1_receiver_semaphore_addr", shared_ctx.bg_noc1_receiver_semaphore_addr),
             ("shared_bg_src_cb", shared_ctx.gu_out_cb),
             ("shared_bg_src_num_pages", 1),
             ("shared_bg_receiver_data_addr", shared_ctx.bg_receiver_data_addr),
@@ -2642,7 +2680,16 @@ class MoeSharedExpertOp:
             ("shared_og_dest_noc_x", shared_ctx.output_gather_params["dest_noc_x"]),
             ("shared_og_dest_noc_y", shared_ctx.output_gather_params["dest_noc_y"]),
             ("shared_og_data_size_bytes", shared_ctx.output_gather_params["data_size_bytes"]),
-            ("shared_og_receiver_semaphore_addr", shared_ctx.output_gather_params["receiver_semaphore_addr"]),
+            # Sender selects noc0 vs noc1 receiver semaphore at compile-time based on
+            # its per-core shared_og_noc_idx (matches the receiver wait counts).
+            (
+                "shared_og_noc0_receiver_semaphore_addr",
+                shared_ctx.output_gather_params["noc0_receiver_semaphore_addr"],
+            ),
+            (
+                "shared_og_noc1_receiver_semaphore_addr",
+                shared_ctx.output_gather_params["noc1_receiver_semaphore_addr"],
+            ),
             ("shared_og_src_cb", shared_ctx.output_gather_params["src_cb"]),
             ("shared_og_src_num_pages", shared_ctx.output_gather_params["src_num_pages"]),
             ("shared_og_receiver_data_addr", shared_ctx.output_gather_params["receiver_data_addr"]),
@@ -4515,12 +4562,12 @@ class MoeOp:
             n_parallel=shared_n_parallel,
             ag_receiver_semaphore_addr=sem_addrs[MoeSem.AG_GATHER],
             bg_receiver_semaphore_addr=sem_addrs[MoeSem.BG_GATHER],
-            ag_noc1_receiver_semaphore_addr=sem_addrs[MoeSem.AG_GATHER],
-            bg_noc1_receiver_semaphore_addr=sem_addrs[MoeSem.BG_GATHER],
+            ag_noc1_receiver_semaphore_addr=sem_addrs[MoeSem.AG_GATHER_NOC1],
+            bg_noc1_receiver_semaphore_addr=sem_addrs[MoeSem.BG_GATHER_NOC1],
             shared_mcast_sender_semaphore_addr=sem_addrs[MoeSem.MCAST_SENDER],
             shared_mcast_receiver_semaphore_addr=sem_addrs[MoeSem.SHARED_DOWN_MCAST_RECEIVER],
             output_gather_noc0_receiver_semaphore_addr=sem_addrs[MoeSem.OUTPUT_GATHER],
-            output_gather_noc1_receiver_semaphore_addr=sem_addrs[MoeSem.OUTPUT_GATHER],
+            output_gather_noc1_receiver_semaphore_addr=sem_addrs[MoeSem.OUTPUT_GATHER_NOC1],
             output_mcast_sender_semaphore_addr=sem_addrs[MoeSem.MCAST_SENDER],
             output_mcast_receiver_semaphore_addr=sem_addrs[MoeSem.SHARED_OUTPUT_MCAST_RECEIVER],
             cb_id_context=cb_id_context,
@@ -4795,11 +4842,87 @@ class MoeOp:
         self.bcast_dst_nodes = []
         self.device_kernel_defines = list(self.kernel_defines)
 
+        # Pick the optimal NOC per sender core for each gather based on hop distance,
+        # then update per-core noc_idx descriptors and per-NOC sender counts on NCRISC.
+        self._build_gather_noc_per_device(coord)
+
         # Apply reduce-to-one modifications (no-op when reduce disabled)
         self._build_reduce_per_device(reduce_root_coord, coord, row, col, chip_id)
 
         # Apply broadcast modifications (no-op when bcast disabled)
         self._build_bcast_per_device(coord, row, col, chip_id)
+
+    @staticmethod
+    def _gather_noc_idx_per_core(mesh_device, mesh_coord, sender_grid, target_core):
+        """Pick the optimal NOC (0 or 1) for each sender core based on hop distance to the target.
+
+        Mirrors AttentionBlock.get_gather_noc_idx_per_core: ties go to NOC_0.
+        Returns a list of (CoreCoord, noc_idx) tuples, suitable for a
+        PerCoreCompileTimeDescriptor.
+        """
+        result = []
+        for core in ttnn.corerange_to_cores(sender_grid, row_wise=True):
+            noc0_hop = get_worker_noc_hop_distance(mesh_device, core, target_core, ttnn.NOC.NOC_0, mesh_coord)
+            noc1_hop = get_worker_noc_hop_distance(mesh_device, core, target_core, ttnn.NOC.NOC_1, mesh_coord)
+            result.append((core, 0 if noc0_hop <= noc1_hop else 1))
+        return result
+
+    @staticmethod
+    def _set_named_arg(arg_list, name, value):
+        """Replace the value of a named (name, value) tuple in a compile-time arg list."""
+        for i, (n, _) in enumerate(arg_list):
+            if n == name:
+                arg_list[i] = (name, value)
+                return
+        arg_list.append((name, value))
+
+    def _build_gather_noc_per_device(self, mesh_coord):
+        """Compute per-device gather NOC assignments and patch CT args + per-core descriptors.
+
+        Each MoE gather sender chooses NOC_0 or NOC_1 at compile-time based on which
+        NOC has the shorter hop distance to the receiver. The receiver waits on
+        separate noc0/noc1 semaphores using per-NOC sender counts that match the
+        per-core assignments.
+        """
+        ctx = self.ctx
+        mesh_device = ctx.mesh_device
+        receiver_core = ctx.routed_ctx.sender_core
+
+        gathers = []
+        if ctx.enable_routing:
+            gathers.append(("gate_mm_gather", ctx.routed_ctx.gate_mm_params["core_grid"]))
+        gathers.append(("down_proj_gather", ctx.routed_ctx.gate_proj_core_ranges))
+        gathers.append(("shared_ag", ctx.shared_ctx.a_compute_grid))
+        gathers.append(("shared_bg", ctx.shared_ctx.b_compute_grid))
+        gathers.append(("shared_og", ctx.shared_ctx.matmul_core_grid))
+
+        # Map gather name -> (noc0_num_senders_arg, noc1_num_senders_arg, per_core_desc_arg)
+        ct_arg_names = {
+            "gate_mm_gather": ("gather_noc0_num_senders", "gather_noc1_num_senders", "gate_mm_gather_noc_idx"),
+            "down_proj_gather": (
+                "down_proj_gather_noc0_num_senders",
+                "down_proj_gather_noc1_num_senders",
+                "down_proj_gather_noc_idx",
+            ),
+            "shared_ag": ("shared_ag_noc0_num_senders", "shared_ag_noc1_num_senders", "shared_ag_noc_idx"),
+            "shared_bg": ("shared_bg_noc0_num_senders", "shared_bg_noc1_num_senders", "shared_bg_noc_idx"),
+            "shared_og": ("shared_og_noc0_num_senders", "shared_og_noc1_num_senders", "shared_og_noc_idx"),
+        }
+
+        for gather_name, sender_grid in gathers:
+            noc_idx_per_core = MoeOp._gather_noc_idx_per_core(mesh_device, mesh_coord, sender_grid, receiver_core)
+            noc0_num = sum(1 for _, idx in noc_idx_per_core if idx == 0)
+            noc1_num = sum(1 for _, idx in noc_idx_per_core if idx == 1)
+            noc0_arg, noc1_arg, per_core_arg = ct_arg_names[gather_name]
+            MoeOp._set_named_arg(self.ncrisc_args, noc0_arg, noc0_num)
+            MoeOp._set_named_arg(self.ncrisc_args, noc1_arg, noc1_num)
+            self.device_per_core_descs.append(
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg=per_core_arg,
+                    core_values=noc_idx_per_core,
+                    other_value=0,
+                )
+            )
 
     @staticmethod
     def op(

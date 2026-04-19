@@ -1482,7 +1482,7 @@ void kernel_main() {
             // Gate Gather (A) receiver (MoeGather: receiver on NCRISC)
             deepseek_b1_ops::MoeGather::ReceiverArgs ag_args{
                 get_named_compile_time_arg_val("shared_ag_noc0_num_senders"),
-                0,  // noc1_num_senders
+                get_named_compile_time_arg_val("shared_ag_noc1_num_senders"),
                 get_named_compile_time_arg_val("shared_ag_noc0_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_ag_noc1_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_ag_dst_cb"),
@@ -1492,7 +1492,7 @@ void kernel_main() {
             // Up Gather (B) receiver (MoeGather: receiver on NCRISC)
             deepseek_b1_ops::MoeGather::ReceiverArgs bg_args{
                 get_named_compile_time_arg_val("shared_bg_noc0_num_senders"),
-                0,  // noc1_num_senders
+                get_named_compile_time_arg_val("shared_bg_noc1_num_senders"),
                 get_named_compile_time_arg_val("shared_bg_noc0_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_bg_noc1_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_bg_dst_cb"),
@@ -1573,7 +1573,11 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather_dest_noc_x"),
                 get_named_compile_time_arg_val("gather_dest_noc_y"),
                 get_named_compile_time_arg_val("gather_data_size_bytes"),
-                get_named_compile_time_arg_val("gather_receiver_semaphore_addr"),
+                // Pick noc0/noc1 receiver semaphore based on this core's noc_idx so the
+                // increment lands on the same semaphore the receiver waits on for that NOC.
+                get_named_compile_time_arg_val("gate_mm_gather_noc_idx") == 0
+                    ? get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_addr")
+                    : get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("gather_src_cb"),
                 get_named_compile_time_arg_val("gather_src_num_pages"),
                 get_named_compile_time_arg_val("gather_sender_grid_start_x"),
@@ -1583,6 +1587,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather_row_major"),
                 get_named_compile_time_arg_val("gather_receiver_data_addr"),
                 0,  // sender_idx (unused when UsePerCoreSenderIdx=false)
+                get_named_compile_time_arg_val("gate_mm_gather_noc_idx"),
             };
 
             // Gate (writer)
@@ -1654,7 +1659,11 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_gather_dest_noc_x"),
                 get_named_compile_time_arg_val("down_proj_gather_dest_noc_y"),
                 get_named_compile_time_arg_val("down_proj_gather_data_size_bytes"),
-                get_named_compile_time_arg_val("down_proj_gather_receiver_semaphore_addr"),
+                // Pick noc0/noc1 receiver semaphore based on this core's noc_idx so the
+                // increment lands on the same semaphore the receiver waits on for that NOC.
+                get_named_compile_time_arg_val("down_proj_gather_noc_idx") == 0
+                    ? get_named_compile_time_arg_val("down_proj_gather_noc0_receiver_semaphore_addr")
+                    : get_named_compile_time_arg_val("down_proj_gather_noc1_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("down_proj_gather_src_cb"),
                 get_named_compile_time_arg_val("down_proj_gather_src_num_pages"),
                 get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_x"),
@@ -1664,6 +1673,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_gather_row_major"),
                 get_named_compile_time_arg_val("down_proj_gather_receiver_data_addr"),
                 get_named_compile_time_arg_val("down_proj_gather_sender_idx"),
+                get_named_compile_time_arg_val("down_proj_gather_noc_idx"),
             };
 
             // down_proj Mcast (sender + receiver on BRISC)
@@ -1756,7 +1766,11 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_ag_dest_noc_x"),
                 get_named_compile_time_arg_val("shared_ag_dest_noc_y"),
                 get_named_compile_time_arg_val("shared_ag_data_size_bytes"),
-                get_named_compile_time_arg_val("shared_ag_receiver_semaphore_addr"),
+                // Pick noc0/noc1 receiver semaphore based on this core's noc_idx so the
+                // increment lands on the same semaphore the receiver waits on for that NOC.
+                get_named_compile_time_arg_val("shared_ag_noc_idx") == 0
+                    ? get_named_compile_time_arg_val("shared_ag_noc0_receiver_semaphore_addr")
+                    : get_named_compile_time_arg_val("shared_ag_noc1_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_ag_src_cb"),
                 get_named_compile_time_arg_val("shared_ag_src_num_pages"),
                 0,
@@ -1766,6 +1780,7 @@ void kernel_main() {
                 0,  // row_major (unused)
                 get_named_compile_time_arg_val("shared_ag_receiver_data_addr"),
                 get_named_compile_time_arg_val("shared_ag_sender_idx"),
+                get_named_compile_time_arg_val("shared_ag_noc_idx"),
             };
 
             // Up Gather (B) sender (MoeGather: sender on BRISC)
@@ -1773,7 +1788,11 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_bg_dest_noc_x"),
                 get_named_compile_time_arg_val("shared_bg_dest_noc_y"),
                 get_named_compile_time_arg_val("shared_bg_data_size_bytes"),
-                get_named_compile_time_arg_val("shared_bg_receiver_semaphore_addr"),
+                // Pick noc0/noc1 receiver semaphore based on this core's noc_idx so the
+                // increment lands on the same semaphore the receiver waits on for that NOC.
+                get_named_compile_time_arg_val("shared_bg_noc_idx") == 0
+                    ? get_named_compile_time_arg_val("shared_bg_noc0_receiver_semaphore_addr")
+                    : get_named_compile_time_arg_val("shared_bg_noc1_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_bg_src_cb"),
                 get_named_compile_time_arg_val("shared_bg_src_num_pages"),
                 0,
@@ -1783,6 +1802,7 @@ void kernel_main() {
                 0,
                 get_named_compile_time_arg_val("shared_bg_receiver_data_addr"),
                 get_named_compile_time_arg_val("shared_bg_sender_idx"),
+                get_named_compile_time_arg_val("shared_bg_noc_idx"),
             };
 
             // Gated Reduce (writer — no-op for BRISC)
@@ -1821,7 +1841,11 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_og_dest_noc_x"),
                 get_named_compile_time_arg_val("shared_og_dest_noc_y"),
                 get_named_compile_time_arg_val("shared_og_data_size_bytes"),
-                get_named_compile_time_arg_val("shared_og_receiver_semaphore_addr"),
+                // Pick noc0/noc1 receiver semaphore based on this core's noc_idx so the
+                // increment lands on the same semaphore the receiver waits on for that NOC.
+                get_named_compile_time_arg_val("shared_og_noc_idx") == 0
+                    ? get_named_compile_time_arg_val("shared_og_noc0_receiver_semaphore_addr")
+                    : get_named_compile_time_arg_val("shared_og_noc1_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_og_src_cb"),
                 get_named_compile_time_arg_val("shared_og_src_num_pages"),
                 0,  // sender_grid_start_x (unused with UsePerCoreSenderIdx)
@@ -1831,6 +1855,7 @@ void kernel_main() {
                 0,  // row_major (unused)
                 get_named_compile_time_arg_val("shared_og_receiver_data_addr"),
                 get_named_compile_time_arg_val("shared_residual_add_core_idx"),  // reuse matmul core index
+                get_named_compile_time_arg_val("shared_og_noc_idx"),
             };
 
             // Output Mcast — sender + receiver on BRISC (sender core → 130 cores)
