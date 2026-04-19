@@ -40,6 +40,10 @@ IGNORED_KEYS = frozenset(
         "sweep_source_hash",
         "device_ids",
         "mesh_device",
+        # Old master traces use "tensor_placement", new tracer uses "mesh_device".
+        # Both represent the same multi-device placement metadata. Since mesh_device
+        # is already ignored, tensor_placement should be ignored too for consistency.
+        "tensor_placement",
     }
 )
 

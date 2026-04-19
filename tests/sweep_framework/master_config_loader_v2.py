@@ -1055,14 +1055,18 @@ class MasterConfigLoader:
             "DataType::INT32": ttnn.int32,
             "DataType::UINT32": ttnn.uint32,
             "DataType::BFLOAT8_B": ttnn.bfloat8_b,
+            "DataType::BFLOAT4_B": ttnn.bfloat4_b,
             "DataType::UINT16": ttnn.uint16,
+            "DataType::UINT8": ttnn.uint8,
             # V2 tracer format (dot-style)
             "DataType.BFLOAT16": ttnn.bfloat16,
             "DataType.FLOAT32": ttnn.float32,
             "DataType.INT32": ttnn.int32,
             "DataType.UINT32": ttnn.uint32,
             "DataType.BFLOAT8_B": ttnn.bfloat8_b,
+            "DataType.BFLOAT4_B": ttnn.bfloat4_b,
             "DataType.UINT16": ttnn.uint16,
+            "DataType.UINT8": ttnn.uint8,
         }
         return dtype_mapping.get(dtype_str, ttnn.bfloat16)
 
