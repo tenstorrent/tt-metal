@@ -32,12 +32,20 @@ from models.experimental.patchtsmixer.tt.model_processing import (
 )
 
 
+_ALLOWED_DATASETS = {"ETTh1", "ETTh2", "ETTm1", "ETTm2"}
+
+
 def download_ett_dataset(dataset_name="ETTh2", data_dir="./data"):
     """Download ETT dataset from GitHub"""
-    data_dir = Path(data_dir)
-    data_dir.mkdir(exist_ok=True)
+    if dataset_name not in _ALLOWED_DATASETS:
+        raise ValueError(f"dataset_name must be one of {_ALLOWED_DATASETS}, got: {dataset_name!r}")
 
-    dataset_path = data_dir / f"{dataset_name}.csv"
+    base_dir = Path(data_dir).resolve()
+    base_dir.mkdir(exist_ok=True)
+
+    dataset_path = (base_dir / f"{dataset_name}.csv").resolve()
+    if not str(dataset_path).startswith(str(base_dir)):
+        raise ValueError(f"Resolved dataset path escapes the base directory: {dataset_path}")
 
     if not dataset_path.exists():
         url = f"https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/{dataset_name}.csv"
@@ -55,7 +63,7 @@ def prepare_ett_data(dataset_name="ETTh2", context_length=512, prediction_length
     df = download_ett_dataset(dataset_name, data_dir)
 
     # ETT datasets have 'date' as timestamp and 7 features
-    timestamp_column = "date"
+    #  timestamp_column = "date"
     feature_columns = ["HUFL", "HULL", "MUFL", "MULL", "LUFL", "LULL", "OT"]
 
     # Standard ETT splits (in hours for ETTh datasets)
@@ -130,9 +138,12 @@ def load_or_create_model(model_class, config, checkpoint_path=None):
     """Load a trained model or create a new one"""
     model = model_class(**config).eval()
 
-    if checkpoint_path and Path(checkpoint_path).exists():
-        print(f"Loading checkpoint from {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if checkpoint_path:
+        resolved_checkpoint = Path(checkpoint_path).resolve()
+        if not resolved_checkpoint.is_file():
+            raise ValueError(f"Checkpoint path does not point to a valid file: {resolved_checkpoint}")
+        print(f"Loading checkpoint from {resolved_checkpoint}")
+        checkpoint = torch.load(resolved_checkpoint, map_location="cpu")
         if "model_state_dict" in checkpoint:
             model.load_state_dict(checkpoint["model_state_dict"])
         else:

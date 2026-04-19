@@ -160,7 +160,9 @@ def main():
     parser.add_argument("--output_dir", type=str, default="simple_patchtsmixer_etth2")
     args = parser.parse_args()
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    output_dir = os.path.realpath(args.output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    args.output_dir = output_dir
 
     print("=== Config ===")
     print(args)
@@ -237,6 +239,8 @@ def main():
             print(f"  -> New best model saved to {best_path}")
 
     print("=== Evaluating on test set (best model) ===")
+    if not os.path.isfile(best_path):
+        raise FileNotFoundError(f"Best model checkpoint not found: {best_path}")
     model.load_state_dict(torch.load(best_path, map_location=device))
     test_loss = train_or_eval_epoch(model, test_loader, optimizer=None, device=device)
     print(f"Test MSE: {test_loss:.6f}")
