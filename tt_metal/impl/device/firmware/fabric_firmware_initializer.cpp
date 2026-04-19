@@ -683,9 +683,28 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
     // commands through the broken fabric path, causing 5s+ timeouts followed by 16+ minutes
     // of triage scripts — all wasted time.
     //
-    // Fail-fast: if any channel is NOT at expected_status, throw now so the test fails
-    // immediately with a clear diagnostic instead of hanging.
-    uint32_t total_bad = 0;
+    // Retry with backoff: a channel that's 1ms away from READY_FOR_TRAFFIC should not cause a
+    // false failure.  We retry up to kMaxRetries times with kRetryDelayMs between attempts.
+    // Only channels that still fail after all retries are reported.
+    //
+    // Distinguish corrupt vs. still-initializing: use is_known_edm_status() to classify failing
+    // channels.  A channel at a valid-but-not-yet-ready EDMStatus (e.g. DOWNSTREAM_EDM_SETUP_STARTED)
+    // is "still initializing" — may recover with more time.  A channel at an unrecognized value
+    // (e.g. 0x49705530) has corrupt L1 and will never recover without a chip reset.
+    //
+    // Fail-fast: if any channel is NOT at expected_status after retries, throw now so the test
+    // fails immediately with a clear diagnostic instead of hanging.
+    constexpr uint32_t kMaxRetries = 3;
+    constexpr uint32_t kRetryDelayMs = 10;
+
+    // Collect (device_id, eth_chan_id, eth_logical_core) for all channels to check.
+    struct ChannelInfo {
+        Device* dev;
+        uint32_t eth_chan_id;
+        CoreCoord eth_logical_core;
+    };
+    std::vector<ChannelInfo> channels_to_check;
+
     for (auto* dev : devices_) {
         if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
             continue;
@@ -695,30 +714,120 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
         for (const auto& [eth_chan_id, direction] : active_channels) {
             const auto eth_logical_core =
                 cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
-            std::vector<uint32_t> status_buf(1, 0);
-            detail::ReadFromDeviceL1(dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
-            if (status_buf[0] != expected_status) {
-                log_error(
-                    tt::LogMetal,
-                    "verify_all_fabric_channels_healthy: Device {} chan={} edm_status=0x{:08x} "
-                    "(expected 0x{:08x}) — channel did NOT recover from prior corruption",
-                    dev->id(),
-                    eth_chan_id,
-                    status_buf[0],
-                    expected_status);
-                total_bad++;
-            }
+            channels_to_check.push_back({dev, eth_chan_id, eth_logical_core});
         }
     }
 
-    if (total_bad > 0) {
-        TT_THROW(
-            "Fabric health check failed: {} ERISC channel(s) did not reach expected status "
-            "after initialization. This usually means the previous process left ERISCs in an "
-            "unrecoverable state (corrupt L1). A tt-smi chip reset is required to recover. "
-            "See #42429.",
-            total_bad);
+    // Track which channels have NOT yet reached expected_status.
+    // Start with all channels as "pending"; remove them as they pass.
+    struct FailedChannel {
+        ChipId device_id;
+        uint32_t eth_chan_id;
+        uint32_t actual_status;
+        bool is_corrupt;  // true = unrecognized status (corrupt L1), false = valid but not ready
+    };
+    std::vector<FailedChannel> failed_channels;
+
+    // Indices into channels_to_check that still need checking.
+    std::vector<size_t> pending_indices;
+    pending_indices.reserve(channels_to_check.size());
+    for (size_t i = 0; i < channels_to_check.size(); i++) {
+        pending_indices.push_back(i);
     }
+
+    for (uint32_t attempt = 0; attempt < kMaxRetries && !pending_indices.empty(); attempt++) {
+        if (attempt > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
+        }
+
+        std::vector<size_t> still_pending;
+        for (size_t idx : pending_indices) {
+            const auto& ch = channels_to_check[idx];
+            std::vector<uint32_t> status_buf(1, 0);
+            detail::ReadFromDeviceL1(
+                ch.dev, ch.eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+            if (status_buf[0] != expected_status) {
+                still_pending.push_back(idx);
+                // On last attempt, record the failure.
+                if (attempt == kMaxRetries - 1) {
+                    const bool corrupt = !is_known_edm_status(status_buf[0]);
+                    failed_channels.push_back({ch.dev->id(), ch.eth_chan_id, status_buf[0], corrupt});
+                }
+            }
+        }
+        pending_indices = std::move(still_pending);
+    }
+
+    if (failed_channels.empty()) {
+        return;
+    }
+
+    // Log each failure with appropriate classification.
+    // GAP 5: Check if the channel was force-reset in a prior teardown session.
+    std::set<std::pair<ChipId, uint32_t>> force_reset_snapshot;
+    {
+        std::lock_guard<std::mutex> lock(force_reset_channels_mutex_);
+        force_reset_snapshot = force_reset_channels_;
+    }
+
+    std::string failure_details;
+    uint32_t corrupt_count = 0;
+    uint32_t initializing_count = 0;
+    uint32_t degraded_count = 0;
+
+    for (const auto& fc : failed_channels) {
+        const bool was_force_reset = force_reset_snapshot.count({fc.device_id, fc.eth_chan_id}) > 0;
+
+        std::string classification;
+        if (was_force_reset) {
+            classification = "DEGRADED (force-reset in prior teardown)";
+            degraded_count++;
+        } else if (fc.is_corrupt) {
+            classification = "CORRUPT (unrecognized status — L1 garbage)";
+            corrupt_count++;
+        } else {
+            // Valid EDMStatus but not READY_FOR_TRAFFIC — try to name it.
+            auto maybe_enum = enchantum::enum_cast<tt::tt_fabric::EDMStatus>(fc.actual_status);
+            if (maybe_enum.has_value()) {
+                classification = fmt::format(
+                    "STILL_INITIALIZING (status={})", enchantum::to_string(maybe_enum.value()));
+            } else {
+                classification = "STILL_INITIALIZING (known but unnameable status)";
+            }
+            initializing_count++;
+        }
+
+        log_error(
+            tt::LogMetal,
+            "verify_all_fabric_channels_healthy: Device {} chan={} actual=0x{:08x} expected=0x{:08x} — {}",
+            fc.device_id,
+            fc.eth_chan_id,
+            fc.actual_status,
+            expected_status,
+            classification);
+
+        failure_details += fmt::format(
+            "  dev={} chan={} status=0x{:08x} ({})\n",
+            fc.device_id,
+            fc.eth_chan_id,
+            fc.actual_status,
+            classification);
+    }
+
+    TT_THROW(
+        "Fabric health check failed after {} retries: {} ERISC channel(s) did not reach "
+        "READY_FOR_TRAFFIC (0x{:08x}). Breakdown: {} corrupt, {} still-initializing, {} degraded "
+        "(force-reset in prior session).\n{}"
+        "Corrupt channels require a tt-smi chip reset to recover. "
+        "Still-initializing channels may need a longer fabric_router_sync_timeout. "
+        "See #42429.",
+        kMaxRetries,
+        failed_channels.size(),
+        expected_status,
+        corrupt_count,
+        initializing_count,
+        degraded_count,
+        failure_details);
 }
 
 uint32_t FabricFirmwareInitializer::get_fabric_router_sync_timeout_ms() const {
