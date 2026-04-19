@@ -157,6 +157,13 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config,
     )
 
+    # Re-inject sliding_window_size when present in the traced config.
+    # build_op_kwargs skips None values by default, but the master trace
+    # records sliding_window_size=None explicitly (the model passed it).
+    sliding_window_size = kwargs.get("sliding_window_size", "__ABSENT__")
+    if sliding_window_size != "__ABSENT__" and "sliding_window_size" not in op_kwargs:
+        op_kwargs["sliding_window_size"] = sliding_window_size
+
     # Clear sharded memory_config from op_kwargs too
 
     # Validate program_config grid fits current device
@@ -215,20 +222,10 @@ def run(
     torch_k = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_k)(shape_k)
     torch_v = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_v)(shape_v)
 
-    # Handle GQA (Grouped Query Attention) - if K/V have fewer heads, replicate them
-    if num_heads_k < num_heads_q:
-        repeat_factor = num_heads_q // num_heads_k
-        torch_k = torch_k.repeat(1, repeat_factor, 1, 1)
-        if num_heads_q % num_heads_k != 0:
-            remaining = num_heads_q - (repeat_factor * num_heads_k)
-            torch_k = torch.cat([torch_k, torch_k[:, -num_heads_k : -num_heads_k + remaining, :, :]], dim=1)
-
-    if num_heads_v < num_heads_q:
-        repeat_factor = num_heads_q // num_heads_v
-        torch_v = torch_v.repeat(1, repeat_factor, 1, 1)
-        if num_heads_q % num_heads_v != 0:
-            remaining = num_heads_q - (repeat_factor * num_heads_v)
-            torch_v = torch.cat([torch_v, torch_v[:, -num_heads_v : -num_heads_v + remaining, :, :]], dim=1)
+    # Do NOT replicate K/V heads for GQA — the SDPA op handles grouped-query
+    # attention internally.  The master trace records the original K/V shapes
+    # (e.g. 4 KV heads for 16 Q heads), and replicating here changes
+    # original_shape which breaks trace validation.
 
     # Quantize inputs to target dtype - both PyTorch and TTNN use same quantized inputs.
     # Always use DRAM interleaved for the round-trip (safe on any device).
@@ -261,9 +258,18 @@ def run(
     torch_k = torch_k.to(torch.float32)
     torch_v = torch_v.to(torch.float32)
 
-    # PyTorch reference
+    # PyTorch reference — expand K/V heads for GQA in the golden only
+    # (don't modify the original tensors used for TTNN, which handles GQA internally)
+    torch_k_golden = torch_k
+    torch_v_golden = torch_v
+    if num_heads_k < num_heads_q:
+        repeat_factor = num_heads_q // num_heads_k
+        torch_k_golden = torch_k.repeat(1, repeat_factor, 1, 1)
+    if num_heads_v < num_heads_q:
+        repeat_factor = num_heads_q // num_heads_v
+        torch_v_golden = torch_v.repeat(1, repeat_factor, 1, 1)
     torch_output_golden = torch.nn.functional.scaled_dot_product_attention(
-        torch_q, torch_k, torch_v, attn_mask=None, dropout_p=0.0, is_causal=bool(is_causal)
+        torch_q, torch_k_golden, torch_v_golden, attn_mask=None, dropout_p=0.0, is_causal=bool(is_causal)
     )
 
     # TTNN execution
