@@ -80,7 +80,7 @@ def run(
     storage_type="StorageType::DEVICE",
     memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     dtype="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
-    core_grid=None,  # Core grid configuration
+    core_grid="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     program_config=None,  # Program configuration
     compute_kernel_config=None,  # Compute kernel configuration
     activation=None,  # Activation function
@@ -342,21 +342,20 @@ def run(
         if compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
-        # Pass core_grid even when None if it was in the traced config
-        if core_grid is not None:
+        # Pass core_grid when present in the traced config (even if None).
+        # __ABSENT__ means the config didn't have core_grid at all.
+        if core_grid != "__ABSENT__":
             linear_kwargs["core_grid"] = core_grid
-        elif "core_grid" in kwargs:
-            linear_kwargs["core_grid"] = None
 
         if activation is not None:
             linear_kwargs["activation"] = activation
 
-        # Pass sub_device_id and global_cb only when they have non-None values.
-        # The V2 loader fills None for all configs (even those that didn't have these
-        # params in the master trace), so passing None would create extra_key diffs.
-        if sub_device_id != "__ABSENT__" and sub_device_id is not None:
+        # Pass sub_device_id and global_cb when present in the traced config.
+        # V2 loader uses "__ABSENT__" for keys missing from a config.
+        # None is a valid value (master trace has these as None explicitly).
+        if sub_device_id != "__ABSENT__":
             linear_kwargs["sub_device_id"] = sub_device_id
-        if global_cb != "__ABSENT__" and global_cb is not None:
+        if global_cb != "__ABSENT__":
             linear_kwargs["global_cb"] = global_cb
 
         linear_kwargs.update(parsed_op_kwargs)

@@ -85,13 +85,13 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
-    # Only include memory_config/dtype when they have non-None values.
-    # V2 loader fills None for all configs (including those where master trace
-    # didn't pass them), which would create extra_key diffs in validation.
+    # Only include memory_config/dtype when present in the traced config.
+    # V2 loader uses "__ABSENT__" sentinel for keys missing from a config.
+    # None is a valid value (master trace may have dtype=None explicitly).
     extra_kw = {}
-    if memory_config is not None and memory_config != "__ABSENT__":
+    if memory_config != "__ABSENT__":
         extra_kw["memory_config"] = memory_config
-    if dtype is not None and dtype != "__ABSENT__":
+    if dtype != "__ABSENT__":
         extra_kw["dtype"] = dtype
     op_kwargs = build_op_kwargs(
         kwargs, exclude={"scalar"}, output_memory_config=output_memory_config,
