@@ -36,7 +36,6 @@
 #include <thread>
 #include <vector>
 
-#include <enchantum/enchantum.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/cluster.hpp>
@@ -1549,30 +1548,48 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorERISCRecovery) {
 // EDMStatus enumerators (i.e., enchantum::enum_cast returns nullopt).
 // ---------------------------------------------------------------------------
 TEST(FabricFirmwareInitializer, EdmStatusEnumCountMatchesSwitchCoverage) {
-    // enchantum::enum_count gives the number of enumerators at compile time.
-    // This must match kExpectedEdmStatusCount in fabric_firmware_initializer.cpp.
+    // EDMStatus uses large non-contiguous hex sentinel values (e.g. 0xA0B0C0D0),
+    // so compile-time reflection via enchantum is not possible.
+    // Instead we maintain the authoritative list here — if a new enumerator is
+    // added this array must be updated along with is_known_edm_status() in
+    // fabric_firmware_initializer.cpp.
+    using tt::tt_fabric::EDMStatus;
+    constexpr EDMStatus kAllStatuses[] = {
+        EDMStatus::STARTED,
+        EDMStatus::REMOTE_HANDSHAKE_COMPLETE,
+        EDMStatus::LOCAL_HANDSHAKE_COMPLETE,
+        EDMStatus::READY_FOR_TRAFFIC,
+        EDMStatus::TERMINATED,
+        EDMStatus::INITIALIZATION_STARTED,
+        EDMStatus::TXQ_INITIALIZED,
+        EDMStatus::STREAM_REG_INITIALIZED,
+        EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED,
+        EDMStatus::EDM_VCS_SETUP_COMPLETE,
+        EDMStatus::WORKER_INTERFACES_INITIALIZED,
+        EDMStatus::ETHERNET_HANDSHAKE_COMPLETE,
+        EDMStatus::VCS_OPENED,
+        EDMStatus::ROUTING_TABLE_INITIALIZED,
+        EDMStatus::INITIALIZATION_COMPLETE,
+    };
     constexpr size_t kExpectedCount = 15;
-    constexpr size_t actual_count = enchantum::enum_count<tt::tt_fabric::EDMStatus>();
-    EXPECT_EQ(actual_count, kExpectedCount)
-        << "EDMStatus enum count changed from " << kExpectedCount << " to " << actual_count
-        << ". Update is_known_edm_status() switch AND kExpectedEdmStatusCount in "
-           "fabric_firmware_initializer.cpp.";
+    static_assert(std::size(kAllStatuses) == kExpectedCount,
+        "Update kAllStatuses here AND is_known_edm_status() in fabric_firmware_initializer.cpp");
 
-    // Verify all enum values are castable (sanity check that enchantum sees them all).
-    for (const auto& v : enchantum::enum_values<tt::tt_fabric::EDMStatus>()) {
-        auto maybe = enchantum::enum_cast<tt::tt_fabric::EDMStatus>(static_cast<uint32_t>(v));
-        EXPECT_TRUE(maybe.has_value())
-            << "enchantum::enum_cast failed for EDMStatus value 0x" << std::hex
-            << static_cast<uint32_t>(v);
+    // All values must be distinct and non-zero.
+    std::set<uint32_t> seen;
+    for (const auto& s : kAllStatuses) {
+        uint32_t v = static_cast<uint32_t>(s);
+        EXPECT_NE(v, 0u) << "EDMStatus value is zero";
+        EXPECT_TRUE(seen.insert(v).second) << "Duplicate EDMStatus value: 0x" << std::hex << v;
     }
 
-    // Verify known-garbage values are NOT valid EDMStatus enumerators.
+    // Known-garbage values must not collide with any valid EDMStatus.
     constexpr uint32_t kGarbageValues[] = {0x49705180u, 0xDEADBEEFu, 0x00000001u, 0xFFFFFFFFu};
     for (uint32_t garbage : kGarbageValues) {
-        auto maybe = enchantum::enum_cast<tt::tt_fabric::EDMStatus>(garbage);
-        EXPECT_FALSE(maybe.has_value())
+        bool collides = seen.count(garbage) > 0;
+        EXPECT_FALSE(collides)
             << "Garbage value 0x" << std::hex << garbage
-            << " unexpectedly maps to a valid EDMStatus enumerator";
+            << " unexpectedly collides with a valid EDMStatus enumerator";
     }
 }
 
@@ -1590,7 +1607,6 @@ TEST_F(AsyncTeardownFabric2DFixture, ConcurrentQuiesceAndDispatchRace) {
     auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
 
-    std::atomic<bool> dispatch_exception{false};
     std::atomic<bool> quiesce_exception{false};
 
     // Phase 1: dispatch async workload
