@@ -73,10 +73,13 @@ class TtParallelEmbedding(LightweightModule):
         Returns:
             ttnn.Tensor if device is not None, else None
         """
-        assert torch_weight.shape == (
-            vocab_size,
-            emb_dim,
-        ), f"Weight shape mismatch: got {torch_weight.shape}, expected ({vocab_size}, {emb_dim})"
+        if torch_weight is not None:
+            assert torch_weight.shape == (
+                vocab_size,
+                emb_dim,
+            ), f"Weight shape mismatch: got {torch_weight.shape}, expected ({vocab_size}, {emb_dim})"
+        else:
+            torch_weight = torch.empty(vocab_size, emb_dim)
 
         shard_dims = [None, None]
         shard_dims[tp_axis] = -1  # shard emb_dim across TP axis
@@ -98,6 +101,8 @@ class TtParallelEmbedding(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
             cache_file_name=cache_file_name,
         )
+        if device is not None:
+            ttnn.synchronize_device(device)
 
         if device is None:
             del tt_weight
@@ -164,6 +169,17 @@ class TtParallelEmbedding(LightweightModule):
 
         if torch_weight is not None:
             self.weight = self._create_weight_from_torch(torch_weight)
+        elif weight_cache_path is not None:
+            self.weight = self._convert_and_cache_weight(
+                None,
+                self.vocab_size,
+                self.emb_dim,
+                self.mesh_device,
+                self.tp_axis,
+                self.dtype,
+                self.weight_cache_path,
+                device=self.mesh_device,
+            )
         else:
             self.weight = self._create_random_weight()
 

@@ -91,18 +91,24 @@ class TtSharedExpert(LightweightModule):
                 return None
             return str(cache_path / f"{cache_name_prefix}.{name}")
 
-        def _convert_projection(torch_weight, dims, name):
-            # Transpose from HF format [out, in] to TTNN format [in, out]
-            torch_weight_t = torch_weight.T.contiguous()
+        # Prepare post-transpose tensors
+        if torch_weights is not None:
+            gate_w = torch_weights["gate_proj"].T.contiguous()
+            up_w = torch_weights["up_proj"].T.contiguous()
+            down_w = torch_weights["down_proj"].T.contiguous()
+        else:
+            gate_w = torch.empty(emb_dim, hidden_dim)
+            up_w = torch.empty(emb_dim, hidden_dim)
+            down_w = torch.empty(hidden_dim, emb_dim)
 
+        def _to_ttnn(tensor, dims, name):
             mesh_mapper = ttnn.ShardTensor2dMesh(
                 mesh_device,
                 mesh_shape=mesh_device.shape,
                 dims=dims,
             )
-
-            tt_weight = ttnn.as_tensor(
-                torch_weight_t,
+            return ttnn.as_tensor(
+                tensor,
                 mesh_mapper=mesh_mapper,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
@@ -111,12 +117,9 @@ class TtSharedExpert(LightweightModule):
                 cache_file_name=_cache_name(name),
             )
 
-            return tt_weight
-
-        # Convert all 3 projections
-        gate_tt = _convert_projection(torch_weights["gate_proj"], (None, -1), "gate_proj")
-        up_tt = _convert_projection(torch_weights["up_proj"], (None, -1), "up_proj")
-        down_tt = _convert_projection(torch_weights["down_proj"], (None, -2), "down_proj")
+        gate_tt = _to_ttnn(gate_w, (None, -1), "gate_proj")
+        up_tt = _to_ttnn(up_w, (None, -1), "up_proj")
+        down_tt = _to_ttnn(down_w, (None, -2), "down_proj")
 
         if device is None:
             # Cache built, free host tensors
@@ -191,9 +194,23 @@ class TtSharedExpert(LightweightModule):
         # Create sharded weights
         if torch_weights is not None:
             logger.debug("Creating weights from provided torch tensors")
-            # Use shared static method with device=mesh_device
             weights = self._convert_and_cache_weights(
                 torch_weights,
+                emb_dim,
+                hidden_dim,
+                mesh_device,
+                self.weights_dtype,
+                weight_cache_path,
+                cache_name_prefix,
+                device=mesh_device,
+            )
+            self.gate_proj = weights["gate"]
+            self.up_proj = weights["up"]
+            self.down_proj = weights["down"]
+        elif weight_cache_path is not None:
+            logger.debug("Loading weights from cache")
+            weights = self._convert_and_cache_weights(
+                None,
                 emb_dim,
                 hidden_dim,
                 mesh_device,

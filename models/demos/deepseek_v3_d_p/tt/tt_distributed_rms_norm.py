@@ -75,7 +75,10 @@ class TtDistributedRmsNorm(LightweightModule):
             ttnn.Tensor if device is not None, else None
         """
         # Reshape weight to [1, 1, emb_dim // 32, 32]
-        torch_weight_reshaped = torch_weight.reshape(1, 1, emb_dim // 32, 32)
+        if torch_weight is not None:
+            torch_weight_reshaped = torch_weight.reshape(1, 1, emb_dim // 32, 32)
+        else:
+            torch_weight_reshaped = torch.empty(1, 1, emb_dim // 32, 32)
 
         # Create mesh mapper: replicate across rows, shard dim 2 across cols
         mesh_mapper = ttnn.ShardTensor2dMesh(
@@ -180,6 +183,16 @@ class TtDistributedRmsNorm(LightweightModule):
         if torch_weight is not None:
             logger.debug("Creating weight from provided torch tensor")
             self.weight = self._create_sharded_weight_from_torch(torch_weight)
+        elif weight_cache_path is not None:
+            logger.debug("Loading weight from cache")
+            self.weight = self._convert_and_cache_weight(
+                None,
+                self.emb_dim,
+                self.mesh_device,
+                self.weight_cache_path,
+                self.cache_name_prefix,
+                device=self.mesh_device,
+            )
         else:
             logger.debug("Creating random sharded weight")
             self.weight = self._create_random_sharded_weight()
