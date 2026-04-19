@@ -589,6 +589,13 @@ jobs:
          needs.find-changed-files.outputs.llk-unit-tests-changed == 'true')
       }}
     secrets: inherit
+    # Shard the gtest binary across N N150 runners. Each shard runs ~1/N of the test
+    # cases via GTEST_TOTAL_SHARDS / GTEST_SHARD_INDEX, plumbed through cpp-post-commit.yaml.
+    # 4 shards approximately match what gets us under ~3-4 min wall on WH.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: wormhole_b0
@@ -597,6 +604,8 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       test-group-name: llk
       enable-llk-asserts: true
+      gtest-shard-total: 4
+      gtest-shard-index: ${{ matrix.shard }}
 
   llk-fd-unit-tests-blackhole:
     needs: [ build, find-changed-files ]
@@ -609,14 +618,26 @@ jobs:
          needs.find-changed-files.outputs.llk-unit-tests-changed == 'true')
       }}
     secrets: inherit
+    # Two shards on BH — the p150b pool is smaller than N150's, so we use fewer
+    # parallel runners. BH per-test cost is ~25× lower than WH, so 2 shards keep
+    # wall time well under the FD target without saturating the pool.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: blackhole
-      runner-label: P150
+      # Reuse the same Blackhole runner pool as llk-test-blackhole (tt-ubuntu-2204-p150b-stable)
+      # rather than the smaller tt-ubuntu-2204-P150-viommu-stable pool, where queue waits
+      # have exceeded the workflow's auto-cancel window in practice.
+      runner-label: p150b
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       test-group-name: llk
       enable-llk-asserts: true
+      gtest-shard-total: 2
+      gtest-shard-index: ${{ matrix.shard }}
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
