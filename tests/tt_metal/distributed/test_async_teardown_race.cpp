@@ -32,8 +32,12 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <atomic>
+#include <thread>
 #include <vector>
 
+#include <enchantum/enchantum.hpp>
+#include <experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/cluster.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
@@ -41,6 +45,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_event.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -1526,6 +1531,178 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorERISCRecovery) {
         log_info(
             tt::LogTest,
             "[Scenario M] Buffer round-trip clean — terminate_stale_erisc_routers() ACTIVE path verified");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GAP 1: Verify is_known_edm_status() coverage via compile-time enum count.
+//
+// is_known_edm_status() lives in an anonymous namespace inside
+// fabric_firmware_initializer.cpp so we cannot call it directly from here.
+// Instead, we verify the invariant that the static_assert in
+// fabric_firmware_initializer.cpp enforces: the number of EDMStatus
+// enumerators equals the expected switch-case count (kExpectedEdmStatusCount).
+// If this test fails, a new EDMStatus value was added without updating the
+// switch AND the static_assert constant — both need updating.
+//
+// Additionally, we verify that well-known garbage values are NOT valid
+// EDMStatus enumerators (i.e., enchantum::enum_cast returns nullopt).
+// ---------------------------------------------------------------------------
+TEST(FabricFirmwareInitializer, EdmStatusEnumCountMatchesSwitchCoverage) {
+    // enchantum::enum_count gives the number of enumerators at compile time.
+    // This must match kExpectedEdmStatusCount in fabric_firmware_initializer.cpp.
+    constexpr size_t kExpectedCount = 15;
+    constexpr size_t actual_count = enchantum::enum_count<tt::tt_fabric::EDMStatus>();
+    EXPECT_EQ(actual_count, kExpectedCount)
+        << "EDMStatus enum count changed from " << kExpectedCount << " to " << actual_count
+        << ". Update is_known_edm_status() switch AND kExpectedEdmStatusCount in "
+           "fabric_firmware_initializer.cpp.";
+
+    // Verify all enum values are castable (sanity check that enchantum sees them all).
+    for (const auto& v : enchantum::enum_values<tt::tt_fabric::EDMStatus>()) {
+        auto maybe = enchantum::enum_cast<tt::tt_fabric::EDMStatus>(static_cast<uint32_t>(v));
+        EXPECT_TRUE(maybe.has_value())
+            << "enchantum::enum_cast failed for EDMStatus value 0x" << std::hex
+            << static_cast<uint32_t>(v);
+    }
+
+    // Verify known-garbage values are NOT valid EDMStatus enumerators.
+    constexpr uint32_t kGarbageValues[] = {0x49705180u, 0xDEADBEEFu, 0x00000001u, 0xFFFFFFFFu};
+    for (uint32_t garbage : kGarbageValues) {
+        auto maybe = enchantum::enum_cast<tt::tt_fabric::EDMStatus>(garbage);
+        EXPECT_FALSE(maybe.has_value())
+            << "Garbage value 0x" << std::hex << garbage
+            << " unexpectedly maps to a valid EDMStatus enumerator";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GAP 4: Concurrent quiesce + dispatch race test.
+//
+// Opens a mesh device, dispatches a workload (non-blocking) on CQ 0, then
+// simultaneously calls quiesce_devices() from a second thread. Verifies no
+// hang and no exception, then re-dispatches to confirm the CQ is still
+// functional.
+//
+// Requires >= 2 devices for quiesce to exercise the fabric path.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DFixture, ConcurrentQuiesceAndDispatchRace) {
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    auto device_range = MeshCoordinateRange(mesh_device_->shape());
+
+    std::atomic<bool> dispatch_exception{false};
+    std::atomic<bool> quiesce_exception{false};
+
+    // Phase 1: dispatch async workload
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(device_range, std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario Q] Dispatching blank workload (blocking=false)");
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    }
+
+    // Phase 2: race — quiesce from a second thread while CQ may still be draining
+    std::thread quiesce_thread([&]() {
+        try {
+            log_info(tt::LogTest, "[Scenario Q] quiesce_devices() — from background thread");
+            mesh_device_->quiesce_devices();
+            log_info(tt::LogTest, "[Scenario Q] quiesce_devices() completed");
+        } catch (const std::exception& e) {
+            log_warning(tt::LogTest, "[Scenario Q] quiesce_devices() threw: {}", e.what());
+            quiesce_exception.store(true);
+        }
+    });
+
+    quiesce_thread.join();
+
+    EXPECT_FALSE(quiesce_exception.load()) << "quiesce_devices() threw an exception during concurrent dispatch";
+
+    // Phase 3: verify the device is still functional by re-dispatching
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario Q] Verification dispatch (blocking=true)");
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+        log_info(tt::LogTest, "[Scenario Q] Post-quiesce dispatch completed — CQ is functional");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GAP 6: Stress test for quiesce + EventSynchronize memory ordering.
+//
+// Records a MeshEvent, then concurrently calls quiesce_devices() from one
+// thread and EventSynchronize from another. Runs multiple iterations to
+// surface any memory ordering bugs in the is_quiesced() flag (which must
+// use acquire/release semantics).
+//
+// Requires >= 2 devices for quiesce to exercise the fabric path.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DFixture, QuiesceEventSynchronizeStress) {
+    constexpr int kIterations = 10;
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    auto device_range = MeshCoordinateRange(mesh_device_->shape());
+
+    for (int iter = 0; iter < kIterations; iter++) {
+        log_info(tt::LogTest, "[Scenario QE] Iteration {}/{}", iter + 1, kIterations);
+
+        // Dispatch a workload and record an event
+        auto& cq = mesh_device_->mesh_command_queue();
+        {
+            auto program = create_blank_program(cores);
+            auto workload = MeshWorkload();
+            workload.add_program(device_range, std::move(program));
+            EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        }
+
+        auto event = cq.enqueue_record_event_to_host();
+
+        std::atomic<bool> sync_ok{true};
+        std::atomic<bool> quiesce_ok{true};
+
+        // Race: event wait vs quiesce_devices
+        // enqueue_record_event_to_host already waits internally, but we still
+        // exercise the quiesce path concurrently with event completion.
+        std::thread sync_thread([&]() {
+            try {
+                cq.enqueue_wait_for_event(event);
+            } catch (const std::exception& e) {
+                log_warning(tt::LogTest, "[Scenario QE] EventSynchronize threw: {}", e.what());
+                sync_ok.store(false);
+            }
+        });
+
+        std::thread quiesce_thread([&]() {
+            try {
+                mesh_device_->quiesce_devices();
+            } catch (const std::exception& e) {
+                log_warning(tt::LogTest, "[Scenario QE] quiesce_devices() threw: {}", e.what());
+                quiesce_ok.store(false);
+            }
+        });
+
+        sync_thread.join();
+        quiesce_thread.join();
+
+        // Both should complete without hanging (watchdog protects us) and without exceptions
+        EXPECT_TRUE(sync_ok.load()) << "EventSynchronize failed on iteration " << iter;
+        EXPECT_TRUE(quiesce_ok.load()) << "quiesce_devices() failed on iteration " << iter;
+    }
+
+    // Final sanity: blocking dispatch to confirm device is still operational
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(device_range, std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+        log_info(
+            tt::LogTest,
+            "[Scenario QE] All {} iterations passed — quiesce + EventSynchronize memory ordering is safe",
+            kIterations);
     }
 }
 

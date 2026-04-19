@@ -24,6 +24,8 @@
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 namespace tt::tt_metal {
 
 namespace {
@@ -55,6 +57,14 @@ bool is_known_edm_status(uint32_t status) {
         default: return false;
     }
 }
+
+// Compile-time guard: if a new EDMStatus enumerator is added, the switch in is_known_edm_status()
+// must be updated.  enchantum::enum_count gives the number of enumerators at compile time.
+// Update kExpectedEdmStatusCount when adding a new case above.
+constexpr size_t kExpectedEdmStatusCount = 15;
+static_assert(
+    enchantum::enum_count<tt::tt_fabric::EDMStatus>() == kExpectedEdmStatusCount,
+    "EDMStatus enum count changed — update is_known_edm_status() switch and kExpectedEdmStatusCount");
 
 }  // namespace
 
