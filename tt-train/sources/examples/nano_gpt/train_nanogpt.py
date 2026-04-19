@@ -125,7 +125,6 @@ class TrainingConfig(BaseTrainingConfig):
         # Extended fields not in base TrainingConfig
         self.project_name = tc.get("project_name", "tt_train_nano_gpt")
         self.data_path = tc.get("data_path", "")
-        self.tokenizer_type = tc.get("tokenizer_type", "char")
         self.scheduler_type = tc.get("scheduler_type", "identity")
         self.use_clip_grad_norm = tc.get("use_clip_grad_norm", False)
         self.clip_grad_norm_max_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
@@ -154,7 +153,7 @@ class ModelConfig:
 
     model_type: str = "gpt2"  # "gpt2", "llama", "deepseek", or "qwen3"
     model_path: str = ""
-    vocab_size: int = 256
+    vocab_size: int = 0  # 0 = auto-detect from data (char tokenization); >0 = use this value (pre-tokenized data)
     embedding_dim: int = 384
     num_blocks: int = 6
     num_heads: int = 6
@@ -1241,15 +1240,6 @@ def main():
         training_config = TrainingConfig()
         model_config = ModelConfig()
 
-    # Validate tokenizer_type vs vocab_size consistency
-    if training_config.tokenizer_type == "char" and model_config.vocab_size > 128:
-        raise ValueError(
-            f"Configuration mismatch: model config has vocab_size={model_config.vocab_size:,} "
-            f"but tokenizer_type='char'.\n"
-            f"Character tokenization uses small vocabulary (~68-96 tokens from Shakespeare text). "
-            f"If you want to use a larger vocabulary, use tokenizer_type='bpe' instead."
-        )
-
     # Override with command line args (only if provided)
     if args.data_path:
         training_config.data_path = args.data_path
@@ -1345,13 +1335,18 @@ def main():
 
         print("1. Loading and preparing data...")
         print(f"   - Data path: {training_config.data_path}")
-        print(f"   - Tokenizer: {training_config.tokenizer_type}")
 
         seq_len = model_config.max_sequence_length
+        is_pretokenized = training_config.data_path.endswith((".yaml", ".yml"))
 
-        if training_config.tokenizer_type == "bpe":
+        if is_pretokenized:
             import yaml
 
+            if model_config.vocab_size == 0:
+                raise ValueError(
+                    f"Pre-tokenized data ({training_config.data_path}) requires vocab_size to be "
+                    f"set in the model config. Omitting vocab_size is only valid for plain text data."
+                )
             with open(training_config.data_path, "r") as f:
                 token_data = yaml.safe_load(f)
             tokens = np.array(token_data["tokens"], dtype=np.uint32)
@@ -1365,10 +1360,19 @@ def main():
                 )
             dataset = InMemoryTokenDataset(tokens, seq_len)
             tokenizer = None
+            print(f"   - Pre-tokenized data: {len(tokens):,} tokens (vocab {data_vocab_size:,})")
         else:
+            if model_config.vocab_size > 0:
+                raise ValueError(
+                    f"Plain text data ({training_config.data_path}) uses character tokenization, "
+                    f"which auto-detects vocab_size from the text. Remove vocab_size from the model "
+                    f"config (or set it to 0). Got vocab_size={model_config.vocab_size}.\n"
+                    f"For pre-tokenized data with a fixed vocab, use a .yaml data file instead."
+                )
             text = read_file_to_str(training_config.data_path)
             dataset, tokenizer = create_dataset_from_text(text, seq_len)
             model_config.vocab_size = tokenizer.vocab_size
+            print(f"   - Character tokenization: {tokenizer.vocab_size} unique characters")
 
         print(f"   - Vocabulary size: {model_config.vocab_size}")
         print(f"   - Dataset size: {len(dataset)} samples")

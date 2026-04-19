@@ -7,7 +7,6 @@ training_config:
   max_steps: 5000
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  tokenizer_type: "bpe"
   data_path: "data/tokenized_shakespeare_qwen3.yaml"
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b.yaml"
   optimizer:
