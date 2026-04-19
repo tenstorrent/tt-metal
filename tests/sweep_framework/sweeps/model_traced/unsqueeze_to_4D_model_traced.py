@@ -77,7 +77,6 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(
         kwargs, output_memory_config=output_memory_config,
-        keep_none=True,
         extra_kwargs={"memory_config": memory_config},
     )  # op_kwargs available but op does not accept extra kwargs
 

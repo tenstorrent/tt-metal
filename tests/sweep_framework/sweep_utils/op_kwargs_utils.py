@@ -292,18 +292,18 @@ def build_op_kwargs(
             # Preserve explicit None when keep_none is set
             op_kwargs[key] = None
 
-    # Merge extra_kwargs (re-injected named params like memory_config, dtype)
+    # Merge extra_kwargs (re-injected named params like memory_config, dtype).
+    # None values from extra_kwargs are ALWAYS skipped — keep_none only applies
+    # to kwargs from the test vector.  Named params default to None when the
+    # traced config did not include them, so including None would inject keys
+    # that the original trace never recorded.
     if extra_kwargs:
         for key, value in extra_kwargs.items():
-            if value == "__ABSENT__":
-                continue
-            if value is None and not keep_none:
+            if value is None or value == "__ABSENT__":
                 continue
             parsed = parse_dict_value(key, value)
             if parsed is not None:
                 op_kwargs[key] = parsed
-            elif keep_none and value is None:
-                op_kwargs[key] = None
 
     return op_kwargs
 

@@ -115,7 +115,6 @@ def run(
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
     op_kwargs = build_op_kwargs(kwargs, exclude={"padding_idx", "weight_tensor_placement"},
-        keep_none=True,
         extra_kwargs={"memory_config": memory_config, "dtype": dtype},
     )
 

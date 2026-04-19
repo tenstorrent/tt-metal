@@ -132,7 +132,6 @@ def run(
     # Exclude program_config (handled above), activation (used for golden too),
     # and output_tile (a Tile object that can't be auto-parsed from dict).
     parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile"},
-        keep_none=True,
         extra_kwargs={"memory_config": memory_config, "dtype": dtype},
     )
 

@@ -208,7 +208,6 @@ def run(
         input_e_tensor_placement = None
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config,
-        keep_none=True,
     )
 
     # Extract shapes for all 5 inputs.

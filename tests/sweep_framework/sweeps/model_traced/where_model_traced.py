@@ -86,7 +86,6 @@ def run(
     input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config,
-        keep_none=True,
     )
 
     is_ternary_tensor = input_b_dtype is not None and input_c_dtype is not None

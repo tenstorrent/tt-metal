@@ -65,7 +65,6 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config,
-        keep_none=True,
     )
 
     # v2 tracer puts target shape in arg1 or shape; arg2 may hold a

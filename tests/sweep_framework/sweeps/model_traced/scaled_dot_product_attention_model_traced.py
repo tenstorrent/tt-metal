@@ -155,7 +155,6 @@ def run(
         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config,
-        keep_none=True,
     )
 
     # Clear sharded memory_config from op_kwargs too

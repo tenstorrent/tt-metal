@@ -79,7 +79,6 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "dtype"}, output_memory_config=output_memory_config,
-        keep_none=True,
         extra_kwargs={"memory_config": memory_config},
     )
 
