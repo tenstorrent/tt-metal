@@ -333,7 +333,8 @@ ttnn::Tensor composite_all_gather(
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    bool use_l1_small_for_semaphores) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -373,7 +374,13 @@ ttnn::Tensor composite_all_gather(
     }
 
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::prim::all_broadcast(
-        input_tensor, cluster_axis, subdevice_id, input_tensor.memory_config(), num_links, ttnn::ccl::Topology::Linear);
+        input_tensor,
+        cluster_axis,
+        subdevice_id,
+        input_tensor.memory_config(),
+        num_links,
+        ttnn::ccl::Topology::Linear,
+        use_l1_small_for_semaphores);
 
     // Do the gather itself
     ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);

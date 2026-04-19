@@ -355,6 +355,7 @@ class TtPrefillBlock(LightweightModule):
                 cluster_axis=1,
                 num_links=self.num_links,
                 topology=self.topology,
+                use_l1_small_for_semaphores=True,
             )
             ffn_out = self.ffn(gathered)
             ttnn.deallocate(gathered)

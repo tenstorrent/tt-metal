@@ -339,6 +339,7 @@ class TtSharedExpert(LightweightModule):
                 cluster_axis=1,  # Scatter along mesh columns
                 num_links=self.num_links,
                 topology=self.topology,
+                use_l1_small_for_semaphores=True,
             )
         else:
             output = output_full  # No need to reduce-scatter if only one device in mesh column - there is no TP

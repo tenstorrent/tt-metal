@@ -71,6 +71,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": 512,
             },
             1,
             ttnn.Topology.Linear,
@@ -82,6 +83,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": 512,
             },
             1,
             ttnn.Topology.Linear,
@@ -93,6 +95,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": 512,
             },
             1,
             ttnn.Topology.Linear,
@@ -123,7 +126,7 @@ def test_ttnn_moe(
     and run forward(x) end-to-end. Validation compares intermediates directly.
     """
 
-    mesh_device.disable_and_clear_program_cache()  # temporary disabling program cache; because cached all gather semaphores at wrong place cause this test case to OOM
+    # mesh_device.disable_and_clear_program_cache()  # no longer needed: semaphores now placed in L1_SMALL
     # pytest  models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-linear-8-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
 
     profiler.clear()

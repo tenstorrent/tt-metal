@@ -15,7 +15,8 @@ std::array<ttnn::Tensor, 2> offset_cumsum(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,
     uint32_t num_links,
-    const ttnn::MemoryConfig& memory_config) {
+    const ttnn::MemoryConfig& memory_config,
+    bool use_l1_small_for_semaphores) {
     const auto& shape = input_tensor.logical_shape();
     uint32_t n_routed_experts = shape[-1];
 
@@ -28,7 +29,13 @@ std::array<ttnn::Tensor, 2> offset_cumsum(
         /*subdevice_id=*/std::nullopt,
         /*memory_config=*/memory_config,
         /*optional_output_tensor=*/std::nullopt,
-        /*num_links=*/num_links);
+        /*num_links=*/num_links,
+        /*topology=*/std::nullopt,
+        /*chunks_per_sync=*/std::nullopt,
+        /*num_workers_per_link=*/std::nullopt,
+        /*num_buffers_per_channel=*/std::nullopt,
+        /*sub_core_grid=*/std::nullopt,
+        /*use_l1_small_for_semaphores=*/use_l1_small_for_semaphores);
 
     auto row_major = ttnn::to_layout(gathered, tt::tt_metal::Layout::ROW_MAJOR, std::nullopt, std::nullopt);
 

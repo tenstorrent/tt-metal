@@ -104,6 +104,7 @@ class TtMoERoutingSetup(LightweightModule):
             cluster_axis=0,
             num_links=self.num_links,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            use_l1_small_for_semaphores=True,
         )
         signpost(header="moe_gate_calculate_dispatch_offsets")
 
