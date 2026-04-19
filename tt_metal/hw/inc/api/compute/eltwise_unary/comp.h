@@ -6,9 +6,9 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#include "sfpu/ckernel_sfpu_comp.h"
 #include "ckernel_sfpu_comp.h"
 #include "ckernel_sfpu_unary_comp.h"
-#include "sfpu/ckernel_sfpu_comp.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
