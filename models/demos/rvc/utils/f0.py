@@ -10,6 +10,7 @@ from enum import Enum
 class F0Method(str, Enum):
     RAPT = "rapt"
     DIO = "dio"
+    RMVE = "rmve"
 
     @classmethod
     def from_str(cls, value: "F0Method | str") -> "F0Method":

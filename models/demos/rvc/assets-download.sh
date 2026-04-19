@@ -16,10 +16,12 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_FOLDER="${SCRIPT_DIR}/rvc-nano"
+RMVE_REPO_FOLDER="${SCRIPT_DIR}/rmve"
 DATA_DIR="${SCRIPT_DIR}/data"
 TARGET_ASSETS_DIR="${DATA_DIR}/assets"
 TARGET_CONFIGS_DIR="${DATA_DIR}/configs"
 TARGET_SAMPLE_FILE="${DATA_DIR}/sample-speech.wav"
+TARGET_RMVPE_FILE="${DATA_DIR}/rmvpe.safetensors"
 
 export GIT_CLONE_PROTECTION_ACTIVE=false
 export GIT_LFS_SKIP_SMUDGE=1
@@ -55,11 +57,42 @@ rm -rf .git
 
 popd
 
+if [[ -d "${RMVE_REPO_FOLDER}" ]]; then
+  if [[ -d "${RMVE_REPO_FOLDER}/.git" ]]; then
+    echo "Reusing existing ${RMVE_REPO_FOLDER} clone."
+  else
+    echo "Removing existing ${RMVE_REPO_FOLDER} (not a git clone)."
+    rm -rf "${RMVE_REPO_FOLDER}"
+  fi
+fi
+
+if [[ ! -d "${RMVE_REPO_FOLDER}" ]]; then
+  git clone --depth=1 --no-single-branch https://huggingface.co/mert-kurttutan/rmve "${RMVE_REPO_FOLDER}"
+fi
+
+pushd "${RMVE_REPO_FOLDER}"
+
+git config advice.detachedHead false
+
+git fetch --depth=1 origin main
+git checkout FETCH_HEAD
+
+unset GIT_LFS_SKIP_SMUDGE
+unset GIT_CLONE_PROTECTION_ACTIVE
+
+download "rmvpe.safetensors"
+
+rm -rf .git
+
+popd
+
 mkdir -p "${DATA_DIR}"
 rm -rf "${TARGET_ASSETS_DIR}" "${TARGET_CONFIGS_DIR}"
 mv "${REPO_FOLDER}/assets" "${TARGET_ASSETS_DIR}"
 mv "${REPO_FOLDER}/configs" "${TARGET_CONFIGS_DIR}"
 mv "${REPO_FOLDER}/sample-speech.wav" "${TARGET_SAMPLE_FILE}"
+mv "${RMVE_REPO_FOLDER}/rmvpe.safetensors" "${TARGET_RMVPE_FILE}"
 
 
 rm -rf "${REPO_FOLDER}"
+rm -rf "${RMVE_REPO_FOLDER}"

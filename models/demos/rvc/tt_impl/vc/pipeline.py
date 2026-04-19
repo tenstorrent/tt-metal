@@ -17,6 +17,7 @@ from safetensors.torch import load_file
 from scipy import signal
 
 import ttnn
+from models.demos.rvc.torch_impl.rmve import RMVEPitchAlgorithm
 from models.demos.rvc.torch_impl.vc.pipeline import change_rms
 from models.demos.rvc.tt_impl.vc.hubert import HubertModel
 from models.demos.rvc.tt_impl.vc.synthesizer import SynthesizerTrnMsNSF, SynthesizerTrnMsNSF_nono
@@ -117,6 +118,8 @@ class Pipeline:
         self.index_rate = index_rate
         self.rms_mix_rate = rms_mix_rate
         self.protect = protect
+        self._rmve_pitch_algorithm: RMVEPitchAlgorithm | None = None
+
         if self.tt_device.get_num_devices() > 1:
             self.input_mesh_mapper = ttnn.ShardTensorToMesh(self.tt_device, dim=0)
             self.output_mesh_composer = ttnn.ConcatMeshToTensor(self.tt_device, dim=0)
@@ -144,6 +147,12 @@ class Pipeline:
         self.t_center = self.sr * x_center
         self.t_max = self.sr * x_max
         self.device = config.device
+
+    def _get_rmve_pitch_algorithm(self) -> RMVEPitchAlgorithm:
+        if self._rmve_pitch_algorithm is None:
+            device_type = self.device.type if isinstance(self.device, torch.device) else str(self.device)
+            self._rmve_pitch_algorithm = RMVEPitchAlgorithm(sample_rate=self.sr, hop_size=self.window)
+        return self._rmve_pitch_algorithm
 
     def _get_f0(self, audio, num_frames):
         if audio.dim() == 2:
@@ -174,6 +183,8 @@ class Pipeline:
                 otype="f0",
             )
             f0 = torch.from_numpy(f0)
+            f0 = f0.unsqueeze(0)
+
         elif self.f0_method is F0Method.DIO:
             audio_np = audio.detach().cpu().reshape(-1).numpy().astype(np.float64)
             frame_period = self.window / self.sr * 1000.0
@@ -189,10 +200,13 @@ class Pipeline:
             )
             f0 = pw.stonemask(audio_np, f0, t, self.sr)
             f0 = torch.from_numpy(f0.astype(np.float32))
+            f0 = f0.unsqueeze(0)
+        elif self.f0_method is F0Method.RMVE:
+            audio_np = audio.detach().cpu().reshape(-1).numpy().astype(np.float32)
+            f0, _ = self._get_rmve_pitch_algorithm().extract_continuous_periodicity(audio)
         else:
             raise ValueError(f"Unsupported f0_method: {self.f0_method}, must be one of {list(F0Method)}")
 
-        f0 = f0.unsqueeze(0)
         f0_len = f0.shape[1]
         if f0_len < num_frames:
             pad_size = (num_frames - f0_len + 1) // 2
