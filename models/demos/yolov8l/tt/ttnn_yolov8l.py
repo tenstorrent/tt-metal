@@ -11,6 +11,10 @@ from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_
 
 SHARDED_CONCAT_L1_FALLBACK_THRESHOLD_BYTES = 0  # Force DRAM path for 640x640 (only 12 cores, not 64)
 
+# Resolution-dependent memory config: L1 for 640x640, DRAM for larger resolutions.
+# Set by TtDetectionModel.__init__ before the forward pass.
+_DETECT_MEM_CONFIG = ttnn.DRAM_MEMORY_CONFIG  # default; overridden at model init
+
 with open("models/demos/yolov8l/tt/configs.json", "r") as file:
     configs = json.load(file)
 
@@ -27,7 +31,33 @@ def to_row_major_if_needed(tensor):
 
 
 def sharded_concat_sppf(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
-    # Use DRAM interleaved concat to avoid 64-core assumption
+    if _DETECT_MEM_CONFIG == ttnn.L1_MEMORY_CONFIG:
+        # L1 sharded path (fast, used for 640x640)
+        shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
+        input_sharded_memory_configs = []
+        for i in range(len(input_tensors)):
+            input_sharded_memory_config = ttnn.create_sharded_memory_config(
+                (shard_height, input_tensors[i].shape[-1]),
+                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                use_height_and_width_as_shard_shape=True,
+            )
+            input_sharded_memory_configs.append(input_sharded_memory_config)
+        sharded_inputs = [
+            ttnn.to_memory_config(tensor, config) for tensor, config in zip(input_tensors, input_sharded_memory_configs)
+        ]
+        total_width = sum(tensor.shape[-1] for tensor in input_tensors)
+        out_sharded_memory_config = ttnn.create_sharded_memory_config(
+            (shard_height, total_width),
+            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        output = ttnn.concat(sharded_inputs, dim, memory_config=out_sharded_memory_config)
+        output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return output
+
+    # DRAM interleaved path (for larger resolutions)
     dram_tensors = []
     for tensor in input_tensors:
         if tensor.is_sharded():
@@ -232,7 +262,7 @@ class TtConv:
             return_weights_and_bias=True,
             return_output_dim=True,
             dtype=self.output_dtype,
-            slice_config=self.slice_config,
+            slice_config=self.slice_config if self.slice_config is not None else ttnn.Conv2dL1FullSliceConfig,
         )
 
         if self.is_detect_cv2:
@@ -288,7 +318,7 @@ class TtBottleneck:
         )
 
     def __call__(self, x, ensure_dram=False):
-        if ensure_dram:
+        if ensure_dram and _DETECT_MEM_CONFIG != ttnn.L1_MEMORY_CONFIG:
             if x.is_sharded():
                 x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
             else:
@@ -374,11 +404,17 @@ class TtC2f:
             f"{self.path}.cv2",
             input_params=self.input_params[1],
             bfloat8=self.bfloat8,
-            # block_shard=self.block_shard,
+            block_shard=self.block_shard if self.cv2_slice_config is None else False,
             change_shard=self.change_shard,
             deallocate_activation=self.deallocate_activation,
             slice_config=self.cv2_slice_config,
-            block_shard=False,
+        )
+
+        # Default bottleneck slice config: None for 640x640 (baseline), DRAM 1-slice otherwise
+        _bn_default_sc = (
+            None
+            if _DETECT_MEM_CONFIG == ttnn.L1_MEMORY_CONFIG
+            else ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=1)
         )
 
         self.bottleneck_modules = []
@@ -398,10 +434,10 @@ class TtC2f:
                     tilize=self.tilize,
                     bottleneck_slice_config_cv1=self.bottleneck_slice_config_cv1
                     if i in self.bottleneck_slice_cv1_list
-                    else ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=1),
+                    else _bn_default_sc,
                     bottleneck_slice_config_cv2=self.bottleneck_slice_config_cv2
                     if i in self.bottleneck_slice_cv2_list
-                    else ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=1),
+                    else _bn_default_sc,
                 )
             )
 
@@ -458,7 +494,8 @@ class TtC2f:
 
         for i in range(len(y)):
             ttnn.deallocate(y[i])
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        if _DETECT_MEM_CONFIG == ttnn.DRAM_MEMORY_CONFIG:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x, out_h, out_w = self.cv2(x)
         return x, out_h, out_w
 
@@ -522,6 +559,15 @@ class TtDetectCv2:
         self.parameters = parameters
         self.path = path
         self.input_params = input_params
+
+        def _detect_slice_config(num_slices):
+            if num_slices <= 1 and _DETECT_MEM_CONFIG == ttnn.L1_MEMORY_CONFIG:
+                return None  # baseline: no slice_config for 640x640
+            elif num_slices <= 1:
+                return ttnn.Conv2dL1FullSliceConfig
+            else:
+                return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices)
+
         self.conv0 = TtConv(
             device,
             parameters,
@@ -529,9 +575,7 @@ class TtDetectCv2:
             input_params=input_params[0],
             bfloat8=True,
             block_shard=block_shard,
-            slice_config=ttnn.Conv2dL1FullSliceConfig
-            if conv0_num_slices == 1
-            else ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=conv0_num_slices),
+            slice_config=_detect_slice_config(conv0_num_slices),
         )
         self.conv1 = TtConv(
             device,
@@ -540,9 +584,7 @@ class TtDetectCv2:
             input_params=input_params[1],
             bfloat8=True,
             block_shard=block_shard,
-            slice_config=ttnn.Conv2dL1FullSliceConfig
-            if conv1_num_slices == 1
-            else ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=conv1_num_slices),
+            slice_config=_detect_slice_config(conv1_num_slices),
         )
         self.conv2 = TtConv(
             device,
@@ -554,9 +596,7 @@ class TtDetectCv2:
             change_shard=True,
             block_shard=block_shard,
             is_detect_cv2=True,
-            slice_config=ttnn.Conv2dL1FullSliceConfig
-            if conv2_num_slices == 1
-            else ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=conv2_num_slices),
+            slice_config=_detect_slice_config(conv2_num_slices),
         )
 
     def __call__(self, x):
@@ -577,6 +617,13 @@ class TtDFL:
         self.parameters = parameters
         self.path = path
         self.input_params = input_params
+        if num_slices <= 1 and _DETECT_MEM_CONFIG == ttnn.L1_MEMORY_CONFIG:
+            _dfl_sc = None
+        elif num_slices <= 1:
+            _dfl_sc = ttnn.Conv2dL1FullSliceConfig
+        else:
+            _dfl_sc = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices)
+
         self.conv = TtConv(
             device,
             parameters,
@@ -585,18 +632,16 @@ class TtDFL:
             bfloat8=True,
             is_fused=False,
             change_shard=False,
-            slice_config=ttnn.Conv2dL1FullSliceConfig
-            if num_slices == 1
-            else ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices),
+            slice_config=_dfl_sc,
         )
 
     def __call__(self, x, c1=16):
         b, _, a = x.shape
-        x = ttnn.reshape(x, (b, 4, c1, a), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.softmax(x, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.permute(x, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.reshape(x, (b, 4, c1, a), memory_config=_DETECT_MEM_CONFIG)
+        x = ttnn.softmax(x, dim=2, memory_config=_DETECT_MEM_CONFIG)
+        x = ttnn.permute(x, (0, 1, 3, 2), memory_config=_DETECT_MEM_CONFIG)
         x, h, w = self.conv(x)
-        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.sharded_to_interleaved(x, memory_config=_DETECT_MEM_CONFIG)
         x = ttnn.permute(x, (0, 3, 1, 2))
         x = ttnn.reshape(x, (x.shape[0], 1, 4, int(x.shape[3] / 4)))
         x = ttnn.reshape(x, (x.shape[0], x.shape[1] * x.shape[2], x.shape[3]))
@@ -604,7 +649,19 @@ class TtDFL:
 
 
 class TtDetect:
-    def __init__(self, device, parameters, path, input_params, nc=80, ch=(320, 640, 640), num_slices=1):
+    def __init__(
+        self,
+        device,
+        parameters,
+        path,
+        input_params,
+        nc=80,
+        ch=(320, 640, 640),
+        num_slices=1,
+        detect_cv2_conv0_slices=None,
+        detect_cv3_conv0_slices=None,
+        detect_cv3_conv1_slices=None,
+    ):
         self.device = device
         self.parameters = parameters
         self.path = path
@@ -613,6 +670,14 @@ class TtDetect:
         self.ch = ch
         self.detect_cv2_modules = []
         self.detect_cv3_modules = []
+
+        # Default slice functions (DRAM multi-slice for large resolutions)
+        if detect_cv2_conv0_slices is None:
+            detect_cv2_conv0_slices = lambda i: 4 if i in [0, 1] else 1
+        if detect_cv3_conv0_slices is None:
+            detect_cv3_conv0_slices = lambda i: 4 if i in [0, 1] else 1
+        if detect_cv3_conv1_slices is None:
+            detect_cv3_conv1_slices = lambda i: 4 if i == 0 else 1
 
         nl = len(self.ch)
         block_shard = False
@@ -627,7 +692,7 @@ class TtDetect:
                     f"{path}.cv2.{i}",
                     input_params=cv2_params,
                     block_shard=block_shard,
-                    conv0_num_slices=4 if i in [0, 1] else 1,
+                    conv0_num_slices=detect_cv2_conv0_slices(i),
                     conv1_num_slices=1,
                     conv2_num_slices=1,
                 )
@@ -639,8 +704,8 @@ class TtDetect:
                     f"{path}.cv3.{i}",
                     input_params=cv3_params,
                     block_shard=block_shard,
-                    conv0_num_slices=4 if i in [0, 1] else 1,
-                    conv1_num_slices=4 if i == 0 else 1,
+                    conv0_num_slices=detect_cv3_conv0_slices(i),
+                    conv1_num_slices=detect_cv3_conv1_slices(i),
                     conv2_num_slices=1,
                 )
             )
@@ -662,39 +727,83 @@ class TtDetect:
         for i in range(nl):
             a, _, _ = self.detect_cv2_modules[i](x[i])
             b, _, _ = self.detect_cv3_modules[i](x[i])
-            x[i] = ttnn.concat((a, b), dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x[i] = ttnn.concat((a, b), dim=3, memory_config=_DETECT_MEM_CONFIG)
 
         shape = x[0].shape
         anchors, strides = self.parameters["anchors"], self.parameters["strides"]
 
         xi = []
         for i in x:
-            i = ttnn.reshape(i, (shape[0], -1, no), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            i = ttnn.reshape(i, (shape[0], -1, no), memory_config=_DETECT_MEM_CONFIG)
             xi.append(i)
 
-        x_cat = ttnn.concat(xi, 1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x_cat = ttnn.permute(x_cat, (0, 2, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_cat = ttnn.concat(xi, 1, memory_config=_DETECT_MEM_CONFIG)
+        x_cat = ttnn.permute(x_cat, (0, 2, 1), memory_config=_DETECT_MEM_CONFIG)
 
-        box = ttnn.slice(x_cat, [0, 0, 0], [1, 64, x_cat.shape[2]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        cls = ttnn.slice(x_cat, [0, 64, 0], [1, 144, x_cat.shape[2]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        box = ttnn.slice(x_cat, [0, 0, 0], [1, 64, x_cat.shape[2]], memory_config=_DETECT_MEM_CONFIG)
+        cls = ttnn.slice(x_cat, [0, 64, 0], [1, 144, x_cat.shape[2]], memory_config=_DETECT_MEM_CONFIG)
         dfl = self.dfl_module(box)
 
-        anchors = ttnn.to_memory_config(anchors, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+        anchors = ttnn.to_memory_config(anchors, memory_config=_DETECT_MEM_CONFIG, dtype=ttnn.bfloat8_b)
         dbox = ttnn_decode_bboxes(self.device, dfl, anchors)
         # dbox = ttnn.to_dtype(dbox, dtype=ttnn.bfloat8_b)
-        strides = ttnn.to_memory_config(strides, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+        strides = ttnn.to_memory_config(strides, memory_config=_DETECT_MEM_CONFIG, dtype=ttnn.bfloat8_b)
         dbox = ttnn.multiply(dbox, strides, dtype=ttnn.bfloat8_b)
 
-        return [ttnn.concat((dbox, ttnn.sigmoid(cls)), dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG), x]
+        return [ttnn.concat((dbox, ttnn.sigmoid(cls)), dim=1, memory_config=_DETECT_MEM_CONFIG), x]
 
 
 class TtDetectionModel:
     def __init__(self, device, parameters, res=(1280, 1280), batch_size=1, reg_max=16):
+        global _DETECT_MEM_CONFIG
         self.device = device
         self.parameters = parameters
         self.res = res
         self.reg_max = reg_max
         self.batch_size = batch_size
+
+        global SHARDED_CONCAT_L1_FALLBACK_THRESHOLD_BYTES
+
+        # 640x640 tensors fit in L1; larger resolutions need DRAM
+        self._use_l1 = res[0] <= 640 and res[1] <= 640
+        _DETECT_MEM_CONFIG = ttnn.L1_MEMORY_CONFIG if self._use_l1 else ttnn.DRAM_MEMORY_CONFIG
+
+        # Enable L1 sharded concat for 640x640 (tensors fit in L1)
+        if self._use_l1:
+            SHARDED_CONCAT_L1_FALLBACK_THRESHOLD_BYTES = 1_000_000_000  # 1GB = always L1
+        else:
+            SHARDED_CONCAT_L1_FALLBACK_THRESHOLD_BYTES = 0  # force DRAM for large resolutions
+
+        # For 640x640: no slice_config at all (baseline behavior — shard_layout=HEIGHT_SHARDED)
+        # For 1280x1280: use explicit slice configs with DRAM slicing for large activations
+        if self._use_l1:
+            _sc = None  # no slice_config — baseline behavior
+            _cv2_sc = None
+            _bn_cv1_slices_c2f2 = None
+            _bn_cv2_slices_c2f2 = None
+            _bn_cv1_list_c2f2 = []
+            _bn_cv2_list_c2f2 = []
+            _bn_cv1_slices_c2f4 = None
+            _bn_cv2_slices_c2f4 = None
+            _bn_cv1_list_c2f4 = []
+            _bn_cv2_list_c2f4 = []
+            _detect_cv2_conv0_slices = lambda i: 1
+            _detect_cv3_conv0_slices = lambda i: 1
+            _detect_cv3_conv1_slices = lambda i: 1
+        else:
+            _sc = ttnn.Conv2dL1FullSliceConfig
+            _cv2_sc = ttnn.Conv2dL1FullSliceConfig
+            _bn_cv1_slices_c2f2 = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
+            _bn_cv2_slices_c2f2 = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
+            _bn_cv1_list_c2f2 = [0, 1, 2]
+            _bn_cv2_list_c2f2 = [0, 1, 2]
+            _bn_cv1_slices_c2f4 = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
+            _bn_cv2_slices_c2f4 = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=2)
+            _bn_cv1_list_c2f4 = []
+            _bn_cv2_list_c2f4 = []
+            _detect_cv2_conv0_slices = lambda i: 4 if i in [0, 1] else 1
+            _detect_cv3_conv0_slices = lambda i: 4 if i in [0, 1] else 1
+            _detect_cv3_conv1_slices = lambda i: 4 if i == 0 else 1
 
         self.conv_0 = TtConv(
             device,
@@ -719,12 +828,12 @@ class TtDetectionModel:
             n=3,
             shortcut=True,
             input_params=c2f_configs["model.2"]["input_params"],
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
-            cv2_slice_config=ttnn.Conv2dL1FullSliceConfig,
-            bottleneck_slice_config_cv1=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4),
-            bottleneck_slice_config_cv2=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4),
-            bottleneck_slice_cv1_list=[0, 1, 2],
-            bottleneck_slice_cv2_list=[0, 1, 2],
+            slice_config=_sc,
+            cv2_slice_config=_cv2_sc,
+            bottleneck_slice_config_cv1=_bn_cv1_slices_c2f2,
+            bottleneck_slice_config_cv2=_bn_cv2_slices_c2f2,
+            bottleneck_slice_cv1_list=_bn_cv1_list_c2f2,
+            bottleneck_slice_cv2_list=_bn_cv2_list_c2f2,
         )
         self.conv_3 = TtConv(
             device,
@@ -740,12 +849,12 @@ class TtDetectionModel:
             n=6,
             shortcut=True,
             input_params=c2f_configs["model.4"]["input_params"],
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
-            cv2_slice_config=ttnn.Conv2dL1FullSliceConfig,
-            bottleneck_slice_config_cv1=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4),
-            bottleneck_slice_config_cv2=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=2),
-            bottleneck_slice_cv1_list=[],
-            bottleneck_slice_cv2_list=[],
+            slice_config=_sc,
+            cv2_slice_config=_cv2_sc,
+            bottleneck_slice_config_cv1=_bn_cv1_slices_c2f4,
+            bottleneck_slice_config_cv2=_bn_cv2_slices_c2f4,
+            bottleneck_slice_cv1_list=_bn_cv1_list_c2f4,
+            bottleneck_slice_cv2_list=_bn_cv2_list_c2f4,
         )
         self.conv_5 = TtConv(device, parameters, "model.5", input_params=[3, 2, 1, 512, 256], block_shard=True)
         self.c2f_6 = TtC2f(
@@ -757,8 +866,8 @@ class TtDetectionModel:
             block_shard=True,
             change_shard=True,
             input_params=c2f_configs["model.6"]["input_params"],
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
-            cv2_slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=_sc,
+            cv2_slice_config=_cv2_sc,
         )
         self.conv_7 = TtConv(
             device,
@@ -777,8 +886,8 @@ class TtDetectionModel:
             change_shard=True,
             block_shard=True,
             input_params=c2f_configs["model.8"]["input_params"],
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
-            cv2_slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=_sc,
+            cv2_slice_config=_cv2_sc,
         )
         self.sppf_9 = TtSppf(
             device, parameters, "model.9", input_params=sppf_configs["input_params"], batch_size=self.batch_size
@@ -792,9 +901,8 @@ class TtDetectionModel:
             bfloat8=True,
             block_shard=True,
             input_params=c2f_configs["model.12"]["input_params"],
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
-            cv2_slice_config=ttnn.Conv2dL1FullSliceConfig,
-            # bottleneck_slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4),
+            slice_config=_sc,
+            cv2_slice_config=_cv2_sc,
         )
         self.c2f_15 = TtC2f(
             device,
@@ -803,8 +911,8 @@ class TtDetectionModel:
             n=3,
             shortcut=False,
             input_params=c2f_configs["model.15"]["input_params"],
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
-            cv2_slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=_sc,
+            cv2_slice_config=_cv2_sc,
         )
         self.conv_16 = TtConv(
             device,
@@ -812,7 +920,7 @@ class TtDetectionModel:
             "model.16",
             input_params=conv_config["input_params"][4],
             block_shard=True,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=_sc,
         )
         self.c2f_18 = TtC2f(
             device,
@@ -821,8 +929,8 @@ class TtDetectionModel:
             n=3,
             shortcut=False,
             input_params=c2f_configs["model.18"]["input_params"],
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
-            cv2_slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=_sc,
+            cv2_slice_config=_cv2_sc,
         )
         self.conv_19 = TtConv(
             device, parameters, "model.19", input_params=conv_config["input_params"][5], block_shard=True
@@ -836,10 +944,19 @@ class TtDetectionModel:
             input_params=c2f_configs["model.21"]["input_params"],
             block_shard=True,
             change_shard=False,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
-            cv2_slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=_sc,
+            cv2_slice_config=_cv2_sc,
         )
-        self.detect_22 = TtDetect(device, parameters, "model.22", detect_config, num_slices=1)
+        self.detect_22 = TtDetect(
+            device,
+            parameters,
+            "model.22",
+            detect_config,
+            num_slices=1,
+            detect_cv2_conv0_slices=_detect_cv2_conv0_slices,
+            detect_cv3_conv0_slices=_detect_cv3_conv0_slices,
+            detect_cv3_conv1_slices=_detect_cv3_conv1_slices,
+        )
 
     def __call__(self, x):
         N, C, H, W = x.shape
@@ -859,13 +976,15 @@ class TtDetectionModel:
         conv_0, out_h, out_w = self.conv_0(x)
         conv_1, out_h, out_w = self.conv_1(conv_0)
         ttnn.deallocate(conv_0)
-        conv_1 = ttnn.to_memory_config(conv_1, ttnn.DRAM_MEMORY_CONFIG)
+        if not self._use_l1:
+            conv_1 = ttnn.to_memory_config(conv_1, ttnn.DRAM_MEMORY_CONFIG)
         c2f_2, out_h, out_w = self.c2f_2(conv_1)
         ttnn.deallocate(conv_1)
         conv_3, out_h, out_w = self.conv_3(c2f_2)
         ttnn.deallocate(c2f_2)
 
-        conv_3 = ttnn.to_memory_config(conv_3, ttnn.DRAM_MEMORY_CONFIG)
+        if not self._use_l1:
+            conv_3 = ttnn.to_memory_config(conv_3, ttnn.DRAM_MEMORY_CONFIG)
         c2f_4, out_h, out_w = self.c2f_4(conv_3)
         ttnn.deallocate(conv_3)
 
@@ -875,6 +994,8 @@ class TtDetectionModel:
         ttnn.deallocate(conv_5)
 
         c2f_6 = ttnn.sharded_to_interleaved(c2f_6, ttnn.L1_MEMORY_CONFIG)
+        if self._use_l1:
+            c2f_6 = ttnn.to_memory_config(c2f_6, ttnn.L1_MEMORY_CONFIG)
         conv_7, out_h, out_w = self.conv_7(c2f_6)
 
         c2f_8, out_h, out_w = self.c2f_8(conv_7, reshard_bottleneck_input=True)
@@ -913,7 +1034,11 @@ class TtDetectionModel:
         c2f_12 = ttnn.sharded_to_interleaved(c2f_12, ttnn.L1_MEMORY_CONFIG)
         c2f_12 = to_row_major_if_needed(c2f_12)
         twelve = ttnn.clone(c2f_12, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-        c2f_12 = ttnn.reshape(c2f_12, (self.batch_size, out_h, out_w, c2f_12.shape[-1]))
+        c2f_12 = ttnn.reshape(
+            c2f_12,
+            (self.batch_size, out_h, out_w, c2f_12.shape[-1]),
+            memory_config=ttnn.L1_MEMORY_CONFIG if self._use_l1 else None,
+        )
         nhw = c2f_12.shape[0] * c2f_12.shape[1] * c2f_12.shape[2]
         num_cores = determine_num_cores(nhw, c2f_12.shape[2])
         core_grid = get_core_grid_from_num_cores(num_cores)
@@ -925,7 +1050,7 @@ class TtDetectionModel:
         else:
             c2f_12 = ttnn.interleaved_to_sharded(c2f_12, shardspec)
 
-        if hasattr(self.c2f_12, "cv2_slice_config") and self.c2f_12.cv2_slice_config is not None:
+        if not self._use_l1 and hasattr(self.c2f_12, "cv2_slice_config") and self.c2f_12.cv2_slice_config is not None:
             if c2f_12.is_sharded():
                 c2f_12 = ttnn.sharded_to_interleaved(c2f_12, ttnn.DRAM_MEMORY_CONFIG)
             else:
@@ -947,7 +1072,8 @@ class TtDetectionModel:
 
         c2f_15 = ttnn.sharded_to_interleaved(c2f_15, ttnn.L1_MEMORY_CONFIG)
         fifteen = ttnn.clone(c2f_15, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-        c2f_15 = ttnn.to_memory_config(c2f_15, ttnn.DRAM_MEMORY_CONFIG)
+        if not self._use_l1:
+            c2f_15 = ttnn.to_memory_config(c2f_15, ttnn.DRAM_MEMORY_CONFIG)
         conv_16, out_h, out_w = self.conv_16(c2f_15)
         ttnn.deallocate(c2f_15)
         conv_16 = ttnn.sharded_to_interleaved(conv_16, ttnn.L1_MEMORY_CONFIG)
@@ -971,17 +1097,19 @@ class TtDetectionModel:
 
         ttnn.deallocate(nine)
         ttnn.deallocate(conv_19)
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        if not self._use_l1:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         c2f_21, out_h, out_w = self.c2f_21(x, reshard_bottleneck_input=True)
         c2f_21 = ttnn.sharded_to_interleaved(c2f_21, ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(x)
         x = [fifteen, eighteen, c2f_21]
-        x = [
-            ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
-            if tensor.memory_config().buffer_type != ttnn.BufferType.DRAM
-            else tensor
-            for tensor in x
-        ]
+        if not self._use_l1:
+            x = [
+                ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
+                if tensor.memory_config().buffer_type != ttnn.BufferType.DRAM
+                else tensor
+                for tensor in x
+            ]
         x = self.detect_22(x, nc=80, ch=(320, 640, 640), reg_max=self.reg_max)
         return x
 

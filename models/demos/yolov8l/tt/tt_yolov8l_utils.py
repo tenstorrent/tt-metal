@@ -87,17 +87,17 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5, mesh_mapper=None)
 
 
 def ttnn_decode_bboxes(device, distance, anchor_points, xywh=True, dim=1):
-    lt, rb = ttnn.split(
-        distance, 2, 1, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )  # if done in tile : tt-metal issue #17017
+    from models.demos.yolov8l.tt.ttnn_yolov8l import _DETECT_MEM_CONFIG
+
+    lt, rb = ttnn.split(distance, 2, 1, memory_config=_DETECT_MEM_CONFIG)  # if done in tile : tt-metal issue #17017
 
     x1y1 = anchor_points - lt
     x2y2 = anchor_points + rb
     if xywh:
         c_xy = x1y1 + x2y2
-        c_xy = ttnn.div(c_xy, 2, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        wh = ttnn.subtract(x2y2, x1y1, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.concat([c_xy, wh], 1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        c_xy = ttnn.div(c_xy, 2, dtype=ttnn.bfloat8_b, memory_config=_DETECT_MEM_CONFIG)
+        wh = ttnn.subtract(x2y2, x1y1, dtype=ttnn.bfloat8_b, memory_config=_DETECT_MEM_CONFIG)
+        return ttnn.concat([c_xy, wh], 1, memory_config=_DETECT_MEM_CONFIG)
 
 
 def preprocess_parameters(state_dict, path, bias=True, bfloat8=True, mesh_mapper=None):
