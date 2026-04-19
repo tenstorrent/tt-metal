@@ -133,7 +133,13 @@ class TtMoEGatePrefill(LightweightModule):
             return str(cache_path / f"{cache_name_prefix}.{name}")
 
         # Transpose weight from HF (n_experts, dim) to TTNN (dim, n_experts)
-        weight_for_ttnn = torch_weight.T
+        if torch_weight is not None:
+            weight_for_ttnn = torch_weight.T
+        else:
+            weight_for_ttnn = torch.empty(config.dim, config.n_routed_experts)
+
+        if torch_bias is None:
+            torch_bias = torch.empty(config.n_routed_experts)
 
         # Convert weight
         weight_tt = ttnn.as_tensor(
@@ -226,23 +232,31 @@ class TtMoEGatePrefill(LightweightModule):
         self.mesh_device = mesh_device
         self.fallback_mode = fallback_mode
 
-        # Handle cache-only case (weight=None, bias=None)
         if weight is not None and bias is not None:
-            torch_weight = weight
-            torch_bias = bias
+            weights = self._convert_and_cache_gate_weights(
+                weight, bias, config, mesh_device, weight_cache_path, cache_name_prefix, device=mesh_device
+            )
+        elif weight_cache_path is not None:
+            weights = self._convert_and_cache_gate_weights(
+                None, None, config, mesh_device, weight_cache_path, cache_name_prefix, device=mesh_device
+            )
         else:
-            # Dummy tensors for cache load (ignored when cache exists)
-            torch_weight = torch.zeros([config.n_routed_experts, config.dim])
-            torch_bias = torch.zeros([config.n_routed_experts])
-
-        # Use shared conversion method
-        weights = self._convert_and_cache_gate_weights(
-            torch_weight, torch_bias, config, mesh_device, weight_cache_path, cache_name_prefix, device=mesh_device
-        )
+            weights = self._convert_and_cache_gate_weights(
+                torch.zeros([config.n_routed_experts, config.dim]),
+                torch.zeros([config.n_routed_experts]),
+                config,
+                mesh_device,
+                None,
+                None,
+                device=mesh_device,
+            )
 
         self.weight = weights["weight"]
-
         bias_tt = weights["bias_unbroadcasted"]
+        torch_weight_fallback = weights["torch_weight"]
+        torch_bias_fallback = weights["torch_bias"]
+
+        # Broadcast bias for deepseek_grouped_gate kernel
         bias_torch = ttnn.to_torch(bias_tt)
         del bias_tt
         bias_broadcasted = bias_torch.repeat(config.sp_dim).view(config.sp_dim, -1)
@@ -258,10 +272,8 @@ class TtMoEGatePrefill(LightweightModule):
 
         # Torch copies for host fallback paths — keep in HF convention (n_experts, dim)
         if fallback_mode != GateComputeMode.DEVICE:
-            # Shared method already converts cached tensors to torch format
-            # Whether from provided weights or loaded from cache, these are correct
-            self.torch_weight = weights["torch_weight"]  # (n_experts, dim) - HF format
-            self.torch_bias = weights["torch_bias"]  # (n_experts,)
+            self.torch_weight = torch_weight_fallback  # (n_experts, dim) - HF format
+            self.torch_bias = torch_bias_fallback  # (n_experts,)
 
         # Reference model for host grouped-gate paths
         if fallback_mode in (GateComputeMode.HOST_GROUPED_GATE, GateComputeMode.HOST_ALL):
@@ -279,7 +291,6 @@ class TtMoEGatePrefill(LightweightModule):
                 hidden_size=config.dim,
             )
             self.reference_model = ReferenceMoEGate(self.ref_config, use_bitonic_sort=True)
-            # Use converted torch tensors (from cache or original weights)
             self.reference_model.weight.data = self.torch_weight  # (n_experts, dim)
             self.reference_model.e_score_correction_bias.data = self.torch_bias  # (n_experts,)
 
