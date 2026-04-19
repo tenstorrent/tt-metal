@@ -99,13 +99,13 @@ def build_weight_mapping_single(config, root_prefix, tie_word_embeddings):
     mapping = {}
     transforms = {}
 
-    mapping["model.embed_tokens.weight"] = f"{root_prefix}/model/embed_tokens"
+    mapping["model.embed_tokens.weight"] = f"{root_prefix}/tok_emb/weight"
     if not tie_word_embeddings:
-        mapping["lm_head.weight"] = f"{root_prefix}/lm_head_weight"
+        mapping["lm_head.weight"] = f"{root_prefix}/fc/weight"
 
     for i in range(config.num_hidden_layers):
         hp = f"model.layers.{i}"
-        tp = f"{root_prefix}/model/layers/{i}"
+        tp = f"{root_prefix}/blocks/{i}"
 
         mapping[f"{hp}.self_attn.q_proj.weight"] = f"{tp}/self_attn/q_proj/weight"
         transforms[f"{hp}.self_attn.q_proj.weight"] = (
@@ -145,7 +145,7 @@ def build_weight_mapping_single(config, root_prefix, tie_word_embeddings):
         mapping[f"{hp}.mlp.up_proj.weight"] = f"{tp}/mlp/up_proj/weight"
         mapping[f"{hp}.mlp.down_proj.weight"] = f"{tp}/mlp/down_proj/weight"
 
-    mapping["model.norm.weight"] = f"{root_prefix}/model/norm/weight"
+    mapping["model.norm.weight"] = f"{root_prefix}/ln_fc/weight"
     return mapping, transforms
 
 

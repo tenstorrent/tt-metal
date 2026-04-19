@@ -35,19 +35,28 @@ class _QKNorm(AbstractModuleBase):
 
 
 class Qwen3Attention(AbstractModuleBase):
-    def __init__(
-        self,
-        config,
-        layer_idx: int,
-        rope_params: ttml.ops.rope.RotaryEmbeddingParams,
-    ) -> None:
+    def __init__(self, config, layer_idx: int) -> None:
         super().__init__()
         self.layer_idx = layer_idx
         self.head_dim = config.head_dim
         self.num_heads = config.num_attention_heads
         self.num_kv_heads = config.num_key_value_heads
         self.hidden_size = config.hidden_size
-        self.rope_params = rope_params
+
+        rope_scaling_params = ttml.ops.rope.RopeScalingParams()
+        rs = config.rope_scaling
+        if rs.scaling_factor != 0.0 and rs.original_context_length != 0:
+            rope_scaling_params.scaling_factor = rs.scaling_factor
+            rope_scaling_params.high_freq_factor = rs.high_freq_factor
+            rope_scaling_params.low_freq_factor = rs.low_freq_factor
+            rope_scaling_params.original_context_length = rs.original_context_length
+
+        self.rope_params = ttml.ops.rope.build_rope_params(
+            config.max_position_embeddings,
+            config.head_dim,
+            config.rope_theta,
+            rope_scaling_params,
+        )
 
         q_out = self.num_heads * self.head_dim
         kv_out = self.num_kv_heads * self.head_dim

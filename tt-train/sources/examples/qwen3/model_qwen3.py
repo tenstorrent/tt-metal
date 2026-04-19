@@ -2,157 +2,42 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen3 HF finetuning wrapper.
+"""Qwen3 HF weight loading and re-exports.
 
-Provides ``Qwen3ForCausalLM`` — a thin wrapper around ``ttml.models.qwen3``
-building blocks arranged in an HF-compatible parameter tree for weight loading.
-
-For training from scratch via ``train_nanogpt.py``, use
-``ttml.models.qwen3.Qwen3`` directly.
+The model implementation lives in ``ttml.models.qwen3``.  This module provides
+``load_weights_from_hf`` for loading HuggingFace checkpoints, and re-exports
+symbols consumed by ``model_qwen3_distributed.py`` and ``model_factory.py``.
 """
 
 import torch
 from tqdm import tqdm
 
 import ttml
-from ttml.modules import AbstractModuleBase, ModuleList, Parameter
 
 # Re-export shared components so existing callers (model_qwen3_distributed,
 # model_factory, etc.) continue to work with ``from model_qwen3 import ...``
 from ttml.models.qwen3 import (  # noqa: F401
+    Qwen3,
     Qwen3Config,
     Qwen3RMSNorm,
     Qwen3RopeScalingConfig,
     create_qwen3_config_from_hf,
 )
 from ttml.models.qwen3.autograd_ops import ConcatLastDim, RMSNormFunction  # noqa: F401
-from ttml.models.qwen3.transformer import Qwen3Block
-from ttml.models import memory_efficient_runner
 
-from utils.tensor_utils import (
-    torch_to_ttml,
-    make_weight,
-)
+from utils.tensor_utils import torch_to_ttml
 from utils.param_utils import (  # noqa: F401 — re-exported for callers
     unpermute_proj_rows,
     unpermute_norm_weights,
     build_weight_mapping_single,
 )
 
+# Backwards-compat alias: callers that created Qwen3ForCausalLM now get Qwen3
+Qwen3ForCausalLM = Qwen3
+
 
 def linear(x, weight, bias=None):
     return ttml.ops.linear.linear(x, weight, bias)
-
-
-# =====================================================================
-# Qwen3ForCausalLM  (HF-compatible parameter tree)
-# =====================================================================
-
-
-class _Qwen3Backbone(AbstractModuleBase):
-    """Backbone that mirrors the HF ``Qwen3Model`` parameter tree:
-    embed_tokens, layers[i], norm."""
-
-    def __init__(self, config: Qwen3Config, rope_params) -> None:
-        super().__init__()
-        vocab_tiled = ((config.vocab_size + 31) // 32) * 32
-        self.embed_tokens = Parameter(make_weight((1, 1, vocab_tiled, config.hidden_size)))
-        self.layers = ModuleList([Qwen3Block(config, i, rope_params) for i in range(config.num_hidden_layers)])
-        self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-
-
-class Qwen3ForCausalLM(AbstractModuleBase):
-    """HF-compatible CausalLM using shared ttml building blocks.
-
-    Parameter tree matches HuggingFace naming so that
-    ``build_weight_mapping_single`` / ``load_weights_from_hf`` work unchanged.
-    """
-
-    def __init__(
-        self,
-        config: Qwen3Config,
-        tie_word_embeddings: bool = False,
-        track_memory: int = 0,
-        use_checkpoint: bool = False,
-    ):
-        super().__init__()
-        self.create_name("Qwen3ForCausalLM")
-        self.config = config
-        self.tie_word_embeddings = tie_word_embeddings
-        self.track_memory = track_memory
-        self.use_checkpoint = use_checkpoint
-
-        rope_scaling_params = ttml.ops.rope.RopeScalingParams()
-        rs = config.rope_scaling
-        if rs.scaling_factor != 0.0 and rs.original_context_length != 0:
-            rope_scaling_params.scaling_factor = rs.scaling_factor
-            rope_scaling_params.high_freq_factor = rs.high_freq_factor
-            rope_scaling_params.low_freq_factor = rs.low_freq_factor
-            rope_scaling_params.original_context_length = rs.original_context_length
-
-        rope_params = ttml.ops.rope.build_rope_params(
-            config.max_position_embeddings,
-            config.head_dim,
-            config.rope_theta,
-            rope_scaling_params,
-        )
-
-        self.model = _Qwen3Backbone(config, rope_params)
-
-        if tie_word_embeddings:
-            self.lm_head_weight = None
-        else:
-            vocab_tiled = ((config.vocab_size + 31) // 32) * 32
-            self.lm_head_weight = Parameter(make_weight((1, 1, vocab_tiled, config.hidden_size)))
-
-    def _snapshot(self, x, fwd_label: str, bwd_label: str):
-        if not self.track_memory:
-            return x
-        from utils.memory import memory_snapshot
-
-        return memory_snapshot(x, fwd_label, bwd_label)
-
-    def forward(self, input_ids, attention_mask=None, past_key_values=None, **kwargs):
-        hidden_states = ttml.ops.embedding.embedding(input_ids, self.model.embed_tokens.tensor)
-        hidden_states = self._snapshot(hidden_states, "AFTER_EMBEDDING_FWD", "AFTER_EMBEDDING_BWD")
-
-        position_offset = 0
-        if past_key_values is not None:
-            position_offset = past_key_values.get_seq_length()
-
-        for i, layer in enumerate(self.model.layers):
-            if self.use_checkpoint:
-                hidden_states = memory_efficient_runner(
-                    layer,
-                    hidden_states,
-                    attention_mask,
-                    past_key_values,
-                    position_offset,
-                )
-            else:
-                hidden_states = layer(
-                    hidden_states,
-                    attention_mask,
-                    past_key_values,
-                    position_offset,
-                )
-            if self.track_memory and (i + 1) % self.track_memory == 0:
-                hidden_states = self._snapshot(
-                    hidden_states,
-                    f"AFTER_LAYER_{i}_FWD",
-                    f"AFTER_LAYER_{i}_BWD",
-                )
-
-        hidden_states = self.model.norm(hidden_states)
-        hidden_states = self._snapshot(hidden_states, "AFTER_NORM_FWD", "AFTER_NORM_BWD")
-
-        if self.tie_word_embeddings:
-            logits = linear(hidden_states, self.model.embed_tokens.tensor, None)
-        else:
-            logits = linear(hidden_states, self.lm_head_weight.tensor, None)
-
-        logits = self._snapshot(logits, "AFTER_LM_HEAD_FWD", "AFTER_LM_HEAD_BWD")
-        return logits
 
 
 # =====================================================================
@@ -161,13 +46,13 @@ class Qwen3ForCausalLM(AbstractModuleBase):
 
 
 def load_weights_from_hf(
-    ttml_model: Qwen3ForCausalLM,
+    ttml_model,
     hf_state_dict: dict,
     config: Qwen3Config,
     tie_word_embeddings: bool = False,
     verbose: bool = False,
 ) -> None:
-    """Load HF weights into single-device ttml model."""
+    """Load HF weights into single-device ttml Qwen3 model."""
     ttml_params = ttml_model.parameters()
 
     if verbose:

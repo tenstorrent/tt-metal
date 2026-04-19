@@ -63,6 +63,19 @@ from ttml.common.profiler_utils import profiler_marker
 # Union type for models that share the same forward(input, mask) interface
 Model = Union[NanoGPT, Llama, DeepSeek, Qwen3]
 
+# Registry mapping model_type -> calculate_flops_per_token callable
+from ttml.models.deepseek.flops import calculate_flops_per_token as _deepseek_flops
+from ttml.models.nanogpt.flops import calculate_flops_per_token as _gpt2_flops
+from ttml.models.llama.flops import calculate_flops_per_token as _llama_flops
+from ttml.models.qwen3.flops import calculate_flops_per_token as _qwen3_flops
+
+FLOPS_REGISTRY: dict[str, callable] = {
+    "deepseek": _deepseek_flops,
+    "gpt2": _gpt2_flops,
+    "llama": _llama_flops,
+    "qwen3": _qwen3_flops,
+}
+
 # Memory tracking utilities
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
@@ -1429,25 +1442,9 @@ def main():
 
         # Compute FLOPs per token for throughput reporting (all model types)
         flops_per_token = 0
-        if model_config.model_type == "deepseek":
-            from ttml.models.deepseek import DeepSeekConfig
-            from ttml.models.deepseek.flops import calculate_flops_per_token as deepseek_flops
-
-            ds_cfg = model.config if hasattr(model, "config") and isinstance(model.config, DeepSeekConfig) else None
-            if ds_cfg is not None:
-                flops_per_token = deepseek_flops(ds_cfg, model_config.max_sequence_length)
-        elif model_config.model_type == "gpt2":
-            from ttml.models.nanogpt.flops import calculate_flops_per_token as gpt2_flops
-
-            flops_per_token = gpt2_flops(model.config, model_config.max_sequence_length)
-        elif model_config.model_type == "llama":
-            from ttml.models.llama.flops import calculate_flops_per_token as llama_flops
-
-            flops_per_token = llama_flops(model.config, model_config.max_sequence_length)
-        elif model_config.model_type == "qwen3":
-            from ttml.models.qwen3.flops import calculate_flops_per_token as qwen3_flops
-
-            flops_per_token = qwen3_flops(model.config, model_config.max_sequence_length)
+        flops_fn = FLOPS_REGISTRY.get(model_config.model_type)
+        if flops_fn is not None:
+            flops_per_token = flops_fn(model.config, model_config.max_sequence_length)
 
         if flops_per_token > 0:
             print(f"   - FLOPs per token: {flops_per_token:,} ({flops_per_token/1e9:.2f}G)")
