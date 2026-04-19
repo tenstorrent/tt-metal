@@ -96,9 +96,6 @@ run_t3000_ttnn_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
-  echo "LOG_METAL: Resetting all Tenstorrent devices before test run"
-  tt-smi -r >/dev/null 2>&1 || true
-  echo "LOG_METAL: tt-smi -r complete"
   # Two tests share a known chip-3 AllGather hang (0x880030060 unsafe NOC access):
   #   1. MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0 (2x4 mesh)
   #   2. MeshDevice1x4FabricFixture.TestGenericOpAllGather (1x4 mesh, unit_tests_ttnn)
@@ -108,7 +105,6 @@ run_t3000_ttnn_tests() {
   # from the ERISC firmware init race fixed on this branch (predecessor tests pass).
   # Multiple triage captures are already in AI-JOURNAL.md. Skip both via the escape
   # hatch until the underlying all_gather NOC access bug is root-caused.
-  export TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP=1
   # Run the chip-3 CQ0 AllGather hang reproducer FIRST. With the escape hatch
   # above, the async_cq0 step will SKIP (GTEST_SKIP) rather than hang. The
   # predecessor step (unit_tests_ttnn_ccl_ops) still runs normally — it
