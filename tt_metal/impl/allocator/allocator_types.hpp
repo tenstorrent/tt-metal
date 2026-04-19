@@ -47,6 +47,7 @@ struct AllocatorConfig {
     uint32_t l1_alignment = 0;
     bool disable_interleaved = false;
     AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP;
+
     void reset();
     ~AllocatorConfig() { reset(); }
 };
