@@ -366,15 +366,20 @@ def _parallel_tile_nms(
         scores = cls_scores[xi][mask]
 
         if boxes.shape[0] == 0:
-            return {"boxes": {"xyxy": boxes[:, :4], "conf": boxes[:, 0], "cls": boxes[:, 0]}}
+            e = boxes[:, :4].float()
+            return {"boxes": {"xyxy": e, "conf": e[:, 0], "cls": e[:, 0]}}
 
         conf_val, cls_id = scores.max(1, keepdim=True)
         x = torch.cat([boxes, conf_val, cls_id.float()], dim=1)
         x = x[conf_val.view(-1) > conf]
 
         if x.shape[0] == 0:
+            x = x.float()
             return {"boxes": {"xyxy": x[:, :4], "conf": x[:, 4], "cls": x[:, 5]}}
 
+        # Convert to float32 only for the few remaining detections —
+        # torchvision NMS requires float32.
+        x = x.float()
         c = x[:, 5:6] * 7680
         i = _tv_nms(x[:, :4] + c, x[:, 4], iou)
         i = i[:max_det]
@@ -431,24 +436,30 @@ def _postprocess_worker_shm(
     t_wall_start = 0.0
     LOG_INTERVAL = 10
     nms_pool = ThreadPoolExecutor(max_workers=4)
+    encode_pool = ThreadPoolExecutor(max_workers=1)
+    encode_future = None
 
     while True:
         try:
             item = q_in.get()
             if item is None:
+                if encode_future is not None:
+                    encode_future.result()
                 return
 
             (pred_slot, ring_slot, shifts, tpf, scale_x, scale_y) = item
-            preds_torch = shm_preds[pred_slot]
+            preds_torch = shm_preds[pred_slot]  # keep bf16 — NMS converts only filtered dets
 
             t_post_start = time.perf_counter()
             if fc == 0:
                 t_wall_start = t_post_start
 
-            canvas = shm_ring[ring_slot].numpy().copy()
+            # Direct view — ring_size=4 ensures prep won't reuse this slot
+            # for 4 more frames (~133ms at 30 FPS), well after BG finishes.
+            canvas = shm_ring[ring_slot].numpy()
 
-            # Debug raw model output stats
-            if fc % 10 == 0:
+            # Debug raw model output stats (infrequent — bf16 min/max is slow)
+            if fc % 30 == 0:
                 raw = preds_torch  # [24, 84, 8400]
                 bbox_raw = raw[:, :4, :]  # cx, cy, w, h
                 cls_raw = raw[:, 4:, :]  # class logits
@@ -510,9 +521,15 @@ def _postprocess_worker_shm(
             _draw_scaled_preds(canvas, scaled)
             t_draw = time.perf_counter() - t0
 
+            # Encode previous frame finishes in background thread while we did
+            # NMS+merge+draw above.  Wait here (bounded: at most 1 pending),
+            # then submit this frame's encode.  cv2.imencode releases the GIL
+            # so the thread gives real parallelism with the next iteration's NMS.
             t0 = time.perf_counter()
             canvas = draw_hud(canvas, hud_label, ema_fps)
-            write_frame(frame_file, canvas, jpeg_quality)
+            if encode_future is not None:
+                encode_future.result()
+            encode_future = encode_pool.submit(write_frame, frame_file, canvas, jpeg_quality)
             t_encode = time.perf_counter() - t0
 
             dt_post = time.perf_counter() - t_post_start
@@ -670,9 +687,7 @@ def run_sahi_640_pipelined(args):
     )
     print(f"{TAG} Runner ready.", flush=True)
 
-    # --- Set up staging buffer for pipelined D2H/compute overlap -----------
-    runner._setup_staging_buffer()
-    print(f"{TAG} Staging buffer allocated for D2H/compute overlap.", flush=True)
+    # Staging buffer is pre-allocated during runner construction (before trace capture).
 
     # --- NMS / merge config ------------------------------------------------
     coco_names = _load_coco_names()
@@ -702,8 +717,8 @@ def run_sahi_640_pipelined(args):
 
     # --- Shared memory: prediction ring (avoids pickling 67 MB per frame) --
     PRED_RING = 2
-    # YOLOv8L output: (tiles_per_frame, 84, 8400) float32
-    shm_preds = torch.zeros(PRED_RING, tiles_per_frame, 84, 8400, dtype=torch.float32).share_memory_()
+    # YOLOv8L output: (tiles_per_frame, 84, 8400) bfloat16 (half memory, faster copy)
+    shm_preds = torch.zeros(PRED_RING, tiles_per_frame, 84, 8400, dtype=torch.bfloat16).share_memory_()
     pred_write_idx = 0
 
     # --- BG process --------------------------------------------------------
@@ -815,9 +830,8 @@ def run_sahi_640_pipelined(args):
         local_bf16.copy_(uint8_src)
         local_bf16.mul_(_inv_255)
 
-    # Holder for threaded prepare_input result
-    _prepared_input = [None]
-
+    # Metadata tracking for pipelined frames
+    prev_meta = None
     batch_count = 0
     drop_count = 0
     LOG_INTERVAL = 10
@@ -825,6 +839,7 @@ def run_sahi_640_pipelined(args):
     t_host_prep_sum = t_queue_sum = t_d2h_sum = 0.0
     t_enqueue_sum = t_batch_total_sum = 0.0
     t_prep_read_sum = t_prep_sp_sum = t_prep_total_sum = 0.0
+    t_staging_wait_sum = t_pcie_d2h_sum = t_compose_sum = 0.0
 
     try:
         # --- Request first frame from prep ---------------------------------
@@ -850,97 +865,25 @@ def run_sahi_640_pipelined(args):
             flush=True,
         )
 
-        # --- Synchronous pipeline (direct readback, no staging corruption) ---
-        print(f"{TAG} Using synchronous pipeline (direct readback, no staging buffer)", flush=True)
+        # --- Pipelined execution (D2H/compute overlap via pre-allocated staging) ---
+        print(f"{TAG} Using pipelined execution (D2H/compute overlap)", flush=True)
 
-        # Prime: prepare first frame
+        # Prime: convert first frame and submit (non-blocking trace execution)
         _convert_uint8_to_bf16(cur_tensor)
+        runner.submit(local_bf16)
+        prev_meta = (cur_shifts[:tiles_per_frame], cur_ring_slot)
 
-        # Signal prep for second frame
+        # Signal prep for next frame
         if not is_image:
             go_event.set()
             _prep_pending = True
         else:
             _prep_pending = False
 
-        # Wait for prep of second frame
-        if _prep_pending:
-            while not ready_event.wait(timeout=0.5):
-                if stop:
-                    break
-            ready_event.clear()
-            if (not stop) and shm_timings[6].item() >= 0:
-                cur_tensor = shm_tensor
-                cur_shifts = [
-                    (int(shm_shifts[i, 0].item()), int(shm_shifts[i, 1].item())) for i in range(tiles_per_frame)
-                ]
-                cur_ring_slot = int(shm_timings[7].item())
-            else:
-                _prep_pending = False
-
-        prev_shifts = cur_shifts
-        prev_ring_slot = cur_ring_slot
-
         while not stop:
             t_batch_start = time.perf_counter()
 
-            # --- Convert uint8→bf16 ---
-            t0_convert = time.perf_counter()
-            _convert_uint8_to_bf16(cur_tensor)
-            t_convert = (time.perf_counter() - t0_convert) * 1000
-
-            # Signal prep for next frame
-            if not is_image:
-                go_event.set()
-                _prep_pending = True
-            else:
-                _prep_pending = False
-
-            # --- Run model synchronously ---
-            t0 = time.perf_counter()
-            runner.run(local_bf16)
-            ttnn.synchronize_device(runner.device)
-            t_run = (time.perf_counter() - t0) * 1000
-
-            # --- Direct D2H readback (no staging buffer) ---
-            t0 = time.perf_counter()
-            preds_torch = ttnn.to_torch(
-                runner.runner_infra.output_tensor[0],
-                dtype=torch.float32,
-                mesh_composer=output_mesh_composer,
-                device=runner.device,
-            )
-            t_d2h = (time.perf_counter() - t0) * 1000
-
-            t_host_prep = 0.0
-            t_queue = t_run
-
-            # --- Enqueue previous frame's predictions to BG ----------------
-            t0 = time.perf_counter()
-            _dropped = False
-            if preds_torch is not None:
-                pred_slot = pred_write_idx % PRED_RING
-                shm_preds[pred_slot].copy_(preds_torch[:tiles_per_frame])
-                pred_write_idx += 1
-                item = (
-                    pred_slot,
-                    prev_ring_slot,
-                    prev_shifts[:tiles_per_frame],
-                    tiles_per_frame,
-                    scale_x,
-                    scale_y,
-                )
-                try:
-                    q_post.put_nowait(item)
-                except Exception:
-                    _dropped = True
-            t_enqueue = (time.perf_counter() - t0) * 1000
-
-            # Save current frame's metadata as "prev" for next iteration
-            prev_shifts = cur_shifts
-            prev_ring_slot = cur_ring_slot
-
-            # --- Wait for prep (next frame) --------------------------------
+            # --- Wait for next frame from prep ---
             t0 = time.perf_counter()
             if _prep_pending:
                 while not ready_event.wait(timeout=0.5):
@@ -952,18 +895,15 @@ def run_sahi_640_pipelined(args):
                 _next_valid = False
             t_prep_wait = (time.perf_counter() - t0) * 1000
 
-            # --- Read next frame from shared memory (prep already scaled) --
-            if _prep_pending and _next_valid:
-                cur_tensor = shm_tensor
-                cur_shifts = [
-                    (
-                        int(shm_shifts[i, 0].item()),
-                        int(shm_shifts[i, 1].item()),
-                    )
-                    for i in range(tiles_per_frame)
-                ]
-                cur_ring_slot = int(shm_timings[7].item())
+            if not _next_valid and not is_image:
+                break
 
+            # Read next frame metadata from shared memory
+            if _next_valid:
+                next_shifts = [
+                    (int(shm_shifts[i, 0].item()), int(shm_shifts[i, 1].item())) for i in range(tiles_per_frame)
+                ]
+                next_ring_slot = int(shm_timings[7].item())
                 _prep_timings = {
                     "read_ms": shm_timings[1].item(),
                     "sp_ms": shm_timings[4].item(),
@@ -971,8 +911,69 @@ def run_sahi_640_pipelined(args):
                 }
             else:
                 _prep_timings = None
-                if not is_image:
-                    break
+
+            # --- Convert + submit next frame ---
+            # submit() copies prev output → staging on CQ0, then queues
+            # H2D + reshard + trace.  Non-blocking.
+            result_meta = prev_meta  # metadata for get_result's return value
+
+            t0_convert = time.perf_counter()
+            if _next_valid:
+                _convert_uint8_to_bf16(shm_tensor)
+            t_convert = (time.perf_counter() - t0_convert) * 1000
+
+            t0_submit = time.perf_counter()
+            if _next_valid:
+                runner.submit(local_bf16)
+                t_host_prep = runner.last_timing.get("host_prep_ms", 0)
+                prev_meta = (next_shifts[:tiles_per_frame], next_ring_slot)
+            else:
+                t_host_prep = 0
+            t_submit = (time.perf_counter() - t0_submit) * 1000
+
+            # --- PCIe D2H (fast, no contention — prep not running yet) ---
+            t0_d2h = time.perf_counter()
+            has_result = runner.pcie_d2h()
+            t_staging_wait = runner.last_timing.get("staging_wait_ms", 0)
+            t_pcie_d2h = runner.last_timing.get("pcie_d2h_ms", 0)
+
+            # Signal prep AFTER PCIe completes — avoids memory bandwidth
+            # contention between prep's numpy/torch ops and PCIe DMA.
+            # Prep runs in parallel with compose (~12ms window).
+            if not is_image:
+                go_event.set()
+                _prep_pending = True
+            else:
+                _prep_pending = False
+
+            # --- Compose (host-side untile+cat, prep runs in parallel) ---
+            if has_result:
+                preds = runner.compose(mesh_composer=output_mesh_composer)
+            t_compose = runner.last_timing.get("compose_ms", 0)
+            t_d2h_wall = (time.perf_counter() - t0_d2h) * 1000
+
+            # --- Enqueue result to BG ---
+            t0 = time.perf_counter()
+            _dropped = False
+            if has_result:
+                r_shifts, r_ring_slot = result_meta
+                pred_slot = pred_write_idx % PRED_RING
+                shm_preds[pred_slot].copy_(preds[:tiles_per_frame])
+                pred_write_idx += 1
+                item = (
+                    pred_slot,
+                    r_ring_slot,
+                    r_shifts,
+                    tiles_per_frame,
+                    scale_x,
+                    scale_y,
+                )
+                try:
+                    q_post.put_nowait(item)
+                except Exception:
+                    _dropped = True
+            t_enqueue = (time.perf_counter() - t0) * 1000
+            t_d2h = runner.last_timing.get("d2h_ms", t_d2h_wall)
 
             dt_batch = time.perf_counter() - t_batch_start
 
@@ -983,8 +984,11 @@ def run_sahi_640_pipelined(args):
             t_prep_wait_sum += t_prep_wait
             t_convert_sum += t_convert
             t_host_prep_sum += t_host_prep
-            t_queue_sum += t_queue
+            t_queue_sum += t_submit
             t_d2h_sum += t_d2h
+            t_staging_wait_sum += t_staging_wait
+            t_pcie_d2h_sum += t_pcie_d2h
+            t_compose_sum += t_compose
             t_enqueue_sum += t_enqueue
             t_batch_total_sum += dt_batch
             if _prep_timings:
@@ -997,9 +1001,10 @@ def run_sahi_640_pipelined(args):
                 fps = 1.0 / max(dt_batch, 1e-9)
                 print(
                     f"{TAG} Batch 1: {dt_batch * 1000:.1f}ms ({fps:.1f} FPS)  |  "
+                    f"convert={t_convert:.1f}  "
                     f"host_prep={t_host_prep:.1f}  "
-                    f"queue={t_queue:.1f}  "
-                    f"d2h={t_d2h:.1f}  "
+                    f"submit={t_submit:.1f}  "
+                    f"d2h={t_d2h:.1f}(wait={t_staging_wait:.1f}+pcie={t_pcie_d2h:.1f}+compose={t_compose:.1f})  "
                     f"enqueue={t_enqueue:.1f}  "
                     f"prep_wait={t_prep_wait:.1f}  "
                     f"prep(proc)={_pt.get('total_ms', 0):.1f}"
@@ -1020,8 +1025,8 @@ def run_sahi_640_pipelined(args):
                     f"prep_wait={t_prep_wait_sum / n:.1f}  "
                     f"convert={t_convert_sum / n:.1f}  "
                     f"host_prep={t_host_prep_sum / n:.1f}  "
-                    f"queue={t_queue_sum / n:.1f}  "
-                    f"d2h={t_d2h_sum / n:.1f}  "
+                    f"submit={t_queue_sum / n:.1f}  "
+                    f"d2h={t_d2h_sum / n:.1f}(wait={t_staging_wait_sum / n:.1f}+pcie={t_pcie_d2h_sum / n:.1f}+compose={t_compose_sum / n:.1f})  "
                     f"enqueue={t_enqueue_sum / n:.1f}  "
                     f"drops={drop_count}  (ms)",
                     flush=True,
@@ -1030,24 +1035,19 @@ def run_sahi_640_pipelined(args):
                 t_host_prep_sum = t_queue_sum = t_d2h_sum = 0.0
                 t_enqueue_sum = t_batch_total_sum = 0.0
                 t_prep_read_sum = t_prep_sp_sum = t_prep_total_sum = 0.0
+                t_staging_wait_sum = t_pcie_d2h_sum = t_compose_sum = 0.0
 
-        # Flush the last frame from the pipeline
+        # Flush: read last frame's output from device
         if batch_count > 0 and not stop:
             try:
                 last_preds = runner.flush_pipeline(mesh_composer=output_mesh_composer)
-                if last_preds is not None:
+                if last_preds is not None and prev_meta is not None:
+                    r_shifts, r_ring_slot = prev_meta
                     pred_slot = pred_write_idx % PRED_RING
                     shm_preds[pred_slot].copy_(last_preds[:tiles_per_frame])
                     pred_write_idx += 1
                     q_post.put(
-                        (
-                            pred_slot,
-                            prev_ring_slot,
-                            prev_shifts[:tiles_per_frame],
-                            tiles_per_frame,
-                            scale_x,
-                            scale_y,
-                        ),
+                        (pred_slot, r_ring_slot, r_shifts, tiles_per_frame, scale_x, scale_y),
                         timeout=2,
                     )
             except Exception:

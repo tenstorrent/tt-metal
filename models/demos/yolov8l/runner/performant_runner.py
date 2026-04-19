@@ -4,8 +4,6 @@
 
 import time
 
-import torch
-
 import ttnn
 from models.demos.yolov8l.runner.performant_runner_infra import YOLOv8lPerformanceRunnerInfra
 
@@ -82,6 +80,33 @@ class YOLOv8lPerformantRunner:
         self.runner_infra.run()
         self.runner_infra.validate()
 
+        # Untilize detection output on-device (TILE → ROW_MAJOR).
+        # This eliminates the expensive CPU-side untiling in to_torch,
+        # cutting compose from ~18ms to ~10ms.
+        tile_output = self.runner_infra.output_tensor[0]
+        rm_output = ttnn.untilize(tile_output, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(tile_output)
+        self.runner_infra.output_tensor[0] = rm_output
+
+        # Pre-allocate staging buffer for pipelined D2H/compute overlap.
+        # Must happen BEFORE trace capture so the trace allocator avoids
+        # this address — post-trace allocations get corrupted when trace
+        # execution overwrites intermediate buffers at reused addresses.
+        self.dram_staging = ttnn.clone(
+            self.runner_infra.output_tensor[0],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # Pre-allocate host buffer — avoids per-frame allocation overhead
+        self.host_staging = ttnn.allocate_tensor_on_host(self.dram_staging.spec, self.device)
+        self.staging_ready_event = ttnn.record_event(self.device, 0)
+        self.read_done_event = ttnn.record_event(self.device, 1)
+        self._pipeline_frame = 0
+        print(
+            f"[runner] staging shape={self.dram_staging.shape} dtype={self.dram_staging.dtype} "
+            f"volume={self.dram_staging.volume()}",
+            flush=True,
+        )
+
         # Capture
         ttnn.wait_for_event(1, self.op_event)
         ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
@@ -94,26 +119,21 @@ class YOLOv8lPerformantRunner:
         trace_input_addr = self.runner_infra.input_tensor.buffer_address()
         self.tid = ttnn.begin_trace_capture(self.device, cq_id=0)
         self.runner_infra.run()
+        # Untilize inside trace — replayed every frame at device speed
+        tile_output_traced = self.runner_infra.output_tensor[0]
+        self.runner_infra.output_tensor[0] = ttnn.untilize(
+            tile_output_traced, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(tile_output_traced)
         self.input_tensor = ttnn.allocate_tensor_on_device(dram_spec, self.device)
         ttnn.end_trace_capture(self.device, self.tid, cq_id=0)
         # assert trace_input_addr == self.input_tensor.buffer_address()
 
     def _setup_staging_buffer(self):
-        """Create a staging buffer for pipelined D2H.
+        """No-op: staging buffer is pre-allocated during trace capture.
 
-        Uses ``ttnn.clone`` to create a copy at a separate DRAM address with
-        the same layout/memory-config as the model output.  During pipelined
-        execution, CQ1 reads from staging while CQ0 writes to the trace's
-        fixed output address — no conflict because they're at different addrs.
+        Kept for backward compatibility with callers that invoke this method.
         """
-        output = self.runner_infra.output_tensor[0]
-        # Clone preserves layout (TILE) and memory config (interleaved DRAM)
-        self.dram_staging = ttnn.clone(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # Events: staging_ready (CQ0: staging written), read_done (CQ1: D2H finished)
-        self.staging_ready_event = ttnn.record_event(self.device, 0)
-        self.read_done_event = ttnn.record_event(self.device, 1)
-        self._pipeline_frame = 0
 
     def _execute_yolov8l_trace_2cqs_inference(self, tt_inputs_host=None):
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
@@ -183,11 +203,7 @@ class YOLOv8lPerformantRunner:
         # Copy previous output to staging (safe: staging not read by CQ1 yet)
         if self._pipeline_frame > 0:
             ttnn.wait_for_event(0, self.read_done_event)  # prev D2H released staging
-            ttnn.deallocate(self.dram_staging)
-            self.dram_staging = ttnn.clone(
-                self.runner_infra.output_tensor[0],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            ttnn.copy(self.runner_infra.output_tensor[0], self.dram_staging)
             self.staging_ready_event = ttnn.record_event(self.device, 0)
 
         # Reshard input + start trace (all on CQ0, after reshard-to-staging)
@@ -224,32 +240,101 @@ class YOLOv8lPerformantRunner:
         t0 = time.perf_counter()
         composer = mesh_composer or self.mesh_composer
         ttnn.wait_for_event(1, self.staging_ready_event)
-        result = ttnn.to_torch(
-            self.dram_staging,
-            dtype=torch.float32,
-            mesh_composer=composer,
-            device=self.device,
-            cq_id=1,
-        )
+        t_wait = time.perf_counter()
+
+        # D2H into pre-allocated host buffer
+        ttnn.copy_device_to_host_tensor(self.dram_staging, self.host_staging, blocking=True, cq_id=1)
         self.read_done_event = ttnn.record_event(self.device, 1)
-        self.last_timing["d2h_ms"] = (time.perf_counter() - t0) * 1000
+        t_pcie = time.perf_counter()
+
+        # Host-side compose (keep native bfloat16 — skip float32 conversion)
+        result = ttnn.to_torch(
+            self.host_staging,
+            mesh_composer=composer,
+        )
+        t_end = time.perf_counter()
+
+        self.last_timing["d2h_ms"] = (t_end - t0) * 1000
+        self.last_timing["staging_wait_ms"] = (t_wait - t0) * 1000
+        self.last_timing["pcie_d2h_ms"] = (t_pcie - t_wait) * 1000
+        self.last_timing["compose_ms"] = (t_end - t_pcie) * 1000
         return result
+
+    def pcie_d2h(self):
+        """PCIe D2H only — does NOT compose.
+
+        Blocks until PCIe transfer completes.  Returns False on the first
+        call (no previous frame yet).  Call ``compose()`` afterwards to
+        get the torch result.
+        """
+        if self._pipeline_frame <= 1:
+            return False
+
+        t0 = time.perf_counter()
+        ttnn.wait_for_event(1, self.staging_ready_event)
+        t_wait = time.perf_counter()
+
+        ttnn.copy_device_to_host_tensor(self.dram_staging, self.host_staging, blocking=True, cq_id=1)
+        self.read_done_event = ttnn.record_event(self.device, 1)
+        t_pcie = time.perf_counter()
+
+        self.last_timing["staging_wait_ms"] = (t_wait - t0) * 1000
+        self.last_timing["pcie_d2h_ms"] = (t_pcie - t_wait) * 1000
+        return True
+
+    def compose(self, mesh_composer=None):
+        """Host-side compose of previously D2H'd data.
+
+        Must be called after ``pcie_d2h()``.  Returns the composed
+        torch tensor (bfloat16).
+        """
+        t0 = time.perf_counter()
+        composer = mesh_composer or self.mesh_composer
+        result = ttnn.to_torch(
+            self.host_staging,
+            mesh_composer=composer,
+        )
+        t_end = time.perf_counter()
+        self.last_timing["compose_ms"] = (t_end - t0) * 1000
+        self.last_timing["d2h_ms"] = (
+            self.last_timing["staging_wait_ms"] + self.last_timing["pcie_d2h_ms"] + self.last_timing["compose_ms"]
+        )
+        return result
+
+    def compose_into(self, dest):
+        """Compose directly into a pre-allocated tensor, skipping torch.cat.
+
+        Uses ``get_device_tensors`` + per-shard ``to_torch`` to avoid the
+        single monolithic ``torch.cat`` that ``ConcatMeshToTensor`` performs.
+        Writes each shard directly to ``dest[i]``.
+        ``dest`` must have shape ``[N, 84, 8400]`` where N >= num_devices.
+
+        Must be called after ``pcie_d2h()``.
+        """
+        t0 = time.perf_counter()
+        shards = ttnn.get_device_tensors(self.host_staging)
+        t_extract = time.perf_counter()
+        for i, shard in enumerate(shards):
+            dest[i] = shard.to_torch()[0]  # [1, 84, 8400] → [84, 8400]
+        t_end = time.perf_counter()
+        self.last_timing["compose_ms"] = (t_end - t0) * 1000
+        self.last_timing["compose_extract_ms"] = (t_extract - t0) * 1000
+        self.last_timing["compose_copy_ms"] = (t_end - t_extract) * 1000
+        self.last_timing["d2h_ms"] = (
+            self.last_timing["staging_wait_ms"] + self.last_timing["pcie_d2h_ms"] + self.last_timing["compose_ms"]
+        )
+        return dest
 
     def flush_pipeline(self, mesh_composer=None):
         """Get the last frame's result after the final ``submit`` call.
 
-        Syncs the device, reshards the final output to staging, and D2Hs.
+        Syncs the device and reads the output directly (no staging copy needed
+        since no concurrent CQ0 execution after sync).
         """
         ttnn.synchronize_device(self.device)
-        ttnn.deallocate(self.dram_staging)
-        self.dram_staging = ttnn.clone(
-            self.runner_infra.output_tensor[0],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
         composer = mesh_composer or self.mesh_composer
         return ttnn.to_torch(
-            self.dram_staging,
-            dtype=torch.float32,
+            self.runner_infra.output_tensor[0],
             mesh_composer=composer,
             device=self.device,
         )
