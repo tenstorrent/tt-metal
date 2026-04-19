@@ -9,7 +9,7 @@ training_config:
   clip_grad_norm_max_norm: 1.0
   tokenizer_type: "bpe"
   data_path: "data/tokenized_shakespeare_qwen3.yaml"
-  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b_bpe.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b.yaml"
   optimizer:
     type: AdamW
     lr: 0.0003

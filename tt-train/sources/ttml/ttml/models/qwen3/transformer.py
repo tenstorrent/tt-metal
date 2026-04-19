@@ -73,15 +73,10 @@ class Qwen3MLP(AbstractModuleBase):
 class Qwen3Block(AbstractModuleBase):
     """Single Qwen3 decoder layer: pre-norm attention + pre-norm MLP."""
 
-    def __init__(
-        self,
-        config,
-        layer_idx: int,
-        rope_params: ttml.ops.rope.RotaryEmbeddingParams,
-    ) -> None:
+    def __init__(self, config, layer_idx: int) -> None:
         super().__init__()
 
-        self.self_attn = Qwen3Attention(config, layer_idx, rope_params)
+        self.self_attn = Qwen3Attention(config, layer_idx)
         self.mlp = Qwen3MLP(config.hidden_size, config.intermediate_size)
         self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)

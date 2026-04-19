@@ -52,32 +52,51 @@ class Qwen3Config:
     weight_tying: WeightTyingType = WeightTyingType.Disabled
     rope_scaling: Qwen3RopeScalingConfig = field(default_factory=Qwen3RopeScalingConfig)
 
-    def __post_init__(self):
-        if self.max_position_embeddings % 32 != 0:
-            raise ValueError(
-                "Max position embeddings must be divisible by 32 due to current limitations in tensor. "
-                f"Provided max_position_embeddings={self.max_position_embeddings}"
-            )
-        if self.hidden_size % 32 != 0:
-            raise ValueError(
-                "Hidden size must be divisible by 32 due to current limitations in tensor. "
-                f"Provided hidden_size={self.hidden_size}"
-            )
-        if self.num_attention_heads <= 0:
-            raise ValueError(
-                "Number of attention heads must be a positive integer. "
-                f"Provided num_attention_heads={self.num_attention_heads}"
-            )
-        if self.num_key_value_heads <= 0:
-            raise ValueError(
-                "Number of key/value heads must be a positive integer. "
-                f"Provided num_key_value_heads={self.num_key_value_heads}"
-            )
-        if self.num_attention_heads % self.num_key_value_heads != 0:
-            raise ValueError(
-                "Number of attention heads must be divisible by the number of key/value heads. "
-                f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
-            )
+
+def create_qwen3_config_from_hf(
+    hf_config,
+    max_sequence_length: int,
+    runner_type: RunnerType = RunnerType.Default,
+) -> Qwen3Config:
+    """Create a Qwen3Config from a HuggingFace config object."""
+    rope_scaling_factor = 0.0
+    rope_original_context_length = 0
+    rope_high_freq_factor = 4.0
+    rope_low_freq_factor = 1.0
+    if hasattr(hf_config, "rope_scaling") and hf_config.rope_scaling:
+        rs = hf_config.rope_scaling
+        rope_scaling_factor = rs.get("factor", 0.0)
+        rope_original_context_length = rs.get("original_max_position_embeddings", 0)
+        rope_high_freq_factor = rs.get("high_freq_factor", 4.0)
+        rope_low_freq_factor = rs.get("low_freq_factor", 1.0)
+
+    return Qwen3Config(
+        vocab_size=hf_config.vocab_size,
+        hidden_size=hf_config.hidden_size,
+        intermediate_size=hf_config.intermediate_size,
+        num_hidden_layers=hf_config.num_hidden_layers,
+        num_attention_heads=hf_config.num_attention_heads,
+        num_key_value_heads=hf_config.num_key_value_heads,
+        head_dim=getattr(
+            hf_config,
+            "head_dim",
+            hf_config.hidden_size // hf_config.num_attention_heads,
+        ),
+        max_position_embeddings=max_sequence_length,
+        rms_norm_eps=hf_config.rms_norm_eps,
+        attention_bias=getattr(hf_config, "attention_bias", True),
+        rope_theta=getattr(hf_config, "rope_theta", 1000000.0),
+        runner_type=runner_type,
+        weight_tying=(
+            WeightTyingType.Enabled if getattr(hf_config, "tie_word_embeddings", False) else WeightTyingType.Disabled
+        ),
+        rope_scaling=Qwen3RopeScalingConfig(
+            scaling_factor=rope_scaling_factor,
+            original_context_length=rope_original_context_length,
+            high_freq_factor=rope_high_freq_factor,
+            low_freq_factor=rope_low_freq_factor,
+        ),
+    )
 
 
 class Qwen3(AbstractModuleBase):
@@ -114,23 +133,7 @@ class Qwen3(AbstractModuleBase):
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight.tensor
 
-        rope_scaling_params = ttml.ops.rope.RopeScalingParams()
-        if config.rope_scaling.scaling_factor != 0.0 and config.rope_scaling.original_context_length != 0:
-            rope_scaling_params.scaling_factor = config.rope_scaling.scaling_factor
-            rope_scaling_params.high_freq_factor = config.rope_scaling.high_freq_factor
-            rope_scaling_params.low_freq_factor = config.rope_scaling.low_freq_factor
-            rope_scaling_params.original_context_length = config.rope_scaling.original_context_length
-
-        rope_params = ttml.ops.rope.build_rope_params(
-            config.max_position_embeddings,
-            config.head_dim,
-            config.rope_theta,
-            rope_scaling_params,
-        )
-
-        self.blocks = ModuleList(
-            [Qwen3Block(config, layer_idx, rope_params) for layer_idx in range(config.num_hidden_layers)]
-        )
+        self.blocks = ModuleList([Qwen3Block(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
 
         self.ln_fc = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
@@ -195,47 +198,6 @@ class Qwen3(AbstractModuleBase):
         logits = self.fc(out)
         logits = self._snapshot(logits, "AFTER_LM_HEAD_FWD", "AFTER_LM_HEAD_BWD")
         return logits
-
-
-def create_qwen3_config_from_hf(hf_config, max_sequence_length: int) -> Qwen3Config:
-    """Create a Qwen3Config from a HuggingFace config object."""
-    rope_scaling_factor = 0.0
-    rope_original_context_length = 0
-    rope_high_freq_factor = 4.0
-    rope_low_freq_factor = 1.0
-    if hasattr(hf_config, "rope_scaling") and hf_config.rope_scaling:
-        rs = hf_config.rope_scaling
-        rope_scaling_factor = rs.get("factor", 0.0)
-        rope_original_context_length = rs.get("original_max_position_embeddings", 0)
-        rope_high_freq_factor = rs.get("high_freq_factor", 4.0)
-        rope_low_freq_factor = rs.get("low_freq_factor", 1.0)
-
-    return Qwen3Config(
-        vocab_size=hf_config.vocab_size,
-        hidden_size=hf_config.hidden_size,
-        intermediate_size=hf_config.intermediate_size,
-        num_hidden_layers=hf_config.num_hidden_layers,
-        num_attention_heads=hf_config.num_attention_heads,
-        num_key_value_heads=hf_config.num_key_value_heads,
-        head_dim=getattr(
-            hf_config,
-            "head_dim",
-            hf_config.hidden_size // hf_config.num_attention_heads,
-        ),
-        max_position_embeddings=max_sequence_length,
-        rms_norm_eps=hf_config.rms_norm_eps,
-        attention_bias=getattr(hf_config, "attention_bias", True),
-        rope_theta=getattr(hf_config, "rope_theta", 1000000.0),
-        weight_tying=(
-            WeightTyingType.Enabled if getattr(hf_config, "tie_word_embeddings", False) else WeightTyingType.Disabled
-        ),
-        rope_scaling=Qwen3RopeScalingConfig(
-            scaling_factor=rope_scaling_factor,
-            original_context_length=rope_original_context_length,
-            high_freq_factor=rope_high_freq_factor,
-            low_freq_factor=rope_low_freq_factor,
-        ),
-    )
 
 
 from .flops import calculate_flops_per_token

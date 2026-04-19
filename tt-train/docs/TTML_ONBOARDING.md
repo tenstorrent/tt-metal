@@ -404,13 +404,13 @@ Training configs come in two flavors based on their tokenizer type:
 cd tt-train
 source /path/to/tt-metal/python_env/bin/activate
 
-# GPT-2 (50,257 vocab) — already provided as data/tokenized_shakespeare.yaml
+# GPT-2 (50,257 vocab) — data/tokenized_shakespeare.yaml
 python tools/dataset_to_tokens.py \
     --text_file data/shakespeare.txt \
     --hf_tokenizer gpt2 \
     --output_file data/tokenized_shakespeare
 
-# TinyLlama (32,000 vocab) — already provided as data/tokenized_shakespeare_tinyllama.yaml
+# TinyLlama (32,000 vocab) — data/tokenized_shakespeare_tinyllama.yaml
 python tools/dataset_to_tokens.py \
     --text_file data/shakespeare.txt \
     --hf_tokenizer TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
