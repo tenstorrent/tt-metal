@@ -44,6 +44,16 @@ IGNORED_KEYS = frozenset(
         # Both represent the same multi-device placement metadata. Since mesh_device
         # is already ignored, tensor_placement should be ignored too for consistency.
         "tensor_placement",
+        # output_tensor is a pre-allocated buffer optimization.  The sweep test
+        # may or may not provide one depending on whether the V2 loader's
+        # decomposed output_tensor_shape was successfully reconstructed.
+        # Its presence/absence does not change the operation's semantics.
+        "output_tensor",
+        # num_devices and slice_dim are multi-device sharding metadata passed
+        # by the distributed slice implementation.  Sweep tests use coordinate-
+        # based slice parameters which are semantically equivalent.
+        "num_devices",
+        "slice_dim",
     }
 )
 
@@ -56,6 +66,14 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     meaningful configuration difference.
     """
     if isinstance(obj, dict):
+        # Normalize Shape dicts: {'type': 'Shape', 'value': 'Shape([1, 1, 32, 1])'}
+        # → plain list [1, 1, 32, 1] for comparison with sweep trace arrays.
+        if obj.get("type") == "Shape" and "value" in obj:
+            import re
+            m = re.search(r"\[([0-9, ]+)\]", str(obj["value"]))
+            if m:
+                shape_list = [int(x.strip()) for x in m.group(1).split(",")]
+                return normalize(shape_list, _parent_key=_parent_key)
         result = {}
         for k, v in sorted(obj.items()):
             if k in IGNORED_KEYS:
@@ -77,6 +95,16 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
             result[k] = normalize(v, _parent_key=k)
         return result
     if isinstance(obj, list):
+        # Normalize original_shape lists: strip leading 1s so that
+        # 2D shapes like [32, 64128] and 4D shapes like [1, 1, 32, 64128]
+        # are treated as equivalent.  The 2D→4D padding in create_tensor_on_mesh
+        # legitimately adds leading 1s to avoid partition.cpp crashes, but
+        # the logical shape is unchanged.
+        if _parent_key == "original_shape" and all(isinstance(x, (int, float)) for x in obj):
+            stripped = list(obj)
+            while len(stripped) > 1 and stripped[0] == 1:
+                stripped.pop(0)
+            return [normalize(item, _parent_key=_parent_key) for item in stripped]
         return [normalize(item, _parent_key=_parent_key) for item in obj]
     return obj
 
