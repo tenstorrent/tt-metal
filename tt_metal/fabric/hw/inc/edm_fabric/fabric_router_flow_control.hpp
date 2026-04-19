@@ -241,9 +241,10 @@ FORCE_INLINE void receiver_send_completion_ack(
     uint8_t src_id,
     uint32_t num_completions = 1) {
     if constexpr (CHECK_BUSY) {
+        // NOTE: a RISC-V PAUSE hint (.4byte 0x0100000F) in this loop caused a measured 13.8%
+        // BW regression in Ring topology (5.9% overall) on T3000 vs. NOP-baseline goldens.
+        // Keep identical to main (empty body).
         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
-            // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
-            __asm__ volatile(".4byte 0x0100000F");
         };
     }
     receiver_channel_response_credit_sender.send_completion_credit(src_id, num_completions);
@@ -253,9 +254,10 @@ template <bool CHECK_BUSY>
 FORCE_INLINE void receiver_send_received_ack(
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
     if constexpr (CHECK_BUSY) {
+        // NOTE: a RISC-V PAUSE hint (.4byte 0x0100000F) in this loop caused a measured 13.8%
+        // BW regression in Ring topology (5.9% overall) on T3000 vs. NOP-baseline goldens.
+        // Keep identical to main (empty body).
         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
-            // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
-            __asm__ volatile(".4byte 0x0100000F");
         };
     }
     receiver_channel_response_credit_sender.send_ack_credit(src_id);

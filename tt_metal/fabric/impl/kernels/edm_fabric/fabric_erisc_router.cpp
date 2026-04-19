@@ -596,8 +596,9 @@ FORCE_INLINE void send_next_data(
                     return;
                 }
             }
-            // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
-            __asm__ volatile(".4byte 0x0100000F");
+            // NOTE: a RISC-V PAUSE hint (.4byte 0x0100000F) here caused a measured 13.8% BW
+            // regression in Ring topology (5.9% overall) on T3000 vs. NOP-baseline goldens.
+            // Keep identical to main (no hint in loop body).
         };
     }
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
@@ -622,8 +623,6 @@ FORCE_INLINE void send_next_data(
         // program by then, causing L1 corruption (BRISC .text mismatch).
         // The pre-send spin (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA, always true) is where we safely
         // bail on teardown before any packet is committed.
-        // RISC-V PAUSE hint (Zihintpause) — equivalent to ttsl::pause() on RISC-V.
-        __asm__ volatile(".4byte 0x0100000F");
     };
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
 }
