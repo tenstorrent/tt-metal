@@ -1351,6 +1351,30 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
+            "is_per_core_allocated",
+            [](const Tensor& self) -> bool {
+                if (!is_device_tensor(self) || !self.is_allocated()) {
+                    return false;
+                }
+                return experimental::per_core_allocation::is_per_core_allocation(
+                    self.mesh_buffer().device_local_config().sharding_args);
+            },
+            R"doc(
+            Returns True if this tensor was allocated with experimental per-core L1 allocation.
+
+            Per-core allocated tensors have a different physical address per core, so they
+            cannot be queried with ``buffer_address()``. Use this property to branch between
+            ``buffer_address()`` and ``experimental_per_core_buffer_address(core)``.
+
+            .. code-block:: python
+
+                if tensor.is_per_core_allocated():
+                    addr = tensor.experimental_per_core_buffer_address(core)
+                else:
+                    addr = tensor.buffer_address()
+
+        )doc")
+        .def(
             "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(
             Get memory layout of TT Tensor.
 
