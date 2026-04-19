@@ -1252,9 +1252,10 @@ class TT_CCL:
             num_workers_per_link = 4
         else:
             num_workers_per_link = 1
-        # OLMo prefill: sync reduce_scatter (no subdevice). Avoids barrier_semaphore deadlocks
-        # inside captured traces and avoids DRAM OOM from async intermediate buffers.
-        # Non-OLMo (Llama/Qwen) and OLMo >8k: async with DRAM intermediate.
+        # OLMo prefill: fully sync reduce_scatter (no subdevice, no semaphores).
+        # Avoids barrier_semaphore deadlocks at large ISL: ring fabric accumulates
+        # Ethernet completion signals across many sequential CCL ops. Sync CCL keeps
+        # all devices lockstep; warmup (generator.py) primes the fabric first.
         if self.is_olmo and self.mode == "prefill":
             ttnn_tensor_out = ttnn.reduce_scatter(
                 input_tensor_mesh,
@@ -1262,7 +1263,7 @@ class TT_CCL:
                 cluster_axis=cluster_axis,
                 memory_config=memory_config,
                 topology=ttnn.Topology.Ring,
-                num_links=1,  # Force num_links=1 for sync CCL (multi-link can deadlock)
+                num_links=1,
                 subdevice_id=None,
             )
         else:
@@ -1338,16 +1339,15 @@ class TT_CCL:
         else:
             topology = self.model_config["CCL_TOPOLOGY"]
             persistent_buffer = self.all_gather_buffers.get(buffer_key, None) if buffer_key is not None else None
-        # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
-        # OLMo prefill: sync all_gather (no subdevice). Avoids barrier_semaphore deadlocks
-        # that occur with async CCL at longer sequence lengths (8K+).
+        # OLMo prefill: sync all_gather (no subdevice). Same fabric-saturation rationale
+        # as ring_all_gather and ring_reduce_scatter above.
         if self.is_olmo and self.mode == "prefill":
             ttnn_tensor_out = ttnn.all_gather(
                 input_tensor_mesh,
                 dim,
                 cluster_axis=cluster_axis,
                 topology=topology,
-                num_links=1,  # Force num_links=1 for sync CCL (multi-link can deadlock)
+                num_links=1,
                 memory_config=memory_config,
             )
         else:
@@ -1402,7 +1402,10 @@ class TT_CCL:
 
         num_links = 4
         # OLMo prefill: sync all_gather (no subdevice). Avoids barrier_semaphore deadlocks
-        # inside captured traces. Non-OLMo (Llama/Qwen): async with persistent buffers.
+        # at large ISL: ring fabric accumulates Ethernet completion signals across 384+
+        # sequential CCL ops (64 layers × 6 ops) when no persistent buffers are available
+        # (seqlen > 4096). Ascending warmup (generator.py) primes the fabric first.
+        # Non-OLMo (Llama/Qwen): async with persistent buffers or barrier_semaphore.
         if self.is_olmo and self.mode == "prefill":
             ttnn_tensor_out = ttnn.all_gather(
                 input_tensor_mesh,

@@ -137,7 +137,9 @@ class Generator(WarmupForwardMixin):
                     tt_out_logits_all_users,
                 )
         # OLMo long-ISL eager warmup (no trace). Sync CCL cold-start: a 32K prefill
-        # deadlocks without ascending warmup (8K→16K→32K) to prime fabric state.
+        # deadlocks without ascending warmup (8K→16K→32K) to prime ring fabric state.
+        # Root cause: barrier_semaphore accumulates ring fabric signals across 384+
+        # sequential CCL ops (64 layers × 6 ops per layer); warmup progressively drains them.
         # Auto-configured from max_seq_len; no drains between steps (matches working state).
         if getattr(self.model_args, "is_olmo", False) and not getattr(self, "long_isl_warmup_seqlens", None):
             max_sl = self.model_args.max_seq_len
@@ -163,7 +165,6 @@ class Generator(WarmupForwardMixin):
                     empty_slots=warmup_empty_slots,
                     tt_out_logits_all_users=tt_out_logits_all_users,
                 )
-
         logger.info("Prefill traces warmup completed")
 
     def prefill_forward_text(
