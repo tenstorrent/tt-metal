@@ -3,6 +3,39 @@ allocation_policies:
       max_configs_per_core: 1
 
 Tests:
+
+  - name: "LinearSequentialNeighborExchange"
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 32
+      num_packets: 1000
+
+    patterns:
+      - type: sequential_neighbor_exchange
+
+  - name: "MeshSequentialNeighborExchange"
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1, 2]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 32
+      num_packets: 1000
+
+    patterns:
+      - type: sequential_neighbor_exchange
+
   - name: "LinearNeighborExchange"
     fabric_setup:
       topology: Linear

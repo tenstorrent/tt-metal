@@ -22,16 +22,14 @@ from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
-from models.demos.deepseek_v3_b1.utils import generate_mm_weights
+from models.demos.deepseek_v3_b1.utils import deinterleave_kv_cache, generate_mm_weights
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
 )
 from models.demos.deepseek_v3_b1.weights.transforms.attention import (
     fuse_kv_b12,
-    fuse_o_proj_gate_mm_norms,
-    fuse_q_ab_kv_a,
+    fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a,
 )
 
 
@@ -375,20 +373,34 @@ def test_attention_block(
 
     # kv_b2_proj: [K1, intermediate * num_tp] — full TP width, split along output dim per column
     torch_kv_b2_proj_weights = generate_mm_weights((K1, post_sdpa_intermediate * num_tp), dtype=torch.bfloat16)
-    # o_proj: [K2 * num_tp, output_size] — full TP height, split along input dim per column
+    # o_proj: [K2*num_tp, output_size] — inner-dim split across columns,
+    # outer-dim split across mesh rows.  Same full weight goes to both
+    # packing (which slices per device) and golden.
     torch_o_proj_weights = generate_mm_weights((K2 * num_tp, output_size), dtype=torch.bfloat16)
 
-    # Fused matmul1 (q_a_proj packed), matmul2 (q_b_proj shuffled), and DKV matmul (kv_a_proj)
-    # weights as overlapped tensors sharing a single L1 buffer via fuse_q_ab_kv_a.
-    qab_kva = fuse_q_ab_kv_a(
+    # KV Cache Branch RMSNorm gamma
+    torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
+
+    # Fused o_proj (TP4 shuffled), gate_mm, norms, and q_a/q_b/kv_a into one L1 buffer.
+    fused = fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
+        torch_o_proj_weights,
+        torch_gate_mm_weights,
+        torch_gamma,
+        torch_rmsnorm2_gamma,
+        torch_dkv_rmsnorm_gamma,
+        torch_ffn_norm,
         torch_matmul_weights,
         torch_matmul2_weights_full_unshuffled,
         torch_dkv_matmul_weights,
         submesh,
     )
-    matmul_weights_overlapped = qab_kva["q_a_proj"]
-    matmul2_weights_overlapped = qab_kva["q_b_proj"]
-    dkv_matmul_weights_overlapped = qab_kva["kv_a_proj"]
+    o_proj_overlapped = fused["o_proj"]
+    gamma_overlapped = fused["attn_norm"]
+    rmsnorm2_gamma_overlapped = fused["q_norm"]
+    dkv_rmsnorm_gamma_overlapped = fused["kv_norm"]
+    matmul_weights_overlapped = fused["q_a_proj"]
+    matmul2_weights_overlapped = fused["q_b_proj"]
+    dkv_matmul_weights_overlapped = fused["kv_a_proj"]
 
     # Matmul3 / kv_b1_proj weights — fused with kv_b2_proj
     torch_matmul3_weights_flat = torch_matmul3_weights.reshape(num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
@@ -495,24 +507,6 @@ def test_attention_block(
         tile=trans_tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
-
-    # KV Cache Branch RMSNorm gamma
-    torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
-
-    # Fused o_proj, gate_mm, and RMSNorm gammas — we only need the 3 gamma overlapped views.
-    o_norms = fuse_o_proj_gate_mm_norms(
-        torch_o_proj_weights,
-        torch_gate_mm_weights,
-        torch_gamma,
-        torch_rmsnorm2_gamma,
-        torch_dkv_rmsnorm_gamma,
-        torch_ffn_norm,
-        submesh,
-    )
-    o_proj_overlapped = o_norms["o_proj"]
-    gamma_overlapped = o_norms["attn_norm"]
-    rmsnorm2_gamma_overlapped = o_norms["q_norm"]
-    dkv_rmsnorm_gamma_overlapped = o_norms["kv_norm"]
 
     # KRoPE cos/sin: DRAM INTERLEAVED (each krope core reads its width slice)
     krope_num_cores = kv_cache_branch_rope_crs.num_cores()
@@ -725,7 +719,11 @@ def test_attention_block(
     # ========================================================================
     # Create CCL tensors
     # ========================================================================
-    # Final output: receiver core (12,9) — all-reduce output + residual add
+    # o_proj (112 cores) produces [M, 7168] split across 4 TP rows (1792 each).
+    # GatherReduce3 collects the 112-core result onto the receiver core (11,9).
+    # AllReduce sums across the 2 column devices so each has the same [M, 1792].
+    # AllGather concatenates the 4 row slices into the full [M, 7168] on every device.
+    # Output is written to a separate tensor (not in-place into the input).
     output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
@@ -1104,20 +1102,27 @@ def test_attention_block(
             assert passing, f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC check failed: {pcc}"
 
     # ========================================================================
-    # Validate attention block output (full pipeline: SDPA -> kv_b2 -> o_proj -> all-reduce + residual)
+    # Validate attention block output: after AllGather every device has full [1, 7168]
     # ========================================================================
-    ref_device_idx = 0
-    ref_device_output = output_torch[ref_device_idx : ref_device_idx + 1, :]
+    slot_size = torch_output_expected.shape[-1] // mesh_rows  # 7168 / 4 = 1792
+    all_passing = True
     for device_idx in range(mesh_rows * mesh_cols):
         received = output_torch[device_idx : device_idx + 1, :]
-        if device_idx != ref_device_idx:
-            dev_eq = torch.equal(received, ref_device_output)
-            assert dev_eq, f"Device {device_idx} output mismatch"
 
         passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
         max_diff = torch.max(torch.abs(torch_output_expected - received)).item()
         logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc} Max Diff: {max_diff}")
-        assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
+        if not passing:
+            all_passing = False
+            # Per-slot breakdown to identify which rank's data is corrupted
+            for slot in range(mesh_rows):
+                s, e = slot * slot_size, (slot + 1) * slot_size
+                slot_recv = received[:, s:e]
+                slot_gold = torch_output_expected[:, s:e]
+                _, slot_pcc = comp_pcc(slot_gold, slot_recv, 0.0)
+                slot_max = torch.max(torch.abs(slot_gold - slot_recv)).item()
+                logger.info(f"  Device {device_idx} slot {slot} [{s}:{e}] PCC: {slot_pcc} Max Diff: {slot_max}")
+    assert all_passing, "Attention Block Output PCC check failed (see per-slot breakdown above)"
 
     logger.info("✓ Attention Block mesh test passed!")
 

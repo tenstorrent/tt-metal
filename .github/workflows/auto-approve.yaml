@@ -88,10 +88,15 @@ jobs:
           GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh pr review "$PR_NUMBER" \
-            --repo tenstorrent/tt-metal \
-            --approve \
-            --body "🤖 Auto-approved: SFPI version bump from @nathan-TT (component author). Only tt_metal/sfpi-version was modified."
+          # Use REST API instead of `gh pr review` to avoid GraphQL rate limits.
+          # Same PAT, same approving account, same CODEOWNERS bypass — just different transport.
+          curl -s -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/tenstorrent/tt-metal/pulls/${PR_NUMBER}/reviews" \
+            -d '{"event":"APPROVE","body":"🤖 Auto-approved: SFPI version bump from @nathan-TT (component author). Only tt_metal/sfpi-version was modified."}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print('Approved, review ID:', d[chr(105)+chr(100)]) if chr(105)+chr(100) in d else print('Error:', d)"
 
   # ---------------------------------------------------------------------------
   # ttsim — @mcraigheadTT bumping .github/workflows/ttsim.yaml
@@ -155,7 +160,12 @@ jobs:
           GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh pr review "$PR_NUMBER" \
-            --repo tenstorrent/tt-metal \
-            --approve \
-            --body "🤖 Auto-approved: ttsim version bump from @mcraigheadTT (component author)."
+          # Use REST API instead of `gh pr review` to avoid GraphQL rate limits.
+          # Same PAT, same approving account, same CODEOWNERS bypass — just different transport.
+          curl -s -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/tenstorrent/tt-metal/pulls/${PR_NUMBER}/reviews" \
+            -d '{"event":"APPROVE","body":"🤖 Auto-approved: ttsim version bump from @mcraigheadTT (component author)."}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print('Approved, review ID:', d[chr(105)+chr(100)]) if chr(105)+chr(100) in d else print('Error:', d)"

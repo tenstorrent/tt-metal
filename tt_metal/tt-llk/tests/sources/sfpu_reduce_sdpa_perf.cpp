@@ -61,7 +61,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Set valid for source A only (B is not used in this operation)
-            return _perf_unpack_loop_set_valid<true, false>(TILE_CNT * LOOP_FACTOR);
+            _perf_unpack_loop_set_valid<true, false>(TILE_CNT * LOOP_FACTOR);
+            return;
         }
         else
         {
@@ -83,6 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "ckernel_sfpu.h"
+#include "sfpu/ckernel_sfpu_reduce.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
@@ -130,7 +132,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             // Clear valid for source A only (B is not used)
-            return _perf_math_loop_clear_valid<true, false>(TILE_CNT * LOOP_FACTOR);
+            _perf_math_loop_clear_valid<true, false>(TILE_CNT * LOOP_FACTOR);
+            return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -236,9 +239,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            for (int loop = 0; loop < LOOP_FACTOR; ++loop)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (int block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
+                for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
                 {
                     std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
 
