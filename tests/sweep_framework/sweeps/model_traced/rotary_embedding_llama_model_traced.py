@@ -637,8 +637,8 @@ def run(
     start_time = start_measuring_time()
 
     rope_call_kwargs = {"is_decode_mode": is_decode_mode}
-    if output_memory_config is not None:
-        rope_call_kwargs["memory_config"] = output_memory_config
+    # Only add memory_config from op_kwargs (if traced config had it),
+    # NOT from output_memory_config (which is for tensor creation, not the op call).
     rope_call_kwargs.update(op_kwargs)
     output_tensor = ttnn.experimental.rotary_embedding_llama(
         input_tensor_a,

@@ -95,7 +95,7 @@ def run(
     dtype="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     storage_type="StorageType::DEVICE",
-    layout=None,  # Additional layout parameter from JSON
+    layout="__ABSENT__",  # __ABSENT__ sentinel: layout kwarg from traced config
     weight_shape=None,  # Alternative weight shape parameter
     weight_dtype=None,  # Alternative weight dtype parameter
     weight_layout=None,  # Alternative weight layout parameter
@@ -115,7 +115,7 @@ def run(
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
     op_kwargs = build_op_kwargs(kwargs, exclude={"padding_idx", "weight_tensor_placement"},
-        extra_kwargs={"memory_config": memory_config, "dtype": dtype},
+        extra_kwargs={"memory_config": memory_config, "dtype": dtype, "layout": layout},
     )
 
     # V2 format provides separate shapes
