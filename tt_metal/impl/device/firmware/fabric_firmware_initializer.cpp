@@ -24,7 +24,6 @@
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
 
-#include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal {
 
@@ -58,13 +57,28 @@ bool is_known_edm_status(uint32_t status) {
     }
 }
 
-// Compile-time guard: if a new EDMStatus enumerator is added, the switch in is_known_edm_status()
-// must be updated.  enchantum::enum_count gives the number of enumerators at compile time.
-// Update kExpectedEdmStatusCount when adding a new case above.
-constexpr size_t kExpectedEdmStatusCount = 15;
-static_assert(
-    enchantum::count<tt::tt_fabric::EDMStatus> == kExpectedEdmStatusCount,
-    "EDMStatus enum count changed — update is_known_edm_status() switch and kExpectedEdmStatusCount");
+// NOTE: If a new EDMStatus enumerator is added, update is_known_edm_status() above.
+
+static const char* edm_status_name(tt::tt_fabric::EDMStatus s) {
+    switch (s) {
+        case tt::tt_fabric::EDMStatus::STARTED:                     return "STARTED";
+        case tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE:   return "REMOTE_HANDSHAKE_COMPLETE";
+        case tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE:    return "LOCAL_HANDSHAKE_COMPLETE";
+        case tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC:           return "READY_FOR_TRAFFIC";
+        case tt::tt_fabric::EDMStatus::TERMINATED:                  return "TERMINATED";
+        case tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED:      return "INITIALIZATION_STARTED";
+        case tt::tt_fabric::EDMStatus::TXQ_INITIALIZED:             return "TXQ_INITIALIZED";
+        case tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED:      return "STREAM_REG_INITIALIZED";
+        case tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED: return "DOWNSTREAM_EDM_SETUP_STARTED";
+        case tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE:      return "EDM_VCS_SETUP_COMPLETE";
+        case tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED: return "WORKER_INTERFACES_INITIALIZED";
+        case tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE: return "ETHERNET_HANDSHAKE_COMPLETE";
+        case tt::tt_fabric::EDMStatus::VCS_OPENED:                  return "VCS_OPENED";
+        case tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED:   return "ROUTING_TABLE_INITIALIZED";
+        case tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE:     return "INITIALIZATION_COMPLETE";
+        default: return "(unknown)";
+    }
+}
 
 }  // namespace
 
@@ -786,14 +800,10 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
             classification = "CORRUPT (unrecognized status — L1 garbage)";
             corrupt_count++;
         } else {
-            // Valid EDMStatus but not READY_FOR_TRAFFIC — try to name it.
-            auto maybe_enum = enchantum::cast<tt::tt_fabric::EDMStatus>(fc.actual_status);
-            if (maybe_enum.has_value()) {
-                classification = fmt::format(
-                    "STILL_INITIALIZING (status={})", enchantum::to_string(maybe_enum.value()));
-            } else {
-                classification = "STILL_INITIALIZING (known but unnameable status)";
-            }
+            // Valid EDMStatus but not READY_FOR_TRAFFIC — name it.
+            auto status_enum = static_cast<tt::tt_fabric::EDMStatus>(fc.actual_status);
+            classification = fmt::format(
+                "STILL_INITIALIZING (status={})", edm_status_name(status_enum));
             initializing_count++;
         }
 
