@@ -589,9 +589,21 @@ class Molmo2Model(LightweightModule):
         replicate_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
 
         # ============================================================
-        # STAGE 1: Run ViT encoding with data parallelism
+        # STAGE 1: Run ViT encoding with data parallelism,
+        # streaming pooling per pass to avoid accumulating all features.
+        #
+        # Batched approach (old): accumulate all 6 × 215 MB gathered tensors,
+        # then concat (1.29 GB) and pool → peak 2.58 GB → OOM at 384 frames.
+        #
+        # Streaming approach (new): pool each pass immediately after gather,
+        # keep only the pooled output (~43 MB/pass), concat at end.
+        # Peak DRAM: ~250 MB instead of 2.58 GB.
+        #
+        # Valid because Molmo2 video pooling uses same-frame spatial neighbors:
+        # frame F's indices are all in [F*729, (F+1)*729-1], so each pass's
+        # pooling only needs that pass's ViT features.
         # ============================================================
-        all_vit_features = []
+        all_pooled_features = []
 
         for pass_idx in range(num_passes):
             pass_start = pass_idx * frames_per_pass
@@ -688,45 +700,45 @@ class Molmo2Model(LightweightModule):
                     [1, 1, actual_patches, pool_dim],  # slice_end
                 )
 
-            all_vit_features.append(gathered)
+            # ---- Streaming pooling: pool this pass immediately, then free gathered ----
+            # Slice pooling indices for this pass's frames
+            pass_frame_start = pass_idx * frames_per_pass
+            pass_frame_end = min(pass_frame_start + frames_per_pass, total_frames)
+            pass_pooled_idx = pooled_patches_idx[pass_frame_start:pass_frame_end]  # [actual_frames, n_out, k_pool]
 
-        # Concatenate all passes on device (ttnn.concat)
-        if len(all_vit_features) == 1:
-            combined_features_ttnn = all_vit_features[0]
+            # Convert global indices → pass-relative (each frame F refs patches [F*729, (F+1)*729-1])
+            pass_patch_offset = pass_frame_start * num_patches_per_frame
+            pass_pooled_idx_rel = (pass_pooled_idx - pass_patch_offset).clamp(min=0)
+            pass_valid = pass_pooled_idx >= 0
+
+            pooled_pass = self.vision_backbone.pool_and_project_chunked_ttnn(
+                image_features=gathered,  # [1, 1, actual_frames × 729, pool_dim]
+                pooled_patches_idx=pass_pooled_idx_rel,
+                valid_mask=pass_valid,
+                n_out=n_out,
+                k_pool=k_pool,
+                batch_size=actual_frames_this_pass,
+                max_frames_per_pool_chunk=16,
+            )
+            ttnn.deallocate(gathered)
+            ttnn.synchronize_device(self.mesh_device)
+            all_pooled_features.append(pooled_pass)
+            logger.debug(f"  Pass {pass_idx+1} pooled: {pooled_pass.shape}")
+
+        # ============================================================
+        # STAGE 2: Concatenate pooled pass outputs (low peak DRAM)
+        # Each pass produces ~43 MB; 6 passes → 258 MB at concat time
+        # instead of the 2.58 GB peak of the old batched approach.
+        # ============================================================
+        if len(all_pooled_features) == 1:
+            visual_embeddings = all_pooled_features[0]
         else:
-            combined_features_ttnn = ttnn.concat(all_vit_features, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            for t in all_vit_features:
+            visual_embeddings = ttnn.concat(all_pooled_features, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for t in all_pooled_features:
                 ttnn.deallocate(t)
-        logger.info(f"  Combined ViT features (on device): {combined_features_ttnn.shape}")
 
-        # ============================================================
-        # STAGE 2: Pool + Project (same as chunked version)
-        # Device-side preprocessing: clip/compare ops run on ttnn
-        # ============================================================
-        batch_size = total_frames
-
-        # Always use chunked pooling: pool_and_project_chunked_ttnn deallocates
-        # image_features early (before pooling), keeping peak DRAM low.
-        # The single-pass path keeps image_features alive during all of pooling,
-        # causing OOM for >=31 frames (image_features 104MB + to_pool 895MB > free).
-        logger.debug(f"  Stage 2: Chunked pooling on {batch_size} frames (1 frame/chunk)")
-
-        # For chunked path, compute valid_token on CPU (small tensor)
-        valid = pooled_patches_idx >= 0
-        valid_token = torch.any(valid, dim=-1)
-
-        # combined_features_ttnn already on device from Stage 1
-        # pool_and_project_chunked_ttnn will deallocate it early internally.
-
-        visual_embeddings = self.vision_backbone.pool_and_project_chunked_ttnn(
-            image_features=combined_features_ttnn,
-            pooled_patches_idx=pooled_patches_idx,
-            valid_mask=valid,
-            n_out=n_out,
-            k_pool=k_pool,
-            batch_size=batch_size,
-            max_frames_per_pool_chunk=16,
-        )
+        valid_token = torch.any(pooled_patches_idx >= 0, dim=-1)
+        ttnn.synchronize_device(self.mesh_device)
 
         logger.info(f"embed_image_data_parallel: Complete, output shape: {visual_embeddings.shape}")
 

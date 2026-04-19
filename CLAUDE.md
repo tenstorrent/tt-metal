@@ -15,3 +15,5 @@
 ## Session Management
 - Read BRINGUP_LOG.md at the start of every session.
 - Update BRINGUP_LOG.md before ending a session with: [Status, PCC, Block Hash].
+
+Your updates will be reviewed by Codex

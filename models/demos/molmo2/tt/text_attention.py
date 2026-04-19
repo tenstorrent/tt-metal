@@ -305,13 +305,13 @@ class TextAttention(LightweightModule):
         """
         seq_len = x.shape[-2]
 
-        # Fused QKV projection: one matmul then slice (better accumulation than 3 separate matmuls)
+        # Fused QKV projection: one matmul then slice
         q_dim = self.num_heads_per_device * self.head_dim
         kv_dim = self.num_kv_heads_per_device * self.head_dim
         qkv = ttnn.linear(
             x,
             self.wqkv,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # Slice along last dim: [1, 1, seq_len, Q_dim + K_dim + V_dim] → Q, K, V

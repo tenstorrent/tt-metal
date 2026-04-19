@@ -1549,8 +1549,8 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
     # Maximum tokens processed in a single prefill forward pass.
     # Sequences longer than this are processed via chunked prefill.
-    # 4096 is the largest trace-captured bucket size and stays within T3K DRAM limits.
-    _MAX_PREFILL_CHUNK_SIZE = 4096
+    # 8192 matches demo.py and avoids 10+ GB SDPA allocation for 32K ISL.
+    _MAX_PREFILL_CHUNK_SIZE = 8192
 
     # KV cache block size (must match model_spec.py "block_size": "64")
     _BLOCK_SIZE = 64
@@ -1697,9 +1697,15 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         else:
             actual_seq_len = tensor_shape[1]  # fallback
         logger.info(f"_run_prefill: tensor_shape={list(tensor_shape)}, actual_seq_len={actual_seq_len}")
-        padded_seq_len = get_padded_prefill_len(actual_seq_len)
+        # For sequences that will use chunked prefill, pad to block_size alignment only
+        # (not the full bucket) to avoid OOM from large hidden-state allocations (536 MB+ at 65536).
+        if actual_seq_len > self._MAX_PREFILL_CHUNK_SIZE and page_table_torch is not None:
+            block_size = self._BLOCK_SIZE
+            padded_seq_len = ((actual_seq_len + block_size - 1) // block_size) * block_size
+        else:
+            padded_seq_len = get_padded_prefill_len(actual_seq_len)
 
-        # Step 3: Pad hidden states to bucket size
+        # Step 3: Pad hidden states to target size
         if actual_seq_len != padded_seq_len:
             # Padding tuple must match tensor dimensions
             if len(tensor_shape) == 4:
@@ -1721,20 +1727,17 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
         # --- Chunked prefill for sequences > _MAX_PREFILL_CHUNK_SIZE ---
         # Avoids full [heads, seq_len, seq_len] attention matrix which OOMs on T3K
-        # for sequences > 4096 tokens (e.g. 30-frame video → 6570 tokens).
-        # Uses chunked_scaled_dot_product_attention (reads from paged KV cache).
-        # Requires page_table_torch for per-chunk block-table slicing.
-        # NOTE: Only use chunked prefill when there's NO attention mask.
-        # If there IS a multimodal attention mask, use full prefill to preserve it
-        # (matches demo.py behavior which prioritizes mask over chunking).
-        if (
-            actual_seq_len > self._MAX_PREFILL_CHUNK_SIZE
-            and page_table_torch is not None
-            and page_table is not None
-            and attn_mask is None
-        ):
-            # No attention mask - safe to use chunked prefill
-            logger.info(f"_run_prefill: seq_len={actual_seq_len} > {self._MAX_PREFILL_CHUNK_SIZE} → chunked prefill")
+        # (10+ GB for 36864-token sequences). Uses chunked_scaled_dot_product_attention.
+        # The multimodal mask (if present) is dropped in the chunked path — video tokens
+        # attend causally, which is a trade-off for 32K ISL memory fit.
+        if actual_seq_len > self._MAX_PREFILL_CHUNK_SIZE and page_table_torch is not None and page_table is not None:
+            logger.info(
+                f"_run_prefill: seq_len={actual_seq_len} > {self._MAX_PREFILL_CHUNK_SIZE} → chunked prefill"
+                + (" (dropping multimodal mask)" if attn_mask is not None else "")
+            )
+            if attn_mask is not None:
+                ttnn.deallocate(attn_mask)
+                attn_mask = None
             ttnn.deallocate(hidden_states_ttnn)  # will be re-sliced inside chunked path
 
             # Re-build hidden states without seq padding (chunked path handles its own sizing)
@@ -1764,13 +1767,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 "last_chunk_start": last_chunk_start,
             }
 
-        # --- Standard path ---
-        # Log if we're using full prefill for long sequence with attention mask
-        if actual_seq_len > self._MAX_PREFILL_CHUNK_SIZE and attn_mask is not None:
-            logger.info(
-                f"_run_prefill: seq_len={actual_seq_len} > {self._MAX_PREFILL_CHUNK_SIZE} with attn_mask: "
-                "using FULL prefill to preserve multimodal attention (matches demo behavior)"
-            )
+        # --- Standard path (short sequences or no paged KV cache) ---
 
         # Step 4: Get rotation matrices for the correct bucket size
         rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(padded_seq_len, start_pos=0)
@@ -2835,11 +2832,30 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
             ttnn.copy(new_pos, self.current_pos)
-            ttnn.copy(new_pos, self.rot_mat_idxs)
             ttnn.deallocate(new_pos)
+            # rot_mat_idxs has shape [1, batch_padded] (e.g. [1,32] for batch=1 padded to 32)
+            rot_mat_sz = self.rot_mat_idxs.shape[-1]
+            new_rot_idxs = ttnn.from_torch(
+                start_pos[:1].int().unsqueeze(0).expand(1, rot_mat_sz).contiguous(),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            ttnn.copy(new_rot_idxs, self.rot_mat_idxs)
+            ttnn.deallocate(new_rot_idxs)
 
-            # Copy hidden states into trace input tensor
-            ttnn.copy(hidden_states, self.decode_trace_tensors["hidden_states"])
+            # Copy hidden states into trace input tensor.
+            # Trace was captured with [1,1,1,4096]; hidden_states may be [1,1,32,4096] when padded.
+            hs_trace = ttnn.slice(
+                hidden_states,
+                [0, 0, 0, 0],
+                list(self.decode_trace_tensors["hidden_states"].shape),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.copy(hs_trace, self.decode_trace_tensors["hidden_states"])
+            ttnn.deallocate(hs_trace)
             ttnn.deallocate(hidden_states)
 
             # Copy page_table to trace tensor if provided
@@ -2923,6 +2939,11 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         elif logits.dim() == 1:
             logits = logits.unsqueeze(0).unsqueeze(1)
 
+        # Flush all in-flight device ops before returning to the next request.
+        # Without this sync, the decode trace leaves outstanding work on the device
+        # that interferes with the next request's vision processing (ViT/pooling hang).
+        ttnn.synchronize_device(self.mesh_device)
+
         return logits
 
     def _decode_forward_dp(
@@ -2988,10 +3009,28 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 )
                 ttnn.copy(new_pos, self.current_pos)
-                ttnn.copy(new_pos, self.rot_mat_idxs)
                 ttnn.deallocate(new_pos)
+                # rot_mat_idxs has shape [1, batch_padded]; broadcast scalar position
+                rot_mat_sz = self.rot_mat_idxs.shape[-1]
+                new_rot_idxs = ttnn.from_torch(
+                    pos_chunk[:1].int().unsqueeze(0).expand(1, rot_mat_sz).contiguous(),
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                ttnn.copy(new_rot_idxs, self.rot_mat_idxs)
+                ttnn.deallocate(new_rot_idxs)
 
-                ttnn.copy(hidden_states, self.decode_trace_tensors["hidden_states"])
+                hs_trace = ttnn.slice(
+                    hidden_states,
+                    [0, 0, 0, 0],
+                    list(self.decode_trace_tensors["hidden_states"].shape),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.copy(hs_trace, self.decode_trace_tensors["hidden_states"])
+                ttnn.deallocate(hs_trace)
                 ttnn.deallocate(hidden_states)
 
                 if page_table_tt is not None and "page_table" in self.decode_trace_tensors:

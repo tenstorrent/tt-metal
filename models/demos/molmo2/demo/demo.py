@@ -2493,8 +2493,9 @@ class Molmo2Generator:
         bias = build_molmo2_prefill_attention_bias(token_type_ids, attention_mask=hf_attention_mask).to(torch.bfloat16)
         is_mesh = self.mesh_device.__class__.__name__ == "MeshDevice"
         mm = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None
-        # Use bfloat4_b for large masks to save DRAM (4x smaller than bfloat16)
-        mask_dtype = ttnn.bfloat4_b if seq_len > 8192 else ttnn.bfloat16
+        # Always use bfloat4_b for the mask: it's additive (0 or -inf), so precision
+        # doesn't matter, and bfloat4_b is 4x smaller than bfloat16.
+        mask_dtype = ttnn.bfloat4_b
         return ttnn.from_torch(
             bias,
             device=self.mesh_device,
@@ -2620,9 +2621,21 @@ class Molmo2Generator:
         # Initialize KV cache if needed
         self.init_kv_cache()
 
-        # Pad input_ids to next bucket size for trace reuse
+        # Pad input_ids to next bucket size for trace reuse.
+        # For sequences that will use chunked prefill (seq > max_prefill_chunk_size),
+        # avoid padding to a very large bucket (which would OOM): just align to block_size.
         original_seq_len = input_ids.shape[1]
-        input_ids, seq_len, _ = pad_input_ids(input_ids, pad_token_id=0)
+        if original_seq_len > self.max_prefill_chunk_size and self.use_paged_attention:
+            # Align to block_size so paged cache writes are clean, no large padding needed
+            block_aligned = ((original_seq_len + self.block_size - 1) // self.block_size) * self.block_size
+            if block_aligned > original_seq_len:
+                pad_amount = block_aligned - original_seq_len
+                import torch as _torch
+
+                input_ids = _torch.cat([input_ids, _torch.zeros((1, pad_amount), dtype=input_ids.dtype)], dim=1)
+            seq_len = input_ids.shape[1]
+        else:
+            input_ids, seq_len, _ = pad_input_ids(input_ids, pad_token_id=0)
         if seq_len != original_seq_len:
             logger.info(f"Padded input_ids from {original_seq_len} to {seq_len} for trace reuse")
 
@@ -2821,8 +2834,10 @@ class Molmo2Generator:
         else:
             # Warm-up (compile) - use smaller chunk for warmup if chunked prefill
             compile_seq_len = min(seq_len, self.max_prefill_chunk_size)
-            if compile_seq_len < seq_len and prefill_attn_mask_ttnn is None:
-                # Create a smaller hidden_states for compilation
+            if compile_seq_len < seq_len:
+                # Long sequence: compile with a small causal chunk (no mask).
+                # The chunked prefill path (line below) will handle the actual inference.
+                # Compiling the full seq with mask would need 10+ GB for the attention matrix.
                 warmup_hidden_states = ttnn.slice(
                     hidden_states_ttnn,
                     (0, 0, 0, 0),
@@ -2844,29 +2859,29 @@ class Molmo2Generator:
             # Actual prefill (TTFT) - use chunked prefill for long sequences
             ttft_start = time.perf_counter()
 
-            if seq_len > self.max_prefill_chunk_size and self.use_paged_attention and prefill_attn_mask_ttnn is None:
-                # Chunked prefill for long sequences
-                logger.info(f"Using chunked prefill: seq_len={seq_len}, chunk_size={self.max_prefill_chunk_size}")
+            if seq_len > self.max_prefill_chunk_size and self.use_paged_attention:
+                # Chunked prefill for long sequences (avoids 10+ GB SDPA allocation).
+                # Pass the multimodal mask if present: _run_chunked_prefill slices it per chunk.
+                logger.info(
+                    f"Using chunked prefill: seq_len={seq_len}, chunk_size={self.max_prefill_chunk_size}"
+                    + (" (with multimodal mask)" if prefill_attn_mask_ttnn is not None else "")
+                )
                 logits, last_chunk_size = self._run_chunked_prefill(
                     hidden_states_ttnn,
                     seq_len,
                     effective_page_table,
                     user_id,
+                    attn_mask=prefill_attn_mask_ttnn,
                 )
-                # For chunked prefill, logits are only for the last chunk
-                # Store the index within the last chunk for correct logits access
+                if prefill_attn_mask_ttnn is not None:
+                    ttnn.deallocate(prefill_attn_mask_ttnn)
+                    prefill_attn_mask_ttnn = None
                 timing["chunked_prefill"] = True
                 timing["last_chunk_size"] = last_chunk_size
-                # Compute the position within the last chunk
-                # original_seq_len may be less than seq_len (padded)
                 last_chunk_start = ((original_seq_len - 1) // self.max_prefill_chunk_size) * self.max_prefill_chunk_size
                 timing["last_token_idx_in_chunk"] = original_seq_len - 1 - last_chunk_start
             else:
-                # Standard prefill for short sequences (or long with multimodal mask — chunking unsupported)
-                if seq_len > self.max_prefill_chunk_size and prefill_attn_mask_ttnn is not None:
-                    logger.warning(
-                        "Long sequence with multimodal attention mask: using full prefill (chunked path has no mask support)"
-                    )
+                # Standard (single-pass) prefill for short sequences
                 # For long sequences, pass last_token_idx to avoid 9.5GB LM head logits
                 lti = original_seq_len - 1 if seq_len > 8192 else None
                 logits, _ = self.model.text_model.forward(
@@ -2905,25 +2920,32 @@ class Molmo2Generator:
         seq_len: int,
         page_table: ttnn.Tensor,
         user_id: int = 0,
+        attn_mask: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, int]:
         """
         Run prefill in chunks to avoid OOM for long sequences.
 
-        For sequences longer than max_prefill_chunk_size, processes in chunks
-        using chunked_scaled_dot_product_attention which reads previous KV from cache.
+        For sequences longer than max_prefill_chunk_size, processes in chunks.
+        Each chunk's SDPA matrix is chunk_size × seq_len (~2.25 GB for 8192 × 36864)
+        instead of seq_len × seq_len (~10.87 GB for 36864 × 36864).
 
         Args:
             hidden_states_ttnn: Full hidden states [1, 1, seq_len, hidden_dim]
             seq_len: Total sequence length
             page_table: Page table for paged attention
             user_id: User ID for KV cache slot
+            attn_mask: Optional [1, 1, seq_len, seq_len] multimodal mask (bfloat4_b).
+                       Sliced per chunk to [1, 1, chunk_size, seq_len].
 
         Returns:
             Tuple of (logits from the last chunk, size of the last chunk)
         """
         chunk_size = self.max_prefill_chunk_size
         num_chunks = (seq_len + chunk_size - 1) // chunk_size
-        logger.info(f"Chunked prefill: {num_chunks} chunks of {chunk_size} tokens")
+        logger.info(
+            f"Chunked prefill: {num_chunks} chunks of {chunk_size} tokens"
+            + (" + multimodal mask" if attn_mask is not None else "")
+        )
 
         logits = None
 
@@ -2947,7 +2969,6 @@ class Molmo2Generator:
             rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(actual_chunk_size, start_pos=chunk_start)
 
             # Compute chunk page table (pages for this chunk)
-            blocks_per_chunk = (chunk_size + self.block_size - 1) // self.block_size
             chunk_start_block = chunk_start // self.block_size
             chunk_end_block = (chunk_end + self.block_size - 1) // self.block_size
 
@@ -2962,7 +2983,10 @@ class Molmo2Generator:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
-            # Forward pass with chunked attention
+            # chunked_scaled_dot_product_attention does not support attn_mask;
+            # pass None here. Video tokens are attended causally (each chunk sees
+            # all previous K/V via the paged cache). This is a trade-off for 32K ISL:
+            # not fully bidirectional but avoids the 10.87 GB full-attention OOM.
             chunk_logits, _ = self.model.text_model.forward(
                 hidden_states=chunk_hidden,
                 start_pos=chunk_start,
@@ -3878,7 +3902,11 @@ def run_video_demo(
             generator.warmup_video_traces(
                 frames_per_device=frames_per_device,
                 num_devices=num_devices,
-                prefill_buckets=[b for b in PREFILL_SEQ_BUCKETS if b <= generator.max_seq_len],
+                # Only compile traces for buckets up to max_prefill_chunk_size.
+                # Longer sequences use chunked prefill which reuses the 8192 trace.
+                prefill_buckets=[
+                    b for b in PREFILL_SEQ_BUCKETS if b <= min(generator.max_seq_len, generator.max_prefill_chunk_size)
+                ],
                 pool_n_out=_n_out,
                 pool_k_pool=_k_pool,
                 max_vit_frames=MAX_VIT_FRAMES_FOR_POOL,

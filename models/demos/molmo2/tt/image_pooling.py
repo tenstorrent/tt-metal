@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 """
 Image Pooling for Molmo2 Vision Adapter.
 
@@ -31,6 +33,10 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+# Chunk size for TP all_reduce along batch_seq dim. Full all_gather allocates multi-GB
+# for long video sequences (32K ISL); chunking bounds peak DRAM. Override with env var.
+_DEFAULT_IMAGE_POOLING_AR_CHUNK = 512
 
 
 class ImagePooling(LightweightModule):
@@ -410,14 +416,37 @@ class ImagePooling(LightweightModule):
 
         ttnn.deallocate(attn_output)
 
-        # TP=8: All-reduce to combine partial results from all devices
+        # TP: All-reduce combines row-parallel partials. all_reduce uses all_gather internally
+        # and can allocate multi-GB for long video sequences (32K ISL); chunk along batch_seq
+        # to bound peak DRAM. Override chunk size with MOLMO2_IMAGE_POOLING_AR_CHUNK env var.
         if self.is_mesh_device and self.num_devices > 1:
-            output = ttnn.all_reduce(
-                output,
-                cluster_axis=1,
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            ar_chunk = int(os.environ.get("MOLMO2_IMAGE_POOLING_AR_CHUNK", str(_DEFAULT_IMAGE_POOLING_AR_CHUNK)))
+            ar_chunk = max(1, ar_chunk)
+            b1 = int(output.shape[1])
+            if b1 <= ar_chunk:
+                output = ttnn.all_reduce(
+                    output,
+                    cluster_axis=1,
+                    num_links=1,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                # Chunked all_reduce to avoid OOM peak allocation for long sequences
+                chunks = []
+                for chunk_start in range(0, b1, ar_chunk):
+                    chunk_end = min(chunk_start + ar_chunk, b1)
+                    chunk = ttnn.slice(
+                        output,
+                        [0, chunk_start, 0, 0],
+                        [output.shape[0], chunk_end, output.shape[2], output.shape[3]],
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    chunk = ttnn.all_reduce(chunk, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    chunks.append(chunk)
+                ttnn.deallocate(output)
+                output = ttnn.concat(chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                for c in chunks:
+                    ttnn.deallocate(c)
 
         # Add output bias (replicated, added after all_reduce)
         output = output + self.bo
