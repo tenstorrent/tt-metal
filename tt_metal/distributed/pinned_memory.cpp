@@ -251,6 +251,11 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
         }
         bool all_devices_completed = true;
         for (const auto& coord : event.device_range()) {
+            // In multi-host meshes, event.device_range() spans all coordinates including
+            // remote ranks. Skip non-local coordinates — the remote rank manages its own CQs.
+            if (!event.device()->impl().is_local(coord)) {
+                continue;
+            }
             auto* physical_device = event.device()->impl().get_device(coord);
             if (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
                 all_devices_completed = false;
@@ -341,7 +346,7 @@ std::shared_ptr<PinnedMemory> PinnedMemory::Create(
     std::vector<IDevice*> devices;
     devices.reserve(coordinates.size());
     for (const auto& coord : coordinates) {
-        if (view.contains(coord)) {
+        if (view.contains(coord) && view.impl().is_local(coord)) {
             if (auto* device = view.impl().get_device(coord)) {
                 devices.push_back(device);
             }
