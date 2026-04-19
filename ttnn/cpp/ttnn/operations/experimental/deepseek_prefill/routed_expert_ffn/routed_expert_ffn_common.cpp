@@ -69,7 +69,7 @@ uint32_t best_in0_block_w(
             false,
             "best_in0_block_w: no in0_block_w divides upper bound {} and fits L1. "
             "per_core_M={}, per_core_N={}, in0 dtype={}, in1 dtype={}, output dtype={}. "
-            "L1 budget after {}% margin: {} B; minimum estimated CB size (at in0_block_w=1): {} B. "
+            "L1 budget {}%: {} B; minimum estimated CB size (at in0_block_w=1): {} B. "
             "Consider reducing per_core_M/per_core_N, using a smaller weight dtype (bfp8/bfp4), "
             "or using a larger compute grid to shrink per-core work.",
             K_tiles,
@@ -78,7 +78,7 @@ uint32_t best_in0_block_w(
             input_tensor_a.dtype(),
             input_tensor_b.dtype(),
             output_dtype,
-            static_cast<int>(l1_safety_margin * 100),
+            static_cast<int>(100 * l1_safety_margin),
             max_l1_space,
             min_cb_size);
     }
