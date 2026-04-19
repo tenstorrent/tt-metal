@@ -52,9 +52,11 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config=None,
+    input_b_shape=None,
     input_b_dtype=None,
     input_b_layout=None,
     input_b_memory_config=None,
+    input_c_shape=None,
     input_c_dtype=None,
     input_c_layout=None,
     input_c_memory_config=None,
@@ -87,14 +89,16 @@ def run(
     is_host = storage_type and "HOST" in str(storage_type)
 
     if is_ternary_tensor:
-        # Tensor creation
+        # Tensor creation — use per-input shapes when available (broadcast support)
+        shape_b = tuple(input_b_shape) if input_b_shape is not None else shape_a
+        shape_c = tuple(input_c_shape) if input_c_shape is not None else shape_a
         torch_condition = torch.randint(0, 2, shape_a, dtype=torch.float32)
         torch_input_b = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-        )(shape_a)
+        )(shape_b)
         torch_input_c = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_c_dtype
-        )(shape_a)
+        )(shape_c)
         torch_output = torch.where(torch_condition > 0, torch_input_b, torch_input_c)
 
         if not is_host:
@@ -172,9 +176,10 @@ def run(
         torch_condition = torch.randint(0, 2, shape_a, dtype=torch.float32)
         b_layout = input_b_layout if input_b_layout is not None else input_a_layout
         b_mem_config = input_b_memory_config if input_b_memory_config is not None else input_a_memory_config
+        shape_b = tuple(input_b_shape) if input_b_shape is not None else shape_a
         torch_input_b = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-        )(shape_a)
+        )(shape_b)
         torch_output = torch.where(torch_condition > 0, torch_input_b, scalar_value)
 
         if not is_host:

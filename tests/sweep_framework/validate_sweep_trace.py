@@ -104,7 +104,19 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
             stripped = list(obj)
             while len(stripped) > 1 and stripped[0] == 1:
                 stripped.pop(0)
-            return [normalize(item, _parent_key=_parent_key) for item in stripped]
+            # Tile-align dimensions: TTNN's TILE_LAYOUT pads dimensions to
+            # multiples of 32.  The master trace records the logical (pre-pad)
+            # shape while the sweep re-trace may capture the padded shape.
+            # Round up each dim > 1 to the nearest multiple of 32 so that
+            # e.g. 16 and 32 compare as equal.
+            aligned = []
+            for x in stripped:
+                val = int(x)
+                if val > 1:
+                    aligned.append(((val + 31) // 32) * 32)
+                else:
+                    aligned.append(val)
+            return aligned
         return [normalize(item, _parent_key=_parent_key) for item in obj]
     return obj
 
