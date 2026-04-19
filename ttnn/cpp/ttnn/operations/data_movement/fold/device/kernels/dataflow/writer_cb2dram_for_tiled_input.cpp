@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
 #include "tt-metalium/constants.hpp"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
@@ -19,8 +18,6 @@ void kernel_main() {
     constexpr uint32_t element_size = get_compile_time_arg_val(7);           // Size of each element in bytes
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(8);            // Input circular buffer ID
     constexpr auto dst_args = TensorAccessorArgs<9>();
-
-    experimental::CircularBuffer input_cb(input_cb_id);
 
     // Runtime arguments - Processing parameters
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);        // Base destination address in DRAM
@@ -49,8 +46,8 @@ void kernel_main() {
 
         // Process each tile in the width dimension
         for (uint32_t tile_idx = 0; tile_idx < tiles_per_width_dim; tile_idx++) {
-            input_cb.wait_front(tiles_per_channel_dim);
-            uint64_t l1_read_addr = input_cb.get_read_ptr();
+            cb_wait_front(input_cb_id, tiles_per_channel_dim);
+            uint64_t l1_read_addr = get_write_ptr(input_cb_id);
 
             const uint32_t width_limit =
                 (remaining_width < tt::constants::TILE_HEIGHT) ? remaining_width : tt::constants::TILE_HEIGHT;
@@ -76,7 +73,7 @@ void kernel_main() {
 
             // Ensure all writes complete before moving to next set of tiles_per_channel_dim tiles
             noc_async_write_barrier();
-            input_cb.pop_front(tiles_per_channel_dim);
+            cb_pop_front(input_cb_id, tiles_per_channel_dim);
         }
 
         // Update patch offset for next block
