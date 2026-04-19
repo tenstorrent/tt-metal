@@ -91,6 +91,9 @@ run_t3000_ttfabric_tests() {
 }
 
 run_t3000_ttnn_tests() {
+  # Reset hardware state from any prior hung job
+  tt-smi -r || true
+
   # Record the start time
   fail=0
   start_time=$(date +%s)
