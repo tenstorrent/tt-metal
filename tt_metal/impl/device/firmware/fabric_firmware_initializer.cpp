@@ -642,6 +642,13 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
 }
 
 void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
+    // Same early-return guard as wait_for_fabric_router_sync(): on single-chip and TTSim
+    // configs fabric_config is DISABLED so fabric_context_ is null — skip the health check.
+    tt_fabric::FabricConfig fabric_config = descriptor_->fabric_config();
+    if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
+        return;
+    }
+
     const auto& fabric_context = control_plane_.get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
     const auto [router_sync_address, expected_status] = builder_context.get_fabric_router_sync_address_and_status();
