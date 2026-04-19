@@ -67,9 +67,10 @@ using tt::tt_metal::distributed::MeshShape;
 // Also: because `config_.fabric_config` is left at its default (DISABLED), the base
 // MeshDeviceFixtureBase::SetUp does NOT call the 5-arg SetFabricConfig that would set
 // `fabric_tensix_config`. The ctor calls the 1-arg SetFabricConfig(FABRIC_1D) below, so
-// `FabricTensixConfig` stays at DISABLED for this fixture. Device::quiesce_and_restart_fabric_workers()
-// therefore early-returns on L431 for every device here. Any diagnostics assuming that
-// function actually ran will be misleading for this test.
+// `FabricTensixConfig` stays at DISABLED for this fixture, meaning Phases 1/2/4 of
+// quiesce_and_restart_fabric_workers() (Tensix MUX) are skipped. Phases 2.5 and 3
+// (ERISC termination + firmware reload) DO run and are needed to restore ERISC fabric
+// router state after AllGather teardown.
 class MultiCQFabricMeshDevice2x4Fixture : public MeshDeviceFixtureBase {
 protected:
     MultiCQFabricMeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 4}, .num_cqs = 2}) {
@@ -81,19 +82,23 @@ protected:
         // leaves them present so local reproducers and bisects continue to work. Remove
         // once the underlying hang is fixed.
         //
-        // ERISC race condition fixes are confirmed working (branch nsexton/0-racecondition-hunt):
-        // CclAsyncOp.ReduceScatterSmall_PersistentFabric and all 19 FabricSendRecv2x4Tests now
-        // pass consistently. The remaining hang here is a distinct underlying issue: Tensix
-        // workers on the far N300 chips (device IDs 4-7, accessed via non-MMIO ETH fabric)
-        // perform an unsafe NOC access at 0x880030060 during "Enqueue dummy ops" after
-        // ttnn::all_gather. The hang manifests at dispatch_thread_pool_->wait() in
-        // enqueue_write_shards_nolock() and is not related to the ERISC firmware init race.
+        // Root cause (resolved on this branch): after ttnn::all_gather, the CCL teardown
+        // terminates ERISC fabric routers on non-MMIO devices (device IDs 4-7). Without
+        // quiesce_and_restart_fabric_workers Phase 2.5+3, these routers stay dead. The
+        // subsequent "Enqueue dummy ops" dispatch relay then spins indefinitely waiting for
+        // fabric endpoints that never become ready, triggering the 5s timeout and
+        // "device timeout, the device is unrecoverable" error.
+        //
+        // Fix: Phase 2 (this branch) adds assert_risc_reset_at_core on the Tensix MUX BRISC
+        // before Phase 3 L1 overwrite, eliminating the close_finish/TERMINATED race that
+        // could corrupt ARC_RESET_SCRATCH_ADDR (0x880030060). Phase 2.5+3 now safely
+        // terminate and restart ERISC routers, restoring fabric health before each iteration.
+        // TT_METAL_DISABLE_QUIESCE_FABRIC_RESTART is therefore no longer set here.
         if (const char* disable = std::getenv("TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP");
             disable != nullptr && std::string_view(disable) == "1") {
             GTEST_SKIP() << "Temporarily disabled via TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP=1 "
                             "while chip-3 AllGather hang is being root-caused.";
         }
-        setenv("TT_METAL_DISABLE_QUIESCE_FABRIC_RESTART", "1", /*overwrite=*/0);
         setenv("TT_METAL_FABRIC_HEALTH_PROBE", "1", /*overwrite=*/0);
         MeshDeviceFixtureBase::SetUp();
     }

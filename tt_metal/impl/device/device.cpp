@@ -621,7 +621,9 @@ void Device::quiesce_and_restart_fabric_workers() {
         const auto router_sync_addr =
             builder_ctx.get_fabric_router_sync_address_and_status().first;
         constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
-        constexpr uint32_t erisc_timeout_ms = 500;
+        // 100ms is sufficient for a cooperative ERISC shutdown. The previous 500ms value
+        // added ~9s total quiesce latency (6 channels × 3 devices × 500ms worst-case).
+        constexpr uint32_t erisc_timeout_ms = 100;
         constexpr uint32_t kSpinsBetweenSleeps = 64;
 
         std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(erisc_term_signal));
