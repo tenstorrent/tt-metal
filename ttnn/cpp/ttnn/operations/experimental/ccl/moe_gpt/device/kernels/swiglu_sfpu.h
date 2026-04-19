@@ -14,13 +14,13 @@
 //
 // Usage:
 //   // With default GPT-OSS config (alpha=1.702, clamp_limit=7.0):
-//   PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
-//   PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(gate, up, out)));
+//   PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
+//   PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(gate, up, out)));
 //
 //   // With custom config:
 //   struct MyConfig { static constexpr float alpha = 1.0f; static constexpr float clamp_limit = 5.0f; };
-//   PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
-//   PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false, MyConfig>(gate, up, out)));
+//   PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
+//   PACK((llk_math_eltwise_binary_sfpu_swiglu<false, MyConfig>(gate, up, out)));
 //
 // This header is designed to be reusable across different models.
 // Include it from a compute kernel that runs SFPU on the PACK or MATH thread.
@@ -109,7 +109,6 @@ inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, c
     }
 }
 
-template <bool APPROXIMATION_MODE>
 inline void swiglu_init() {
     // SwiGLU uses sigmoid internally, which needs reciprocal table init.
     _init_reciprocal_<false, false>();
@@ -119,15 +118,14 @@ inline void swiglu_init() {
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_swiglu_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROXIMATE>(ckernel::sfpu::swiglu_init<APPROXIMATE>);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::swiglu_init);
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::SwiGLUConfigGPTOSS>
+template <bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::SwiGLUConfigGPTOSS>
 inline void llk_math_eltwise_binary_sfpu_swiglu(
     uint gate_tile, uint32_t up_tile, uint32_t out_tile, int vector_mode = VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_swiglu<is_fp32_dest_acc_en, 8, Config>, gate_tile, up_tile, out_tile, vector_mode);
 }
 
