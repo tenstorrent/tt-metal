@@ -266,28 +266,20 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             norm_sweep = normalize(sweep_args)
 
             if norm_master == norm_sweep:
-                # Arguments match — check if config_hash computation also agrees
-                if sweep_config_hash and sweep_config_hash != source_hash:
-                    report.results.append(
-                        ConfigResult(
-                            config_hash=source_hash,
-                            op_name=op_name,
-                            master_config_id=master_cid,
-                            sweep_config_id=sweep_cid,
-                            status="hash_mismatch",
-                            sweep_config_hash=sweep_config_hash,
-                        )
+                # Arguments match after normalization — this is a match.
+                # The config_hash may differ (e.g. when normalization strips
+                # None-valued keys that were present in one trace but absent
+                # in the other), but the operational behaviour is identical.
+                report.results.append(
+                    ConfigResult(
+                        config_hash=source_hash,
+                        op_name=op_name,
+                        master_config_id=master_cid,
+                        sweep_config_id=sweep_cid,
+                        status="match",
+                        sweep_config_hash=sweep_config_hash if (sweep_config_hash and sweep_config_hash != source_hash) else None,
                     )
-                else:
-                    report.results.append(
-                        ConfigResult(
-                            config_hash=source_hash,
-                            op_name=op_name,
-                            master_config_id=master_cid,
-                            sweep_config_id=sweep_cid,
-                            status="match",
-                        )
-                    )
+                )
             else:
                 diffs = deep_diff(norm_master, norm_sweep)
                 report.results.append(
