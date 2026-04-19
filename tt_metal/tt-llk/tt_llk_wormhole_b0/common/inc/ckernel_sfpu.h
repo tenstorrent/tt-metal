@@ -10,4 +10,4 @@
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
 #include "sfpi.h"
-
+#include "sfpu/ckernel_sfpu_load_config.h"
