@@ -651,7 +651,12 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
 
     const auto& fabric_context = control_plane_.get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
-    const auto [router_sync_address, expected_status] = builder_context.get_fabric_router_sync_address_and_status();
+    const auto [router_sync_address, sync_status] = builder_context.get_fabric_router_sync_address_and_status();
+    // By the time this check runs, the master ERISC has already propagated READY_FOR_TRAFFIC
+    // (0xa3b3c3d3) to all subordinate channels.  LOCAL_HANDSHAKE_COMPLETE (0xa2b2c2d2) is only
+    // the intermediate state wait_for_fabric_router_sync() polls on; using it here would be a
+    // false positive on every healthy run.
+    const uint32_t expected_status = static_cast<uint32_t>(tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
 
     // Check ALL active ERISC channels on every device — not just the master channel.
     // wait_for_fabric_router_sync() only polls the master channel, which can pass even when
