@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ckernel_sfpu_sigmoid.h"
+#include "sfpu/ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 

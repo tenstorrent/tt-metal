@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 template <bool APPROXIMATION_MODE, int ITERATIONS>

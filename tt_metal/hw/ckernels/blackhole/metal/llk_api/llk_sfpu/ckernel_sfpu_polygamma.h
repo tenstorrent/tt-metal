@@ -10,6 +10,7 @@
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "sfpu/ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
