@@ -234,7 +234,6 @@ class Pipeline:
             f0 = torch.from_numpy(f0.astype(np.float32))
             f0 = f0.unsqueeze(0)
         elif self.f0_method is F0Method.RMVE:
-            audio_np = audio.detach().cpu().reshape(-1).numpy().astype(np.float32)
             f0, _ = self._get_rmve_pitch_algorithm().extract_continuous_periodicity(audio)
 
         else:

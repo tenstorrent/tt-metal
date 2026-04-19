@@ -155,15 +155,6 @@ class Pipeline:
         return self._rmve_pitch_algorithm
 
     def _get_f0(self, audio, num_frames):
-        if audio.dim() == 2:
-            coarse_batch = []
-            continuous_batch = []
-            for batch_idx in range(audio.shape[0]):
-                coarse, continuous = self._get_f0(audio[batch_idx], num_frames)
-                coarse_batch.append(coarse)
-                continuous_batch.append(continuous)
-            return torch.cat(coarse_batch, dim=0), torch.cat(continuous_batch, dim=0)
-
         f0_min = 50
         f0_max = 1100
         f0_mel_min = 1127 * math.log(1 + f0_min / 700)
@@ -202,7 +193,6 @@ class Pipeline:
             f0 = torch.from_numpy(f0.astype(np.float32))
             f0 = f0.unsqueeze(0)
         elif self.f0_method is F0Method.RMVE:
-            audio_np = audio.detach().cpu().reshape(-1).numpy().astype(np.float32)
             f0, _ = self._get_rmve_pitch_algorithm().extract_continuous_periodicity(audio)
         else:
             raise ValueError(f"Unsupported f0_method: {self.f0_method}, must be one of {list(F0Method)}")
