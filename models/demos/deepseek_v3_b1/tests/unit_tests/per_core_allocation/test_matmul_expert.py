@@ -2576,6 +2576,8 @@ def test_benchmark_up_proj(device):
         active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
         formats_per_device=[["bfp4", "bfp0"]],
         subblock_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
         fmt_distribution="uniform",
         fmt_ratios={"bfp4": 3, "bfp0": 1},
     )
@@ -2594,7 +2596,9 @@ def test_benchmark_down_proj(device):
         active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
         formats_per_device=[["bfp4", "bfp0"]],
         accum_experts=True,
-        subblock_n=4,
+        subblock_n=7,
+        n_parallel_per_bank=2,
+        k_parallel_per_bank=1,
         fmt_distribution="uniform",
         fmt_ratios={"bfp4": 3, "bfp0": 1},
     )
