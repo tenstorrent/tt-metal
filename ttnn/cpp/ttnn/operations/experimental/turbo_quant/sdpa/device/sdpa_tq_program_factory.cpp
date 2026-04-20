@@ -93,13 +93,17 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         CircularBufferConfig(q_chunk_tiles * q_tile_size, {{CBIndex::c_0, q_df}})
             .set_page_size(CBIndex::c_0, q_tile_size));
 
-    // K/V CBs: when pre_rescaled, use native KV format (BFP8/BFP4) with 1 chunk
-    // capacity. Reader pushes directly to c_1/c_2, sdpa_standard reads natively.
-    // O(chunk) L1 enables 128K+ context.
-    // When not pre_rescaled, keep BF16 full-cache CBs for dequant pre-fill path.
+    // K/V CBs: both paths now use O(chunk) L1 for 128K+ context.
+    //
+    // Pre-rescaled: reader pushes native KV format (BFP4) directly to c_1/c_2;
+    //   sdpa_standard consumes tile-by-tile. Capacity = 1 chunk.
+    //
+    // Full dequant: compute interleaves dequant (BFP4+norm → BF16) with SDPA
+    //   per-chunk using Flash-Attention online softmax. Capacity = 2 chunks
+    //   to double-buffer reader↔compute.
     auto kv_cb_df = attrs.pre_rescaled ? k_idx_df : bf16_df;
     auto kv_cb_tile_size = attrs.pre_rescaled ? k_idx_tile_size : bf16_tile_size;
-    uint32_t kv_cb_chunks = attrs.pre_rescaled ? 1 : k_num_chunks;
+    uint32_t kv_cb_chunks = attrs.pre_rescaled ? 1 : 2;
 
     CreateCircularBuffer(
         program,
