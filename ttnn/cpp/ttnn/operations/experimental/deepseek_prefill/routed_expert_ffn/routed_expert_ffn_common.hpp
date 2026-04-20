@@ -49,7 +49,7 @@ ttnn::Tensor routed_expert_ffn_wh(
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    std::optional<ttnn::Tensor> output);
+    const std::optional<ttnn::Tensor>& output);
 
 // Blackhole-optimized path (14x10 grid)
 ttnn::Tensor routed_expert_ffn_bh(

@@ -20,7 +20,7 @@ ttnn::Tensor routed_expert_ffn_wh(
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    std::optional<ttnn::Tensor> output) {
+    const std::optional<ttnn::Tensor>& output) {
     // Wormhole compute grid is fixed at 8x8. All configs below are tuned for this
     // grid; bail loudly on anything else so we don't silently emit a bad program config.
     constexpr uint32_t GRID_X = 8;
