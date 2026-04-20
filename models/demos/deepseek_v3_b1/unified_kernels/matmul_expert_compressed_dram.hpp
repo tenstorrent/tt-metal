@@ -96,8 +96,19 @@ struct MatmulExpertCompressedDRAM {
         uint32_t fmt_cb_page_size_,
         uint32_t fmt_sem_addr_0_,
         uint32_t fmt_sem_addr_1_,
-        uint32_t accum_experts_ = 0,
-        uint32_t index_offset_ = 0>
+        uint32_t accum_experts_,
+        uint32_t index_offset_,
+        // K-parallelism: this core's K-slice index and how many cores share its bank for K.
+        // DRAM layout for K-split banks must be K-slice outer so each core reads contiguous.
+        // Offset into the bank's expert region is set via expert_offsets[] in op.py —
+        // the kernel only needs num_subblocks_k_local and k_slice_idx for compute-side
+        // activation/fmt pointer arithmetic.
+        uint32_t k_parallel_per_bank_,
+        uint32_t k_slice_idx_,
+        uint32_t num_subblocks_k_local_,
+        // Dedicated global sem for K-reduction (passed as address). PACK on the reducer
+        // polls it; NCRISC on senders increments. Separate from pipeline_sem (ring protocol).
+        uint32_t partial_sem_addr_>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -131,6 +142,18 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t fmt_sem_addr_1 = fmt_sem_addr_1_;
         static constexpr bool accum_experts = accum_experts_ != 0;
         static constexpr uint32_t index_offset = index_offset_;
+        static constexpr uint32_t k_parallel_per_bank = k_parallel_per_bank_;
+        static constexpr uint32_t k_slice_idx = k_slice_idx_;
+        static constexpr uint32_t num_subblocks_k_local =
+            num_subblocks_k_local_ != 0 ? num_subblocks_k_local_ : num_subblocks_k_ / k_parallel_per_bank_;
+        // Cross-core K-reduction: K is split across k_parallel_per_bank cores in the same bank,
+        // which produce partials that are reduced via NOC write + pack-with-L1-acc on the reducer.
+        static constexpr bool inner_dim_reduction = (k_parallel_per_bank > 1);
+        // Reducer = last K-slice core (holds the final sum); senders are earlier slices.
+        static constexpr bool is_reducer = (k_slice_idx + 1 == k_parallel_per_bank);
+        // Only meaningful inside `if constexpr (inner_dim_reduction)` scope.
+        static constexpr bool is_sender = !is_reducer;
+        static constexpr uint32_t partial_sem_addr = partial_sem_addr_;
     };
 
     template <
@@ -153,9 +176,14 @@ struct MatmulExpertCompressedDRAM {
         uint32_t fmt_cb_page_size_,
         uint32_t fmt_sem_addr_0_,
         uint32_t fmt_sem_addr_1_,
-        uint32_t accum_experts_ = 0,
-        uint32_t fuse_silu_ = 0,
-        uint32_t index_offset_ = 0>
+        uint32_t accum_experts_,
+        uint32_t fuse_silu_,
+        uint32_t index_offset_,
+        // K-parallelism — compute-side mirror of ReaderCTArgs fields.
+        uint32_t k_parallel_per_bank_,
+        uint32_t k_slice_idx_,
+        uint32_t num_subblocks_k_local_,
+        uint32_t partial_sem_addr_>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -179,6 +207,15 @@ struct MatmulExpertCompressedDRAM {
         static constexpr bool accum_experts = accum_experts_ != 0;
         static constexpr bool fuse_silu = fuse_silu_ != 0;
         static constexpr uint32_t index_offset = index_offset_;
+        static constexpr uint32_t k_parallel_per_bank = k_parallel_per_bank_;
+        static constexpr uint32_t k_slice_idx = k_slice_idx_;
+        static constexpr uint32_t num_subblocks_k_local =
+            num_subblocks_k_local_ != 0 ? num_subblocks_k_local_ : num_subblocks_k_ / k_parallel_per_bank_;
+        static constexpr bool inner_dim_reduction = (k_parallel_per_bank > 1);
+        static constexpr bool is_reducer = (k_slice_idx + 1 == k_parallel_per_bank);
+        // Only meaningful inside `if constexpr (inner_dim_reduction)` scope.
+        static constexpr bool is_sender = !is_reducer;
+        static constexpr uint32_t partial_sem_addr = partial_sem_addr_;
     };
 
     struct WriterCTArgs {};
@@ -196,7 +233,10 @@ struct MatmulExpertCompressedDRAM {
         void impl() {
 #if defined(COMPILE_FOR_NCRISC)
             constexpr uint32_t tiles_per_block = CTArgs::subblock_k * CTArgs::subblock_n;
-            constexpr uint32_t num_iterations = CTArgs::num_subblocks_k * (CTArgs::per_core_n / CTArgs::subblock_n);
+            // K-split: each core iterates only its own K-slice. num_subblocks_k_local defaults
+            // to num_subblocks_k / k_parallel_per_bank (= full num_subblocks_k when k_parallel=1).
+            constexpr uint32_t num_subblocks_k_local = CTArgs::num_subblocks_k_local;
+            constexpr uint32_t num_iterations = num_subblocks_k_local * (CTArgs::per_core_n / CTArgs::subblock_n);
             constexpr uint32_t max_page_size = CTArgs::noc_max_page_size;
             constexpr uint32_t num_active_experts = CTArgs::num_active_experts;
             constexpr uint32_t num_buffers = 3;
@@ -236,7 +276,7 @@ struct MatmulExpertCompressedDRAM {
             uint32_t num_free_blocks_in_buffer = num_buffers;
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
-            bool any_dram_expert_seen = false;
+            uint32_t num_dram_active = 0;
 
             reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
@@ -246,6 +286,7 @@ struct MatmulExpertCompressedDRAM {
                     continue;  // bit15=1 → SRAM expert, skip
                 }
                 uint32_t expert_idx = raw_idx;  // bit15=0, raw value is global expert ID
+                // For K-split, expert_offsets already points at this K-slice's start (set in op.py).
                 uint32_t expert_in1_addr = expert_offsets[expert_idx];
                 uint32_t dram_read_offset = 0;
                 const volatile uint16_t* block_size_ptr = block_sizes + expert_idx * num_iterations;
@@ -258,7 +299,7 @@ struct MatmulExpertCompressedDRAM {
                 // Wait for a free fmt slot (at most 1 expert ahead of each TRISC consumer).
                 fmt_sync::producer_wait_slot(CTArgs::fmt_sem_addr_0, CTArgs::fmt_sem_addr_1);
 
-                any_dram_expert_seen = true;
+                num_dram_active++;
 
                 uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(CTArgs::bank_id, expert_in1_addr);
 
@@ -357,11 +398,34 @@ struct MatmulExpertCompressedDRAM {
             }
 
             // Final flush: drain the in-flight block(s) from the LAST DRAM expert.
-            if (any_dram_expert_seen) {
+            if (num_dram_active > 0) {
                 for (uint32_t i = 0; i < extra_blocks_in_flight; ++i) {
                     noc_async_read_barrier_with_trid(block_trid_to_wait);
                     cb_push_back(CTArgs::cb_in1, tiles_per_block);
                     block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
+                }
+            }
+
+            // Phase-2 K-reduction. Sender (non-last K-slice) waits for its TRISC to finish
+            // packing to cb_out, NOC-writes the whole cb_out to the reducer's cb_out L1,
+            // and signals the reducer via pipeline_sem. The reducer's TRISC polls that sem,
+            // then pack-with-L1-acc onto cb_out to add its own partial. No new CBs or args.
+            if constexpr (CTArgs::inner_dim_reduction) {
+                if constexpr (CTArgs::is_sender) {
+                    if (num_dram_active > 0) {
+                        uint32_t output_tiles = num_dram_active * CTArgs::per_core_n;
+                        uint32_t output_bytes = output_tiles * get_tile_size(CTArgs::cb_out);
+
+                        cb_wait_front(CTArgs::cb_out, output_tiles);
+                        uint32_t src_addr = get_read_ptr(CTArgs::cb_out);
+                        // Reducer's cb_out is allocated at the same L1 offset as sender's cb_out
+                        // (both are sharded from the output tensor → identical per-core layout).
+                        uint64_t dst_noc = get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, src_addr);
+                        noc_async_write(src_addr, dst_noc, output_bytes);
+                        uint64_t sem_noc =
+                            get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, CTArgs::partial_sem_addr);
+                        noc_semaphore_inc(sem_noc, 1);
+                    }
                 }
             }
 
@@ -381,10 +445,16 @@ struct MatmulExpertCompressedDRAM {
             constexpr uint32_t in0_page_size = CTArgs::in0_page_size;
             constexpr uint32_t tiles_per_block = CTArgs::subblock_k * CTArgs::subblock_n;
             constexpr uint32_t num_subblocks_n = CTArgs::per_core_n / CTArgs::subblock_n;
+            // K-split: each core iterates only its K-slice. fmt is packed per-K-slice in op.py
+            // so TRISC walks it linearly; activation is shared across K-slice cores, so cb_in0
+            // rd_ptr offsets into this core's K-slice via act_k_slice_byte_offset (constexpr).
+            constexpr uint32_t num_subblocks_k_local = CTArgs::num_subblocks_k_local;
+            constexpr uint32_t act_k_slice_byte_offset =
+                CTArgs::k_slice_idx * num_subblocks_k_local * CTArgs::subblock_k * in0_page_size;
 
             reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
             pack_reconfig_data_format<true>(CTArgs::cb_out);
-            compressed_custom_mm_block_init_short<false, true, true>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+            compressed_custom_mm_block_init_short<false, true, false>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             if constexpr (CTArgs::fuse_silu) {
                 PACK((llk_math_eltwise_unary_sfpu_silu_init<false>()));
             }
@@ -395,7 +465,7 @@ struct MatmulExpertCompressedDRAM {
             }
 
             uint32_t in0_base = 0;
-            UNPACK(({ in0_base = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in0); }));
+            UNPACK(({ in0_base = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in0) + act_k_slice_byte_offset; }));
 
             if constexpr (CTArgs::accum_experts) {
                 uint32_t num_dram_experts = 0;
@@ -483,6 +553,112 @@ struct MatmulExpertCompressedDRAM {
                 }
 
                 PACK((llk_pack_reconfig_l1_acc(0)));
+            } else if constexpr (CTArgs::inner_dim_reduction) {
+                // K-split path: accumulate ALL experts into dst (one tile per expert since
+                // num_subblocks_n==1), then pack once at the end. Reducer waits for sender's
+                // NOC write BEFORE the single pack phase, so pack-with-L1-acc reads sender's
+                // already-landed data. Sender does the same structure with acc=0.
+                static_assert(num_subblocks_n == 1, "K-split requires num_subblocks_n == 1");
+
+                tile_regs_acquire();
+
+                uint32_t fmt_slot = 0;
+                uint32_t dst_base = 0;
+                for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
+                    uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
+                    if (raw_idx & 0x8000) {
+                        continue;
+                    }
+
+                    UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
+                    MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1)));
+                    const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
+                        CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
+                    uint32_t fmt_meta_offset = 0;
+
+                    for (uint32_t sb_k = 0; sb_k < num_subblocks_k_local; sb_k++) {
+                        cb_wait_front(CTArgs::cb_in1, tiles_per_block);
+                        UNPACK(({
+                            unified_kernels::override_cb_rd_ptr(
+                                CTArgs::cb_in0, in0_base + sb_k * CTArgs::subblock_k * in0_page_size);
+                        }));
+                        uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
+                        if (sb_k < num_subblocks_k_local - 1) {
+                            compressed_custom_mm_block<false>(
+                                CTArgs::cb_in0,
+                                CTArgs::cb_in1,
+                                meta_addr,
+                                dst_base,
+                                CTArgs::subblock_k,
+                                CTArgs::subblock_n);
+                        } else {
+                            compressed_custom_mm_block<true>(
+                                CTArgs::cb_in0,
+                                CTArgs::cb_in1,
+                                meta_addr,
+                                dst_base,
+                                CTArgs::subblock_k,
+                                CTArgs::subblock_n);
+                        }
+                        fmt_meta_offset += meta_words_per_block;
+                        cb_pop_front(CTArgs::cb_in1, tiles_per_block);
+                    }
+
+                    UNPACK((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_0)));
+                    MATH((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_1)));
+                    fmt_slot ^= 1;
+                    dst_base += CTArgs::subblock_n;
+                }
+
+                // dst_base is now num_active_dram_experts * subblock_n (total packed tiles).
+                uint32_t total_tiles = dst_base;
+
+                tile_regs_commit();
+
+                cb_reserve_back(CTArgs::cb_out, total_tiles);
+
+                if constexpr (CTArgs::fuse_silu) {
+                    TTI_SEMWAIT(
+                        p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                        semaphore::t6_sem(semaphore::MATH_PACK),
+                        p_stall::STALL_ON_ZERO);
+                    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+                    for (uint32_t t = 0; t < total_tiles; t++) {
+                        PACK((llk_math_eltwise_unary_sfpu_silu<false, false, 2>(t, (int)VectorMode::R)));
+                    }
+                    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                } else {
+                    tile_regs_wait();
+                }
+                // PACK-side: wait for sender's data to land before reading L1 for acc.
+                // This must happen between commit and pack_tile.
+                if constexpr (CTArgs::is_reducer) {
+                    constexpr uint32_t num_senders = CTArgs::k_parallel_per_bank - 1;
+                    PACK(({
+                        volatile tt_l1_ptr uint32_t* partial_sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::partial_sem_addr);
+                        while (*partial_sem_ptr < num_senders) {
+                        }
+                    }));
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                }
+
+                for (uint32_t t = 0; t < total_tiles; t++) {
+                    pack_tile(t, CTArgs::cb_out);
+                }
+                tile_regs_release();
+
+                cb_push_back(CTArgs::cb_out, total_tiles);
+
+                if constexpr (CTArgs::is_reducer) {
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+
+                    PACK(({
+                        volatile tt_l1_ptr uint32_t* partial_sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::partial_sem_addr);
+                        *partial_sem_ptr = 0;
+                    }));
+                }
             } else {
                 uint32_t fmt_slot = 0;
 

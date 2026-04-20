@@ -377,7 +377,10 @@ def _build_dram_output(
     tile_w,
 ):
     """DRAM output tensor on dram_core_grid."""
-    dram_out_per_core = dram_per_core_N * tile_w * num_active_dram
+    # SRAM-only runs (no active DRAM experts) still need a non-empty placeholder
+    # tensor since the op signature requires one; shape doesn't matter — it's unused.
+    effective_active_dram = max(num_active_dram, 1)
+    dram_out_per_core = dram_per_core_N * tile_w * effective_active_dram
     dram_out_total = dram_out_per_core * num_dram_cores_active * num_devices
     out_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -468,20 +471,34 @@ def _validate_dram_output(
     dram_fuse_silu,
     tile_w,
     tp_expert=True,
+    cores_per_dram_bank=1,
+    k_parallel_per_bank=1,
 ):
-    """Validate per-expert DRAM output from dram_core_grid output tensor."""
+    """Validate per-expert DRAM output from dram_core_grid output tensor.
+
+    For k_parallel_per_bank > 1 (cross-core K-reduction), only the reducer cores
+    (k_slice_idx == k_parallel-1) hold the final full result. Sender cores hold
+    partials and are skipped here. offset → (k_slice, n_slice) derivation matches
+    op.py.
+    """
+    assert cores_per_dram_bank % k_parallel_per_bank == 0
+    n_parallel_per_bank = cores_per_dram_bank // k_parallel_per_bank
+    num_banks = num_dram_cores_active // cores_per_dram_bank
     dram_core_width = dram_per_core_N * tile_w
 
     for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result)):
         output_dev = ttnn.to_torch(out_dev)
-        # Expert parallel: each device processes only its own expert.
         dev_active_dram = active_dram if tp_expert else [active_dram[dev_idx]]
         num_active_dram = len(dev_active_dram)
         for exp_offset, eidx in enumerate(dev_active_dram):
             slices = []
-            for ci in range(num_dram_cores_active):
-                start = ci * dram_core_width * num_active_dram + exp_offset * dram_core_width
-                slices.append(output_dev[..., start : start + dram_core_width])
+            for bank_idx in range(num_banks):
+                for n_slice_in_bank in range(n_parallel_per_bank):
+                    # Reducer is the last k-slice within each n-slice group.
+                    offset = n_slice_in_bank * k_parallel_per_bank + (k_parallel_per_bank - 1)
+                    core_flat_idx = bank_idx * cores_per_dram_bank + offset
+                    start = core_flat_idx * dram_core_width * num_active_dram + exp_offset * dram_core_width
+                    slices.append(output_dev[..., start : start + dram_core_width])
             expert_output = torch.cat(slices, dim=-1)
             mm_result = torch_a.float() @ torch_b_all[eidx][dev_idx].float()
             if dram_fuse_silu:
@@ -649,8 +666,14 @@ def _build_dram_experts(
     subblock_n,
     Kt,
     tile_w,
+    k_parallel_per_bank=1,
 ):
-    """Build DRAM CompressedTensors and dram_meta_tensors for the kernel."""
+    """Build DRAM CompressedTensors and dram_meta_tensors for the kernel.
+
+    For K-split: shuffle the tensor with subblock_k=Kt/k_parallel so each K-slice's
+    tiles are contiguous at the start of the shard. n_parallel cores share the N-slice,
+    each K-parallel core reads a contiguous K-slice region.
+    """
     dram_grid_size = mesh_device.dram_grid_size()
     dram_grid = ttnn.CoreRangeSet(
         [
@@ -660,14 +683,25 @@ def _build_dram_experts(
             )
         ]
     )
+    assert cores_per_dram_bank % k_parallel_per_bank == 0
+    n_parallel_per_bank = cores_per_dram_bank // k_parallel_per_bank
+    # Shard width = per_core_N × tile_w × n_parallel (cores sharing a bank's N-slice).
+    # For K-split (n_parallel=1), shard width = per_core_N × tile_w (one N-slice per bank).
+    shard_width = dram_per_core_N * tile_w * n_parallel_per_bank
     dram_b_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(dram_grid, [K, dram_per_core_N * tile_w * cores_per_dram_bank], ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(dram_grid, [K, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
     )
+    # Shuffle with subblock_k=Kt/k_parallel lays out each K-slice's tiles contiguously.
+    # For k_parallel=1 (no K-split), subblock_k defaults to Kt (one big block per N col).
+    shuffle_subblock_k = Kt // k_parallel_per_bank if k_parallel_per_bank > 1 else None
     dram_cts = []
     for eidx in dram_expert_ids:
-        slices_shuffled = [shuffle_tensor_tiles(b, tile_w, num_banks, subblock_n=subblock_n) for b in torch_b_all[eidx]]
+        slices_shuffled = [
+            shuffle_tensor_tiles(b, tile_w, num_banks, subblock_k=shuffle_subblock_k, subblock_n=subblock_n)
+            for b in torch_b_all[eidx]
+        ]
         b_4d = torch.stack(slices_shuffled).reshape(mesh_rows, mesh_cols, K, N_dram_per_device)
         ct = CompressedTensor.from_torch(
             b_4d,
@@ -688,21 +722,39 @@ def _build_dram_experts(
         subblock_k,
         num_subblocks_k,
         dram_per_core_N,
-        cores_per_dram_bank=cores_per_dram_bank,
+        n_parallel_per_bank=n_parallel_per_bank,
         num_total_experts=num_experts,
         is_dram_flags=dram_meta_flags,
         subblock_n=subblock_n,
+        k_parallel_per_bank=k_parallel_per_bank,
     )
     return dram_cts, dram_meta_tensors
 
 
 def _compute_dram_matmul_params(
-    K, N, tile_w, num_banks, num_dram_cores, num_dram_cores_active, cores_per_dram_bank, subblock_k, subblock_n=None
+    K,
+    N,
+    tile_w,
+    num_banks,
+    num_dram_cores,
+    num_dram_cores_active,
+    cores_per_dram_bank,
+    subblock_k,
+    subblock_n=None,
+    k_parallel_per_bank=1,
 ):
-    """Compute DRAM per-core tiling and subblock_k."""
+    """Compute DRAM per-core tiling and subblock_k.
+
+    For K-split (k_parallel_per_bank > 1): cores within a bank share the same
+    N-slice and split K. N padding/sizing uses n_parallel_per_bank, not cores_per_dram_bank.
+    """
     Kt = K // tile_w
-    n_dram_padded = _pad_to_dram_banks(N, tile_w, tile_w * num_banks * cores_per_dram_bank)
-    dram_per_core_N = n_dram_padded // num_dram_cores // tile_w
+    assert cores_per_dram_bank % k_parallel_per_bank == 0
+    n_parallel_per_bank = cores_per_dram_bank // k_parallel_per_bank
+    n_dram_padded = _pad_to_dram_banks(N, tile_w, tile_w * num_banks * n_parallel_per_bank)
+    # Per-core N tiles = N / (num_banks × n_parallel). For K-split, n_parallel=1, so
+    # all cores in a bank share the bank's full N-slice.
+    dram_per_core_N = n_dram_padded // (num_banks * n_parallel_per_bank) // tile_w
     if subblock_k is None:
         subblock_k = Kt // 4 if Kt > 8 else Kt
     if subblock_k % 2 != 0:
@@ -713,9 +765,15 @@ def _compute_dram_matmul_params(
     assert (
         dram_per_core_N % subblock_n == 0
     ), f"dram_per_core_N ({dram_per_core_N}) must be divisible by subblock_n ({subblock_n})"
-    N_dram_per_device = dram_per_core_N * tile_w * num_dram_cores_active
+    num_subblocks_k = Kt // subblock_k
+    assert (
+        num_subblocks_k % k_parallel_per_bank == 0
+    ), f"num_subblocks_k ({num_subblocks_k}) must be divisible by k_parallel_per_bank ({k_parallel_per_bank})"
+    N_dram_per_device = dram_per_core_N * tile_w * num_banks * n_parallel_per_bank
     logger.info(
-        f"DRAM matmul params: Kt={Kt}, dram_per_core_N={dram_per_core_N}, subblock_k={subblock_k}, subblock_n={subblock_n}, N_dram_per_device={N_dram_per_device}"
+        f"DRAM matmul params: Kt={Kt}, dram_per_core_N={dram_per_core_N}, subblock_k={subblock_k}, "
+        f"subblock_n={subblock_n}, N_dram_per_device={N_dram_per_device}, "
+        f"k_parallel_per_bank={k_parallel_per_bank}, n_parallel_per_bank={n_parallel_per_bank}"
     )
     return Kt, dram_per_core_N, subblock_k, subblock_n, N_dram_per_device
 
@@ -831,7 +889,7 @@ def _build_dram_experts_replicated(
         subblock_k,
         num_subblocks_k,
         dram_per_core_N,
-        cores_per_dram_bank=cores_per_dram_bank,
+        n_parallel_per_bank=cores_per_dram_bank,
         num_total_experts=num_experts,
         is_dram_flags=dram_meta_flags,
         subblock_n=subblock_n,
@@ -928,7 +986,7 @@ def _run_standard(
     formats_per_device,
     subblock_k,
     subblock_n,
-    cores_per_dram_bank,
+    n_parallel_per_bank,
     sram_cores_override,
     sram_k_parallel,
     sram_n_parallel,
@@ -937,8 +995,10 @@ def _run_standard(
     tp_expert=True,
     fmt_distribution="random",
     fmt_ratios=None,
+    k_parallel_per_bank=1,
 ):
     """Standard path: WIDTH_SHARDED SRAM, per-expert output slices on compute_core_grid."""
+    cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
     tile_w = 32
     sram_id_set = set(sram_expert_ids)
     has_sram = bool(sram_expert_ids)
@@ -966,6 +1026,7 @@ def _run_standard(
         cores_per_dram_bank,
         subblock_k,
         subblock_n,
+        k_parallel_per_bank=k_parallel_per_bank,
     )
 
     torch.manual_seed(0)
@@ -1004,6 +1065,7 @@ def _run_standard(
             subblock_n,
             Kt,
             tile_w,
+            k_parallel_per_bank=k_parallel_per_bank,
         )
     else:
         assert len(formats_per_device) == 1, "tp_expert=False: all devices share same formats"
@@ -1115,7 +1177,8 @@ def _run_standard(
         sram_fmt_tensors=sram_fmt_tensors,
         sram_base_addr_tensors=sram_base_addr_tensors,
         sram_k_offsets=sram_k_offsets,
-        cores_per_dram_bank=cores_per_dram_bank,
+        n_parallel_per_bank=n_parallel_per_bank,
+        k_parallel_per_bank=k_parallel_per_bank,
         sram_per_core_n=sram_per_core_N,
         sram_k_per_core=Kt,
         sram_output_tensor=sram_out_tensor,
@@ -1146,6 +1209,8 @@ def _run_standard(
             dram_fuse_silu,
             tile_w,
             tp_expert=tp_expert,
+            cores_per_dram_bank=cores_per_dram_bank,
+            k_parallel_per_bank=k_parallel_per_bank,
         )
 
 
@@ -1161,7 +1226,7 @@ def _run_accum(
     formats_per_device,
     subblock_k,
     subblock_n,
-    cores_per_dram_bank,
+    n_parallel_per_bank,
     sram_cores_override,
     sram_k_parallel,
     sram_n_parallel,
@@ -1171,6 +1236,7 @@ def _run_accum(
     fmt_ratios=None,
 ):
     """Accumulation path: WIDTH_SHARDED SRAM, expert outputs summed in-place."""
+    cores_per_dram_bank = n_parallel_per_bank
     assert tp_expert, "Expert parallel (tp_expert=False) not supported in accum path"
     tile_w = 32
     sram_id_set = set(sram_expert_ids)
@@ -1316,7 +1382,7 @@ def _run_accum(
         sram_fmt_tensors=sram_fmt_tensors,
         sram_base_addr_tensors=sram_base_addr_tensors,
         sram_k_offsets=sram_k_offsets,
-        cores_per_dram_bank=cores_per_dram_bank,
+        n_parallel_per_bank=n_parallel_per_bank,
         accum_experts=True,
         sram_per_core_n=sram_per_core_N,
         sram_k_per_core=Kt,
@@ -1360,7 +1426,7 @@ def _run_slice_k(
     formats_per_device,
     subblock_k,
     subblock_n,
-    cores_per_dram_bank,
+    n_parallel_per_bank,
     sram_cores_override,
     sram_k_parallel,
     sram_n_parallel,
@@ -1369,8 +1435,10 @@ def _run_slice_k(
     tp_expert=True,
     fmt_distribution="random",
     fmt_ratios=None,
+    k_parallel_per_bank=1,
 ):
     """K-sliced path: HEIGHT_SHARDED SRAM, separate output grids."""
+    cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
     assert tp_expert, "Expert parallel (tp_expert=False) not supported in slice_k path"
     tile_w = 32
     sram_id_set = set(sram_expert_ids)
@@ -1398,6 +1466,7 @@ def _run_slice_k(
         cores_per_dram_bank,
         subblock_k,
         subblock_n,
+        k_parallel_per_bank=k_parallel_per_bank,
     )
 
     assert len(formats_per_device) == num_devices
@@ -1434,6 +1503,7 @@ def _run_slice_k(
         subblock_n,
         Kt,
         tile_w,
+        k_parallel_per_bank=k_parallel_per_bank,
     )
     a_tensor = _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores, M, K, tile_w)
     index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores, is_dram_flags)
@@ -1509,7 +1579,8 @@ def _run_slice_k(
         sram_fmt_tensors=sram_fmt_tensors,
         sram_base_addr_tensors=sram_base_addr_tensors,
         sram_k_offsets=sram_k_offsets,
-        cores_per_dram_bank=cores_per_dram_bank,
+        n_parallel_per_bank=n_parallel_per_bank,
+        k_parallel_per_bank=k_parallel_per_bank,
         sram_per_core_n=sram_per_core_N,
         sram_k_per_core=sram_k_per_core,
         sram_output_tensor=sram_out_tensor,
@@ -1543,6 +1614,8 @@ def _run_slice_k(
             pcc_threshold,
             dram_fuse_silu,
             tile_w,
+            cores_per_dram_bank=cores_per_dram_bank,
+            k_parallel_per_bank=k_parallel_per_bank,
         )
 
 
@@ -1558,7 +1631,7 @@ def _run_hybrid_expert_multi_device(
     formats_per_device,
     subblock_k=None,
     subblock_n=None,
-    cores_per_dram_bank=1,
+    n_parallel_per_bank=1,
     pcc_threshold=0.97,
     accum_experts=False,
     sram_cores_override=None,
@@ -1568,8 +1641,10 @@ def _run_hybrid_expert_multi_device(
     tp_expert=True,
     fmt_distribution="random",
     fmt_ratios=None,
+    k_parallel_per_bank=1,
 ):
     """Dispatcher: delegate to the appropriate variant."""
+    cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
     assert dram_expert_ids, "DRAM expert path is always required"
     assert len(dram_expert_ids) <= num_experts, "dram_expert_ids exceeds num_experts"
     if not tp_expert:
@@ -1591,7 +1666,7 @@ def _run_hybrid_expert_multi_device(
             formats_per_device,
             subblock_k,
             subblock_n,
-            cores_per_dram_bank,
+            n_parallel_per_bank,
             sram_cores_override,
             sram_k_parallel,
             sram_n_parallel,
@@ -1600,6 +1675,7 @@ def _run_hybrid_expert_multi_device(
             tp_expert,
             fmt_distribution,
             fmt_ratios,
+            k_parallel_per_bank=k_parallel_per_bank,
         )
     elif accum_experts:
         _run_accum(
@@ -1614,7 +1690,7 @@ def _run_hybrid_expert_multi_device(
             formats_per_device,
             subblock_k,
             subblock_n,
-            cores_per_dram_bank,
+            n_parallel_per_bank,
             sram_cores_override,
             sram_k_parallel,
             sram_n_parallel,
@@ -1636,7 +1712,7 @@ def _run_hybrid_expert_multi_device(
             formats_per_device,
             subblock_k,
             subblock_n,
-            cores_per_dram_bank,
+            n_parallel_per_bank,
             sram_cores_override,
             sram_k_parallel,
             sram_n_parallel,
@@ -1645,6 +1721,7 @@ def _run_hybrid_expert_multi_device(
             tp_expert,
             fmt_distribution,
             fmt_ratios,
+            k_parallel_per_bank=k_parallel_per_bank,
         )
 
 
@@ -1792,7 +1869,7 @@ def test_hybrid_expert_multi_device_sparse_2cores_per_bank(bh_2d_mesh_device):
             ["bfp2"],
         ],
         sram_n_parallel=8,
-        cores_per_dram_bank=2,
+        n_parallel_per_bank=2,
     )
 
 
@@ -2462,7 +2539,11 @@ def test_benchmark_up_proj(device):
 
 
 def test_benchmark_gate_proj(device):
-    """MoE gate-proj shape: 256 experts, 8 selected (1 per device), K=7168, N=256, DRAM-only, fuse_silu."""
+    """MoE gate-proj shape: 256 experts, 8 selected (1 per device), K=7168, N=256, DRAM-only, fuse_silu.
+
+    cores_per_dram_bank=2, k_parallel_per_bank=2 → 2 cores per bank split K (n_parallel=1).
+    Each K-slice core produces a partial matmul; partial-K PCC validator checks each core.
+    """
     _run_hybrid_expert_multi_device(
         device,
         M=1,
@@ -2472,11 +2553,13 @@ def test_benchmark_gate_proj(device):
         sram_expert_ids=[],
         dram_expert_ids=list(range(8)),
         active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
-        formats_per_device=[["bfp4"]],
-        dram_fuse_silu=False,  # disable to reduce runtime for benchmarking
+        formats_per_device=[["bfp4", "bfp0"]],
+        dram_fuse_silu=False,
         subblock_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
         fmt_distribution="uniform",
-        # fmt_ratios={"bfp4": 3, "bfp0": 1},
+        fmt_ratios={"bfp4": 3, "bfp0": 1},
     )
 
 

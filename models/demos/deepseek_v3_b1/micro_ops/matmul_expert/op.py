@@ -306,6 +306,7 @@ def _build_program_for_device(
     subblock_k: int = 0,
     subblock_n: int = 1,
     cores_per_dram_bank: int = 1,
+    k_parallel_per_bank: int = 1,
     num_in1_buffers: int = 3,
     accum_experts: bool = False,
     sram_per_core_n: int = 0,
@@ -318,6 +319,7 @@ def _build_program_for_device(
     fmt_cb_l1_addr: int = 0,
     fmt_sem_addr_0: int = 0,
     fmt_sem_addr_1: int = 0,
+    partial_sem_addr: int = 0,
 ) -> ttnn.ProgramDescriptor:
     """Build a ProgramDescriptor for one device — handles SRAM-only, DRAM-only, and hybrid.
 
@@ -439,7 +441,10 @@ def _build_program_for_device(
         ("cb_in1_dram_size_bytes", cb_in1_dram_total_bytes),
         ("noc_max_page_size", noc_max_page_size),
         ("pipeline_sem_id", pipeline_sem_id),
+        ("partial_sem_addr", partial_sem_addr),
         ("cores_per_dram_bank", cores_per_dram_bank),
+        ("k_parallel_per_bank", k_parallel_per_bank),
+        ("num_subblocks_k_local", num_subblocks_k // k_parallel_per_bank),
         ("index_l1_addr", index_tensor.buffer_address()),
         ("cb_fmt_dram", cb_fmt_dram),
         ("fmt_dram_addr", dram_fmt_layout["fmt_dram_addr"]),
@@ -503,7 +508,7 @@ def _build_program_for_device(
         ),
     ]
     dram_pcv = dram_core_params or {}
-    for name in ("bank_id", "vc", "core_in_bank_idx", "next_core_noc_x", "next_core_noc_y"):
+    for name in ("bank_id", "vc", "core_in_bank_idx", "next_core_noc_x", "next_core_noc_y", "k_slice_idx"):
         per_core_descriptors.append(
             PerCoreCompileTimeDescriptor(named_compile_time_arg=name, core_values=dram_pcv.get(name, []), other_value=0)
         )
@@ -548,6 +553,7 @@ def create_dram_expert_metadata(
     num_total_experts: int,
     is_dram_flags: list,
     device_coord=None,
+    k_parallel_per_bank: int = 1,
 ) -> tuple:
     """Build per-core meta and fmt tensors for ExpertKernel.
 
@@ -578,6 +584,25 @@ def create_dram_expert_metadata(
     fmt_words_per_expert = num_iterations * meta_words_per_block
     BLOCK_SIZE_UNIT = 64
 
+    # K-parallelism: cores within a bank split the K dim.
+    # n_parallel_per_bank cores split N (each gets its own n-slice),
+    # k_parallel_per_bank cores share the same n-slice but split K.
+    assert cores_per_dram_bank % k_parallel_per_bank == 0, (
+        f"cores_per_dram_bank ({cores_per_dram_bank}) must be divisible by "
+        f"k_parallel_per_bank ({k_parallel_per_bank})"
+    )
+    n_parallel_per_bank = cores_per_dram_bank // k_parallel_per_bank
+    assert num_subblocks_k % k_parallel_per_bank == 0, (
+        f"num_subblocks_k ({num_subblocks_k}) must be divisible by " f"k_parallel_per_bank ({k_parallel_per_bank})"
+    )
+    num_subblocks_k_local = num_subblocks_k // k_parallel_per_bank
+    num_tiles_k = subblock_k * num_subblocks_k
+    num_tiles_k_local = subblock_k * num_subblocks_k_local
+    num_iterations_local = num_subblocks_k_local * (per_core_N // subblock_n)
+    fmt_words_per_expert_local = num_iterations_local * meta_words_per_block
+    # Shard's per-N-tile count (across all n-parallel cores in a bank).
+    per_N_tiles = per_core_N * n_parallel_per_bank
+
     per_core_expert_offsets = {i: [] for i in range(num_total_cores)}
     per_core_block_sizes = {i: [] for i in range(num_total_cores)}
     per_core_fmt = {i: [] for i in range(num_total_cores)}
@@ -587,6 +612,7 @@ def create_dram_expert_metadata(
     core_in_bank_idx_core_values = []
     next_core_noc_x_core_values = []
     next_core_noc_y_core_values = []
+    k_slice_idx_core_values = []
 
     bank_ids = []
 
@@ -604,20 +630,25 @@ def create_dram_expert_metadata(
             core_flat_idx = bank_idx * cores_per_dram_bank + offset
             core = compute_cores_list[core_flat_idx]
             is_last = offset == cores_per_dram_bank - 1
-            col_start = offset * per_core_N
+
+            # offset enumerates (n_slice_idx, k_slice_idx) pairs.
+            # k_slice varies faster (inner) so K-parallel cores in the same bank
+            # are contiguous in the ring protocol — matches the NOC-adjacent layout.
+            k_slice_idx = offset % k_parallel_per_bank
+            n_slice_idx = offset // k_parallel_per_bank
+            col_start = n_slice_idx * per_core_N
 
             core_offsets = []
             core_block_sizes = []
             core_fmt = []
 
-            num_tiles_k = subblock_k * num_subblocks_k
             dram_ct_idx = 0
             for global_expert_idx in range(num_total_experts):
                 if not is_dram_flags[global_expert_idx]:
                     # SRAM expert — zero-filled placeholder so global indexing works.
                     core_offsets.append(0)
-                    core_block_sizes.extend([0] * num_iterations)
-                    core_fmt.extend([0] * fmt_words_per_expert)
+                    core_block_sizes.extend([0] * num_iterations_local)
+                    core_fmt.extend([0] * fmt_words_per_expert_local)
                     continue
 
                 ct = cts[dram_ct_idx]
@@ -626,14 +657,17 @@ def create_dram_expert_metadata(
                 dram_cores = ttnn.corerange_to_cores(data_tensor.memory_config().shard_spec.grid)
                 shard_assignment = ct.get_assignment_per_shard(dram_cores[bank_idx], device_coord=device_coord)
 
-                # Tiles per n-group in shard layout: num_tiles_k × subblock_n.
-                # subblock_n=1 (column-major): one full column per group.
-                # subblock_n>1 (row-major blocks, num_subblocks_k must be 1): subblock_k×subblock_n.
-                # In both cases subblock_k * num_subblocks_k = num_tiles_k.
-                block_size_tiles = num_tiles_k * subblock_n
-                ng_start = col_start // subblock_n
+                # Shard tile layout (via shuffle_tensor_tiles with subblock_k=num_tiles_k_local):
+                #   [k_slice outer, n_group inner, K_local inner] for subblock_n=1.
+                # For subblock_n>1 (num_subblocks_k must be 1 in that mode), k_parallel_per_bank
+                # must be 1 (no K-split) — asserted above via num_subblocks_k divisibility.
+                block_size_tiles = num_tiles_k_local * subblock_n
                 num_core_ng = per_core_N // subblock_n
-                tile_start = ng_start * block_size_tiles
+                # K-slice k contains per_N_tiles × num_tiles_k_local tiles (K_local × all N).
+                # Within it, n-col n is at offset n × num_tiles_k_local (× subblock_n for tile groups).
+                k_slice_tile_offset = k_slice_idx * per_N_tiles * num_tiles_k_local
+                n_slice_tile_offset = (col_start // subblock_n) * block_size_tiles
+                tile_start = k_slice_tile_offset + n_slice_tile_offset
                 tile_end = tile_start + num_core_ng * block_size_tiles
                 core_assignment = shard_assignment[tile_start:tile_end]
                 dram_col_offset = sum(_TILE_SIZES[int(shard_assignment[t])] for t in range(tile_start))
@@ -642,7 +676,7 @@ def create_dram_expert_metadata(
                     core_assignment,
                     subblock_k,
                     per_core_N,
-                    num_subblocks_k,
+                    num_subblocks_k_local,
                     subblock_n,
                 )
                 expert_in1_addr = data_tensor.buffer_address()
@@ -660,6 +694,7 @@ def create_dram_expert_metadata(
             bank_id_core_values.append((core, bank_id))
             vc_core_values.append((core, vc))
             core_in_bank_idx_core_values.append((core, offset))
+            k_slice_idx_core_values.append((core, k_slice_idx))
 
             if not is_last:
                 next_core = compute_cores_list[core_flat_idx + 1]
@@ -672,7 +707,7 @@ def create_dram_expert_metadata(
     # Upload expert offsets (uint32) and block sizes (uint16) as separate L1 tensors.
     offset_tensors = upload_per_core_uint32_tensor(device, compute_cores_list, per_core_expert_offsets, num_experts)
     block_size_tensors = upload_per_core_uint16_tensor(
-        device, compute_cores_list, per_core_block_sizes, num_experts * num_iterations
+        device, compute_cores_list, per_core_block_sizes, num_experts * num_iterations_local
     )
 
     expert_offsets_l1_addr_core_values = [
@@ -696,6 +731,7 @@ def create_dram_expert_metadata(
         "core_in_bank_idx": core_in_bank_idx_core_values,
         "next_core_noc_x": next_core_noc_x_core_values,
         "next_core_noc_y": next_core_noc_y_core_values,
+        "k_slice_idx": k_slice_idx_core_values,
     }
 
     return (
@@ -781,6 +817,7 @@ def _assemble_dram_results(
     fmt_sem_addr_1,
     fmt_sem_0,
     fmt_sem_1,
+    partial_sem_addr,
 ):
     """Phase 3: assemble per-device result tuples."""
     result = {}
@@ -800,6 +837,7 @@ def _assemble_dram_results(
                 fmt_sem_addr_1,
                 fmt_sem_0,
                 fmt_sem_1,
+                partial_sem_addr,
             )
     logger.info("  All device metadata created")
     return result
@@ -811,11 +849,12 @@ def create_dram_expert_tensors_multi_device(
     subblock_k: int,
     num_subblocks_k: int,
     per_core_N: int,
-    cores_per_dram_bank: int,
+    n_parallel_per_bank: int,
     num_total_experts: int,
     is_dram_flags: list,
     num_in1_buffers: int = 3,
     subblock_n: int = 1,
+    k_parallel_per_bank: int = 1,
 ) -> dict:
     """Create per-device tensors for ExpertKernel.mesh_op.
 
@@ -826,6 +865,7 @@ def create_dram_expert_tensors_multi_device(
         {MeshCoordinate: (in1_backing, meta_tensors, fmt_tensors,
                           l1_addrs, per_core_values, num_in1_buffers)}
     """
+    cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
     mesh_shape = mesh_device.shape
     num_devices = mesh_device.get_num_devices()
     logger.info(
@@ -846,10 +886,16 @@ def create_dram_expert_tensors_multi_device(
     in1_cb_tiles = subblock_k * subblock_n * num_in1_buffers
     in1_region_bytes = in1_cb_tiles * max_tile_size
 
+    # K-split: each core's fmt/block_sizes describe only its K-slice (num_subblocks_k_local blocks per expert).
+    assert num_subblocks_k % k_parallel_per_bank == 0, (
+        f"num_subblocks_k ({num_subblocks_k}) must be divisible by " f"k_parallel_per_bank ({k_parallel_per_bank})"
+    )
+    num_subblocks_k_local = num_subblocks_k // k_parallel_per_bank
+
     # fmt double-buffer region appended after in1 region.
     dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
     tiles_per_block = subblock_k * subblock_n
-    num_iterations_local = num_subblocks_k * (per_core_N // subblock_n)
+    num_iterations_local = num_subblocks_k_local * (per_core_N // subblock_n)
     fmt_words_per_expert = num_iterations_local * _meta_words_for_tiles(tiles_per_block)
     fmt_bytes_per_expert_raw = fmt_words_per_expert * 4
     fmt_bytes_per_expert = _align(fmt_bytes_per_expert_raw, dram_alignment)
@@ -881,6 +927,9 @@ def create_dram_expert_tensors_multi_device(
     fmt_sem_1 = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
     fmt_sem_addr_0 = ttnn.get_global_semaphore_address(fmt_sem_0)
     fmt_sem_addr_1 = ttnn.get_global_semaphore_address(fmt_sem_1)
+    # K-reduction sync — global sem (so PACK/NCRISC can both address it by L1 addr).
+    partial_sem = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
+    partial_sem_addr = ttnn.get_global_semaphore_address(partial_sem)
     fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes
 
     logger.info(
@@ -889,8 +938,9 @@ def create_dram_expert_tensors_multi_device(
     )
 
     # --- Phase 1: compute per-device metadata and pack fmt bank data ---
+    # K-split: each core's fmt describes only its K-slice's blocks.
     tiles_per_block = subblock_k * subblock_n
-    num_iterations = num_subblocks_k * (per_core_N // subblock_n)
+    num_iterations = num_subblocks_k_local * (per_core_N // subblock_n)
     fmt_words_per_expert = num_iterations * _meta_words_for_tiles(tiles_per_block)
     fmt_bytes_per_expert_raw = fmt_words_per_expert * 4
     fmt_bytes_per_expert = _align(fmt_bytes_per_expert_raw, dram_alignment)
@@ -922,6 +972,7 @@ def create_dram_expert_tensors_multi_device(
                 num_total_experts=num_total_experts,
                 is_dram_flags=is_dram_flags,
                 device_coord=coord,
+                k_parallel_per_bank=k_parallel_per_bank,
             )
             per_device_results[coord] = (meta_tensors, l1_addrs, per_core_values)
 
@@ -959,6 +1010,7 @@ def create_dram_expert_tensors_multi_device(
         fmt_sem_addr_1,
         fmt_sem_0,
         fmt_sem_1,
+        partial_sem_addr,
     )
 
 
@@ -1025,7 +1077,8 @@ class ExpertKernel:
         sram_fmt_tensors: dict = None,  # from create_expert_fmt_tensors(), keyed by MeshCoordinate.
         sram_base_addr_tensors: dict = None,  # from create_expert_fmt_tensors(), keyed by MeshCoordinate.
         sram_k_offsets: list = None,  # [(CoreCoord, k_offset_tiles), ...] for K-sliced SRAM.
-        cores_per_dram_bank: int = 1,
+        n_parallel_per_bank: int = 1,
+        k_parallel_per_bank: int = 1,
         accum_experts: bool = False,
         sram_output_tensor: ttnn.Tensor = None,
         dram_fuse_silu: bool = False,
@@ -1047,9 +1100,11 @@ class ExpertKernel:
             dram_per_core_n: Number of N tiles per DRAM core.
             has_sram: Whether SRAM expert path is active.
             sram_core_grid: CoreRangeSet for SRAM expert cores (required when has_sram).
-            cores_per_dram_bank: Compute cores per DRAM bank.
+            n_parallel_per_bank: N-parallel cores per DRAM bank (total cores per bank =
+                                 n_parallel_per_bank * k_parallel_per_bank).
             sram_output_tensor: Separate SRAM output tensor on sram_core_grid (required when has_sram).
         """
+        cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
         mesh_device = a_tensor.device()
         mesh_shape = mesh_device.shape
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
@@ -1125,6 +1180,7 @@ class ExpertKernel:
                     fmt_sem_addr_1,
                     _fmt_sem_0,
                     _fmt_sem_1,
+                    partial_sem_addr,
                 ) = dram_meta_tensors[coord]
                 # Per-core active flags — each core runs only the path it belongs to.
                 all_cores_dev = ttnn.corerange_to_cores(a_dev.memory_config().shard_spec.grid)
@@ -1151,6 +1207,7 @@ class ExpertKernel:
                     subblock_k=subblock_k,
                     subblock_n=subblock_n,
                     cores_per_dram_bank=cores_per_dram_bank,
+                    k_parallel_per_bank=k_parallel_per_bank,
                     num_in1_buffers=num_in1_buffers,
                     accum_experts=accum_experts,
                     sram_per_core_n=sram_per_core_n,
@@ -1163,6 +1220,7 @@ class ExpertKernel:
                     fmt_cb_l1_addr=fmt_cb_l1_addr,
                     fmt_sem_addr_0=fmt_sem_addr_0,
                     fmt_sem_addr_1=fmt_sem_addr_1,
+                    partial_sem_addr=partial_sem_addr,
                 )
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
 
