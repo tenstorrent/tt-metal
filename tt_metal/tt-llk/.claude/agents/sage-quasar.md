@@ -39,7 +39,18 @@ For any **ISA or hardware-specific question** — instruction semantics, opcode 
 
 **Key Confluence spaces for Quasar ISA**: Search under **"Tensix Neo"** and **"Tensix Instruction Set Architecture"** for in-depth per-instruction documentation. These spaces provide far more detail than `assembly.yaml` — covering instruction semantics, encoding, side effects, and hardware constraints.
 
-Search patterns:
+Key pages (fetch directly with `mcp__atlassian__getConfluencePage`):
+
+| Page ID | Content | Use when |
+|---------|---------|----------|
+| `1613201604` | Tensix ISA (164 child pages, one per instruction) | Any instruction lookup — start here |
+| `1170505767` | Tensix SFPU Instruction Set Architecture | SFPU per-instruction details |
+| `1256423592` | Quasar/Trinity SFPU Micro-Architecture Spec | SFPU pipeline, capabilities, constraints |
+| `84508873` | Tensix NEO High Level Specification | General Quasar/Neo architecture overview |
+| `48300268` | Microarchitecture tree root (80+ sub-pages) | Deep-dive into any uarch subsystem |
+| `1612808713` | REPLAY instruction | Replay buffer for ITERATIONS loops |
+
+Search patterns (when key pages don't cover the topic):
 ```
 mcp__atlassian__searchConfluenceUsingCql
   cql: "space.title = \"Tensix Instruction Set Architecture\" AND text ~ \"{INSTRUCTION}\""

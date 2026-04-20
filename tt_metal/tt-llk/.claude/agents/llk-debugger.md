@@ -25,7 +25,7 @@ Determine the target architecture from (in priority order):
 5. `.claude/references/common-errors.md`
 
 ### Quasar
-1. Confluence: search under **"Tensix Neo"** and **"Tensix Instruction Set Architecture"** spaces for in-depth per-instruction documentation
+1. Confluence: search under **"Tensix Neo"** and **"Tensix Instruction Set Architecture"** spaces. Key page IDs for direct fetch: `1613201604` (Tensix ISA, 164 child pages), `1170505767` (SFPU ISA), `1256423592` (Quasar/Trinity SFPU uarch), `84508873` (Tensix NEO spec), `48300268` (uarch tree root), `1612808713` (REPLAY instruction)
 2. `assembly.yaml` in `tt_llk_quasar/instructions/` (useful for quick reference but limited detail)
 3. Existing code patterns in `tt_llk_quasar/`
 4. Confluence: search for "quasar" or "trinity" topics (broader architecture context)
