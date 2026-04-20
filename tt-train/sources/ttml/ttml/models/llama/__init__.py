@@ -186,6 +186,7 @@ from _ttml.models.llama import (
 )
 
 from .safetensors_loader import load_from_safetensors
+from .flops import calculate_flops_per_token
 
 __all__ = [
     # C++ bindings
@@ -196,5 +197,6 @@ __all__ = [
     "Llama",
     "LlamaConfig",
     "LlamaRopeScalingConfig",
+    "calculate_flops_per_token",
     "load_from_safetensors",
 ]
