@@ -10,6 +10,7 @@
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "core_coord.hpp"
@@ -80,6 +81,11 @@ public:
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
     const std::unordered_set<TerminationInfo>& get_registered_termination_cores(ChipId dev_id) const;
+
+    // Returns (logical_core, core_type) pairs for all dispatch kernels on dev_id.
+    // Used by rescue_stuck_dispatch_cores to target the correct cores.
+    // Unlike get_registered_termination_cores (RelayMux only), this covers all FDKernelType::DISPATCH nodes.
+    std::vector<std::pair<CoreCoord, CoreType>> get_logical_dispatch_cores_for_rescue(ChipId dev_id) const;
 
     void reset();
 

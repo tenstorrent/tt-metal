@@ -300,32 +300,31 @@ void DispatchKernelInitializer::rescue_stuck_dispatch_cores(IDevice* device) con
     const uint32_t buf_size_reg_idx = hal.get_noc_stream_remote_dest_buf_size_reg_index();
     const uint32_t num_streams = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
 
-    // 0xFFFF is the maximum 16-bit value.  The firmware uses 17-bit wrapping arithmetic
-    // (stream_wrap_gt / stream_wrap_ge with MEM_WORD_ADDR_WIDTH shift), so any count <= 0xFFFF
-    // will be satisfied when SPACE_AVAILABLE is set to 0xFFFF.
-    const uint32_t rescue_count = 0xFFFF;
+    // 0x1FFFF is the maximum 17-bit value (MEM_WORD_ADDR_WIDTH = 17).  The firmware uses
+    // 17-bit wrapping arithmetic (stream_wrap_gt) where the comparison window is 2^16 = 65536.
+    // Using the full 17-bit max ensures that any pending wait_count — including values in
+    // [0x10000, 0x1FFFE] that 0xFFFF would fail to satisfy — is covered.
+    const uint32_t rescue_count = 0x1FFFF;
 
-    const auto& termination_cores = dispatch_topology_->get_registered_termination_cores(device->id());
-    for (const auto& info : termination_cores) {
-        // Note: rescue applies to DISPATCH_S cores only (stream_wrap_gt stuck path).
-        // DISPATCH_D uses a different wait mechanism (cb_acquire_pages) — writing 0xFFFF
-        // to DISPATCH_D stream registers is a no-op since DISPATCH_D never reads
-        // STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE in the way stream_wrap_gt does.
-        // Adding a per-core type filter would require TerminationInfo to carry the
-        // dispatch type; accepted as low-risk until that field exists.
+    // get_logical_dispatch_cores_for_rescue returns (logical_core, core_type) for all
+    // FDKernelType::DISPATCH kernels (DISPATCH_S, DISPATCH_D, DISPATCH, PREFETCH, etc.).
+    // This is the correct set to rescue: get_registered_termination_cores() only returns
+    // RelayMux (ROUTING) cores and would be a complete no-op for dispatch_s.
+    const auto dispatch_core_infos = dispatch_topology_->get_logical_dispatch_cores_for_rescue(device->id());
+    for (const auto& [logical_core, core_type] : dispatch_core_infos) {
         for (uint32_t i = 0; i < num_streams; i++) {
             uint32_t stream_id = mem_map.get_dispatch_stream_index(i);
             uint32_t reg_addr = overlay_start + (stream_id * stream_reg_space) + (buf_size_reg_idx << 2);
             std::vector<uint32_t> val{rescue_count};
             try {
-                detail::WriteToDeviceL1(device, info.logical_core, reg_addr, val, info.core_type);
+                detail::WriteToDeviceL1(device, logical_core, reg_addr, val, core_type);
             } catch (const std::exception& e) {
                 log_warning(
                     tt::LogMetal,
                     "rescue_stuck_dispatch_cores: Device {} core ({},{}) stream={} write failed: {}",
                     device->id(),
-                    info.logical_core.x,
-                    info.logical_core.y,
+                    logical_core.x,
+                    logical_core.y,
                     stream_id,
                     e.what());
             }
@@ -334,15 +333,15 @@ void DispatchKernelInitializer::rescue_stuck_dispatch_cores(IDevice* device) con
             tt::LogMetal,
             "rescue_stuck_dispatch_cores: Device {} core ({},{}) injected count={:#x} on {} streams",
             device->id(),
-            info.logical_core.x,
-            info.logical_core.y,
+            logical_core.x,
+            logical_core.y,
             rescue_count,
             num_streams);
     }
 
     // Brief pause to let firmware observe the unblocked stream registers and advance
     // past the wait loop before we send the termination signal.
-    if (!termination_cores.empty()) {
+    if (!dispatch_core_infos.empty()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
         // GAP 3: Post-rescue verification — re-attempt wait_until_cores_done with a short

@@ -845,6 +845,22 @@ const std::unordered_set<TerminationInfo>& DispatchTopology::get_registered_term
     return termination_info_.at(dev_id);
 }
 
+std::vector<std::pair<CoreCoord, CoreType>> DispatchTopology::get_logical_dispatch_cores_for_rescue(
+    ChipId dev_id) const {
+    std::vector<std::pair<CoreCoord, CoreType>> result;
+    for (auto* kernel : node_id_to_kernel_) {
+        if (kernel->GetDeviceId() != dev_id) {
+            continue;
+        }
+        if (kernel->GetKernelType() != FDKernelType::DISPATCH) {
+            continue;
+        }
+        const auto& lc = kernel->GetLogicalCore();
+        result.emplace_back(CoreCoord{lc.x, lc.y}, kernel->GetCoreType());
+    }
+    return result;
+}
+
 void DispatchTopology::reset() {
     for (auto& kernel : node_id_to_kernel_) {
         delete kernel;

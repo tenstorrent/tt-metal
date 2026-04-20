@@ -215,7 +215,27 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 uint32_t spin_counter = 0;
                 bool terminated = false;
                 while (true) {
-                    detail::ReadFromDeviceL1(dev, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
+                    // Wrapped in try/catch: ReadFromDeviceL1 can throw for non-MMIO (remote)
+                    // devices if the tunnel is down or the device is unresponsive.  Without
+                    // this guard a single throw exits the loop via exception, bypassing the
+                    // timeout path and aborting all Phase 2 (ETH router) teardown for this
+                    // device.  On read failure we treat the MUX as "not yet terminated" and
+                    // let the loop continue until the timeout naturally expires, then fall
+                    // into the force-reset path.
+                    try {
+                        detail::ReadFromDeviceL1(dev, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
+                    } catch (const std::exception& read_ex) {
+                        log_warning(
+                            tt::LogMetal,
+                            "FabricFirmwareInitializer::teardown: ReadFromDeviceL1 threw on "
+                            "Device {} Tensix MUX core ({},{}): {} — treating as not-terminated",
+                            dev->id(),
+                            mux_core.x,
+                            mux_core.y,
+                            read_ex.what());
+                        // Don't break — fall through to timeout check so we eventually
+                        // force-reset rather than spin indefinitely.
+                    }
                     if (status_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED)) {
                         terminated = true;
                         break;
@@ -396,9 +416,25 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         // can distinguish "was force-reset" from "corrupt from prior crash".
         std::vector<std::string> reset_failed_channels;
         for (const auto& ch : pending) {
-            std::vector<uint32_t> status_buf(1, 0);
-            detail::ReadFromDeviceL1(
-                ch.dev, ch.eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+            // Diagnostic read: log the last-seen status before asserting reset.
+            // Wrapped in try/catch — if the read itself throws (e.g. device unresponsive),
+            // we still want to proceed with force_reset_channels_ registration and
+            // assert_risc_reset_at_core for ALL remaining channels.  Without this guard,
+            // a single bad read would abort the loop, leaving other channels un-reset and
+            // skipping devices_.clear() / init_done.erase(key) at the end of teardown.
+            std::vector<uint32_t> status_buf(1, 0xDEAD'DEAD);
+            try {
+                detail::ReadFromDeviceL1(
+                    ch.dev, ch.eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+            } catch (const std::exception& read_ex) {
+                log_warning(
+                    tt::LogMetal,
+                    "FabricFirmwareInitializer::teardown: diagnostic ReadFromDeviceL1 threw on "
+                    "Device {} chan={}: {} — using sentinel status for log, proceeding with reset",
+                    ch.dev->id(),
+                    ch.eth_chan_id,
+                    read_ex.what());
+            }
             log_warning(
                 tt::LogMetal,
                 "FabricFirmwareInitializer::teardown: Device {} ETH chan={} did not "
