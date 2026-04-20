@@ -89,11 +89,15 @@ def run_test(device_id: int = 0):
     # PyTorch codebook lookup
     rvq_first_codebook = state_dict.get("quantizer.rvq_first.vq.layers.0._codebook.embedding_sum")
     rvq_first_output_proj = state_dict.get("quantizer.rvq_first.output_proj.weight")
+    rvq_first_cluster_usage = state_dict.get("quantizer.rvq_first.vq.layers.0._codebook.cluster_usage")
     rvq_rest_codebooks = []
+    rvq_rest_cluster_usages = []
     for i in range(15):
         key = f"quantizer.rvq_rest.vq.layers.{i}._codebook.embedding_sum"
+        usage_key = f"quantizer.rvq_rest.vq.layers.{i}._codebook.cluster_usage"
         if key in state_dict:
             rvq_rest_codebooks.append(state_dict[key])
+            rvq_rest_cluster_usages.append(state_dict.get(usage_key))
     rvq_rest_output_proj = state_dict.get("quantizer.rvq_rest.output_proj.weight")
 
     pytorch_embeddings = codebook_lookup_rvq(
@@ -102,6 +106,8 @@ def run_test(device_id: int = 0):
         rvq_rest_codebooks,
         rvq_first_output_proj,
         rvq_rest_output_proj,
+        rvq_first_cluster_usage=rvq_first_cluster_usage,
+        rvq_rest_cluster_usages=rvq_rest_cluster_usages,
     )
     print(f"  PyTorch embeddings shape: {pytorch_embeddings.shape}")
     print(f"  PyTorch embeddings range: [{pytorch_embeddings.min():.4f}, {pytorch_embeddings.max():.4f}]")
@@ -121,10 +127,11 @@ def run_test(device_id: int = 0):
         # Call internal codebook lookup
         ttnn_embeddings = ttnn_decoder._codebook_lookup(token_ids)
         print(f"  TTNN embeddings shape: {ttnn_embeddings.shape}")
-        print(f"  TTNN embeddings range: [{ttnn_embeddings.min():.4f}, {ttnn_embeddings.max():.4f}]")
+        ttnn_embeddings_torch = ttnn.to_torch(ttnn_embeddings, dtype=torch.float32).squeeze(1).permute(0, 2, 1)
+        print(f"  TTNN embeddings range: [{ttnn_embeddings_torch.min():.4f}, {ttnn_embeddings_torch.max():.4f}]")
 
         # Compare
-        pcc1 = compute_pcc(pytorch_embeddings, ttnn_embeddings)
+        pcc1 = compute_pcc(pytorch_embeddings, ttnn_embeddings_torch)
         print(f"  PCC (codebook lookup): {pcc1:.6f}")
 
         if pcc1 < 0.99:
@@ -147,16 +154,55 @@ def run_test(device_id: int = 0):
                 k.replace("pre_transformer.", ""): v for k, v in state_dict.items() if k.startswith("pre_transformer.")
             }
 
-            pytorch_hidden = pre_transformer_forward(pytorch_embeddings, pre_transformer_weights, config)
+            # For pre-transformer parity, build the exact 1024-d input expected by input_proj:
+            # semantic branch (512) + acoustic branch (512), concatenated along channels.
+            expected_in_dim = int(pre_transformer_weights["input_proj.weight"].shape[1])
+            if expected_in_dim != 1024:
+                raise RuntimeError(f"Unexpected pre_transformer input dim: {expected_in_dim}")
+
+            def _normalize_codebook(
+                emb_sum: torch.Tensor, usage: torch.Tensor | None, eps: float = 1e-5
+            ) -> torch.Tensor:
+                if usage is None:
+                    return emb_sum
+                return emb_sum / usage.clamp(min=eps)[:, None]
+
+            # Semantic (q0) -> [B, 512, S]
+            first_cb = _normalize_codebook(rvq_first_codebook, rvq_first_cluster_usage)
+            first_ids = token_ids[:, 0, :]
+            first_emb = F.embedding(first_ids, first_cb).transpose(1, 2)
+            if rvq_first_output_proj is not None:
+                first_emb = F.conv1d(first_emb, rvq_first_output_proj)
+
+            # Acoustic (q1..q15) -> [B, 512, S]
+            rest_emb = None
+            for i, codebook_sum in enumerate(rvq_rest_codebooks):
+                if i + 1 >= token_ids.shape[1]:
+                    break
+                usage = rvq_rest_cluster_usages[i] if i < len(rvq_rest_cluster_usages) else None
+                cb = _normalize_codebook(codebook_sum, usage)
+                ids = token_ids[:, i + 1, :]
+                emb = F.embedding(ids, cb).transpose(1, 2)
+                rest_emb = emb if rest_emb is None else rest_emb + emb
+            if rest_emb is not None and rvq_rest_output_proj is not None:
+                rest_emb = F.conv1d(rest_emb, rvq_rest_output_proj)
+
+            if first_emb is None or rest_emb is None:
+                raise RuntimeError("Unable to build 1024-d pre_transformer input from RVQ branches.")
+
+            pretransformer_input_bcs = torch.cat([first_emb, rest_emb], dim=1).contiguous()  # [B, 1024, S]
+            pytorch_hidden_in = pretransformer_input_bcs.permute(0, 2, 1).contiguous()  # [B, S, 1024]
+            pytorch_hidden = pre_transformer_forward(pytorch_hidden_in, pre_transformer_weights, config)
             print(f"  PyTorch hidden shape: {pytorch_hidden.shape}")
 
             # TTNN pre-transformer - run forward manually
-            # Convert pytorch_embeddings to TTNN and run pre_transformer
-            seq_len = pytorch_embeddings.shape[1]
+            # Convert same 1024-d input to TTNN and run pre_transformer.
+            ttnn_hidden_in = pretransformer_input_bcs.permute(0, 2, 1).contiguous()
+            seq_len = ttnn_hidden_in.shape[1]
             pad_seq = ((seq_len + 31) // 32) * 32
             padding = pad_seq - seq_len
 
-            embeddings_padded = F.pad(pytorch_embeddings, (0, 0, 0, padding))
+            embeddings_padded = F.pad(ttnn_hidden_in, (0, 0, 0, padding))
             embeddings_ttnn = ttnn.from_torch(
                 embeddings_padded.to(torch.bfloat16),
                 dtype=ttnn.bfloat16,
@@ -165,19 +211,7 @@ def run_test(device_id: int = 0):
             )
 
             # Get RoPE for pre-transformer
-            cos, sin = ttnn_decoder._compute_rope(pad_seq, pytorch_embeddings.device)
-            cos_ttnn = ttnn.from_torch(
-                cos.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
-            sin_ttnn = ttnn.from_torch(
-                sin.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
+            cos_ttnn, sin_ttnn = ttnn_decoder._compute_rope(pad_seq)
 
             ttnn_hidden = ttnn_decoder.pre_transformer(embeddings_ttnn, cos_ttnn, sin_ttnn)
             ttnn_hidden_torch = ttnn.to_torch(ttnn_hidden)[:, :seq_len, :]

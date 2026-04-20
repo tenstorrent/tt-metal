@@ -16,7 +16,7 @@ The pre-transformer uses TTNN, while convolutional layers use PyTorch fallback.
 """
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import torch
 
@@ -861,7 +861,7 @@ class TtSpeechTokenizerDecoder(LightweightModule):
             ttnn.to_layout(sin, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
         )
 
-    def _codebook_lookup(self, token_ids: ttnn.Tensor) -> ttnn.Tensor:
+    def _codebook_lookup(self, token_ids: Union[torch.Tensor, ttnn.Tensor]) -> ttnn.Tensor:
         """
         Lookup embeddings from RVQ codebooks with proper projections.
 
@@ -876,6 +876,15 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         Returns:
             embeddings: [batch, seq_len, 1024] (or codebook_dim if no projections)
         """
+        if isinstance(token_ids, torch.Tensor):
+            token_ids = ttnn.from_torch(
+                token_ids,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         batch_size, num_quantizers, seq_len = int(token_ids.shape[0]), int(token_ids.shape[1]), int(token_ids.shape[2])
         mc = ttnn.DRAM_MEMORY_CONFIG
 
@@ -939,7 +948,7 @@ class TtSpeechTokenizerDecoder(LightweightModule):
                 )
                 rvq_rest_emb_tt, _ = conv(rvq_rest_emb_tt, seq_len)
 
-        # Concatenate rvq_first and rvq_rest to get 1024-dim embeddings
+        # Combine semantic + acoustic branches (512 channels).
         if rvq_first_emb_tt is not None and rvq_rest_emb_tt is not None:
             embeddings = ttnn.add(rvq_first_emb_tt, rvq_rest_emb_tt, memory_config=mc)
         elif rvq_first_emb_tt is not None:
