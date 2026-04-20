@@ -10,7 +10,7 @@ Single Galaxy 8x1 Torus: Development/testing setup using TG
    - Requires: TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_8x1_torus_graph_descriptor.textproto"
 
 Run with:
-'MESH_DEVICE=TG8X1 USE_TORUS_MODE=1 TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_8x1_torus_graph_descriptor.textproto" \
+'MESH_DEVICE=TG8X4 USE_TORUS_MODE=1 TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_8x4_torus_graph_descriptor.textproto" \
  pytest models/demos/deepseek_v3/tests/tg_moe_tests/test_optimized_moe_decode_block_tg_8x1.py -v'
 """
 
@@ -545,7 +545,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     return pcc_passed and allclose_passed
 
 
-@pytest.mark.requires_device(["QUAD", "TG8X1"])
+@pytest.mark.requires_device(["QUAD", "TG8X1", "TG8X4", "TG"])
 @pytest.mark.skipif(
     (os.getenv("USE_TORUS_MODE") is None),
     reason=f"Requires ring fabric",
@@ -553,7 +553,8 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
     [
-        pytest.param((8, 1), (8, 1), id="8x1_tg"),
+        # pytest.param((8, 4), (8, 4), id="8x4_tg"),
+        pytest.param((4, 8), (4, 8), id="8x4_tg"),
     ],
     indirect=["mesh_device"],
 )
@@ -573,12 +574,12 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
 @pytest.mark.parametrize("enable_trace", [True])
-@pytest.mark.parametrize("num_iterations", [1])
+@pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            # "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "trace_region_size": 500000,
         },
@@ -616,6 +617,7 @@ def test_optimized_moe_decode_block(
     random.seed(2003)
 
     num_devices = mesh_shape[0] * mesh_shape[1]
+    print("NUM DEVICES: ", num_devices)
     experts = experts_per_device * num_devices  # Calculate total experts from mesh shape
     num_dispatch_devices = mesh_shape[cluster_axis]
     num_replicated_devices = num_devices // num_dispatch_devices
@@ -1133,23 +1135,15 @@ def test_optimized_moe_decode_block(
             output_memory_config=fast_reduce_output_memory_config,
         )
 
-        # Conditionally apply reduce_scatter based on mesh shape
-        # For 16x1 (no replication), skip reduce_scatter and take first item
-        # For 16x8 (with replication), apply reduce_scatter across replicas
-        if mesh_shape[1 - cluster_axis] == 1:
-            # No replication: final output is the only item in the list
-            tt_final_output = tt_fast_reduce_output_tensors[0]
-        else:
-            # With replication: reduce_scatter across replicated devices
-            # [select_experts_k, tokens_per_device, hidden_size // num_replicated_devices] final per device shape
-            tt_final_output = ttnn.experimental.deepseek_moe_reduce_scatter(
-                tt_fast_reduce_output_tensors,
-                output_memory_config=rs_output_memory_config,
-                dim=-1,
-                num_links=4,
-                topology=ttnn.Topology.Ring,
-                cluster_axis=1,
-            )
+        tt_summed_output = ttnn.sum(tt_scaled_output, dim=0)
+        tt_final_output = ttnn.reduce_scatter(
+            tt_summed_output,
+            dim=-1,
+            num_links=4,
+            memory_config=rs_output_memory_config,
+            topology=ttnn.Topology.Ring,
+            cluster_axis=1 - cluster_axis,
+        )
 
         return tt_combine_output, tt_final_output
 
