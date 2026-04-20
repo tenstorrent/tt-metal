@@ -429,7 +429,7 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
     const auto router_sync_address = builder_context.get_fabric_router_sync_address_and_status().first;
     const auto [term_addr, term_signal] = builder_context.get_fabric_router_termination_address_and_signal();
     constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
-    constexpr uint32_t stale_timeout_ms = 50;  // EDM firmware responds in <5ms; base firmware never responds
+    constexpr uint32_t stale_timeout_ms = 100;  // EDM firmware responds in <5ms; base firmware never responds
     constexpr uint32_t kSpinsBetweenSleeps = 64;
 
     const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());

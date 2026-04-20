@@ -78,6 +78,11 @@ FORCE_INLINE bool wait_for_fabric_endpoint_ready(
         if (local_fabric_ep_status_ptr[0] == tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC) {
             return true;
         }
+        // RISC-V PAUSE hint: adds ~5-50 cycles of backoff per iteration so the
+        // 1M cap covers more wall-clock time without a larger loop bound. Safe
+        // here because this function is only called at init time, not on the
+        // data-path hot loop (where PAUSE caused a 13.8% BW regression).
+        asm volatile(".4byte 0x0100000F");
     }
     // Fall through on timeout: host-side reset logic recovers. Avoid infinite spin
     // so a stuck peer cannot permanently wedge this kernel.

@@ -203,6 +203,9 @@ FORCE_INLINE void wait_for_mux_endpoint_ready(
         if (ptr[0] == tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
             return;
         }
+        // RISC-V PAUSE hint: adds backoff per iteration — more wall-clock time
+        // covered by 1M cap without enlarging the bound. Init-time only; safe.
+        asm volatile(".4byte 0x0100000F");
     }
     // Fall through on timeout — caller or host Phase 4 handles recovery.
 }

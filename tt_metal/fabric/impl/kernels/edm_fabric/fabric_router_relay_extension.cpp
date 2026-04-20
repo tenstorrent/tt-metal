@@ -176,6 +176,9 @@ FORCE_INLINE void wait_for_mux_endpoint_ready(
             return;
         }
 #endif
+        // RISC-V PAUSE hint: adds backoff per iteration — more wall-clock time
+        // covered by 1M cap without enlarging the bound. Init-time only; safe.
+        asm volatile(".4byte 0x0100000F");
     }
     // Fall through on timeout.
 }
