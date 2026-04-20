@@ -46,6 +46,7 @@ tt_stl/**/CMakeLists.txt @ayerofieiev-tt @akerteszTT @riverwuTT @tenstorrent/met
 
 # Scaleout Tools
 tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @jpanasiukTT @tenstorrent/codeowner-bypass
+tools/scaleout/exabox/ @jpanasiukTT @aczajkowskiTT @ctr-fmamedov-crypto @gsarabandoTT @tt-mnijjar @mgajewskiTT @pbaraTT @vdu-TT @tt-rkim @jlakisTT @dpopovTT @tenstorrent/codeowner-bypass
 
 # Scaleout
 tests/scale_out/test_ccl_fabric_manager.py @tenstorrent/metalium-developers-metal-distributed @tenstorrent/codeowner-bypass
