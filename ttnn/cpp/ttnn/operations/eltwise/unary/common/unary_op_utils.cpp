@@ -92,6 +92,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::WHERE_TSS: return "SFPU_OP_WHERE_INCLUDE";
         case UnaryOpType::CLAMP_TSS: return "SFPU_OP_CLAMP_INCLUDE";
         case UnaryOpType::SOFTSHRINK:
+        case UnaryOpType::HARDSHRINK:
         case UnaryOpType::SOFTSIGN:
         case UnaryOpType::HARDSIGMOID:
         case UnaryOpType::CELU: return "SFPU_OP_ACTIVATIONS_INCLUDE";
@@ -266,10 +267,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {
                 fmt::format("erf_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("erf_tile<{1}u>({0});", idst, (uint32_t)param0)};
-        case UnaryOpType::ERFC:
-            return {
-                fmt::format("erfc_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("erfc_tile<{1}u>({0});", idst, (uint32_t)param0)};
+        case UnaryOpType::ERFC: return {"erfc_tile_init();", fmt::format("erfc_tile({0});", idst)};
         case UnaryOpType::RDIV: {
             uint32_t rounding_mode_value = params[1];
             static constexpr const char* rounding_mode_strs[] = {
@@ -514,7 +512,17 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(param1))};
         }
-        case UnaryOpType::HARDSHRINK: return {};
+        case UnaryOpType::HARDSHRINK: {
+            uint32_t lambda_bits = std::bit_cast<uint32_t>(param0);
+            if (input_dtype.has_value() && *input_dtype == DataType::BFLOAT16) {
+                // For BF16 inputs, pre-round lambda to BF16 precision (RNE) then
+                // re-expand to FP32. This ensures the SFPU's FP32→FP19b truncation
+                // preserves the BF16 value exactly, matching the input's precision.
+                uint32_t bf16 = (lambda_bits + 0x7FFFu + ((lambda_bits >> 16) & 1u)) >> 16;
+                lambda_bits = bf16 << 16;
+            }
+            return {"hardshrink_tile_init();", fmt::format("hardshrink_tile({}, {}u);", idst, lambda_bits)};
+        }
         case UnaryOpType::SOFTSHRINK:
             return {
                 "softshrink_tile_init();",
@@ -1015,12 +1023,6 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
             }
         case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
         case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
-        case UnaryOpType::HARDSHRINK:
-            if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
-                return "hardshrink_kernel_sfpu.cpp";
-            } else {
-                return "hardshrink_kernel.cpp";
-            }
         case UnaryOpType::HARDSWISH:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
                 return "hardswish_kernel_sfpu.cpp";

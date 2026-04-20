@@ -5,6 +5,8 @@
 
 #include "api/alignment.h"
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -43,6 +45,10 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<0>();
     constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_src(cb_id_src);
+    experimental::CircularBuffer cb_src_b(cb_id_src_b);
+
     constexpr uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_src);
     constexpr uint32_t element_size = src_tile_bytes / tile_hw;
@@ -62,6 +68,8 @@ void kernel_main() {
     const uint32_t page_size_b = align(page_size_b_arg, alignment_b);
 #endif
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto src = TensorAccessor(src_args, src_addr, page_size_a);
     const auto src_b = TensorAccessor(src_b_args, src_addr_b, page_size_b);
 
@@ -125,11 +133,11 @@ void kernel_main() {
                             const uint32_t current_read_len_a = align(current_chunk_bytes, alignment_a);
                             const uint32_t current_read_len_b = align(current_chunk_bytes, alignment_b);
 
-                            cb_reserve_back(cb_id_src, 1);
-                            const uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
+                            cb_src.reserve_back(1);
+                            const uint32_t l1_write_addr_src = cb_src.get_write_ptr();
 
-                            cb_reserve_back(cb_id_src_b, 1);
-                            const uint32_t l1_write_addr_src_b = get_write_ptr(cb_id_src_b);
+                            cb_src_b.reserve_back(1);
+                            const uint32_t l1_write_addr_src_b = cb_src_b.get_write_ptr();
 
 #if SRC_BCAST
                             const uint64_t addr_a = get_noc_addr(row_block_a, src) + current_chunk_offset;
@@ -142,7 +150,7 @@ void kernel_main() {
                                 noc_async_read(addr_b, curr_l1_b, current_read_len_b);
                                 curr_l1_b += current_chunk_bytes;
                             }
-                            noc_async_read_barrier();
+                            noc.async_read_barrier();
                             FILL_TILE_WITH_FIRST_ROW_RM(l1_write_addr_src, current_chunk_elements, limit);
 #else
                             uint32_t curr_l1_a = l1_write_addr_src;
@@ -156,12 +164,12 @@ void kernel_main() {
                             const uint64_t addr_b = get_noc_addr(row_block_b, src_b) + current_chunk_offset;
                             noc_async_read(addr_b, l1_write_addr_src_b, current_read_len_b);
 
-                            noc_async_read_barrier();
+                            noc.async_read_barrier();
                             FILL_TILE_WITH_FIRST_ROW_RM(l1_write_addr_src_b, current_chunk_elements, limit);
 #endif
 
-                            cb_push_back(cb_id_src, 1);
-                            cb_push_back(cb_id_src_b, 1);
+                            cb_src.push_back(1);
+                            cb_src_b.push_back(1);
                         }
 
                         row_blocks_pushed++;

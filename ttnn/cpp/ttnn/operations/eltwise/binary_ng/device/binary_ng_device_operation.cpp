@@ -35,7 +35,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case BIAS_GELU:
         case HYPOT: return (a == FLOAT32 && b == FLOAT32);
         case GT:
-        case LT:
+        case LT: return ((a == b) && (a == INT32 || a == FLOAT32 || a == UINT16));
         case GE:
         case LE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
         case LCM:
@@ -49,7 +49,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case BITWISE_AND: return a == b && (a == INT32 || a == UINT32 || a == UINT16);
         case DIV_FLOOR:
         case DIV_TRUNC:
-        case REMAINDER: return (a == INT32 && b == INT32);
+        case REMAINDER:
         case FMOD:
         case QUANT:
         case REQUANT:
@@ -355,11 +355,11 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
             a_dim,
             b_dim);
 
-        if (i <= -6) {
+        if (i <= -7) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Broadcasting rule violation for rank >= 6 at dimension index {} (output rank {}). "
-                "Broadcast is supported up to rank 5. dim a: {}, dim b: {}",
+                "Broadcasting rule violation for rank >= 7 at dimension index {} (output rank {}). "
+                "Broadcast is supported up to rank 6. dim a: {}, dim b: {}",
                 i,
                 larger_rank,
                 a_dim,

@@ -97,8 +97,8 @@ def test_01_volume_tensors(device, a, b, c_golden, memory_config_a, memory_confi
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
-        [[3, 4, 8, 6, 32, 64], [1, 1, 8, 6, 32, 64]],
-        [[1, 2, 3, 3, 4, 32], [5, 1, 3, 3, 4, 32]],
+        [[3, 4, 8, 6, 32, 64, 32], [1, 1, 8, 6, 32, 64, 32]],
+        [[1, 2, 3, 3, 4, 32, 32], [5, 1, 3, 3, 4, 32, 32]],
     ],
 )
 def test_binary_invalid_rank(device, a_shape, b_shape):

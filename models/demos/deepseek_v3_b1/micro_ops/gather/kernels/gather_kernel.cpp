@@ -60,6 +60,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather_row_major"),
                 receiver_data_addr,
                 get_named_compile_time_arg_val("gather_sender_idx"),
+                noc_index,
             },
         .receiver =
             {

@@ -87,8 +87,8 @@ inline void _calculate_sine_(const int iterations)
     {
         sfpi::vFloat v             = sfpi::dst_reg[0];
         v                          = 0.318309886183791f * v; // *1/pi to get number of pi rads.
-        sfpi::vInt whole_v         = sfpi::float_to_int16(v, 0);
-        sfpi::vFloat whole_v_float = sfpi::int32_to_float(whole_v, 0);
+        sfpi::vInt whole_v         = sfpi::float_to_int16(v, sfpi::RoundMode::NearestEven);
+        sfpi::vFloat whole_v_float = sfpi::int32_to_float(whole_v, sfpi::RoundMode::NearestEven);
         v                          = v - whole_v_float;
         v *= 3.141592653589793f; // fractional * pi to get it in [-pi:pi]
         v       = _sfpu_sine_maclaurin_series_<APPROXIMATION_MODE>(v);
@@ -114,8 +114,8 @@ inline void _calculate_cosine_(const int iterations)
     {
         sfpi::vFloat v             = sfpi::dst_reg[0];
         v                          = 0.318309886183791f * v; // *1/pi to get number of pi rads.
-        sfpi::vInt whole_v         = sfpi::float_to_int16(v, 0);
-        sfpi::vFloat whole_v_float = sfpi::int32_to_float(whole_v, 0);
+        sfpi::vInt whole_v         = sfpi::float_to_int16(v, sfpi::RoundMode::NearestEven);
+        sfpi::vFloat whole_v_float = sfpi::int32_to_float(whole_v, sfpi::RoundMode::NearestEven);
         v                          = v - whole_v_float;
         v *= 3.141592653589793f; // fractional * pi to get it in [-pi:pi]
         v       = _sfpu_cosine_maclaurin_series_<APPROXIMATION_MODE>(v);
@@ -172,12 +172,13 @@ inline void _calculate_asinh_()
         sfpi::vFloat tmp = inp * inp + sfpi::vConst1;
         tmp              = _calculate_sqrt_body_<APPROXIMATION_MODE>(tmp);
         tmp              = tmp + sfpi::abs(inp);
-        sfpi::dst_reg[0] = _calculate_log_body_no_init_(tmp);
+        auto res         = _calculate_log_body_no_init_(tmp);
         v_if (inp < sfpi::vConst0)
         {
-            sfpi::dst_reg[0] = -sfpi::dst_reg[0];
+            res = -res;
         }
         v_endif;
+        sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
     }
 }
@@ -191,14 +192,15 @@ inline void _calculate_atanh_()
     {
         sfpi::vFloat inp     = sfpi::dst_reg[0];
         sfpi::vFloat abs_inp = sfpi::abs(inp);
+        sfpi::vFloat res;
         v_if (abs_inp > sfpi::vConst1)
         {
-            sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN();
+            res = std::numeric_limits<float>::quiet_NaN();
         }
         v_elseif (abs_inp == sfpi::vConst1)
         {
             sfpi::vFloat inf = std::numeric_limits<float>::infinity();
-            sfpi::dst_reg[0] = sfpi::setsgn(inf, inp);
+            res              = sfpi::setsgn(inf, inp);
         }
         v_else
         {
@@ -212,13 +214,14 @@ inline void _calculate_atanh_()
             }
             else
             {
-                den = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(tmp, 0));
+                den = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(tmp, sfpi::RoundMode::NearestEven));
             }
             num              = num * den;
             den              = _calculate_log_body_no_init_(num);
-            sfpi::dst_reg[0] = 0.5f * den;
+            res              = 0.5f * den;
         }
         v_endif;
+        sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
     }
 }

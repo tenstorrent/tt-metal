@@ -22,6 +22,7 @@ Optional:
                                         (default: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric)
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml)
+    --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
     --help                              Display this help message and exit
 
 Example:
@@ -42,6 +43,7 @@ MESH_GRAPH_DESC_PATH=""
 MESH_GRAPH_DESC_PATH_EXPLICIT=false
 TEST_BINARY="./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric"
 TEST_CONFIG="tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml"
+FILTER=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -108,6 +110,14 @@ while [[ $# -gt 0 ]]; do
             TEST_CONFIG="$2"
             shift 2
             ;;
+        --filter)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --filter requires a non-empty value"
+                exit 1
+            fi
+            FILTER="$2"
+            shift 2
+            ;;
         --help)
             show_help
             exit 0
@@ -161,6 +171,9 @@ echo "Output directory: $OUTPUT_DIR"
 echo "Mesh graph descriptor: $MESH_GRAPH_DESC_PATH"
 echo "Test binary: $TEST_BINARY"
 echo "Test config: $TEST_CONFIG"
+if [[ -n "$FILTER" ]]; then
+    echo "Filter: $FILTER"
+fi
 echo "Log file: $LOG_FILE"
 echo "=========================================="
 echo ""
@@ -168,6 +181,9 @@ echo ""
 EXTRA_BINARY_ARGS=""
 if [[ "$TEST_BINARY" == *test_tt_fabric ]]; then
     EXTRA_BINARY_ARGS="--show-progress --show-workers"
+fi
+if [[ -n "$FILTER" ]]; then
+    EXTRA_BINARY_ARGS="$EXTRA_BINARY_ARGS --filter $FILTER"
 fi
 
 if [[ "$CONFIG" == "4x8" ]]; then
@@ -182,7 +198,7 @@ if [[ "$CONFIG" == "4x8" ]]; then
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=0 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
 else
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
@@ -192,22 +208,22 @@ else
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=0 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=1 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=2 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=3 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
 fi
 
