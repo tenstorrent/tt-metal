@@ -160,6 +160,7 @@ public:
 }  // namespace
 
 void bind_fusion_dispatch_op(nb::module_& mod) {
+    // NOLINTNEXTLINE(bugprone-unused-raii)
     nb::class_<AddressSlots>(mod, "AddressSlots", R"doc(
         Opaque mapping of every position in a ProgramDescriptor that references
         an IO tensor address (CB buffer pointers, per-core runtime args, common
