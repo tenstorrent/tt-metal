@@ -18,11 +18,13 @@ namespace ckernel::sfpu {
 // LUT-based erf via piecewise rational P(x)/Q(x)
 //
 // BF16: n8/d8, 1 segment, range [-10.0, 10.0] (parity x²-Horner).
-//       WH-specific refit (v2): coefficients re-optimized to maximize
-//       decomposed-GELU BF16-byte match (99.3 % on Gaussian σ∈{0.5..3})
-//       vs the pre-#41850 5-segment polynomial GELU path, preserving
-//       MaxULP=1 vs FP64 truth at BF16 erf output. Same kernel structure
-//       (same FMA count) — perf neutral. See PR #42540 / plan 0090.
+//       WH-specific refit (v3, on-device): coefficients re-optimized via
+//       coordinate descent on actual WH SFPU hardware measurements.
+//       On-device GELU byte-match vs pre-#41850 polynomial: 85.7 %
+//       (Python model prediction was 99.3 % — WH FMA behavior diverges
+//       significantly from Python IEEE FP32 model). MaxULP=1 vs FP64
+//       truth preserved. Same kernel structure — perf neutral.
+//       See PR #42540 / plan 0090.
 // FP32: n16/d16, 1 segment, range [-10.0, 10.0] (parity x²-Horner).
 // ======================================================================
 
@@ -52,7 +54,7 @@ constexpr uint32_t ERF_NUM_SEGMENTS = 1;
 constexpr uint32_t ERF_LUT_SIZE = 20;
 constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
     {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f, 1.1280932447e+00f, 0.0000000000e+00f,
-     2.7471853014e-01f,  0.0000000000e+00f, 4.5174409690e-02f, 0.0000000000e+00f, 7.4855461733e-04f,
+     2.7609212279e-01f,  0.0000000000e+00f, 4.5400281738e-02f, 0.0000000000e+00f, 7.4481184425e-04f,
      0.0000000000e+00f,  1.0000000000e+00f, 0.0000000000e+00f, 5.7439188334e-01f, 0.0000000000e+00f,
      1.3675764810e-01f,  0.0000000000e+00f, 8.2844606784e-03f, 0.0000000000e+00f, 2.4813862145e-05f}};
 
