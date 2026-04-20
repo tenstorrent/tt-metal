@@ -183,7 +183,10 @@ struct MatmulExpertCompressedDRAM {
         uint32_t k_parallel_per_bank_,
         uint32_t k_slice_idx_,
         uint32_t num_subblocks_k_local_,
-        uint32_t partial_sem_addr_>
+        uint32_t partial_sem_addr_,
+        // Aliased CB over cb_out with a single-tile view of all expert outputs for
+        // the post-reduction silu fast-path (tile shape = [num_active * per_core_n, tile_w]).
+        uint32_t cb_out_silu_>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -216,6 +219,7 @@ struct MatmulExpertCompressedDRAM {
         // Only meaningful inside `if constexpr (inner_dim_reduction)` scope.
         static constexpr bool is_sender = !is_reducer;
         static constexpr uint32_t partial_sem_addr = partial_sem_addr_;
+        static constexpr uint32_t cb_out_silu = cb_out_silu_;
     };
 
     struct WriterCTArgs {};
@@ -616,22 +620,10 @@ struct MatmulExpertCompressedDRAM {
                 tile_regs_commit();
 
                 cb_reserve_back(CTArgs::cb_out, total_tiles);
+                tile_regs_wait();
 
-                if constexpr (CTArgs::fuse_silu) {
-                    TTI_SEMWAIT(
-                        p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                        semaphore::t6_sem(semaphore::MATH_PACK),
-                        p_stall::STALL_ON_ZERO);
-                    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-                    for (uint32_t t = 0; t < total_tiles; t++) {
-                        PACK((llk_math_eltwise_unary_sfpu_silu<false, false, 2>(t, (int)VectorMode::R)));
-                    }
-                    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                } else {
-                    tile_regs_wait();
-                }
-                // PACK-side: wait for sender's data to land before reading L1 for acc.
-                // This must happen between commit and pack_tile.
+                // Reducer: wait for sender's NOC write then pack-with-L1-acc to sum
+                // sender_partial + reducer_partial in L1 as a RAW sum (no silu yet).
                 if constexpr (CTArgs::is_reducer) {
                     constexpr uint32_t num_senders = CTArgs::k_parallel_per_bank - 1;
                     PACK(({
@@ -648,17 +640,46 @@ struct MatmulExpertCompressedDRAM {
                 }
                 tile_regs_release();
 
-                cb_push_back(CTArgs::cb_out, total_tiles);
-
                 if constexpr (CTArgs::is_reducer) {
                     PACK((llk_pack_reconfig_l1_acc(0)));
-
-                    PACK(({
-                        volatile tt_l1_ptr uint32_t* partial_sem_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::partial_sem_addr);
-                        *partial_sem_ptr = 0;
-                    }));
                 }
+
+                // Post-reduction silu fast-path (reducer only). cb_out_silu is a view of
+                // cb_out's L1 with tile shape [silu_tile_h, tile_w] — op.py pads silu_tile_h
+                // up to the next valid face_r_dim {2,4,8,16}, so one copy_tile + silu +
+                // pack_tile covers all expert outputs (padded slots are garbage but out_tensor
+                // is assumed sized for the padded count by the caller).
+                if constexpr (CTArgs::fuse_silu && CTArgs::is_reducer) {
+                    constexpr uint32_t raw_silu_tile_h = CTArgs::num_active_experts * CTArgs::per_core_n;
+                    constexpr uint32_t silu_tile_h = raw_silu_tile_h <= 2   ? 2
+                                                     : raw_silu_tile_h <= 4 ? 4
+                                                     : raw_silu_tile_h <= 8 ? 8
+                                                                            : 16;
+                    static_assert(raw_silu_tile_h <= 16, "silu fast-path: silu_tile_h must be <= 16");
+                    // 2 faces × (silu_tile_h * 16 elems) / 32 lanes = silu_tile_h/2 iterations/face.
+                    constexpr uint32_t silu_iterations = silu_tile_h / 2;
+
+                    reconfig_data_format_srca<false, true>(CTArgs::cb_out_silu, CTArgs::cb_out_silu);
+                    pack_reconfig_data_format<true>(CTArgs::cb_out_silu);
+                    copy_tile_to_dst_init_short(CTArgs::cb_out_silu);
+
+                    tile_regs_acquire();
+                    copy_tile(CTArgs::cb_out_silu, 0, 0);
+                    tile_regs_commit();
+
+                    TTI_SEMWAIT(
+                        p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                        semaphore::t6_sem(semaphore::MATH_PACK),
+                        p_stall::STALL_ON_ZERO);
+                    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+                    PACK((llk_math_eltwise_unary_sfpu_silu<true, false, silu_iterations>(0, (int)VectorMode::R)));
+                    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+
+                    pack_tile(0, CTArgs::cb_out_silu, 0);
+                    tile_regs_release();
+                }
+
+                cb_push_back(CTArgs::cb_out, total_tiles);
             } else {
                 uint32_t fmt_slot = 0;
 

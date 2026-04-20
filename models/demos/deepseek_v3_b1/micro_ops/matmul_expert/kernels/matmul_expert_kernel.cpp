@@ -136,7 +136,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("k_parallel_per_bank"),
         get_named_compile_time_arg_val("k_slice_idx"),
         get_named_compile_time_arg_val("num_subblocks_k_local"),
-        get_named_compile_time_arg_val("partial_sem_addr")>;
+        get_named_compile_time_arg_val("partial_sem_addr"),
+        get_named_compile_time_arg_val("cb_out_silu")>;
 #endif
 
     constexpr bool sram_active = get_named_compile_time_arg_val("sram_active") != 0;

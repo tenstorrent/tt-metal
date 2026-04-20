@@ -29,6 +29,14 @@ def _align(n: int, alignment: int) -> int:
     return ((n + alignment - 1) // alignment) * alignment
 
 
+def _pad_to_face_r_dim(n: int) -> int:
+    """Round n up to the next valid LLK face_r_dim ∈ {2, 4, 8, 16}."""
+    for valid in (2, 4, 8, 16):
+        if n <= valid:
+            return valid
+    raise ValueError(f"value {n} exceeds max face_r_dim 16")
+
+
 def _assignment_to_llk_fmt(idx: int) -> int:
     """Map CompressedTensor assignment index to new LLK format code."""
     _ASSIGNMENT_TO_LLK_FMT = [3, 2, 1, 0]  # bfp8→3, bfp4→2, bfp2→1, bfp0→0
@@ -346,6 +354,10 @@ def _build_program_for_device(
     cb_in1_dram = 4
     cb_fmt_dram = 5
     cb_out_sram = 6
+    # cb_out_silu: aliased on out_tensor's L1 region, but with tile shape
+    # [num_active_experts * dram_per_core_n, tile_w] so the silu post-pass can
+    # treat all expert outputs as ONE tile (single copy_tile / silu / pack_tile).
+    cb_out_silu = 7
 
     # CB descriptors.
     cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_tensor)
@@ -355,6 +367,20 @@ def _build_program_for_device(
     cbs = [cb0_desc, *cb1_descs, cb2_desc, cb3_desc]
     if sram_out_tensor is not None:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(cb_out_sram, sram_out_tensor))
+
+    # Silu-view alias on cb_out's L1 region (same backing, wider tile). Pad tile height
+    # up to the next valid face_r_dim {2,4,8,16} so the silu fast-path always works.
+    # Caller must ensure out_tensor has at least silu_tile_h * tile_w elements per core.
+    if dram_fuse_silu and dram_per_core_n > 0:
+        tile_h, tile_w = out_tensor.get_tile().tile_shape
+        raw_silu_tile_h = num_active_experts * dram_per_core_n * tile_h
+        silu_tile_h = _pad_to_face_r_dim(raw_silu_tile_h)
+        silu_tile = ttnn.Tile([silu_tile_h, tile_w])
+        silu_tile_bytes = silu_tile.get_tile_size(out_tensor.dtype)
+        cb_out_silu_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out_silu, out_tensor)
+        cb_out_silu_desc.format_descriptors[0].tile = ttnn.TileDescriptor(silu_tile)
+        cb_out_silu_desc.format_descriptors[0].page_size = silu_tile_bytes
+        cbs.append(cb_out_silu_desc)
 
     # cb_in1_dram and cb_fmt_dram share one backing tensor (dram_backing_tensor).
     # in1 region: [0, in1_region_bytes), fmt region: [in1_region_bytes, total).
@@ -462,6 +488,7 @@ def _build_program_for_device(
         ("cb_out_sram", cb_out_sram),
         ("dram_fuse_silu", 1 if dram_fuse_silu else 0),
         ("index_offset", index_offset),
+        ("cb_out_silu", cb_out_silu),
     ]
 
     # Per-core descriptors.

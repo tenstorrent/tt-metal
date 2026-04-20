@@ -2554,7 +2554,7 @@ def test_benchmark_gate_proj(device):
         dram_expert_ids=list(range(8)),
         active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
         formats_per_device=[["bfp4", "bfp0"]],
-        dram_fuse_silu=False,
+        dram_fuse_silu=True,
         subblock_n=1,
         n_parallel_per_bank=1,
         k_parallel_per_bank=2,
