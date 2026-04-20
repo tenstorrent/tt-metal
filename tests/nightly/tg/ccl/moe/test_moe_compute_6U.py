@@ -913,6 +913,7 @@ def compute_matmul_golden(
     if activation_type == MoEActivationFunction.SILU:
         # SILU: silu(x @ w0) * (x @ w1)
         torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
+        # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
         torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
     elif activation_type == MoEActivationFunction.SWIGLU:
         torch_intermediate_ref = _swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)  # (L, E, T, N)
