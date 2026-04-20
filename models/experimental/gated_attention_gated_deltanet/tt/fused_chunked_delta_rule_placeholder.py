@@ -4,7 +4,7 @@
 
 import math
 import ttnn
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 
 from .ttnn_delta_rule_ops import (
     l2_norm_ttnn,
@@ -13,6 +13,100 @@ from .ttnn_delta_rule_ops import (
     _create_strict_lower_tril_ttnn,
     _get_matmul_program_config,
 )
+
+
+def build_fused_chunked_delta_rule_constants(
+    device,
+    batch_size: int,
+    num_heads: int,
+    seq_len: int,
+    head_k_dim: int,
+    head_v_dim: int,
+    chunk_size: int,
+) -> Dict[str, Any]:
+    """Eagerly build host-to-device constants used by ``fused_chunked_delta_rule_ttnn``.
+
+    ``ttnn.ones`` / ``ttnn.zeros`` create a host buffer and then copy it to the device, which is
+    not permitted during trace capture (``fd_mesh_command_queue.cpp`` asserts "Writes are not
+    supported during trace capture"). Call this once, outside of any trace capture region, and
+    pass the returned dict into ``fused_chunked_delta_rule_ttnn`` via ``precomputed_constants``.
+    """
+    B = batch_size
+    H = num_heads
+    T = seq_len
+    K = head_k_dim
+    V = head_v_dim
+    BH = B * H
+
+    pad_len = (chunk_size - (T % chunk_size)) % chunk_size
+    L = T + pad_len
+
+    tril_mask = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+    tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    strict_lower = _create_strict_lower_tril_ttnn(
+        chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    strict_lower = ttnn.reshape(strict_lower, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    eye = _create_eye_matrix_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+    eye = ttnn.reshape(eye, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    lower_causal = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    initial_state_zeros = ttnn.zeros(
+        [BH, K, V], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    pad_zeros = None
+    if pad_len > 0:
+        pad_zeros = {
+            "q": ttnn.zeros(
+                [BH, pad_len, K],
+                device=device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            ),
+            "k": ttnn.zeros(
+                [BH, pad_len, K],
+                device=device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            ),
+            "v": ttnn.zeros(
+                [BH, pad_len, V],
+                device=device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            ),
+            "beta": ttnn.zeros(
+                [BH, pad_len, 1],
+                device=device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            ),
+            "g": ttnn.zeros(
+                [BH, pad_len, 1],
+                device=device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            ),
+        }
+
+    return {
+        "tril_mask": tril_mask,
+        "strict_lower": strict_lower,
+        "eye": eye,
+        "lower_causal": lower_causal,
+        "initial_state_zeros": initial_state_zeros,
+        "pad_zeros": pad_zeros,
+        "shape_key": (B, H, T, K, V, chunk_size, L, pad_len),
+    }
 
 
 def _get_tensor_shape(tensor, use_padded=False):
@@ -43,6 +137,7 @@ def fused_chunked_delta_rule_ttnn(
     scale: Optional[float] = None,
     initial_state: Optional[ttnn.Tensor] = None,
     device: Optional[ttnn.Device] = None,
+    precomputed_constants: Optional[Dict[str, Any]] = None,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     """
     Fused chunked delta rule using optimized per-chunk operations.
@@ -116,77 +211,27 @@ def fused_chunked_delta_rule_ttnn(
     g = ttnn.reshape(g, [BH, T], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     if pad_len > 0:
-        q = ttnn.concat(
-            [
-                q,
-                ttnn.zeros(
-                    [BH, pad_len, K],
-                    device=device,
-                    dtype=ttnn.float32,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                ),
-            ],
-            dim=1,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        k = ttnn.concat(
-            [
-                k,
-                ttnn.zeros(
-                    [BH, pad_len, K],
-                    device=device,
-                    dtype=ttnn.float32,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                ),
-            ],
-            dim=1,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        v = ttnn.concat(
-            [
-                v,
-                ttnn.zeros(
-                    [BH, pad_len, V],
-                    device=device,
-                    dtype=ttnn.float32,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                ),
-            ],
-            dim=1,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        pre_pad = (precomputed_constants or {}).get("pad_zeros") if precomputed_constants else None
+
+        def _pad_zero(shape, key):
+            if pre_pad is not None and key in pre_pad:
+                return pre_pad[key]
+            return ttnn.zeros(
+                shape,
+                device=device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+
+        q = ttnn.concat([q, _pad_zero([BH, pad_len, K], "q")], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        k = ttnn.concat([k, _pad_zero([BH, pad_len, K], "k")], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        v = ttnn.concat([v, _pad_zero([BH, pad_len, V], "v")], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         beta_flat = ttnn.concat(
-            [
-                beta_flat,
-                ttnn.zeros(
-                    [BH, pad_len, 1],
-                    device=device,
-                    dtype=ttnn.float32,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                ),
-            ],
-            dim=1,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            [beta_flat, _pad_zero([BH, pad_len, 1], "beta")], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
         )
         g_3d = ttnn.reshape(g, [BH, T, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        g_3d = ttnn.concat(
-            [
-                g_3d,
-                ttnn.zeros(
-                    [BH, pad_len, 1],
-                    device=device,
-                    dtype=ttnn.float32,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                ),
-            ],
-            dim=1,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        g_3d = ttnn.concat([g_3d, _pad_zero([BH, pad_len, 1], "g")], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         g = ttnn.reshape(g_3d, [BH, L], memory_config=ttnn.L1_MEMORY_CONFIG)
         beta_flat = ttnn.reshape(beta_flat, [BH, L, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
     else:
@@ -214,8 +259,11 @@ def fused_chunked_delta_rule_ttnn(
     decay_row = ttnn.reshape(decay, [batch, 1, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
     L_diff = ttnn.subtract(decay_col, decay_row, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    tril_mask = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
-    tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
+    if precomputed_constants is not None and "tril_mask" in precomputed_constants:
+        tril_mask = precomputed_constants["tril_mask"]
+    else:
+        tril_mask = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+        tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     L_diff_masked = ttnn.multiply(L_diff, tril_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
     L_mask = ttnn.multiply(
@@ -235,14 +283,20 @@ def fused_chunked_delta_rule_ttnn(
         kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     M = ttnn.neg(ttnn.multiply(kk, L_mask, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG)
-    strict_lower = _create_strict_lower_tril_ttnn(
-        chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-    strict_lower = ttnn.reshape(strict_lower, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
+    if precomputed_constants is not None and "strict_lower" in precomputed_constants:
+        strict_lower = precomputed_constants["strict_lower"]
+    else:
+        strict_lower = _create_strict_lower_tril_ttnn(
+            chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        strict_lower = ttnn.reshape(strict_lower, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
     M = ttnn.multiply(M, strict_lower, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    eye = _create_eye_matrix_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
-    eye = ttnn.reshape(eye, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
+    if precomputed_constants is not None and "eye" in precomputed_constants:
+        eye = precomputed_constants["eye"]
+    else:
+        eye = _create_eye_matrix_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+        eye = ttnn.reshape(eye, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     R = ttnn.add(M, eye, memory_config=ttnn.L1_MEMORY_CONFIG)
     P = ttnn.matmul(M, M, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -332,12 +386,19 @@ def fused_chunked_delta_rule_ttnn(
         decay_2d = None
         decay_last_2d = None
 
-    lower_causal = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if precomputed_constants is not None and "lower_causal" in precomputed_constants:
+        lower_causal = precomputed_constants["lower_causal"]
+    else:
+        lower_causal = _create_tril_ones_ttnn(
+            chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
-    # Initialize state
-    S = ttnn.zeros(
-        [BH, K, V], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
+    if precomputed_constants is not None and "initial_state_zeros" in precomputed_constants:
+        S = precomputed_constants["initial_state_zeros"]
+    else:
+        S = ttnn.zeros(
+            [BH, K, V], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
     if initial_state is not None:
         S = ttnn.typecast(
             ttnn.reshape(initial_state, [BH, K, V], memory_config=ttnn.L1_MEMORY_CONFIG),

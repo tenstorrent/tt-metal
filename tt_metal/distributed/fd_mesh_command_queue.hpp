@@ -187,6 +187,10 @@ private:
     // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
 
+    // If mesh trace capture was started but never ended (e.g. Python exception mid-capture), CQ state must be reset
+    // before finish/synchronize can record completion events. Must be called with lock_api_function_ held.
+    void abort_interrupted_mesh_trace_capture_if_active_nolock();
+
 protected:
     bool write_shard_to_device(
         const MeshBuffer& buffer,

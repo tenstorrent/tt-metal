@@ -521,12 +521,61 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
         ReadCoreDataDescriptor(dst, size_bytes), address.device_coord, blocking, sub_device_ids);
 }
 
+void FDMeshCommandQueue::abort_interrupted_mesh_trace_capture_if_active_nolock() {
+    if (!trace_id_.has_value()) {
+        return;
+    }
+    const MeshTraceId interrupted_trace_id = trace_id_.value();
+    log_warning(
+        LogMetal,
+        "Mesh CQ {}: aborting incomplete mesh trace capture (trace id {}). "
+        "This usually means end_mesh_trace was not reached (e.g. Python exception during capture); the partial "
+        "trace is discarded so the device can synchronize.",
+        id_,
+        *interrupted_trace_id);
+
+    trace_nodes_.clear();
+
+    auto trace_region_size = mesh_device_->allocator_impl()->get_config().trace_region_size;
+    if (trace_region_size == 0) {
+        mesh_device_->allocator_impl()->end_dram_high_water_mark_tracking();
+    }
+
+    trace_id_ = std::nullopt;
+    trace_ctx_ = nullptr;
+
+    trace_dispatch::load_host_dispatch_state(
+        mesh_device_->num_sub_devices(),
+        cq_shared_state_->worker_launch_message_buffer_state,
+        expected_num_workers_completed_,
+        config_buffer_mgr_,
+        worker_launch_message_buffer_state_reset_,
+        expected_num_workers_completed_reset_,
+        config_buffer_mgr_reset_);
+
+    for (auto* device : mesh_device_->get_devices()) {
+        device->sysmem_manager().set_bypass_mode(/*enable*/ false, /*clear*/ true);
+    }
+
+    this->reset_prefetcher_cache_manager();
+    swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
+
+    // release_mesh_trace restores mark_allocations_safe when trace_buffers_size_ reaches 0. No populate_mesh_buffer
+    // happened in this abort path, so no mark_allocations_unsafe is needed here.
+    mesh_device_->release_mesh_trace(interrupted_trace_id);
+}
+
 void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish_nolock");
 
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
+
+    // If a mesh trace capture was started but never ended (e.g. Python exception mid-capture), clearing it here
+    // lets synchronize_device / close_device proceed instead of hitting the "Event Synchronization is not supported
+    // during trace capture" TT_FATAL in enqueue_record_event_helper below.
+    this->abort_interrupted_mesh_trace_capture_if_active_nolock();
 
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
