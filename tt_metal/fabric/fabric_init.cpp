@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <unordered_set>
+
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "tt_metal.hpp"
@@ -85,6 +87,12 @@ bool configure_fabric_cores(tt::tt_metal::IDevice* device) {
     // (edm_status_address, termination_signal_address), so there is no race with the
     // L1 clear below.
     bool all_channels_healthy = true;
+    // Track dead channels so the L1 clear loop below can skip them.
+    // For non-MMIO chips, WriteToDeviceL1 routes writes through ethernet — the same path
+    // that timed out during the soft reset — and can hang indefinitely (write_core has no
+    // per-call timeout unlike read_non_mmio).  Skipping the L1 clear for dead channels is
+    // safe: firmware won't start on them regardless of whether L1 was zeroed.
+    std::unordered_set<uint32_t> dead_channels;
     {
         const auto chip_id = device->id();
         for (const auto& [router_chan, _] : router_chans_and_direction) {
@@ -109,25 +117,25 @@ bool configure_fabric_cores(tt::tt_metal::IDevice* device) {
                     chip_id,
                     router_chan);
             } catch (const std::exception& e) {
-                // Non-fatal: if the reset fails (e.g. remote chip unreachable), we still attempt
-                // the L1 writes below.  The worst case is the same as without this fix — the
-                // firmware doesn't start on this channel.
-                // Mark the device degraded so the caller can skip read-barrier operations
-                // (e.g. l1_barrier) that would also hang/timeout on the same dead channels.
+                // Fatal for this channel: remote chip is unreachable.
+                // Skip L1 writes for this channel — WriteToDeviceL1 on a non-MMIO chip routes
+                // through ethernet and will hang indefinitely on a dead channel.
                 all_channels_healthy = false;
+                dead_channels.insert(router_chan);
                 log_warning(
                     tt::LogMetal,
                     "configure_fabric_cores: Failed ERISC0 soft reset on device {} channel {}: {}. "
-                    "Proceeding with L1 clear — firmware may not start on this channel.",
+                    "Skipping L1 clear for this channel — firmware will not start on it.",
                     chip_id,
                     router_chan,
                     e.what());
             } catch (...) {
                 all_channels_healthy = false;
+                dead_channels.insert(router_chan);
                 log_warning(
                     tt::LogMetal,
                     "configure_fabric_cores: Failed ERISC0 soft reset on device {} channel {} "
-                    "(unknown exception). Proceeding with L1 clear.",
+                    "(unknown exception). Skipping L1 clear for this channel.",
                     chip_id,
                     router_chan);
             }
@@ -135,6 +143,11 @@ bool configure_fabric_cores(tt::tt_metal::IDevice* device) {
     }
 
     for (const auto& [router_chan, _] : router_chans_and_direction) {
+        if (dead_channels.count(router_chan)) {
+            // Skip L1 clear for dead channels — WriteToDeviceL1 on non-MMIO chips routes
+            // writes through ethernet and will hang if the channel is unreachable.
+            continue;
+        }
         auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
         for (const auto& address : addresses_to_clear) {
             tt::tt_metal::detail::WriteToDeviceL1(device, router_logical_core, address, router_zero_buf, CoreType::ETH);
