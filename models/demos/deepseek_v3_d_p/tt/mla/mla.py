@@ -704,10 +704,10 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
-        logger.info(f"Starting Pre-sdpa sync")
-        ttnn.synchronize_device(self.mesh_device)
-        ttnn.distributed_context_barrier()
-        logger.info(f"Starting SDPA")
+        # logger.info(f"Starting Pre-sdpa sync")
+        # ttnn.synchronize_device(self.mesh_device)
+        # ttnn.distributed_context_barrier()
+        # logger.info(f"Starting SDPA")
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
             tt_kvpe,
@@ -735,10 +735,10 @@ class ttMLA:
             is_balanced=self.is_balanced,
         )
 
-        logger.info(f"Starting post-sdpa sync")
-        ttnn.synchronize_device(self.mesh_device)
-        ttnn.distributed_context_barrier()
-        logger.info(f"sdpa done")
+        # logger.info(f"Starting post-sdpa sync")
+        # ttnn.synchronize_device(self.mesh_device)
+        # ttnn.distributed_context_barrier()
+        # logger.info(f"sdpa done")
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(
