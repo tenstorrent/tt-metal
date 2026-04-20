@@ -24,7 +24,10 @@
 
 namespace tt::scaleout_tools {
 
+using tt::tt_metal::AsicID;
 using tt::tt_metal::AsicTopology;
+using tt::tt_metal::EthConnection;
+using tt::tt_metal::ExitNodeConnection;
 using tt::tt_metal::PhysicalSystemDescriptor;
 
 enum class CommandMode {
@@ -305,6 +308,49 @@ AsicTopology run_connectivity_validation(
         physical_system_descriptor.get_all_hostnames());
     auto missing_topology = validate_connectivity(
         fsd_proto, gsd_yaml_node, input_args.fail_on_warning, physical_system_descriptor, input_args.min_connections);
+
+    // Find connections in the ASIC graph missing from the host connectivity graph —
+    // links where only one side reported the cross-host connection during discovery.
+    const auto& system_graph = physical_system_descriptor.get_system_graph();
+    const auto& asic_graph = system_graph.asic_connectivity_graph;
+    const auto& host_graph = system_graph.host_connectivity_graph;
+    std::unordered_map<AsicID, std::unordered_map<AsicID, size_t>> one_sided_idx;
+    for (const auto& [host, asic_group] : asic_graph) {
+        if (!host_graph.contains(host)) {
+            continue;
+        }
+        const auto& src_host_edges = host_graph.at(host);
+        for (const auto& [src_asic, edges] : asic_group) {
+            for (const auto& [dst_asic, eth_conns] : edges) {
+                bool all_global =
+                    std::all_of(eth_conns.begin(), eth_conns.end(), [](const EthConnection& c) { return !c.is_local; });
+                if (!all_global) {
+                    continue;
+                }
+                auto host_edge_it = std::find_if(src_host_edges.begin(), src_host_edges.end(), [&](const auto& edge) {
+                    return edge.first == physical_system_descriptor.get_host_name_for_asic(dst_asic);
+                });
+                for (const auto& eth_conn : eth_conns) {
+                    bool exit_conn_found =
+                        host_edge_it != src_host_edges.end() &&
+                        std::any_of(
+                            host_edge_it->second.begin(), host_edge_it->second.end(), [&](const ExitNodeConnection& c) {
+                                return c.src_exit_node == src_asic && c.dst_exit_node == dst_asic &&
+                                       c.eth_conn.src_chan == eth_conn.src_chan &&
+                                       c.eth_conn.dst_chan == eth_conn.dst_chan;
+                            });
+                    if (!exit_conn_found) {
+                        if (!one_sided_idx[src_asic].contains(dst_asic)) {
+                            missing_topology[src_asic].push_back({dst_asic, {eth_conn}});
+                            one_sided_idx[src_asic][dst_asic] = missing_topology[src_asic].size() - 1;
+                        } else {
+                            missing_topology[src_asic][one_sided_idx[src_asic][dst_asic]].second.push_back(eth_conn);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     return missing_topology;
 }

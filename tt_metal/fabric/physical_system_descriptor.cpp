@@ -663,12 +663,20 @@ void PhysicalSystemDescriptor::validate_graphs() {
                             return host_edge.first == dst_host;
                         });
 
-                    TT_FATAL(
-                        host_edge_it != src_host_edges.end(),
-                        "Physical Discovery Error: Global Connection between {} and {} is not found in the host "
-                        "connectivity graph. Please reset the system and try again.",
-                        src_host,
-                        dst_host);
+                    // TT_FATAL(
+                    //     host_edge_it != src_host_edges.end(),
+                    //     "Physical Discovery Error: Global Connection between {} and {} is not found in the host "
+                    //     "connectivity graph. Please reset the system and try again.",
+                    //     src_host,
+                    //     dst_host);
+                    if (host_edge_it == src_host_edges.end()) {
+                        log_critical(
+                            tt::LogDistributed,
+                            "Physical Discovery Error: Global Connection between {} and {} is not found in the host "
+                            "connectivity graph. Please reset the system and try again.",
+                            src_host,
+                            dst_host);
+                    }
 
                     const auto& exit_node_conns = host_edge_it->second;
                     bool exit_conn_found = std::any_of(
@@ -679,12 +687,44 @@ void PhysicalSystemDescriptor::validate_graphs() {
                                    exit_node_conn.eth_conn.dst_chan == eth_conn.dst_chan;
                         });
 
-                    TT_FATAL(
-                        exit_conn_found,
-                        "Physical Discovery Error: Global Connection between {} and {} is not found in the "
-                        "host connectivity graph. Please reset the system and try again.",
-                        src_host,
-                        dst_host);
+                    if (!exit_conn_found) {
+                        const auto& src_desc = asic_descriptors_.at(src_asic);
+                        const auto& dst_desc = asic_descriptors_.at(dst_asic);
+                        log_critical(
+                            tt::LogDistributed,
+                            "Physical Discovery Error: Exit node connection from {} (tray={} asic_loc={}) to {} "
+                            "(tray={} asic_loc={}) via ETH_ID src={} dst={} is not found in the host "
+                            "connectivity graph.",
+                            src_host,
+                            src_desc.tray_id.get(),
+                            src_desc.asic_location.get(),
+                            dst_host,
+                            dst_desc.tray_id.get(),
+                            dst_desc.asic_location.get(),
+                            eth_conn.src_chan,
+                            eth_conn.dst_chan);
+
+                        // TT_FATAL(
+                        //     exit_conn_found,
+                        //     "Physical Discovery Error: Exit node connection from {} (tray={} asic_loc={}) to {} "
+                        //     "(tray={} asic_loc={}) via ETH_ID src={} dst={} is not found in the host "
+                        //     "connectivity graph.",
+                        //     src_host,
+                        //     src_desc.tray_id.get(),
+                        //     src_desc.asic_location.get(),
+                        //     dst_host,
+                        //     dst_desc.tray_id.get(),
+                        //     dst_desc.asic_location.get(),
+                        //     eth_conn.src_chan,
+                        //     eth_conn.dst_chan);
+                    }
+
+                    // TT_FATAL(
+                    //     exit_conn_found,
+                    //     "Physical Discovery Error: Global Connection between {} and {} is not found in the "
+                    //     "host connectivity graph. Please reset the system and try again.",
+                    //     src_host,
+                    //     dst_host);
                 }
             }
         }

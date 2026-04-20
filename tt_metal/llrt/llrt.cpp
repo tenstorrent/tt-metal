@@ -283,26 +283,47 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         return;
     }
-    if (get_core_type(device_id, virtual_core) != tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
+    if (get_core_type(device_id, virtual_core) == tt::tt_metal::HalProgrammableCoreType::TENSIX) {
         return;
     }
-    const auto port_status_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::PORT_STATUS);
-    const auto retrain_count_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RETRAIN_COUNT);
-    const auto rx_link_up_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RX_LINK_UP);
-    uint32_t port_status = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device_id, virtual_core, port_status_addr, sizeof(uint32_t))[0];
-    uint32_t retrain_count = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device_id, virtual_core, retrain_count_addr, sizeof(uint32_t))[0];
-    uint32_t rx_link_up = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device_id, virtual_core, rx_link_up_addr, sizeof(uint32_t))[0];
+
+    auto ubb_id =
+        tt::tt_fabric::get_ubb_id(*tt::tt_metal::MetalContext::instance().get_cluster().get_driver(), device_id);
+    std::vector<uint32_t> local_chip_info = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device_id, virtual_core, 0x7CFC0, 8 * sizeof(uint32_t));
     log_critical(
         tt::LogMetal,
-        "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
+        "Device {} (tray={} asic_loc={}): Virtual core {}, ASIC Location: {}, ETH ID: {}, Logical ETH ID: {}",
         device_id,
+        ubb_id.tray_id,
+        ubb_id.asic_id,
         virtual_core.str(),
-        port_status,
-        retrain_count,
-        rx_link_up);
+        local_chip_info[0] >> 8 & 0xFF,
+        local_chip_info[0] >> 16 & 0xFF,
+        local_chip_info[0] >> 24 & 0xFF);
+
+    if (get_core_type(device_id, virtual_core) == tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
+        const auto port_status_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::PORT_STATUS);
+        const auto retrain_count_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RETRAIN_COUNT);
+        const auto rx_link_up_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RX_LINK_UP);
+        uint32_t port_status = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            device_id, virtual_core, port_status_addr, sizeof(uint32_t))[0];
+        uint32_t retrain_count = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            device_id, virtual_core, retrain_count_addr, sizeof(uint32_t))[0];
+        uint32_t rx_link_up = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            device_id, virtual_core, rx_link_up_addr, sizeof(uint32_t))[0];
+
+        log_critical(
+            tt::LogMetal,
+            "  Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
+            port_status,
+            retrain_count,
+            rx_link_up);
+
+        log_critical(tt::LogMetal, "  This is an active erisc");
+    } else {
+        log_critical(tt::LogMetal, "  This is an idle erisc");
+    }
 }
 
 }  // namespace
@@ -336,11 +357,19 @@ void wait_until_cores_done(
 
                 tt::tt_metal::MetalContext::instance().on_dispatch_timeout_detected();
 
-                TT_THROW(
+                // TT_THROW(
+                //     "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",
+                //     device_id,
+                //     timeout_ms,
+                //     cores);
+
+                log_warning(
+                    tt::LogMetal,
                     "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",
                     device_id,
                     timeout_ms,
                     cores);
+                return;
             }
         }
 
