@@ -19,6 +19,7 @@ Parametrized over:
 
 import gc
 import json
+import os
 
 import pytest
 import torch
@@ -398,15 +399,17 @@ def test_prefill_transformer(
         # else: already computed by load_and_compute_layer_by_layer()
 
         # Per-stage PCC comparison
-        pcc_results = []
+        output_pcc = {}
+        kvpe_kv_pcc = {}
+        kvpe_pe_pcc = {}
         for (label, tt_host), ref_host in zip(tt_snapshots, ref_snapshots):
             try:
                 _, pcc = comp_pcc(ref_host.float(), tt_host.float())
                 logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
-                pcc_results.append((label, pcc))
+                output_pcc[label] = pcc
             except Exception as e:
                 logger.error(f"{label:<20s}  PCC comparison failed: {e}")
-                pcc_results.append((label, -1.0))
+                output_pcc[label] = -1.0
 
         # Per-layer KVPE PCC comparison — read back from external cache
         if do_return_kv:
@@ -429,26 +432,47 @@ def test_prefill_transformer(
                         tt_kvpe_layer[:, :, :, kv_lora_rank:].float(),
                     )
                     logger.info(f"{label:<20s}  KV PCC = {kv_pcc:.6f}, PE PCC = {pe_pcc:.6f}")
-                    pcc_results.append((f"{label}_kv", kv_pcc))
-                    pcc_results.append((f"{label}_pe", pe_pcc))
+                    kvpe_kv_pcc[f"{label}_kv"] = kv_pcc
+                    kvpe_pe_pcc[f"{label}_pe"] = pe_pcc
                 except Exception as e:
                     logger.error(f"{label:<20s}  KVPE PCC comparison failed: {e}")
-                    pcc_results.append((f"{label}_kv", -1.0))
-                    pcc_results.append((f"{label}_pe", -1.0))
+                    kvpe_kv_pcc[f"{label}_kv"] = -1.0
+                    kvpe_pe_pcc[f"{label}_pe"] = -1.0
 
         profiler.end("pcc_validation")
 
         # Summary table
+        all_pcc_items = list(output_pcc.items()) + list(kvpe_kv_pcc.items()) + list(kvpe_pe_pcc.items())
         logger.info(f"\n{'='*50}")
         logger.info(f"{'Stage':<20s}  {'PCC':>10s}  {'Status':>8s}")
         logger.info(f"{'-'*50}")
         failures = []
-        for label, pcc in pcc_results:
+        for label, pcc in all_pcc_items:
             status = "PASS" if pcc > threshold else ("FAIL" if pcc >= 0 else "ERROR")
             logger.info(f"{label:<20s}  {pcc:>10.6f}  {status:>8s}")
             if pcc <= threshold:
                 failures.append((label, pcc))
         logger.info(f"{'='*50}")
+
+        pcc_result = {
+            "pcc": (output_pcc, kvpe_kv_pcc, kvpe_pe_pcc),
+            "threshold": threshold,
+            "num_layers": num_layers,
+            "isl_total": isl_total,
+            "weight_type": weight_type,
+            "input_source": input_source,
+            "mesh_shape": mesh_shape,
+            "n_routed_experts": n_routed_experts,
+            "capacity_factor": capacity_factor,
+        }
+
+        try:
+            from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
+
+            generate_pcc_plots(pcc_result, output_dir=os.getenv("PCC_PLOT_DIR", "/tmp/pcc_plots"))
+            write_pcc_summary(pcc_result, threshold=threshold)
+        except Exception as e:
+            logger.warning(f"Failed to generate PCC plots: {e}")
 
         # Store failures for deferred check (after timing report)
         has_pcc_failures = len(failures) > 0
@@ -481,6 +505,26 @@ def test_prefill_transformer(
     logger.info(f"{'='*60}")
     for key in profiler.times:
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
+
+    # Append timing report to the per-run PCC summary file
+    try:
+        from pathlib import Path
+
+        summary_dir = Path(os.getenv("PCC_SUMMARY_DIR", "/tmp/pcc_summaries"))
+        from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import _build_run_name
+
+        run_name = _build_run_name(pcc_result)
+        summary_path = summary_dir / f"pcc_summary_{run_name}.md"
+        if summary_path.exists():
+            with open(summary_path, "a") as f:
+                f.write("\n\n### Timing Report\n\n")
+                f.write("| Stage | Time (ms) |\n")
+                f.write("|-------|-----------|\n")
+                for key in profiler.times:
+                    f.write(f"| {key} | {profiler.get(key) * 1000:.2f} |\n")
+            logger.info(f"Timing report appended to {summary_path}")
+    except Exception as e:
+        logger.warning(f"Failed to append timing report: {e}")
 
     # Restore original config
     DeepSeekV3Config.NUM_ROUTED_EXPERTS = orig_num_routed_experts
