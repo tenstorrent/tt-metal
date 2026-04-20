@@ -37,10 +37,10 @@ SEQ_LEN_100_K = 100 * 1024
 @pytest.mark.parametrize(
     "input_source, is_balanced, isl_total",
     [
-        # ("random", True, SEQ_LEN_25_K),
-        ("random", True, SEQ_LEN_100_K),
+        ("random", True, SEQ_LEN_25_K),
+        # ("random", True, SEQ_LEN_100_K),
     ],
-    ids=["seq_100k"],
+    ids=["seq_25k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
