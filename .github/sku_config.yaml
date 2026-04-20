@@ -220,6 +220,7 @@ skus:
   bh_sp4:
     runs_on:
       - exabox-multihost-with-nfs
+    explicit_nodes: "bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08,bh-glx-c03u02,bh-glx-c03u08,bh-glx-c04u02,bh-glx-c04u08,bh-glx-c05u02,bh-glx-c05u08,bh-glx-c06u02,bh-glx-c06u08,bh-glx-c07u02,bh-glx-c07u08,bh-glx-c08u02,bh-glx-c08u08"
     mgd: |
       mesh_descriptors {
         name: \"SP4_M0\"

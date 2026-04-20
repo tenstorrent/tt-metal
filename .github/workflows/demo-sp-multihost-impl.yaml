@@ -25,6 +25,7 @@ jobs:
     outputs:
       matrix: ${{ steps.filter-tests.outputs.matrix }}
       mgd: ${{ steps.extract-mgd.outputs.mgd }}
+      explicit_nodes: ${{ steps.extract-explicit-nodes.outputs.explicit_nodes }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/demo_sp_multihost_tests.yaml
     steps:
@@ -41,6 +42,17 @@ jobs:
             exit 1
           fi
           echo "✓ SKU 'bh_${{ inputs.sp-config }}' exists in sku_config.yaml"
+
+      - name: Extract explicit nodes from SKU
+        id: extract-explicit-nodes
+        run: |
+          EXPLICIT_NODES=$(python3 .github/scripts/utils/extract_explicit_nodes_from_sku.py "bh_${{ inputs.sp-config }}" .github/sku_config.yaml)
+          echo "explicit_nodes=$EXPLICIT_NODES" >> $GITHUB_OUTPUT
+          if [ -n "$EXPLICIT_NODES" ]; then
+            echo "✓ Using explicit nodes: $EXPLICIT_NODES"
+          else
+            echo "No explicit nodes found, will use MGD allocation"
+          fi
 
       - name: Extract MGD configuration from SKU
         id: extract-mgd
@@ -116,8 +128,19 @@ jobs:
           echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Create allocation for ${{ matrix.test-group.name }}
-        id: allocation
+      - name: Create allocation for ${{ matrix.test-group.name }} (Explicit Nodes)
+        id: allocation-explicit
+        if: ${{ needs.load-test-matrix.outputs.explicit_nodes != '' }}
+        uses: ./.github/actions/ttop-create-allocation
+        timeout-minutes: 30
+        with:
+          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          namespace: ttop-ci
+          explicit: ${{ needs.load-test-matrix.outputs.explicit_nodes }}
+
+      - name: Create allocation for ${{ matrix.test-group.name }} (MGD)
+        id: allocation-mgd
+        if: ${{ needs.load-test-matrix.outputs.explicit_nodes == '' }}
         uses: ./.github/actions/ttop-create-allocation
         timeout-minutes: 30
         with:
