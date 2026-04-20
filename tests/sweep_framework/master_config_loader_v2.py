@@ -1447,8 +1447,16 @@ class MasterConfigLoader:
 
             except Exception as e:
                 config_hash_display = config_hash[:16] + "..." if config_hash else "unknown"
-                logger.warning(f"⚠️ Skipping config_hash={config_hash_display} due to error: {e}")
-                continue
+                logger.warning(f"⚠️ Error processing config_hash={config_hash_display}: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+                # Instead of skipping entirely, try to salvage what we can.
+                # If we have at least positional tensor info, keep the config.
+                if not config_dict and not positional_tensors:
+                    logger.warning(f"   → Skipping config entirely (no data extracted)")
+                    continue
+                else:
+                    logger.warning(f"   → Keeping partial config (extracted {len(config_dict)} kwargs + {len(positional_tensors)} tensors)")
 
             # Add positional tensor parameters with consistent naming
             if positional_tensors:

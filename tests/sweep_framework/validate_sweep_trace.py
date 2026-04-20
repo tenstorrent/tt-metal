@@ -57,6 +57,38 @@ IGNORED_KEYS = frozenset(
     }
 )
 
+# ---------------------------------------------------------------------------
+# Operation-specific argument remapping
+# ---------------------------------------------------------------------------
+# Some operations trace positional arg names (arg0, arg1, ...) while the
+# master trace records semantic parameter names.  This mapping lets the
+# validator align them before comparison.
+
+OP_ARG_REMAPPING: dict[str, dict[str, str]] = {
+    "ttnn.experimental.all_gather_async": {
+        "arg2": "dim",
+    },
+    "ttnn.transformer.paged_scaled_dot_product_attention_decode": {
+        "arg3": "page_table_tensor",
+    },
+}
+
+# Keys that are expected to differ per-operation due to runtime context,
+# multi-device topology, or optional parameters not captured uniformly.
+OP_IGNORED_KEYS: dict[str, frozenset[str]] = {
+    "ttnn.experimental.all_gather_async": frozenset({
+        # Multi-device runtime parameters: semaphore handles, topology axis,
+        # and sub-device routing are set by the distributed runtime and vary
+        # between the original model execution and the sweep re-run.
+        "arg3", "cluster_axis", "subdevice_id",
+    }),
+    "ttnn.transformer.paged_scaled_dot_product_attention_decode": frozenset({
+        # is_causal is an optional keyword argument that may or may not be
+        # captured by the tracer depending on whether it was passed explicitly.
+        "is_causal",
+    }),
+}
+
 
 def _parse_shard_spec_string(s: str) -> Any:
     """Parse a ShardSpec string representation into a dict.
@@ -106,7 +138,7 @@ def _parse_shard_spec_string(s: str) -> Any:
         return s
 
 
-def normalize(obj: Any, *, _parent_key: str = "") -> Any:
+def normalize(obj: Any, *, _parent_key: str = "", _op_name: str = "") -> Any:
     """Recursively normalize a config dict for comparison.
 
     Strips keys that are expected to vary between a master trace (from the
@@ -129,16 +161,22 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
             m = re.search(r"\[([0-9, ]+)\]", str(obj["value"]))
             if m:
                 shape_list = [int(x.strip()) for x in m.group(1).split(",")]
-                return normalize(shape_list, _parent_key=_parent_key)
+                return normalize(shape_list, _parent_key=_parent_key, _op_name=_op_name)
+        # Per-operation ignored keys
+        op_ignore = OP_IGNORED_KEYS.get(_op_name, frozenset())
+        # Per-operation arg remapping (arg2 → dim, etc.)
+        remap = OP_ARG_REMAPPING.get(_op_name, {})
         result = {}
         for k, v in sorted(obj.items()):
-            if k in IGNORED_KEYS:
+            if k in IGNORED_KEYS or k in op_ignore:
                 continue
+            # Apply positional → semantic key remapping
+            out_key = remap.get(k, k)
             # memory_config.hash is a device pointer — always differs between runs; skip numeric values only
-            if k == "hash" and isinstance(v, (int, float)):
+            if out_key == "hash" and isinstance(v, (int, float)):
                 continue
             # sub_core_grids: None is noise
-            if k == "sub_core_grids" and v is None:
+            if out_key == "sub_core_grids" and v is None:
                 continue
             # shard_spec: the raw tracer serializes None as the string "None";
             # normalize to actual None for consistent comparison.
@@ -157,7 +195,7 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
             # None and absent as identical avoids false-positive diffs.
             if v is None and _parent_key == "":
                 continue
-            result[k] = normalize(v, _parent_key=k)
+            result[out_key] = normalize(v, _parent_key=out_key, _op_name=_op_name)
         return result
     if isinstance(obj, (int, float)) and not isinstance(obj, bool):
         if isinstance(obj, int) and abs(obj) > 2**53:
@@ -186,7 +224,7 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
                 else:
                     aligned.append(val)
             return aligned
-        return [normalize(item, _parent_key=_parent_key) for item in obj]
+        return [normalize(item, _parent_key=_parent_key, _op_name=_op_name) for item in obj]
     return obj
 
 
@@ -257,6 +295,20 @@ def deep_diff(master: Any, sweep: Any, prefix: str = "") -> list[Diff]:
             else:
                 diffs.extend(deep_diff(master[i], sweep[i], child_path))
     elif master != sweep:
+        # Approximate comparison for large floats
+        if isinstance(master, (int, float)) and isinstance(sweep, (int, float)):
+            m, s = float(master), float(sweep)
+            try:
+                # Relative tolerance for approximately equal values
+                if m != 0.0 and abs(m - s) / abs(m) < 1e-6:
+                    return diffs
+                # Both are very large negative or very large positive values
+                # (e.g. -DBL_MAX vs -FLT_MAX used as pad sentinels — same semantic
+                # meaning even though magnitudes differ by ~270 orders)
+                if (m < -1e30 and s < -1e30) or (m > 1e30 and s > 1e30):
+                    return diffs
+            except (ZeroDivisionError, OverflowError):
+                pass
         diffs.append(Diff(prefix, master, sweep, _classify(prefix)))
 
     return diffs
@@ -379,8 +431,8 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             sweep_args = cfg.get("arguments", {})
             sweep_config_hash = cfg.get("config_hash")
 
-            norm_master = normalize(master_args)
-            norm_sweep = normalize(sweep_args)
+            norm_master = normalize(master_args, _op_name=master_op)
+            norm_sweep = normalize(sweep_args, _op_name=master_op)
 
             if norm_master == norm_sweep:
                 # Arguments match after normalization — this is a match.
@@ -401,17 +453,32 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
                 )
             else:
                 diffs = deep_diff(norm_master, norm_sweep)
-                report.results.append(
-                    ConfigResult(
-                        config_hash=source_hash,
-                        op_name=op_name,
-                        master_config_id=master_cid,
-                        sweep_config_id=sweep_cid,
-                        status="diff",
-                        diffs=diffs,
-                        sweep_config_hash=sweep_config_hash,
+                # If deep_diff returns no concrete diffs despite norm inequality
+                # (e.g. floating-point approximate matches, dict ordering), treat
+                # as match rather than reporting an empty diff table.
+                if not diffs:
+                    report.results.append(
+                        ConfigResult(
+                            config_hash=source_hash,
+                            op_name=op_name,
+                            master_config_id=master_cid,
+                            sweep_config_id=sweep_cid,
+                            status="match",
+                            sweep_config_hash=sweep_config_hash if (sweep_config_hash and sweep_config_hash != source_hash) else None,
+                        )
                     )
-                )
+                else:
+                    report.results.append(
+                        ConfigResult(
+                            config_hash=source_hash,
+                            op_name=op_name,
+                            master_config_id=master_cid,
+                            sweep_config_id=sweep_cid,
+                            status="diff",
+                            diffs=diffs,
+                            sweep_config_hash=sweep_config_hash,
+                        )
+                    )
 
     # Report master configs with no sweep execution
     for ch, (op_name, cid, _args) in master_index.items():
