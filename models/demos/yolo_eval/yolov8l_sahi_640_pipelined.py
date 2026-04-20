@@ -708,7 +708,12 @@ def _postprocess_worker_shm(
             if len(encode_futures) >= 3:
                 encode_futures[0].result()
                 encode_futures.pop(0)
-            encode_futures.append(encode_pool.submit(_write_frame_ts, frame_file, canvas, jpeg_quality))
+            # CRITICAL: copy canvas before encoding.  `canvas` is a numpy view
+            # into shared memory (shm_ring).  With RING_SIZE=4 and ~26ms pipeline
+            # latency, the prep process overwrites this slot ~27ms after BG reads
+            # it — while the 28ms JPEG encode is still reading.  The race causes
+            # half-old/half-new frames → "boxes appear and disappear" glitch.
+            encode_futures.append(encode_pool.submit(_write_frame_ts, frame_file, canvas.copy(), jpeg_quality))
             t_encode = time.perf_counter() - t0
 
             dt_post = time.perf_counter() - t_post_start
