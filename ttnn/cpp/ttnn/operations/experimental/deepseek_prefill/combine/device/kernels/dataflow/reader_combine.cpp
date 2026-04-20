@@ -91,15 +91,14 @@ void kernel_main() {
     // Zero-init args follow immediately after the TensorAccessorArgs block
     constexpr uint32_t zi_cb_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t num_total_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
-#if IS_TILE_LAYOUT
-    constexpr uint32_t num_idle_cores_group = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
-    constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
-#endif
+    constexpr uint32_t tile_layout_args_base = output_args.next_compile_time_args_offset() + 2;
 #else
-#if IS_TILE_LAYOUT
-    constexpr uint32_t num_idle_cores_group = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
-    constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t tile_layout_args_base = output_args.next_compile_time_args_offset();
 #endif
+
+#if IS_TILE_LAYOUT
+    constexpr uint32_t num_idle_cores_group = get_compile_time_arg_val(tile_layout_args_base);
+    constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(tile_layout_args_base + 1);
 #endif
 
     // ===== Runtime Args =====
@@ -244,18 +243,14 @@ void kernel_main() {
     // Set up scratch buffers for batched reads
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
     uint32_t metadata_base = get_write_ptr(cb_dispatched_metadata_id);
+    const auto dispatched_metadata_addr_gen =
+        TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr, aligned_dispatched_metadata_page_size);
 
 #if IS_TILE_LAYOUT
     uint32_t untilize_base = get_write_ptr(cb_untilize_id);
 #else
     cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
-#endif
-
-    const auto dispatched_metadata_addr_gen =
-        TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr, aligned_dispatched_metadata_page_size);
-
-#if !IS_TILE_LAYOUT
     const auto dispatched_buffer_addr_gen =
         TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr, aligned_dispatched_buffer_page_size);
 #endif
