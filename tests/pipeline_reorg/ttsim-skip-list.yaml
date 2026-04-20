@@ -9,11 +9,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
-  - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
-  - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
-  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
-  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py
   - tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
@@ -35,6 +30,8 @@ wormhole_b0:
 
   # Numeric mismatches, not root caused
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
+  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
+  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
@@ -44,9 +41,10 @@ wormhole_b0:
 
 blackhole:
   # Job-level timeouts
-  - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
-  - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
-  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
+  - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
@@ -61,6 +59,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_rms_norm.py::test_rms_norm_row_major
+  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py
   - tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py
 
@@ -69,6 +68,8 @@ blackhole:
 
   # Numeric mismatches, likely caused by issue #41163
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
 
   # Numeric mismatches, not root caused

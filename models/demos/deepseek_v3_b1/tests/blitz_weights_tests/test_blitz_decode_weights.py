@@ -44,6 +44,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.tests.blitz_weights_tests.op import CopyToOutput
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
@@ -456,6 +457,7 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+@requires_hybrid_allocator
 def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, o_proj_dtype):
     """Verify single fused buffer: TP4+shuffle o_proj, gate_mm, norms, and q_a/q_b/kv_a.
 
@@ -463,11 +465,6 @@ def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, me
     in one ``overlap_tensors`` call).  Per mesh device, o_proj is the ``shuffle_q_a`` pack of the
     ``(8192, 1792)`` slice (``tp_dim=(1, 0)``), shard ``(4096, 32)`` on 112 cores.
     """
-    import os
-
-    if os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID", "0") != "1":
-        pytest.skip("Requires TT_METAL_ALLOCATOR_MODE_HYBRID=1 for per-core allocation")
-
     num_devices = mesh_rows * mesh_cols
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
