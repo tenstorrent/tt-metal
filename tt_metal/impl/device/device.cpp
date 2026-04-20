@@ -388,7 +388,10 @@ void Device::configure_fabric() {
         return;
     }
 
-    tt::tt_fabric::configure_fabric_cores(this);
+    // Returns false if any channel had a timed-out soft reset (remote chip unreachable).
+    // In that case the dead channels will also hang on read-barrier operations, so we skip
+    // l1_barrier below to avoid a 10-minute freeze.  See #42429.
+    const bool fabric_cores_healthy = tt::tt_fabric::configure_fabric_cores(this);
 
     fabric_program_->impl().finalize_offsets(this);
 
@@ -396,9 +399,20 @@ void Device::configure_fabric() {
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
-    // don't get the GO mailbox have all landed
+    // don't get the GO mailbox have all landed.
+    // Skip for degraded devices (some ETH channels timed out in configure_fabric_cores):
+    // l1_barrier reads back from every ETH core to confirm writes landed, and those reads
+    // will hang indefinitely on dead channels — same root cause as the timed-out soft resets.
     MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
-    env_impl.get_cluster().l1_barrier(this->id());
+    if (fabric_cores_healthy) {
+        env_impl.get_cluster().l1_barrier(this->id());
+    } else {
+        log_warning(
+            tt::LogMetal,
+            "configure_fabric: Skipping l1_barrier for Device {} — some ETH channels had "
+            "soft reset failures (dead remote chip?). Fabric may not start on those channels.",
+            this->id_);
+    }
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->impl().logical_cores();
     const auto& hal = env_impl.get_hal();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();

@@ -56,7 +56,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_
     return nullptr;
 }
 
-void configure_fabric_cores(tt::tt_metal::IDevice* device) {
+bool configure_fabric_cores(tt::tt_metal::IDevice* device) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto soc_desc = cluster.get_soc_desc(device->id());
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -84,6 +84,7 @@ void configure_fabric_cores(tt::tt_metal::IDevice* device) {
     // reset_cores().  Base UMD firmware does not touch fabric-specific state addresses
     // (edm_status_address, termination_signal_address), so there is no race with the
     // L1 clear below.
+    bool all_channels_healthy = true;
     {
         const auto chip_id = device->id();
         for (const auto& [router_chan, _] : router_chans_and_direction) {
@@ -111,6 +112,9 @@ void configure_fabric_cores(tt::tt_metal::IDevice* device) {
                 // Non-fatal: if the reset fails (e.g. remote chip unreachable), we still attempt
                 // the L1 writes below.  The worst case is the same as without this fix — the
                 // firmware doesn't start on this channel.
+                // Mark the device degraded so the caller can skip read-barrier operations
+                // (e.g. l1_barrier) that would also hang/timeout on the same dead channels.
+                all_channels_healthy = false;
                 log_warning(
                     tt::LogMetal,
                     "configure_fabric_cores: Failed ERISC0 soft reset on device {} channel {}: {}. "
@@ -119,6 +123,7 @@ void configure_fabric_cores(tt::tt_metal::IDevice* device) {
                     router_chan,
                     e.what());
             } catch (...) {
+                all_channels_healthy = false;
                 log_warning(
                     tt::LogMetal,
                     "configure_fabric_cores: Failed ERISC0 soft reset on device {} channel {} "
@@ -135,6 +140,8 @@ void configure_fabric_cores(tt::tt_metal::IDevice* device) {
             tt::tt_metal::detail::WriteToDeviceL1(device, router_logical_core, address, router_zero_buf, CoreType::ETH);
         }
     }
+
+    return all_channels_healthy;
 }
 
 }  // namespace tt::tt_fabric
