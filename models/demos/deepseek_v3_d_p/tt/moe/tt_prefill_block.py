@@ -73,6 +73,7 @@ class TtPrefillBlock(LightweightModule):
         emb_dim = config.hidden_size
 
         logger.info(f"Building TTNN cache for TtPrefillBlock layer {layer_idx} ({'MoE' if is_moe else 'dense'})")
+        logger.info(f"Building prefill block - capacity factor: {capacity_factor}")
 
         # Build attn_norm cache
         TtDistributedRmsNorm.build_ttnn_cache(

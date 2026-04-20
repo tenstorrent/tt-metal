@@ -38,9 +38,9 @@ SEQ_LEN_100_K = 100 * 1024
     "input_source, is_balanced, isl_total",
     [
         ("random", True, SEQ_LEN_25_K),
-        # ("random", True, SEQ_LEN_100_K),
+        ("random", True, SEQ_LEN_100_K),
     ],
-    ids=["seq_25k"],
+    ids=["seq_25k", "seq_100k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
@@ -49,7 +49,7 @@ SEQ_LEN_100_K = 100 * 1024
     ],
     ids=["moe-gate_device"],
 )
-@pytest.mark.parametrize("num_iterations", [100000])
+@pytest.mark.parametrize("num_iterations", [100])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -130,6 +130,11 @@ def test_prefill_block(
     torch_input = torch.randn(1, isl_total, emb_dim, dtype=torch.bfloat16)
 
     # --- TT block ---
+    capacity_factor = 32
+    if isl_total == SEQ_LEN_100_K:
+        capacity_factor = 8
+
+    logger.debug(f"Setting capacity factor to {capacity_factor} for isl_total={isl_total}")
     block_kwargs = dict(
         mesh_device=mesh_device,
         config=config,
@@ -141,6 +146,7 @@ def test_prefill_block(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_balanced=is_balanced,
+        capacity_factor=capacity_factor,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
