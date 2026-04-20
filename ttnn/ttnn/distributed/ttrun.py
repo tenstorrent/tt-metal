@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -1258,7 +1259,6 @@ ENV_PASSTHROUGH_PREFIXES = (
     "ARCH_",  # Architecture variables (e.g., ARCH_NAME)
     "WH_",  # Wormhole-specific variables (e.g., WH_ARCH_YAML)
     "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
-    "DEBUG_",  # Generic debug toggles used by tests/demos
     "DEEPSEEK_",  # DeepSeek model vars (e.g., DEEPSEEK_V3_HF_MODEL, DEEPSEEK_V3_CACHE)
     "MESH_",  # Mesh config (e.g., MESH_DEVICE)
 )
@@ -1685,8 +1685,8 @@ def build_mpi_command(
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
 
-    if mpi_args:
-        cmd.extend(mpi_args)
+    if effective_mpi_args:
+        cmd.extend(effective_mpi_args)
 
     parent_env_prefix = _parent_env_prefix_from_environ()
 
@@ -1865,7 +1865,7 @@ def legacy_flow(
         tt-run --rank-binding rank_binding.yaml ./my_app
 
         # Launch on multiple hosts with rankfile
-        tt-run --rank-binding binding.yaml --mpi-args "--rankfile hosts.txt" ./my_app
+        tt-run --rank-binding binding.yaml --mpi-args "--map-by rankfile:file=hosts.txt" ./my_app
 
     \b
     Rank Binding YAML Example:
@@ -1896,7 +1896,7 @@ def legacy_flow(
             - env_overrides: Per-rank environment variables (e.g., TT_VISIBLE_DEVICES)
             This is about TT-Metal's logical device organization.
 
-        --mpi-args "--host ..." or "--rankfile ...":
+        --mpi-args "--host ..." or "--map-by rankfile:file=...":
             Configures MPI process placement. Tells mpirun:
             - Which physical cluster nodes to spawn processes on
             - How to distribute ranks across those nodes
@@ -1916,10 +1916,10 @@ def legacy_flow(
         tt-run --rank-binding rank_binding.yaml ./my_app
 
         # Multi-host with rankfile (multihost MPI settings are default)
-        tt-run --rank-binding binding.yaml --mpi-args "--rankfile hosts.txt" ./my_app
+        tt-run --rank-binding binding.yaml --mpi-args "--map-by rankfile:file=hosts.txt" ./my_app
 
         # Multi-host with specific network interface (e.g., ConnectX NIC)
-        tt-run --rank-binding binding.yaml --tcp-interface cnx1 --mpi-args "--rankfile hosts.txt" ./my_app
+        tt-run --rank-binding binding.yaml --tcp-interface cnx1 --mpi-args "--map-by rankfile:file=hosts.txt" ./my_app
 
         # With additional MPI args
         tt-run --rank-binding binding.yaml --mpi-args "--bind-to core" ./my_app
@@ -2018,7 +2018,7 @@ def legacy_flow(
 
         Example:
             tt-run --rank-binding config.yaml --mpi-args "--host nodeA,nodeB" ./my_app
-            tt-run --tcp-interface cnx1 --rank-binding config.yaml --mpi-args "--rankfile hosts.txt" ./my_app
+            tt-run --tcp-interface cnx1 --rank-binding config.yaml --mpi-args "--map-by rankfile:file=hosts.txt" ./my_app
 
     \b
     Debugging with --debug-gdbserver:
@@ -2122,6 +2122,10 @@ def legacy_flow(
     effective_rankfile_syntax = rankfile_syntax if rankfile_syntax is not None else detect_rankfile_syntax(mpi_launcher)
 
     if not bare:
+        user_has_btl_setting = has_mca_param(effective_mpi_args, "btl")
+        user_has_tcp_include = has_mca_param(effective_mpi_args, "btl_tcp_if_include")
+        user_has_tcp_exclude = has_mca_param(effective_mpi_args, "btl_tcp_if_exclude")
+
         # Recommended MPI settings for multi-host clusters:
         # - Use TCP for byte transfer layer (reliable for multi-host)
         # - Exclude loopback and docker0 (can't route inter-node traffic)
@@ -2129,31 +2133,33 @@ def legacy_flow(
         # These interfaces cannot route traffic between hosts and can cause MPI
         # process discovery issues if selected. For specific interface control,
         # use --tcp-interface.
-        multihost_args = [
-            "--mca",
-            "btl",
-            "self,tcp",
-            "--mca",
-            "btl_tcp_if_exclude",
-            "docker0,lo",
-        ]
+        multihost_args = []
+        if not user_has_btl_setting:
+            multihost_args.extend(["--mca", "btl", "self,tcp"])
 
         if tcp_interface:
-            # If a specific interface is requested, use include instead of exclude
-            multihost_args = [
-                "--mca",
-                "btl",
-                "self,tcp",
-                "--mca",
-                "btl_tcp_if_include",
-                tcp_interface,
-            ]
+            if user_has_tcp_include or user_has_tcp_exclude:
+                logger.warning(
+                    f"{TT_RUN_PREFIX} Ignoring --tcp-interface={tcp_interface} because --mpi-args already "
+                    "specifies btl_tcp_if_include or btl_tcp_if_exclude."
+                )
+            else:
+                # If a specific interface is requested, use include instead of exclude
+                multihost_args.extend(["--mca", "btl_tcp_if_include", tcp_interface])
+        elif not user_has_tcp_include and not user_has_tcp_exclude:
+            multihost_args.extend(["--mca", "btl_tcp_if_exclude", "docker0,lo"])
 
         # Prepend multihost args so user-provided --mpi-args can override if needed
         effective_mpi_args = multihost_args + effective_mpi_args
 
         if verbose:
-            logger.info(f"{TT_RUN_PREFIX} Using multihost MPI args: {' '.join(multihost_args)}")
+            if multihost_args:
+                logger.info(f"{TT_RUN_PREFIX} Using multihost MPI args: {' '.join(multihost_args)}")
+            else:
+                logger.info(
+                    f"{TT_RUN_PREFIX} Skipping default multihost MPI args (user-provided --mpi-args already "
+                    "set matching MCA options)."
+                )
 
     # Inject rankfile args if provided (auto-detect MPI syntax)
     # This happens after multihost args so rankfile comes right before user args
