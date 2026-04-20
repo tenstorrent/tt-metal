@@ -83,7 +83,10 @@ struct KernelSpec {
     // Threading
     // Number of kernel threads (this can be specified globally or per-node)
     uint8_t num_threads = 1;
-    using ThreadNodeMap = std::unordered_map<Nodes, uint8_t>;  // node -> number of kernel threads
+    // Optional per-node thread count specification (overrides global num_threads)
+    // This is currently unsupported, and an open question if we ever want to support it.
+    using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node, num_threads}
+    using ThreadNodeMap = std::vector<NodeSpecificThreadCount>;
     std::optional<ThreadNodeMap> thread_node_map = std::nullopt;
 
     // Kernel type (methods)
