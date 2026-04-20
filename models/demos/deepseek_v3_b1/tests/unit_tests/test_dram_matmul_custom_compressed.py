@@ -23,7 +23,7 @@ from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, Comp
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import DRAMStreamingMatmulCompressed
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_matmul_custom_compressed import scale_tiles_for_mixed_formats
-from models.demos.deepseek_v3_b1.weights.prepare import _shuffle_dram_assignment
+from models.demos.deepseek_v3_b1.weights.transforms.moe import shuffle_dram_assignment as _shuffle_dram_assignment
 
 
 def pad_to_dram_banks(num, tile_w, lcm):
@@ -707,12 +707,153 @@ def test_dram_matmul_bspm_multi_expert(device):
 def test_dram_matmul_bspm_cache_roundtrip(device, tmp_path):
     """BSPM CompressedTensor TensorCache disk round-trip.
 
-    Skipped: CompressedTensor save/load via the new TensorCache is not yet
-    implemented (known gap — requires CompressedTensorTarget in weights/cache/).
+    Verifies:
+    - Cache miss writes compact tiles.bin + assignment.npy to disk.
+    - Cache hit reloads from disk and produces bitwise-equivalent CompressedTensor.
+    - tiles.bin is smaller than a uniform BFP4 baseline (compact format saves space).
+    - Matmul PCC between miss and hit is ≥ 0.99 (round-trip is numerically lossless).
     """
-    import pytest
-
-    pytest.skip(
-        "CompressedTensor TensorCache round-trip not yet implemented. "
-        "Pending: CompressedTensorTarget + _store_compressed/_load_compressed in weights/cache/."
+    from models.common.utility_functions import comp_pcc
+    from models.demos.deepseek_v3_b1.compressed_tensor import bfp4_tile_byte_count
+    from models.demos.deepseek_v3_b1.weights.cache import (
+        CacheContext,
+        CompressedTensorBuildInputs,
+        CompressedTensorTarget,
+        SourceTensorSelection,
+        TensorCache,
     )
+    from models.demos.deepseek_v3_b1.weights.cache.fingerprint import compute_artifact_id
+
+    tile_w = 32
+    M, K, N = 1, 256, 256
+    num_banks = device.dram_grid_size().x
+
+    N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    tiles_h = K // tile_w
+    tiles_w_grid = N_padded // tile_w
+
+    # Mixed BFP4/BFP2/zero assignment (60%/25%/15%) so compact < BFP4 baseline
+    # Format codes: 1=bfp4, 2=bfp2, 3=bfp0(zero)
+    rng = np.random.default_rng(42)
+    assignment_logical = rng.choice([1, 2, 3], size=(tiles_h, tiles_w_grid), p=[0.60, 0.25, 0.15]).astype(np.int8)
+    assignment_logical[0, 0] = 2  # guarantee at least one BFP2 tile
+    assignment_logical[0, 1] = 3  # guarantee at least one zero tile
+
+    torch.manual_seed(0)
+    w_logical = torch.randn(K, N_padded).float().numpy()
+
+    cache_ctx = CacheContext(
+        schema_version=1,
+        hf_model_id="test_model",
+        hf_revision="test",
+        mesh_shape=(1, 1),
+    )
+    tgt = CompressedTensorTarget(
+        name="test_proj",
+        K=K,
+        N_padded=N_padded,
+        num_banks=num_banks,
+        bspm_variant="B",
+        bspm_budget=3.5,
+    )
+    fp = cache_ctx.fingerprint(source=SourceTensorSelection(names=("test_weight",)), target=tgt)
+
+    cache = TensorCache(tmp_path / "cache")
+
+    def _preprocess(_raw):
+        return {tgt.name: CompressedTensorBuildInputs(w_logical=w_logical, assignment_logical=assignment_logical)}
+
+    # --- First call: cache miss — writes tiles.bin, assignment.npy, metadata.json ---
+    ct_miss = cache.get_or_create(fp, device, preprocess=_preprocess, raw_tensors={})
+    assert isinstance(ct_miss, CompressedTensor), f"Expected CompressedTensor from miss, got {type(ct_miss)}"
+
+    artifact_id = compute_artifact_id(fp)
+    obj_dir = tmp_path / "cache" / "objects" / artifact_id[:2] / artifact_id
+    tiles_bin = obj_dir / "tiles.bin"
+    assert tiles_bin.is_file(), "tiles.bin not written on cache miss"
+    assert (obj_dir / "assignment.npy").is_file(), "assignment.npy not written on cache miss"
+    assert (obj_dir / "metadata.json").is_file(), "metadata.json not written on cache miss"
+
+    compact_size = tiles_bin.stat().st_size
+    bfp4_size = bfp4_tile_byte_count(tiles_h, tiles_w_grid)
+    assert compact_size < bfp4_size, (
+        f"Compact tiles.bin ({compact_size} B) must be < uniform BFP4 baseline ({bfp4_size} B). "
+        "Check that BFP2/zero tiles are reducing the packed size."
+    )
+    logger.info(
+        "tiles.bin: {} B vs BFP4 baseline {} B ({:.1f}%)",
+        compact_size,
+        bfp4_size,
+        100 * compact_size / bfp4_size,
+    )
+
+    # Per-tier tile counts must sum to total tile grid area.
+    counts = ct_miss.tile_counts
+    total_tiles = tiles_h * tiles_w_grid
+    count_sum = counts.get("bfp4", 0) + counts.get("bfp2", 0) + counts.get("bfp0", 0)
+    assert count_sum == total_tiles, (
+        f"Tile count mismatch: bfp4={counts.get('bfp4',0)} + bfp2={counts.get('bfp2',0)} "
+        f"+ bfp0={counts.get('bfp0',0)} = {count_sum}, expected {total_tiles}"
+    )
+    assert counts.get("bfp4", 0) > 0, "No BFP4 tiles found — assignment may be wrong"
+    assert counts.get("bfp2", 0) > 0, "No BFP2 tiles found — assignment may be wrong"
+    assert counts.get("bfp0", 0) > 0, "No zero tiles found — assignment may be wrong"
+    logger.info(
+        "Tile counts — bfp4: {}, bfp2: {}, zero: {} (total {})",
+        counts.get("bfp4", 0),
+        counts.get("bfp2", 0),
+        counts.get("bfp0", 0),
+        total_tiles,
+    )
+
+    # --- Second call: cache hit — reloads from tiles.bin without calling preprocess ---
+    ct_hit = cache.get_or_create(fp, device, preprocess=_preprocess, raw_tensors={})
+    assert isinstance(ct_hit, CompressedTensor), f"Expected CompressedTensor from hit, got {type(ct_hit)}"
+
+    # --- Matmul PCC: miss and hit must agree (lossless round-trip) ---
+    per_core_N = N_padded // num_banks
+    primary_cores_list = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    compute_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in primary_cores_list]
+    )
+    num_cores = len(primary_cores_list)
+
+    torch.manual_seed(1)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_a_replicated = torch_a.repeat(num_cores, 1)
+    a_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, K], ttnn.ShardOrientation.ROW_MAJOR)
+    a_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, a_shard_spec)
+    ttnn_a = ttnn.from_torch(
+        torch_a_replicated,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=a_mem_config,
+        tile=ttnn.Tile([M, tile_w]),
+    )
+
+    out_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec)
+
+    Kt = K // tile_w
+    subblock_k = Kt if Kt <= 8 else Kt // 4
+    if subblock_k % 2 != 0:
+        subblock_k = max(2, subblock_k - 1)
+
+    def _run(ct):
+        ttnn_out = ttnn.from_torch(
+            torch.zeros((M, N_padded), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=out_mem_config,
+            tile=ttnn.Tile([M, tile_w]),
+        )
+        return ttnn.to_torch(DRAMStreamingMatmulCompressed.op(ttnn_a, ct, ttnn_out, subblock_k=subblock_k))[..., :N]
+
+    out_miss = _run(ct_miss)
+    out_hit = _run(ct_hit)
+
+    passing, pcc = comp_pcc(out_miss, out_hit, 0.99)
+    logger.info("Cache roundtrip PCC (miss vs hit): {}", pcc)
+    assert passing, f"Cache roundtrip PCC too low: {pcc} — miss and hit CompressedTensors disagree"
