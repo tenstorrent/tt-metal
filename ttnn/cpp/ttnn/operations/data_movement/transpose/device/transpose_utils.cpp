@@ -3,29 +3,34 @@
 
 #include "transpose_utils.hpp"
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::data_movement::transpose {
 
 using namespace tt::tt_metal;
 
-static const std::optional<ShardSpec>& get_shard_spec_from_tensor_spec(const TensorSpec& tensor_spec) {
-    return tensor_spec.memory_config().shard_spec();
-}
+namespace {
 
-bool is_uneven(const TensorSpec& t) {
+// Returns true if the tensor's padded shape does not divide evenly into its shard shape,
+// or if the sharded memory config has no concrete shard_spec. Conservatively returns true
+// for pathological inputs (rank < 2) so callers fall back to interleaved paths.
+bool is_unevenly_sharded(const TensorSpec& t) {
     if (!t.memory_config().is_sharded()) {
         return false;
     }
-    const auto& shard_spec = get_shard_spec_from_tensor_spec(t);
+    const auto& shard_spec = t.memory_config().shard_spec();
     if (!shard_spec.has_value()) {
         return true;
     }
     const auto& shape = t.padded_shape();
-    const auto& shard = shard_spec->shape;
     const auto rank = shape.rank();
-    TT_FATAL(rank >= 2, "Rank must be at least 2");
+    if (rank < 2) {
+        return true;
+    }
+    const auto& shard = shard_spec->shape;
     uint64_t volume_except_last = 1;
     for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
         volume_except_last *= shape[i];
@@ -33,76 +38,32 @@ bool is_uneven(const TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 || (shape[-1] % shard[1]) != 0;
 }
 
+}  // namespace
+
 bool is_native_transpose_sharding(const TensorSpec& input_spec, const MemoryConfig& output_memory_config) {
-    if (!output_memory_config.is_sharded()) {
+    const auto& in_cfg = input_spec.memory_config();
+    if (!output_memory_config.is_sharded() || !in_cfg.is_sharded()) {
         return false;
     }
-    if (!input_spec.memory_config().is_sharded()) {
+    if (is_unevenly_sharded(input_spec)) {
         return false;
     }
-    if (is_uneven(input_spec)) {
+    if (in_cfg.buffer_type() == BufferType::DRAM || output_memory_config.buffer_type() == BufferType::DRAM) {
         return false;
     }
-    if (input_spec.memory_config().buffer_type() == BufferType::DRAM ||
-        output_memory_config.buffer_type() == BufferType::DRAM) {
-        return false;
-    }
-    if (input_spec.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+    if (in_cfg.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
         output_memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         return false;
     }
-    if (output_memory_config.shard_spec().has_value() && input_spec.memory_config().shard_spec().has_value()) {
-        const auto& in_grid = input_spec.memory_config().shard_spec()->grid;
-        const auto& out_grid = output_memory_config.shard_spec()->grid;
-        if (in_grid != out_grid) {
+    // When either spec is missing we're in the pre-derivation path (callers like transpose.cpp and
+    // compute_output_specs use this predicate as an eligibility probe before deriving the output
+    // shard_spec). Skip the grid equality check in that case — the derived grid will match the input's.
+    if (output_memory_config.shard_spec().has_value() && in_cfg.shard_spec().has_value()) {
+        if (in_cfg.shard_spec()->grid != output_memory_config.shard_spec()->grid) {
             return false;
         }
     }
     return true;
-}
-
-std::optional<TransposeShardSpecs> get_transpose_shard_specs(
-    const TensorSpec& input_spec, const TensorSpec& output_spec) {
-    const bool input_sharded = input_spec.memory_config().is_sharded();
-    const bool output_sharded = output_spec.memory_config().is_sharded();
-
-    if (!input_sharded && !output_sharded) {
-        return std::nullopt;
-    }
-
-    if (!is_native_transpose_sharding(input_spec, output_spec.memory_config()) || is_uneven(output_spec)) {
-        return std::nullopt;
-    }
-
-    if (input_spec.layout() == Layout::ROW_MAJOR) {
-        auto is_shard_tile_aligned = [](const TensorSpec& spec) {
-            const auto& shard = *get_shard_spec_from_tensor_spec(spec);
-            const auto tile_hw = spec.tile().get_tile_hw();
-            const uint64_t shard_elements = static_cast<uint64_t>(shard.shape[0]) * shard.shape[1];
-            return shard_elements % tile_hw == 0;
-        };
-
-        if ((input_sharded && !is_shard_tile_aligned(input_spec)) ||
-            (output_sharded && !is_shard_tile_aligned(output_spec))) {
-            return std::nullopt;
-        }
-    }
-
-    TT_FATAL(
-        get_shard_spec_from_tensor_spec(output_spec).has_value(),
-        "Output must have shard spec when using native sharded path");
-
-    if (input_sharded) {
-        const auto& in_shard = *get_shard_spec_from_tensor_spec(input_spec);
-        const auto& out_shard = *get_shard_spec_from_tensor_spec(output_spec);
-        return TransposeShardSpecs{.input_shard_spec = in_shard, .output_shard_spec = out_shard};
-    }
-
-    const auto& out_shard = *get_shard_spec_from_tensor_spec(output_spec);
-    const auto& out_shape = output_spec.padded_shape();
-    const auto& in_shape = input_spec.padded_shape();
-    auto adjusted_in = adjust_shard_spec_to_shape(out_shard, out_shape, in_shape);
-    return TransposeShardSpecs{.input_shard_spec = adjusted_in, .output_shard_spec = out_shard};
 }
 
 ShardSpec adjust_shard_spec_to_shape(
@@ -122,11 +83,43 @@ ShardSpec adjust_shard_spec_to_shape(
     uint32_t to_width = to_shape[-1];
     TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
     TT_FATAL(from_width > 0, "Invalid from_shape: width dimension is zero");
-    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
-    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
+
+    // Require exact division so we never silently truncate the scaled shard dimensions. Callers
+    // must only invoke this helper when the to/from shape ratios evenly divide the source shard.
+    const uint64_t h_num = static_cast<uint64_t>(ret.shape[0]) * to_volume_except_width;
+    const uint64_t w_num = static_cast<uint64_t>(ret.shape[1]) * to_width;
+    TT_FATAL(
+        h_num % from_volume_except_width == 0,
+        "adjust_shard_spec_to_shape: height scaling not exact ({} * {} not divisible by {}).",
+        ret.shape[0],
+        to_volume_except_width,
+        from_volume_except_width);
+    TT_FATAL(
+        w_num % from_width == 0,
+        "adjust_shard_spec_to_shape: width scaling not exact ({} * {} not divisible by {}).",
+        ret.shape[1],
+        to_width,
+        from_width);
+    uint32_t scaled_h = static_cast<uint32_t>(h_num / from_volume_except_width);
+    uint32_t scaled_w = static_cast<uint32_t>(w_num / from_width);
+
+    // Only clamp to tile dimensions when the source shard was already tile-aligned. For sub-tile
+    // ROW_MAJOR shards the caller is responsible for legality and we must not over-size the shard.
+    const bool source_tile_aligned =
+        shard_spec.shape[0] % tt::constants::TILE_HEIGHT == 0 && shard_spec.shape[1] % tt::constants::TILE_WIDTH == 0;
+    if (source_tile_aligned) {
+        scaled_h = std::max(scaled_h, tt::constants::TILE_HEIGHT);
+        scaled_w = std::max(scaled_w, tt::constants::TILE_WIDTH);
+    }
+
+    ret.shape[0] = scaled_h;
+    ret.shape[1] = scaled_w;
     return ret;
 }
 
+// When the user requests a sharded output but no shard_spec, and the input is interleaved, we derive
+// a grid and shard shape using the full device compute grid, matching the shard math used elsewhere
+// for height/width/block cases.
 ShardSpec generate_transpose_shard_spec(
     const Tensor& input_tensor, const ttnn::Shape& padded_out_shape, TensorMemoryLayout memory_layout) {
     auto* device = input_tensor.device();
@@ -155,40 +148,35 @@ ShardSpec generate_transpose_shard_spec(
         auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), tt::constants::TILE_WIDTH);
         shard_shape = {shard_height, shard_width};
     }
+    log_debug(tt::LogOp, "Transpose: generated shard spec over full compute grid ({} cores)", num_cores);
     return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
 }
 
-CoreRangeSet get_transpose_worker_grid(const Tensor& input_tensor, const MemoryConfig& output_memory_config) {
-    if (output_memory_config.is_sharded() && output_memory_config.shard_spec().has_value()) {
-        const auto& grid = output_memory_config.shard_spec()->grid;
-        auto* device = input_tensor.device();
-        for (const auto& sub_device_id : device->get_sub_device_ids()) {
-            const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-            if (sub_device_workers.intersects(grid)) {
-                return sub_device_workers;
-            }
-        }
-    }
-
-    if (input_tensor.is_sharded() && is_native_transpose_sharding(input_tensor.tensor_spec(), output_memory_config)) {
-        const auto& grid = input_tensor.shard_spec()->grid;
-        auto* device = input_tensor.device();
-        for (const auto& sub_device_id : device->get_sub_device_ids()) {
-            const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-            if (sub_device_workers.intersects(grid)) {
-                return sub_device_workers;
-            }
-        }
-    }
-
-    auto* device = input_tensor.device();
-    return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
-}
-
-std::uint32_t* copy_transpose_common_runtime_args(const Buffer& buffer, std::uint32_t* dst) {
+// Refreshes the runtime-tensor-shape common args on program cache hits. The destination span is
+// bounds-checked against the element count produced by the fresh TensorAccessorArgs so any layout
+// change between program creation and the cache hit triggers a clear assertion instead of a silent
+// buffer overrun.
+void copy_transpose_common_runtime_args(const Buffer& buffer, std::span<std::uint32_t> dst) {
     const auto src =
         TensorAccessorArgs(buffer, tensor_accessor::ArgConfig::RuntimeTensorShape).get_common_runtime_args();
-    return std::copy(src.begin(), src.end(), dst);
+    TT_FATAL(
+        dst.size() >= src.size(),
+        "copy_transpose_common_runtime_args: destination span ({} elems) too small for common args ({} elems).",
+        dst.size(),
+        src.size());
+    std::copy(src.begin(), src.end(), dst.begin());
+}
+
+void refresh_transpose_common_runtime_args(
+    Program& program,
+    KernelHandle reader_kernel_id,
+    KernelHandle writer_kernel_id,
+    const Buffer& input_buffer,
+    const Buffer& output_buffer) {
+    auto& reader_args = GetCommonRuntimeArgs(program, reader_kernel_id);
+    auto& writer_args = GetCommonRuntimeArgs(program, writer_kernel_id);
+    copy_transpose_common_runtime_args(input_buffer, std::span<std::uint32_t>(reader_args.data(), reader_args.size()));
+    copy_transpose_common_runtime_args(output_buffer, std::span<std::uint32_t>(writer_args.data(), writer_args.size()));
 }
 
 }  // namespace ttnn::operations::data_movement::transpose

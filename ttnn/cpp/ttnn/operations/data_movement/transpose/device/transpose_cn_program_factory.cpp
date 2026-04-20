@@ -150,14 +150,12 @@ void TransposeCNProgramFactory::override_runtime_arguments(
 
     const auto& input_tensor = tensor_args.input;
 
-    {
-        auto* reader_args = GetCommonRuntimeArgs(program, shared_variables.reader_kernel_id).data();
-        ttnn::operations::data_movement::transpose::copy_transpose_common_runtime_args(
-            *input_tensor.buffer(), reader_args);
-        auto* writer_args = GetCommonRuntimeArgs(program, shared_variables.writer_kernel_id).data();
-        ttnn::operations::data_movement::transpose::copy_transpose_common_runtime_args(
-            *output_tensor.buffer(), writer_args);
-    }
+    ttnn::operations::data_movement::transpose::refresh_transpose_common_runtime_args(
+        program,
+        shared_variables.reader_kernel_id,
+        shared_variables.writer_kernel_id,
+        *input_tensor.buffer(),
+        *output_tensor.buffer());
 
     auto* input_buffer = input_tensor.buffer();
     auto* output_buffer = output_tensor.buffer();
