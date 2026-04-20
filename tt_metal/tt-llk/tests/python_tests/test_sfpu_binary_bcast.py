@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import torch
-from conftest import skip_for_blackhole, skip_for_quasar
+from conftest import skip_for_quasar
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     DestAccumulation,
@@ -103,7 +103,6 @@ SUPPORTED_FORMATS = input_output_formats(
 )
 
 
-@skip_for_blackhole
 @skip_for_quasar
 @parametrize(
     formats=SUPPORTED_FORMATS,

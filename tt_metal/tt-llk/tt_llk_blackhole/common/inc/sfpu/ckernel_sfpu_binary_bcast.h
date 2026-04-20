@@ -772,13 +772,6 @@ inline void _sfpu_binary_bcast_init_()
     }
         .set(ADDR_MOD_3);
 
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
-
     if constexpr (BCAST_DIM == SfpuBcastDim::BCAST_COL)
     {
         // Build persistent col-0 lane mask in LREG_MASK.
