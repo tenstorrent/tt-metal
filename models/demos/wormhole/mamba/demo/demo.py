@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Callable, List, Optional
 
 import pytest
+from models.tt_transformers.tt.model_config import determine_device_name
 import torch
 from loguru import logger
 from tqdm import tqdm
@@ -385,8 +386,9 @@ def run_mamba_demo(
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=f"demo_perf",
-        ml_model_name=model_version,
+        ml_model_name=model_version.removeprefix("state-spaces/"),
         ml_model_type="llm",
+        device_name=determine_device_name(device),
         num_layers=64,
         batch_size=batch_size,
         config_params={"prefill_chunk_size": prefill_chunk_size},
