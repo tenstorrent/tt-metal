@@ -346,10 +346,24 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     pending.begin(),
                     pending.end(),
                     [&](const PendingChannel& ch) {
-                        std::vector<uint32_t> status_buf(1, 0);
-                        detail::ReadFromDeviceL1(
-                            ch.dev, ch.eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
-                        return status_buf[0] == terminated_val;
+                        try {
+                            std::vector<uint32_t> status_buf(1, 0);
+                            detail::ReadFromDeviceL1(
+                                ch.dev, ch.eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+                            return status_buf[0] == terminated_val;
+                        } catch (const std::exception& e) {
+                            // Read failed (e.g. ERISC completely unresponsive).
+                            // Keep this channel in pending so it gets force-reset in the
+                            // second pass. Do not let one bad read abort the entire poll.
+                            log_warning(
+                                tt::LogMetal,
+                                "FabricFirmwareInitializer::teardown: ReadFromDeviceL1 threw on "
+                                "Device {} chan={}: {} — keeping channel pending for force-reset",
+                                ch.dev->id(),
+                                ch.eth_chan_id,
+                                e.what());
+                            return false;
+                        }
                     }),
                 pending.end());
             if (!pending.empty()) {
@@ -398,16 +412,26 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 std::lock_guard<std::mutex> lock(force_reset_channels_mutex_);
                 force_reset_channels_.emplace(ch.dev->id(), ch.eth_chan_id);
             }
+            // Intentional asymmetry: terminate_stale_erisc_routers() and metal_env.cpp's
+            // teardown_fabric_config() both AVOID assert_risc_reset on WH because it tears
+            // down the ETH PHY link and corrupts partner ERISC L1 on adjacent chips.
+            // Here in session teardown, however, the benefit of preventing a zombie ERISC
+            // from racing with the next init's L1 clear outweighs the PHY link disruption.
+            // The partner chip's next init will handle the resulting corrupt L1 via
+            // terminate_stale_erisc_routers()'s CORRUPT path (send TERMINATE best-effort,
+            // skip poll). force_reset_channels_ is populated so verify_all_fabric_channels_healthy()
+            // classifies these as "DEGRADED" rather than "corrupt from prior crash".
             try {
                 const auto virtual_eth_coord = cluster_.get_virtual_coordinate_from_logical_coordinates(
                     ch.dev->id(), ch.eth_logical_core, CoreType::ETH);
                 cluster_.assert_risc_reset_at_core(
                     tt_cxy_pair(ch.dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
             } catch (const std::exception& e) {
-                log_warning(
+                log_error(
                     tt::LogMetal,
                     "FabricFirmwareInitializer::teardown: assert_risc_reset_at_core failed on "
-                    "Device {} chan={}: {} — ERISC may still be running!",
+                    "Device {} chan={}: {} — ERISC may still be running! "
+                    "Next fabric init should expect corrupt state on this channel.",
                     ch.dev->id(),
                     ch.eth_chan_id,
                     e.what());

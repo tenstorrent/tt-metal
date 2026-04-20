@@ -282,6 +282,14 @@ void DispatchKernelInitializer::rescue_stuck_dispatch_cores(IDevice* device) con
     //
     // After unblocking, the termination signal path (process_termination_signals) will cleanly
     // shut down the cores.
+    //
+    // KNOWN LIMITATION: This rescue only addresses the stream_wrap_gt stuck path in
+    // dispatch_s's wait_for_workers(). It does NOT rescue:
+    //   - dispatch_d stuck in cb_acquire_pages (waiting for prefetcher to produce CB pages):
+    //     that would require writing to the CB semaphore, not stream registers.
+    //   - Cores stuck in a NOC write barrier (requires NOC-level reset).
+    //   - Cores blocked waiting for fabric acknowledgment (requires fabric teardown first).
+    // For the cb_acquire_pages case, a device reset may be needed as last resort.
 
     const auto& hal = descriptor_->hal();
     CoreType dispatch_core_type = dispatch_core_manager_.get_dispatch_core_type();
@@ -299,6 +307,12 @@ void DispatchKernelInitializer::rescue_stuck_dispatch_cores(IDevice* device) con
 
     const auto& termination_cores = dispatch_topology_->get_registered_termination_cores(device->id());
     for (const auto& info : termination_cores) {
+        // Note: rescue applies to DISPATCH_S cores only (stream_wrap_gt stuck path).
+        // DISPATCH_D uses a different wait mechanism (cb_acquire_pages) — writing 0xFFFF
+        // to DISPATCH_D stream registers is a no-op since DISPATCH_D never reads
+        // STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE in the way stream_wrap_gt does.
+        // Adding a per-core type filter would require TerminationInfo to carry the
+        // dispatch type; accepted as low-risk until that field exists.
         for (uint32_t i = 0; i < num_streams; i++) {
             uint32_t stream_id = mem_map.get_dispatch_stream_index(i);
             uint32_t reg_addr = overlay_start + (stream_id * stream_reg_space) + (buf_size_reg_idx << 2);

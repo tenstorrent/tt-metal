@@ -125,6 +125,10 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
     WAYPOINT("NWID");
 }
 
+// stream_wrap_gt: wrapping greater-than comparison for stream overlay registers.
+// Stream counters wrap at MEM_WORD_ADDR_WIDTH bits (hardware-defined counter width).
+// NOT interchangeable with wrap_gt() (from cq_common.hpp) which uses a different
+// counter width for CB semaphores.
 FORCE_INLINE
 uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
     constexpr uint32_t shift = 32 - MEM_WORD_ADDR_WIDTH;
@@ -299,12 +303,20 @@ void process_dispatch_s_wait_cmd() {
         (volatile uint32_t*)STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
 
     // Wait for workers to complete
+    uint32_t heartbeat = 0;
     while (stream_wrap_gt(cmd->wait.count, *worker_sem)) {
+        invalidate_l1_cache();
+        update_worker_completion_count_on_dispatch_d();
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     }
     // Send updated worker count to dispatch_d and wait for updated count to get picked up by NOC before
     // (optionally) clearing the counter. dispatch_d will clear its own counter.
     update_worker_completion_count_on_dispatch_d<true>();
     if (cmd->wait.flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM) {
+        // PROTOCOL INVARIANT: dispatch_d must never directly clear dispatch_s's stream
+        // registers via NOC write. Only dispatch_s clears its own registers (here).
+        // dispatch_d clears its own copy independently. Violating this invariant
+        // would cause worker_count_update_for_dispatch_d to go stale.
         // Reset SPACE_AVAILABLE to 0.
         NOC_STREAM_WRITE_REG(stream, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX, 0);
         worker_count_update_for_dispatch_d[index] =
