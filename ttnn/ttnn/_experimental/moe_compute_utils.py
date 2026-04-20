@@ -408,6 +408,9 @@ def prepare_w0_w1_tensor_with_bias(
     Prepare the w0_w1 tensor with bias by concatenating bias rows along K dimension,
     padding to transaction-aligned height, then delegating to prepare_w0_w1_tensor_for_moe_compute.
 
+    Converts true PyTorch bias format (L, E, N) to kernel tile format (L, E, 32, N) with
+    only the first row populated, then concatenates to weights along K dimension.
+
     The kernel reads W0/W1 in blocks of (W0_W1_TILES_PER_TXN * W0_W1_TXNS_PER_BLOCK) tiles.
     With bias, K goes from K/32 tiles to (K/32 + 1) tiles. If (K/32 + 1) is not divisible by
     TILES_PER_TXN, the kernel reads extra padding tiles. The weight tensor must contain those
@@ -416,8 +419,8 @@ def prepare_w0_w1_tensor_with_bias(
     Args:
         torch_w0: Weight tensor of shape (L, E, K, N)
         torch_w1: Weight tensor of shape (L, E, K, N)
-        torch_b0: Bias tensor of shape (L, E, 32, N) -- 1 tile row = 32 elements
-        torch_b1: Bias tensor of shape (L, E, 32, N) -- 1 tile row = 32 elements
+        torch_b0: Bias tensor of shape (L, E, N) -- true PyTorch format
+        torch_b1: Bias tensor of shape (L, E, N) -- true PyTorch format
         L: Number of layers
         E: Number of experts
         K: Input dimension
@@ -447,8 +450,14 @@ def prepare_w0_w1_tensor_with_bias(
     K_tiles_padded = math.ceil(K_tiles_with_bias / W0_W1_TILES_PER_TXN) * W0_W1_TILES_PER_TXN  # 238
     K_padded = K_tiles_padded * ttnn.TILE_SIZE  # 7616
 
-    torch_w0_b0 = torch.cat([torch_w0, torch_b0], dim=2)  # (L, E, K+32, N)
-    torch_w1_b1 = torch.cat([torch_w1, torch_b1], dim=2)  # (L, E, K+32, N)
+    # Convert true PyTorch bias (L, E, N) to kernel tile format (L, E, 32, N) with only row 0 populated.
+    torch_b0_tiled = torch.zeros(L, E, ttnn.TILE_SIZE, N, dtype=torch_b0.dtype)
+    torch_b0_tiled[:, :, 0, :] = torch_b0
+    torch_b1_tiled = torch.zeros(L, E, ttnn.TILE_SIZE, N, dtype=torch_b1.dtype)
+    torch_b1_tiled[:, :, 0, :] = torch_b1
+
+    torch_w0_b0 = torch.cat([torch_w0, torch_b0_tiled], dim=2)  # (L, E, K+32, N)
+    torch_w1_b1 = torch.cat([torch_w1, torch_b1_tiled], dim=2)  # (L, E, K+32, N)
 
     # Pad K from K+32 to K_padded with zeros
     K_pad_amount = K_padded - (K + ttnn.TILE_SIZE)  # 7616 - 7200 = 416
@@ -474,9 +483,12 @@ def prepare_w2_tensor_with_bias(
     but only the weight tiles are ring-rotated — the bias tile stays fixed at
     position N/32 for all cores (matching GPT-OSS behavior).
 
+    Converts true PyTorch bias format (L, E, K) to kernel tile format (L, E, 32, K)
+    with only the first row populated, then performs K-column sharding.
+
     Args:
         torch_w2: Weight tensor of shape (L, E, N, K)
-        torch_b2: Bias tensor of shape (L, E, 32, K) -- 1 tile row = 32 elements
+        torch_b2: Bias tensor of shape (L, E, K) -- true PyTorch format
         L: Number of layers
         E: Number of experts
         N: Intermediate dimension
@@ -489,6 +501,10 @@ def prepare_w2_tensor_with_bias(
     import torch
 
     num_cores = len(ring2cores)
+
+    # Convert true PyTorch bias (L, E, K) to kernel tile format (L, E, 32, K) with only row 0 populated.
+    torch_b2_tiled = torch.zeros(L, E, ttnn.TILE_SIZE, K, dtype=torch_b2.dtype)
+    torch_b2_tiled[:, :, 0, :] = torch_b2
 
     # Column-shard K dimension (same as non-bias prepare_w2_tensor)
     each_shard = []
@@ -543,12 +559,12 @@ def prepare_w2_tensor_with_bias(
         last_group_tiles = 3 if pad_flag else 2
         last_group_pad_tiles = 1 if pad_flag else 2
 
-        b2_each_shard.append(torch_b2[:, :, :, start_col : start_col + 4 * 4 * ttnn.TILE_SIZE])
+        b2_each_shard.append(torch_b2_tiled[:, :, :, start_col : start_col + 4 * 4 * ttnn.TILE_SIZE])
         start_col += 4 * 4 * ttnn.TILE_SIZE
-        b2_each_shard.append(torch_b2[:, :, :, start_col : start_col + last_group_tiles * ttnn.TILE_SIZE])
+        b2_each_shard.append(torch_b2_tiled[:, :, :, start_col : start_col + last_group_tiles * ttnn.TILE_SIZE])
         start_col += last_group_tiles * ttnn.TILE_SIZE
         b2_each_shard.append(
-            torch.zeros(L, E, ttnn.TILE_SIZE, last_group_pad_tiles * ttnn.TILE_SIZE, dtype=torch_b2.dtype)
+            torch.zeros(L, E, ttnn.TILE_SIZE, last_group_pad_tiles * ttnn.TILE_SIZE, dtype=torch_b2_tiled.dtype)
         )
 
     torch_b2_reordered = torch.cat(b2_each_shard, dim=-1)
