@@ -653,7 +653,7 @@ def run_ring_joint_sdpa_perf(
     persistent_output_buffers = [
         [
             ttnn.as_tensor(
-                torch.zeros(ag_output_shape_k),
+                torch.empty(ag_output_shape_k),
                 device=submesh,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=kv_dtype,
@@ -663,7 +663,7 @@ def run_ring_joint_sdpa_perf(
                 ),
             ),
             ttnn.as_tensor(
-                torch.zeros(ag_output_shape_v),
+                torch.empty(ag_output_shape_v),
                 device=submesh,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=kv_dtype,
@@ -688,32 +688,20 @@ def run_ring_joint_sdpa_perf(
         packer_l1_acc=False,
     )
 
-    # Create input tensors
+    # Create input tensors — uninitialized host allocations; data is irrelevant for perf
     logger.info(
-        f"Perf test: creating torch input tensors (Q: [{b},{nhq},{base_seq_len},{head_dim_q}], "
-        f"K: [{b},{nhk},{base_seq_len},{head_dim_k}], V: [{b},{nhv},{base_seq_len},{head_dim_v}])"
+        f"Perf test: allocating uninitialized torch input tensors "
+        f"(Q: [{b},{nhq},{padded_seq_len},{head_dim_q}], "
+        f"K: [{b},{nhk},{padded_seq_len},{head_dim_k}], V: [{b},{nhv},{padded_seq_len},{head_dim_v}])"
     )
-    Q = fa_rand(b, nhq, base_seq_len, head_dim_q)
-    K = fa_rand(b, nhk, base_seq_len, head_dim_k)
-    V = fa_rand(b, nhv, base_seq_len, head_dim_v)
-
-    logger.info(f"Perf test: padding tensors (seq {base_seq_len} -> {padded_seq_len})")
-    padded_Q = torch.cat([Q, torch.zeros(b, nhq, padded_seq_len - base_seq_len, head_dim_q)], dim=2)
-    padded_K = torch.cat([K, torch.zeros(b, nhk, padded_seq_len - base_seq_len, head_dim_k)], dim=2)
-    padded_V = torch.cat([V, torch.zeros(b, nhv, padded_seq_len - base_seq_len, head_dim_v)], dim=2)
-
-    if is_balanced:
-        rp_factor = submesh.shape[rp_axis]
-        chunk_order = create_balanced_chunk_order(rp_factor)
-        logger.info(f"Perf test: applying balanced reordering (rp_factor={rp_factor})")
-        padded_Q = reorder_tensor_chunks(padded_Q, chunk_order, seq_dim=2)
-        padded_K = reorder_tensor_chunks(padded_K, chunk_order, seq_dim=2)
-        padded_V = reorder_tensor_chunks(padded_V, chunk_order, seq_dim=2)
+    padded_Q = torch.empty(b, nhq, padded_seq_len, head_dim_q)
+    padded_K = torch.empty(b, nhk, padded_seq_len, head_dim_k)
+    padded_V = torch.empty(b, nhv, padded_seq_len, head_dim_v)
 
     # Joint tensors
-    joint_Q = fa_rand(b, nhq, joint_seq_len, head_dim_q)
-    joint_K = fa_rand(b, nhk, joint_seq_len, head_dim_k)
-    joint_V = fa_rand(b, nhv, joint_seq_len, head_dim_v)
+    joint_Q = torch.empty(b, nhq, joint_seq_len, head_dim_q)
+    joint_K = torch.empty(b, nhk, joint_seq_len, head_dim_k)
+    joint_V = torch.empty(b, nhv, joint_seq_len, head_dim_v)
 
     # Shard dims
     sdpa_input_shard_dims = [None, None]
