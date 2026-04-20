@@ -43,17 +43,56 @@ void PolyNorm3BackwardDeviceOperation::validate_on_program_cache_miss(
     check_tensor(tensor_args.input, "Input");
     check_tensor(tensor_args.dL_dout, "dL_dout");
     check_tensor(tensor_args.weight, "Weight");
+
+    const auto input_shape = tensor_args.input.logical_shape().to_array_4D();
+    const auto expected_packed_partials_shape = ttnn::Shape({input_shape[0], input_shape[1], input_shape[2], 128U});
+
     if (tensor_args.preallocated_dL_dx.has_value()) {
-        check_tensor(tensor_args.preallocated_dL_dx.value(), "Preallocated dL_dx");
+        const auto& preallocated_dL_dx = tensor_args.preallocated_dL_dx.value();
+        check_tensor(preallocated_dL_dx, "Preallocated dL_dx");
+        TT_FATAL(
+            preallocated_dL_dx.buffer()->buffer_type() == ttnn::BufferType::DRAM,
+            "Preallocated dL_dx buffer must be in DRAM. Buffer type: {}",
+            enchantum::to_string(preallocated_dL_dx.buffer()->buffer_type()));
+        TT_FATAL(
+            preallocated_dL_dx.logical_shape() == tensor_args.input.logical_shape(),
+            "Preallocated dL_dx logical shape {} does not match expected shape {}",
+            preallocated_dL_dx.logical_shape(),
+            tensor_args.input.logical_shape());
+        TT_FATAL(
+            preallocated_dL_dx.padded_shape() == tensor_args.input.padded_shape(),
+            "Preallocated dL_dx padded shape {} does not match expected shape {}",
+            preallocated_dL_dx.padded_shape(),
+            tensor_args.input.padded_shape());
     }
     if (tensor_args.preallocated_packed_partials.has_value()) {
         const auto& packed_partials = tensor_args.preallocated_packed_partials.value();
+        TT_FATAL(
+            packed_partials.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            "Preallocated packed partials must be on Device. Storage type: {}",
+            enchantum::to_string(packed_partials.storage_type()));
+        TT_FATAL(
+            packed_partials.buffer() != nullptr,
+            "Preallocated packed partials must be allocated in device buffers. Buffer is null.");
         TT_FATAL(
             packed_partials.layout() == tt::tt_metal::Layout::TILE,
             "Preallocated packed partials must be tile layout.");
         TT_FATAL(
             packed_partials.dtype() == tt::tt_metal::DataType::FLOAT32,
             "Preallocated packed partials must be FLOAT32.");
+        TT_FATAL(
+            packed_partials.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            "Preallocated packed partials must use Interleaved memory layout. Memory layout: `{}`",
+            enchantum::to_string(packed_partials.memory_config().memory_layout()));
+        TT_FATAL(
+            packed_partials.buffer()->buffer_type() == ttnn::BufferType::DRAM,
+            "Preallocated packed partials buffer must be in DRAM. Buffer type: {}",
+            enchantum::to_string(packed_partials.buffer()->buffer_type()));
+        TT_FATAL(
+            packed_partials.logical_shape() == expected_packed_partials_shape,
+            "Preallocated packed partials logical shape {} does not match expected shape {}",
+            packed_partials.logical_shape(),
+            expected_packed_partials_shape);
     }
 }
 

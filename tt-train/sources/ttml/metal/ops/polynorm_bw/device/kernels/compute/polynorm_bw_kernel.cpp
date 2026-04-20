@@ -177,8 +177,14 @@ void reduce_sum_to_scalar(const uint32_t cb_sum, const uint32_t cb_scalar) {
     reduce_uninit();
 
     tile_regs_commit();
-    pack_and_push(reg_acc, cb_scalar);
-    cb_pop_front(cb_sum, onetile);
+    if (cb_sum == cb_scalar) {
+        // In-place reduction: free the only input slot before reserve_back in pack_and_push.
+        cb_pop_front(cb_sum, onetile);
+        pack_and_push(reg_acc, cb_scalar);
+    } else {
+        pack_and_push(reg_acc, cb_scalar);
+        cb_pop_front(cb_sum, onetile);
+    }
 }
 
 // --- Per-row scalar computations ---
@@ -338,7 +344,7 @@ void accumulate_all_sums_for_row() {
 // --- Output emission ---
 
 // Pack [dw0, dw1, dw2, db] as 4 consecutive tiles into the packed_partials output CB.
-// These are later reduced on the host to produce the final dL/dw and dL/db.
+// These are later reduced on-device by the host wrapper to produce final dL/dw and dL/db.
 void emit_packed_partials_for_row() {
     cb_wait_front(cb_sum_xdout, onetile);
     cb_wait_front(cb_sum_x2dout, onetile);
@@ -512,7 +518,7 @@ void kernel_main() {
         // Reduce accumulated Σdout → dL/db scalar (reuses cb_inv_rms_x slot)
         reduce_sum_to_scalar(cb_db_acc, cb_inv_rms_x);
 
-        // Pack [dw0, dw1, dw2, db] into 4 tiles for host-side final reduction
+        // Pack [dw0, dw1, dw2, db] into 4 tiles for on-device final reduction in host wrapper
         emit_packed_partials_for_row();
     }
 

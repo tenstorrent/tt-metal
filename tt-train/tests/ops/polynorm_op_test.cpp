@@ -272,16 +272,25 @@ void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape, float
     auto mse = ops::mse_loss(out, target);
     mse->backward();
 
-    const auto grad_x = core::to_xtensor(x->get_grad());
-    const auto grad_w = core::to_xtensor(w->get_grad());
-    const auto grad_b = core::to_xtensor(b->get_grad());
+    const auto grad_x_autograd = core::to_xtensor(x->get_grad());
+    const auto grad_w_autograd = core::to_xtensor(w->get_grad());
+    const auto grad_b_autograd = core::to_xtensor(b->get_grad());
     const auto dL_dout = core::to_xtensor(out->get_grad());
     const auto [grad_x_ref, grad_w_ref, grad_b_ref] =
         polynorm_reference_backward(data.input, data.weight, dL_dout, epsilon);
 
-    EXPECT_EQ(grad_x.shape(), data.input.shape());
-    EXPECT_EQ(grad_w.shape(), data.weight.shape());
-    EXPECT_EQ(grad_b.shape(), data.bias.shape());
+    EXPECT_EQ(grad_x_autograd.shape(), data.input.shape());
+    EXPECT_EQ(grad_w_autograd.shape(), data.weight.shape());
+    EXPECT_EQ(grad_b_autograd.shape(), data.bias.shape());
+    EXPECT_TRUE(xt::all(xt::isfinite(grad_x_autograd))) << "autograd fused grad_x has non-finite values";
+    EXPECT_TRUE(xt::all(xt::isfinite(grad_w_autograd))) << "autograd fused grad_w has non-finite values";
+    EXPECT_TRUE(xt::all(xt::isfinite(grad_b_autograd))) << "autograd fused grad_b has non-finite values";
+    expect_allclose_with_metrics(
+        grad_x_autograd, grad_x_ref, kBackwardRtol, kBackwardAtol, "autograd_fused_backward_grad_x_vs_xt_reference");
+    expect_allclose_with_metrics(
+        grad_w_autograd, grad_w_ref, kBackwardRtol, kBackwardAtol, "autograd_fused_backward_grad_w_vs_xt_reference");
+    expect_allclose_with_metrics(
+        grad_b_autograd, grad_b_ref, kBackwardRtol, kBackwardAtol, "autograd_fused_backward_grad_b_vs_xt_reference");
 
     autograd::ctx().reset_graph();
 

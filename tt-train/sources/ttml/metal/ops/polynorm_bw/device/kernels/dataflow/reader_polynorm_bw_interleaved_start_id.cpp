@@ -63,7 +63,7 @@ void kernel_main() {
     generate_tile_with_uint32_value(cb_one, 0x3F800000U);
 
     // Read weight scalars directly from the weight tensor on DRAM (no host roundtrip)
-    constexpr uint32_t cb_scratch = tt::CBIndex::c_6;
+    constexpr uint32_t cb_scratch = tt::CBIndex::c_23;
     const uint16_t w0_bf16 =
         read_bfloat16_scalar_from_tile(weight_address_generator, /*row=*/0U, /*col=*/0U, cb_scratch);
     const uint16_t w1_bf16 =
