@@ -701,12 +701,33 @@ read time. Previously deprecated for latency; now justified by accuracy data.
 
 **Implementation Plan:**
 
-**1. Chunked online softmax in fused kernel** (critical, unblocks >2K context)
+**1. Chunked online softmax in fused kernel** (critical, unblocks >2K context) — **IN PROGRESS (2026-04-20)**
 - Modify `sdpa_tq_decode.cpp` to stream K/V chunks instead of pre-filling
 - Reference pattern: `models/.../sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp`
 - Interleave: dequant one K/V chunk → matmul Q×K^T → softmax → V matmul → accumulate
 - Double-buffer CBs (~2× chunk size) instead of full-cache size
 - Effort: 2-3 days (kernel engineering, complex)
+
+**Progress (WIP commit `6fc1a6a03d1`):**
+- ✅ Replaced two-phase pre-fill+SDPA with interleaved dequant+SDPA loop
+- ✅ CBs shrunk from `k_num_chunks` to 2 (double-buffer) → **no more OOM at 4K+**
+- ✅ New per-chunk dequant helpers (`dequant_k_chunk`, `dequant_v_chunk`) in
+  `sdpa_tq_decode.cpp` that match the original tile layout (transposed K,
+  natural V) for matmul_blocks compatibility
+- ✅ Single-chunk case (seq=128, k_num_chunks=1): cosine **0.9996 PASS**
+- ✅ Pre-rescaled path unchanged and working at all seqlens
+- ❌ **Multi-chunk bug (seq≥512)**: cosine 0.18-0.90 — online softmax /
+  lazy correction has a state-handoff bug
+  - Oversizing CBs to 8× chunk doesn't help → it's a logic bug, not a CB race
+  - Next debug pass needs DPRINT to compare state after each chunk vs
+    `sdpa_inner_loop`'s behavior tile-by-tile
+  - Likely candidates:
+    * Alias swap semantics between cb_sum_A↔B / cb_max_A↔B / cb_out_im_A↔B
+    * L1 pack accum state leaking from dequant's pack_tile<true> calls into
+      subsequent sub_exp_block_bcast_cols_inplace
+    * `cb_reserve_back` / `cb_push_back` ordering between alias CBs
+    * Packer reconfig (ReluType, data_format) after dequant not matching
+      what SDPA expects
 
 **2. Paged cache support for indices + norms**
 - Current `TTNNTurboQuantCache` uses `[1, max_seq, n_heads, head_dim]` interleaved
