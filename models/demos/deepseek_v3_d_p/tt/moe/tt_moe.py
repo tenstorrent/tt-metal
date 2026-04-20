@@ -34,6 +34,24 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
 from models.demos.deepseek_v3_d_p.utils.test_utils import get_input_mem_config
 
 
+def print_buffers(device, name, buffer_type):
+    buffers = ttnn._ttnn.reports.get_buffers(device)
+    filtered_buffers = [buf for buf in buffers if buf.buffer_type == buffer_type]
+
+    for i, buf in enumerate(filtered_buffers):
+        logger.warning(
+            f"{buffer_type} [{name}] Buffer {i}: addr={buf.address}, size={buf.max_size_per_bank}, layout={buf.buffer_layout}"
+        )
+
+
+def print_l1_buffers(device, name):
+    print_buffers(device, name, ttnn.BufferType.L1)
+
+
+def print_l1_small_buffers(device, name):
+    print_buffers(device, name, ttnn.BufferType.L1_SMALL)
+
+
 class TtMoe(LightweightModule):
     """
     TTNN implementation of complete MoE pipeline.
@@ -469,6 +487,7 @@ class TtMoe(LightweightModule):
         logger.debug(
             f"expert_outputs.memory_config is {expert_outputs.memory_config()} and shape is: {expert_outputs.shape}"
         )
+        print_l1_buffers(self.mesh_device, "before untilize")
         ttnn.dump_device_memory_state(self.mesh_device, "pre untilize")
         expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
 
