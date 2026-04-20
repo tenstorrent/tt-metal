@@ -67,8 +67,7 @@ DOTS_MAX_TP_COLS = 2
 DOTS_MAX_DP_ROWS = 1  # no data-parallel support yet
 _DOTS_TP_NOTE = (
     "dots.mocr has num_key_value_heads=2, so TP degree must divide 2. "
-    "Supported TP factors are 1 (N150) and 2 (N300). Larger meshes run on a "
-    "1x2 submesh until data-parallel support lands."
+    "Supported TP factors are 1 (N150) and 2 (N300)."
 )
 
 # Accept common casings / synonyms users hit in CI and tt_transformers docs.
@@ -131,15 +130,31 @@ def resolve_supported_mesh_shape(name: Optional[str] = None) -> Tuple[int, int]:
     """
     rows, cols = resolve_mesh_shape(name)
 
+    # For dots.mocr, TP>2 is not possible (n_kv_heads=2). On multi-chip systems like T3K,
+    # TP=2 (1x2 submesh) is supported but can be undesirable for bringup/debug (long compiles,
+    # fabric/dispatch complexity). Default T3K to TP=1 unless explicitly requested.
+    selector = name if name is not None else os.environ.get("MESH_DEVICE")
+    canonical = _canonicalize(selector) if selector is not None else None
+    if canonical in ("T3K", "T3K_1X8", "T3K_2X4"):
+        req = os.environ.get("DOTS_T3K_TP", "").strip()
+        if req and req not in ("1", "2"):
+            logger.warning(f"dots_ocr.mesh: invalid DOTS_T3K_TP={req!r}; expected '1' or '2'. Using default.")
+            req = ""
+        if req == "1" or (req == "" and os.environ.get("DOTS_T3K_DEFAULT_TP1", "1") != "0"):
+            cols = 1
+
     clamped_cols = min(cols, DOTS_MAX_TP_COLS)
     clamped_rows = min(rows, DOTS_MAX_DP_ROWS)
 
     if (clamped_rows, clamped_cols) != (rows, cols):
         selector = name if name is not None else os.environ.get("MESH_DEVICE")
-        logger.warning(
-            f"dots_ocr.mesh: MESH_DEVICE={selector!r} -> requested mesh ({rows},{cols}) clamped to "
-            f"({clamped_rows},{clamped_cols}). {_DOTS_TP_NOTE}"
-        )
+        # T3K is a very common target — suppress the log for it to keep test output clean.
+        # The clamping is expected and correct behavior for dots.mocr.
+        if selector and str(selector).upper() not in ("T3K", "T3K_1X8", "T3K_2X4"):
+            logger.info(
+                f"dots_ocr.mesh: MESH_DEVICE={selector!r} -> requested mesh ({rows},{cols}) clamped to "
+                f"({clamped_rows},{clamped_cols}). (dots.mocr only supports TP<=2)"
+            )
     return (clamped_rows, clamped_cols)
 
 

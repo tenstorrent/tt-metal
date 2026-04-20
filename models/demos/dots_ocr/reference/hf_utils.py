@@ -1,6 +1,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+HF reference loading for Dots OCR (CPU / no CUDA).
+
+**Compared to ``qwen25_vl``:** that demo vendors ``reference/model.py`` and gates optional
+``flash_attn`` with ``transformers.utils.is_flash_attn_2_available()`` — if unavailable, vision
+FlashAttention helpers are set to ``None`` and attention classes fall back to ``"eager"`` /
+``"sdpa"`` via ``QWEN2_5_VL_*_ATTENTION_CLASSES`` (see ``qwen25_vl/reference/model.py``).
+
+**Dots** loads **remote** code from the Hub (``trust_remote_code=True``). Transformers still runs
+static ``check_imports`` on that file before ``from_pretrained(..., _attn_implementation="eager")``
+applies, so a bare ``import flash_attn`` in the checkpoint must resolve. We use
+``_flash_attn_shim.install()`` only for that import check; **runtime** attention is eager PyTorch
+MHA via ``_attn_implementation="eager"``, not FlashAttention kernels and not CUDA-specific.
+"""
+
 from __future__ import annotations
 
 import os
@@ -9,6 +24,9 @@ from pathlib import Path
 from typing import Optional
 
 import torch
+from transformers.utils import logging
+
+logger = logging.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -16,7 +34,7 @@ class HFLoadSpec:
     model_id: str
     revision: Optional[str] = None
     cache_dir: Optional[Path] = None
-    torch_dtype: torch.dtype = torch.bfloat16
+    dtype: torch.dtype = torch.bfloat16
     trust_remote_code: bool = True
 
 
@@ -28,9 +46,18 @@ def load_processor_and_model(spec: HFLoadSpec):
     """
     Load the Dots OCR model and processor using HuggingFace Transformers.
 
-    Note:
-    - Dots uses custom code (trust_remote_code=True).
+    **Eager attention:** ``_attn_implementation="eager"`` — PyTorch standard MHA, not
+    FlashAttention kernels.
+
+    Remote ``trust_remote_code`` modeling is still scanned with ``check_imports`` *before* those
+    kwargs apply; if the repo lists ``import flash_attn``, we register a minimal compatibility
+    namespace (see ``_flash_attn_shim.install``) so imports succeed. That is **not** the real
+    ``flash_attn`` package and does not enable FA2 at runtime.
     """
+    from models.demos.dots_ocr.reference._flash_attn_shim import install as _install_flash_attn_shim
+
+    _install_flash_attn_shim()
+
     from transformers import AutoModelForCausalLM, AutoProcessor
 
     processor = AutoProcessor.from_pretrained(
@@ -39,12 +66,15 @@ def load_processor_and_model(spec: HFLoadSpec):
         cache_dir=str(spec.cache_dir) if spec.cache_dir else None,
         trust_remote_code=spec.trust_remote_code,
     )
+
     model = AutoModelForCausalLM.from_pretrained(
         spec.model_id,
         revision=spec.revision,
         cache_dir=str(spec.cache_dir) if spec.cache_dir else None,
-        torch_dtype=spec.torch_dtype,
+        dtype=spec.dtype,
         trust_remote_code=spec.trust_remote_code,
+        _attn_implementation="eager",
+        use_safetensors=True,
     )
     model.eval()
     return processor, model

@@ -46,7 +46,11 @@ class PatchEmbedTT(LightweightModule):
         self.state_dict_prefix = state_dict_prefix
         ttnn = get_ttnn()
         if dtype is None:
-            dtype = ttnn.bfloat16 if ttnn is not None else torch.bfloat16
+            # Stub/partial ``ttnn`` installs may lack ``bfloat16``; fall back to torch.
+            if ttnn is not None and getattr(ttnn, "bfloat16", None) is not None:
+                dtype = ttnn.bfloat16
+            else:
+                dtype = torch.bfloat16
         self.dtype = dtype
 
         # Load weights from state dict
@@ -189,10 +193,11 @@ class PatchEmbedTT(LightweightModule):
             return x
 
         memory_config = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        dtype_tt = getattr(ttnn, "bfloat16", torch.bfloat16)
         x_tt = ttnn.from_torch(
             x,
             device=self.mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=dtype_tt,
             layout=ttnn.TILE_LAYOUT,
             memory_config=memory_config,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),

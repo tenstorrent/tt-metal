@@ -10,6 +10,8 @@ what `DotsTransformer.prepare_inputs_prefill()` expects.
 
 from __future__ import annotations
 
+import warnings
+
 import torch
 
 
@@ -32,6 +34,29 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> tuple[to
     return cos, sin
 
 
+def get_rot_mats_hf(seq_len: int, dim: int, theta: float = 10000.0) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    HF-style RoPE cos/sin with full head_dim (not half).
+
+    `ttnn.experimental.rotary_embedding` expects `cos_cached`/`sin_cached` shaped like HF:
+    `[1, 1, seq_len, head_dim]`, where the first half is repeated in the second half.
+    """
+    from models.tt_transformers.tt.common import precompute_freqs
+
+    # Match tt_transformers' HF-format precompute (supports rope scaling / types).
+    cos_freqs, sin_freqs = precompute_freqs(
+        dim,
+        seq_len * 2,
+        theta=theta,
+        scale_factor=None,
+        orig_context_len=None,
+        rope_type="llama3",
+    )
+    cos_hf = torch.cat([cos_freqs[:seq_len], cos_freqs[:seq_len]], dim=-1).unsqueeze(0).unsqueeze(0)
+    sin_hf = torch.cat([sin_freqs[:seq_len], sin_freqs[:seq_len]], dim=-1).unsqueeze(0).unsqueeze(0)
+    return cos_hf, sin_hf
+
+
 def get_rot_mats(
     seq_len: int,
     dim: int = 128,  # head_dim, typical for Qwen2
@@ -44,8 +69,14 @@ def get_rot_mats(
     This matches the HF Qwen2 RoPE implementation and the format expected
     by `DotsTransformer.prepare_inputs_prefill()`.
     """
-    # Ensure we have enough length
-    end = max(seq_len, max_seq_len)
+    # Precompute only `seq_len` positions (older code used max(seq_len, max_seq_len),
+    # which always allocated 8192 rows and wasted RAM on short prompts).
+    if seq_len > max_seq_len:
+        warnings.warn(
+            f"get_rot_mats: seq_len={seq_len} exceeds max_seq_len={max_seq_len}; using seq_len for precompute",
+            stacklevel=2,
+        )
+    end = max(seq_len, 1)
     cos_matrix, sin_matrix = precompute_freqs_cis(dim, end, theta)
 
     # Return slices for the actual sequence length
@@ -64,11 +95,30 @@ def get_hf_rot_mats_from_model(model: torch.nn.Module, input_ids: torch.Tensor) 
         config, "head_dim", getattr(config, "hidden_size", 4096) // getattr(config, "num_attention_heads", 32)
     )
 
-    # Get theta from config or use default
-    theta = getattr(config, "rope_theta", 10000.0)
+    # Prefer Dots/Qwen2 rope_parameters when available (theta/rope_type).
+    rope_params = getattr(config, "rope_parameters", None) or {}
+    theta = float(rope_params.get("rope_theta", getattr(config, "rope_theta", 10000.0)))
+    rope_type = rope_params.get("rope_type", "llama3")
+
+    # Scaling parameters (if present) use the same schema as tt_transformers' rope_scaling_model_factory.
+    rope_scaling = getattr(config, "rope_scaling", None) or {}
+    scale_factor = rope_scaling.get("factor", None)
+    orig_context_len = rope_scaling.get("original_max_position_embeddings", None)
+
+    from models.tt_transformers.tt.common import precompute_freqs
 
     seq_len = input_ids.shape[1]
-    return get_rot_mats(seq_len=seq_len, dim=head_dim, theta=theta)
+    cos_freqs, sin_freqs = precompute_freqs(
+        head_dim,
+        seq_len * 2,
+        theta=theta,
+        scale_factor=scale_factor,
+        orig_context_len=orig_context_len,
+        rope_type=rope_type,
+    )
+    cos_hf = torch.cat([cos_freqs[:seq_len], cos_freqs[:seq_len]], dim=-1).unsqueeze(0).unsqueeze(0)
+    sin_hf = torch.cat([sin_freqs[:seq_len], sin_freqs[:seq_len]], dim=-1).unsqueeze(0).unsqueeze(0)
+    return cos_hf, sin_hf
 
 
 class Qwen2RopeHelper:
