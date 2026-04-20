@@ -148,9 +148,18 @@ def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_a
     return lookup_table
 
 
-def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_axis, num_kvpe_cache_layers):
+def init_kvpe_cache(
+    kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_axis, num_kvpe_cache_layers, zero_init=False
+):
     """
-    Initialize KVPE cache for MLA.
+    Allocate KVPE cache for MLA on device.
+
+    Uses ttnn.empty for direct device allocation by default — no host→device
+    transfer. The caller is responsible for ensuring pages are valid before
+    migration:
+      - fill_cache_for_user_() overwrites pages for valid token positions
+      - MLA's on_layer_complete path calls zero_cache_padding_zigzag() to zero
+        padding pages before fill_cache_for_user_() (when migration is active)
 
     Args:
         kvpe_cache_head_dim: Head dimension for KVPE cache (qk_rope_head_dim + kv_lora_rank)
@@ -159,14 +168,16 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
         mesh_shape: Shape of mesh device
         sp_axis: Sequence parallel axis
         num_kvpe_cache_layers: Number of layers for KVPE cache
+        zero_init: If True, zero-initialize via host transfer (legacy behavior,
+                   useful for tests that assume a zero cache). Default False uses
+                   ttnn.empty for fast device-only allocation.
 
     Returns:
-        tt_kvpe_cache: Initialized KVPE cache on device
+        tt_kvpe_cache: Allocated KVPE cache on device
     """
     # hack in num_layers into batch size, so they are contiguous in memory
     num_layers = num_kvpe_cache_layers
     seq_len_local = seq_len // mesh_shape[sp_axis]
-    torch_kvpe_cache = torch.zeros(num_layers, 1, seq_len_local, kvpe_cache_head_dim)
 
     core_ranges = [
         ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
@@ -184,13 +195,27 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
         nd_shard_spec=kv_nd_shard_spec,
     )
 
-    tt_kvpe_cache = ttnn.from_torch(
-        torch_kvpe_cache,
-        dtype=ttnn.bfloat8_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=kv_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    if zero_init:
+        # Legacy path: allocate on host, zero it, transfer to device.
+        torch_kvpe_cache = torch.zeros(num_layers, 1, seq_len_local, kvpe_cache_head_dim)
+        tt_kvpe_cache = ttnn.from_torch(
+            torch_kvpe_cache,
+            dtype=ttnn.bfloat8_b,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=kv_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+    else:
+        # Fast path: device-side allocation only, no host transfer.
+        # Pages contain garbage until written by fill_cache_for_user_() or zeroed
+        # by zero_cache_padding_zigzag().
+        tt_kvpe_cache = ttnn.empty(
+            shape=[num_layers, 1, seq_len_local, kvpe_cache_head_dim],
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=kv_mem_config,
+        )
 
     return tt_kvpe_cache

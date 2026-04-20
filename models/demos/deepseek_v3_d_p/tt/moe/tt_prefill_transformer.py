@@ -15,7 +15,7 @@ No LM head — returns hidden states after final norm.
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import torch
 from loguru import logger
@@ -210,6 +210,8 @@ class TtPrefillTransformer(LightweightModule):
         kvpe_cache: ttnn.Tensor,
         return_intermediates: bool = False,
         read_profiler: bool = False,
+        on_layer_complete: Optional[Callable[[int, ttnn.Tensor], None]] = None,
+        actual_isl: Optional[int] = None,
     ):
         """
         Forward pass: embed -> [block x N] -> norm.
@@ -220,6 +222,13 @@ class TtPrefillTransformer(LightweightModule):
                         each layer writes to its own slot via cache_layer_idx
             return_intermediates: if True, sync + snapshot to host after each stage
             read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
+            on_layer_complete: optional callback invoked by MLA after fill_cache_for_user_().
+                Called as on_layer_complete(layer_idx, kvpe_cache). Used for KV cache
+                migration in disaggregated prefill/decode. When set, MLA also zeros
+                the padding region of the cache before fill so migration sees valid KV
+                + zero padding. When None, no migration or zeroing.
+            actual_isl: actual (unpadded) input sequence length. Required when
+                on_layer_complete is set (MLA uses it to compute padding region).
 
         Returns:
             If return_intermediates=False:
@@ -239,7 +248,14 @@ class TtPrefillTransformer(LightweightModule):
 
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
-            h, _ = layer(h, rope_tensors, kvpe_cache, cache_layer_idx=i)
+            h, _ = layer(
+                h,
+                rope_tensors,
+                kvpe_cache,
+                cache_layer_idx=i,
+                on_layer_complete=on_layer_complete,
+                actual_isl=actual_isl,
+            )
             signpost(f"forward_layer_{i}_end")
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)
