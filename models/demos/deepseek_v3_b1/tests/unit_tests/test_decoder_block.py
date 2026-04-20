@@ -149,11 +149,17 @@ def create_decoder_golden_tensors(
         golden_kv_b1,
         golden_kv_b2,
         golden_torch_o_proj_weights,
-        golden_torch_gamma,
-        golden_torch_rmsnorm2_gamma,
+        attn_norm,
+        q_norm,
         golden_torch_dkv_rmsnorm_gamma,
         ffn_norm,
     ) = get_layer_raw_tensors(state_dict, layer_idx)
+
+    # Fold attn_norm into q_a and kv_a weights (matching prepare.py weight folding)
+    golden_torch_matmul_weights = golden_torch_matmul_weights * attn_norm.T
+    golden_torch_dkv_matmul_weights = golden_torch_dkv_matmul_weights * attn_norm.T
+    # Fold q_norm into q_b weights (matching prepare.py weight folding)
+    golden_torch_matmul2_weights = golden_torch_matmul2_weights * q_norm.T
 
     total_kv_heads = golden_kv_b1.shape[0] // QNOPE_HEAD_DIM
     kv_lora_rank = golden_kv_b1.shape[1]
@@ -174,22 +180,27 @@ def create_decoder_golden_tensors(
         golden_moe_bias = (
             state_dict[_sd_key("mlp.gate.e_score_correction_bias")].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
         )
+        # Fold ffn_norm into routing and shared expert weights
+        golden_moe_routing_weights = golden_moe_routing_weights * ffn_norm.T
+        golden_moe_shared_gate = golden_moe_shared_gate * ffn_norm.T
+        golden_moe_shared_up = golden_moe_shared_up * ffn_norm.T
         golden_moe_gate_proj_dict = {}
         golden_moe_up_proj_dict = {}
         golden_moe_down_proj_dict = {}
         for e in range(num_routed_experts):
             w_g = state_dict[_sd_key(f"mlp.experts.{e}.gate_proj.weight")].T.contiguous()
-            golden_moe_gate_proj_dict[e] = w_g.reshape(1, 1, K, -1)
+            golden_moe_gate_proj_dict[e] = w_g.reshape(1, 1, K, -1) * ffn_norm.T
             w_u = state_dict[_sd_key(f"mlp.experts.{e}.up_proj.weight")].T.contiguous()
-            golden_moe_up_proj_dict[e] = w_u.reshape(1, 1, K, -1)
+            golden_moe_up_proj_dict[e] = w_u.reshape(1, 1, K, -1) * ffn_norm.T
             w_d = state_dict[_sd_key(f"mlp.experts.{e}.down_proj.weight")].T.contiguous()
             golden_moe_down_proj_dict[e] = w_d.reshape(1, 1, -1, K)
     else:
         gate_full = state_dict[_sd_key("mlp.gate_proj.weight")].T.contiguous()
         up_full = state_dict[_sd_key("mlp.up_proj.weight")].T.contiguous()
         down_full = state_dict[_sd_key("mlp.down_proj.weight")].T.contiguous()
-        golden_moe_shared_gate = gate_full[:, :DENSE_SHARED_N].contiguous()
-        golden_moe_shared_up = up_full[:, :DENSE_SHARED_N].contiguous()
+        # Fold ffn_norm into shared and routed expert weights
+        golden_moe_shared_gate = gate_full[:, :DENSE_SHARED_N].contiguous() * ffn_norm.T
+        golden_moe_shared_up = up_full[:, :DENSE_SHARED_N].contiguous() * ffn_norm.T
         golden_moe_shared_down = down_full[:DENSE_SHARED_N, :].contiguous()
         golden_moe_routing_weights = None
         golden_moe_bias = None
@@ -199,8 +210,8 @@ def create_decoder_golden_tensors(
         for e in range(8):
             start = DENSE_SHARED_N + e * RoutedExpert.GATE_PROJ_N
             end = start + RoutedExpert.GATE_PROJ_N
-            golden_moe_gate_proj_dict[e] = gate_full[:, start:end].reshape(1, 1, K, -1)
-            golden_moe_up_proj_dict[e] = up_full[:, start:end].reshape(1, 1, K, -1)
+            golden_moe_gate_proj_dict[e] = gate_full[:, start:end].reshape(1, 1, K, -1) * ffn_norm.T
+            golden_moe_up_proj_dict[e] = up_full[:, start:end].reshape(1, 1, K, -1) * ffn_norm.T
             golden_moe_down_proj_dict[e] = down_full[start:end, :].reshape(1, 1, -1, K)
 
     num_devices = mesh_rows * mesh_cols
@@ -212,9 +223,7 @@ def create_decoder_golden_tensors(
 
     return {
         "golden_torch_input": d["torch_input"],
-        "golden_torch_gamma": golden_torch_gamma,
         "golden_torch_matmul_weights": golden_torch_matmul_weights,
-        "golden_torch_rmsnorm2_gamma": golden_torch_rmsnorm2_gamma,
         "golden_torch_matmul2_weights": golden_torch_matmul2_weights,
         "golden_torch_matmul3_weights": golden_torch_matmul3_weights,
         "golden_torch_sin": d["torch_sin"],
@@ -702,11 +711,14 @@ def test_decoder(
     KROPE_DIM = 64
     HEADS_PER_ROW = 8
 
+    # attn_norm and q_norm are folded into matmul weights; pass ones so rmsnorm acts as pure normalization
+    ones_attn_gamma = torch.ones_like(d["golden_torch_input"])
+    ones_q_gamma = torch.ones(1, d["golden_torch_matmul_weights"].shape[1], dtype=d["golden_torch_input"].dtype)
     full_q, golden_new_kv, mla_output, moe_scores, moe_indices, moe_output = DecoderBlock.golden(
         d["golden_torch_input"],
-        d["golden_torch_gamma"],
+        ones_attn_gamma,
         d["golden_torch_matmul_weights"],
-        d["golden_torch_rmsnorm2_gamma"],
+        ones_q_gamma,
         d["golden_torch_matmul2_weights"],
         d["golden_torch_matmul3_weights"],
         d["golden_torch_sin"],
@@ -1072,11 +1084,14 @@ def test_decoder_mlp(
     KROPE_DIM = 64
     HEADS_PER_ROW = 8
 
-    _full_q, golden_new_kv, _mla_output, _scores, _indices, moe_output = DecoderBlock.golden(
+    # attn_norm and q_norm are folded into matmul weights; pass ones so rmsnorm acts as pure normalization
+    ones_attn_gamma = torch.ones_like(d["golden_torch_input"])
+    ones_q_gamma = torch.ones(1, d["golden_torch_matmul_weights"].shape[1], dtype=d["golden_torch_input"].dtype)
+    _full_q, _new_kv, _mla_output, _scores, _indices, moe_output = DecoderBlock.golden(
         d["golden_torch_input"],
-        d["golden_torch_gamma"],
+        ones_attn_gamma,
         d["golden_torch_matmul_weights"],
-        d["golden_torch_rmsnorm2_gamma"],
+        ones_q_gamma,
         d["golden_torch_matmul2_weights"],
         d["golden_torch_matmul3_weights"],
         d["golden_torch_sin"],
