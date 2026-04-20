@@ -25,7 +25,7 @@ void kernel_main() {
 
     // Stream mode: required for DRISC to initiate NOC traffic and for
     // remote cores to reach DRISC L1 over NOC.
-    drisc_set_stream_mode();
+    experimental::drisc_set_stream_mode();
 
     experimental::Noc noc;
 
@@ -57,5 +57,5 @@ void kernel_main() {
 #endif
 
     // Always restore NOC2AXI so subsequent context observes the default.
-    drisc_set_noc2axi_mode();
+    experimental::drisc_set_noc2axi_mode();
 }

@@ -9,6 +9,8 @@
 
 #include "noc_parameters.h"
 
+namespace experimental {
+
 /*
   DRISC NIU Mode Configuration (Blackhole)
 
@@ -24,20 +26,18 @@
         - DRISC cannot initiate NOC transactions.
 
     Stream (bit=0):
-        - DRISC can initiate NOC transactions (e.g., drive the DMA
-          engine for L1<->DRAM transfers).
+        - DRISC can initiate NOC transactions.
         - NOC traffic terminates at DRISC L1.
         - Tensix cannot access DRAM directly through this endpoint;
           DRAM traffic must go through the DRISC L1 + DMA path.
 
   NOC addressing note (on-chip, kernel-initiated):
-    The DRAM endpoint's upper-bit L1 tag (0x20_00000000 offset) selects
-    the DRISC L1 window vs. DRAM at the endpoint. For on-chip NOC
-    transactions targeting DRISC L1, the tag is required only when the
-    target DRISC NIU is in NOC2AXI mode (otherwise inbound traffic in
-    the DRAM range is forwarded to DRAM over AXI). In stream mode the
-    NIU terminates at DRISC L1 by default, so `get_noc_addr(x, y, local)`
-    without the tag also works.
+    In NOC2AXI mode the bottom 8 GB of NIU address space maps to GDDR,
+    so a plain local address routes to DRAM, not DRISC L1. To target
+    DRISC L1, add the offset 0x2000000000 to place the address outside
+    the 8 GB GDDR window, routing it to L1 instead.
+    In stream mode all inbound NOC traffic terminates at L1; use local
+    addresses without the tag.
 
   Register persistence (IMPORTANT):
     NIU_CFG_0 persists across program runs; only a chip reset
@@ -94,3 +94,5 @@ inline __attribute__((always_inline)) void drisc_set_noc2axi_mode_all(void) {
 }
 
 #endif  // COMPILE_FOR_DRISC
+
+}  // namespace experimental
