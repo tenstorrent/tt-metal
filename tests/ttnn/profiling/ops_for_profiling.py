@@ -1102,7 +1102,7 @@ def hardshrink(x):
 
 
 def elu(x):
-    ttnn.elu(x, 2)
+    ttnn.elu(x, alpha=2)
 
 
 def heaviside(x):
