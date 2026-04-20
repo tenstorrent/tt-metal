@@ -325,73 +325,68 @@ struct MatmulExpertCompressedDRAM {
                 uint32_t fmt_trid_pending = curr_block_trid;
                 bool fmt_signaled = false;
 
-                // Triple-buffer streaming loop.
-                uint32_t iter = 0;
-                while (iter < num_iterations) {
-                    uint32_t batch_size = std::min(num_buffers, num_iterations - iter);
+                // Triple-buffer streaming loop. Ring protocol operates at batch
+                // boundaries — every num_buffers iters, plus the final iter of the
+                // expert. At each boundary we inc (pass token forward) and, if more
+                // batches remain in this expert, wait (receive token back).
+                for (uint32_t iter = 0; iter < num_iterations; iter++) {
+                    uint32_t block_size = static_cast<uint32_t>(block_size_ptr[iter]) * BLOCK_SIZE_UNIT;
+                    uint32_t slot_start = l1_write_addr_in1;
 
-                    for (uint32_t b = 0; b < batch_size; b++) {
-                        uint32_t block_size = static_cast<uint32_t>(block_size_ptr[iter]) * BLOCK_SIZE_UNIT;
-                        uint32_t slot_start = l1_write_addr_in1;
+                    noc_async_read_set_trid(curr_block_trid);
 
-                        noc_async_read_set_trid(curr_block_trid);
-
-                        uint32_t remaining = block_size;
-                        while (remaining > 0) {
-                            uint32_t chunk = (remaining > max_page_size) ? max_page_size : remaining;
-                            noc_async_read_one_packet_set_state<true>(in1_base_addr, chunk, CTArgs::vc);
-                            noc_async_read_one_packet_with_state_with_trid(
-                                in1_base_addr, dram_read_offset, l1_write_addr_in1, curr_block_trid);
-                            dram_read_offset += chunk;
-                            l1_write_addr_in1 += chunk;
-                            remaining -= chunk;
-                        }
-
-                        l1_write_addr_in1 = slot_start + max_subblock_bytes;
-
-                        if constexpr (CTArgs::cores_per_bank > 1) {
-                            if (b == batch_size - 1) {
-                                constexpr bool is_last_in_ring =
-                                    (CTArgs::core_in_bank_idx == CTArgs::cores_per_bank - 1);
-                                if constexpr (is_last_in_ring) {
-                                    if (iter < num_iterations - 1) {
-                                        noc_semaphore_inc(next_sem_noc_addr, 1);
-                                    }
-                                } else {
-                                    noc_semaphore_inc(next_sem_noc_addr, 1);
-                                }
-                            }
-                        }
-
-                        if (num_free_blocks_in_buffer == num_buffers - extra_blocks_in_flight) {
-                            noc_async_read_barrier_with_trid(block_trid_to_wait);
-                            cb_push_back(CTArgs::cb_in1, tiles_per_block);
-                            // fmt for this expert shares trid with its first weight block.
-                            // When the barrier hits that trid, fmt is in L1 — signal consumers.
-                            if (!fmt_signaled && block_trid_to_wait == fmt_trid_pending) {
-                                fmt_sync::producer_signal(CTArgs::fmt_sem_addr_0, CTArgs::fmt_sem_addr_1);
-                                fmt_signaled = true;
-                            }
-                            block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
-                            // Re-reserve after push: without the per-expert flush, this is the
-                            // only throttle keeping TRISC within 1 block of NCRISC. Missing it
-                            // allows NCRISC to wrap into a slot TRISC is still reading (race).
-                            cb_reserve_back(CTArgs::cb_in1, tiles_per_block * (extra_blocks_in_flight + 1));
-                        } else {
-                            num_free_blocks_in_buffer -= 1;
-                        }
-
-                        curr_block_trid = (curr_block_trid == num_buffers) ? 1 : (curr_block_trid + 1);
-
-                        if (l1_write_addr_in1 >= cb_in1_end) {
-                            l1_write_addr_in1 = cb_in1_base;
-                        }
-
-                        iter++;
+                    uint32_t remaining = block_size;
+                    while (remaining > 0) {
+                        uint32_t chunk = (remaining > max_page_size) ? max_page_size : remaining;
+                        noc_async_read_one_packet_set_state<true>(in1_base_addr, chunk, CTArgs::vc);
+                        noc_async_read_one_packet_with_state_with_trid(
+                            in1_base_addr, dram_read_offset, l1_write_addr_in1, curr_block_trid);
+                        dram_read_offset += chunk;
+                        l1_write_addr_in1 += chunk;
+                        remaining -= chunk;
                     }
 
+                    l1_write_addr_in1 = slot_start + max_subblock_bytes;
+
+                    // Pass the token NOW (before our old-trid barrier below) so the
+                    // next core's reads aren't gated on our barrier completing.
+                    bool batch_end = ((iter + 1) % num_buffers == 0) || (iter + 1 == num_iterations);
                     if constexpr (CTArgs::cores_per_bank > 1) {
-                        if (iter < num_iterations) {
+                        if (batch_end) {
+                            noc_semaphore_inc(next_sem_noc_addr, 1);
+                        }
+                    }
+
+                    if (num_free_blocks_in_buffer == num_buffers - extra_blocks_in_flight) {
+                        noc_async_read_barrier_with_trid(block_trid_to_wait);
+                        cb_push_back(CTArgs::cb_in1, tiles_per_block);
+                        // fmt for this expert shares trid with its first weight block.
+                        // When the barrier hits that trid, fmt is in L1 — signal consumers.
+                        if (!fmt_signaled && block_trid_to_wait == fmt_trid_pending) {
+                            fmt_sync::producer_signal(CTArgs::fmt_sem_addr_0, CTArgs::fmt_sem_addr_1);
+                            fmt_signaled = true;
+                        }
+                        block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
+                        // Re-reserve after push: without the per-expert flush, this is the
+                        // only throttle keeping TRISC within 1 block of NCRISC. Missing it
+                        // allows NCRISC to wrap into a slot TRISC is still reading (race).
+                        cb_reserve_back(CTArgs::cb_in1, tiles_per_block * (extra_blocks_in_flight + 1));
+                    } else {
+                        num_free_blocks_in_buffer -= 1;
+                    }
+
+                    curr_block_trid = (curr_block_trid == num_buffers) ? 1 : (curr_block_trid + 1);
+
+                    if (l1_write_addr_in1 >= cb_in1_end) {
+                        l1_write_addr_in1 = cb_in1_base;
+                    }
+
+                    // Intra-expert batch pacing: wait for the token to return before
+                    // the next batch. Skipped on the expert's final batch — that return
+                    // is handled by the end-of-expert wait below (or, on the last DRAM
+                    // expert, doesn't matter because no more batches will be issued).
+                    if constexpr (CTArgs::cores_per_bank > 1) {
+                        if (batch_end && (iter < (num_iterations - 1))) {
                             noc_semaphore_wait(sem_ptr, 1);
                             noc_semaphore_set(sem_ptr, 0);
                         }
@@ -402,6 +397,17 @@ struct MatmulExpertCompressedDRAM {
                 // by the next expert's first inner-loop barrier (or by the final flush
                 // below if this is the last DRAM expert).
                 fmt_slot ^= 1;
+
+                // End-of-expert token return: only core 0 waits. Every other core
+                // in the ring is naturally gated by its start-of-expert wait for
+                // the next expert, so it can't run ahead or overflow its peer's
+                // sem. Core 0 lacks that start-wait, so without this block it
+                // would race into the next expert while the tail of the ring is
+                // still reading DRAM for this one, causing bank contention.
+                if constexpr (CTArgs::cores_per_bank > 1 && CTArgs::core_in_bank_idx == 0) {
+                    noc_semaphore_wait(sem_ptr, 1);
+                    noc_semaphore_set(sem_ptr, 0);
+                }
             }
 
             // Final flush: drain the in-flight block(s) from the LAST DRAM expert.
