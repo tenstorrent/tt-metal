@@ -29,6 +29,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
 
   # Numeric mismatches, not root caused
+  # https://github.com/tenstorrent/tt-metal/issues/41530
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
@@ -37,6 +38,8 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
 
   # ERROR: UndefinedBehavior: tensix_execute_pacr: intermediate_format=5 mismatches late_from_format=0
+  # https://github.com/tenstorrent/tt-metal/issues/42525
+  # https://github.com/tenstorrent/tt-metal/pull/42112
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
 
 blackhole:
@@ -56,6 +59,8 @@ blackhole:
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
   # MOVD2B failures
+  # https://github.com/tenstorrent/tt-metal/issues/41286
+  # https://github.com/tenstorrent/tt-metal/issues/40583
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_rms_norm.py::test_rms_norm_row_major
@@ -64,6 +69,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py
 
   # ZEROACC failures
+  # https://github.com/tenstorrent/ttsim-private/issues/326
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
 
   # Numeric mismatches, likely caused by issue #41163
@@ -73,6 +79,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
 
   # Numeric mismatches, not root caused
+  # https://github.com/tenstorrent/tt-metal/issues/41530
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py
