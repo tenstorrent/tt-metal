@@ -1003,10 +1003,13 @@ MoEComputeMeshWorkloadFactory::create_at(
     constexpr uint32_t buffer_size_total_tokens =
         512;  // Hardware buffer is always sized for 512 tokens, even if total tokens is smaller
 
+    const ::detail::MoEActivationFunction activation_type = args.activation_type;
+
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
         {"num_experts", experts_per_device},
         {"layer_id", args.layer_id},
         {"num_cores", static_cast<uint32_t>(matmul_num_cores)},
+        {"activation_function", static_cast<uint32_t>(activation_type)},
         {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
         {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
         {"matmul_chunk_available_semaphore_id", matmul_chunk_available_semaphore_id},

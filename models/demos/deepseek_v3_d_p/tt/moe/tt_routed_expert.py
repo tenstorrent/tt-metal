@@ -12,11 +12,11 @@ Unlike TtSharedExpert, this module:
 - Each device holds weights for `experts_per_chip` local experts
 """
 
+from pathlib import Path
 from typing import Optional
 
 import torch
 from loguru import logger
-from tqdm import tqdm
 from tracy import signpost
 
 import ttnn
@@ -33,6 +33,117 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 
 
 class TtRoutedExpert(LightweightModule):
+    @staticmethod
+    def _convert_and_cache_expert_weights(
+        torch_weights: list[dict],
+        experts_per_chip: int,
+        mesh_device: ttnn.MeshDevice,
+        weights_dtype: ttnn.DataType,
+        cache_path: Path | None,
+        cache_name_prefix: str | None,
+        device: ttnn.MeshDevice | None = None,
+    ):
+        """
+        Shared logic for converting expert weights to ttnn with caching.
+
+        Args:
+            torch_weights: List of 256 expert weight dicts
+            experts_per_chip: Number of experts per chip (8 for 8x4 mesh)
+            mesh_device: Mesh device reference
+            weights_dtype: Weight data type
+            cache_path: Cache directory
+            cache_name_prefix: Prefix for cache files
+            device: None for cache-only, mesh_device for cache+load
+
+        Returns:
+            (gate_projs, up_projs, down_projs) if device is not None, else None
+        """
+        from tqdm import tqdm
+
+        def _cache_name(name):
+            if cache_path is None or cache_name_prefix is None:
+                return None
+            return str(cache_path / f"{cache_name_prefix}.{name}")
+
+        mesh_rows, mesh_cols = mesh_device.shape
+        gate_tensors, up_tensors, down_tensors = [], [], []
+
+        for local_expert_idx in tqdm(
+            range(experts_per_chip), desc=f"Expert weights ({'cache' if device is None else 'device'})"
+        ):
+            gate_weights, up_weights, down_weights = ExpertMapping.gather_weights_for_mesh_distribution(
+                torch_weights, local_expert_idx, mesh_rows, mesh_cols, experts_per_chip
+            )
+
+            # Convert gate
+            stacked_gate = torch.stack([w.T.contiguous() for w in gate_weights], dim=0)
+            in_f, out_f = stacked_gate.shape[1], stacked_gate.shape[2]
+            stacked_gate = stacked_gate.reshape(mesh_rows, mesh_cols, in_f, out_f)
+
+            gate_tt = ttnn.as_tensor(
+                stacked_gate,
+                mesh_mapper=ExpertMapping.get_weights_mesh_mapper(mesh_device),
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                dtype=weights_dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
+                cache_file_name=_cache_name(f"local_{local_expert_idx}_gate"),
+            )
+
+            # Convert up (same shape as gate)
+            stacked_up = torch.stack([w.T.contiguous() for w in up_weights], dim=0).reshape(
+                mesh_rows, mesh_cols, in_f, out_f
+            )
+            up_tt = ttnn.as_tensor(
+                stacked_up,
+                mesh_mapper=ExpertMapping.get_weights_mesh_mapper(mesh_device),
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                dtype=weights_dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
+                cache_file_name=_cache_name(f"local_{local_expert_idx}_up"),
+            )
+
+            # Convert down (different shape: hidden_dim x emb_dim after transpose)
+            stacked_down = torch.stack([w.T.contiguous() for w in down_weights], dim=0)
+            in_f_down, out_f_down = stacked_down.shape[1], stacked_down.shape[2]  # Get actual down_proj dims
+            stacked_down = stacked_down.reshape(mesh_rows, mesh_cols, in_f_down, out_f_down)
+            down_tt = ttnn.as_tensor(
+                stacked_down,
+                mesh_mapper=ExpertMapping.get_weights_mesh_mapper(mesh_device),
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                dtype=weights_dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
+                cache_file_name=_cache_name(f"local_{local_expert_idx}_down"),
+            )
+
+            if device is None:
+                del gate_tt, up_tt, down_tt
+            else:
+                gate_tt = ttnn.squeeze(ttnn.squeeze(gate_tt, dim=0), dim=0)
+                up_tt = ttnn.squeeze(ttnn.squeeze(up_tt, dim=0), dim=0)
+                down_tt = ttnn.squeeze(ttnn.squeeze(down_tt, dim=0), dim=0)
+                gate_tensors.append(gate_tt)
+                up_tensors.append(up_tt)
+                down_tensors.append(down_tt)
+
+        return (gate_tensors, up_tensors, down_tensors) if device else None
+
+    @staticmethod
+    def build_ttnn_cache(
+        torch_weights: list[dict],
+        experts_per_chip: int,
+        mesh_device: ttnn.MeshDevice,
+        weights_dtype: ttnn.DataType,
+        cache_path: Path,
+        cache_name_prefix: str,
+    ):
+        """Build TTNN cache for routed experts without device copy."""
+        TtRoutedExpert._convert_and_cache_expert_weights(
+            torch_weights, experts_per_chip, mesh_device, weights_dtype, cache_path, cache_name_prefix, device=None
+        )
+
     """
     TTNN implementation of Routed Expert module.
 
@@ -63,6 +174,8 @@ class TtRoutedExpert(LightweightModule):
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
+        weight_cache_path: Optional[Path] = None,
+        cache_name_prefix: Optional[str] = None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -92,14 +205,8 @@ class TtRoutedExpert(LightweightModule):
         self.activations_dtype = activations_dtype
         self.weights_dtype = weights_dtype
         self.compute_kernel_config = compute_kernel_config
-
-        # Build program configs for matmuls using optimal parameters from sweeps
-        logger.warning(
-            f"RoutedExpert: No optimal program config for given dimensions {max_tokens=}{emb_dim=}{hidden_dim=}, using defaults."
-        )
-        self.gate_program_config = None
-        self.up_program_config = None
-        self.down_program_config = None
+        self.weight_cache_path = weight_cache_path
+        self.cache_name_prefix = cache_name_prefix
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -122,102 +229,35 @@ class TtRoutedExpert(LightweightModule):
                 f"experts_per_chip={experts_per_chip}), got {len(torch_weights)}"
             )
             logger.debug(f"Creating weights from provided torch tensors ({total_experts} experts)")
-            # Create per-device weights: for each local expert index, stack weights from all devices
-            # then shard across devices so each device gets its own expert's weights
-            mesh_rows, mesh_cols = self.mesh_device.shape
-            for local_expert_idx in tqdm(range(experts_per_chip), desc="Torch->TTNN weights per local expert"):
-                gate_weights, up_weights, down_weights = ExpertMapping.gather_weights_for_mesh_distribution(
-                    torch_weights,
-                    local_expert_idx,
-                    mesh_rows,
-                    mesh_cols,
-                    experts_per_chip,
-                )
-
-                self.gate_projs.append(
-                    self._create_weight_from_torch_per_device(gate_weights, name=f"expert_{local_expert_idx}_gate")
-                )
-                self.up_projs.append(
-                    self._create_weight_from_torch_per_device(up_weights, name=f"expert_{local_expert_idx}_up")
-                )
-                self.down_projs.append(
-                    self._create_weight_from_torch_per_device(down_weights, name=f"expert_{local_expert_idx}_down")
-                )
         else:
-            logger.debug("Creating random weights (replicated across devices)")
-            for i in tqdm(range(experts_per_chip), desc="Creating random TTNN weights per chip"):
-                self.gate_projs.append(self._create_random_weight((emb_dim, hidden_dim), name=f"expert_{i}_gate"))
-                self.up_projs.append(self._create_random_weight((emb_dim, hidden_dim), name=f"expert_{i}_up"))
-                self.down_projs.append(self._create_random_weight((hidden_dim, emb_dim), name=f"expert_{i}_down"))
+            # Cache-only mode: create dummy tensors (ignored when cache exists)
+            logger.debug(f"Creating dummy tensors for cache loading ({total_experts} experts)")
+            torch_weights = []
+            for _ in range(total_experts):
+                torch_weights.append(
+                    {
+                        "gate_proj": torch.empty(hidden_dim, emb_dim),
+                        "up_proj": torch.empty(hidden_dim, emb_dim),
+                        "down_proj": torch.empty(emb_dim, hidden_dim),
+                    }
+                )
 
-    def _create_weight_from_torch_per_device(
-        self, torch_weights_per_device: list[torch.Tensor], name: str
-    ) -> ttnn.Tensor:
-        """
-        Convert list of torch weights to ttnn tensor with each device getting its own weight.
-
-        Args:
-            torch_weights_per_device: List of PyTorch weight tensors, one per device.
-                                      Each in HuggingFace format (out_features, in_features).
-            name: Weight name for logging
-
-        Returns:
-            TTNN tensor sharded so each device has its unique weight
-        """
-        # Stack weights and transpose for TTNN matmul
-        # Then reshape to match mesh topology: (mesh_rows, mesh_cols, in_features, out_features)
-        stacked = torch.stack([w.T.contiguous() for w in torch_weights_per_device], dim=0)
-        mesh_rows, mesh_cols = self.mesh_device.shape
-        in_features, out_features = stacked.shape[1], stacked.shape[2]
-        stacked = stacked.reshape(mesh_rows, mesh_cols, in_features, out_features)
-
-        mesh_mapper = ExpertMapping.get_weights_mesh_mapper(self.mesh_device)
-
-        tt_weight = ttnn.from_torch(
-            stacked,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
+        # Use shared static method with device=mesh_device (works for both real weights and cache loading)
+        result = self._convert_and_cache_expert_weights(
+            torch_weights,
+            experts_per_chip,
+            self.mesh_device,
+            self.weights_dtype,
+            self.weight_cache_path,
+            self.cache_name_prefix,
             device=self.mesh_device,
-            dtype=self.weights_dtype,
         )
+        self.gate_projs, self.up_projs, self.down_projs = result
 
-        # Remove the mesh dimensions: (1, 1, in_features, out_features) -> (in_features, out_features)
-        tt_weight = ttnn.squeeze(tt_weight, dim=0)
-        tt_weight = ttnn.squeeze(tt_weight, dim=0)
-
-        return tt_weight
-
-    def _create_weight_from_torch(self, torch_weight: torch.Tensor, name: str) -> ttnn.Tensor:
-        """
-        Convert torch weight to ttnn tensor replicated on all devices.
-
-        NOTE: This method is kept for backwards compatibility but is not used
-        when torch_weights are provided (see _create_weight_from_torch_per_device).
-
-        Args:
-            torch_weight: PyTorch weight tensor in HuggingFace format (out_features, in_features)
-            name: Weight name for logging
-
-        Returns:
-            TTNN tensor replicated on all devices
-        """
-        # HuggingFace format is (out_features, in_features)
-        # TTNN matmul expects (in_features, out_features) for x @ weight
-        torch_weight_t = torch_weight.T.contiguous()
-        logger.debug(f"Creating weight {name}: HF shape {torch_weight.shape} -> TTNN shape {torch_weight_t.shape}")
-
-        # Replicate on all devices (no sharding for routed expert weights)
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
-
-        tt_weight = ttnn.from_torch(
-            torch_weight_t,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            dtype=self.weights_dtype,
-        )
-
-        return tt_weight
+    def _cache_name(self, name: str) -> Optional[str]:
+        if self.weight_cache_path is None or self.cache_name_prefix is None:
+            return None
+        return str(self.weight_cache_path / f"{self.cache_name_prefix}.{name}")
 
     def _create_random_weight(self, shape: tuple, name: str) -> ttnn.Tensor:
         """
@@ -267,29 +307,15 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             Output tensor matching the shape of ``x``.
         """
-        # gate_out = x @ gate_proj
-        gate_out = ttnn.matmul(
-            x, gate_proj, program_config=self.gate_program_config, compute_kernel_config=self.compute_kernel_config
-        )
 
-        # up_out = x @ up_proj
-        up_out = ttnn.matmul(
-            x, up_proj, program_config=self.up_program_config, compute_kernel_config=self.compute_kernel_config
-        )
-
-        # activated = silu(gate_out) * up_out - SiLU fused with multiply
-        activated = ttnn.mul(gate_out, up_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
-
-        # output = activated @ down_proj
-        output = ttnn.matmul(
-            activated,
+        return ttnn.experimental.deepseek_prefill.routed_expert_ffn(
+            x,
+            gate_proj,
+            up_proj,
             down_proj,
-            program_config=self.down_program_config,
             compute_kernel_config=self.compute_kernel_config,
-            optional_output_tensor=out,
+            output=out,
         )
-
-        return output
 
     def _bh_forward_impl(
         self,

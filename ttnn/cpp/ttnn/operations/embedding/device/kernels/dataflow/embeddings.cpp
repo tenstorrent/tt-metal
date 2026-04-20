@@ -30,8 +30,8 @@ void kernel_main() {
 
     constexpr auto input_args = TensorAccessorArgs<10>();
     constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    const auto input = TensorAccessor(input_args, input_buffer_src_addr, input_page_size);
-    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr, weight_stick_size);
+    const auto input = TensorAccessor(input_args, input_buffer_src_addr);
+    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr);
 
     prepare_local_cache(cb_id_in2, weights, weight_stick_size, /*pad_token_arg_idx=*/6);
 
