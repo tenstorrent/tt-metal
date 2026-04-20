@@ -53,7 +53,7 @@ def generate_reference_io(
     reference_model: ReferenceMoEGate,
     checkpoint_state_dict: dict[str, torch.Tensor],
     module_path: str,
-) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
     moe_state_dict = {
         name[5:]: tensor
         for name, tensor in sub_state_dict(checkpoint_state_dict, module_path + ".").items()

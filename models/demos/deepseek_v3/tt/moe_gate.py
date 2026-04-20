@@ -273,7 +273,6 @@ class MoEGate(AbstractModule):
         # create the shard spec and memory config for the input, logits and output
         grid = mesh_device.compute_with_storage_grid_size()
         num_device_cores = grid.x * grid.y
-        start_index = 0
         eps = cfg["eps"]
         scaling_factor = cfg["routed_scaling_factor"]
         enable_sigmoid = cfg["enable_sigmoid"]
