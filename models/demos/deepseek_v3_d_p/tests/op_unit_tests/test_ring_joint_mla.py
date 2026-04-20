@@ -499,8 +499,8 @@ def run_ring_joint_sdpa(
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [(32, 4), (4, 2), (2, 2)],
-    ids=["32x4", "4x2", "2x2"],
+    [(32, 4), (8, 4), (4, 2), (2, 2)],
+    ids=["32x4", "8x4", "4x2", "2x2"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -513,6 +513,7 @@ def run_ring_joint_sdpa(
     ],
 )
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["no_balancing", "balanced"])
+@pytest.mark.parametrize("scale_down", [False, True], ids=["no_scaling", "scaled_sl"])
 @pytest.mark.timeout(0)
 def test_mla_sdpa(
     mesh_device,
@@ -534,6 +535,7 @@ def test_mla_sdpa(
     all_gather_topology,
     skip_check,
     is_balanced,
+    scale_down,
     reset_seeds,
 ):
     production_shape = [32, 4]  # hardcoded for now
@@ -545,8 +547,9 @@ def test_mla_sdpa(
 
     submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
-    seq_len = (seq_len // production_shape[0]) * rp_factor
-    nhq_v = (nhq_v // production_shape[1]) * up_factor
+    if scale_down:
+        seq_len = (seq_len // production_shape[0]) * rp_factor
+        nhq_v = (nhq_v // production_shape[1]) * up_factor
     padded_seq_len = get_padded_vision_seq_len(seq_len, mesh_device_shape[rp_axis])
 
     logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
@@ -849,7 +852,7 @@ def run_ring_joint_sdpa_perf(
         (1, 128, 1, 576, 128),
     ],
 )
-@pytest.mark.parametrize("num_perf_runs", [5], ids=["5runs"])
+@pytest.mark.parametrize("num_perf_runs", [5, 10, 20], ids=["5runs", "10runs", "20runs"])
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -884,6 +887,7 @@ def run_ring_joint_sdpa_perf(
     ids=["rpxup"],
 )
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["no_balancing", "balanced"])
+@pytest.mark.parametrize("scale_down", [False, True], ids=["no_scaling", "scaled_sl"])
 @pytest.mark.timeout(0)
 def test_mla_sdpa_perf(
     mesh_device,
@@ -903,6 +907,7 @@ def test_mla_sdpa_perf(
     up_axis,
     all_gather_topology,
     is_balanced,
+    scale_down,
     reset_seeds,
 ):
     if num_links == 2 and is_wormhole_b0():
@@ -916,8 +921,9 @@ def test_mla_sdpa_perf(
 
     submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
-    seq_len = (seq_len // production_shape[0]) * rp_factor
-    nhq_v = (nhq_v // production_shape[1]) * up_factor
+    if scale_down:
+        seq_len = (seq_len // production_shape[0]) * rp_factor
+        nhq_v = (nhq_v // production_shape[1]) * up_factor
     padded_seq_len = get_padded_vision_seq_len(seq_len, mesh_device_shape[rp_axis])
 
     logger.info(
