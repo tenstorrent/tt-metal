@@ -23,6 +23,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 N_ITERS = 200
+RESHARD_ITERS = 50
 PCC = 0.99
 
 
@@ -132,7 +133,38 @@ def test_matmul_dram_sharded_via_reshard(device, M, K, N, grid):
     w_interleaved = torch2tt_tensor(in1_raw, device, tt_memory_config=interleaved_dram, tt_dtype=ttnn.bfloat8_b)
     w_reshard = ttnn.interleaved_to_sharded(w_interleaved, in1_dram_sharded_cfg)
     reshard_us = run_variant(w_reshard, "dram_reshrd (via interleaved_to_sharded)")
-    ttnn.deallocate(w_interleaved)
     ttnn.deallocate(w_reshard)
 
-    logger.info(f"  M={M} K={K} N={N}: reshard/direct = {reshard_us/direct_us:.2f}x")
+    # Variant 3: same reshard but through ttnn.to_memory_config. Per PR #41413,
+    # to_memory_config reroutes to ttnn::copy when the i2s staging CB would
+    # exceed L1 — so for large shards this path compares chunked i2s (var 2) vs
+    # copy-based reshard (var 3).
+    w_tmc = ttnn.to_memory_config(w_interleaved, in1_dram_sharded_cfg)
+    tmc_us = run_variant(w_tmc, "dram_tomem_cfg (via to_memory_config)")
+    ttnn.deallocate(w_tmc)
+
+    # Measure the reshard step itself (matmul perf above is identical across
+    # variants since all three produce the same DRAM-sharded weights layout).
+    def time_reshard(reshard_fn, label):
+        out = reshard_fn()
+        out.cpu()
+        ttnn.deallocate(out)
+        t0 = time.perf_counter()
+        for _ in range(RESHARD_ITERS):
+            out = reshard_fn()
+            out.cpu()
+            ttnn.deallocate(out)
+        us = (time.perf_counter() - t0) / RESHARD_ITERS * 1e6
+        logger.info(f"  {label}: {us:7.1f} us/reshard")
+        return us
+
+    i2s_us = time_reshard(lambda: ttnn.interleaved_to_sharded(w_interleaved, in1_dram_sharded_cfg), "reshard via i2s")
+    copy_us = time_reshard(lambda: ttnn.to_memory_config(w_interleaved, in1_dram_sharded_cfg), "reshard via to_mem_cfg")
+
+    ttnn.deallocate(w_interleaved)
+
+    logger.info(
+        f"  M={M} K={K} N={N}: "
+        f"matmul reshard/direct={reshard_us/direct_us:.2f}x tmc/direct={tmc_us/direct_us:.2f}x | "
+        f"reshard-cost copy/i2s={copy_us/i2s_us:.2f}x"
+    )
