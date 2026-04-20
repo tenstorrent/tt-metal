@@ -9,6 +9,7 @@
 
 namespace tt::tt_metal {
 
+[[maybe_unused]]
 static inline void prepare_sender(
     tt::tt_metal::IDevice* const send_device,
     const CoreCoord& send_core,
@@ -51,6 +52,7 @@ static inline void prepare_sender(
     tt_metal::SetRuntimeArgs(*send_program, send_kernel, send_core, {});
 }
 
+[[maybe_unused]]
 static inline void prepare_receiver(
     tt::tt_metal::IDevice* const recv_device,
     const CoreCoord& recv_core,
@@ -89,6 +91,7 @@ static inline void prepare_receiver(
 }
 
 template <typename FIXTURE>
+[[maybe_unused]]
 static void wait_to_finish(
     FIXTURE* fixture,
     tt_metal::Program& send_program,
@@ -119,6 +122,7 @@ static void wait_to_finish(
     }
 }
 
+[[maybe_unused]]
 static bool data_check(
     tt::tt_metal::IDevice* const recv_device,
     const CoreCoord& recv_core,
@@ -144,6 +148,7 @@ static bool data_check(
     return pass;
 }
 
+[[maybe_unused]]
 static bool bandwidth_check(
     tt::tt_metal::IDevice* const send_device,
     const CoreCoord& send_core,
@@ -164,6 +169,7 @@ static bool bandwidth_check(
     return pass;
 }
 
+[[maybe_unused]]
 static bool data_dram_check(
     tt::tt_metal::IDevice* const recv_device,
     uint32_t dram_start_addr,
