@@ -233,7 +233,8 @@ def test_skip_nonlocal_experts(device):
     result = ttnn.to_torch(
         new_implementation(to_device(combine, device), to_device(weights, device), indices_tt, dispatch_table_tt)
     )
-    assert_pcc(result, ref, threshold=0.0, label="skip_nonlocal_no_init_zeros")
+    # Use the standard PCC threshold so this test validates non-local expert skipping.
+    assert_pcc(result, ref, threshold=PCC_THRESHOLD, label="skip_nonlocal_no_init_zeros")
 
 
 # ============================================================================
