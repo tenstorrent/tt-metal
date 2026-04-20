@@ -116,13 +116,30 @@ enum class BroadcastDim { NONE, ROW, COL, SCALAR };
 /**
  * @brief Data format reconfiguration mode for binary operations
  *
- * Controls whether unpacker (input) and/or packer (output) are reconfigured:
- * - NONE: Skip all reconfiguration (binary op is first op or formats match)
- * - INPUT: Reconfigure unpacker only (input format changed)
- * - OUTPUT: Reconfigure packer only (output format changed)
- * - INPUT_AND_OUTPUT: Reconfigure both unpacker and packer (default, safest option)
+ * Controls whether unpacker (srca/srcb) and/or packer (output) are reconfigured.
+ * All reconfigurations are unconditional (no old-operand compare); if the caller
+ * needs the "skip if already matching" optimization, set NONE and invoke the raw
+ * `reconfig_data_format[_srca|_srcb](old, new)` LLK externally before this helper.
+ *
+ * - NONE: Skip all reconfiguration (first op in chain or formats already match)
+ * - INPUT: Reconfigure both srca and srcb (`reconfig_data_format(icb_a, icb_b)`)
+ * - OUTPUT: Reconfigure packer only (`pack_reconfig_data_format(ocb)`)
+ * - INPUT_AND_OUTPUT: Reconfigure srca+srcb and packer (default, safest)
+ * - SRCA_ONLY: Reconfigure srca only (`reconfig_data_format_srca(icb_a)`)
+ * - SRCB_ONLY: Reconfigure srcb only (`reconfig_data_format_srcb(icb_b)`)
+ * - SRCA_ONLY_AND_OUTPUT: srca + packer
+ * - SRCB_ONLY_AND_OUTPUT: srcb + packer
  */
-enum class BinaryDataFormatReconfig { NONE = 0, INPUT = 1, OUTPUT = 2, INPUT_AND_OUTPUT = 3 };
+enum class BinaryDataFormatReconfig {
+    NONE = 0,
+    INPUT = 1,
+    OUTPUT = 2,
+    INPUT_AND_OUTPUT = 3,
+    SRCA_ONLY = 4,
+    SRCB_ONLY = 5,
+    SRCA_ONLY_AND_OUTPUT = 6,
+    SRCB_ONLY_AND_OUTPUT = 7,
+};
 
 /**
  * @brief Input synchronization and consumption policy for binary operations

@@ -220,16 +220,49 @@ inline constexpr uint32_t cx_max_v = CxMax<Vs...>::value;
 // =============================================================================
 
 /**
+ * @brief Per-Load CB lifecycle policy
+ *
+ * The Load op owns the decision of whether to wait on the CB and whether to pop
+ * after copying. The pipeline does NOT override this.
+ *
+ * - WaitAndPop:  wait for tile, copy, pop (default; streaming input)
+ * - WaitNoPop:   wait for tile, copy, don't pop (persistent tile reused across
+ *                iterations, e.g. a mask or scaler)
+ * - NoWaitNoPop: don't wait, don't pop (caller owns CB lifecycle externally,
+ *                e.g. sharded / pre-loaded inputs)
+ */
+enum class LoadPolicy {
+    WaitAndPop,
+    WaitNoPop,
+    NoWaitNoPop,
+};
+
+constexpr bool load_does_wait(LoadPolicy p) { return p == LoadPolicy::WaitAndPop || p == LoadPolicy::WaitNoPop; }
+constexpr bool load_does_pop(LoadPolicy p) { return p == LoadPolicy::WaitAndPop; }
+
+/**
  * @brief User-facing Load: copies a tile from CB into DEST[Slot]
  *
- * Users write Load<cb, Dst::D0> in their chains. sfpu_chain() automatically
- * compacts adjacent same-CB Loads into CompactLoad elements.
+ * sfpu_chain() automatically compacts adjacent same-CB Loads into a single
+ * CompactLoad element (shared wait + N copies + shared pop), reflecting the
+ * fact that the Loads describe the same physical tile fanned out to multiple
+ * DEST slots. When Loads in a merged group carry different policies, the
+ * group's wait and pop flags are the disjunction ("OR") of the individual
+ * Loads — any Load that wants to wait triggers the wait, any Load that wants
+ * to pop triggers the pop.
+ *
+ * @tparam CB      Circular buffer index
+ * @tparam Slot    DEST slot receiving the tile
+ * @tparam Policy  CB lifecycle policy (see LoadPolicy; default WaitAndPop)
  */
-template <uint32_t CB, Dst Slot>
+template <uint32_t CB, Dst Slot, LoadPolicy Policy = LoadPolicy::WaitAndPop>
 struct Load : LoadTag {
     static constexpr uint32_t cb = CB;
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static constexpr uint32_t max_dst = dst_idx;
+    static constexpr LoadPolicy policy = Policy;
+    static constexpr bool do_wait = load_does_wait(Policy);
+    static constexpr bool do_pop = load_does_pop(Policy);
     static_assert(static_cast<uint32_t>(Slot) < 8, "DEST slot exceeds maximum capacity (8)");
 };
 
@@ -237,8 +270,10 @@ struct Load : LoadTag {
  * @brief Compacted Load: multiple DEST slots from the same CB, with wait/pop control
  *
  * Produced by sfpu_chain() compile-time transformation. Adjacent same-CB Loads
- * are merged into one CompactLoad. Wait/pop flags are set based on whether this
- * CB appears in other CompactLoad groups elsewhere in the chain.
+ * whose (DoWait, DoPop) flags ALSO match are merged into one CompactLoad;
+ * differing flags stay as separate CompactLoad elements. The flags originate
+ * from the source `Load<CB, Slot, DoWait, DoPop>` — the pipeline does not
+ * override them.
  *
  * @tparam CB      Circular buffer index
  * @tparam DoWait  If true, exec() calls cb_wait_front before copying
@@ -359,12 +394,18 @@ struct Append<TypeList<Ts...>, T> {
     using type = TypeList<Ts..., T>;
 };
 
-// --- Step 1: Compact adjacent same-CB Loads into CompactLoad (wait=true,pop=true initially) ---
+// --- Step 1: Compact adjacent same-CB Loads into CompactLoad ---
+//
+// Rationale: adjacent same-CB Loads in a chain describe ONE physical tile being
+// fanned out to multiple DEST slots (e.g. hardswish/mish: load `x` to D0 and D1,
+// transform D0, multiply by D1). Merging is always correct on same-CB adjacency
+// — the flags describe the TILE's lifecycle, not per-copy behaviour, so they
+// are combined with OR when Loads merge: `group.do_wait = OR(load.do_wait)`,
+// `group.do_pop = OR(load.do_pop)`. Mixing `Load` and `LoadPersistent` on the
+// same tile therefore yields "wait once, don't pop" (the persistent wins on
+// pop; wait is triggered by either).
 
-// Helper: append a Load, merging with trailing same-CB CompactLoad if present.
-// Uses a two-phase approach: first check if merge is possible, then act.
-
-// Phase 1: Check if last element is CompactLoad<CB,...>
+// Phase 1: Check if last element is CompactLoad<CB, ...> (any flags)
 template <typename TL, uint32_t CB>
 struct LastIsCompactLoadFromCB {
     static constexpr bool value = false;
@@ -386,42 +427,45 @@ struct Prepend<T, TypeList<Ts...>> {
     using type = TypeList<T, Ts...>;
 };
 
-// Phase 3: Replace last CompactLoad<CB,...> by appending a new Slot
-template <typename TL, uint32_t CB, Dst NewSlot>
+// Phase 3: Replace last CompactLoad<CB,...> by appending Slot and OR'ing flags.
+// NewW/NewP are the incoming Load's flags; ExistingW/P come from the trailing
+// CompactLoad. The merged group inherits the disjunction.
+template <typename TL, uint32_t CB, bool NewW, bool NewP, Dst NewSlot>
 struct ReplaceLastLoad;
-template <uint32_t CB, bool W, bool P, Dst... Slots, Dst NewSlot>
-struct ReplaceLastLoad<TypeList<CompactLoad<CB, W, P, Slots...>>, CB, NewSlot> {
-    using type = TypeList<CompactLoad<CB, W, P, Slots..., NewSlot>>;
+template <uint32_t CB, bool W, bool P, Dst... Slots, bool NewW, bool NewP, Dst NewSlot>
+struct ReplaceLastLoad<TypeList<CompactLoad<CB, W, P, Slots...>>, CB, NewW, NewP, NewSlot> {
+    using type = TypeList<CompactLoad<CB, (W || NewW), (P || NewP), Slots..., NewSlot>>;
 };
-template <typename First, typename... Rest, uint32_t CB, Dst NewSlot>
-struct ReplaceLastLoad<TypeList<First, Rest...>, CB, NewSlot> {
-    using type = typename Prepend<First, typename ReplaceLastLoad<TypeList<Rest...>, CB, NewSlot>::type>::type;
+template <typename First, typename... Rest, uint32_t CB, bool NewW, bool NewP, Dst NewSlot>
+struct ReplaceLastLoad<TypeList<First, Rest...>, CB, NewW, NewP, NewSlot> {
+    using type =
+        typename Prepend<First, typename ReplaceLastLoad<TypeList<Rest...>, CB, NewW, NewP, NewSlot>::type>::type;
 };
 
-// AppendLoad: dispatch merge vs new
-template <typename TL, uint32_t CB, Dst Slot, bool Merge = LastIsCompactLoadFromCB<TL, CB>::value>
+// AppendLoad: merge on CB match (any flags), else append new CompactLoad
+template <typename TL, uint32_t CB, Dst Slot, bool W, bool P, bool Merge = LastIsCompactLoadFromCB<TL, CB>::value>
 struct AppendLoad;
 
-// No merge: append new CompactLoad
-template <typename... Elems, uint32_t CB, Dst Slot>
-struct AppendLoad<TypeList<Elems...>, CB, Slot, false> {
-    using type = TypeList<Elems..., CompactLoad<CB, true, true, Slot>>;
+// No merge: first Load for this CB — its flags become the group's flags
+template <typename... Elems, uint32_t CB, Dst Slot, bool W, bool P>
+struct AppendLoad<TypeList<Elems...>, CB, Slot, W, P, false> {
+    using type = TypeList<Elems..., CompactLoad<CB, W, P, Slot>>;
 };
 
-// Merge: replace last CompactLoad with extended version
-template <typename TL, uint32_t CB, Dst Slot>
-struct AppendLoad<TL, CB, Slot, true> {
-    using type = typename ReplaceLastLoad<TL, CB, Slot>::type;
+// Merge: extend slot list of the trailing same-CB CompactLoad, OR'ing flags
+template <typename TL, uint32_t CB, Dst Slot, bool W, bool P>
+struct AppendLoad<TL, CB, Slot, W, P, true> {
+    using type = typename ReplaceLastLoad<TL, CB, W, P, Slot>::type;
 };
 
 // Fold step: dispatch Load vs non-Load via helper
 template <typename Acc, typename Elem, bool IsLoad = is_load_op_v<Elem>>
 struct CompactStep;
 
-// Load: use AppendLoad to merge or create
-template <typename Acc, uint32_t CB, Dst Slot>
-struct CompactStep<Acc, Load<CB, Slot>, true> {
-    using type = typename AppendLoad<Acc, CB, Slot>::type;
+// Load: derive (do_wait, do_pop) from LoadPolicy and thread to AppendLoad
+template <typename Acc, uint32_t CB, Dst Slot, LoadPolicy Policy>
+struct CompactStep<Acc, Load<CB, Slot, Policy>, true> {
+    using type = typename AppendLoad<Acc, CB, Slot, load_does_wait(Policy), load_does_pop(Policy)>::type;
 };
 
 // Non-Load: pass through
@@ -475,10 +519,10 @@ struct NoMultiGroupCB<TypeList<CompactLoad<CB, W, P, S...>, Rest...>> {
         !HasCBInList<CB, TypeList<Rest...>>::value && NoMultiGroupCB<TypeList<Rest...>>::value;
 };
 
-// --- Step 3: Annotate wait/pop based on first/last CB appearance ---
-// After compaction + multi-group check, each CB appears exactly once.
-// All CompactLoads get wait=true, pop=true (which is the initial default from Step 1).
-// No further annotation needed for single-group-per-CB.
+// --- Step 3: Wait/pop annotation is a no-op now ---
+// Each CompactLoad's (do_wait, do_pop) is inherited directly from its source
+// Load<CB, Slot, W, P> type. The pipeline honours those flags at exec() time;
+// no post-hoc annotation is required.
 
 }  // namespace detail
 
@@ -489,8 +533,24 @@ struct NoMultiGroupCB<TypeList<CompactLoad<CB, W, P, S...>, Rest...>> {
 /**
  * @brief Factory function — compacts adjacent same-CB Loads and returns transformed chain
  *
- * Usage: auto chain = sfpu_chain(Load<0, Dst::D0>{}, Load<0, Dst::D1>{}, Exp<>{});
- * Produces: SfpuChain<CompactLoad<0, true, true, D0, D1>, Exp<>>
+ * Adjacent Loads on the same CB are merged into one CompactLoad regardless of
+ * policy. The merged group's wait/pop behaviour is OR'd across the individual
+ * Loads' policies (any Load that wants to wait triggers the wait; any Load
+ * that wants to pop triggers the pop).
+ *
+ * Usage:
+ *   // Fan-out: both slots come from tile[0] of cb=0, single wait+pop.
+ *   auto c1 = sfpu_chain(Load<0, Dst::D0>{}, Load<0, Dst::D1>{}, Exp<>{});
+ *   // → SfpuChain<CompactLoad<0, true, true, D0, D1>, Exp<>>
+ *
+ *   // Mixed: data streams, mask is persistent across iterations.
+ *   auto c2 = sfpu_chain(
+ *       Load<cb_data, Dst::D0>{},                                    // WaitAndPop
+ *       Load<cb_mask, Dst::D1, LoadPolicy::WaitNoPop>{},             // persistent
+ *       Mask<DataFormat::Float16_b>{});
+ *   // → SfpuChain<CompactLoad<cb_data, true, true, D0>,
+ *   //             CompactLoad<cb_mask, true, false, D1>,
+ *   //             Mask<...>>
  */
 template <typename... Ops>
 constexpr ALWI auto sfpu_chain(Ops...) {

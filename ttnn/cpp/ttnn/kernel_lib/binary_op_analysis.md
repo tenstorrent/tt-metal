@@ -1,503 +1,660 @@
 # Binary Operation Kernel Analysis
 
-## Executive Summary
+This document inventories raw `add_tiles` / `sub_tiles` / `mul_tiles` (and their
+broadcast variants) usage across `ttnn/cpp/ttnn/operations/`, groups usages
+into pattern categories, and evaluates migration feasibility against the
+current `ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp` API.
 
-This document analyzes the usage patterns of `add_tiles`, `sub_tiles`, `mul_tiles`, and their broadcast variants across the TTNN kernel codebase. The analysis identifies common patterns, groups them by complexity, and assesses the feasibility of replacing raw API calls with the unified `binary_op_helpers.hpp` library.
+**Reference sources**
 
-**Key Findings:**
-- 60+ files use `add_tiles`, 49 files use `mul_tiles`, 7 files use `sub_tiles`
-- 28 files use row/column broadcast variants
-- 32 files use scalar broadcast variants
-- Most patterns fall into 8 distinct categories
-- ~70% of patterns can be directly replaced with `binary_op_helpers.hpp`
-- ~20% require minor library extensions
-- ~10% are complex patterns that may not benefit from abstraction
+- API header: `ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp`
+- Common types / `NoOp` / `NoAccumulation`: `ttnn/cpp/ttnn/kernel_lib/common_types.hpp`
+- DEST chunk limit: `ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp` (`DEST_AUTO_LIMIT`)
+- Overlapping legacy helper: `ttnn/cpp/ttnn/kernel/compute/moreh_common.hpp`
 
 ---
 
-## 1. Binary Operation APIs Found
+## Executive Summary
 
-### 1.1 Element-wise Operations
-| API | Files | Description |
-|-----|-------|-------------|
-| `add_tiles(cb_a, cb_b, ia, ib, dst)` | 60 | Element-wise A + B |
-| `sub_tiles(cb_a, cb_b, ia, ib, dst)` | 7 | Element-wise A - B |
-| `mul_tiles(cb_a, cb_b, ia, ib, dst)` | 49 | Element-wise A × B |
+Ground-truth counts from the current tree (grep scope
+`ttnn/cpp/ttnn/operations/`):
 
-### 1.2 Row Broadcast Operations (B has 1 row, broadcasts across all rows)
-| API | Files | Description |
-|-----|-------|-------------|
-| `add_tiles_bcast_rows(cb_a, cb_b, ia, ib, dst)` | 15 | A[h,w] + B[w] → C[h,w] |
-| `mul_tiles_bcast_rows(cb_a, cb_b, ia, ib, dst)` | 12 | A[h,w] × B[w] → C[h,w] |
-| `sub_tiles_bcast<BroadcastType::ROW>(...)` | 2 | A[h,w] - B[w] → C[h,w] |
+| Raw API                        | Files |
+|--------------------------------|-------|
+| `add_tiles(...)`               | 70    |
+| `mul_tiles(...)`               | 46    |
+| `sub_tiles(...)`               |  9    |
+| `*_tiles_bcast_rows` / `<ROW>` | 40    |
+| `*_tiles_bcast_cols`           | 34    |
+| `*_tiles_bcast_scalar`         | 24    |
+| `reconfig_data_format_srcb/a`  | 53 files (172 call sites) |
+| `*_tiles_to_cb` (moreh_common) | 13    |
 
-### 1.3 Column Broadcast Operations (B has 1 column, broadcasts across all columns)
-| API | Files | Description |
-|-----|-------|-------------|
-| `add_tiles_bcast_cols(cb_a, cb_b, ia, ib, dst)` | 6 | A[h,w] + B[h] → C[h,w] |
-| `sub_tiles_bcast_cols(cb_a, cb_b, ia, ib, dst)` | 18 | A[h,w] - B[h] → C[h,w] |
-| `mul_tiles_bcast_cols(cb_a, cb_b, ia, ib, dst)` | 24 | A[h,w] × B[h] → C[h,w] |
+**Adoption state:** Zero production kernels currently call
+`compute_kernel_lib::{add,sub,mul,square,binary_op}` from
+`binary_op_helpers.hpp`. Verified via
+`rg 'compute_kernel_lib::(add|sub|mul|square|binary_op)\s*[<(]'` under
+`ttnn/cpp/ttnn/operations/` — the only hit is a feasibility markdown at
+`normalization/layernorm/device/kernels/compute/layernorm_binary_helpers_feasibility.md`.
+The previous version of this document claimed `rotary_embedding_llama.cpp`,
+`softmax.cpp`, and `groupnorm.cpp` were already using the helper; that was
+wrong.
 
-### 1.4 Scalar Broadcast Operations (B is single value, broadcasts everywhere)
-| API | Files | Description |
-|-----|-------|-------------|
-| `add_tiles_bcast_scalar(cb_a, cb_b, ia, ib, dst)` | 5 | A[h,w] + B[0,0] → C[h,w] |
-| `sub_tiles_bcast_scalar(cb_a, cb_b, ia, ib, dst)` | 15 | A[h,w] - B[0,0] → C[h,w] |
-| `mul_tiles_bcast_scalar(cb_a, cb_b, ia, ib, dst)` | 18 | A[h,w] × B[0,0] → C[h,w] |
+**Key library gaps that block wider adoption**
 
-### 1.5 Initialization Functions
-| API | Usage Count | Description |
-|-----|-------------|-------------|
-| `add_tiles_init(cb_a, cb_b)` | 45 | Initialize add |
-| `sub_tiles_init(cb_a, cb_b)` | 5 | Initialize sub |
-| `mul_tiles_init(cb_a, cb_b)` | 38 | Initialize mul |
-| `add_bcast_rows_init_short(cb_a, cb_b)` | 12 | Initialize row broadcast add |
-| `sub_bcast_cols_init_short(cb_a, cb_b)` | 15 | Initialize col broadcast sub |
-| `mul_bcast_cols_init_short(cb_a, cb_b)` | 18 | Initialize col broadcast mul |
-| `mul_tiles_bcast_scalar_init_short(cb_a, cb_b)` | 12 | Initialize scalar broadcast mul |
-| `init_bcast<LLKOP, DIM>(cb_a, cb_b, cb_out)` | 8 | Generic macro-based init |
-| `binary_op_init_common(cb_a, cb_b, cb_out)` | 40+ | Common init for all binary ops |
+1. No partial data-format reconfig (`_srcb` / `_srca`). 53 kernels / 172
+   call sites rely on it; today the helper only supports
+   `NONE | INPUT | OUTPUT | INPUT_AND_OUTPUT`.
+2. `moreh_common.hpp` is a parallel abstraction covering ~13 moreh kernels;
+   overlap needs to be addressed explicitly.
+3. `PostOp` is strictly per-tile; no batch-level hook for vectorised
+   multi-tile SFPU follow-ups.
+4. `sub_bcast_rows` has no upstream `*_init_short` LLK helper (confirmed — no
+   such symbol exists anywhere in the repo). Any `SUB<ROW>` caller must
+   tolerate whatever init the helper emits.
+
+**Migration feasibility estimate (re-verified against current tree):**
+
+- ~40% of the 70 unique files map cleanly to the helper today (Tier 1).
+- ~35% require the partial-reconfig extension OR acceptance of
+  `reconfig = NONE` with manual reconfigs around the call (Tier 2).
+- ~25% have conditional dispatch, multi-CB interleaving, or fused
+  matmul/reduce patterns that make abstraction of low value (Tier 3).
+
+---
+
+## 1. Helper Library Capabilities
+
+Canonical reference for the symbols used in every replacement snippet below.
+All symbols live in `namespace compute_kernel_lib`.
+
+### 1.1 Enums
+
+| Enum                           | Values                                                              |
+|--------------------------------|---------------------------------------------------------------------|
+| `BinaryOpType`                 | `ADD`, `SUB`, `MUL`, `SQUARE`                                       |
+| `BroadcastDim`                 | `NONE`, `ROW`, `COL`, `SCALAR`                                      |
+| `BinaryDataFormatReconfig`     | `NONE`, `INPUT`, `OUTPUT`, `INPUT_AND_OUTPUT`                       |
+| `BinaryInputPolicy`            | `WaitAndPopPerTile`, `WaitAndPopPerChunk`, `WaitUpfrontNoPop`, `WaitUpfrontPopAtEnd`, `NoWaitNoPop`, `NoWaitPopAtEnd` |
+| `BinaryOutputPolicy`           | `PerTile`, `PerChunk`, `Bulk`                                       |
+
+`BroadcastDim` semantics (directly from the header):
+
+| `BroadcastDim` | B shape  | B tiles | What gets broadcast              |
+|----------------|----------|---------|----------------------------------|
+| `NONE`         | `[Ht,Wt]`| `Ht*Wt` | Full tensor                      |
+| `ROW`          | `[1,Wt]` | `Wt`    | Single row replicated down rows  |
+| `COL`          | `[Ht,1]` | `Ht`    | Single column replicated right   |
+| `SCALAR`       | `[1,1]`  | `1`     | Single tile replicated everywhere|
+
+### 1.2 Shapes and policies
+
+```cpp
+// Tile grid dimensions — pick one factory
+BinaryInputBlockShape::of(r, c);   // [r, c] tiles
+BinaryInputBlockShape::single();   // 1 x 1
+BinaryInputBlockShape::row(c);     // 1 x c   (row vector)
+BinaryInputBlockShape::col(r);     // r x 1   (column vector)
+
+// Optional accumulation (reloads prior partial sum/product from CB)
+BinaryAccumulate{cb_accumulator, /*dst_index=*/0};
+NoAccumulation{};  // default (no reload)
+```
+
+### 1.3 Entry points
+
+```cpp
+// Must be called once before any helper op
+binary_op_init_common(icb_a, icb_b, ocb);
+
+// Low-level (explicit op_type)
+binary_op<op_type, bcast_dim, input_a_policy, input_b_policy,
+          output_policy, reconfig, init, PostOp, AccumT>(
+    icb_a, icb_b, ocb, shape, post_op, accum);
+
+// Aliases (op_type omitted; template param list is identical otherwise)
+add<...>(icb_a, icb_b, ocb, shape, post_op, accum);
+sub<...>(icb_a, icb_b, ocb, shape, post_op, accum);
+mul<...>(icb_a, icb_b, ocb, shape, post_op, accum);
+
+// square takes a single-CB input; no bcast_dim; no input_b_policy
+square<input_policy, output_policy, reconfig, init, PostOp, AccumT>(
+    icb, ocb, shape, post_op, accum);
+```
+
+Defaults (as of current header):
+
+```
+bcast_dim         = BroadcastDim::NONE
+input_a_policy    = BinaryInputPolicy::WaitAndPopPerTile
+input_b_policy    = input_a_policy                      // tracks A unless overridden
+output_policy     = BinaryOutputPolicy::PerTile
+reconfig          = BinaryDataFormatReconfig::INPUT_AND_OUTPUT
+init              = true
+PostOp            = NoOp      // from common_types.hpp, compiles away
+AccumT            = NoAccumulation
+```
+
+DEST chunking is automatic via `DEST_AUTO_LIMIT`
+(`ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp`); the caller does not pick a
+subblock size.
 
 ---
 
 ## 2. Pattern Categories
 
-### Pattern 1: Simple Streaming (One Tile at a Time)
-**Difficulty: EASY** | **Files: ~15** | **Helper Support: FULL**
+Eight patterns cover essentially every observed call site. Each entry below
+shows the raw pattern and the verified replacement against the current API.
+
+### Pattern 1 — Simple streaming (one tile at a time)
+
+**Difficulty: EASY. Helper support: FULL.**
 
 ```cpp
-// Example: bcast_h.cpp, bcast_w.cpp, bcast_hw.cpp
-for (uint32_t i = 0; i < N; i++) {
+for (uint32_t i = 0; i < N; ++i) {
     cb_wait_front(cb_in0, 1);
     cb_wait_front(cb_in1, 1);
     cb_reserve_back(cb_out, 1);
-    acquire_dst();
-
-    add_tiles(cb_in0, cb_in1, 0, 0, 0);  // or BCAST_OP<>
+    tile_regs_acquire();
+    add_tiles(cb_in0, cb_in1, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
     pack_tile(0, cb_out);
-
-    release_dst();
+    tile_regs_release();
     cb_pop_front(cb_in0, 1);
     cb_pop_front(cb_in1, 1);
     cb_push_back(cb_out, 1);
 }
 ```
 
-**Replacement:**
+Replacement:
+
 ```cpp
-compute_kernel_lib::add<
-    compute_kernel_lib::BroadcastDim::NONE,
-    compute_kernel_lib::BinaryInputMode::STREAMING>(
-    cb_in0, cb_in1, cb_out,
-    compute_kernel_lib::BinaryTileShape::block(N));
+using namespace compute_kernel_lib;
+
+binary_op_init_common(cb_in0, cb_in1, cb_out);
+add(cb_in0, cb_in1, cb_out, BinaryInputBlockShape::row(N));
+// Defaults: BroadcastDim::NONE, WaitAndPopPerTile, PerTile, INPUT_AND_OUTPUT.
 ```
 
-**Files affected:**
-- `bcast_h.cpp`, `bcast_w.cpp`, `bcast_hw.cpp` (eltwise/binary)
-- `bcast_h.cpp`, `bcast_w.cpp`, `bcast_hw.cpp` (data_movement/bcast)
-- `line_reduction.cpp`, `ring_reduction.cpp` (reduce_scatter)
+Representative files (ground-truthed):
 
----
+- `ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/*.cpp`
+- `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/bcast_{h,w,hw}.cpp`
+- `ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/{line,ring,dim_zero_line,dim_zero_ring}_reduction.cpp`
 
-### Pattern 2: Batched Processing with DST Accumulation
-**Difficulty: EASY** | **Files: ~20** | **Helper Support: FULL**
+### Pattern 2 — Batched DEST accumulation
+
+**Difficulty: EASY. Helper support: FULL (via `WaitAndPopPerChunk` or `BinaryAccumulate`).**
 
 ```cpp
-// Example: reduce_nc.cpp
 cb_wait_front(cb_in0, N);
-cb_wait_front(cb_in1, 1);  // Scalar or persistent
+cb_wait_front(cb_in1, 1);
 tile_regs_acquire();
-for (uint32_t i = 0; i < N; i++) {
-    add_tiles(cb_in0, cb_in1, i, 0, dst0);  // Accumulate to same dst
+for (uint32_t i = 0; i < N; ++i) {
+    add_tiles(cb_in0, cb_in1, i, 0, /*dst=*/0);
 }
 tile_regs_commit();
 tile_regs_wait();
-pack_tile(dst0, cb_out);
+pack_tile(0, cb_out);
 tile_regs_release();
 ```
 
-**Replacement:** Already covered by `BinaryInputMode::STREAMING_BATCHED` or `BinaryAccumulate`.
-
-**Files affected:**
-- `reduce_nc.cpp`
-- `accumulation_compute.cpp`
-- Most CCL reduction kernels
-
----
-
-### Pattern 3: Grid Processing with Index Computation
-**Difficulty: MEDIUM** | **Files: ~25** | **Helper Support: PARTIAL**
+Replacement (scalar B reused; partial result reloaded from accumulator CB):
 
 ```cpp
-// Example: layernorm.cpp, groupnorm.cpp
+add<BroadcastDim::SCALAR,
+    BinaryInputPolicy::WaitAndPopPerChunk,
+    BinaryInputPolicy::WaitUpfrontNoPop>(
+    cb_in0, cb_in1, cb_out, BinaryInputBlockShape::row(N),
+    NoOp{}, BinaryAccumulate{cb_accum, /*dst_index=*/0});
+```
+
+Representative files:
+
+- `ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/compute/accumulation_compute.cpp`
+- `ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp`
+- `ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/compute/reduction.cpp`
+- `ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/compute/reduction.cpp`
+
+### Pattern 3 — Grid traversal with manual subblock indexing
+
+**Difficulty: MEDIUM. Helper support: FULL for the indexing; PARTIAL for reconfig.**
+
+```cpp
 for (uint32_t h = 0; h < Ht; ++h) {
     for (uint32_t w = 0; w < Wt; w += subblock_w) {
         tile_regs_acquire();
         for (uint32_t i = 0; i < subblock_w; ++i) {
-            uint32_t idx = w + i + h * Wt;
-            mul_tiles(cb_a, cb_b, idx, idx_mask, i);
+            uint32_t idx = h * Wt + w + i;
+            mul_tiles(cb_a, cb_b, idx, idx, i);
         }
         tile_regs_commit();
-        // pack loop...
+        // pack subblock_w tiles...
     }
 }
 ```
 
-**Current helper support:**
-- `BinaryTileShape::grid(Ht, Wt)` handles grid dimensions
-- `BinaryTileLayout::with_stride_a(stride)` handles custom strides
-- Subblock processing needs manual chunking or DEST_AUTO_LIMIT
-
-**Gap:** Current library handles `dest_limit` internally but doesn't expose subblock configuration.
-
----
-
-### Pattern 4: Broadcast with Persisted Secondary Input
-**Difficulty: EASY-MEDIUM** | **Files: ~30** | **Helper Support: FULL**
+Replacement:
 
 ```cpp
-// Example: layernorm.cpp, softmax.cpp
-cb_wait_front(cb_scalar, 1);  // Load once
+mul<BroadcastDim::NONE,
+    BinaryInputPolicy::WaitUpfrontPopAtEnd>(
+    cb_a, cb_b, cb_out, BinaryInputBlockShape::of(Ht, Wt));
+```
+
+`DEST_AUTO_LIMIT` handles the subblock split internally. The `subblock_w`
+concept disappears from caller code.
+
+**Caveat:** many files in this pattern interleave `reconfig_data_format_srcb`
+mid-chain — see `ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp`
+(6 `_srcb` sites) and `welford_groupnorm.cpp` (7 sites). Those kernels need
+Gap #1 (Section 4) or have to use `reconfig = BinaryDataFormatReconfig::NONE`
+with caller-side manual reconfigs.
+
+### Pattern 4 — Broadcast with persisted B (no pop)
+
+**Difficulty: EASY. Helper support: FULL.**
+
+```cpp
+cb_wait_front(cb_scale, 1);
 for (uint32_t h = 0; h < Ht; ++h) {
     for (uint32_t w = 0; w < Wt; ++w) {
         cb_wait_front(cb_data, 1);
-        // ...
-        mul_tiles_bcast_cols(cb_data, cb_scalar, w, 0, dst);
-        // ...
+        cb_reserve_back(cb_out, 1);
+        tile_regs_acquire();
+        mul_tiles_bcast_scalar(cb_data, cb_scale, 0, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_out);
+        tile_regs_release();
+        cb_pop_front(cb_data, 1);
+        cb_push_back(cb_out, 1);
     }
 }
-// Don't pop cb_scalar - reused
+// cb_scale stays in the CB
 ```
 
-**Replacement:** Use `BinaryInputMode::PERSISTENT` for secondary input:
+Replacement:
+
 ```cpp
-compute_kernel_lib::mul<
-    compute_kernel_lib::BroadcastDim::COL,
-    compute_kernel_lib::BinaryInputMode::STREAMING>(  // Primary streams
-    cb_data, cb_scalar, cb_out,
-    compute_kernel_lib::BinaryTileShape::grid(Ht, Wt));
-// Note: ROW broadcast variant auto-persists secondary input
+mul<BroadcastDim::SCALAR,
+    BinaryInputPolicy::WaitAndPopPerTile,
+    BinaryInputPolicy::WaitUpfrontNoPop>(
+    cb_data, cb_scale, cb_out, BinaryInputBlockShape::of(Ht, Wt));
 ```
 
-**Files affected:**
-- All layernorm variants
-- All softmax variants
-- Most normalization kernels
+Representative files:
 
----
+- `ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama.cpp`
+- `ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_post_allgather.cpp`
+- `ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/rmsnorm_post_allgather.cpp`
 
-### Pattern 5: Binary Operation with Post-Op (Chained)
-**Difficulty: MEDIUM** | **Files: ~15** | **Helper Support: PARTIAL**
+### Pattern 5 — Binary op with fused post-op (rsqrt / sfpu)
+
+**Difficulty: MEDIUM. Helper support: FULL for per-tile PostOp; missing for batch-level PostOp.**
 
 ```cpp
-// Example: layernorm.cpp (variance calculation)
 tile_regs_acquire();
-add_tiles(cb_var, cb_eps, 0, 0, dst0);
+add_tiles(cb_var, cb_eps, 0, 0, /*dst=*/0);
 rsqrt_tile_init<true>();
-rsqrt_tile<true>(dst0);
+rsqrt_tile<true>(0);
 tile_regs_commit();
 // pack...
 ```
 
-**Current helper support:**
-- `PostOp` callback parameter exists but is limited
-- Only applies to non-streaming modes
+Replacement:
 
-**Gap:** PostOp callback works per-tile in DST, not per-batch. Complex post-ops may need explicit handling.
-
-**Workaround:**
 ```cpp
-compute_kernel_lib::add<...>(
-    cb_var, cb_eps, cb_out,
-    compute_kernel_lib::BinaryTileShape::single(),
-    {},  // layout
-    {},  // accumulation
-    [](uint32_t dst) {
+add(cb_var, cb_eps, cb_out, BinaryInputBlockShape::single(),
+    [](uint32_t dst_idx) {
         rsqrt_tile_init<true>();
-        rsqrt_tile<true>(dst);
+        rsqrt_tile<true>(dst_idx);
     });
 ```
 
----
+Representative files:
 
-### Pattern 6: Reconfig-Heavy Operations
-**Difficulty: MEDIUM** | **Files: ~20** | **Helper Support: PARTIAL**
+- `ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm*.cpp`
+- `ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_pre_allgather*.cpp`
+- `ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp`
+
+### Pattern 6 — Reconfig-heavy chains (`_srcb` / `_srca`)
+
+**Difficulty: MEDIUM. Helper support: PARTIAL — this is Gap #1.**
 
 ```cpp
-// Example: layernorm.cpp, groupnorm.cpp
 reconfig_data_format(cb_a, cb_b);
 pack_reconfig_data_format(cb_out);
 add_tiles_init(cb_a, cb_b);
-// operation...
+// op 1
 
-reconfig_data_format_srcb(cb_b, cb_c);  // Switch only srcb
+reconfig_data_format_srcb(cb_b, cb_c);   // swap only srcb unpacker
 mul_tiles_init(cb_a, cb_c);
-// next operation...
+// op 2
 ```
 
-**Current helper support:**
-- `BinaryDataFormatReconfig::NONE/INPUT/OUTPUT/BOTH` handles full reconfig
-- No support for partial reconfig (`_srcb`, `_srca`)
-
-**Gap:** Needs extension for `reconfig_data_format_srcb()` pattern.
-
----
-
-### Pattern 7: Moreh-Style Single-Tile Operations
-**Difficulty: EASY** | **Files: ~25** | **Helper Support: FULL (via moreh_common)**
+Current best-effort replacement (pass `reconfig = NONE` and handle reconfig
+outside):
 
 ```cpp
-// Example: moreh_adam.cpp, moreh_adamw.cpp
-mul_tiles_to_cb(cb_a, cb_b, cb_out, 0, 0, 0, 0);
-add_tiles_to_cb(cb_c, cb_out, cb_out, 0, 0, 0, 1);
-sub_tiles_to_cb(cb_one, cb_d, cb_tmp, 0, 0, 0, 0);
+reconfig_data_format(cb_a, cb_b);
+pack_reconfig_data_format(cb_out);
+add<BroadcastDim::NONE,
+    BinaryInputPolicy::WaitAndPopPerTile,
+    BinaryInputPolicy::WaitAndPopPerTile,
+    BinaryOutputPolicy::PerTile,
+    BinaryDataFormatReconfig::NONE>(
+    cb_a, cb_b, cb_out, BinaryInputBlockShape::of(Ht, Wt));
+
+reconfig_data_format_srcb(cb_b, cb_c);
+mul<BroadcastDim::NONE,
+    BinaryInputPolicy::WaitAndPopPerTile,
+    BinaryInputPolicy::WaitAndPopPerTile,
+    BinaryOutputPolicy::PerTile,
+    BinaryDataFormatReconfig::NONE>(
+    cb_a, cb_c, cb_out, BinaryInputBlockShape::of(Ht, Wt));
 ```
 
-**Note:** `moreh_common.hpp` already provides `*_tiles_to_cb` helpers that handle:
-- `cb_wait_front`, `cb_reserve_back`
-- `tile_regs_acquire/commit/wait/release`
-- `pack_tile`, `cb_pop_front`, `cb_push_back`
-- FP32_DEST_ACC handling
+Files with the heaviest `_srcb/_srca` concentration (top of the 53-file list):
 
-**Relationship:** These are similar to `binary_op_helpers.hpp` but operate on single tiles with explicit pop control. Consider unifying or deprecating one approach.
+- `layernorm_large_tensor_welford.cpp` (9)
+- `groupnorm_sharded_v2.cpp` (6), `groupnorm.cpp` (6), `welford_groupnorm.cpp` (7)
+- `layernorm.cpp` (6), `layernorm_large_tensor.cpp` (6), `layernorm_welford.cpp` (6)
+- `softmax_large_tensor.cpp` (5), `layernorm_sharded.cpp` (5)
 
----
+### Pattern 7 — Moreh-style single-tile chains (`*_tiles_to_cb`)
 
-### Pattern 8: Complex Multi-CB Operations
-**Difficulty: HARD** | **Files: ~10** | **Helper Support: NONE**
+**Difficulty: N/A — uses `moreh_common.hpp`, not raw tile APIs.**
 
 ```cpp
-// Example: groupnorm.cpp, complex layernorm variants
-cb_wait_front(cb_reread_out, N);
-cb_reserve_back(cb_reread_write_out, N);
+mul_tiles_to_cb(cb_a,   cb_b,   cb_out, 0, 0, /*pop_a=*/0, /*pop_b=*/0);
+add_tiles_to_cb(cb_c,   cb_out, cb_out, 0, 0, /*pop_a=*/0, /*pop_b=*/1);
+sub_tiles_to_cb(cb_one, cb_d,   cb_tmp, 0, 0, /*pop_a=*/0, /*pop_b=*/0);
+```
+
+13 production kernels rely on this API (see Section 5). Most can be expressed
+as chained `binary_op_helpers.hpp` calls with `BinaryInputBlockShape::single()`
+and per-input `BinaryInputPolicy` choices, but each replacement is a multi-line
+rewrite — different cost profile from Tiers 1–2.
+
+### Pattern 8 — Complex multi-CB / conditional dispatch
+
+**Difficulty: HARD. Helper support: NONE intended.**
+
+```cpp
 for (uint32_t w = 0; w < block_w; ++w) {
     if (copy_or_add) {
         copy_tile_init(cb_xmm);
-        // ...
-        copy_tile(cb_xmm, idx, dst0);
+        copy_tile(cb_xmm, w, /*dst=*/0);
     } else {
         add_tiles_init(cb_reread_out, cb_xmm);
-        // ...
-        add_tiles(cb_reread_out, cb_xmm, idx_reread, idx_xmm, dst0);
+        add_tiles(cb_reread_out, cb_xmm, w_reread, w, /*dst=*/0);
     }
-    // conditional packing...
+    // conditional pack...
 }
 ```
 
-**Gap:** Conditional operation dispatch, multi-CB reread patterns, and complex index management are not suited for the current abstraction.
+Kernels: `groupnorm.cpp`, `welford_groupnorm.cpp`, `welford_groupnorm_sharded_v2.cpp`,
+`conv_bmm_tilize.cpp`, `bmm_large_block_zm_fused_bias_activation.cpp`,
+`transformer_group_attn_matmul.cpp`. These are not Tier-1/2/3 migration
+candidates; they should stay on raw APIs or be surgically refactored.
 
 ---
 
-## 3. Kernel Difficulty Ranking
+## 3. Kernel Tiering
 
-### Tier 1: Direct Replacement (EASY) — ~35 files
-Simple patterns that map directly to `binary_op_helpers.hpp`:
+### Tier 1 — Direct replacement (EASY)
 
-| File | Pattern | Replacement Strategy |
-|------|---------|---------------------|
-| `eltwise/binary/bcast_h.cpp` | Pattern 1 | Direct: `add<ROW, STREAMING>` |
-| `eltwise/binary/bcast_w.cpp` | Pattern 1 | Direct: `add<COL, STREAMING>` |
-| `eltwise/binary/bcast_hw.cpp` | Pattern 1 | Direct: `add<SCALAR, STREAMING>` |
-| `data_movement/bcast/*.cpp` | Pattern 1 | Direct: uses `BCAST_OP` macro |
-| `reduce_scatter_minimal_async/line_reduction.cpp` | Pattern 2 | Direct: `add<NONE, STREAMING_BATCHED>` |
-| `reduce_scatter_minimal_async/ring_reduction.cpp` | Pattern 2 | Same as above |
-| `rotary_embedding_llama.cpp` | Pattern 4 | Already using helper! |
-| `accumulation_compute.cpp` | Pattern 2 | Direct: `add/mul<NONE, STREAMING>` with accumulator |
+Verified against current paths. Each entry lists the dominant pattern.
 
-### Tier 2: Minor Adaptation (MEDIUM) — ~30 files
-Require small code restructuring or use PostOp callbacks:
+| File                                                                                                     | Pattern | Primary op |
+|----------------------------------------------------------------------------------------------------------|---------|------------|
+| `eltwise/binary/device/kernels/compute/bcast_h.cpp`                                                      | 1       | `add<ROW>` / templated |
+| `eltwise/binary/device/kernels/compute/bcast_w.cpp`                                                      | 1       | `add<COL>` / templated |
+| `eltwise/binary/device/kernels/compute/bcast_hw.cpp`                                                     | 1       | `add<SCALAR>` / templated |
+| `data_movement/bcast/device/kernels/*.cpp`                                                               | 1       | any-op, bcast templated |
+| `experimental/ccl/reduce_scatter_minimal_async/device/kernels/line_reduction.cpp`                        | 2       | `add` with accumulator |
+| `experimental/ccl/reduce_scatter_minimal_async/device/kernels/ring_reduction.cpp`                        | 2       | `add` with accumulator |
+| `experimental/ccl/reduce_scatter_minimal_async/device/kernels/dim_zero_line_reduction.cpp`               | 2       | `add` with accumulator |
+| `experimental/ccl/reduce_scatter_minimal_async/device/kernels/dim_zero_ring_reduction.cpp`               | 2       | `add` with accumulator |
+| `experimental/ccl/strided_reduce_scatter_async/device/kernels/minimal_ring_reduction.cpp`                | 2       | `add` with accumulator |
+| `experimental/ccl/llama_reduce_scatter/device/kernels/compute/reduction.cpp`                             | 2       | `add` with accumulator |
+| `experimental/ccl/llama_reduce_scatter_create_heads/device/kernels/compute/reduction.cpp`                | 2       | `add` with accumulator |
+| `experimental/ccl/all_reduce_async/device/kernels/compute/reduction.cpp`                                 | 2       | `add` with accumulator |
+| `experimental/transformer/all_reduce_create_qkv_heads/device/kernels/compute/reduction.cpp`              | 2       | `add` with accumulator |
+| `experimental/ccl/deepseek_moe_reduce_scatter/device/kernels/deepseek_moe_reduce_scatter_reduction.cpp`  | 2       | `add` with accumulator |
+| `experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp`                                     | 2       | `add` with accumulator |
+| `experimental/reduction/deepseek_moe_fast_reduce_nc/device/kernels/deepseek_moe_fast_reduce_nc_reduce.cpp` | 2     | `add` with accumulator |
+| `reduction/accumulation/device/kernels/compute/accumulation_compute.cpp`                                 | 2       | `add` / `mul` |
+| `experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama.cpp`      | 4       | `add<SCALAR>` or `mul<SCALAR>` |
+| `experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/compute/rotary_embedding_llama_sharded_row_major.cpp` | 4 | similar |
 
-| File | Pattern | Adaptation Needed |
-|------|---------|-------------------|
-| `layernorm.cpp` | Pattern 3, 5 | Use grid() + PostOp for rsqrt |
-| `softmax.cpp` | Pattern 4, 5 | Already partially uses `reduce_helpers` |
-| `rmsnorm_*.cpp` | Pattern 3, 4 | Grid + persisted scalar |
-| `moreh_layer_norm_*.cpp` | Pattern 3, 5 | Multi-phase operations |
-| `transformer reduction/*.cpp` | Pattern 2, 4 | CCL reductions |
+### Tier 2 — Requires partial-reconfig support OR caller-managed reconfig
 
-### Tier 3: Significant Refactoring (HARD) — ~15 files
-Complex patterns with conditional logic, multi-CB, or custom indexing:
+Needs Gap #1 resolved or the migration swallows extra reconfig lines in
+caller code. Grid + persisted-B + PostOp stack is the common shape.
 
-| File | Pattern | Challenge |
-|------|---------|-----------|
-| `groupnorm.cpp` | Pattern 8 | Conditional copy vs add, multi-CB |
-| `welford_groupnorm.cpp` | Pattern 8 | Welford algorithm state management |
-| `moreh_adam.cpp` | Pattern 7 (chain) | Long chains of single-tile ops |
-| `moreh_adamw.cpp` | Pattern 7 (chain) | Same as adam |
-| `conv_bmm_tilize.cpp` | Mixed | Interleaved with matmul |
-| `transformer_attn_matmul.cpp` | Mixed | Fused with matmul |
+| File                                                                                               | Notes |
+|----------------------------------------------------------------------------------------------------|-------|
+| `normalization/layernorm/device/kernels/compute/layernorm.cpp`                                     | 6 `_srcb`, grid + PostOp rsqrt |
+| `normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp`                        | 6 `_srcb` |
+| `normalization/layernorm/device/kernels/compute/layernorm_welford.cpp`                             | 6 `_srcb` |
+| `normalization/layernorm/device/kernels/compute/layernorm_large_tensor_welford.cpp`                | 9 `_srcb` |
+| `normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp`                             | 5 `_srcb` |
+| `normalization/layernorm/device/kernels/compute/layernorm_sharded_welford.cpp`                     | 4 `_srcb` |
+| `normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp`              | 2 `_srcb` |
+| `normalization/layernorm_distributed/device/kernels/compute/layernorm_post_allgather*.cpp`         | PostOp chain |
+| `normalization/softmax/device/kernels/attention/compute/softmax*.cpp`                              | persistent max/sum |
+| `normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_*.cpp`                           | persistent scale |
+| `normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp`                            | ADD/SUB/MUL chain + PostOp |
+| `experimental/ccl/rms_allgather/device/kernels/compute/rms_compute.cpp`                            | 2 `_srcb` |
+| `experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/rmsnorm_post_allgather.cpp`| persistent scale |
+| `experimental/transformer/dit_layernorm_post_all_gather/device/kernels/compute/layernorm_post_allgather_welford.cpp` | welford |
+| `transformer/sdpa/device/kernels/compute/compute_common.hpp`                                       | persistent K/V lifetime |
+| `conv/conv2d/device/kernels/compute_depthwise_conv1d.cpp`                                          | grid, per-channel bcast |
+
+### Tier 3 — Not recommended without refactor
+
+Conditional dispatch, multi-CB reread, or fused matmul/reduce. Migration
+yields marginal readability win at best.
+
+| File                                                                                      | Reason |
+|-------------------------------------------------------------------------------------------|--------|
+| `normalization/groupnorm/device/kernels/compute/groupnorm.cpp`                            | Pattern 8 (copy-or-add branching) |
+| `normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp`                 | Pattern 8 |
+| `normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp`                    | Welford state machine |
+| `normalization/groupnorm/device/kernels/compute/welford_groupnorm_sharded_v2.cpp`         | Welford state machine |
+| `conv/conv2d/device/kernels/conv_bmm_tilize.cpp`                                          | Fused with matmul |
+| `matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp`              | Fused with matmul |
+| `experimental/matmul/group_attn_matmul/device/kernels/compute/transformer_group_attn_matmul.cpp` | Fused with matmul |
+| `moreh/moreh_adam/device/kernels/moreh_adam.cpp`                                          | Pattern 7 (moreh_common) |
+| `moreh/moreh_adamw/device/kernels/moreh_adamw.cpp`                                        | Pattern 7 |
+| `moreh/moreh_layer_norm_backward/device/kernels/moreh_layer_norm_backward_*_kernel.cpp`   | Pattern 7 + `_srcb` |
 
 ---
 
-## 4. Current `binary_op_helpers.hpp` Coverage Analysis
+## 4. Library Gaps
 
-### What It Provides
-| Feature | Status | Notes |
-|---------|--------|-------|
-| ADD/SUB/MUL operations | ✅ Full | All three ops supported |
-| BroadcastDim::NONE/ROW/COL/SCALAR | ✅ Full | All dimensions supported |
-| STREAMING mode | ✅ Full | One-at-a-time processing |
-| STREAMING_BATCHED mode | ✅ Full | Batch wait/pop with indexed access |
-| PRELOADED mode | ✅ Full | Bulk reserve/push output |
-| PERSISTENT mode | ✅ Full | No pop, tiles persist for reuse |
-| Data format reconfig | ✅ Full | NONE/INPUT/OUTPUT/BOTH |
-| BinaryTileShape | ✅ Full | grid, row, col, single, block |
-| BinaryTileLayout | ✅ Full | Custom strides for indexed modes |
-| BinaryAccumulate | ✅ Full | Iterative accumulation with reload |
-| PostOp callback | ⚠️ Partial | Works in non-STREAMING modes |
-| DEST limit auto-detection | ✅ Full | Via `DEST_AUTO_LIMIT` from dest_helpers |
-| init flag | ✅ Full | Skip init when chaining ops |
+### Gap 1 — Partial data-format reconfig (BLOCKER for Tier 2)
 
-### What's Missing
-| Feature | Impact | Recommendation |
-|---------|--------|----------------|
-| Partial reconfig (`_srcb`, `_srca`) | Medium | Add `BinaryDataFormatReconfig::SRCB_ONLY` |
-| Explicit subblock control | Low | Current auto-chunking usually sufficient |
-| Conditional op dispatch | Low | Keep manual for complex cases |
-| Multi-CB patterns | Low | Not suited for abstraction |
-| `sub_bcast_rows` init | Low | Missing in underlying LLK, workaround exists |
+**Symptom:** `BinaryDataFormatReconfig` has no `SRCB_ONLY` / `SRCA_ONLY`
+variant, while 53 kernels (172 call sites) use `reconfig_data_format_srcb` /
+`_srca` to switch only one unpacker side between ops.
 
----
+**Affected kernels:** layernorm / groupnorm / softmax / rmsnorm families,
+layernorm-welford variants, matmul-fused activation kernels, several moreh
+kernels.
 
-## 5. Recommendations
-
-### 5.1 Library Extensions Needed
-
-#### Extension 1: Partial Data Format Reconfig
-Add support for `reconfig_data_format_srcb()` pattern:
+**Proposed extension:**
 
 ```cpp
 enum class BinaryDataFormatReconfig {
-    NONE = 0,
-    INPUT = 1,      // reconfig_data_format(icb_a, icb_b)
-    OUTPUT = 2,     // pack_reconfig_data_format(ocb)
-    BOTH = 3,       // Both above
-    SRCB_ONLY = 4,  // reconfig_data_format_srcb(old_cb, new_cb)  // NEW
-    SRCA_ONLY = 5   // reconfig_data_format_srca(old_cb, new_cb)  // NEW
+    NONE              = 0,
+    INPUT             = 1,
+    OUTPUT            = 2,
+    INPUT_AND_OUTPUT  = 3,
+    SRCA_ONLY         = 4,  // reconfig_data_format_srca(old_cb, new_cb)
+    SRCB_ONLY         = 5,  // reconfig_data_format_srcb(old_cb, new_cb)
 };
 ```
 
-#### Extension 2: Explicit B-input Pop Control
-Some patterns need to persist B input across multiple operations:
+The helper also needs to learn the previous-CB identity for a one-sided
+reconfig (currently inferred from the `binary_op_init_common` state). Two
+realistic API shapes: either thread explicit `prev_icb_a` / `prev_icb_b`
+parameters, or have the helper track per-side last-configured CB in a thread-
+local state object. The header already keeps enough state to do the latter.
+
+**Classification:** BLOCKER for Tier 2. Without it, Tier 2 migrations must
+sprinkle `reconfig = NONE` + manual reconfigs, defeating most of the
+readability win.
+
+### Gap 2 — `moreh_common.hpp` overlap
+
+**Symptom:** `moreh_common.hpp` exposes `add_tiles_to_cb`, `mul_tiles_to_cb`,
+`sub_tiles_to_cb`, plus `*_bcast_*_to_cb` and `*_with_dt` variants. 13
+production kernels use these APIs; they provide a narrower feature set
+(single-tile only, explicit per-input pop flag) but identical responsibility
+(wait/acquire/op/commit/pack/push).
+
+**Recommendation — explicit:**
+
+- **Coexistence, not deprecation, in the short term.** The `*_to_cb` APIs
+  are per-tile-granularity and already pervasive in moreh. Forcing migration
+  buys little because moreh kernels chain many small ops.
+- **New code: prohibit `moreh_common.hpp` binary ops.** Require
+  `binary_op_helpers.hpp` for any new compute kernel under `operations/`.
+- **Long term:** reimplement the `*_to_cb` helpers as thin shims over
+  `binary_op_helpers.hpp` (single-tile shape + `WaitAndPopPerTile` or
+  equivalent) so the two abstractions collapse into one. That requires Gap #1
+  (many moreh kernels interleave `_srcb` reconfigs) and a per-side pop flag
+  analogous to the `WaitAndPop*` / `WaitUpfrontNoPop` distinction.
+
+**Classification:** Policy decision, not a code blocker.
+
+### Gap 3 — Batch-level PostOp hook
+
+**Symptom:** `PostOp` is invoked per DEST slot. Some follow-up SFPU passes
+(e.g. vectorised rsqrt over a subblock) are cheaper when issued once across
+a chunk.
+
+**Proposed extension:**
 
 ```cpp
-template <
-    BinaryOpType op_type,
-    BroadcastDim bcast_dim = BroadcastDim::NONE,
-    BinaryInputMode input_mode = BinaryInputMode::STREAMING,
-    bool pop_b = true,  // NEW: Control whether to pop B input
-    ...>
-ALWI void binary_op(...);
+template <..., typename PostOp = NoOp, typename BatchPostOp = NoOp, ...>
+ALWI void binary_op(..., PostOp post_op = {}, BatchPostOp batch_post_op = {});
+// batch_post_op(base_dst, chunk_size) called once per DEST chunk.
 ```
 
-#### Extension 3: Multi-tile PostOp with Batching
-Current PostOp is per-tile, but some operations want batch-level PostOp:
+**Classification:** MINOR. Per-tile PostOp works everywhere; batch hook is
+optimisation-only.
 
-```cpp
-// Current: called per tile
-for (uint32_t i = 0; i < chunk_size; ++i) {
-    post_op(base_dst + i);
-}
+### Gap 4 — `sub_bcast_rows` LLK `_init_short`
 
-// Needed: optional batch-level callback
-if constexpr (!std::is_same_v<BatchPostOp, NoOp>) {
-    batch_post_op(base_dst, chunk_size);  // e.g., for vectorized sfpu ops
-}
-```
+**Symptom:** No `sub_bcast_rows_init_short` symbol exists in the repo
+(verified — six hits all for `sub_bcast_rows` as part of
+`sub_tiles_bcast_rows`/`sub_bcast_rows_init_short` were only found as
+substrings in `sub_bcast_cols`-related names; no true match). Any
+`sub<BroadcastDim::ROW>` invocation has to emit a generic
+`init_bcast<...>` or construct the equivalent from the other primitives.
 
-### 5.2 Migration Strategy
-
-**Phase 1: Easy Wins (Tier 1)**
-1. Start with `eltwise/binary/bcast_*.cpp` files — simple, isolated
-2. Move to `data_movement/bcast/*.cpp` — similar structure
-3. Update CCL reduction kernels — already have pattern separation
-
-**Phase 2: Normalization Kernels (Tier 2)**
-1. `layernorm.cpp` — after adding PostOp support verification
-2. `softmax.cpp` — already partially migrated via `reduce_helpers`
-3. `rmsnorm_*.cpp` — similar to layernorm
-
-**Phase 3: Complex Kernels (Tier 3)**
-1. Evaluate case-by-case benefit
-2. Some may be better left manual for clarity
-3. Consider partial migration (binary op only, leave surrounding logic)
-
-### 5.3 Relationship with `moreh_common.hpp`
-
-The `moreh_common.hpp` file provides similar functionality:
-- `add_tiles_to_cb`, `mul_tiles_to_cb`, `sub_tiles_to_cb`
-- Various `*_bcast_*_to_cb` variants
-- Handles FP32_DEST_ACC via `*_with_dt` variants
-
-**Recommendation:**
-1. Mark `moreh_common.hpp` as deprecated for new code
-2. Add migration guide from moreh_common to binary_op_helpers
-3. Keep moreh_common for backward compatibility in moreh kernels
-4. New kernels should use `binary_op_helpers.hpp`
+**Classification:** MINOR. Few kernels need sub-with-row-broadcast; the
+helper can silently fall back to the generic form.
 
 ---
 
-## 6. File-by-File Analysis
+## 5. `moreh_common.hpp` relationship — explicit recommendation
 
-### 6.1 Already Using `binary_op_helpers.hpp`
-| File | Pattern Used |
-|------|--------------|
-| `rotary_embedding_llama.cpp` | `add<NONE, PERSISTENT>` |
-| `softmax.cpp` | Uses `reduce_helpers` which integrates with binary_op |
-| `groupnorm.cpp` | Uses `reduce_helpers` for scalar reduce |
+See Gap #2. Concrete position:
 
-### 6.2 Priority Migration Candidates
+1. `binary_op_helpers.hpp` is the canonical abstraction; new kernels under
+   `ttnn/cpp/ttnn/operations/` must use it.
+2. `moreh_common.hpp` remains supported for existing moreh kernels. Do not
+   migrate moreh kernels eagerly — they chain 10+ ops per step; a
+   large-surface rewrite is high-risk.
+3. When Gap #1 (partial reconfig) lands, plan a follow-up to rewrite
+   `*_tiles_to_cb` as thin shims. Until then, keep the two abstractions
+   parallel.
 
-**High Priority (Simple, High Impact):**
-1. `eltwise/binary/bcast_h.cpp` - 44 lines → ~5 lines
-2. `eltwise/binary/bcast_w.cpp` - 40 lines → ~5 lines
-3. `eltwise/binary/bcast_hw.cpp` - 48 lines → ~5 lines
-4. `data_movement/bcast/bcast_h.cpp` - Same structure
-5. `data_movement/bcast/bcast_w.cpp` - Same structure
+---
 
-**Medium Priority (Good Simplification):**
-1. `reduce_scatter_minimal_async/line_reduction.cpp`
-2. `reduce_scatter_minimal_async/ring_reduction.cpp`
-3. `accumulation_compute.cpp`
-4. `fast_reduce_nc/reduce_nc.cpp`
+## 6. Migration Strategy
 
-**Low Priority (Complex, Marginal Benefit):**
-1. `groupnorm.cpp` - Very complex, many edge cases
-2. `moreh_adam.cpp` - Long chain operations, uses moreh_common
-3. `conv_bmm_tilize.cpp` - Interleaved with matmul
+### Phase 0 — Prove the abstraction (no library changes)
+
+**Tier 1 POC set:**
+
+- `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/bcast_h.cpp`
+- `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/bcast_w.cpp`
+- `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/bcast_hw.cpp`
+- `ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/*.cpp`
+- `ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/line_reduction.cpp`
+- `ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/ring_reduction.cpp`
+- `ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/compute/accumulation_compute.cpp`
+
+Exit criteria: line-count reduction ≥ 40 % per file; perf parity on the
+covering CI jobs.
+
+### Phase 1 — Land Gap #1 (partial reconfig)
+
+Ship `BinaryDataFormatReconfig::{SRCA_ONLY, SRCB_ONLY}`. Add unit coverage
+using a contrived two-op chain with differently-typed CBs. No kernel migration
+in this phase.
+
+### Phase 2 — Tier 2 migration (normalization family)
+
+Once Gap #1 ships, migrate (in order):
+
+1. `rmsnorm_distributed/device/kernels/compute/rmsnorm_*.cpp`
+2. `normalization/softmax/device/kernels/attention/compute/softmax*.cpp`
+3. `normalization/layernorm/device/kernels/compute/layernorm*.cpp`
+4. `normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp`
+5. `experimental/ccl/rms_allgather/device/kernels/compute/rms_compute.cpp`
+6. `experimental/transformer/*/compute/rmsnorm_post_allgather.cpp` variants
+
+### Phase 3 — Tier 3 case-by-case
+
+Evaluate per file. Default is **do not migrate**; keep raw APIs with a
+one-line comment pointing to this document.
 
 ---
 
 ## 7. Summary Statistics
 
-| Category | Count | Migration Effort |
-|----------|-------|------------------|
-| Files using add_tiles | 60 | — |
-| Files using mul_tiles | 49 | — |
-| Files using sub_tiles | 7 | — |
-| Files using bcast variants | 47 | — |
-| **Tier 1: Easy** | ~35 | 1-2 hours each |
-| **Tier 2: Medium** | ~30 | 2-4 hours each |
-| **Tier 3: Hard** | ~15 | Case-by-case |
-| Already migrated | 3 | — |
-| Using moreh_common | ~25 | Separate migration path |
+| Metric                                               | Count |
+|------------------------------------------------------|-------|
+| Files using `add_tiles`                              | 70    |
+| Files using `mul_tiles`                              | 46    |
+| Files using `sub_tiles`                              |  9    |
+| Files using row-broadcast variants                   | 40    |
+| Files using column-broadcast variants                | 34    |
+| Files using scalar-broadcast variants                | 24    |
+| Files using `reconfig_data_format_srcb/_srca`        | 53    |
+| Total `_srcb/_srca` call sites                       | 172   |
+| Files using `moreh_common` `*_tiles_to_cb`           | 13    |
+| Files using `compute_kernel_lib::{add,sub,mul,...}`  |  0 (production) |
+| **Tier 1** (direct migration ready today)            | ~28   |
+| **Tier 2** (blocked on partial reconfig)             | ~25   |
+| **Tier 3** (refactor required or not worth it)       | ~17   |
+
+Counts intentionally round; a handful of files span multiple tiers and are
+categorised by dominant pattern.
 
 ---
 
-## 8. Conclusion
+## 8. Confidence Notes
 
-The `binary_op_helpers.hpp` library provides comprehensive coverage for most binary operation patterns in the codebase. With the recommended extensions (partial reconfig, B-input pop control), it can cover approximately 85-90% of current usage patterns.
-
-**Key Actions:**
-1. ✅ Library is ready for Tier 1 migrations today
-2. ⚠️ Add Extension 1 (SRCB_ONLY reconfig) for Tier 2 migrations
-3. 📋 Create migration guide for moreh_common users
-4. 🔄 Start with bcast kernels as proof-of-concept
-5. 📊 Track metrics: lines of code reduced, pattern coverage
-
-The investment in library adoption pays off through:
-- Reduced code duplication
-- Automatic DEST limit handling
-- Consistent CB management
-- Easier maintenance and debugging
-- Self-documenting intent via template parameters
+- All file paths, counts, and `reconfig_data_format_*` totals verified via
+  `rg` against the current tree at the time of writing.
+- Adoption claim ("zero production callers of `compute_kernel_lib::*` binary
+  APIs") verified via regex `compute_kernel_lib::(add|sub|mul|square|binary_op)\s*[<(]`
+  under `ttnn/cpp/ttnn/operations/` — only hit is a markdown file.
+- Moreh kernel count for `*_tiles_to_cb` is 13 **production** kernels
+  (excludes `moreh_common.hpp` header itself).
+- Line-reduction estimates in the migration strategy are speculative
+  (UNCERTAIN) — they are based on the Tier-1 bcast kernels' structure but
+  have not been measured.
+- Pattern 7's claim that "most moreh chains can be expressed via chained
+  `binary_op_helpers.hpp` calls" is directionally correct but
+  **UNCERTAIN** until Gap #1 lands, because many moreh kernels interleave
+  `_srcb` reconfigs.

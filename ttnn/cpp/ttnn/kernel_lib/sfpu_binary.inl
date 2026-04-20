@@ -49,4 +49,22 @@ ALWI void SfpuMin<In0, In1, Out>::init() const { binary_min_tile_init(); }
 template <Dst In0, Dst In1, Dst Out>
 ALWI void SfpuMin<In0, In1, Out>::call(uint32_t a, uint32_t b, uint32_t c) const { binary_min_tile(a, b, c); }
 
+// --- Mask (in-place zero-mask): data at DataSlot, mask at DataSlot+1 ---
+template <DataFormat DF, Dst DataSlot>
+ALWI void Mask<DF, DataSlot>::init() const { mask_tile_init(); }
+template <DataFormat DF, Dst DataSlot>
+ALWI void Mask<DF, DataSlot>::call(uint32_t data, uint32_t mask, uint32_t /*out = data*/) const {
+    // The LLK ignores `mask` and reads from `data + 1`; we still pass it for
+    // parity with the raw API and for future-proofing (see mask.h TODO).
+    mask_tile(data, mask, DF);
+}
+
+// --- MaskPosInf (in-place +inf-mask): data at DataSlot, mask at DataSlot+1 ---
+template <Dst DataSlot>
+ALWI void MaskPosInf<DataSlot>::init() const { mask_tile_init(); }
+template <Dst DataSlot>
+ALWI void MaskPosInf<DataSlot>::call(uint32_t data, uint32_t mask, uint32_t /*out = data*/) const {
+    mask_posinf_tile(data, mask);
+}
+
 }  // namespace compute_kernel_lib

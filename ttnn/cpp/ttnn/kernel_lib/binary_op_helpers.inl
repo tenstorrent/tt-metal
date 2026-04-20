@@ -19,6 +19,7 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 namespace compute_kernel_lib {
@@ -27,12 +28,20 @@ namespace compute_kernel_lib {
 // Internal Helpers (not part of public API)
 // =============================================================================
 
-constexpr bool reconfig_input(BinaryDataFormatReconfig mode) {
-    return mode == BinaryDataFormatReconfig::INPUT || mode == BinaryDataFormatReconfig::INPUT_AND_OUTPUT;
+constexpr bool reconfig_srca(BinaryDataFormatReconfig mode) {
+    return mode == BinaryDataFormatReconfig::INPUT || mode == BinaryDataFormatReconfig::INPUT_AND_OUTPUT ||
+           mode == BinaryDataFormatReconfig::SRCA_ONLY || mode == BinaryDataFormatReconfig::SRCA_ONLY_AND_OUTPUT;
+}
+
+constexpr bool reconfig_srcb(BinaryDataFormatReconfig mode) {
+    return mode == BinaryDataFormatReconfig::INPUT || mode == BinaryDataFormatReconfig::INPUT_AND_OUTPUT ||
+           mode == BinaryDataFormatReconfig::SRCB_ONLY || mode == BinaryDataFormatReconfig::SRCB_ONLY_AND_OUTPUT;
 }
 
 constexpr bool reconfig_output(BinaryDataFormatReconfig mode) {
-    return mode == BinaryDataFormatReconfig::OUTPUT || mode == BinaryDataFormatReconfig::INPUT_AND_OUTPUT;
+    return mode == BinaryDataFormatReconfig::OUTPUT || mode == BinaryDataFormatReconfig::INPUT_AND_OUTPUT ||
+           mode == BinaryDataFormatReconfig::SRCA_ONLY_AND_OUTPUT ||
+           mode == BinaryDataFormatReconfig::SRCB_ONLY_AND_OUTPUT;
 }
 
 constexpr bool waits_per_tile(BinaryInputPolicy p) { return p == BinaryInputPolicy::WaitAndPopPerTile; }
@@ -245,8 +254,12 @@ ALWI void binary_op(
     const uint32_t b_tile_count = get_b_tile_count<bcast_dim>(Ht, Wt);
 
     // Data format reconfiguration
-    if constexpr (reconfig_input(reconfig)) {
+    if constexpr (reconfig_srca(reconfig) && reconfig_srcb(reconfig)) {
         reconfig_data_format(icb_a, icb_b);
+    } else if constexpr (reconfig_srca(reconfig)) {
+        reconfig_data_format_srca(icb_a);
+    } else if constexpr (reconfig_srcb(reconfig)) {
+        reconfig_data_format_srcb(icb_b);
     }
     if constexpr (reconfig_output(reconfig)) {
         pack_reconfig_data_format(ocb);
