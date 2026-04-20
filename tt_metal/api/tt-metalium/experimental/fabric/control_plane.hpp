@@ -147,6 +147,8 @@ public:
 
     // Return mesh_id, chip_id from physical chip id
     FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const;
+    // Return true if physical chip id is part of the fabric cluster (i.e. in the control plane mapping)
+    bool is_physical_chip_in_fabric_cluster(ChipId physical_chip_id) const;
     // Return physical chip id from fabric node id
     ChipId get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
     // Return fabric node id from ASIC id

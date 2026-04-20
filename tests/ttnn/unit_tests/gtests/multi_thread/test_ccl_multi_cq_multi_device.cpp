@@ -139,6 +139,16 @@ protected:
                     chip_id);
                 continue;
             }
+            // MMIO chips may have dispatch-tunnel routers (count > 0) but are not part of
+            // the fabric cluster routing topology. Skip them to avoid TT_FATAL.
+            if (!control_plane.is_physical_chip_in_fabric_cluster(chip_id)) {
+                log_info(
+                    tt::LogMetal,
+                    "[fabric_eth_health:{}] Device {} skipped: not in fabric cluster",
+                    label,
+                    chip_id);
+                continue;
+            }
             const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
             const auto active_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
             for (const auto& [chan_id, _direction] : active_eth_channels) {

@@ -1264,6 +1264,16 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
     return FabricNodeId(MeshId{0}, 0);
 }
 
+bool ControlPlane::is_physical_chip_in_fabric_cluster(ChipId physical_chip_id) const {
+    for (const auto& [fabric_node_id, mapped_physical_chip_id] :
+         this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+        if (mapped_physical_chip_id == physical_chip_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 ChipId ControlPlane::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
     auto it = logical_mesh_chip_id_to_physical_chip_id_mapping_.find(fabric_node_id);
     TT_FATAL(
