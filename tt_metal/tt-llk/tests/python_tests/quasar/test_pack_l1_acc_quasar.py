@@ -1,9 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import List
+
 import pytest
 import torch
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, FormatConfig
+from helpers.golden_generators import PackGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -34,30 +37,96 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.utils import passed_test
 
-INPUT_DIMENSIONS = [[512, 32]]
+INPUT_DIMENSIONS = [[512, 64], [192, 512]]
 TILE_DIMENSIONS = [32, 32]
+# Complete list of formats that are supported with L1 accumulation
+PACK_L1_ACC_FORMATS = input_output_formats(
+    [
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        DataFormat.Int32,
+        DataFormat.Int8,
+        DataFormat.UInt8,
+    ]
+)
+
+
+def generate_qsr_pack_l1_acc_combinations(
+    formats_list: List[FormatConfig],
+):
+    """
+    Generate pack combinations for Quasar pack with L1 accumulation tests.
+
+    Args:
+        formats_list: List of input/output format pairs
+
+    Returns:
+        List of (format, dest_acc) tuples
+    """
+
+    def is_supported_format_conversion(in_fmt, out_fmt):
+        """Check if the format conversion is supported by packer. These format conversions are NOT dependent on the dest register mode."""
+        # Skip if mixing integer and non-integer formats
+        if in_fmt.is_integer() ^ out_fmt.is_integer():
+            return False
+        return True
+
+    def get_dest_acc_modes(in_fmt):
+        """Determine valid dest register modes depending on the input format."""
+        # Int32, Float32 (unpack_to_dest) requires 32bit mode dest register
+        if in_fmt.is_32_bit():
+            return (DestAccumulation.Yes,)
+        return (DestAccumulation.No, DestAccumulation.Yes)
+
+    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
+        """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
+        # Upcasting to Float32/Int32 requires dest_acc enabled
+        if (
+            out_fmt.is_32_bit()
+            and not in_fmt.is_32_bit()
+            and dest_acc == DestAccumulation.No
+        ):
+            return False
+        # Int8<->UInt8 conversion requires dest_acc enabled
+        if (
+            dest_acc == DestAccumulation.No
+            and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
+            and in_fmt != out_fmt
+        ):
+            return False
+        return True
+
+    combinations = []
+    for fmt in formats_list:
+        in_fmt, out_fmt = fmt.input_format, fmt.output_format
+
+        if not is_supported_format_conversion(in_fmt, out_fmt):
+            continue
+
+        for dest_acc in get_dest_acc_modes(in_fmt):
+            if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
+                combinations.append((fmt, dest_acc))
+
+    return combinations
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-        ],
-    ),
-    dest_acc=DestAccumulation.No,
-    implied_math_format=[ImpliedMathFormat.No],
-    dest_sync_mode=[DestSync.Half],
+    formats_dest_acc=generate_qsr_pack_l1_acc_combinations(PACK_L1_ACC_FORMATS),
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    dest_sync_mode=[DestSync.Half, DestSync.Full],
     input_dimensions=INPUT_DIMENSIONS,
 )
 def test_pack_l1_acc_quasar(
-    formats,
-    dest_acc,
+    formats_dest_acc,
     implied_math_format,
     dest_sync_mode,
     input_dimensions,
     boot_mode=BootMode.DEFAULT,
 ):
+    (formats, dest_acc) = formats_dest_acc
+
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
         [tile_rows, tile_cols]
@@ -65,7 +134,6 @@ def test_pack_l1_acc_quasar(
     num_faces = num_faces_r_dim * num_faces_c_dim
 
     rows, cols = input_dimensions
-    num_elements = rows * cols
     tile_cnt = (rows // tile_rows) * (cols // tile_cols)
 
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -84,12 +152,24 @@ def test_pack_l1_acc_quasar(
         input_dimensions_B=input_dimensions,
         tile_dimensions=TILE_DIMENSIONS,
     )
-    src_A = torch.ones_like(src_A)
 
-    block_elements = output_tiles_in_block * face_r_dim * FACE_C_DIM * num_faces
-    golden_tensor = (
-        torch.ones(block_elements, dtype=format_dict[formats.output_format])
-        * output_num_blocks
+    generate_golden = get_golden_generator(PackGolden)
+    full_golden = generate_golden(
+        src_A,
+        formats.output_format,
+        num_faces=num_faces,
+        input_dimensions=input_dimensions,
+        face_r_dim=face_r_dim,
+    )
+
+    # This test accumulates the results of each block on top of each other
+    elements_per_block = output_tiles_in_block * num_faces * face_r_dim * FACE_C_DIM
+    partials = [
+        full_golden[block * elements_per_block : (block + 1) * elements_per_block]
+        for block in range(output_num_blocks)
+    ]
+    golden_tensor = PackGolden.apply_l1_accumulation(
+        partials, data_format=formats.output_format
     )
 
     unpack_to_dest = (
