@@ -388,6 +388,17 @@ class OpDescriptor:
             # Keying: tensors → hash(spec); hashable args → hash(obj);
             # id()-only args → id(obj) + strong ref pinning (see
             # _content_hash / _inline_cache_key_and_refs).
+            #
+            # Accepted tradeoff: the fingerprint is a proxy for
+            # program_cache_key (computed by C++ compute_program_hash).
+            # A fingerprint collision on args that produce *different*
+            # program_cache_keys would return the wrong cached key —
+            # a silent correctness issue.  This requires (1) a hash
+            # collision in the fingerprint AND (2) the colliding args
+            # to actually change the compiled program.  In practice
+            # this is near-impossible for typical decode loops where
+            # shapes and configs are fixed.  The tradeoff eliminates
+            # a C++ round-trip per inline call (~40 µs).
             _program_key_cache: OrderedDict = OrderedDict()
             _PROGRAM_KEY_CACHE_REGISTRY.append(_program_key_cache)
 
