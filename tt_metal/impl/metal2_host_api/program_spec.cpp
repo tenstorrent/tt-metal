@@ -1156,10 +1156,13 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
 // ----------------------------------------------------------------------------
 
 KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
-    KernelSource::SourceType source_type = (kernel_spec.source_type == KernelSpec::SourceType::FILE_PATH)
-                                               ? KernelSource::SourceType::FILE_PATH
-                                               : KernelSource::SourceType::SOURCE_CODE;
-    return KernelSource(kernel_spec.source, source_type);
+    // Source file path
+    if (auto* p = std::get_if<KernelSpec::SourceFilePath>(&kernel_spec.source)) {
+        return KernelSource(p->path.string(), KernelSource::SourceType::FILE_PATH);
+    } else {  // Source code
+        const auto& c = std::get<KernelSpec::SourceCode>(kernel_spec.source);
+        return KernelSource(c.code, KernelSource::SourceType::SOURCE_CODE);
+    }
 }
 
 // ----------------------------------------------------------------------------
