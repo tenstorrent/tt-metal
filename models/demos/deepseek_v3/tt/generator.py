@@ -1957,12 +1957,12 @@ class DeepseekGenerator(WarmupForwardMixin):
                         next_tokens = prefill_tokens
                         positions = lengths.clone()
                 if teacher_forcing is not None:
-                    for _ui in range(num_of_prompts):
-                        tf_idx = int(prompt_user_ids[_ui].item()) if (prompt_user_ids is not None) else _ui
-                        _forced = teacher_forcing.collect_predicted_tokens(
-                            int(next_tokens[tf_idx].item()), user_idx=_ui
+                    for user_idx in range(num_of_prompts):
+                        tf_idx = int(prompt_user_ids[user_idx].item()) if (prompt_user_ids is not None) else user_idx
+                        forced_token = teacher_forcing.collect_predicted_tokens(
+                            int(next_tokens[tf_idx].item()), user_idx=user_idx
                         )
-                        next_tokens[tf_idx] = int(_forced)
+                        next_tokens[tf_idx] = int(forced_token)
 
                 # Record token 0
                 for i in range(num_of_prompts):
@@ -2046,12 +2046,14 @@ class DeepseekGenerator(WarmupForwardMixin):
                         else:
                             pred_tokens = self._sample_on_host(decode_logits)
                         if teacher_forcing is not None:
-                            for _ui in range(num_of_prompts):
-                                tf_idx = int(prompt_user_ids[_ui].item()) if (prompt_user_ids is not None) else _ui
-                                _forced = teacher_forcing.collect_predicted_tokens(
-                                    int(pred_tokens[tf_idx].item()), user_idx=_ui
+                            for user_idx in range(num_of_prompts):
+                                tf_idx = (
+                                    int(prompt_user_ids[user_idx].item()) if (prompt_user_ids is not None) else user_idx
                                 )
-                                pred_tokens[tf_idx] = int(_forced)
+                                forced_token = teacher_forcing.collect_predicted_tokens(
+                                    int(pred_tokens[tf_idx].item()), user_idx=user_idx
+                                )
+                                pred_tokens[tf_idx] = int(forced_token)
                         next_tokens = pred_tokens
                         positions += 1
 

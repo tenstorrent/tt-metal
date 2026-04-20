@@ -7,9 +7,7 @@ Convert a DeepSeek API batch-results JSON into a compact multi-prompt .refpt
 file that can be committed to the repo and consumed by
 ``test_demo_teacher_forced.py`` without any runtime JSON parsing.
 
-Usage
------
-::
+Usage:
 
     python convert_api_json_to_refpt.py \\
         --input  results-512.json \\
@@ -34,7 +32,7 @@ import torch
 from tqdm import tqdm
 
 
-def _api_token_to_id(tokenizer, token_str: str, token_bytes: Optional[list[int]]) -> int:
+def api_token_to_id(tokenizer, token_str: str, token_bytes: Optional[list[int]]) -> int:
     """Resolve an API log-prob token string to a vocab ID."""
     try:
         vocab_id = tokenizer.convert_tokens_to_ids(token_str)
@@ -43,18 +41,18 @@ def _api_token_to_id(tokenizer, token_str: str, token_bytes: Optional[list[int]]
     except Exception:
         pass
 
-    def _try(text: str) -> Optional[int]:
+    def try_token(text: str) -> Optional[int]:
         ids = tokenizer.encode(text, add_special_tokens=False)
         return ids[0] if len(ids) == 1 else None
 
-    tid = _try(token_str)
+    tid = try_token(token_str)
     if tid is not None:
         return tid
 
     if token_bytes:
         try:
             decoded = bytes(token_bytes).decode("utf-8", errors="replace")
-            tid = _try(decoded)
+            tid = try_token(decoded)
             if tid is not None:
                 return tid
         except Exception:
@@ -63,7 +61,7 @@ def _api_token_to_id(tokenizer, token_str: str, token_bytes: Optional[list[int]]
     return tokenizer.unk_token_id or 0
 
 
-def _build_entries_from_api_json(
+def build_entries_from_api_json(
     results_json: Path,
     tokenizer,
     prompt_count: int,
@@ -99,7 +97,7 @@ def _build_entries_from_api_json(
 
         if steps:
             generated_tokens = [
-                _api_token_to_id(tokenizer, step.get("token", ""), step.get("bytes")) for step in steps[:max_new_tokens]
+                api_token_to_id(tokenizer, step.get("token", ""), step.get("bytes")) for step in steps[:max_new_tokens]
             ]
             if not generated_text:
                 generated_text = "".join(step.get("token", "") for step in steps[:max_new_tokens])
@@ -121,7 +119,7 @@ def _build_entries_from_api_json(
             pos = len(prompt_ids) + step_i
             top_lps = step.get("top") or step.get("top_logprobs") or []
             for k, lp_entry in enumerate(top_lps[:5]):
-                tok_id = _api_token_to_id(tokenizer, lp_entry.get("token", ""), lp_entry.get("bytes"))
+                tok_id = api_token_to_id(tokenizer, lp_entry.get("token", ""), lp_entry.get("bytes"))
                 top5[pos, k] = tok_id
 
         ref_t = torch.cat([prompt_t, gen_t], dim=1)
@@ -141,7 +139,7 @@ def _build_entries_from_api_json(
     return entries
 
 
-def _compress_entries_lzma(entries: list[dict]) -> tuple[bytes, list[dict], int]:
+def compress_entries_lzma(entries: list[dict]) -> tuple[bytes, list[dict], int]:
     """
     Pack all per-entry tensors into one LZMA-compressed blob.
 
@@ -210,14 +208,14 @@ def main() -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
 
-    entries = _build_entries_from_api_json(
+    entries = build_entries_from_api_json(
         results_json=Path(args.input),
         tokenizer=tokenizer,
         prompt_count=args.num_entries,
         max_new_tokens=args.max_new_tokens,
     )
 
-    compressed, layout, raw_bytes = _compress_entries_lzma(entries)
+    compressed, layout, raw_bytes = compress_entries_lzma(entries)
     payload = {
         "format_version": "multi_prompt_v1_lzma_v1",
         "num_prompts": len(entries),

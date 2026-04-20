@@ -39,13 +39,13 @@ REFERENCE_FILE = Path(
 GENERATED_OUTPUTS_FILE = Path(__file__).with_name("teacher_forced_generated_outputs.json")
 
 
-def _tile_align(length: int) -> int:
+def tile_align(length: int) -> int:
     k_chunk_size = K_CHUNK_SIZE
     aligned_size = max(int(ttnn.TILE_SIZE), k_chunk_size)
     return ((int(length) + aligned_size - 1) // aligned_size) * aligned_size
 
 
-def _desired_prompt_count(system_name: str) -> int:
+def resolve_prompt_count(system_name: str) -> int:
     name = system_name.upper()
     if name == "QUAD":
         return 512
@@ -54,7 +54,7 @@ def _desired_prompt_count(system_name: str) -> int:
     return 1
 
 
-def _entry_prompt_text(entry: dict, tokenizer) -> str:
+def entry_prompt_text(entry: dict, tokenizer) -> str:
     prompt = entry.get("prompt")
     if prompt:
         return str(prompt)
@@ -66,7 +66,7 @@ def _entry_prompt_text(entry: dict, tokenizer) -> str:
     return ""
 
 
-def _entry_generated_text(entry: dict, tokenizer) -> str:
+def entry_generated_text(entry: dict, tokenizer) -> str:
     generated = entry.get("decoded_generated_text")
     if generated:
         return str(generated)
@@ -99,7 +99,7 @@ def test_demo_teacher_forcing_accuracy(
     if requested_system_name is None:
         pytest.fail("Environment variable $MESH_DEVICE is not set. Please set it to DUAL or QUAD.")
 
-    desired_prompt_count = _desired_prompt_count(requested_system_name)
+    desired_prompt_count = resolve_prompt_count(requested_system_name)
     if is_ci_env:
         desired_prompt_count = 1
 
@@ -132,7 +132,7 @@ def test_demo_teacher_forcing_accuracy(
     entries = entries[:desired_prompt_count]
 
     max_prompt_len = max(int(entry["tf_prompt_len"]) for entry in entries)
-    configured_max_seq_len = _tile_align(max_prompt_len + max_new_tokens)
+    configured_max_seq_len = tile_align(max_prompt_len + max_new_tokens)
     if configured_max_seq_len > DEFAULT_MAX_SEQ_LEN:
         pytest.skip(
             f"Teacher-forced context needs max_seq_len={configured_max_seq_len}, "
@@ -156,15 +156,15 @@ def test_demo_teacher_forcing_accuracy(
             "generated_tokens": e0["generated_tokens"],
             "top5_tokens": e0["top5_tokens"],
             "tf_prompt_len": int(e0["tf_prompt_len"]),
-            "prompt": _entry_prompt_text(e0, tokenizer),
-            "decoded_generated_text": _entry_generated_text(e0, tokenizer),
+            "prompt": entry_prompt_text(e0, tokenizer),
+            "decoded_generated_text": entry_generated_text(e0, tokenizer),
         }
     )
 
     run_ref_file = tmp_path / "teacher_forcing_multi_prompt.refpt"
     torch.save(run_payload, run_ref_file)
 
-    prompts = [_entry_prompt_text(entry, tokenizer) for entry in entries]
+    prompts = [entry_prompt_text(entry, tokenizer) for entry in entries]
     assert len(prompts) == num_users, (
         f"Prompt count {len(prompts)} must match run users {num_users} "
         f"({mesh_rows} rows x {max_users_per_row} users/row) for one-call validation."
@@ -205,9 +205,9 @@ def test_demo_teacher_forcing_accuracy(
         output_records.append(
             {
                 "index": idx,
-                "prompt": _entry_prompt_text(entry, tokenizer),
+                "prompt": entry_prompt_text(entry, tokenizer),
                 "tt_output": tt_text,
-                "gt_output": _entry_generated_text(entry, tokenizer),
+                "gt_output": entry_generated_text(entry, tokenizer),
             }
         )
     GENERATED_OUTPUTS_FILE.parent.mkdir(parents=True, exist_ok=True)
