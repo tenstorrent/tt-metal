@@ -32,6 +32,28 @@
   owner_id: U08RL15T4N8
   team: models
 
+- name: "(Galaxy) DeepSeek Prefill Transformer PCC"
+  cmd: |
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+    export MESH_DEVICE=TG
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    export NORM_OUTPUT_DIR=/tmp/ds_output_all_sources_new_ndshard # to deprecate
+    export PCC_SUMMARY_DIR=/tmp/pcc_summaries
+    export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Reference-prefill
+    export TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache-prefill
+    export HF_HOME=/tmp/hf_home # this is r/w path for huggingface, the actual model cache is in the read-only path defined by DEEPSEEK_V3_HF_MODEL
+    export HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub # this is r/o path with the model
+    pytest -xvs models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py \
+      -k 'pretrained and pcc and e256_cf32_host and mesh-8x4 and kv_cache and 1024 and 61 and abc' \
+      --tb=short
+  model: deepseek_prefill
+  skus:
+    bh_galaxy:
+      timeout: 20
+  owner_id: U08RL15T4N8
+  team: models
+
 - name: "t3k_DeepSeek_PREFILL"
   cmd: |
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv --tb=short -k "random and (linear-8-1link or mesh-4x2 or mesh-2x4)"
