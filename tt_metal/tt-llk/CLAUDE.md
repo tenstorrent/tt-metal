@@ -37,14 +37,17 @@ tt-llk/
 
 ### Environment Setup
 
-Run inside the **tt-metal Docker image** (the default for codegen and internal work — Python test deps like `ml_dtypes`, `torch`, `tt-exalens` are already installed at the system level):
+Check for `tests/.venv` to decide which setup applies:
 
-```bash
-cd tests
-./setup_testing_env.sh          # fetches SFPI; no venv needed in the image
-```
+- **`tests/.venv` exists** — external setup was used previously (`source ./setup_external_testing_env.sh` created the venv and installed `requirements.txt`). Activate it before running tests: `source tests/.venv/bin/activate`.
+- **No `tests/.venv`** — you are inside the **tt-metal Docker image** (the default for work; Python test deps like `ml_dtypes`, `torch`, `tt-exalens` are already installed system-wide). Just run the arch-specific setup with `CHIP_ARCH`:
 
-Outside the image, use `source ./setup_external_testing_env.sh` instead — that variant creates `tests/.venv` and installs `requirements.txt`. See `tests/README.md` for details.
+  ```bash
+  cd tests
+  CHIP_ARCH=quasar ./setup_testing_env.sh   # fetches SFPI for the target arch; no venv needed
+  ```
+
+See `tests/README.md` for details.
 
 ### MCP Servers
 Pre-configured in `.mcp.json`. Atlassian requires authentication on first use.
