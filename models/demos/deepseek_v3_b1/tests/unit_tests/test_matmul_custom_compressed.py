@@ -183,7 +183,7 @@ def test_matmul_custom_compressed_small(device):
 
 def test_matmul_custom_compressed_mixed(device):
     """[1, 256] x [256, 32], mixed bfp8+bfp4. K=8 tiles."""
-    _run_matmul_custom_compressed(device, 1, 256, 32, formats=["bfp4", "bfp2"])
+    _run_matmul_custom_compressed(device, 1, 256, 32, formats=["bfp8", "bfp4"])
 
 
 def test_matmul_custom_compressed_large(device):
