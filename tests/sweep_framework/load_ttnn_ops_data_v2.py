@@ -1630,11 +1630,16 @@ def resolve_manifest(manifest_path=None, scope=None):
     return unique
 
 
-def _resolve_manifest_with_models(manifest_path=None, scope=None):
+def _resolve_manifest_with_models(manifest_path=None, scope=None, model_filter=None):
     """Like resolve_manifest but returns {trace_id: set_of_model_names | None}.
 
     None means no filter (all models in the trace).
     A set means only reconstruct configs belonging to those model_names.
+
+    Args:
+        model_filter: Optional list of model names to restrict to.  When set,
+            only targets whose model list intersects with *model_filter* are
+            resolved, and only the intersecting model names are passed through.
     """
     data, _ = _load_manifest(manifest_path)
     targets_map = data.get("targets", {})
@@ -1650,6 +1655,12 @@ def _resolve_manifest_with_models(manifest_path=None, scope=None):
     # trace_id -> set of model_names to include (None = all models)
     trace_model_map = {}
 
+    # Build a lookup of which models each trace contains (from registry metadata).
+    # Used to skip pinned traces that don't contain filtered models.
+    registry_models_by_tid = {}
+    for r in registry:
+        registry_models_by_tid[r.get("trace_id")] = set(r.get("models", []))
+
     for entries in groups.values():
         for entry in entries or []:
             model_val = entry.get("model")
@@ -1657,6 +1668,12 @@ def _resolve_manifest_with_models(manifest_path=None, scope=None):
             hw_filter = entry.get("hardware")
 
             models = [model_val] if isinstance(model_val, str) else (list(model_val) if model_val else [])
+
+            # Apply CLI model filter: only keep models that match the filter
+            if model_filter:
+                models = [m for m in models if m in model_filter]
+                if not models:
+                    continue
 
             def _add(tid, model_list):
                 if tid not in trace_model_map:
@@ -1669,7 +1686,16 @@ def _resolve_manifest_with_models(manifest_path=None, scope=None):
             if pinned_trace is not None:
                 tids = [int(pinned_trace)] if not isinstance(pinned_trace, list) else [int(t) for t in pinned_trace]
                 for tid in tids:
-                    _add(tid, models)
+                    if model_filter:
+                        # Only add this trace if the registry confirms it contains at least
+                        # one of the filtered models.  This avoids hitting the DB for traces
+                        # that clearly don't have the requested model.
+                        registry_models_for_tid = registry_models_by_tid.get(tid, set())
+                        trace_models = [m for m in models if m in registry_models_for_tid]
+                        if trace_models:
+                            _add(tid, trace_models)
+                    else:
+                        _add(tid, models)
                 continue
 
             # Registry-resolved: each model resolves to latest active trace per device_series
@@ -1692,7 +1718,9 @@ def _resolve_manifest_with_models(manifest_path=None, scope=None):
     return trace_model_map
 
 
-def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, schema=DEFAULT_SCHEMA):
+def reconstruct_from_manifest(
+    manifest_path=None, output_path=None, scope=None, schema=DEFAULT_SCHEMA, model_filter=None
+):
     """Reconstruct merged JSON from manifest targets.
 
     Resolves targets to (trace_run_id, model_names) pairs, reconstructs each
@@ -1703,11 +1731,12 @@ def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, 
         output_path: Path to write the merged JSON (optional).
         scope: 'lead_models' or 'model_traced' (None = all targets).
         schema: Database schema to read from (default: "ttnn_ops_v6").
+        model_filter: Optional list of model names to restrict reconstruction to.
 
     Returns:
         Merged dict in the tracer's master JSON format.
     """
-    trace_model_map = _resolve_manifest_with_models(manifest_path, scope=scope)
+    trace_model_map = _resolve_manifest_with_models(manifest_path, scope=scope, model_filter=model_filter)
     if not trace_model_map:
         print("Nothing to reconstruct")
         return {"operations": {}, "metadata": {}}
@@ -2328,6 +2357,15 @@ if __name__ == "__main__":
             list_trace_runs(model_filter, schema=_schema)
         elif cmd == "reconstruct-manifest":
             _args = sys.argv[2:]
+            # Extract --models-filter if present
+            _model_filter = None
+            if "--models-filter" in _args:
+                idx = _args.index("--models-filter")
+                if idx + 1 < len(_args):
+                    _model_filter = [m.strip() for m in _args[idx + 1].split(",") if m.strip()]
+                    _args = _args[:idx] + _args[idx + 2 :]
+                else:
+                    _args = _args[:idx]
             if _args and _args[0].endswith(".json"):
                 manifest, output = None, _args[0]
                 _args = _args[1:]
@@ -2336,7 +2374,7 @@ if __name__ == "__main__":
                 output = _args[1] if len(_args) > 1 else None
                 _args = _args[2:]
             scope = _args[0] if _args else None
-            reconstruct_from_manifest(manifest, output, scope, _schema)
+            reconstruct_from_manifest(manifest, output, scope, _schema, model_filter=_model_filter)
         elif cmd == "resolve-manifest":
             manifest = sys.argv[2] if len(sys.argv) > 2 else None
             scope = sys.argv[3] if len(sys.argv) > 3 else None
