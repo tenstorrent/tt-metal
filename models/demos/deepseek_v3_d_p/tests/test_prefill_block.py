@@ -95,6 +95,7 @@ def test_prefill_block(
 ):
     config = config_only
     config.max_seq_len = isl_total
+    mesh_device.disable_and_clear_program_cache()
 
     sp_axis = 0
     tp_axis = 1
