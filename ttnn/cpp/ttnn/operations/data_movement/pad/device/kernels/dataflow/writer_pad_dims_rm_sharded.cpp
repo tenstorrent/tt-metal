@@ -4,16 +4,19 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    experimental::CircularBuffer cb(cb_id);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
 
     for (uint32_t i = 0; i < num_bytes_risc / 2; ++i) {
         ptr[i] = val;
     }
 
-    uint32_t pad_val_addr = get_write_ptr(cb_id);
+<<<<<<< HEAD
+    uint32_t pad_val_addr = cb.get_write_ptr();
     uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
     uint32_t l1_write_addr = pad_val_addr;
 
@@ -26,8 +29,13 @@ inline __attribute__((always_inline)) void fill_pad_cb_with_val(
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_zero(
     const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
+    experimental::CircularBuffer cb(cb_id);
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+<<<<<<< HEAD
     uint32_t pad_val_addr = get_write_ptr(cb_id);
+=======
+    uint32_t pad_val_addr = cb.get_read_ptr();
+>>>>>>> origin/main
     uint32_t l1_write_addr = pad_val_addr;
 
     for (uint32_t i = 0; i < num_noc_transfer; ++i) {
@@ -67,8 +75,10 @@ void kernel_main() {
 
     constexpr auto cb_pad = tt::CBIndex::c_1;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
+    experimental::CircularBuffer cb_pad_exp(cb_pad);
+    experimental::CircularBuffer cb_out0_exp(cb_out0);
 
-    uint32_t pad_val_addr = get_read_ptr(cb_pad);
+    uint32_t pad_val_addr = cb_pad_exp.get_read_ptr();
     uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
 
     if constexpr (not_pad_by_zero) {
@@ -77,7 +87,7 @@ void kernel_main() {
         fill_pad_cb_with_zero(cb_pad, zero_pad_stick_size, num_zero_pad_sticks_read);
     }
 
-    uint32_t l1_write_addr = get_write_ptr(cb_out0);
+    uint32_t l1_write_addr = cb_out0_exp.get_write_ptr();
 
     uint32_t i_stick = start_id;
     uint32_t curr_c = start_dim_offset[2], curr_h = start_dim_offset[1], curr_n = start_dim_offset[3];

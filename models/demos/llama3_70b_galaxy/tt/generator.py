@@ -1036,6 +1036,7 @@ class Generator(WarmupForwardMixin):
         reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        slot_remap=None,
     ):
         if getattr(self, "_disable_decode_tracing", False):
             enable_trace = False
@@ -1046,6 +1047,13 @@ class Generator(WarmupForwardMixin):
         else:
             return_logits = False
 
+        # Track sampling mode changes to reset inputs when switching
+        # between host sampling and device sampling (different trace has stale inputs)
+        sampling_on_device = sampling_params is not None
+        prev_sampling_on_device = getattr(self, "_prev_sampling_on_device", None)
+        self._prev_sampling_on_device = sampling_on_device
+        if prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device:
+            reset_inputs = True
         if self.prev_page_table is None:
             self.prev_page_table = (
                 page_table.clone()
@@ -1069,6 +1077,11 @@ class Generator(WarmupForwardMixin):
             "is_cur_pos_sharded": is_cur_pos_sharded,
             "is_page_table_sharded": is_page_table_sharded,
         }
+        # Apply slot remap from condense before advancing seeds.
+        if slot_remap is not None:
+            sm_bs = self.model.sampling.seed_manager.max_batch_size
+            rank_remap = slot_remap[0:sm_bs]
+            self.model.sampling.seed_manager.apply_slot_remap(rank_remap)
         self.model.sampling.seed_manager.get_new_values()
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again

@@ -18,7 +18,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
     constexpr auto src_args = TensorAccessorArgs<1>();
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     uint32_t end_page_id = start_page_id + num_tiles;
     for (uint32_t page_id = start_page_id; page_id < end_page_id; ++page_id) {
