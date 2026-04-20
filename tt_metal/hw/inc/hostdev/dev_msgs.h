@@ -263,7 +263,7 @@ struct debug_assert_msg_t {
     volatile uint16_t line_num;
     volatile uint8_t tripped;
     volatile uint8_t which;
-    volatile uint32_t claim;  // CODEGEN:skip
+    volatile uint32_t claim;
     volatile uint64_t hw_fault_info;
 };
 
