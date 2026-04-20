@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -40,9 +41,7 @@ def run_perf_depth_anything_v2(expected_inference_time, expected_compile_time, d
     parameters = custom_preprocessor(torch_model, "depth_anything_v2")
     tt_model = TtDepthAnythingV2(torch_model.config, parameters, device)
 
-    tt_pixel_values = ttnn.from_torch(
-        pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-    )
+    tt_pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     with torch.no_grad():
         # First iteration (includes compile)

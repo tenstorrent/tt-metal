@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -94,8 +95,8 @@ def ttnn_conv2d(
             bias = ttnn.reshape(bias, (1, 1, bias.shape[0], bias.shape[1]))
 
     # ---- input: (B, C, H, W) -> (B, H, W, C) --------------------------------
-    x = ttnn.transpose(x, -3, -1)   # (B, C, W, H)
-    x = ttnn.transpose(x, -2, -1)   # (B, H, W, C)
+    x = ttnn.transpose(x, -3, -1)  # (B, C, W, H)
+    x = ttnn.transpose(x, -2, -1)  # (B, H, W, C)
 
     out_tensor, [out_h, out_w] = ttnn.conv2d(
         input_tensor=x,
@@ -118,8 +119,8 @@ def ttnn_conv2d(
 
     # ttnn returns (1, 1, B*out_h*out_w, out_c); reshape then transpose back.
     out_tensor = ttnn.reshape(out_tensor, (batch_size, out_h, out_w, out_channels))
-    out_tensor = ttnn.transpose(out_tensor, -3, -1)   # (B, out_c, out_w, out_h)
-    out_tensor = ttnn.transpose(out_tensor, -2, -1)   # (B, out_c, out_h, out_w)
+    out_tensor = ttnn.transpose(out_tensor, -3, -1)  # (B, out_c, out_w, out_h)
+    out_tensor = ttnn.transpose(out_tensor, -2, -1)  # (B, out_c, out_h, out_w)
 
     return out_tensor, [out_h, out_w]
 
@@ -130,13 +131,13 @@ def ttnn_upsample(x, scale_factor):
     ttnn.upsample expects NHWC format, so we transpose before and after.
     """
     # (B, C, H, W) -> (B, H, W, C)
-    x = ttnn.transpose(x, -2, -1)    # (B, C, W, H)
-    x = ttnn.transpose(x, -3, -1)    # (B, H, W, C)
+    x = ttnn.transpose(x, -2, -1)  # (B, C, W, H)
+    x = ttnn.transpose(x, -3, -1)  # (B, H, W, C)
     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.upsample(x, scale_factor=scale_factor)
     # (B, H', W', C) -> (B, C, H', W')
-    x = ttnn.transpose(x, -3, -1)    # (B, C, W', H')
-    x = ttnn.transpose(x, -2, -1)    # (B, C, H', W')
+    x = ttnn.transpose(x, -3, -1)  # (B, C, W', H')
+    x = ttnn.transpose(x, -2, -1)  # (B, C, H', W')
     return x
 
 
@@ -166,7 +167,7 @@ class TtDPTReassembleLayer:
     def __call__(self, x):
         # x: (B, seqL_padded, 1024) in TILE layout
         batch_size = x.shape[0]
-        grid_h = grid_w = 37          # 518 / 14 = 37
+        grid_h = grid_w = 37  # 518 / 14 = 37
         patch_count_all = grid_h * grid_w  # 1369
         feat = self.feature_size
 
@@ -186,8 +187,8 @@ class TtDPTReassembleLayer:
 
         # 3. Reshape to spatial tensor (B, H, W, C) then -> (B, C, H, W)
         x = ttnn.reshape(x, (batch_size, grid_h, grid_w, feat))
-        x = ttnn.transpose(x, -3, -1)   # (B, feat, grid_w, grid_h)
-        x = ttnn.transpose(x, -2, -1)   # (B, feat, grid_h, grid_w)
+        x = ttnn.transpose(x, -3, -1)  # (B, feat, grid_w, grid_h)
+        x = ttnn.transpose(x, -2, -1)  # (B, feat, grid_h, grid_w)
 
         # 4. Resample based on reassemble_factors = [4, 2, 1, 0.5]
         if self.read_idx == 0:
@@ -207,12 +208,15 @@ class TtDPTReassembleLayer:
                 self.parameters.resize.weight,
                 self.parameters.resize.bias,
                 self.device,
-                feat, feat,
-                batch_size, grid_h, grid_w,
+                feat,
+                feat,
+                batch_size,
+                grid_h,
+                grid_w,
                 stride=(2, 2),
             )
 
-        return x   # (B, feat, H', W')
+        return x  # (B, feat, H', W')
 
 
 # ============================================================================
@@ -250,8 +254,11 @@ class TtDPTFusionStage:
             params.convolution1.weight,
             params.convolution1.bias,
             self.device,
-            channels, channels,
-            batch_size, h, w,
+            channels,
+            channels,
+            batch_size,
+            h,
+            w,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         x = ttnn.relu(x)
@@ -261,8 +268,11 @@ class TtDPTFusionStage:
             params.convolution2.weight,
             params.convolution2.bias,
             self.device,
-            channels, channels,
-            batch_size, h, w,
+            channels,
+            channels,
+            batch_size,
+            h,
+            w,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -277,11 +287,11 @@ class TtDPTFusionStage:
         x = None
         for i in range(3, -1, -1):
             params = self.parameters.layers[i]
-            feat_i = features[i]   # (B, C_i, H_i, W_i)
+            feat_i = features[i]  # (B, C_i, H_i, W_i)
 
             # Transpose to (B, H, W, C_i) for linear ops
-            feat_i = ttnn.transpose(feat_i, -2, -1)   # (B, C_i, W_i, H_i)
-            feat_i = ttnn.transpose(feat_i, -3, -1)   # (B, H_i, W_i, C_i)
+            feat_i = ttnn.transpose(feat_i, -2, -1)  # (B, C_i, W_i, H_i)
+            feat_i = ttnn.transpose(feat_i, -3, -1)  # (B, H_i, W_i, C_i)
 
             # Step 1: neck_conv -- channel normalizer  C_i -> 256
             feat_i = ttnn.linear(
@@ -300,8 +310,8 @@ class TtDPTFusionStage:
             )
 
             # Back to (B, 256, H_i, W_i)
-            feat_i = ttnn.transpose(feat_i, -3, -1)   # (B, 256, W_i, H_i)
-            feat_i = ttnn.transpose(feat_i, -2, -1)   # (B, 256, H_i, W_i)
+            feat_i = ttnn.transpose(feat_i, -3, -1)  # (B, 256, W_i, H_i)
+            feat_i = ttnn.transpose(feat_i, -2, -1)  # (B, 256, H_i, W_i)
 
             if x is None:
                 # Deepest level -- nothing to add yet.
@@ -329,7 +339,7 @@ class TtDPTFusionStage:
             x = self._residual_block(x, params.residual_layer1)
             x = self._residual_block(x, params.residual_layer2)
 
-        return x   # (B, 256, H_out, W_out)
+        return x  # (B, 256, H_out, W_out)
 
 
 # ============================================================================
@@ -354,8 +364,11 @@ class TtDPTHead:
             self.parameters.conv1.weight,
             self.parameters.conv1.bias,
             self.device,
-            channels, 256,
-            batch_size, h, w,
+            channels,
+            256,
+            batch_size,
+            h,
+            w,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         x = ttnn.relu(x)
@@ -370,8 +383,11 @@ class TtDPTHead:
             self.parameters.conv2.weight,
             self.parameters.conv2.bias,
             self.device,
-            256, 128,
-            batch_size, h, w,
+            256,
+            128,
+            batch_size,
+            h,
+            w,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         x = ttnn.relu(x)
@@ -382,13 +398,16 @@ class TtDPTHead:
             self.parameters.conv3.weight,
             self.parameters.conv3.bias,
             self.device,
-            128, 1,
-            batch_size, h, w,
+            128,
+            1,
+            batch_size,
+            h,
+            w,
             kernel_size=(1, 1),
             padding=(0, 0),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        return x   # (B, 1, H_out, W_out)
+        return x  # (B, 1, H_out, W_out)
 
 
 # ============================================================================
@@ -404,7 +423,7 @@ def vit_patch_embeddings(config, pixel_values, parameters, device):
     """
     batch_size, img_c, img_h, img_w = pixel_values.shape
     patch_size = 14
-    patch_count = img_h // patch_size          # 37
+    patch_count = img_h // patch_size  # 37
     patch_count_all = patch_count * patch_count  # 1369
 
     # ---- 1. Patchify --------------------------------------------------
@@ -420,10 +439,10 @@ def vit_patch_embeddings(config, pixel_values, parameters, device):
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
     # seq dimension: seqL_padded - 32 CLS tokens = 1376 patch slots
-    patch_seq_padded = config.get("seqL_padded", 1408) - 32   # 1376
-    pad_seq  = patch_seq_padded - x.shape[1]   # 1376 - 1369 = 7
+    patch_seq_padded = config.get("seqL_padded", 1408) - 32  # 1376
+    pad_seq = patch_seq_padded - x.shape[1]  # 1376 - 1369 = 7
     # feature dimension: patch_size*patch_size*C = 588; padded to 608 (19 tiles)
-    pad_feat = 608 - x.shape[2]               # 608 - 588 = 20
+    pad_feat = 608 - x.shape[2]  # 608 - 588 = 20
 
     x = ttnn.pad(x, padding=((0, 0), (0, pad_seq), (0, pad_feat)), value=0)
 
@@ -435,7 +454,7 @@ def vit_patch_embeddings(config, pixel_values, parameters, device):
         dtype=ttnn.bfloat16,
     )
 
-    return x   # (B, 1376, 1024)
+    return x  # (B, 1376, 1024)
 
 
 def vit_embeddings(config, pixel_values, parameters, device):
@@ -470,7 +489,7 @@ def vit_embeddings(config, pixel_values, parameters, device):
     pos_embeds = _dram_tile(pos_embeds)
     embedding_output = ttnn.add(embedding_output, pos_embeds, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    return embedding_output   # (B, 1408, 1024)
+    return embedding_output  # (B, 1408, 1024)
 
 
 def vit_layer(hidden_states, parameters, config):
@@ -479,9 +498,9 @@ def vit_layer(hidden_states, parameters, config):
     Uses fused QKV matmul + ttnn's split/concatenate_heads helpers.
     All ops stay on DRAM (no sharding) for N300 8x7 grid compatibility.
     """
-    num_heads  = config["num_attention_heads"]   # 16
-    hidden_size = config["hidden_size"]           # 1024
-    head_size  = hidden_size // num_heads         # 64
+    num_heads = config["num_attention_heads"]  # 16
+    hidden_size = config["hidden_size"]  # 1024
+    head_size = hidden_size // num_heads  # 64
 
     # ---- LayerNorm 1 ---------------------------------------------------
     # Do NOT pass memory_config or program_config: causes TT_FATAL when
@@ -518,7 +537,7 @@ def vit_layer(hidden_states, parameters, config):
     attn_scores = ttnn.to_memory_config(attn_scores, ttnn.DRAM_MEMORY_CONFIG)
     attn_scores = ttnn.mul(
         attn_scores,
-        1.0 / (head_size ** 0.5),
+        1.0 / (head_size**0.5),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -531,9 +550,7 @@ def vit_layer(hidden_states, parameters, config):
     ttnn.deallocate(value)
 
     # ---- Merge heads & output projection --------------------------------
-    context_layer = ttnn.transformer.concatenate_heads(
-        context_layer, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    context_layer = ttnn.transformer.concatenate_heads(context_layer, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     attn_out = ttnn.linear(
         context_layer,
@@ -545,7 +562,7 @@ def vit_layer(hidden_states, parameters, config):
 
     # ---- Residual 1 ----------------------------------------------------
     hidden_states = _dram_tile(hidden_states)
-    attn_out      = _dram_tile(attn_out)
+    attn_out = _dram_tile(attn_out)
     hidden_states = ttnn.add(hidden_states, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(attn_out)
 
@@ -575,7 +592,7 @@ def vit_layer(hidden_states, parameters, config):
 
     # ---- Residual 2 ----------------------------------------------------
     hidden_states = _dram_tile(hidden_states)
-    mlp_out       = _dram_tile(mlp_out)
+    mlp_out = _dram_tile(mlp_out)
     hidden_states = ttnn.add(hidden_states, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(mlp_out)
 
@@ -623,7 +640,7 @@ class TtDepthAnythingV2:
             for i in range(4)
         ]
         self.fusion = TtDPTFusionStage(self.parameters["neck"]["fusion"], device)
-        self.head   = TtDPTHead(self.parameters["head"], device)
+        self.head = TtDPTHead(self.parameters["head"], device)
 
     # ------------------------------------------------------------------
     def _move_to_device(self, params, device):
@@ -660,9 +677,7 @@ class TtDepthAnythingV2:
                 self.config,
             )
             if i in out_indices:
-                features.append(
-                    ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-                )
+                features.append(ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG))
 
         # ---- 3. Final backbone LayerNorm --------------------------------
         hidden_states = ttnn.layer_norm(
@@ -695,7 +710,7 @@ def get_model_config(batch_size, device):
     Sharding optimisations belong in a later stage.
     """
     if device is not None:
-        raw  = device.compute_with_storage_grid_size()
+        raw = device.compute_with_storage_grid_size()
         grid_x, grid_y = raw.x, raw.y
     else:
         grid_x, grid_y = 8, 7
@@ -706,7 +721,7 @@ def get_model_config(batch_size, device):
     # 1369 patches + 1 CLS = 1370 -> must reach a multiple of 32.
     # CLS is padded to 32 tokens (one full tile), so total = 1369 + 32 = 1401
     # -> rounded up to 1408 (= 44 x 32).
-    min_tok    = 1369 + 32
+    min_tok = 1369 + 32
     seqL_padded = ((min_tok + 31) // 32) * 32  # 1408
 
     return {
@@ -776,7 +791,7 @@ def custom_preprocessor(torch_model, name):
             "patch_embeddings": {
                 "projection": {
                     "weight": _tile(pw, dtype=ttnn.bfloat8_b),
-                    "bias":   _rm(torch_model.backbone.embeddings.patch_embeddings.projection.bias),
+                    "bias": _rm(torch_model.backbone.embeddings.patch_embeddings.projection.bias),
                 }
             },
             # CLS token: original shape (1, 1, 1024); pad seq-dim to 32 so that
@@ -784,7 +799,7 @@ def custom_preprocessor(torch_model, name):
             "cls_token": _rm(
                 torch.nn.functional.pad(
                     torch_model.backbone.embeddings.cls_token,
-                    (0, 0, 0, 31),   # pad seq 1 -> 32
+                    (0, 0, 0, 31),  # pad seq 1 -> 32
                 )
             ),
             # Position embeddings: original (1, 1370, 1024) [1 CLS + 1369 patches].
@@ -800,7 +815,7 @@ def custom_preprocessor(torch_model, name):
         "layernorm": {
             # unsqueeze(0) -> (1, 1024) so LayerNorm kernel finds a 2-D TILE tensor.
             "weight": _tile(torch_model.backbone.layernorm.weight.unsqueeze(0)),
-            "bias":   _tile(torch_model.backbone.layernorm.bias.unsqueeze(0)),
+            "bias": _tile(torch_model.backbone.layernorm.bias.unsqueeze(0)),
         },
     }
 
@@ -809,28 +824,34 @@ def custom_preprocessor(torch_model, name):
         # Fuse Q, K, V weight matrices: cat along head dim then transpose.
         # Each is (1024, 1024); cat -> (3072, 1024); .T -> (1024, 3072)
         qkv_w = torch.cat(
-            [layer.attention.attention.query.weight,
-             layer.attention.attention.key.weight,
-             layer.attention.attention.value.weight],
+            [
+                layer.attention.attention.query.weight,
+                layer.attention.attention.key.weight,
+                layer.attention.attention.value.weight,
+            ],
             dim=0,
         ).transpose(0, 1)
 
         qkv_b = torch.cat(
-            [layer.attention.attention.query.bias,
-             layer.attention.attention.key.bias,
-             layer.attention.attention.value.bias],
+            [
+                layer.attention.attention.query.bias,
+                layer.attention.attention.key.bias,
+                layer.attention.attention.value.bias,
+            ],
             dim=0,
-        ).unsqueeze(0)   # (1, 3072)
+        ).unsqueeze(
+            0
+        )  # (1, 3072)
 
         lp = {
             "layernorm_before": {
                 "weight": _tile(layer.norm1.weight.unsqueeze(0)),
-                "bias":   _tile(layer.norm1.bias.unsqueeze(0)),
+                "bias": _tile(layer.norm1.bias.unsqueeze(0)),
             },
             "attention": {
                 "qkv": {
                     "weight": _tile(qkv_w, dtype=ttnn.bfloat8_b),
-                    "bias":   _tile(qkv_b),
+                    "bias": _tile(qkv_b),
                 },
                 "output": {
                     "dense": {
@@ -844,18 +865,18 @@ def custom_preprocessor(torch_model, name):
             },
             "layernorm_after": {
                 "weight": _tile(layer.norm2.weight.unsqueeze(0)),
-                "bias":   _tile(layer.norm2.bias.unsqueeze(0)),
+                "bias": _tile(layer.norm2.bias.unsqueeze(0)),
             },
             "intermediate": {
                 "dense": {
                     "weight": _tile(layer.mlp.fc1.weight.transpose(0, 1), dtype=ttnn.bfloat8_b),
-                    "bias":   _rm(layer.mlp.fc1.bias),
+                    "bias": _rm(layer.mlp.fc1.bias),
                 }
             },
             "output": {
                 "dense": {
                     "weight": _tile(layer.mlp.fc2.weight.transpose(0, 1), dtype=ttnn.bfloat8_b),
-                    "bias":   _rm(layer.mlp.fc2.bias),
+                    "bias": _rm(layer.mlp.fc2.bias),
                 }
             },
         }
@@ -880,7 +901,7 @@ def custom_preprocessor(torch_model, name):
         rp = {
             "projection": {
                 "weight": _tile(proj_w, dtype=ttnn.bfloat8_b),
-                "bias":   _rm(layer.projection.bias),
+                "bias": _rm(layer.projection.bias),
             }
         }
 
@@ -889,7 +910,7 @@ def custom_preprocessor(torch_model, name):
             # Conv weight must be bfloat16 ROW_MAJOR -- NOT bfloat8_b.
             rp["resize"] = {
                 "weight": _rm(layer.resize.weight, dtype=ttnn.bfloat16),
-                "bias":   _rm(layer.resize.bias),
+                "bias": _rm(layer.resize.bias),
             }
 
         parameters["neck"]["reassemble"].append(rp)
@@ -914,31 +935,31 @@ def custom_preprocessor(torch_model, name):
             # Channel normalizer: neck_hidden_sizes[i] -> 256 (applied first)
             "neck_conv": {
                 "weight": _tile(nc_w, dtype=ttnn.bfloat8_b),
-                "bias":   _rm(torch_model.neck.convs[i].bias),
+                "bias": _rm(torch_model.neck.convs[i].bias),
             },
             # Fusion projection: 256 -> 256
             "projection": {
                 "weight": _tile(fproj_w, dtype=ttnn.bfloat8_b),
-                "bias":   _rm(layer.projection.bias),
+                "bias": _rm(layer.projection.bias),
             },
             "residual_layer1": {
                 "convolution1": {
                     "weight": _rm(layer.residual_layer1.convolution1.weight, dtype=ttnn.bfloat16),
-                    "bias":   _rm(layer.residual_layer1.convolution1.bias),
+                    "bias": _rm(layer.residual_layer1.convolution1.bias),
                 },
                 "convolution2": {
                     "weight": _rm(layer.residual_layer1.convolution2.weight, dtype=ttnn.bfloat16),
-                    "bias":   _rm(layer.residual_layer1.convolution2.bias),
+                    "bias": _rm(layer.residual_layer1.convolution2.bias),
                 },
             },
             "residual_layer2": {
                 "convolution1": {
                     "weight": _rm(layer.residual_layer2.convolution1.weight, dtype=ttnn.bfloat16),
-                    "bias":   _rm(layer.residual_layer2.convolution1.bias),
+                    "bias": _rm(layer.residual_layer2.convolution1.bias),
                 },
                 "convolution2": {
                     "weight": _rm(layer.residual_layer2.convolution2.weight, dtype=ttnn.bfloat16),
-                    "bias":   _rm(layer.residual_layer2.convolution2.bias),
+                    "bias": _rm(layer.residual_layer2.convolution2.bias),
                 },
             },
         }
@@ -952,15 +973,15 @@ def custom_preprocessor(torch_model, name):
     parameters["head"] = {
         "conv1": {
             "weight": _rm(torch_model.head.conv1.weight, dtype=ttnn.bfloat16),
-            "bias":   _rm(torch_model.head.conv1.bias),
+            "bias": _rm(torch_model.head.conv1.bias),
         },
         "conv2": {
             "weight": _rm(torch_model.head.conv2.weight, dtype=ttnn.bfloat16),
-            "bias":   _rm(torch_model.head.conv2.bias),
+            "bias": _rm(torch_model.head.conv2.bias),
         },
         "conv3": {
             "weight": _rm(torch_model.head.conv3.weight, dtype=ttnn.bfloat16),
-            "bias":   _rm(torch_model.head.conv3.bias),
+            "bias": _rm(torch_model.head.conv3.bias),
         },
     }
 

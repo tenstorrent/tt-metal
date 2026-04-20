@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -23,7 +24,7 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
     print(f"Loading model: {model_id}")
 
     # 1. Load PyTorch Model (Reference)
-    try: 
+    try:
         torch_model = AutoModelForDepthEstimation.from_pretrained(
             model_id, torch_dtype=torch.float32, trust_remote_code=True
         )
@@ -36,7 +37,7 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
 
     # 2. Initialize Tenstorrent Device
     device = None
-    try: 
+    try:
         device_id = 0
         device = ttnn.open_device(device_id=device_id, l1_small_size=16384)
         print(f"Device {device_id} opened.")

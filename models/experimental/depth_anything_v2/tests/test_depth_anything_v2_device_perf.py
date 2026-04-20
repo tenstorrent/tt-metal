@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -17,7 +18,9 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
     subdir = "depth_anything_v2"
     num_iterations = 3
     margin = 0.03
-    command = f"pytest models/experimental/depth_anything_v2/tests/test_depth_anything_v2_pcc.py::test_depth_anything_v2_pcc"
+    command = (
+        f"pytest models/experimental/depth_anything_v2/tests/test_depth_anything_v2_pcc.py::test_depth_anything_v2_pcc"
+    )
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
