@@ -107,16 +107,38 @@ there's a significant gap.
 - To recover accuracy, either use higher-precision cache (BFP8 or BF16) or accept
   the quality/memory tradeoff
 
-**Recommendation for production KV compression:**
-1. **Baseline BFP8** (96.7%, 1 byte/elem) — current production, best accuracy
-2. **BFP4 cache alone** (71.3%, 0.5 byte/elem) — accept accuracy hit for 2× memory
-   savings. **Skip TQ** — it adds latency with no accuracy benefit.
-3. **TQ on any format** — not worth adopting. No config improves on the above.
+### The Real Issue: Pre-Rescaled ≠ Paper's TQ Design
 
-The original TurboQuant paper design assumed BF16 or higher-precision storage —
-on that substrate TQ's rotation+quantization makes sense. On Wormhole's BFP4/BFP8
-shared-exponent formats, the storage format's precision loss dominates TQ's
-contribution.
+The low accuracy isn't inherent to TurboQuant — **our implementation took a shortcut
+that breaks TQ's design guarantees**.
+
+**Paper's design (Pure TQ / "Full Dequant"):**
+- Store: 3-bit **integer index** (0..7) + BF16 **norm** (one float per vector)
+- Memory: ~0.4 bytes/elem (3 bits/elem + 4 bytes per 128-elem vector)
+- At read time: `centroid[idx] × norm` reconstructed with full precision
+- **Accuracy preserved** — indices 0..7 are exact in any format; norm is BF16
+
+**Our shortcut ("Pre-Rescaled BFP4"):**
+- Compute `centroid[idx] × norm` at quantize time, store the product as BFP4
+- Memory: ~0.5 bytes/elem (BFP4 storage)
+- Storing continuous floats in BFP4 is lossy (shared-exponent per 32-elem block)
+- **Accuracy lost** — BFP4's shared-exponent loses precision on pre-rescaled values
+
+The paper's claims (MSE=0.034, cosine>0.999) apply to the **indices-plus-norm**
+representation, NOT to pre-rescaled floats stored in BFP4. We conflated the two.
+
+### Next Step: Revive Full Dequant as Main Path
+
+Full Dequant (BFP4 indices + BF16 norms, fused SDPA with centroid reconstruction)
+is the **correct TQ implementation**. We had this working previously but deprecated
+it due to latency (15-35× slower than std SDPA). With the accuracy data we now have,
+the tradeoff is worth revisiting:
+
+- Full Dequant: ~0.4 bytes/elem, expected ~95%+ top-1 accuracy, slower SDPA
+- Pre-Rescaled: ~0.5 bytes/elem, 72% top-1 accuracy, fast SDPA
+
+For production, **correctness matters more than raw latency**. See Section 6 for
+implementation plan.
 
 ### T3K Max Batch at Long Context (2026-04-20)
 
@@ -636,11 +658,11 @@ jokes, math, biology, sports, travel). Prefill + 100 tokens decode per prompt.
 
 ### Status Summary
 
-| | Latency | KV Memory | Max Context | Status |
-|--|---------|-----------|-------------|--------|
-| **TQ BFP4 Paged + Std SDPA** | **= baseline** | **0.5× baseline** | **128K** | **Production-ready (2026-04-14)** |
-| Baseline BFP8 | = baseline | 1× | 128K | Reference |
-| ~~TQ BFP4 Fused SDPA~~ | — | — | — | **DROPPED (2026-04-17)** — BFP4 paged path supersedes |
+| | Latency | KV Memory | Top-1 Acc | Max Context | Status |
+|--|---------|-----------|-----------|-------------|--------|
+| Baseline BFP8 | 1× | 1× | **96.7%** | 128K | Reference |
+| TQ BFP4 Paged (pre-rescaled) | 1× | 0.5× | 72% | 128K | Works but lossy (2026-04-20) |
+| **TQ Full Dequant (indices + norms)** | **TBD** | **~0.4×** | **TBD (expect ~95%+)** | TBD | **NEW MAIN TARGET** (see below) |
 
 ### Prefill → BFP4 decode: paged prefill path (follow-up)
 
@@ -655,13 +677,73 @@ prefill currently fails with block_size mismatch (`Input tensor height (128) mus
 handles paged KV caches, not a TurboQuant issue. Follow-up: investigate paged prefill
 setup or two-phase model init (non-paged prefill → paged decode).
 
-### ~~Fused SDPA kernel — Chunked dequant~~ DROPPED (2026-04-17)
+### NEW MAIN TARGET: Full Dequant (BFP4 indices + BF16 norms) — REVIVED (2026-04-20)
 
-The custom fused SDPA kernel (`ttnn/cpp/ttnn/operations/experimental/turbo_quant/sdpa/`)
-is deprecated. The BFP4 paged + standard SDPA path already delivers the target
-(= baseline latency, 0.5× memory, 128K context) with no custom kernel needed.
+After the accuracy benchmark revealed the pre-rescaled path loses ~25% top-1
+accuracy due to BFP4 shared-exponent compression, we're reviving the Full Dequant
+path as the correct implementation of TurboQuant. This is the paper's original
+design: store quantization indices + per-vector norms separately, reconstruct at
+read time. Previously deprecated for latency; now justified by accuracy data.
 
-C++ sources are retained in-tree for reference but are not on the production path.
+**What exists already:**
+- Custom fused SDPA kernel at `ttnn/cpp/ttnn/operations/experimental/turbo_quant/sdpa/`
+  - Device op + program factory + reader + compute + writer (~925 lines C++)
+  - Reads BFP4 indices + BF16 norms, does centroid gather + norm multiply in compute
+  - Python binding: `ttnn.experimental.turbo_quant_sdpa_decode`
+- TTNNTurboQuantCache with `memory_efficient=True` stores BFP4 indices + BF16 norms
+- Synthetic tests pass with cosine > 0.999
+
+**Known limitations:**
+- Works up to 2K seq; pre-fills full BF16 cache in L1 CBs → OOMs at 4K+
+- Uses interleaved tensors (not paged) — separate `k_indices_dev` / `k_norms_dev`
+- 15-35× slower than std SDPA (at seqs that fit) due to centroid gather overhead
+- Untested on T3K / multi-device
+
+**Implementation Plan:**
+
+**1. Chunked online softmax in fused kernel** (critical, unblocks >2K context)
+- Modify `sdpa_tq_decode.cpp` to stream K/V chunks instead of pre-filling
+- Reference pattern: `models/.../sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp`
+- Interleave: dequant one K/V chunk → matmul Q×K^T → softmax → V matmul → accumulate
+- Double-buffer CBs (~2× chunk size) instead of full-cache size
+- Effort: 2-3 days (kernel engineering, complex)
+
+**2. Paged cache support for indices + norms**
+- Current `TTNNTurboQuantCache` uses `[1, max_seq, n_heads, head_dim]` interleaved
+- Refactor to paged: `[max_num_blocks, n_heads, block_size, head_dim]` for indices
+- Norms are tiny (per-vector, not per-element) — could stay non-paged or be paged
+- Update reader kernel to take page_table and do paged reads
+- Effort: 1-2 days
+
+**3. Multi-device / T3K support**
+- Replicate centroids across devices, shard indices/norms by heads
+- Fix `fused_sdpa_decode` to use mesh_composer/mesh_mapper where needed
+- Effort: 1 day
+
+**4. Integration into eval_e2e.py / eval_e2e_prefill.py**
+- Add `--tq-full-dequant` flag (mutually exclusive with `--bfp4-cache`)
+- Allocate TTNNTurboQuantCache with `memory_efficient=True`
+- Route attention decode through `fused_sdpa_decode` (not std SDPA)
+- Effort: 1 day
+
+**5. Accuracy + latency validation**
+- Run token accuracy benchmark → expect >95% top-1 (vs pre-rescaled's 72%)
+- Measure decode latency → target <30ms on T3K (2× baseline acceptable given accuracy)
+- Run seqlen + batch sweeps to confirm long context + multi-batch works
+- Effort: 1-2 days
+
+**6. Optional: optimize centroid gather** (only if latency is unacceptable)
+- Current: ~50 SFPU ops/tile via conditional cascades
+- Alternative: LUT-style gather via unpacker + matmul
+- Alternative: do centroid×norm expansion post-softmax instead of on K/V read
+- Effort: 3-5 days if needed
+
+**Total effort estimate: ~1-2 weeks.**
+
+**Alternative approach (simpler but higher risk):**
+Modify the standard SDPA decode reader to support TQ dequant on-read. Reuse std
+SDPA's proven chunked online softmax. Only the reader needs TQ logic. Risk:
+touching shared infrastructure used by other models.
 
 ### ~~Prefill → TQ decode migration (quality issue)~~ RESOLVED
 
