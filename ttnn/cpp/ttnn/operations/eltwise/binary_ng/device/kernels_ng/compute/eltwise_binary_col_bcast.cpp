@@ -45,9 +45,12 @@ ALWI void process_tile(
     cb_push_back(cb_llk_post, num_tiles_per_cycle);
     tile_regs_release();
 
-    // Restore srca for the binary op's lhs operand; unary_bcast_init reconfigured it for
-    // cb_bcast, and cb_post_lhs's format may differ (e.g. typecast with fp32_dest_acc_en).
-    reconfig_data_format_srca(cb_bcast, cb_post_lhs);
+    // Symmetric uninit to unary_bcast_init — undoes UNPACK and MATH state changes
+    // so the following binary op starts from a clean LLK state. Replaces the previous
+    // manual reconfig_data_format_srca which only handled SRCA format and missed
+    // unpack-context / math-datacopy state, causing format mismatches on BH (PACR) and
+    // ttsim UNPACR cfg_context_id=1 on WH.
+    unary_bcast_uninit<BroadcastType::COL>(cb_bcast);
     pack_reconfig_data_format(cb_llk_post, cb_out);
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
