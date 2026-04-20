@@ -831,7 +831,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("moe_rmsnorm_rsqrt_fast_approx") == 1,
                 get_named_compile_time_arg_val("moe_rmsnorm_input_cb"),  // residual_mcast_src_cb
                 get_named_compile_time_arg_val("moe_rmsnorm_gamma_cb"),
-                get_named_compile_time_arg_val("moe_rmsnorm_output_cb")>;  // rmsnorm_output_cb
+                get_named_compile_time_arg_val("moe_rmsnorm_output_cb"),  // rmsnorm_output_cb
+                false>;
             deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
                 get_common_arg_val<uint32_t>(
                     get_named_compile_time_arg_val("moe_rmsnorm_trisc_common_rt_arg_base") + 0),
