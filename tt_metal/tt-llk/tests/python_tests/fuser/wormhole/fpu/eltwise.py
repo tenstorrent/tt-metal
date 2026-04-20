@@ -11,9 +11,8 @@ from fuser.fused_loop import FusedLoop, LoopTileByTile
 from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
-from helpers.chip_architecture import ChipArchitecture
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
-from helpers.llk_params import EltwiseBinaryReuseDestType, MathOperation
+from helpers.llk_params import AccToDest, EltwiseBinaryReuseDestType, MathOperation
 
 
 class EltwiseFpu(Fpu):
@@ -58,8 +57,8 @@ class EltwiseFpu(Fpu):
         ).reshape(operation.max_output_dimensions)
 
         if (
-            config.architecture == ChipArchitecture.WORMHOLE
-            and self.operation == MathOperation.Elwmul
+            self.operation == MathOperation.Elwmul
+            or compute_unit.acc_to_dest == AccToDest.Yes
         ):
             golden_tensor = golden_tensor + tensor_dst
 

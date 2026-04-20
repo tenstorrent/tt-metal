@@ -139,9 +139,10 @@ class UnpackerA(Unpacker):
         num_faces = operation.num_faces
         transpose_faces = compute_unit.unpack_transpose_faces.cpp_enum_value
         transpose_within_face = compute_unit.unpack_transpose_within_face.cpp_enum_value
+        acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value
 
         return (
-            f"    _llk_unpack_A_init_<{broadcast_type}, false, {reuse_dest}, {unpack_to_dest}>(\n"
+            f"    _llk_unpack_A_init_<{broadcast_type}, {acc_to_dest}, {reuse_dest}, {unpack_to_dest}>(\n"
             f"        {transpose_faces}, {transpose_within_face}, {face_r_dim}, {num_faces}, unpack_a_src_format{stage}, unpack_a_dst_format{stage}\n"
             f"    );\n"
         )
@@ -157,9 +158,10 @@ class UnpackerA(Unpacker):
         unpack_to_dest = "true" if operation.unpack_to_dest else "false"
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
+        acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value
 
         return (
-            f"_llk_unpack_A_<{broadcast_type}, false, {reuse_dest}, {unpack_to_dest}>(\n"
+            f"_llk_unpack_A_<{broadcast_type}, {acc_to_dest}, {reuse_dest}, {unpack_to_dest}>(\n"
             f"    L1_ADDRESS(buffer_A{stage}[{block.tile_id_global}]), unpack_a_src_format{stage}, unpack_a_dst_format{stage}\n"
             f");\n"
         )

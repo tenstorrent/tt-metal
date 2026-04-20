@@ -359,6 +359,18 @@ class AccToDest(Enum):
             return "false"
 
 
+class UnpackToDest(Enum):
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
+
+
 class Tilize(Enum):
     Yes = True
     No = False
