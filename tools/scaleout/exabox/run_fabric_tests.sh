@@ -180,7 +180,7 @@ echo ""
 
 EXTRA_BINARY_ARGS=""
 if [[ "$TEST_BINARY" == *test_tt_fabric ]]; then
-    EXTRA_BINARY_ARGS="--show-progress --show-workers"
+    EXTRA_BINARY_ARGS="--show-progress --show-workers --progress-interval 1"
 fi
 if [[ -n "$FILTER" ]]; then
     EXTRA_BINARY_ARGS="$EXTRA_BINARY_ARGS --filter $FILTER"
