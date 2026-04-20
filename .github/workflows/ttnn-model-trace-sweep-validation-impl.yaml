@@ -515,7 +515,8 @@ jobs:
           python3 tests/sweep_framework/validate_sweep_trace.py \
             --master-trace model_tracer/traced_operations/ttnn_operations_master.json \
             --sweep-trace "${sweep_trace_files[@]}" \
-            --output-report validation_summary.md
+            --output-report validation_summary.md \
+            --pass-threshold 1.0
           validation_exit_code=$?
           set -e
 
