@@ -61,7 +61,7 @@ void kernel_main() {
 #if defined(ARCH_QUASAR)
     uint32_t hw_idx = internal_::get_hw_thread_idx();
     volatile tt_l1_ptr uint8_t* const trisc_run =
-        &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->subordinate_sync.map[hw_idx];
+        &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.map[hw_idx];
 #else
     volatile tt_l1_ptr uint8_t * const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))
         ->subordinate_sync.map[COMPILE_FOR_TRISC + 1];  // first entry is for NCRISC
