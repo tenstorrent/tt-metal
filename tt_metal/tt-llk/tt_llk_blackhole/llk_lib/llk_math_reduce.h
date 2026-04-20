@@ -30,22 +30,11 @@ inline void reduce_row_perform_transpose()
     if (enforce_fp32_accumulation)
     {
         // BH Issue #449 W/A: SFPU-staged 2-pass transpose.
-        // Splits fp32 into hi16/lo16 at scratch Dst16b rows far past face footprint,
-        // transposes each half via plain MOVD2B(DEST_NORM)+TRNSPSRCB+MOVB2D(DEST_NORM)
-        // (no dest_32b_lo=1), then SFPU recombines. ZEROACC after use avoids
-        // polluting subsequent reduce iterations that may accumulate onto these rows.
-        // Phase 1: inline (ADDR_MOD_0, no DstRWC advance). Phase 3: replay×8 with
-        // ADDR_MOD_7 dest.incr=+2, starting from DstRWC=0.
+        // ADDR_MOD_7 (dest.incr=2) and Phase 3 replay body programmed once in init.
+        // Phase 1: inline (ADDR_MOD_0, no DstRWC advance so Phase 3 replay starts at 0).
+        // Phase 3: replay×8 from slot 0 (recorded in init).
         constexpr std::uint32_t HI16_STAGE = 128;
         constexpr std::uint32_t LO16_STAGE = 144;
-
-        // ADDR_MOD_7: dest.incr=2 for Phase 3 replay (SFPU DstRWC starts at 0).
-        addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 2},
-        }
-            .set(ADDR_MOD_7);
 
         // Phase 1: SFPU splits fp32 face into hi16/lo16 raw at scratch rows (inline).
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
@@ -86,12 +75,8 @@ inline void reduce_row_perform_transpose()
 
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
 
-        // Phase 3: SFPU recombines hi16 + lo16 back to fp32 (replay, DstRWC starts 0).
+        // Phase 3: replay from slot 0 (body recorded once in _llk_math_reduce_init_).
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-        lltt::record<lltt::NoExec>(0, 3);
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_0, LO16_STAGE);
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, HI16_STAGE);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
 #pragma GCC unroll 8
         for (std::uint32_t i = 0; i < 8; i++)
         {
@@ -353,6 +338,24 @@ inline void _llk_math_reduce_init_()
     if constexpr (enforce_fp32_accumulation)
     {
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
+
+        // ADDR_MOD_7: dest.incr=2 for Phase 3 replay advancing SFPU DstRWC by 2 per iter.
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 2},
+        }
+            .set(ADDR_MOD_7);
+
+        // Record Phase 3 recombine body once; reduce_row_perform_transpose replays it x8.
+        // LO16_STAGE=144, HI16_STAGE=128: load lo16 then hi16 (HI16_ONLY preserves lo16),
+        // store as INT32. ADDR_MOD_7 on STORE advances SFPU DstRWC +2 per replay iter.
+        constexpr std::uint32_t HI16_STAGE = 128;
+        constexpr std::uint32_t LO16_STAGE = 144;
+        lltt::record<lltt::NoExec>(0, 3);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_0, LO16_STAGE);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, HI16_STAGE);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 

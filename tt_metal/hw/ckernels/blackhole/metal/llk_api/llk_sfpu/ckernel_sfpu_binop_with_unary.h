@@ -10,6 +10,7 @@
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 
 namespace ckernel::sfpu {
 
