@@ -5,7 +5,7 @@
 import math
 import os
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Sequence
 
 import torch
 from loguru import logger
@@ -67,13 +67,6 @@ def pad_batch_to_dram_banks(batch, num_banks=12):
     if batch % num_banks == 0:
         return batch
     return ((batch + num_banks - 1) // num_banks) * num_banks
-
-
-def _decode_run_op_kwargs(fragment: Any) -> dict:
-    """Expand a decode op config entry for use as ``**kwargs`` (``OpConfigBase`` or ``dict``)."""
-    if isinstance(fragment, dict):
-        return fragment
-    return dict(fragment.items())
 
 
 def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_w=32, *, mesh_device: ttnn.Device):
@@ -2047,8 +2040,8 @@ class MLA1D(AbstractModule):
             q_pc = RMSNorm._get_pc(tt_q.memory_config())
             kv_pc = RMSNorm._get_pc(tt_kv_nope.memory_config())
             fused = Parallel(
-                q=descriptors.rms_norm(program_config=q_pc, **_decode_run_op_kwargs(cfg["q_norm"])),
-                kv=descriptors.rms_norm(program_config=kv_pc, **_decode_run_op_kwargs(cfg["kv_norm"])),
+                q=descriptors.rms_norm(program_config=q_pc, **cfg["q_norm"]),
+                kv=descriptors.rms_norm(program_config=kv_pc, **cfg["kv_norm"]),
             )
             cfg["fused_qkv_norm"] = fused
         fused.q.update(tt_q)
