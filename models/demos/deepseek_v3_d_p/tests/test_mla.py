@@ -123,8 +123,8 @@ def run_mla_inference(
         logger.info("Perf: warmup forward pass")
         _ = _forward()
         logger.info("Starting synchronize after warmup")
-        ttnn.synchronize_device(mesh_device)
-        ttnn.distributed_context_barrier()
+        # ttnn.synchronize_device(mesh_device)
+        # ttnn.distributed_context_barrier()
 
         logger.info(f"Perf: running {num_loops} measured forward passes with tracy signposts")
         signpost("start")
