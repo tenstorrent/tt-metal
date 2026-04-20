@@ -555,7 +555,7 @@ inline void _sfpu_binary_bcast_init_()
         // Record the broadcast helper (mask + ROR1 + ROR2) into replay slot 0.
         _record_broadcast_replay_();
     }
-    // BCAST_ROW: no persistent state needed - both variants operate purely
+    // BCAST_ROW: no persistent state needed - the kernel operates purely
     // on per-tile LREG contents via SFPTRANSP + SFPLOAD/SFPSTORE.
 }
 
