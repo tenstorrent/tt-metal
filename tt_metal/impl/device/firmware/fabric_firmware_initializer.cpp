@@ -129,9 +129,20 @@ void FabricFirmwareInitializer::configure() {
 }
 
 void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& init_done) {
-    TT_FATAL(
-        !init_done.contains(InitializerKey::Dispatch),
-        "FabricFirmwareInitializer must be torn down after DispatchKernelInitializer");
+    // Clear force_reset_channels_ at the start of each teardown cycle to prevent stale entries
+    // from prior cycles causing misclassification in verify_all_fabric_channels_healthy().
+    {
+        std::lock_guard<std::mutex> lock(force_reset_channels_mutex_);
+        force_reset_channels_.clear();
+    }
+
+    if (init_done.contains(InitializerKey::Dispatch)) {
+        log_error(
+            tt::LogMetal,
+            "FabricFirmwareInitializer::teardown: DispatchKernelInitializer is still active — "
+            "teardown ordering violation. Proceeding with best-effort fabric teardown to avoid "
+            "leaving ERISCs running.");
+    }
     if (descriptor_->is_mock_device()) {
         log_info(tt::LogMetal, "Skipping fabric teardown for mock devices");
         init_done.erase(key);
@@ -344,9 +355,25 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             }
         }
 
+        // Log which channels missed the deadline — critical for diagnosing partial teardown.
+        if (!pending.empty()) {
+            std::string missed_list;
+            for (const auto& ch : pending) {
+                if (!missed_list.empty()) missed_list += ", ";
+                missed_list += fmt::format("dev={}/chan={}", ch.dev->id(), ch.eth_chan_id);
+            }
+            log_warning(
+                tt::LogMetal,
+                "FabricFirmwareInitializer::teardown: Global deadline expired with {} channel(s) "
+                "still pending TERMINATE: [{}]. Force-resetting these channels.",
+                pending.size(),
+                missed_list);
+        }
+
         // Force-reset any channels that did not terminate within the global deadline.
         // GAP 5: Record force-reset channels so the next verify_all_fabric_channels_healthy()
         // can distinguish "was force-reset" from "corrupt from prior crash".
+        std::vector<std::string> reset_failed_channels;
         for (const auto& ch : pending) {
             std::vector<uint32_t> status_buf(1, 0);
             detail::ReadFromDeviceL1(
@@ -373,18 +400,35 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 log_warning(
                     tt::LogMetal,
                     "FabricFirmwareInitializer::teardown: assert_risc_reset_at_core failed on "
-                    "Device {} chan={}: {}",
+                    "Device {} chan={}: {} — ERISC may still be running!",
                     ch.dev->id(),
                     ch.eth_chan_id,
                     e.what());
+                reset_failed_channels.push_back(
+                    fmt::format("dev={}/chan={}", ch.dev->id(), ch.eth_chan_id));
             }
+        }
+
+        if (!reset_failed_channels.empty()) {
+            std::string failed_list;
+            for (const auto& s : reset_failed_channels) {
+                if (!failed_list.empty()) failed_list += ", ";
+                failed_list += s;
+            }
+            log_error(
+                tt::LogMetal,
+                "FabricFirmwareInitializer::teardown: {} channel(s) could NOT be force-reset and "
+                "may still be running: [{}]. Next fabric init should expect corrupt state on these channels.",
+                reset_failed_channels.size(),
+                failed_list);
         }
     }
 
     devices_.clear();
     initialized_.clear();
-    // Don't clear force_reset_channels_ here — preserve it for the next session's
-    // verify_all_fabric_channels_healthy() to use for degraded-channel diagnostics.
+    // force_reset_channels_ was populated during this teardown and will be consumed by the
+    // next session's verify_all_fabric_channels_healthy() for degraded-channel diagnostics.
+    // It is cleared at the start of the next teardown() call.
     init_done.erase(key);
 }
 
@@ -499,7 +543,11 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
                 status_buf[0]);
 
             std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(term_signal));
-            detail::WriteToDeviceL1(dev, eth_logical_core, term_addr, term_buf, CoreType::ETH);
+            try {
+                detail::WriteToDeviceL1(dev, eth_logical_core, term_addr, term_buf, CoreType::ETH);
+            } catch (...) {
+                // write-side also unresponsive — best effort only, ignore
+            }
             corrupt_count++;
             continue;
         }
@@ -515,7 +563,19 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
         stale_running_count++;
 
         std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(term_signal));
-        detail::WriteToDeviceL1(dev, eth_logical_core, term_addr, term_buf, CoreType::ETH);
+        try {
+            detail::WriteToDeviceL1(dev, eth_logical_core, term_addr, term_buf, CoreType::ETH);
+        } catch (const std::exception& write_ex) {
+            log_warning(
+                tt::LogMetal,
+                "terminate_stale_erisc_routers: Device {} chan={} TERMINATE write failed ({}). "
+                "Skipping poll — configure_fabric_cores() will reset L1.",
+                dev->id(),
+                eth_chan_id,
+                write_ex.what());
+            stale_timeout_count++;
+            continue;
+        }
 
         // Poll for TERMINATED
         const auto stale_start = std::chrono::steady_clock::now();
@@ -735,7 +795,7 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
     // Fail-fast: if any channel is NOT at expected_status after retries, throw now so the test
     // fails immediately with a clear diagnostic instead of hanging.
     constexpr uint32_t kMaxRetries = 3;
-    constexpr uint32_t kRetryDelayMs = 10;
+    constexpr uint32_t kRetryDelayMs = 50;  // 3 * 50ms = 150ms total; sufficient for slow subordinate init
 
     // Collect (device_id, eth_chan_id, eth_logical_core) for all channels to check.
     struct ChannelInfo {

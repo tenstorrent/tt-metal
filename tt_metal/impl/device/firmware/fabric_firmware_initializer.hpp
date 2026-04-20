@@ -50,7 +50,7 @@ private:
     uint32_t get_fabric_router_sync_timeout_ms() const;
 
     // Probe all active ERISC router channels for stale firmware and terminate any found.
-    // Sends TERMINATE to each active ERISC channel, polls for EDMStatus::TERMINATED (50 ms).
+    // Sends TERMINATE to each active ERISC channel, polls for EDMStatus::TERMINATED (100 ms).
     // On timeout, logs a warning and continues — does NOT assert RISC reset (that would
     // tear down the WH ETH PHY link and break non-MMIO L1 access for the rest of the mesh).
     // Called before configure_fabric_cores() clears L1 (Fix A).
