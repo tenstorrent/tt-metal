@@ -189,7 +189,10 @@ class TestCppPostProc:
 
 matmul_test_perf_counters = {
     "name": "Matmul_perf_counters",
-    "command": "pytest tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_padded_2d_matmul[tile_count=1375-side=width]",
+    # Use a small 32x32 matmul (same as TestSingleOp uses); the 1375-tile matmul
+    # overflows the profiler DRAM buffers when all counter groups are captured
+    # and triggers a native crash in device teardown on WH.
+    "command": "pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_matmul.py::test_run_matmul_test[BFLOAT16-input_shapes0]",
     "capture_perf_counters_groups": ["all"],
 }
 
