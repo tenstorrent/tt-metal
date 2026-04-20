@@ -18,6 +18,7 @@
 #include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "sfpu/ckernel_sfpu_abs.h"
+#include "sfpu/ckernel_sfpu_gelu.h"
 #include "sfpu/ckernel_sfpu_activations.h"
 #include "sfpu/ckernel_sfpu_elu.h"
 #include "sfpu/ckernel_sfpu_exp.h"
