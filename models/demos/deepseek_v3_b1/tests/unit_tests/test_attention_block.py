@@ -15,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
@@ -77,6 +78,7 @@ from models.demos.deepseek_v3_b1.weights.transforms.attention import (
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
 @pytest.mark.requires_grid_size((13, 10))
+@requires_hybrid_allocator
 def test_attention_block(
     bh_2d_mesh_device,
     mesh_rows,
