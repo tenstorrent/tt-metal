@@ -323,6 +323,18 @@ class PartialFace(Enum):
             return "false"
 
 
+class EnforceFP32Accumulation(Enum):
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
+
+
 class Tilize(Enum):
     Yes = True
     No = False

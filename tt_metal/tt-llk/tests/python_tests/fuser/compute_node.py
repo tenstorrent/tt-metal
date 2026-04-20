@@ -14,6 +14,7 @@ from helpers.llk_params import (
     BroadcastType,
     DataCopyType,
     EltwiseBinaryReuseDestType,
+    EnforceFP32Accumulation,
     MathFidelity,
     PerfRunType,
     ReduceDimension,
@@ -42,6 +43,7 @@ class ComputeNode:
         reduce_dim: ReduceDimension = None,
         reduce_pool: ReducePool = ReducePool.Max,
         math_fidelity: MathFidelity = MathFidelity.LoFi,
+        enforce_fp32_accumulation: EnforceFP32Accumulation = EnforceFP32Accumulation.No,
     ):
         if fpu is None and sfpu is None:
             raise ValueError("Compute unit needs an fpu or sfpu unit")
@@ -60,6 +62,7 @@ class ComputeNode:
         self.reduce_dim = reduce_dim
         self.reduce_pool = reduce_pool
         self.math_fidelity = math_fidelity
+        self.enforce_fp32_accumulation = enforce_fp32_accumulation
 
         if (
             self.broadcast_type != BroadcastType.None_
