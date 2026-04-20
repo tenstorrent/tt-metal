@@ -4,10 +4,6 @@
 import pytest
 import torch
 from helpers.format_config import DataFormat
-from helpers.golden_generators import (
-    DataCopyGolden,
-    get_golden_generator,
-)
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -54,7 +50,7 @@ TILE_DIMENSIONS = [32, 32]
     dest_sync_mode=[DestSync.Half],
     input_dimensions=INPUT_DIMENSIONS,
 )
-def test_unary_broadcast_quasar(
+def test_pack_l1_acc_quasar(
     formats,
     dest_acc,
     implied_math_format,
@@ -90,12 +86,10 @@ def test_unary_broadcast_quasar(
     )
     src_A = torch.ones_like(src_A)
 
-    generate_golden = get_golden_generator(DataCopyGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        formats.output_format,
-        tile_cnt=tile_cnt,
-        face_r_dim=face_r_dim,
+    block_elements = output_tiles_in_block * face_r_dim * FACE_C_DIM * num_faces
+    golden_tensor = (
+        torch.ones(block_elements, dtype=format_dict[formats.output_format])
+        * output_num_blocks
     )
 
     unpack_to_dest = (
@@ -103,7 +97,7 @@ def test_unary_broadcast_quasar(
     )
 
     configuration = TestConfig(
-        "sources/quasar/eltwise_unary_broadcast_quasar_test.cpp",
+        "sources/quasar/pack_l1_acc_quasar_test.cpp",
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
@@ -124,7 +118,7 @@ def test_unary_broadcast_quasar(
                 output_num_blocks=output_num_blocks,
             ),
             TEST_FACE_DIMS(face_r_dim=face_r_dim, face_c_dim=FACE_C_DIM),
-            RELU_CONFIG(ReluConfig.NoRelu),
+            RELU_CONFIG(ReluConfig.NoRelu.value),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
