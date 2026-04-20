@@ -328,6 +328,7 @@ def _build_program_for_device(
     fmt_sem_addr_0: int = 0,
     fmt_sem_addr_1: int = 0,
     partial_sem_addr: int = 0,
+    pipeline_sem_addr: int = 0,
 ) -> ttnn.ProgramDescriptor:
     """Build a ProgramDescriptor for one device — handles SRAM-only, DRAM-only, and hybrid.
 
@@ -371,6 +372,7 @@ def _build_program_for_device(
     # Silu-view alias on cb_out's L1 region (same backing, wider tile). Pad tile height
     # up to the next valid face_r_dim {2,4,8,16} so the silu fast-path always works.
     # Caller must ensure out_tensor has at least silu_tile_h * tile_w elements per core.
+    silu_tile_h = 0  # unused when fuse_silu is off, but passed as CT arg unconditionally
     if dram_fuse_silu and dram_per_core_n > 0:
         tile_h, tile_w = out_tensor.get_tile().tile_shape
         raw_silu_tile_h = num_active_experts * dram_per_core_n * tile_h
@@ -433,9 +435,9 @@ def _build_program_for_device(
     else:
         raise ValueError(f"Unsupported architecture: {arch}")
 
-    # Semaphores (always needed — DRAM infrastructure always present).
-    pipeline_sem_id = 0
-    semaphores = [ttnn.SemaphoreDescriptor(id=pipeline_sem_id, core_ranges=core_grid, initial_value=0)]
+    # Semaphores (always needed — DRAM infrastructure always present). Global sem
+    # so we pass the L1 address directly — matches fmt/partial sems.
+    semaphores = []
 
     # Activation tile size in shifted units (byte >> cb_addr_shift=4).
     # bf16 tile: face_r_dim * 32 * 2 bytes per face, 4 faces if full tile.
@@ -466,7 +468,7 @@ def _build_program_for_device(
         ("per_core_n", dram_per_core_n),
         ("cb_in1_dram_size_bytes", cb_in1_dram_total_bytes),
         ("noc_max_page_size", noc_max_page_size),
-        ("pipeline_sem_id", pipeline_sem_id),
+        ("pipeline_sem_addr", pipeline_sem_addr),
         ("partial_sem_addr", partial_sem_addr),
         ("cores_per_dram_bank", cores_per_dram_bank),
         ("k_parallel_per_bank", k_parallel_per_bank),
@@ -489,6 +491,7 @@ def _build_program_for_device(
         ("dram_fuse_silu", 1 if dram_fuse_silu else 0),
         ("index_offset", index_offset),
         ("cb_out_silu", cb_out_silu),
+        ("silu_tile_h", silu_tile_h),
     ]
 
     # Per-core descriptors.
@@ -845,6 +848,7 @@ def _assemble_dram_results(
     fmt_sem_0,
     fmt_sem_1,
     partial_sem_addr,
+    pipeline_sem_addr,
 ):
     """Phase 3: assemble per-device result tuples."""
     result = {}
@@ -865,6 +869,7 @@ def _assemble_dram_results(
                 fmt_sem_0,
                 fmt_sem_1,
                 partial_sem_addr,
+                pipeline_sem_addr,
             )
     logger.info("  All device metadata created")
     return result
@@ -950,6 +955,7 @@ def create_dram_expert_tensors_multi_device(
     #   sem_0: UNPACK-side counter. NCRISC atomic_add(+1) per expert; UNPACK atomic_sub(-1) after consume.
     #   sem_1: MATH-side counter.   Same protocol for MATH.
     # NCRISC waits sem_{0,1} < 2 before writing next fmt, allowing 1-expert-ahead pipelining.
+    ttnn.synchronize_device(mesh_device)
     fmt_sem_0 = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
     fmt_sem_1 = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
     fmt_sem_addr_0 = ttnn.get_global_semaphore_address(fmt_sem_0)
@@ -957,6 +963,10 @@ def create_dram_expert_tensors_multi_device(
     # K-reduction sync — global sem (so PACK/NCRISC can both address it by L1 addr).
     partial_sem = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
     partial_sem_addr = ttnn.get_global_semaphore_address(partial_sem)
+    # Pipeline ring sem (per-core, cores_per_bank > 1) — global so we pass L1 addr.
+    pipeline_sem = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
+    pipeline_sem_addr = ttnn.get_global_semaphore_address(pipeline_sem)
+    ttnn.synchronize_device(mesh_device)
     fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes
 
     logger.info(
@@ -1038,6 +1048,7 @@ def create_dram_expert_tensors_multi_device(
         fmt_sem_0,
         fmt_sem_1,
         partial_sem_addr,
+        pipeline_sem_addr,
     )
 
 
@@ -1208,6 +1219,7 @@ class ExpertKernel:
                     _fmt_sem_0,
                     _fmt_sem_1,
                     partial_sem_addr,
+                    pipeline_sem_addr,
                 ) = dram_meta_tensors[coord]
                 # Per-core active flags — each core runs only the path it belongs to.
                 all_cores_dev = ttnn.corerange_to_cores(a_dev.memory_config().shard_spec.grid)
@@ -1248,6 +1260,7 @@ class ExpertKernel:
                     fmt_sem_addr_0=fmt_sem_addr_0,
                     fmt_sem_addr_1=fmt_sem_addr_1,
                     partial_sem_addr=partial_sem_addr,
+                    pipeline_sem_addr=pipeline_sem_addr,
                 )
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
 

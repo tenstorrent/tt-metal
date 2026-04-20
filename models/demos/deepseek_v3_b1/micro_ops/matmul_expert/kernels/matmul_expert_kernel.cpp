@@ -64,7 +64,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("cb_in1_dram_size_bytes"),
         get_named_compile_time_arg_val("noc_max_page_size"),
         get_named_compile_time_arg_val("core_in_bank_idx"),
-        get_named_compile_time_arg_val("pipeline_sem_id"),
+        get_named_compile_time_arg_val("pipeline_sem_addr"),
         get_named_compile_time_arg_val("next_core_noc_x"),
         get_named_compile_time_arg_val("next_core_noc_y"),
         get_named_compile_time_arg_val("cores_per_dram_bank"),
@@ -137,7 +137,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("k_slice_idx"),
         get_named_compile_time_arg_val("num_subblocks_k_local"),
         get_named_compile_time_arg_val("partial_sem_addr"),
-        get_named_compile_time_arg_val("cb_out_silu")>;
+        get_named_compile_time_arg_val("cb_out_silu"),
+        get_named_compile_time_arg_val("silu_tile_h")>;
 #endif
 
     constexpr bool sram_active = get_named_compile_time_arg_val("sram_active") != 0;

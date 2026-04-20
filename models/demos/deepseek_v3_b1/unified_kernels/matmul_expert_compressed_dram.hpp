@@ -26,6 +26,7 @@
 // for DRAM streaming vs CB 1 for SRAM B data).
 
 #include "kernel_utils.hpp"
+#include "expert_index_encoding.hpp"
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -82,7 +83,7 @@ struct MatmulExpertCompressedDRAM {
         uint32_t cb_in1_size_bytes_,
         uint32_t noc_max_page_size_,
         uint32_t core_in_bank_idx_,
-        uint32_t pipeline_sem_id_,
+        uint32_t pipeline_sem_addr_,
         uint32_t next_core_noc_x_,
         uint32_t next_core_noc_y_,
         uint32_t cores_per_bank_,
@@ -126,7 +127,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t cb_in1_size_bytes = cb_in1_size_bytes_;
         static constexpr uint32_t noc_max_page_size = noc_max_page_size_;
         static constexpr uint32_t core_in_bank_idx = core_in_bank_idx_;
-        static constexpr uint32_t pipeline_sem_id = pipeline_sem_id_;
+        static constexpr uint32_t pipeline_sem_addr = pipeline_sem_addr_;
         static constexpr uint32_t next_core_noc_x = next_core_noc_x_;
         static constexpr uint32_t next_core_noc_y = next_core_noc_y_;
         static constexpr uint32_t cores_per_bank = cores_per_bank_;
@@ -185,8 +186,10 @@ struct MatmulExpertCompressedDRAM {
         uint32_t num_subblocks_k_local_,
         uint32_t partial_sem_addr_,
         // Aliased CB over cb_out with a single-tile view of all expert outputs for
-        // the post-reduction silu fast-path (tile shape = [num_active * per_core_n, tile_w]).
-        uint32_t cb_out_silu_>
+        // the post-reduction silu fast-path (tile shape = [silu_tile_h, tile_w]).
+        // silu_tile_h is pre-padded by op.py to a valid face_r_dim ∈ {2,4,8,16}.
+        uint32_t cb_out_silu_,
+        uint32_t silu_tile_h_>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -220,6 +223,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr bool is_sender = !is_reducer;
         static constexpr uint32_t partial_sem_addr = partial_sem_addr_;
         static constexpr uint32_t cb_out_silu = cb_out_silu_;
+        static constexpr uint32_t silu_tile_h = silu_tile_h_;
     };
 
     struct WriterCTArgs {};
@@ -256,12 +260,11 @@ struct MatmulExpertCompressedDRAM {
             const volatile uint16_t* block_sizes =
                 reinterpret_cast<const volatile uint16_t*>(CTArgs::block_sizes_l1_addr);
 
-            // Pipeline semaphore for cores_per_bank > 1.
+            // Pipeline semaphore for cores_per_bank > 1 (global sem, addr-based).
             volatile tt_l1_ptr uint32_t* sem_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::pipeline_sem_id));
-            uint64_t next_sem_l1 = get_semaphore(CTArgs::pipeline_sem_id);
-            uint64_t next_noc_addr = get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, 0);
-            uint64_t next_sem_noc_addr = next_noc_addr | next_sem_l1;
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::pipeline_sem_addr);
+            uint64_t next_sem_noc_addr =
+                get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, CTArgs::pipeline_sem_addr);
 
             // Double-buffered fmt slot. Toggles per DRAM expert.
             uint32_t fmt_slot = 0;
@@ -286,7 +289,7 @@ struct MatmulExpertCompressedDRAM {
 
             for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                 uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
-                if (raw_idx & 0x8000) {
+                if (is_sram_expert(raw_idx)) {
                     continue;  // bit15=1 → SRAM expert, skip
                 }
                 uint32_t expert_idx = raw_idx;  // bit15=0, raw value is global expert ID
@@ -474,7 +477,7 @@ struct MatmulExpertCompressedDRAM {
             if constexpr (CTArgs::accum_experts) {
                 uint32_t num_dram_experts = 0;
                 for (uint32_t i = 0; i < num_active_experts; i++) {
-                    if (!(static_cast<uint32_t>(index_ptr[i + CTArgs::index_offset]) & 0x8000)) {
+                    if (!(is_sram_expert(index_ptr[i + CTArgs::index_offset]))) {
                         num_dram_experts++;
                     }
                 }
@@ -483,7 +486,7 @@ struct MatmulExpertCompressedDRAM {
                 uint32_t dram_idx = 0;
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                     uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
-                    if (raw_idx & 0x8000) {
+                    if (is_sram_expert(raw_idx)) {
                         continue;
                     }
 
@@ -570,7 +573,7 @@ struct MatmulExpertCompressedDRAM {
                 uint32_t dst_base = 0;
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                     uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
-                    if (raw_idx & 0x8000) {
+                    if (is_sram_expert(raw_idx)) {
                         continue;
                     }
 
@@ -650,14 +653,8 @@ struct MatmulExpertCompressedDRAM {
                 // pack_tile covers all expert outputs (padded slots are garbage but out_tensor
                 // is assumed sized for the padded count by the caller).
                 if constexpr (CTArgs::fuse_silu && CTArgs::is_reducer) {
-                    constexpr uint32_t raw_silu_tile_h = CTArgs::num_active_experts * CTArgs::per_core_n;
-                    constexpr uint32_t silu_tile_h = raw_silu_tile_h <= 2   ? 2
-                                                     : raw_silu_tile_h <= 4 ? 4
-                                                     : raw_silu_tile_h <= 8 ? 8
-                                                                            : 16;
-                    static_assert(raw_silu_tile_h <= 16, "silu fast-path: silu_tile_h must be <= 16");
                     // 2 faces × (silu_tile_h * 16 elems) / 32 lanes = silu_tile_h/2 iterations/face.
-                    constexpr uint32_t silu_iterations = silu_tile_h / 2;
+                    constexpr uint32_t silu_iterations = CTArgs::silu_tile_h / 2;
 
                     reconfig_data_format_srca<false, true>(CTArgs::cb_out_silu, CTArgs::cb_out_silu);
                     pack_reconfig_data_format<true>(CTArgs::cb_out_silu);
@@ -680,12 +677,20 @@ struct MatmulExpertCompressedDRAM {
                 }
 
                 cb_push_back(CTArgs::cb_out, total_tiles);
+
+                // Reset partial_sem on the reducer for the next program run.
+                // UNPACK has the reliable L1 atomic path; PACK-side plain stores are buggy.
+                if constexpr (CTArgs::is_reducer) {
+                    constexpr uint32_t num_senders = CTArgs::k_parallel_per_bank - 1;
+                    cb_wait_front(CTArgs::cb_out, total_tiles);
+                    UNPACK(unified_kernels::sem_atomic_dec(CTArgs::partial_sem_addr, num_senders));
+                }
             } else {
                 uint32_t fmt_slot = 0;
 
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                     uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
-                    if (raw_idx & 0x8000) {
+                    if (is_sram_expert(raw_idx)) {
                         continue;
                     }
 

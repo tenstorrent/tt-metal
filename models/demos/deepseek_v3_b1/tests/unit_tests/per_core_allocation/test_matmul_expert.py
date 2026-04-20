@@ -2495,44 +2495,6 @@ def test_matmul_expert_bspm_sparse_activation(bh_2d_mesh_device):
     )
 
 
-@pytest.mark.skip_post_commit
-def test_benchmark_down_proj(device):
-    _run_hybrid_expert_multi_device(
-        device,
-        M=1,
-        K=256,
-        N=7168,
-        num_experts=1,
-        sram_expert_ids=[],
-        dram_expert_ids=list(range(1)),
-        active_expert_ids=[0],
-        formats_per_device=[
-            ["bfp4", "bfp0"],
-        ],
-        subblock_n=4,
-        accum_experts=True,
-    )
-
-
-@pytest.mark.skip_post_commit
-def test_benchmark_up_proj(device):
-    _run_hybrid_expert_multi_device(
-        device,
-        M=1,
-        K=7168,
-        N=256,
-        num_experts=1,
-        sram_expert_ids=[],
-        dram_expert_ids=list(range(1)),
-        active_expert_ids=[0],
-        formats_per_device=[
-            ["bfp4", "bfp0"],
-        ],
-        subblock_n=1,
-        accum_experts=False,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Benchmark tests — DRAM-only, 1 expert per device, production MoE shapes
 # ---------------------------------------------------------------------------

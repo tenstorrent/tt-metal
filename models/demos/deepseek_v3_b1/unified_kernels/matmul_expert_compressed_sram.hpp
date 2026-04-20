@@ -10,6 +10,7 @@
 // performs matmul for each SRAM expert (bit15=1) using per-core fmt tables.
 
 #include "kernel_utils.hpp"
+#include "expert_index_encoding.hpp"
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -158,7 +159,7 @@ struct MatmulExpertCompressedSRAM {
             if constexpr (CTArgs::accum_experts) {
                 uint32_t num_sram_experts = 0;
                 for (uint32_t i = 0; i < num_active_experts; i++) {
-                    if (static_cast<uint32_t>(index_ptr[i]) & 0x8000) {
+                    if (is_sram_expert(index_ptr[i])) {
                         num_sram_experts++;
                     }
                 }
@@ -170,11 +171,11 @@ struct MatmulExpertCompressedSRAM {
                     uint32_t sram_idx = 0;
                     for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                         uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
-                        if (!(raw_idx & 0x8000)) {
+                        if (!(is_sram_expert(raw_idx))) {
                             continue;
                         }
 
-                        uint32_t slot = raw_idx & 0x7FFF;
+                        uint32_t slot = expert_slot(raw_idx);
                         uint32_t expert_base = sram_base_addrs[slot];
                         uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base + slot * meta_words_per_expert);
 
@@ -206,11 +207,11 @@ struct MatmulExpertCompressedSRAM {
 
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                     uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
-                    if (!(raw_idx & 0x8000)) {
+                    if (!(is_sram_expert(raw_idx))) {
                         continue;
                     }
 
-                    uint32_t slot = raw_idx & 0x7FFF;
+                    uint32_t slot = expert_slot(raw_idx);
                     uint32_t expert_base = sram_base_addrs[slot];
                     uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base + slot * meta_words_per_expert);
 
