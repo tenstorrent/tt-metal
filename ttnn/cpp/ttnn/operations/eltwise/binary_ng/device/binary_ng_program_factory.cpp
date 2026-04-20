@@ -316,8 +316,8 @@ bool is_llk_bcast(
     const SubtileBroadcastType subtile_broadcast_type,
     const DataType a_dtype,
     const DataType b_dtype,
-    [[maybe_unused]] const DataType c_dtype) {
-    auto all_match = [&](DataType dt) { return a_dtype == dt && b_dtype == dt; };
+    const DataType c_dtype) {
+    auto all_match = [&](DataType dt) { return a_dtype == dt && b_dtype == dt && c_dtype == dt; };
 
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
@@ -332,17 +332,7 @@ bool is_llk_bcast(
         }
         if (all_match(DataType::FLOAT32) || all_match(DataType::INT32) || all_match(DataType::UINT32) ||
             all_match(DataType::UINT16)) {
-            [[maybe_unused]] tt::ARCH arch = tt::tt_metal::hal::get_arch();
-            //  tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py::test_binary_implicit_broadcast
-            //  tests/ttnn/unit_tests/operations/eltwise/test_pow.py::test_binary_ng_pow[dtype=float32-input_a=[1, 128,
-            //  96]-input_b=[1, 128, 1]]
-            //  ttsim blackhole ERROR: UnsupportedFunctionality: tensix_execute_zeroacc: clear
-            //  32b 16 rows: clear_zero_flags=1 dst=1 row=0 dst_row_valid not already set
-            // ttsim wormhole ERROR: UndefinedBehavior: tensix_execute_unpacr: unpack_to_dst=0 in_data_format=0
-            // out_data_format=0
-            if (arch == tt::ARCH::WORMHOLE_B0) {
-                return true;
-            }
+            return true;
         }
     }
 
@@ -788,7 +778,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 // set
                 // tt-sim wormhole ERROR: UndefinedBehavior: tensix_execute_unpacr: unpack_to_dst=0 in_data_format=0
                 // out_data_format=0
-                use_llk_bcast = false;
+                // use_llk_bcast = false;  // commented out pending real-BH validation
             }
         }
     }
