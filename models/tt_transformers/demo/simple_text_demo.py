@@ -32,6 +32,12 @@ from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
 models_not_supported_for_device_sampling = ["Mistral-7B"]
 
+# Capture the *original* HF_MODEL env var at import time, before any
+# parametrized test case can mutate it to an absolute LFC cache path.
+# Tests pass this to model_location_generator which uses pathlib joins;
+# an absolute path would reset the base and cause spurious assertions.
+_ORIGINAL_HF_MODEL = os.getenv("HF_MODEL", "")
+
 
 class TokenAccuracy:
     def __init__(self, model_name):
@@ -880,7 +886,7 @@ def test_demo_text(
     """
     Simple demo with limited dependence on reference code.
     """
-    hf_dir = os.getenv("HF_MODEL", "")
+    hf_dir = _ORIGINAL_HF_MODEL
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
 
     test_id = request.node.callspec.id
@@ -959,10 +965,9 @@ def test_demo_text(
         pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
     if is_ci_env:
-        hf_model = os.getenv("HF_MODEL", "")
-        is_33_70b = "3.3-70B" in hf_model
-        is_32_1b = "3.2-1B" in hf_model
-        is_31_8b = "3.1-8B" in hf_model
+        is_33_70b = "3.3-70B" in hf_dir
+        is_32_1b = "3.2-1B" in hf_dir
+        is_31_8b = "3.1-8B" in hf_dir
 
         tg_enabled = (data_parallel == 4 and is_33_70b) or (data_parallel in [4, 16, 32] and is_31_8b)
 
@@ -972,14 +977,12 @@ def test_demo_text(
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
 
     if is_ci_v2_env:
-        # Use hf_dir (the *original* HF_MODEL captured at test entry) rather than
-        # re-reading os.getenv("HF_MODEL"), which may have been mutated to an
-        # absolute LFC cache path by a previous parametrized test case.  Passing
-        # an absolute path to model_location_generator causes pathlib to reset
-        # the base in internal_weka_path, making .exists() return True on the
-        # LFC cache dir and triggering a spurious MLPerf assertion.
+        # hf_dir comes from _ORIGINAL_HF_MODEL (captured at import time) so it
+        # is always the clean HF name (e.g. "meta-llama/Llama-3.1-8B-Instruct"),
+        # even if a previous parametrized test mutated os.environ["HF_MODEL"]
+        # to an absolute LFC cache path.
         model_location = model_location_generator(hf_dir, download_if_ci_v2=True, ci_v2_timeout_in_s=900)
-        # update env var HF_MODEL to the model location
+        # Downstream code (model_config.py) reads HF_MODEL for CKPT_DIR/TOKENIZER_PATH
         os.environ["HF_MODEL"] = str(model_location)
 
     if not stop_at_eos:
