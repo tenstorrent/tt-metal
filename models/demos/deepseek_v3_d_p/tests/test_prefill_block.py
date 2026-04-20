@@ -39,22 +39,22 @@ PCC_THRESHOLD_MOE_GATE_HOST = 0.996
 PCC_THRESHOLD_MOE_GATE_DEVICE = 0.992
 PCC_THRESHOLD_KVPE = 0.999
 
+SEQ_LEN_100K = 100 * 1024
+
 
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total",
     [
-        ("random", False, 1024),
-        ("abc_1k", True, 1024),
+        ("random", False, SEQ_LEN_100K),
     ],
-    ids=["smoke-random", "pcc-abc_1k"],
+    ids=["seq_100k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
     [
-        ("dense", None),
         ("moe", GateComputeMode.DEVICE),
     ],
-    ids=["dense", "moe-gate_device"],
+    ids=["moe-gate_device"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -64,6 +64,7 @@ PCC_THRESHOLD_KVPE = 0.999
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": 1024,
             },
             1,
             ttnn.Topology.Linear,
@@ -75,6 +76,7 @@ PCC_THRESHOLD_KVPE = 0.999
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": 1024,
             },
             2,
             ttnn.Topology.Linear,

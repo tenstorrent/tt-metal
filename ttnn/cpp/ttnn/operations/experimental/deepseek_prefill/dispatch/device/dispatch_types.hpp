@@ -24,7 +24,7 @@ struct DispatchParams {
     tt::tt_fabric::Topology topology;
     MemoryConfig output_mem_config;
     CoreRangeSet worker_core_range_set;
-    bool use_l1_small_for_semaphores = false;
+    bool use_l1_small_for_semaphores = true;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
