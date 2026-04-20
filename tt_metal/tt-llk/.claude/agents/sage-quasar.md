@@ -33,24 +33,32 @@ When searching for a concept (e.g., "binary unpack"), search by the semantic mea
 
 ## Source Priority
 
-### 1. assembly.yaml (PRIMARY for ISA details)
+### 1. Confluence (PRIMARY for ISA and hardware specifics)
 
-The only definitive local ISA source for Quasar:
+For any **ISA or hardware-specific question** — instruction semantics, opcode encoding, data format conversions (FP32/TF32/BF16/FP16/FP8/INT), dest register precision, SFPU/FPU capabilities, TDMA, threading model, L1/register file layout — **Confluence is the authoritative source**.
+
+**Key Confluence spaces for Quasar ISA**: Search under **"Tensix Neo"** and **"Tensix Instruction Set Architecture"** for in-depth per-instruction documentation. These spaces provide far more detail than `assembly.yaml` — covering instruction semantics, encoding, side effects, and hardware constraints.
+
+Search patterns:
+```
+mcp__atlassian__searchConfluenceUsingCql
+  cql: "space.title = \"Tensix Instruction Set Architecture\" AND text ~ \"{INSTRUCTION}\""
+
+mcp__atlassian__searchConfluenceUsingCql
+  cql: "space.title = \"Tensix Neo\" AND text ~ \"{topic}\""
+
+mcp__atlassian__searchConfluenceUsingCql
+  cql: "text ~ \"quasar {topic}\" OR text ~ \"trinity {topic}\""
+```
+
+### 2. assembly.yaml (quick reference)
+
+Local ISA reference for verifying instruction existence and parameters:
 ```
 grep -A 50 "^{INSTRUCTION}:" tt_llk_quasar/instructions/assembly.yaml
 ```
 
-Use this to verify whether an instruction exists on Quasar and check its parameters.
-
-### 2. Confluence (PRIMARY for hardware specifics — ISA, data formats, register layouts, pipeline behavior)
-
-For any **hardware-specific question** — ISA semantics, opcode encoding, data format conversions (FP32/TF32/BF16/FP16/FP8/INT), dest register precision, SFPU/FPU capabilities, TDMA, threading model, L1/register file layout — **Confluence is the authoritative source**. `assembly.yaml` tells you the instruction *exists* and its parameters; Confluence tells you what it *does* on the hardware.
-
-Search pattern:
-```
-mcp__atlassian__searchConfluenceUsingCql
-  cql: "text ~ \"quasar {topic}\" OR text ~ \"trinity {topic}\""
-```
+Useful for quick lookups, but limited in detail. For full instruction semantics, always prefer the Confluence ISA spaces above.
 
 Then fetch the full page with `mcp__atlassian__getConfluencePage` to read the content and its metadata.
 
@@ -154,5 +162,5 @@ For each file you read:
 3. NEVER query DeepWiki for `tenstorrent/tt-isa-documentation` — it has no Quasar content
 4. Always provide file:line references
 5. Always explain WHY, not just WHAT
-6. When an instruction or pattern is unclear, check assembly.yaml first
+6. When an instruction or pattern is unclear, check Confluence ISA spaces first, then assembly.yaml
 7. For ISA, data format, or any hardware-specific question, fetch Confluence via the MCP and check the page's last-modified date. If the page is older than ~3 months, include the staleness disclaimer from the Confluence section — never present aging HW docs as ground truth without the caveat.

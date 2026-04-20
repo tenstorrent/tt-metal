@@ -25,11 +25,12 @@ Determine the target architecture from (in priority order):
 5. `.claude/references/common-errors.md`
 
 ### Quasar
-1. `assembly.yaml` in `tt_llk_quasar/instructions/`
-2. Existing code patterns in `tt_llk_quasar/`
-3. Confluence: search for "quasar" or "trinity" topics
-4. `.claude/references/common-errors.md`
-5. **NO DeepWiki** — `tt-isa-documentation` has no Quasar content
+1. Confluence: search under **"Tensix Neo"** and **"Tensix Instruction Set Architecture"** spaces for in-depth per-instruction documentation
+2. `assembly.yaml` in `tt_llk_quasar/instructions/` (useful for quick reference but limited detail)
+3. Existing code patterns in `tt_llk_quasar/`
+4. Confluence: search for "quasar" or "trinity" topics (broader architecture context)
+5. `.claude/references/common-errors.md`
+6. **NO DeepWiki** — `tt-isa-documentation` has no Quasar content
 
 ## Error Classification
 
@@ -44,7 +45,7 @@ Determine the target architecture from (in priority order):
 
 ### Device Reset Details
 
-**When to reset** (`tt-smi -r <PCI_ID>`):
+**When to reset** (`tt-smi -r`):
 - TIMEOUT errors
 - Runtime ASSERTION errors
 - DATA_MISMATCH that persists across reruns without code changes (device may be in bad state)
@@ -80,7 +81,7 @@ Read `.claude/references/common-errors.md` for known patterns and investigation 
 5. Look for TTI_ vs TT_OP_ confusion (immediate execution vs encoding)
 
 #### TIMEOUT
-1. Reset the device: `tt-smi -r <PCI_ID>`
+1. Reset the device: `tt-smi -r`
 2. Check MOP configuration (outer/inner loop counts)
 3. Compare MOP structure with a similar working kernel
 4. Verify tile dimension configuration

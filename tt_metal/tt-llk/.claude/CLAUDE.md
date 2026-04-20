@@ -65,8 +65,7 @@ Trigger examples for `arch-lookup`:
 ### Device Reset
 When tests fail with `TENSIX TIMED OUT`, the device may be hung. Reset with:
 ```bash
-tt-smi -ls          # find PCI device ID
-tt-smi -r <PCI_ID>  # reset device
+tt-smi -r  # reset device
 ```
 Only reset for runtime failures (TIMEOUT, runtime ASSERTION). Never reset for compile errors or reconfig escapes — resetting masks reconfig bugs.
 
