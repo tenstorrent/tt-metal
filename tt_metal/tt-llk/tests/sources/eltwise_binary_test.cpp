@@ -37,6 +37,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const ckernel::TensorShape tensor_shape = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
     const std::uint32_t transpose           = params.UNPACK_TRANSPOSE_FACES;
 
+    _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
+
     // Configure hardware for unpacking, no broadcast, no transpose
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,

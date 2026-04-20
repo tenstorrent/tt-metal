@@ -12,8 +12,10 @@ import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    ApproximationMode,
     BroadcastType,
     DestAccumulation,
+    FastMode,
     MathFidelity,
     MathOperation,
     PackerReluType,
@@ -634,6 +636,64 @@ def to_tensor(operand, data_format):
     return operand.clone().detach().to(torch_format)
 
 
+FTZ_THRESHOLD = 1e-37
+
+
+def quantize_input(operand, fmt, data_format):
+    """Quantize a single operand to match what hardware sees after unpack.
+
+    When data is stored in BFP or MX format in L1 memory and unpacked by
+    hardware, precision is lost.  This function simulates that loss so the
+    golden operates on the same values that hardware sees.
+
+    Args:
+        operand: Input tensor.
+        fmt: The L1 storage format of this operand (``None`` to skip quantization).
+        data_format: Fallback format used for a plain dtype cast when *fmt*
+            is ``None`` or does not require special quantization.
+    """
+    if fmt is None:
+        return to_tensor(operand, data_format)
+    if fmt == DataFormat.Bfp4_b:
+        return _bfp4b_to_float16b(operand)
+    if fmt == DataFormat.Bfp8_b:
+        return _bfp8b_to_float16b(operand)
+    if fmt.is_mx_format():
+        return quantize_mx_tensor_chunked(operand, fmt)
+    return to_tensor(operand, fmt)
+
+
+def quantize_output(tensor, data_format):
+    """Quantize output and apply flush-to-zero to match hardware packing.
+
+    Hardware packs results back into L1 in the target ``data_format``,
+    losing precision.  After quantization, values with magnitude below
+    ``FTZ_THRESHOLD`` are flushed to zero (hardware always runs with FTZ).
+
+    Args:
+        tensor: Result tensor to quantize.
+        data_format: Target L1 storage format.
+    """
+    if data_format == DataFormat.Bfp4_b:
+        tensor = _bfp4b_to_float16b(tensor.to(torch.bfloat16))
+    elif data_format == DataFormat.Bfp8_b:
+        tensor = _bfp8b_to_float16b(tensor.to(torch.bfloat16))
+    elif data_format.is_mx_format():
+        tensor = quantize_mx_tensor_chunked(tensor.to(torch.bfloat16), data_format)
+    else:
+        tensor = to_tensor(tensor, data_format)
+
+    if data_format.is_integer():
+        return tensor
+
+    t_f32 = tensor.float()
+    return torch.where(
+        t_f32.abs() < FTZ_THRESHOLD,
+        torch.zeros_like(t_f32),
+        t_f32,
+    ).to(tensor.dtype)
+
+
 def transpose_tensor(tensor):
     """Transpose a PyTorch tensor.
     Args:
@@ -670,7 +730,7 @@ class TransposeGolden:
         if num_faces not in [1, 2, 4]:
             raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
 
-        tensor = to_tensor(operand, data_format)
+        tensor = quantize_input(operand, data_format, data_format)
         torch_format = format_dict[data_format]
 
         # Each face is always 16x16 = 256 elements
@@ -720,7 +780,7 @@ class TransposeGolden:
             raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
 
         torch_format = format_dict[data_format]
-        tensor = to_tensor(operand, data_format)
+        tensor = quantize_input(operand, data_format, data_format)
 
         total_elements = ELEMENTS_PER_FACE * num_faces
         tensor = tensor[:total_elements]
@@ -1039,6 +1099,8 @@ class MatmulGolden(FidelityMasking):
                 .to(torch_format)
             )
 
+        res = quantize_output(res, data_format)
+
         if tilize:
             res = tilize_block(
                 res,
@@ -1088,16 +1150,11 @@ class BroadcastGolden:
         else:
             input_flat = torch.tensor(operand, dtype=torch_format).flatten()
 
-        # For block-floating-point formats, quantize the input tile-by-tile BEFORE
-        # extracting broadcast values.  The hardware unpacks src_B from its block-float
-        # encoding before applying the broadcast, so the shared-exponent quantization
-        # is determined by the original (non-broadcast) 16-element rows of the tile.
-        # If we quantized after broadcasting we would get wrong shared exponents because
-        # all 16 repeated copies of the same value form a trivial block.
-        if data_format == DataFormat.Bfp4_b:
-            input_flat = _bfp4b_to_float16b(input_flat)
-        elif data_format == DataFormat.Bfp8_b:
-            input_flat = _bfp8b_to_float16b(input_flat)
+        # Quantize the input tile-by-tile BEFORE extracting broadcast values.
+        # Hardware unpacks src_B from its block-float encoding before applying
+        # the broadcast, so the shared-exponent quantization is determined by
+        # the original (non-broadcast) 16-element rows of the tile.
+        input_flat = quantize_input(input_flat, data_format, data_format)
 
         # Calculate output size based on variable face dimensions
         elements_per_tile = face_r_dim * FACE_DIM * num_faces
@@ -1203,9 +1260,7 @@ class DataCopyGolden:
     ):
         torch_format = format_dict[data_format]
 
-        # Quantize input to match what hardware actually unpacks from bfp4_b L1 memory
-        if input_format == DataFormat.Bfp4_b:
-            operand1 = _bfp4b_to_float16b(operand1)
+        operand1 = quantize_input(operand1, input_format, data_format)
 
         height, width = input_dimensions[0], input_dimensions[1]
 
@@ -1268,8 +1323,8 @@ class DataCopyGolden:
 
             result = result.to(torch_format)
 
-        # Apply bfp4_b output quantization round-trip to match hardware behaviour
-        if data_format == DataFormat.Bfp4_b:
+        # Apply BFP output quantization round-trip to match hardware behaviour
+        if data_format in (DataFormat.Bfp4_b, DataFormat.Bfp8_b):
             result_t = (
                 result.float()
                 if isinstance(result, torch.Tensor)
@@ -1284,7 +1339,10 @@ class DataCopyGolden:
             else:
                 data = flat
                 dims = None
-            result = _bfp4b_to_float16b(data, dims)
+            if data_format == DataFormat.Bfp4_b:
+                result = _bfp4b_to_float16b(data, dims)
+            else:
+                result = _bfp8b_to_float16b(data, dims)
 
         return result
 
@@ -1329,7 +1387,7 @@ class PackGolden:
             :, :elements_per_tile_needed
         ].reshape(-1)
 
-        return result
+        return quantize_output(result, data_format)
 
     @staticmethod
     def get_relu_mode_and_threshold_bits(
@@ -1545,6 +1603,8 @@ class UnarySFPUGolden:
         }
         self.data_format = None
         self.dest_acc = DestAccumulation.No
+        self.approx_mode = ApproximationMode.No
+        self.fast_mode = FastMode.No
 
     def __call__(
         self,
@@ -1559,18 +1619,18 @@ class UnarySFPUGolden:
         fill_const_value: float = 5,
         reduce_pool: Optional[ReducePool] = None,
         skip_tilize: bool = False,
+        approx_mode: ApproximationMode = ApproximationMode.No,
+        fast_mode: FastMode = FastMode.No,
     ):
         self.data_format = data_format
         self.dest_acc = dest_acc
+        self.approx_mode = approx_mode
+        self.fast_mode = fast_mode
 
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
 
-        # Quantize input to match what hardware actually unpacks from bfp4_b L1 memory
-        if input_format == DataFormat.Bfp4_b:
-            operand1 = _bfp4b_to_float16b(operand1)
-        if input_format.is_mx_format():
-            operand1 = quantize_mx_tensor_chunked(operand1, input_format)
+        operand1 = quantize_input(operand1, input_format, data_format)
 
         # Special handling for Column and Row reduction which needs to process the entire tensor
         if operation in [MathOperation.ReduceColumn, MathOperation.ReduceRow]:
@@ -1802,12 +1862,127 @@ class UnarySFPUGolden:
         return torch.nn.functional.elu(input_tensor, alpha=1.0).item()
 
     def _exp(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
-        )
-        return torch.exp(input_tensor).item()
+        if self.approx_mode == ApproximationMode.Yes:
+            if self.fast_mode == FastMode.Yes:
+                return self._exp_schraudolph_fast(x, clamp_negative=True)
+            else:
+                return self._exp_piecewise_approx(x)
+        else:
+            input_tensor = (
+                x
+                if isinstance(x, torch.Tensor)
+                else torch.tensor(x, dtype=format_dict[self.data_format])
+            )
+            return torch.exp(input_tensor).item()
+
+    # ===============================================================
+    # LLK implementations of exp
+    # ===============================================================
+    @staticmethod
+    def _exp_schraudolph_approx(x):
+        """Schraudolph scheme used by _calculate_exponential_approx_.
+
+        Computes exp(x) by exploiting the IEEE 754 float bit layout:
+          1. in = x * (1/ln2) + c23_73       (c23_73 = bf16(0x4340) = 192.0)
+          2. in_short = adj_exp + reinterpret<int32>(in)
+                        (adj_exp = bf16(0xBD3F) reinterpreted as int32)
+          3. in_short <<= 7                   (10 - FRAC_BITS where FRAC_BITS=3)
+          4. return reinterpret<float>(in_short)
+        """
+        LN2_RECIP = 1.442695
+        C23_73 = 192.0  # bf16 0x4340 → float32 0x43400000
+        # bf16 0xBD3F → float32 0xBD3F0000 → reinterpret as int32
+        ADJ_EXP_INT = struct.unpack("!i", bytes.fromhex("BD3F0000"))[0]
+
+        val = x * LN2_RECIP + C23_73
+        val_int = struct.unpack("i", struct.pack("f", val))[0]
+        in_short = ADJ_EXP_INT + val_int
+        in_short = (in_short << 7) & 0xFFFFFFFF
+        if in_short >= 0x80000000:
+            in_short -= 0x100000000
+        return struct.unpack("f", struct.pack("i", in_short))[0]
+
+    @staticmethod
+    def _exp_piecewise_approx(x):
+        """_calculate_exponential_piecewise_ with APPROXIMATION_MODE=true.
+
+        Clamps extreme inputs then delegates to the Schraudolph approximation.
+        """
+        if x >= 89:
+            return float("inf")
+        if x < -42:
+            return 0.0
+        return UnarySFPUGolden._exp_schraudolph_approx(x)
+
+    @staticmethod
+    def _exp_schraudolph_fast(x, clamp_negative=True):
+        """Schraudolph scheme for FAST_APPROX && APPROXIMATION_MODE.
+
+        When clamp_negative=True: clamps inputs below -88.5 to -88.5, uses
+        uint16 rounding and left-shift by 15.
+
+        When clamp_negative=False: uses int16 sign-magnitude rounding, shift,
+        and sign-setting. Outputs for x < ~-88 may be negative (need ReLU).
+        """
+        A = 369.329925537109375  # 256.0 / ln(2)
+        B_MINUS_C = 32500.818359375
+        THRESHOLD = -88.5
+
+        if clamp_negative:
+            x = max(x, THRESHOLD)
+            val = A * x + B_MINUS_C
+            val_int = int(round(val))
+            val_int = max(0, min(val_int, 65535))
+            result_bits = (val_int << 15) & 0xFFFFFFFF
+        else:
+            val = A * x + B_MINUS_C
+            val_int = int(round(val))
+            val_int = max(-32767, min(val_int, 32767))
+            sign = 0 if val_int >= 0 else 1
+            magnitude = abs(val_int)
+            shifted = (magnitude << 15) & 0x7FFFFFFF
+            result_bits = shifted | (sign << 31)
+
+        return struct.unpack("f", struct.pack("I", result_bits))[0]
+
+    @staticmethod
+    def _exp_horner(x):
+        """_sfpu_exp_ Horner-form polynomial used when APPROXIMATION_MODE=false.
+
+        For positive x: extracts exponent, sets it to -1, evaluates a 2nd-order
+        Horner polynomial, then squares repeatedly to restore the exponent.
+        For negative x: computes exp(|x|) then takes reciprocal.
+        """
+        if x == 0.0:
+            return 1.0
+
+        is_negative = x < 0
+        val = abs(x)
+
+        bits = struct.unpack("I", struct.pack("f", val))[0]
+        exp_biased = (bits >> 23) & 0xFF
+        original_exp = exp_biased - 127
+
+        if original_exp >= 0:
+            bits_new = (bits & 0x807FFFFF) | (126 << 23)
+            val = struct.unpack("f", struct.pack("I", bits_new))[0]
+
+        tmp = val * 0.8373 + 0.863281
+        val = val * tmp + 1.0
+
+        if original_exp >= 0:
+            for _ in range(original_exp + 1):
+                val = val * val
+
+        if is_negative:
+            if val != 0:
+                val = 1.0 / val
+
+        return val
+
+    # ===============================================================
+    # End of LLK implementations of exp
+    # ===============================================================
 
     def _exp2(self, x):
         input_tensor = (
@@ -1922,17 +2097,7 @@ class EltwiseBinaryGolden(FidelityMasking):
             MathOperation.Elwmul: self._mul,
         }
 
-    def _quantize_input(self, operand, fmt, data_format):
-        """Quantize a single operand to match what hardware sees after unpack."""
-        if fmt is None:
-            return to_tensor(operand, data_format)
-        if fmt == DataFormat.Bfp4_b:
-            return _bfp4b_to_float16b(operand)
-        if fmt == DataFormat.Bfp8_b:
-            return _bfp8b_to_float16b(operand)
-        if fmt.is_mx_format():
-            return quantize_mx_tensor_chunked(operand, fmt)
-        return to_tensor(operand, data_format)
+    _UNSET = object()
 
     def __call__(
         self,
@@ -1942,29 +2107,30 @@ class EltwiseBinaryGolden(FidelityMasking):
         data_format,
         math_fidelity,
         input_format=None,
-        input_format_B=None,
+        input_format_B=_UNSET,
     ):
         if op not in self.ops:
             raise ValueError(f"Unsupported Eltwise operation: {op}")
 
-        # If input_format_B is not provided, it defaults to input_format.
-        if input_format_B is None:
+        # If input_format_B is not provided at all, default to input_format.
+        # If explicitly passed as None, it means "already quantized, skip".
+        if input_format_B is EltwiseBinaryGolden._UNSET:
             input_format_B = input_format
 
-        # Step 1: Quantize each input independently to match what hardware sees
-        # after unpacking from L1. Each operand uses its own format.
-        operand1 = self._quantize_input(operand1, input_format, data_format)
-        operand2 = self._quantize_input(operand2, input_format_B, data_format)
+        operand1 = quantize_input(operand1, input_format, data_format)
+        operand2 = quantize_input(operand2, input_format_B, data_format)
 
-        # Use bfloat16 for fidelity masking when any input is a block-float format.
-        uses_block_float = any(
-            fmt is not None
-            and (fmt in (DataFormat.Bfp4_b, DataFormat.Bfp8_b) or fmt.is_mx_format())
-            for fmt in (input_format, input_format_B)
-        )
-        math_format_for_fidelity = (
-            DataFormat.Float16_b if uses_block_float else data_format
-        )
+        # Fidelity masking models the source register decomposition, so use
+        # the *input* format, not the output format.  Block-float / MX formats
+        # are unpacked to Float16_b in the source registers.
+        def _src_reg_format(fmt):
+            if fmt is None:
+                return None
+            if fmt in (DataFormat.Bfp4_b, DataFormat.Bfp8_b) or fmt.is_mx_format():
+                return DataFormat.Float16_b
+            return fmt
+
+        math_format_for_fidelity = _src_reg_format(input_format) or data_format
 
         t1, t2 = operand1, operand2
 
@@ -1979,11 +2145,14 @@ class EltwiseBinaryGolden(FidelityMasking):
 
         if op == MathOperation.Elwmul:
             result = None
+            orig_t1, orig_t2 = t1, t2
             for fidelity_iter in range(fidelity_iter_count + 1):
-                t1, t2 = self._apply_fidelity_masking(
-                    math_format_for_fidelity, t1, t2, fidelity_iter
+                if fidelity_iter > 0:
+                    t1, t2 = operand1, operand2
+                masked_t1, masked_t2 = self._apply_fidelity_masking(
+                    math_format_for_fidelity, orig_t1, orig_t2, fidelity_iter
                 )
-                phase_result = self.ops[op](t1, t2)
+                phase_result = self.ops[op](masked_t1, masked_t2)
                 if fidelity_iter == 0:
                     result = phase_result
                 else:
@@ -1991,28 +2160,27 @@ class EltwiseBinaryGolden(FidelityMasking):
         else:
             result = self.ops[op](t1, t2)
 
-        # Step 3: Quantize output to match what hardware packs back into L1.
-        if data_format == DataFormat.Bfp4_b:
-            result = _bfp4b_to_float16b(result.to(torch.bfloat16))
-        elif data_format == DataFormat.Bfp8_b:
-            result = _bfp8b_to_float16b(result.to(torch.bfloat16))
-        elif data_format.is_mx_format():
-            result = quantize_mx_tensor_chunked(result.to(torch.bfloat16), data_format)
-        else:
-            result = to_tensor(result, data_format)
-
-        return result
+        return quantize_output(result, data_format)
 
     # Operation methods
+    @staticmethod
+    def _wide_dtype(t):
+        """Pick a lossless wide type: int64 for integer tensors, float32 otherwise."""
+        if t.dtype in (torch.int8, torch.int16, torch.int32, torch.int64):
+            return torch.int64
+        return torch.float32
+
     def _add(self, t1, t2):
-        return t1 + t2
+        wide = self._wide_dtype(t1)
+        return (t1.to(wide) + t2.to(wide)).to(t1.dtype)
 
     def _sub(self, t1, t2):
-        return t1 - t2
+        wide = self._wide_dtype(t1)
+        return (t1.to(wide) - t2.to(wide)).to(t1.dtype)
 
     def _mul(self, t1, t2):
-        # Compute in float32 for better fidelity, then cast back to original dtype.
-        return (t1.to(torch.float32) * t2.to(torch.float32)).to(t1.dtype)
+        wide = self._wide_dtype(t1)
+        return (t1.to(wide) * t2.to(wide)).to(t1.dtype)
 
 
 @register_golden
@@ -2127,7 +2295,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         ):
             result = untilize_block(result, data_format, dimensions)
 
-        return result
+        return quantize_output(result, data_format)
 
     # Operation methods are covered by Eltwise Binary Golden
     def _xlogy(self, x, y):
@@ -2245,11 +2413,8 @@ class ReduceGolden:
         if reduce_dim not in self.dim_handlers:
             raise ValueError(f"Unsupported reduce dimension: {reduce_dim}")
 
-        # Quantize input to match what hardware actually unpacks from BFP L1 memory
-        if input_format == DataFormat.Bfp4_b:
-            operand = _bfp4b_to_float16b(operand)
-        elif input_format == DataFormat.Bfp8_b:
-            operand = _bfp8b_to_float16b(operand)
+        fmt_for_plain = input_format if input_format is not None else data_format
+        operand = quantize_input(operand, input_format, fmt_for_plain)
 
         if reduce_to_one:
             # Accumulate all tiles into a single result
@@ -2257,11 +2422,19 @@ class ReduceGolden:
                 operand, reduce_dim, pool_type, data_format, tile_cnt, tile_shape
             )
         else:
-            # Process each tile independently
+            # Process each tile independently; quantize output like eltwise binary
             return torch.cat(
                 [
-                    self._process_tile(
-                        operand, reduce_dim, pool_type, data_format, tile, tile_shape
+                    quantize_output(
+                        self._process_tile(
+                            operand,
+                            reduce_dim,
+                            pool_type,
+                            data_format,
+                            tile,
+                            tile_shape,
+                        ),
+                        data_format,
                     )
                     for tile in range(tile_cnt)
                 ]
@@ -2295,9 +2468,7 @@ class ReduceGolden:
                 else:
                     raise ValueError(f"Unsupported pool type: {pool_type}")
 
-        # Convert back to target data format at the end
-        target_dtype = format_dict[data_format]
-        return accumulated.to(target_dtype)
+        return quantize_output(accumulated, data_format)
 
     def _process_tile(
         self, operand, reduce_dim, pool_type, data_format, tile_idx, tile_shape
@@ -2391,7 +2562,9 @@ class ReduceGolden:
 
 @register_golden
 class ReduceBlockMaxRowGolden:
-    def __call__(self, operand, ct_dim, data_format, dimensions):
+    def __call__(self, operand, ct_dim, data_format, dimensions, input_format=None):
+        operand = quantize_input(operand, input_format, data_format)
+
         operand = operand.reshape(dimensions)
         output = torch.zeros(dimensions)
         for i in range(dimensions[0]):
@@ -2427,11 +2600,16 @@ class ReduceGapoolGolden(FidelityMasking):
         reduce_dim,
         math_fidelity=MathFidelity.LoFi,
         tile_cnt=1,
+        input_format=None,
     ):
 
         fidelity_iter_count = self.MATH_FIDELITY_TO_ITER_COUNT[math_fidelity]
 
-        return torch.cat(
+        fmt = input_format if input_format is not None else data_format
+        operand1 = quantize_input(operand1, input_format, fmt)
+        operand2 = quantize_input(operand2, input_format, fmt)
+
+        result = torch.cat(
             [
                 self._process_tile(
                     operand1,
@@ -2444,6 +2622,8 @@ class ReduceGapoolGolden(FidelityMasking):
                 for tile in range(tile_cnt)
             ]
         )
+
+        return quantize_output(result, data_format)
 
     def _process_tile(
         self, operand1, operand2, data_format, reduce_dim, fidelity_iter_count, tile_idx
@@ -2528,8 +2708,10 @@ class ReduceGapoolGolden(FidelityMasking):
 
 @register_golden
 class UntilizeGolden:
-    def __call__(self, operand, data_format, dimensions=[32, 32]):
+    def __call__(self, operand, data_format, dimensions=[32, 32], input_format=None):
         from helpers.tilize_untilize import untilize_block
+
+        operand = quantize_input(operand, input_format, data_format)
 
         result = untilize_block(
             operand, stimuli_format=data_format, dimensions=dimensions
@@ -2539,13 +2721,17 @@ class UntilizeGolden:
 
 @register_golden
 class TilizeGolden:
-    def __call__(self, operand, dimensions, data_format, num_faces=4):
+    def __call__(
+        self, operand, dimensions, data_format, num_faces=4, input_format=None
+    ):
         from helpers.llk_params import format_dict
         from helpers.tilize_untilize import tilize_block
 
         # Validate the number of faces
         if not (1 <= num_faces <= 4):
             raise ValueError(f"`num_faces` must be between 1 and 4, got {num_faces}")
+
+        operand = quantize_input(operand, input_format, data_format)
 
         # Always do full tilization first
         result = tilize_block(operand, dimensions, data_format)
@@ -2595,7 +2781,7 @@ class PackRowsGolden:
 
         result = extracted_elements.flatten()
 
-        return result.to(format_dict[data_format])
+        return quantize_output(result, data_format)
 
 
 @register_golden
@@ -2612,6 +2798,7 @@ class TopKGolden:
         K=32,
         sort_direction: TopKSortDirection = TopKSortDirection.Descending,
         input_dimensions=[32, 128],
+        input_format=None,
     ):
         """
         Perform per-row topk on a tensor.
@@ -2622,6 +2809,7 @@ class TopKGolden:
             k: Number of top elements to extract per row (default: 32).
             sort_direction: Direction to sort top-k values (default: Descending).
             input_dimensions: Input dimensions [rows, cols] (default: [32, 128]).
+            input_format: Input data format for BFP quantization (optional).
         Constraint:
             In LLK api, we perform topk with k >= 32, so input tensor must always have at least 2 tiles for values and
             of course 2 tiles for indices since we need to reorder them based on the topk results.
@@ -2630,6 +2818,8 @@ class TopKGolden:
             Tensor with topk applied per row. One Tile of values followed by one tile of indices.
         """
         torch_format = format_dict[data_format]
+
+        operand = quantize_input(operand, input_format, data_format)
 
         num_stages = 2  # One stage for values and one stage for indices.
 
