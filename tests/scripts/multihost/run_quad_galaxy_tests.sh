@@ -15,7 +15,7 @@ run_quad_galaxy_unit_tests() {
   fail=0
 
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
-  local tcp_interface="cnx1"
+  local tcp_interface="ens5f0np0"
   local hosts="UF-EV-C5-GWH02,UF-EV-C5-GWH01,UF-EV-C4-GWH02,UF-EV-C4-GWH01"
   local mpi_host="--host $hosts"
   local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 --tag-output"
@@ -69,7 +69,7 @@ setup_dual_galaxy_env() {
     export HOSTS="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 2 | paste -sd,)"
     export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    export TCP_INTERFACE="cnx1"
+    export TCP_INTERFACE="ens5f0np0"
     mkdir -p logs
     mkdir -p generated/artifacts
 
@@ -100,7 +100,7 @@ setup_quad_galaxy_env() {
     # heuristic to extract only 4 first hosts from the hostfile
     export HOSTS="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 4 | paste -sd,)"
     export RANKFILE=/etc/mpirun/rankfile
-    export TCP_INTERFACE="cnx1"
+    export TCP_INTERFACE="ens5f0np0"
     mkdir -p logs
     mkdir -p generated/artifacts
 
