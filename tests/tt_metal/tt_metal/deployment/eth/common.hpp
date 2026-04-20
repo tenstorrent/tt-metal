@@ -156,7 +156,7 @@ static bool bandwidth_check(
     uint64_t total_transferred,
     double threshold) {
     /* ==================== */
-    uint64_t delta = read_l1_u64(send_device, send_core, send_delta_addr);
+    uint64_t delta = read_eth_l1_u64(send_device, send_core, send_delta_addr);
     double deltas = delta / 1.35e9; /* Assuming fixed max frequency */
     double bandwidth = 8 * total_transferred / 1e9 / deltas;
     log_info(tt::LogTest, "      Bandwidth {:.3f} Gbps, {:.3f} ms", bandwidth, deltas * 1000);

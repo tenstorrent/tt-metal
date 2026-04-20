@@ -59,7 +59,15 @@ static inline uint32_t l1_alloc(struct l1_allocator* alloc, uint32_t size) {
 }
 
 [[maybe_unused]]
-uint64_t read_l1_u64(tt::tt_metal::IDevice* const device, const CoreCoord& core, uint64_t l1_addr) {
+uint64_t read_eth_l1_u32(tt::tt_metal::IDevice* const device, const CoreCoord& core, uint64_t l1_addr) {
+    auto delta_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core<uint32_t>(
+        device->id(), device->ethernet_core_from_logical_core(core), l1_addr, sizeof(uint32_t));
+
+    return delta_vec[0];
+}
+
+[[maybe_unused]]
+uint64_t read_eth_l1_u64(tt::tt_metal::IDevice* const device, const CoreCoord& core, uint64_t l1_addr) {
     auto delta_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core<uint32_t>(
         device->id(), device->ethernet_core_from_logical_core(core), l1_addr, 2 * sizeof(uint32_t));
 
