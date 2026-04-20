@@ -153,9 +153,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
 
     auto output_layout = TensorLayout(
         operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config);
-    auto output_padded_shape = output_layout.compute_padded_shape(
-        input_tensor.logical_shape());  // We need to account for the fact that the output tensor may have a different
-                                        // padded_shape due to having a differrent shard_spec.
+
     return {TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout(
