@@ -65,9 +65,11 @@ ALWI void process_tile(
         exp_cb_llk_post.push_back(num_tiles_per_cycle);
         tile_regs_release();
         exp_cb_raw_other.pop_front(num_tiles_per_cycle);
-        // Symmetric uninit to unary_bcast_init — undoes UNPACK and MATH state changes
-        // so the following binary op starts from a clean LLK state.
+        // Two-part transition: unary_bcast_uninit cleans UNPACK_A + MATH unary-datacopy
+        // state; reconfig_data_format_srca restores SrcA format for the binary op's read
+        // of cb_left (which may be FP32 via llk_bcast_dest_fp32 while cb_raw_other is BF16).
         unary_bcast_uninit<BroadcastType::ROW>(cb_raw_other);
+        reconfig_data_format_srca(cb_raw_other, cb_left);
         pack_reconfig_data_format(cb_llk_post, cb_out);
 #ifdef ARCH_BLACKHOLE
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));

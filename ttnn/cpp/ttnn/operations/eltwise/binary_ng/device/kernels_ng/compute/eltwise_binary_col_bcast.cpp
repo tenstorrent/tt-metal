@@ -45,12 +45,16 @@ ALWI void process_tile(
     cb_push_back(cb_llk_post, num_tiles_per_cycle);
     tile_regs_release();
 
-    // Symmetric uninit to unary_bcast_init — undoes UNPACK and MATH state changes
-    // so the following binary op starts from a clean LLK state. Replaces the previous
-    // manual reconfig_data_format_srca which only handled SRCA format and missed
-    // unpack-context / math-datacopy state, causing format mismatches on BH (PACR) and
-    // ttsim UNPACR cfg_context_id=1 on WH.
+    // Two-part transition from unary_bcast to the following binary op:
+    //  (1) unary_bcast_uninit — undoes UNPACK_A + MATH unary-datacopy state from
+    //      unary_bcast_init. Without this, BH hits PACR format mismatch and WH ttsim
+    //      cascades into the cfg_context_id=1 UNPACR variant.
+    //  (2) reconfig_data_format_srca(cb_bcast -> cb_post_lhs) — llk_bcast_dest_fp32
+    //      makes cb_post_lhs (c_5) FP32 when Dest is FP32 while cb_bcast stays at input
+    //      format (e.g. BF16). The binary op reads cb_post_lhs, so SrcA must track its
+    //      format or results are corrupted (seen as PCC 0.508 on add+COL_A BF16->FP32).
     unary_bcast_uninit<BroadcastType::COL>(cb_bcast);
+    reconfig_data_format_srca(cb_bcast, cb_post_lhs);
     pack_reconfig_data_format(cb_llk_post, cb_out);
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
