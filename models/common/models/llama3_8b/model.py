@@ -635,7 +635,7 @@ class EagerLlamaExecutor:
         # Attach model_args to model so engine can access it via model.model_args
         if model_args is not None:
             model.model_args = model_args
-        self._engine = EagerLLMExecutor(model, mesh_device)
+        self._engine = EagerLLMExecutor(model, mesh_device, iter_named_modules=_iter_llama_executor_named_modules)
 
     @property
     def model(self):
@@ -724,27 +724,6 @@ class EagerLlamaExecutor:
             sampling_params=sampling_params,
         )
 
-    def compile(
-        self,
-        *,
-        prefill_tokens,
-        prefill_page_table=None,
-        kv_cache=None,
-        prompt_lens=None,
-        empty_slots=None,
-        start_pos=None,
-        sampling_params=None,
-    ):
-        return self._engine.compile(
-            prefill_tokens=prefill_tokens,
-            prefill_page_table=prefill_page_table,
-            kv_cache=kv_cache,
-            prompt_lens=prompt_lens,
-            empty_slots=empty_slots,
-            start_pos=start_pos,
-            sampling_params=sampling_params,
-        )
-
     # =========================================================================
     # Forward — delegate to engine
     # =========================================================================
@@ -759,7 +738,6 @@ class EagerLlamaExecutor:
         enable_trace=True,
         sampling_params=None,
         start_pos=None,
-        warmup_prefill=True,
     ):
         return self._engine.prefill_forward(
             tokens,
@@ -770,7 +748,6 @@ class EagerLlamaExecutor:
             enable_trace=enable_trace,
             sampling_params=sampling_params,
             start_pos=start_pos,
-            warmup_prefill=warmup_prefill,
         )
 
     def _prefill_single_user(self, tokens, page_table, user_id, last_token_idx, num_cached_tokens=0):
@@ -821,7 +798,7 @@ class TracedLlamaExecutor:
         # Attach model_args to model so engine can access it via model.model_args
         if model_args is not None:
             model.model_args = model_args
-        self._engine = TracedLLMExecutor(model, mesh_device)
+        self._engine = TracedLLMExecutor(model, mesh_device, iter_named_modules=_iter_llama_executor_named_modules)
 
     @property
     def model(self):
@@ -878,6 +855,46 @@ class TracedLlamaExecutor:
         )
 
     # =========================================================================
+    # Compile — delegate to engine
+    # =========================================================================
+
+    def compile_prefill(
+        self,
+        *,
+        tokens,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        start_pos=None,
+    ):
+        return self._engine.compile_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=empty_slots,
+            start_pos=start_pos,
+        )
+
+    def compile_decode(
+        self,
+        *,
+        tokens,
+        start_pos,
+        page_table=None,
+        kv_cache=None,
+        sampling_params=None,
+    ):
+        return self._engine.compile_decode(
+            tokens=tokens,
+            start_pos=start_pos,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            sampling_params=sampling_params,
+        )
+
+    # =========================================================================
     # Forward — delegate to engine
     # =========================================================================
 
@@ -891,7 +908,6 @@ class TracedLlamaExecutor:
         enable_trace=True,
         sampling_params=None,
         start_pos=None,
-        warmup_prefill=True,
     ):
         return self._engine.prefill_forward(
             tokens,
@@ -902,7 +918,6 @@ class TracedLlamaExecutor:
             enable_trace=enable_trace,
             sampling_params=sampling_params,
             start_pos=start_pos,
-            warmup_prefill=warmup_prefill,
         )
 
     def decode_forward(
@@ -931,3 +946,29 @@ class TracedLlamaExecutor:
 
     def cleanup(self):
         return self._engine.cleanup()
+
+
+# =============================================================================
+# Executor Validation Traversal
+# =============================================================================
+
+
+def _iter_llama_executor_named_modules(model):
+    """Yield named submodules that declare executor input contracts."""
+    if not hasattr(model, "layers"):
+        return
+
+    for i, layer in enumerate(model.layers):
+        for suffix, submodule in [
+            ("attn_norm", getattr(layer, "attention_norm", None)),
+            ("attention", getattr(layer, "attention", None)),
+            ("ff_norm", getattr(layer, "ff_norm", None)),
+            ("mlp", getattr(layer, "mlp", None)),
+        ]:
+            if submodule is not None:
+                yield f"layer[{i}].{suffix}", submodule
+
+    if hasattr(model, "norm"):
+        yield "final_norm", model.norm
+    if hasattr(model, "lm_head"):
+        yield "lm_head", model.lm_head
