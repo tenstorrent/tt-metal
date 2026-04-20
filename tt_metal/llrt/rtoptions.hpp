@@ -206,6 +206,8 @@ class RunTimeOptions {
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     bool experimental_noc_debug_dump_enabled = false;
 
+    bool checkpoint_enabled = false;
+
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
     // should remain the same size as normal, unlike with null_kernels.
@@ -343,6 +345,13 @@ class RunTimeOptions {
     // Use new DEVICE_PRINT system instead of legacy DPRINT
     bool use_device_print = false;
 
+    // Enable hybrid lockstep + per-core L1 allocator mode
+    bool allocator_mode_hybrid = false;
+
+    // Disable shared memory tracking for tt-smi
+    bool shm_tracking_disabled = false;
+    bool shm_verbose = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -425,6 +434,11 @@ public:
     void set_llk_asserts(bool enabled) { enable_llk_asserts = enabled; }
 
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
+
+    bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
+
+    bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
+    bool get_shm_verbose() const { return shm_verbose; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.
@@ -578,6 +592,9 @@ public:
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
 
+    void set_checkpoint_enabled(bool v) { checkpoint_enabled = v; }
+    bool get_checkpoint_enabled() const { return checkpoint_enabled; }
+
     void set_kernels_nullified(bool v) { null_kernels = v; }
     bool get_kernels_nullified() const { return null_kernels; }
 
@@ -624,7 +641,7 @@ public:
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
-        return !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint);
+        return !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint) && !profiler_enabled;
     }
     bool get_fast_dispatch() const { return fast_dispatch; }
 

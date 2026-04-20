@@ -19,18 +19,6 @@ constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(7);
 constexpr bool use_fabric_on_receiver = get_compile_time_arg_val(8);
 constexpr bool use_fabric_on_sender = get_compile_time_arg_val(9);
 
-FORCE_INLINE bool socket_wait_for_pages_with_termination(
-    const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
-    constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == termination_value) {
-            return false;
-        }
-    }
-    return true;
-}
-
 FORCE_INLINE void write_data_to_local_core_with_ack(
     SocketSenderInterface& sender_socket, uint32_t l1_read_addr, uint64_t dst_addr, uint32_t page_size) {
     noc_async_write(l1_read_addr, dst_addr, page_size);
@@ -184,9 +172,12 @@ void kernel_main() {
     }
 
     while (true) {
-        socket_reserve_pages(sender_socket, 1);
-        if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
+        invalidate_l1_cache();
+        if (termination_semaphore[0] == 1) {
             break;
+        }
+        socket_reserve_pages(sender_socket, 1);
+        while (!socket_wait_for_pages(receiver_socket, 1)) {
         }
 
         auto l1_read_addr = receiver_socket.read_ptr;

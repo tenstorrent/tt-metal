@@ -111,7 +111,7 @@ ttnn::Tensor upsample(
     // Validation is handled by the device operation's validate_on_program_cache_miss
 
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(
-        ttnn::init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4));
+        ttnn::init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4));
 
     // For bilinear mode, call halo preprocessing step before the upsample operation
     if (mode == "bilinear") {

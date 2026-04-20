@@ -28,7 +28,7 @@ from transformers.cache_utils import DynamicCache
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 import ttnn
-from models.common.utility_functions import is_slow_dispatch
+from models.common.utility_functions import is_slow_dispatch, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.demo.pipeline import (
     PipelineConfiguration,
     create_single_galaxy_combined_spec_decode_pipeline_configuration,
@@ -64,6 +64,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     create_fabric_router_config,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
+from models.demos.deepseek_v3_b1.weights.prepare import prepare_lm_head_weights
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
@@ -1573,6 +1574,7 @@ def _is_persistent_mode_enabled():
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Skip perf tests with LLK asserts enabled.")
 def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters, device_params, enable_mtp):
     """Performance test for LM-head sampling with optional MTP fusion.
 
@@ -2015,6 +2017,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
 
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("seed", [123, 1337, 52098])
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_single_device(
     bh_2d_mesh_device,
     use_fp32,
@@ -2416,12 +2419,13 @@ def test_single_device_mtp(
     logger.info(f"Expected MTP shape: {torch_expected_mtp.shape}")
     mtp_passing_pcc, output = comp_pcc(mtp_output_torch, torch_expected_mtp.float(), 0.99)
     if not mtp_passing_pcc:
-        logger.warning(f"MTP output PCC check failed: {mtp_passing_pcc}")
+        logger.warning(f"MTP output PCC check failed: {output}")
     assert mtp_passing_pcc, "MTP output PCC check failed"
 
 
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("seed", [1337])
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -2727,6 +2731,7 @@ def test_single_device_mtp_verification(
 
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("seed", [1337])
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_single_device_d2h(
     bh_2d_mesh_device,
     use_fp32,
@@ -2908,6 +2913,7 @@ def test_single_device_d2h(
         ((3, 0), (2, 0), 4242),
     ],
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_multidevice(
     bh_2d_mesh_device,
     use_fp32,
@@ -3451,6 +3457,7 @@ def test_multidevice_mtp(
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_d2h(
     bh_2d_mesh_device,
     use_fp32,
@@ -3680,6 +3687,7 @@ def test_d2h(
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_d2d_to_d2h_pipeline(
     bh_2d_mesh_device,
     use_fp32,
@@ -3985,6 +3993,7 @@ def test_d2d_to_d2h_pipeline(
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_4stage_galaxy_1_iteration(
     bh_2d_mesh_device,
     use_fp32,
@@ -4318,6 +4327,7 @@ def test_4stage_galaxy_1_iteration(
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32, device_params):
     """
     4-stage 4x2 single-galaxy pipeline:
@@ -4675,6 +4685,7 @@ def test_reference_payload_mtp_accept_rate_ttnn(
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_persistent_mode_real_weights(mesh_device, use_fp32, hf_model_path, hf_state_dict):
     """
     Same as test_persistent_mode but uses real HF weights (DEEPSEEK_V3_HF_MODEL) via StateDictWeightProvider.
@@ -4777,6 +4788,7 @@ def test_persistent_mode_real_weights(mesh_device, use_fp32, hf_model_path, hf_s
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
     """
     16-stage 4x2 pod pipeline (4 galaxies):

@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -213,6 +214,7 @@ public:
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_core(
         const CoreCoord& core) const;
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_corerange(const CoreRange& cr) const;
+    std::vector<CoreRange> dataflow_buffers_unique_coreranges() const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
     void init_semaphores(
@@ -297,6 +299,14 @@ public:
     // Ensures that circular buffer core ranges are within the device compute grid
     void validate_circular_buffer_core_ranges(const IDevice* device);
 
+    // Deallocate circular buffers and unregister from devices
+    void deallocate_circular_buffers();
+
+    // CB tracking for SHM memory reporting
+    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> get_cb_l1_regions_per_core(
+        int device_id, size_t num_devices) const;
+    size_t get_num_cb_devices() const { return cb_devices_.size(); }
+
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
@@ -308,8 +318,6 @@ public:
     bool runs_on_noc_multicast_only_cores();
 
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
-
-    bool kernel_binary_always_stored_in_ringbuffer();
 
     void generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
 
@@ -408,6 +416,8 @@ private:
     std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
     // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
     std::vector<CircularBufferAllocator> cb_allocators_;
+    // Tracks which devices this program has CBs allocated on (for CB memory reporting)
+    std::unordered_set<const IDevice*> cb_devices_;
 
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>

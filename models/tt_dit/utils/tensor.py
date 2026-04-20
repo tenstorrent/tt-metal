@@ -23,6 +23,7 @@ def typed_tensor(
     mesh_axis=None,
     shard_dim=None,
     layout=ttnn.TILE_LAYOUT,
+    on_host=False,
 ) -> ttnn.Tensor:
     """
     Replicates or shards a tensor based on the mesh_axis and shard_dim
@@ -39,15 +40,28 @@ def typed_tensor(
         layout=layout,
         dtype=dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=device,
+        device=None if on_host else device,
         mesh_mapper=mesh_mapper,
     )
 
 
 def bf16_tensor(
-    x: torch.Tensor, device: ttnn.Device | None = None, mesh_axis=None, shard_dim=None, layout=ttnn.TILE_LAYOUT
+    x: torch.Tensor,
+    device: ttnn.Device | None = None,
+    mesh_axis=None,
+    shard_dim=None,
+    layout=ttnn.TILE_LAYOUT,
+    on_host=False,
 ) -> ttnn.Tensor:
-    return typed_tensor(x, ttnn.bfloat16, device, mesh_axis, shard_dim, layout)
+    return typed_tensor(
+        x,
+        ttnn.bfloat16,
+        device,
+        mesh_axis,
+        shard_dim,
+        layout,
+        on_host=on_host,
+    )
 
 
 def float32_tensor(
@@ -75,7 +89,12 @@ def bf16_tensor_host(
 
 
 def typed_tensor_2dshard(
-    x: torch.Tensor, device: ttnn.Device, shard_mapping: dict[int, int], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    x: torch.Tensor,
+    device: ttnn.Device,
+    shard_mapping: dict[int, int],
+    layout=ttnn.TILE_LAYOUT,
+    dtype=ttnn.bfloat16,
+    on_host=False,
 ) -> ttnn.Tensor:
     assert len(shard_mapping) == 2
     assert all(0 <= k <= 1 and 0 <= v < len(x.shape) for k, v in shard_mapping.items())
@@ -88,7 +107,7 @@ def typed_tensor_2dshard(
         layout=layout,
         dtype=dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=device,
+        device=None if on_host else device,
         mesh_mapper=mesh_mapper,
     )
 
@@ -98,8 +117,9 @@ def bf16_tensor_2dshard(
     device: ttnn.Device,
     shard_mapping: dict[int, int],
     layout=ttnn.TILE_LAYOUT,
+    on_host: bool = False,
 ) -> ttnn.Tensor:
-    return typed_tensor_2dshard(x, device, shard_mapping, layout, dtype=ttnn.bfloat16)
+    return typed_tensor_2dshard(x, device, shard_mapping, layout, dtype=ttnn.bfloat16, on_host=on_host)
 
 
 def from_torch(
@@ -245,6 +265,156 @@ def local_device_to_torch(tt_tensor: ttnn.Tensor) -> torch.Tensor:
         msg = "Failed to find local device tensor"
         raise RuntimeError(msg)
     return torch_tensor
+
+
+_to_torch_zero_copy_warned = False
+
+
+def _to_torch_zero_copy(t: ttnn.Tensor) -> torch.Tensor:
+    """Convert a host ttnn tensor to a PyTorch tensor, preferring zero-copy.
+
+    Uses ``to_torch_with_padded_shape`` when available — for ROW_MAJOR host
+    tensors this wraps the existing buffer directly (zero-copy) instead of
+    copying through ``decode_tensor_data`` as ``to_torch`` always does.
+
+    Falls back to ``to_torch`` if the method is removed, with a one-time
+    warning so the performance regression is visible.
+
+    TODO: Once ``to_torch`` supports a ``padded_output`` parameter (or the
+    zero-copy path becomes the default for ROW_MAJOR), switch to that and
+    remove this helper.
+    """
+    global _to_torch_zero_copy_warned
+    try:
+        return t.to_torch_with_padded_shape()
+    except AttributeError:
+        if not _to_torch_zero_copy_warned:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "to_torch_with_padded_shape unavailable, falling back to to_torch (slower d2h)"
+            )
+            _to_torch_zero_copy_warned = True
+        return ttnn.to_torch(t)
+
+
+def fast_device_to_host(
+    tt_tensor: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    concat_dims: list[int | None],
+    ccl_manager=None,
+) -> torch.Tensor:
+    """Fast D2H transfer using async DMA and zero-copy to_torch.
+
+    On a single-host system, this avoids the on-device all_gather by reading
+    all per-device shards concurrently with async DMA, converting to PyTorch
+    with zero-copy when possible, and concatenating on host.
+
+    On a multi-host (distributed) system, each host can only access its local
+    devices, so this falls back to on-device all_gather via *ccl_manager*
+    followed by a local-device read.
+
+    Args:
+        tt_tensor: Multi-device ttnn tensor on ``mesh_device``.
+        mesh_device: The mesh device.
+        concat_dims: Per mesh axis, the tensor dimension to concatenate along,
+            or ``None`` to skip that axis.  E.g. ``[3, 4]`` means concatenate
+            along dim 3 for mesh axis 0 and dim 4 for mesh axis 1.
+        ccl_manager: Optional :class:`CCLManager` instance.  Required for
+            multi-host environments where only local devices are accessible.
+    """
+    # Multi-host: can only access local devices, must all_gather on device first.
+    if ttnn.using_distributed_env():
+        if ccl_manager is None:
+            msg = "fast_device_to_host requires ccl_manager in a distributed " "(multi-host) environment"
+            raise ValueError(msg)
+        return ccl_manager.device_to_host(tt_tensor, concat_dims)
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    import torch
+
+    mesh_shape = tuple(mesh_device.shape)
+
+    if len(mesh_shape) != 2:
+        raise ValueError(
+            f"fast_device_to_host only supports 2D meshes, got mesh shape {mesh_shape} (ndim={len(mesh_shape)})"
+        )
+    if len(concat_dims) != 2:
+        raise ValueError(
+            f"concat_dims must have exactly 2 elements for a 2D mesh, got {len(concat_dims)}: {concat_dims}"
+        )
+
+    # Get mesh coordinates before issuing DMA — topology is on the original
+    # device tensor and maps each shard index to its (row, col) mesh position.
+    mesh_coords = list(tt_tensor.tensor_topology().mesh_coords())
+    device_tensors = ttnn.get_device_tensors(tt_tensor)
+
+    # Async DMA: issue all transfers then sync once
+    host_tensors = [dt.cpu(blocking=False) for dt in device_tensors]
+    ttnn.synchronize_device(mesh_device)
+
+    # Zero-copy to_torch when available, otherwise standard to_torch
+    with ThreadPoolExecutor(max_workers=len(host_tensors)) as pool:
+        shards = list(pool.map(_to_torch_zero_copy, host_tensors))
+
+    # Trim physical (tile-padded) shape to logical shape — view, no copy
+    logical_shape = list(host_tensors[0].shape)
+    shards = [s[tuple(slice(0, d) for d in logical_shape)] for s in shards]
+
+    # Validate that topology coordinates and device tensors are consistent.
+    n_coords, n_shards = len(mesh_coords), len(shards)
+    expected = mesh_shape[0] * mesh_shape[1]
+    if n_coords != n_shards:
+        raise ValueError(
+            f"mesh_coords length ({n_coords}) != device shards length ({n_shards}); "
+            "tensor_topology and get_device_tensors are out of sync"
+        )
+    if n_shards != expected:
+        raise ValueError(f"Expected {expected} shards for mesh shape {mesh_shape}, got {n_shards}")
+
+    # Build coord→shard mapping using explicit mesh coordinates rather than
+    # assuming get_device_tensors() returns shards in row-major order.
+    shards_by_coord = {(int(c[0]), int(c[1])): s for c, s in zip(mesh_coords, shards)}
+
+    if len(shards_by_coord) != n_shards:
+        raise ValueError(
+            f"Duplicate mesh coordinates detected: {n_shards} shards but only "
+            f"{len(shards_by_coord)} unique coordinates"
+        )
+
+    # Validate: if a mesh axis is not gathered (concat_dims[axis] is None)
+    # and has more than one device, the tensor must be replicated along that
+    # axis — otherwise we'd silently drop unique shards.
+    placements = list(tt_tensor.tensor_topology().placements())
+    for axis in range(len(concat_dims)):
+        if concat_dims[axis] is None and mesh_shape[axis] > 1:
+            if not isinstance(placements[axis], ttnn.PlacementReplicate):
+                msg = (
+                    f"concat_dims[{axis}] is None (no gather) but mesh axis {axis} "
+                    f"(size {mesh_shape[axis]}) is not replicated — this would drop shards."
+                )
+                raise ValueError(msg)
+
+    # Reassemble from 2D mesh using explicit coordinate lookup.
+    if concat_dims[0] is not None and concat_dims[1] is not None:
+        rows = []
+        for r in range(mesh_shape[0]):
+            row_shards = [shards_by_coord[(r, c)] for c in range(mesh_shape[1])]
+            rows.append(torch.cat(row_shards, dim=concat_dims[1]))
+        return torch.cat(rows, dim=concat_dims[0])
+    elif concat_dims[0] is not None:
+        return torch.cat(
+            [shards_by_coord[(r, 0)] for r in range(mesh_shape[0])],
+            dim=concat_dims[0],
+        )
+    elif concat_dims[1] is not None:
+        return torch.cat(
+            [shards_by_coord[(0, c)] for c in range(mesh_shape[1])],
+            dim=concat_dims[1],
+        )
+    else:
+        return shards[0]
 
 
 def upsample(

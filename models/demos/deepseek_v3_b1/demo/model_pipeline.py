@@ -67,7 +67,9 @@ class ModelPipeline:
         if weights_mode == "real":
             if cache_path is None:
                 raise ValueError("weights_mode='real' requires cache_path")
-            provider: WeightProvider = CacheWeightProvider(cache_path)
+            if model_path is None:
+                raise ValueError("weights_mode='real' requires model_path")
+            provider: WeightProvider = CacheWeightProvider(cache_path, model_path)
         elif weights_mode == "state_dict":
             if model_path is None:
                 raise ValueError("weights_mode='state_dict' requires model_path")
@@ -96,8 +98,7 @@ class ModelPipeline:
 
         self._page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES
         self.model: DeepSeekV3 | None = None
-        if self.pipeline.my_mesh_id == 0:
-            # Initialize host-side model interface for mesh id 0 (first stage)
+        if self.pipeline.my_stage_idx == 0:
             self.model = DeepSeekV3(
                 write_fn=self.pipeline.write_token,
                 read_fn=self.pipeline.read_output,
@@ -108,11 +109,11 @@ class ModelPipeline:
             if io_socket_descriptor_prefix is not None:
                 self.pipeline.export_host_socket_descriptors(io_socket_descriptor_prefix)
 
-        logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
+        logger.info(f"Created ModelPipeline for stage {self.pipeline.my_stage_idx}.")
 
     def prefill_forward(self, tokens: list[int]) -> list[DecodeResult]:
         """Prefill prompt tokens and return the DecodeResults from the last prompt token's outputs."""
-        if self.pipeline.my_mesh_id != 0:
+        if self.pipeline.my_stage_idx != 0:
             raise RuntimeError("prefill_forward() should only be called on mesh id 0")
         assert self.model is not None
         logger.debug(f"Prefilling with {len(tokens)} tokens...")
@@ -132,8 +133,8 @@ class ModelPipeline:
         return results
 
     def decode_forward(self, input_token: int) -> int:
-        """Run 1 decode step and return the next token id (legacy non-speculative path)."""
-        if self.pipeline.my_mesh_id != 0:
+        """Run 1 decode step and return the next token id."""
+        if self.pipeline.my_stage_idx != 0:
             raise RuntimeError("decode_forward() should only be called on mesh id 0")
         assert self.model is not None
 
@@ -171,9 +172,8 @@ class ModelPipeline:
           - REJECT:   emit base output, write tokens at device-supplied positions.
           - STALE:    discard and re-read.
         """
-        if self.pipeline.my_mesh_id != 0:
-            raise RuntimeError("run_inference() should only be called on mesh id 0")
-        assert self.model is not None
+        if self.pipeline.my_stage_idx != 0:
+            raise RuntimeError("run_inference() should only be called on stage 0")
         assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
 
         generated_tokens: list[int] = []

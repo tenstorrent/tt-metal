@@ -54,7 +54,6 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::SQRT:
         case UnaryOpType::HEAVISIDE:
         case UnaryOpType::ERF:
-        case UnaryOpType::ERFC:
         case UnaryOpType::RSUB:
         case UnaryOpType::RDIV:
         case UnaryOpType::EXP:
@@ -98,7 +97,6 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::THRESHOLD:
         case UnaryOpType::CLAMP_TSS:
         case UnaryOpType::SELU:
-        case UnaryOpType::LOGIT:
         case UnaryOpType::RPOW:
         case UnaryOpType::MISH:
         case UnaryOpType::POLYGAMMA: return true;

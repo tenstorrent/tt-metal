@@ -178,10 +178,14 @@ void kernel_main() {
 
     // ── Mcast receiver (all cores) ──────────────────────────────────
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast_dst_cb"),
-        get_named_compile_time_arg_val("mcast_dst_num_pages"),
+    deepseek_b1_ops::Mcast::DMArgs mcast_args{
+        .sender = {},
+        .receiver =
+            {
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast_dst_cb"),
+                get_named_compile_time_arg_val("mcast_dst_num_pages"),
+            },
     };
 
     // ── RMSNorm + Matmul (no-ops on NCRISC, compute on TRISC) ──────
@@ -348,6 +352,35 @@ void kernel_main() {
 #endif
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
+
+    // Template params: <num_cores, is_sender_in_receiver_grid, loopback>
+    // loopback=false because sender does not consume its own multicast data
+    using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
+        get_named_compile_time_arg_val("mcast_num_cores"),
+        get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid") == 1,
+        false>;
+
+    constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
+    constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
+    deepseek_b1_ops::Mcast::DMArgs mcast_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast_data_size_bytes"),
+                mcast_src_cb,
+                get_named_compile_time_arg_val("mcast_src_num_pages"),
+                Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
+                get_write_ptr(mcast_dst_cb),
+            },
+        .receiver = {},
+    };
+
+    // Matmul writer args (BRISC is a no-op for matmul; compute runs on TRISC)
     using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
 

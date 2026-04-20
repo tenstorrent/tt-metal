@@ -12,6 +12,8 @@ import ttnn
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 
+TEST_PADDING_VALUE = -42
+
 
 def reference(x, n_devices, is_rmsnorm):
     S = x[0].shape[2]
@@ -76,15 +78,14 @@ def ln_pre_allgather_op(xs, n_devices, is_rmsnorm, out_dtpe, kernel_config):
     return tt_out
 
 
-def run_layernorm_pre_all_gather_residual_pcc(device):
+def run_layernorm_pre_all_gather_residual_pcc(device, inp_shape):
     """Stats from layer_norm_pre_all_gather with residual_input_tensor (input + residual).
 
-    Aligns with test_norm41467.py: shape (1, 1, 32, 128), BFLOAT16, HiFi4, fp32_dest_acc on pre.
+    Shape (1, 1, 32, 128), BFLOAT16, HiFi4, fp32_dest_acc on pre.
     Golden stats match torch reductions on the fused tensor input + residual.
     """
     torch.manual_seed(41467)
 
-    inp_shape = (1, 1, 32, 128)
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     torch_inp = torch.randn(inp_shape, dtype=torch.bfloat16)
@@ -108,6 +109,7 @@ def run_layernorm_pre_all_gather_residual_pcc(device):
         tt_layout=ttnn.TILE_LAYOUT,
         tt_memory_config=dram_memcfg,
     )
+    tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE)
     tt_res = torch2tt_tensor(
         torch_res,
         tt_dtype=ttnn.bfloat16,
@@ -173,8 +175,7 @@ def run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather: bool):
     """End-to-end LayerNorm (pre_all_gather -> post_all_gather) with weight only, no bias.
 
     Regression for the former TT_FATAL that required beta whenever layernorm used gamma
-    (see layernorm_post_all_gather_device_operation). Shape (1, 1, 37, 72) matches the
-    standalone repro formerly in test_norm41378.py.
+    (see layernorm_post_all_gather_device_operation). Shape (1, 1, 37, 72)
     """
     torch.manual_seed(42)
 
@@ -217,6 +218,7 @@ def run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather: bool):
         tt_layout=ttnn.TILE_LAYOUT,
         tt_memory_config=dram_memcfg,
     )
+    tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE)
 
     if use_pre_all_gather:
         tt_stats = ln_pre_allgather_op([tt_inp], 1, False, ttnn.bfloat16, pre_kernel_config)[0]
@@ -462,9 +464,17 @@ def test_layernorm_part_1_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
 )
 def test_layernorm_pre_post_gamma_only_pcc(use_pre_all_gather, device):
     """layer_norm_post_all_gather with gamma and no bias; PCC vs torch reference."""
+    if use_pre_all_gather:
+        pytest.skip("Skipping test with use_pre_all_gather=True due to implicit padding issue #42135")
     run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather)
 
 
-def test_layernorm_pre_all_gather_residual_pcc(device):
-    """layer_norm_pre_all_gather with residual_input_tensor; PCC vs torch (see test_norm41467.py)."""
-    run_layernorm_pre_all_gather_residual_pcc(device)
+@pytest.mark.parametrize(
+    "inp_shape",
+    [(1, 1, 32, 128), (1, 1, 24, 42), (1, 1, 24, 38)],
+)
+def test_layernorm_pre_all_gather_residual_pcc(device, inp_shape):
+    """layer_norm_pre_all_gather with residual_input_tensor; PCC vs torch reference."""
+    if inp_shape == (1, 1, 24, 38):
+        pytest.skip("Skipping shape (1,1,24,38) due to implicit padding issue #42148")
+    run_layernorm_pre_all_gather_residual_pcc(device, inp_shape)

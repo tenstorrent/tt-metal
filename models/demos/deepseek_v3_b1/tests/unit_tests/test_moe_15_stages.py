@@ -25,9 +25,9 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
-    RoutedExpert,
     create_routed_expert_tensors,
     create_shared_expert_tensors,
 )
@@ -95,7 +95,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     if device_grid.x < 13 or device_grid.y < 10:
         pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for MoE (need >= 13x10)")
 
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
     assert len(pipeline_config) == num_procs + 1
 
     is_torus = device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D_TORUS_Y
@@ -475,7 +475,7 @@ def test_persistent_moe_15_stages(
     if device_grid.x < 13 or device_grid.y < 10:
         pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for MoE (need >= 13x10)")
 
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
     assert len(pipeline_config) == num_procs + 1
 
     is_torus = device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D_TORUS_Y
@@ -862,7 +862,7 @@ def test_persistent_moe_multi_token(
     if device_grid.x < 13 or device_grid.y < 10:
         pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for MoE (need >= 13x10)")
 
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
     assert len(pipeline_config) == num_procs + 1
 
     is_torus = device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D_TORUS_Y

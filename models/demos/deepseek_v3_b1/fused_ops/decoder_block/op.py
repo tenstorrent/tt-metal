@@ -522,26 +522,39 @@ class DecoderBlock:
                 ccl_sender_core = ctx["ccl_sender_core"]
                 gather_core = ctx["gather_core"]
                 allreduce_config = ccl["allreduce_config"]
+                allgather_config = ccl["allgather_config"]
                 coord = ccl["mesh_coord"]
 
                 sender_group = kernel_result.get_group_by_arg("is_allreduce_sender_core", 1)
                 receiver_group = kernel_result.get_group_by_arg("is_allreduce_receiver_core", 1)
 
-                # Sender NCRISC: common RT args + per-core fabric args
+                # Sender NCRISC: common RT args + [count] + allreduce fabric args + allgather fabric args
                 ccl_sender_ncrisc_rt = program.kernels[sender_group.ncrisc_kernel_index].runtime_args[
                     ccl_sender_core.x
                 ][ccl_sender_core.y]
                 ccl_sender_ncrisc_rt.extend(ccl["sender_ncrisc_common_rt_args"])
-                ccl_sender_ncrisc_rt.extend(
+                allreduce_ncrisc_pc_args = list(
                     allreduce_config.get_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
                 )
+                ccl_sender_ncrisc_rt.append(len(allreduce_ncrisc_pc_args))
+                ccl_sender_ncrisc_rt.extend(allreduce_ncrisc_pc_args)
+                ccl_sender_ncrisc_rt.extend(
+                    allgather_config.get_transport_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
 
-                # Sender BRISC: common RT args + per-core fabric args
+                # Sender BRISC: common RT args + [count] + allreduce fabric args + allgather fabric args
                 ccl_sender_brisc_rt = program.kernels[sender_group.brisc_kernel_index].runtime_args[ccl_sender_core.x][
                     ccl_sender_core.y
                 ]
                 ccl_sender_brisc_rt.extend(ccl["sender_brisc_common_rt_args"])
-                ccl_sender_brisc_rt.extend(allreduce_config.get_brisc_per_core_rt_args(coord, program, ccl_sender_core))
+                allreduce_brisc_pc_args = list(
+                    allreduce_config.get_brisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
+                ccl_sender_brisc_rt.append(len(allreduce_brisc_pc_args))
+                ccl_sender_brisc_rt.extend(allreduce_brisc_pc_args)
+                ccl_sender_brisc_rt.extend(
+                    allgather_config.get_transport_brisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
 
                 # Receiver NCRISC: common RT args only (reader uses semaphores, no fabric)
                 ccl_receiver_ncrisc_rt = program.kernels[receiver_group.ncrisc_kernel_index].runtime_args[

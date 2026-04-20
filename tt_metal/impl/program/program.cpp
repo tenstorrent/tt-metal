@@ -48,6 +48,10 @@
 #include "impl/context/context_types.hpp"
 #include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
+#include "impl/device/device_impl.hpp"
+#include "impl/memory_tracking/memory_stats_shm.hpp"
+#include "tt-metalium/mesh_device.hpp"
+#include <unistd.h>
 #include "jit_build/build.hpp"
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
@@ -218,7 +222,11 @@ detail::ProgramImpl::ProgramImpl() :
     Inspector::program_created(this);
 }
 
-detail::ProgramImpl::~ProgramImpl() noexcept { Inspector::program_destroyed(this); }
+detail::ProgramImpl::~ProgramImpl() noexcept {
+    // Deallocate circular buffers and unregister from devices
+    deallocate_circular_buffers();
+    Inspector::program_destroyed(this);
+}
 
 Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
@@ -941,6 +949,8 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
 CBHandle detail::ProgramImpl::add_circular_buffer(
     const CoreRangeSet& core_range_set, const CircularBufferConfig& config) {
     TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
+    TT_FATAL(
+        this->dataflow_buffers_.empty(), "Cannot add circular buffer to a program that already has dataflow buffers");
     // Merge ranges to reduce the number of multicasts needed to initialize CBs.
     std::shared_ptr<CircularBufferImpl> circular_buffer =
         std::make_shared<CircularBufferImpl>(core_range_set.merge_ranges(), config);
@@ -952,6 +962,8 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
     const CircularBufferConfig& config,
     const experimental::GlobalCircularBuffer& global_circular_buffer) {
     TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
+    TT_FATAL(
+        this->dataflow_buffers_.empty(), "Cannot add circular buffer to a program that already has dataflow buffers");
     // Merge ranges to reduce the number of multicasts needed to initialize CBs.
     std::shared_ptr<CircularBufferImpl> circular_buffer =
         std::make_shared<CircularBufferImpl>(core_range_set.merge_ranges(), config, global_circular_buffer);
@@ -1065,13 +1077,71 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
 
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     // ZoneScoped;
+
+    // If device is a MeshDevice, we need to track all its sub-devices
+    std::vector<const IDevice*> devices_to_track;
+    const tt::tt_metal::distributed::MeshDevice* mesh_device =
+        dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
+    if (mesh_device != nullptr) {
+        // Mesh device: track all sub-devices
+        for (IDevice* sub_device : mesh_device->get_devices()) {
+            devices_to_track.push_back(sub_device);
+        }
+    } else {
+        // Single device
+        devices_to_track.push_back(device);
+    }
+
+    // Track which devices are NEW (not already tracked)
+    std::vector<const IDevice*> new_devices;
+    for (const IDevice* dev : devices_to_track) {
+        auto [iter, inserted] = this->cb_devices_.insert(dev);
+        if (inserted) {
+            new_devices.push_back(dev);
+        }
+    }
+
+    // If CB layout already calculated, skip allocation but report for new devices
     if (not this->local_circular_buffer_allocation_needed_) {
+        // Report CB allocations for any NEW devices (using cached addresses)
+        if (!new_devices.empty() && !this->circular_buffers_.empty()) {
+            for (const IDevice* dev : new_devices) {
+                for (const auto& circular_buffer : this->circular_buffers_) {
+                    if (!circular_buffer->globally_allocated()) {
+                        tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                            circular_buffer->core_ranges(),
+                            circular_buffer->address(),
+                            circular_buffer->size(),
+                            circular_buffer->globally_allocated(),
+                            dev);
+                    }
+                }
+
+                // Also register program with the NEW device
+                auto* device_obj = dynamic_cast<Device*>(const_cast<IDevice*>(dev));
+                if (device_obj) {
+                    device_obj->register_program(this);
+                    if (device_obj->get_shm_stats_provider()) {
+                        device_obj->get_shm_stats_provider()->update_from_allocator(device_obj, getpid());
+                    }
+                }
+            }
+        }
         return;
     }
 
     uint64_t base_cb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
+            // Track globally allocated CBs too (they use L1 memory allocated via the allocator)
+            for (const IDevice* dev : devices_to_track) {
+                tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                    circular_buffer->core_ranges(),
+                    circular_buffer->address(),
+                    circular_buffer->size(),
+                    circular_buffer->globally_allocated(),
+                    dev);
+            }
             continue;
         }
 
@@ -1099,15 +1169,78 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
                 }
             }
         }
-        tt::tt_metal::GraphTracker::instance().track_allocate_cb(
-            circular_buffer->core_ranges(),
-            computed_addr,
-            circular_buffer->size(),
-            circular_buffer->globally_allocated(),
-            device);
+        // Report CB allocation for ALL devices being tracked
+        for (const IDevice* dev : devices_to_track) {
+            tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                circular_buffer->core_ranges(),
+                computed_addr,
+                circular_buffer->size(),
+                circular_buffer->globally_allocated(),
+                dev);
+        }
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
+
+    // Register program ONLY with NEW devices (prevents duplicate registration)
+    for (const IDevice* dev : new_devices) {
+        auto* device_obj = dynamic_cast<Device*>(const_cast<IDevice*>(dev));
+        if (device_obj) {
+            device_obj->register_program(this);
+            // Update locally-allocated CB stats via query (accurate even for cached programs)
+            if (device_obj->get_shm_stats_provider()) {
+                device_obj->get_shm_stats_provider()->update_from_allocator(device_obj, getpid());
+            }
+        }
+    }
     this->local_circular_buffer_allocation_needed_ = false;
+}
+
+std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> detail::ProgramImpl::get_cb_l1_regions_per_core(
+    int device_id, size_t num_devices) const {
+    (void)device_id;    // TODO: Use device_id once per-device or heterogeneous mesh CB layouts are supported
+    (void)num_devices;  // TODO: Use num_devices for multi-device filtering or layout partitioning when implemented
+
+    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_core;
+
+    // For each allocator, iterate through all cores in its CoreRange
+    for (const auto& cb_allocator : cb_allocators_) {
+        const auto& l1_regions = cb_allocator.l1_regions;
+
+        // Add these regions to every core in the CoreRange
+        for (uint32_t x = cb_allocator.core_range.start_coord.x; x <= cb_allocator.core_range.end_coord.x; x++) {
+            for (uint32_t y = cb_allocator.core_range.start_coord.y; y <= cb_allocator.core_range.end_coord.y; y++) {
+                CoreCoord core(x, y);
+                auto& core_regions = regions_per_core[core];
+                core_regions.insert(core_regions.end(), l1_regions.begin(), l1_regions.end());
+            }
+        }
+    }
+
+    return regions_per_core;
+}
+
+void detail::ProgramImpl::deallocate_circular_buffers() {
+    // Deallocate all circular buffers for this program on ALL devices
+    // This notifies the GraphTracker to report deallocations
+    if (!this->cb_devices_.empty() && !this->circular_buffers_.empty()) {
+        for (const IDevice* idevice : this->cb_devices_) {
+            tt::tt_metal::GraphTracker::instance().track_deallocate_cb(idevice);
+        }
+
+        // Unregister program from ALL devices (matches registration)
+        for (const IDevice* idevice : this->cb_devices_) {
+            auto* device = dynamic_cast<Device*>(const_cast<IDevice*>(idevice));
+            if (device) {
+                device->unregister_program(this);
+                // Update locally-allocated CB stats via query (accurate after deallocation)
+                if (device->get_shm_stats_provider()) {
+                    device->get_shm_stats_provider()->update_from_allocator(device, getpid());
+                }
+            }
+        }
+
+        this->cb_devices_.clear();  // Clear device set after deallocation
+    }
 }
 
 void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device) {
@@ -1161,8 +1294,8 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
 void detail::ProgramImpl::init_semaphores(
     const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
     const auto& hal = MetalContext::instance().hal();
-    uint64_t kernel_config_base =
-        hal.get_dev_addr(hal.get_programmable_core_type(programmable_core_type_index), HalL1MemAddrType::KERNEL_CONFIG);
+    HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
+    uint64_t kernel_config_base = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
     uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
     CoreType core_type = MetalContext::instance().hal().get_core_type(programmable_core_type_index);
     auto semaphores_on_core = this->semaphores_on_core(logical_core, core_type);
@@ -1794,16 +1927,6 @@ bool detail::ProgramImpl::runs_on_noc_multicast_only_cores() {
                 .empty());
 }
 
-bool detail::ProgramImpl::kernel_binary_always_stored_in_ringbuffer() {
-    // Active ethernet cores use a fixed address for the kernel binary, because they don't have enough memory to have
-    // that big of a ringbuffer.
-    return !(
-        MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
-        not this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(
-                                        HalProgrammableCoreType::ACTIVE_ETH))
-                .empty());
-}
-
 Program::Program(Program&& other) noexcept = default;
 
 Program& Program::operator=(Program&& other) noexcept = default;
@@ -1978,6 +2101,12 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             state.dfb_offset,
             state.dfb_size);
 
+        // On WH/BH, DFBs reuse the CB firmware init path; set local_cb_mask to a proper DFB
+        // slot bitmask so setup_local_cb_read_write_interfaces initialises every DFB slot.
+        if (!hal.has_tile_counter_registers() && !dataflow_buffers.empty()) {
+            program_dispatch::finalize_dfb_masks(kernel_groups_getter(index), dataflow_buffers);
+        }
+
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         state.offset = program_dispatch::finalize_kernel_bins(
@@ -2012,8 +2141,8 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 
     // Determine the DRAM kernel binary size per program and the max across all programs.
     // populate_dispatch_data (called above via set_program_attrs_across_core_types) packs all
-    // kernel binaries from every core type into program_transfer_info.binary_data, so its size
-    // reflects the full unpadded binary payload the prefetcher must cache.
+    // kernel binaries from every core type into program_transfer_info.binary_data as a single,
+    // page-aligned payload, so its size reflects the full padded binary data the prefetcher must cache.
     uint32_t max_program_sizeB = 0;
     for (auto& program : programs) {
         uint32_t binary_sizeB =

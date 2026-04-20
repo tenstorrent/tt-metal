@@ -10,7 +10,10 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import pad_by_zero, torch2tt_tensor, comp_pcc
+from models.common.utility_functions import pad_by_zero, torch2tt_tensor
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
+
+TEST_PADDING_VALUE = -42
 
 
 def ref_layernorm(x, gamma, beta, eps):
@@ -24,10 +27,14 @@ def ref_rmsnorm(x, gamma, beta, eps):
 def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device):
     epsf = 1e-2
 
-    test_dims = ((1, 9, 384, 1024),)
+    test_dims = (
+        (1, 9, 384, 1024),
+        (1, 1, 24, 42),
+    )
     for test_shape in test_dims:
         in0 = torch.rand(test_shape) * 2 - 0.95
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
+        in0_t = ttnn.fill_implicit_tile_padding(in0_t, TEST_PADDING_VALUE)
 
         if test_id <= 5:
             in1 = torch.rand(test_shape) * 2 - 0.8
@@ -160,9 +167,14 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
 
         ref_lnorm = ref_fn(pt_in, gamma.flatten(), beta.flatten(), epsf)
 
-        passing, output = comp_pcc(ref_lnorm, tt_got_back)
-
-        assert passing, output
+        assert_numeric_metrics(
+            ref_lnorm,
+            tt_got_back,
+            pcc_threshold=0.999,
+            rtol=3.266,
+            atol=0.098,
+            frobenius_threshold=0.016,
+        )
 
 
 @pytest.mark.parametrize(
@@ -215,8 +227,8 @@ def test_layernorm_mix_precision(test_id, in_dtype, gamma_dtype, in0_mem_config,
     run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device)
 
 
-@pytest.mark.parametrize("h", [1632, 8192, 16384])
-@pytest.mark.parametrize("w", [1280])
+@pytest.mark.parametrize("h", [22, 1632, 8192, 16384])
+@pytest.mark.parametrize("w", [45, 1280])
 @pytest.mark.parametrize("num_chunks", [1, 4])
 def test_layer_norm_4D_llama(device, h, w, num_chunks):
     """
@@ -233,6 +245,7 @@ def test_layer_norm_4D_llama(device, h, w, num_chunks):
     )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -241,5 +254,11 @@ def test_layer_norm_4D_llama(device, h, w, num_chunks):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    passing, output = comp_pcc(torch_output_tensor, output_tensor)
-    assert passing, output
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.006,
+        atol=0.018,
+        frobenius_threshold=0.003,
+    )

@@ -28,13 +28,43 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     StageKind,
 )
 from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock, StageMetadata
 
 
 def create_fabric_router_config(max_payload_size: int) -> Any:
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
+
+
+def create_passthrough_pipeline_configuration(
+    weight_provider: WeightProvider,
+    num_procs: int,
+    *,
+    payload: PassthroughPayload = PassthroughPayload.ACTIVATION,
+) -> PipelineConfiguration:
+    """N-stage pipeline: stage 0 is :class:`EmbeddingStage`; stages 1..N-1 are :class:`PassthroughStage`.
+
+    Default ``payload`` is :attr:`~PassthroughPayload.ACTIVATION` so D2D FIFO/page sizes match
+    :class:`EmbeddingStage` downstream (embedding rows). Use :attr:`~PassthroughPayload.TOKEN` only
+    when every stage before the passthrough chain emits token-sized pages (not this factory's
+    embedding-first layout).
+
+    Stage indices 0 .. num_procs-1 must match the distributed mesh count (e.g. 4, 16, 64).
+    """
+    if num_procs < 1:
+        raise ValueError(f"num_procs must be >= 1, got {num_procs}")
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return EmbeddingStage(
+            weight_provider.load_embedding(device),
+            loopback_payload=PassthroughPayload.ACTIVATION,
+        )
+
+    stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {0: stage_0}
+    for i in range(1, num_procs):
+        stage_factories[i] = lambda _d, p=payload: PassthroughStage(p)
+    return PipelineConfiguration(stage_factories)
 
 
 def create_single_galaxy_pipeline_configuration(
@@ -51,6 +81,7 @@ def create_single_galaxy_pipeline_configuration(
         return EmbeddingStage(
             weight_provider.load_embedding(device),
             d2h_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES if enable_mtp else None,
+            forward_metadata=enable_mtp,
         )
 
     def stage_1(device: ttnn.MeshDevice) -> StageKind:
@@ -87,6 +118,7 @@ def create_single_galaxy_pipeline_spec_stage_only_configuration(
         return EmbeddingStage(
             weight_provider.load_embedding(device),
             d2h_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
+            forward_metadata=True,
         )
 
     def stage_1(device: ttnn.MeshDevice) -> StageKind:
@@ -119,6 +151,7 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
         return EmbeddingStage(
             weight_provider.load_embedding(device),
             d2h_page_size=TOKEN_META_PAGE_SIZE_BYTES,
+            forward_metadata=True,
         )
 
     def stage_1(device: ttnn.MeshDevice) -> StageKind:
@@ -195,6 +228,64 @@ def create_single_galaxy_combined_spec_decode_pipeline_configuration(
     )
 
 
+def create_single_galaxy_deepseek_pipeline_configuration(
+    weight_provider: WeightProvider,
+    *,
+    lm_head_fp32_dest_acc_en: bool = True,
+    lm_head_persistent_mode: bool = True,
+    dense_layer_id: int = 0,
+    moe_layer_id: int = 0,
+) -> PipelineConfiguration:
+    """4-stage single-galaxy: Embed -> Dense -> MoE -> LMHead.
+
+    This is the decoder stack that :func:`create_single_galaxy_pipeline_configuration` approximates
+    with two token :class:`PassthroughStage` stages after LMHead. Here the two passthrough slots are
+    replaced by :class:`DenseDecoderStage` and :class:`MoEDecoderStage` **before** LMHead so every
+    D2D hop stays activation-sized until the final LMHead emits token-sized pages to loopback.
+    (Placing dense/MoE after LMHead would mismatch TOKEN vs activation socket handshakes.)
+
+    """
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return EmbeddingStage(
+            weight_provider.load_embedding(device),
+            forward_metadata=True,
+        )
+
+    def stage_1(device: ttnn.MeshDevice) -> StageKind:
+        return DenseDecoderStage(
+            weights=weight_provider.load_dense_layer(layer_id=dense_layer_id, device=device),
+            layer_idx=dense_layer_id,
+            forward_metadata=True,
+        )
+
+    def stage_2(device: ttnn.MeshDevice) -> StageKind:
+        return MoEDecoderStage(
+            weights=weight_provider.load_moe_layer(layer_id=moe_layer_id, device=device),
+            layer_idx=moe_layer_id,
+            forward_metadata=True,
+        )
+
+    def stage_3(device: ttnn.MeshDevice) -> StageKind:
+        return BaseLMHeadStage(
+            weights=weight_provider.load_lm_head(device),
+            fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            persistent_mode=lm_head_persistent_mode,
+        )
+
+    return PipelineConfiguration(
+        {
+            0: stage_0,
+            1: stage_1,
+            2: stage_2,
+            3: stage_3,
+        }
+    )
+
+
+create_single_galaxy_deepseek_pipeline = create_single_galaxy_deepseek_pipeline_configuration
+
+
 def create_single_pod_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
@@ -212,7 +303,7 @@ def create_single_pod_pipeline_configuration(
     fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return EmbeddingStage(weight_provider.load_embedding(device, True), forward_metadata=True)
+        return EmbeddingStage(weight_provider.load_embedding(device), forward_metadata=True)
 
     def stage_14(device: ttnn.MeshDevice) -> StageKind:
         mtp_weights = weight_provider.load_mtp(device) if enable_mtp else None
@@ -338,6 +429,7 @@ def create_pipeline_configuration_from_num_procs(
             enable_mtp=enable_mtp,
         )
     if num_procs == 16:
+        assert enable_mtp, "16-proc pipeline currently requires enable_mtp=True and uses the spec decode topology"
         return create_single_pod_spec_decode_pipeline_configuration(
             weight_provider,
             fp32_dest_acc_en=fp32_dest_acc_en,
@@ -371,39 +463,72 @@ class PipelineConfiguration:
     def num_stages(self) -> int:
         return len(self._stage_factories)
 
-    def build_pipeline(self, mesh_device: ttnn.MeshDevice) -> Pipeline:
-        """Create a Pipeline for this process's stage (determined by mesh_id)."""
-        my_mesh_id = mesh_device.get_system_mesh_id()
-        print(f"[PIPE P{my_mesh_id}] build_pipeline: creating stage factory", flush=True)
-        stage = self._stage_factories[my_mesh_id](mesh_device)
-        print(f"[PIPE P{my_mesh_id}] build_pipeline: stage={type(stage).__name__}", flush=True)
-        return Pipeline(mesh_device, stage)
+    def build_pipeline(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        my_stage_idx: int | None = None,
+        stages_metadata: dict[int, StageMetadata] | None = None,
+        pipeline_config: list | None = None,
+    ) -> Pipeline:
+        """Create a Pipeline for this process's stage.
+
+        Args:
+            mesh_device: The MeshDevice (or submesh) for this stage.
+            my_stage_idx: Which stage this process runs. Defaults to
+                ``mesh_device.get_system_mesh_id()`` for backwards compatibility.
+            stages_metadata: Per-stage rank/mesh_id routing info.
+            pipeline_config: List of PipelineConfigEntry (entry/exit coords per stage).
+                Required when stages_metadata is provided.
+        """
+        if my_stage_idx is None:
+            my_stage_idx = mesh_device.get_system_mesh_id()
+        stage = self._stage_factories[my_stage_idx](mesh_device)
+        return Pipeline(
+            mesh_device, stage, my_stage_idx, stages_metadata=stages_metadata, pipeline_config=pipeline_config
+        )
 
 
 class Pipeline:
     """Orchestrator for one pipeline stage with explicit 4-phase setup."""
 
-    def __init__(self, mesh_device: ttnn.MeshDevice, stage_kind: StageKind) -> None:
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        stage_kind: StageKind,
+        my_stage_idx: int,
+        stages_metadata: dict[int, StageMetadata] | None = None,
+        pipeline_config: list | None = None,
+    ) -> None:
         self._mesh_device = mesh_device
         self._stage_kind = stage_kind
-        self._my_mesh_id = mesh_device.get_system_mesh_id()
-        self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        self._my_stage_idx = my_stage_idx
+        if stages_metadata is not None:
+            assert pipeline_config is not None, "pipeline_config required when stages_metadata is provided"
+            self._pipeline_config = pipeline_config
+        else:
+            self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
         self._ctx = StageContext(
             mesh_device=mesh_device,
             pipeline_config=self._pipeline_config,
-            my_mesh_id=self._my_mesh_id,
+            my_stage_idx=self._my_stage_idx,
+            stages_metadata=stages_metadata,
         )
         self._pipeline_block: PipelineBlock | None = None
 
     @property
     def my_mesh_id(self) -> int:
-        return self._my_mesh_id
+        """Backwards-compatible alias for my_stage_idx."""
+        return self._my_stage_idx
+
+    @property
+    def my_stage_idx(self) -> int:
+        return self._my_stage_idx
 
     def configure_block(self) -> None:
         """Phase 1: Create the PipelineBlock (socket wiring)."""
-        print(f"[PIPE P{self._my_mesh_id}] phase1: configure_block", flush=True)
+        print(f"[PIPE P{self._my_stage_idx}] phase1: configure_block", flush=True)
         self._pipeline_block = self._stage_kind.create_pipeline_block(self._ctx)
-        print(f"[PIPE P{self._my_mesh_id}] phase1: done", flush=True)
+        print(f"[PIPE P{self._my_stage_idx}] phase1: done", flush=True)
 
     def setup(self) -> None:
         """Phase 2: Allocate tensors, weights, semaphores on device.
@@ -413,30 +538,31 @@ class Pipeline:
         """
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before setup()")
-        print(f"[PIPE P{self._my_mesh_id}] phase2: setup tensors", flush=True)
+        print(f"[PIPE P{self._my_stage_idx}] phase2: setup tensors", flush=True)
         self._stage_kind.setup(self._ctx, self._pipeline_block)
-        print(f"[PIPE P{self._my_mesh_id}] phase2: done", flush=True)
+        print(f"[PIPE P{self._my_stage_idx}] phase2: done", flush=True)
 
     def start_pipeline(self) -> None:
         """Phase 3: Start pipeline block kernels (socket interfaces + auxiliary bypass sockets)."""
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before start_pipeline()")
-        print(f"[PIPE P{self._my_mesh_id}] phase3: pipeline_block.run()", flush=True)
+        print(f"[PIPE P{self._my_stage_idx}] phase3: pipeline_block.run()", flush=True)
         self._pipeline_block.run()
-        print(f"[PIPE P{self._my_mesh_id}] phase3: run_auxiliary_sockets()", flush=True)
+        print(f"[PIPE P{self._my_stage_idx}] phase3: run_auxiliary_sockets()", flush=True)
         self._stage_kind.run_auxiliary_sockets()
-        print(f"[PIPE P{self._my_mesh_id}] phase3: done", flush=True)
+        print(f"[PIPE P{self._my_stage_idx}] phase3: done", flush=True)
 
     def start_compute(self) -> None:
         """Phase 4: Launch stage compute (e.g. ``LMHeadSampling.op``, ``DecoderBlock.execute``)."""
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before start_compute()")
-        print(f"[PIPE P{self._my_mesh_id}] phase4: launch_compute", flush=True)
+        print(f"[PIPE P{self._my_stage_idx}] phase4: launch_compute", flush=True)
         self._stage_kind.launch_compute(self._ctx, self._pipeline_block)
-        print(f"[PIPE P{self._my_mesh_id}] phase4: done", flush=True)
+        print(f"[PIPE P{self._my_stage_idx}] phase4: done", flush=True)
 
     def setup_and_run(self) -> None:
         """Run all four phases in order."""
+        self.barrier()  # Synchronize before socket creation — stage 0 may be slow due to weight loading
         logger.info("Configuring block")
         self.configure_block()
 
@@ -475,12 +601,12 @@ class Pipeline:
 
     def terminate(self) -> None:
         """Terminate the pipeline block and any auxiliary sockets."""
-        print(f"[PIPE P{self._my_mesh_id}] terminate: terminate_auxiliary", flush=True)
+        print(f"[PIPE P{self._my_stage_idx}] terminate: terminate_auxiliary", flush=True)
         self._stage_kind.terminate_auxiliary()
-        print(f"[PIPE P{self._my_mesh_id}] terminate: pipeline_block.terminate", flush=True)
+        print(f"[PIPE P{self._my_stage_idx}] terminate: pipeline_block.terminate", flush=True)
         if self._pipeline_block is not None:
             self._pipeline_block.terminate()
-        print(f"[PIPE P{self._my_mesh_id}] terminate: done", flush=True)
+        print(f"[PIPE P{self._my_stage_idx}] terminate: done", flush=True)
 
 
 def create_single_pod_spec_decode_pipeline_configuration(

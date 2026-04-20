@@ -32,7 +32,7 @@ blocking on socket_wait_for_pages() and cb_wait_front() operations.
 """
 
 import ttnn
-from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import get_interleaved_tensor_accessor_args
+from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import get_tensor_accessor_args
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 
 
@@ -50,9 +50,9 @@ class HostInterface:
         loopback_mode=False,
         embedding_cb_index=None,
         fabric_packet_header_cb_index=None,
-        metadata_size_bytes=0,
         sender_mesh=None,
         receiver_mesh=None,
+        metadata_size_bytes=0,
     ):
         assert h2d_socket is not None or d2h_socket is not None, "Either h2d_socket or d2h_socket must be provided"
 
@@ -237,7 +237,7 @@ class HostInterface:
                     self.embedding_tensor.buffer_address(),
                 ]
             )
-            h2d_socket_kernel_ct_args.extend(get_interleaved_tensor_accessor_args(self.embedding_tensor))
+            h2d_socket_kernel_ct_args.extend(get_tensor_accessor_args(self.embedding_tensor))
 
         kernel_source = (
             "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/fused_h2d_receiver_embedding.cpp"
@@ -334,11 +334,13 @@ class HostInterface:
             cb_descriptors.append(packet_header_cb_desc)
         return cb_descriptors
 
-    def run(self):
-        dummy_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
-        )
+    def _build_programs(self):
+        """Build host IO programs and return (device_coord, program) pairs without dispatching.
 
+        This enables multiple HostInterface instances to have their programs merged
+        and dispatched together in a single generic_op call (e.g. for multi-channel
+        parallel pipelines where N HostInterface instances target the same device).
+        """
         h2d_fabric_node_id = None
         d2h_fabric_node_id = None
         my_downstream_fabric_node_id = None
@@ -367,6 +369,8 @@ class HostInterface:
         h2d_cb_descriptors = None
         d2h_kernel = None
         d2h_cb_descriptors = None
+        h2d_uses_fabric = False
+        d2h_uses_fabric = False
 
         if self.h2d_socket:
             h2d_kernel = self._create_h2d_kernel()
@@ -460,31 +464,43 @@ class HostInterface:
                     )
                     d2h_rt_args_ref.extend(bwd_fabric_args)
 
-        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        entries = []
         if self.h2d_socket and h2d_program is not None:
-            mesh_program_descriptor[
-                ttnn.MeshCoordinateRange(self.h2d_mesh_core_coord.device_coord, self.h2d_mesh_core_coord.device_coord)
-            ] = h2d_program
-
+            entries.append((self.h2d_mesh_core_coord.device_coord, h2d_program))
         if self.d2h_socket and d2h_program is not None and not same_device:
-            mesh_program_descriptor[
-                ttnn.MeshCoordinateRange(self.d2h_mesh_core_coord.device_coord, self.d2h_mesh_core_coord.device_coord)
-            ] = d2h_program
+            entries.append((self.d2h_mesh_core_coord.device_coord, d2h_program))
+        return entries
 
-        io_tensors = [
-            dummy_tensor,
-            dummy_tensor,
-        ]
+    def run(self):
+        entries = self._build_programs()
 
-        return ttnn.generic_op(io_tensors, mesh_program_descriptor)
+        dummy_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
+        )
+
+        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        for device_coord, program in entries:
+            mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = program
+
+        return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 
     def get_downstream_socket(self):
         if self.downstream_mesh_socket is not None:
             return self.downstream_mesh_socket
         elif self.downstream_socket_pair is not None:
             return self.downstream_socket_pair[1]
+        elif self.downstream_mesh_socket is not None:
+            raise ValueError("Downstream receiver socket not available for inter-mesh configuration")
         else:
             raise ValueError("Downstream socket not available")
+
+    def get_downstream_sender_socket(self):
+        if self.downstream_mesh_socket is not None:
+            return self.downstream_mesh_socket
+        elif self.downstream_socket_pair is not None:
+            return self.downstream_socket_pair[0]
+        else:
+            raise ValueError("Downstream sender socket not available")
 
     def get_upstream_socket(self):
         if self.upstream_socket_pair is not None:

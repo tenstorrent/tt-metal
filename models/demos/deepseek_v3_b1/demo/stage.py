@@ -19,15 +19,15 @@ import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock, StageMetadata
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
-from models.demos.deepseek_v3_b1.prepare_weights import (
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_broadcast_test_inputs
+from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
+from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MTPWeights,
 )
-from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_broadcast_test_inputs
-from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 # Global constants used by multiple stage kinds (and exported to pipeline/cli)
 TOKEN_PAGE_SIZE_BYTES = 64
@@ -68,7 +68,12 @@ class StageContext:
 
     mesh_device: ttnn.MeshDevice
     pipeline_config: list
-    my_mesh_id: int
+    my_stage_idx: int
+    stages_metadata: dict[int, StageMetadata] | None = None
+
+    @property
+    def my_mesh_id(self) -> int:
+        return self.my_stage_idx
 
 
 class StageKind(ABC):
@@ -91,45 +96,8 @@ class StageKind(ABC):
     def terminate_auxiliary(self) -> None:
         """Terminate auxiliary sockets. Default: no-op."""
 
-    def run_auxiliary_sockets(self) -> None:
-        """Start auxiliary (bypass) d2d_exchange kernels. Default: no-op."""
-
-    def terminate_auxiliary(self) -> None:
-        """Terminate auxiliary sockets. Default: no-op."""
-
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         """Run stage compute after ``pipeline_block.run()`` (execute pre-built programs where applicable). Default: no-op."""
-
-
-class EmbeddingStage(StageKind):
-    """Stage 0: H2D + embedding lookup, forwards activation; loopback receives token."""
-
-    def __init__(self, weights: DeepSeekV3EmbeddingLayerWeights, forward_metadata: bool = True) -> None:
-        self._weights = weights
-        self._forward_metadata = forward_metadata
-
-    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
-        print(f"[STAGE P{ctx.my_mesh_id}] EmbeddingStage.create_pipeline_block", flush=True)
-        mesh_device = ctx.mesh_device
-
-        activation_fifo_size = ACTIVATION_W_TOKEN_META_FIFO_SIZE if self._forward_metadata else ACTIVATION_FIFO_SIZE
-        activation_page_size = (
-            ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES if self._forward_metadata else ACTIVATION_PAGE_SIZE_BYTES
-        )
-
-        return PipelineBlock(
-            mesh_device,
-            PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=activation_fifo_size,
-            upstream_d2d_socket_page_size=TOKEN_FIFO_SIZE,
-            downstream_d2d_socket_page_size=activation_page_size,
-            h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
-            embedding_tensor=self._weights.embedding,
-            forward_metadata=self._forward_metadata,
-        )
 
 
 class PassthroughPayload(Enum):
@@ -137,6 +105,75 @@ class PassthroughPayload(Enum):
     TOKEN = "token"
     TOKEN_META = "token_meta"
     ACTIVATION_W_TOKEN_META = "activation_w_token_meta"
+
+
+class EmbeddingStage(StageKind):
+    """Stage 0: H2D + embedding lookup with configurable downstream/loopback payloads."""
+
+    def __init__(
+        self,
+        weights: DeepSeekV3EmbeddingLayerWeights,
+        *,
+        loopback_payload: PassthroughPayload = PassthroughPayload.TOKEN,
+        d2h_page_size: int | None = None,
+        forward_metadata: bool = False,
+    ) -> None:
+        self._weights = weights
+        self._loopback_payload = loopback_payload
+        self._d2h_page_size = d2h_page_size
+        self._forward_metadata = forward_metadata
+
+    @staticmethod
+    def _payload_sizes(payload: PassthroughPayload) -> tuple[int, int]:
+        if payload == PassthroughPayload.ACTIVATION:
+            return ACTIVATION_FIFO_SIZE, ACTIVATION_PAGE_SIZE_BYTES
+        if payload == PassthroughPayload.ACTIVATION_W_TOKEN_META:
+            return ACTIVATION_W_TOKEN_META_FIFO_SIZE, ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+        if payload == PassthroughPayload.TOKEN_META:
+            return TOKEN_META_FIFO_SIZE, TOKEN_META_PAGE_SIZE_BYTES
+        return TOKEN_FIFO_SIZE, TOKEN_PAGE_SIZE_BYTES
+
+    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
+        print(f"[STAGE P{ctx.my_stage_idx}] EmbeddingStage.create_pipeline_block", flush=True)
+        mesh_device = ctx.mesh_device
+        my_stage_idx = ctx.my_stage_idx
+        activation_fifo_size = ACTIVATION_W_TOKEN_META_FIFO_SIZE if self._forward_metadata else ACTIVATION_FIFO_SIZE
+        activation_page_size = (
+            ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES if self._forward_metadata else ACTIVATION_PAGE_SIZE_BYTES
+        )
+
+        if self._d2h_page_size is not None:
+            size_to_payload = {
+                TOKEN_PAGE_SIZE_BYTES: PassthroughPayload.TOKEN,
+                TOKEN_META_PAGE_SIZE_BYTES: PassthroughPayload.TOKEN_META,
+                ACTIVATION_PAGE_SIZE_BYTES: PassthroughPayload.ACTIVATION,
+                ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES: PassthroughPayload.ACTIVATION_W_TOKEN_META,
+            }
+            if self._d2h_page_size not in size_to_payload:
+                raise ValueError(f"Unsupported d2h_page_size: {self._d2h_page_size}")
+            loopback_payload = size_to_payload[self._d2h_page_size]
+        else:
+            loopback_payload = self._loopback_payload
+
+        up_fifo, up_page = self._payload_sizes(loopback_payload)
+        d2h_fifo, d2h_page = up_fifo, up_page
+
+        return PipelineBlock(
+            mesh_device,
+            PIPELINE_CORE_COORD,
+            upstream_d2d_socket_fifo_size=up_fifo,
+            downstream_d2d_socket_fifo_size=activation_fifo_size,
+            upstream_d2d_socket_page_size=up_page,
+            downstream_d2d_socket_page_size=activation_page_size,
+            h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
+            d2h_socket_fifo_size=d2h_fifo,
+            d2h_socket_page_size=d2h_page,
+            embedding_tensor=self._weights.embedding,
+            forward_metadata=self._forward_metadata,
+            my_stage_idx=my_stage_idx,
+            stages_metadata=ctx.stages_metadata,
+            pipeline_config=ctx.pipeline_config,
+        )
 
 
 class PassthroughStage(StageKind):
@@ -149,6 +186,7 @@ class PassthroughStage(StageKind):
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         print(f"[STAGE P{ctx.my_mesh_id}] PassthroughStage.create_pipeline_block", flush=True)
         mesh_device = ctx.mesh_device
+        my_stage_idx = ctx.my_stage_idx
         if self._payload == PassthroughPayload.ACTIVATION:
             up_fifo = down_fifo = ACTIVATION_FIFO_SIZE
             up_page = down_page = ACTIVATION_PAGE_SIZE_BYTES
@@ -168,6 +206,9 @@ class PassthroughStage(StageKind):
             downstream_d2d_socket_fifo_size=down_fifo,
             upstream_d2d_socket_page_size=up_page,
             downstream_d2d_socket_page_size=down_page,
+            my_stage_idx=my_stage_idx,
+            stages_metadata=ctx.stages_metadata,
+            pipeline_config=ctx.pipeline_config,
         )
 
 
@@ -215,14 +256,14 @@ class SpecLMHeadStage(StageKind):
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.create_pipeline_block", flush=True)
         mesh_device = ctx.mesh_device
-        my_mesh_id = ctx.my_mesh_id
+        my_stage_idx = ctx.my_stage_idx
         pipeline_config = ctx.pipeline_config
         entry_core = ttnn.MeshCoreCoord(
-            pipeline_config[my_mesh_id].entry_node_coord,
+            pipeline_config[my_stage_idx].entry_node_coord,
             SpecLMHeadStage.LMHEAD_INPUT_CORE,
         )
         exit_core = ttnn.MeshCoreCoord(
-            pipeline_config[my_mesh_id].exit_node_coord,
+            pipeline_config[my_stage_idx].exit_node_coord,
             SpecLMHeadStage.ARGMAX_FINAL_CORE,
         )
         return PipelineBlock(
@@ -234,12 +275,16 @@ class SpecLMHeadStage(StageKind):
             downstream_d2d_socket_page_size=TOKEN_META_PAGE_SIZE_BYTES,
             entry_node_downstream=entry_core,
             exit_node_upstream=exit_core,
+            my_stage_idx=my_stage_idx,
+            stages_metadata=ctx.stages_metadata,
+            pipeline_config=ctx.pipeline_config,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.setup start", flush=True)
         mesh_device = ctx.mesh_device
-        my_mesh_id = ctx.my_mesh_id
+        my_stage_idx = ctx.my_stage_idx
+        pipeline_config = ctx.pipeline_config
 
         # +32 for metadata (32 * 2 bytes = 64 bytes of metadata)
         torch_a = torch.zeros((SpecLMHeadStage.M, SpecLMHeadStage.K + METADATA_NUM_ELEMS), dtype=torch.bfloat16)
@@ -472,13 +517,13 @@ class BaseLMHeadStage(StageKind):
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         print(f"[STAGE P{ctx.my_mesh_id}] BaseLMHeadStage.create_pipeline_block", flush=True)
         mesh_device = ctx.mesh_device
-        my_mesh_id = ctx.my_mesh_id
+        my_stage_idx = ctx.my_stage_idx
         pipeline_config = ctx.pipeline_config
         lmhead_entry_core = ttnn.MeshCoreCoord(
-            pipeline_config[my_mesh_id].entry_node_coord, BaseLMHeadStage.LMHEAD_INPUT_CORE
+            pipeline_config[my_stage_idx].entry_node_coord, BaseLMHeadStage.LMHEAD_INPUT_CORE
         )
         lmhead_exit_core = ttnn.MeshCoreCoord(
-            pipeline_config[my_mesh_id].exit_node_coord, BaseLMHeadStage.ARGMAX_FINAL_CORE
+            pipeline_config[my_stage_idx].exit_node_coord, BaseLMHeadStage.ARGMAX_FINAL_CORE
         )
         down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         down_fifo = ACTIVATION_W_TOKEN_META_FIFO_SIZE
@@ -492,6 +537,9 @@ class BaseLMHeadStage(StageKind):
             downstream_d2d_socket_page_size=down_page,
             entry_node_downstream=lmhead_entry_core,
             exit_node_upstream=lmhead_exit_core,
+            my_stage_idx=my_stage_idx,
+            stages_metadata=ctx.stages_metadata,
+            pipeline_config=ctx.pipeline_config,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -768,14 +816,14 @@ class BaseLMHeadStage(StageKind):
         )
         d = self._lmhead_state
         pipeline_config = ctx.pipeline_config
-        my_mesh_id = ctx.my_mesh_id
+        my_stage_idx = ctx.my_stage_idx
         LMHeadSampling.op(
             d["input_tensor_mesh"],
             d["intermediate_tensor_mesh"],
             d["ttnn_gamma"],
             d["ttnn_b"],
             d["ttnn_scores"],
-            sender_coord=pipeline_config[my_mesh_id].entry_node_coord,
+            sender_coord=pipeline_config[my_stage_idx].entry_node_coord,
             output_mtp_tensor=d.get("ttnn_mtp_output"),
             embedding_tensor=d.get("ttnn_embedding"),
             h_gamma_tensor=d.get("ttnn_h_gamma"),
@@ -784,7 +832,7 @@ class BaseLMHeadStage(StageKind):
             indices_tensor=d["ttnn_indices"],
             output_index_tensor=d["ttnn_output_index"],
             argmax_final_core_coord=BaseLMHeadStage.ARGMAX_FINAL_CORE,
-            argmax_final_mesh_coord=pipeline_config[my_mesh_id].exit_node_coord,
+            argmax_final_mesh_coord=pipeline_config[my_stage_idx].exit_node_coord,
             bcast_semaphores=d["bcast_semaphores"],
             global_semaphore=d["global_semaphore"],
             global_stage2_semaphore=d["global_stage2_semaphore"],
@@ -824,20 +872,35 @@ class _CombinedPipelineBlock:
         embedding_tensor,
         lmhead_input_core: ttnn.CoreCoord,
         argmax_final_core: ttnn.CoreCoord,
+        *,
+        my_stage_idx: int | None = None,
+        pipeline_config: list | None = None,
+        stages_metadata: dict[int, StageMetadata] | None = None,
     ) -> None:
-        my_mesh_id = mesh_device.get_system_mesh_id()
+        if my_stage_idx is None:
+            my_stage_idx = mesh_device.get_system_mesh_id()
         num_procs = int(ttnn.distributed_context_get_size())
-        pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        if pipeline_config is None:
+            pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
         assert len(pipeline_config) == num_procs + 1, "Pipeline config must include loopback entry"
 
-        exit_node_coord = pipeline_config[my_mesh_id].exit_node_coord
+        def stage_mesh_id(stage_idx: int) -> int:
+            if stages_metadata is not None:
+                return stages_metadata[stage_idx].mesh_id
+            return stage_idx
+
+        my_mesh_id = stage_mesh_id(my_stage_idx)
+        next_stage_mesh_id = stage_mesh_id(my_stage_idx + 1)
+        prev_stage_mesh_id = stage_mesh_id(num_procs - 1)
+
+        exit_node_coord = pipeline_config[my_stage_idx].exit_node_coord
         loopback_entry_coord = pipeline_config[num_procs].entry_node_coord
         loopback_exit_coord = pipeline_config[num_procs].exit_node_coord
-        next_stage_entry_coord = pipeline_config[my_mesh_id + 1].entry_node_coord
+        next_stage_entry_coord = pipeline_config[my_stage_idx + 1].entry_node_coord
         prev_stage_exit_coord = pipeline_config[num_procs - 1].exit_node_coord
 
         print(
-            f"[COMBINED P{my_mesh_id}] exit_node_coord={exit_node_coord} loopback_entry_coord={loopback_entry_coord} loopback_exit_coord={loopback_exit_coord} next_stage_entry_coord={next_stage_entry_coord} prev_stage_exit_coord={prev_stage_exit_coord}",
+            f"[COMBINED P{my_stage_idx}] exit_node_coord={exit_node_coord} loopback_entry_coord={loopback_entry_coord} loopback_exit_coord={loopback_exit_coord} next_stage_entry_coord={next_stage_entry_coord} prev_stage_exit_coord={prev_stage_exit_coord}",
             flush=True,
         )
 
@@ -866,7 +929,7 @@ class _CombinedPipelineBlock:
             embedding_tensor=embedding_tensor,
             metadata_size_bytes=TOKEN_META_PAGE_SIZE_BYTES,
             sender_mesh=MeshWrapper(mesh_device),
-            receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1),
+            receiver_mesh=MeshWrapper(mesh_id=next_stage_mesh_id),
         )
 
         # -- SpecLMHead input path (loopback entry from P3) --
@@ -879,7 +942,7 @@ class _CombinedPipelineBlock:
             ttnn.MeshCoreCoord(prev_stage_exit_coord, PIPELINE_CORE_COORD),
             ttnn.MeshCoreCoord(loopback_entry_coord, PIPELINE_CORE_COORD),
             downstream_core_coord=ttnn.MeshCoreCoord(spec_root_device_coord, lmhead_input_core),
-            sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
+            sender_mesh=MeshWrapper(mesh_id=prev_stage_mesh_id),
             receiver_mesh=MeshWrapper(mesh_device),
         )
 
@@ -904,7 +967,7 @@ class _CombinedPipelineBlock:
         )
 
         print(
-            f"[COMBINED P{my_mesh_id}] _CombinedPipelineBlock created: "
+            f"[COMBINED P{my_stage_idx}] _CombinedPipelineBlock created: "
             f"exit_dev={exit_node_coord} "
             f"spec_root={spec_root_device_coord} spec_exit={spec_exit_device_coord} "
             f"d2h_dev={loopback_exit_coord}",
@@ -985,4 +1048,7 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
             self._embedding_weights.embedding,
             SpecLMHeadStage.LMHEAD_INPUT_CORE,
             SpecLMHeadStage.ARGMAX_FINAL_CORE,
+            my_stage_idx=ctx.my_stage_idx,
+            pipeline_config=ctx.pipeline_config,
+            stages_metadata=ctx.stages_metadata,
         )

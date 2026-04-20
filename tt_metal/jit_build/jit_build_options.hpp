@@ -13,7 +13,9 @@
 #include "hlk_desc.hpp"
 #include <hostdevcommon/kernel_structs.h>
 
+namespace tt::tt_metal {
 enum class MathFidelity : uint8_t;
+}  // namespace tt::tt_metal
 namespace tt {
 enum CBIndex : std::uint8_t;
 }  // namespace tt

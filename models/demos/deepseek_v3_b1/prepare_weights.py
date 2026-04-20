@@ -1318,6 +1318,7 @@ def load_mtp_weights(
         eh_projection=eh_projection,
     )
 
+
 def load_shared_head_norm_weights(path: str | Path, device) -> ttnn.Tensor:
     """Load only the shared_head_norm tensor from the MTP cache directory."""
     mtp_dir = Path(path) / "mtp"
