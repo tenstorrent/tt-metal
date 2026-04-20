@@ -42,7 +42,7 @@ namespace {
 
 }  // namespace
 
-DistributedLlama::DistributedLlama(const LlamaConfig& config) {
+DistributedLlama::DistributedLlama(const LlamaConfig& config, bool gather_output_at_lm_head) {
     const auto& pctx = autograd::ctx().get_parallelism_context();
     auto tp_axis = pctx.get_tp_axis();
     bool use_tp = pctx.is_tp_enabled();
@@ -114,8 +114,14 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     }
     ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
     if (use_tp) {
+        // gather_output=true produces fully-replicated [B,1,S,V] logits (needed by the
+        // non-distributed cross_entropy_loss).  gather_output=false leaves logits sharded
+        // along the vocab dim ([B,1,S,V/tp_size] per device), which is what
+        // ttml::ops::distributed::vocab_parallel_cross_entropy_loss expects.  Mismatch silently
+        // inflates the loss by log(tp_size); see assert in vocab_parallel_cross_entropy_loss.
+        fmt::print("    LM head gather_output: {}\n", gather_output_at_lm_head);
         fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-            embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true, tp_axis);
+            embedding_dim, vocab_size, /* has_bias */ false, gather_output_at_lm_head, tp_axis);
     } else {
         fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* has_bias */ false);
     }
@@ -147,12 +153,12 @@ autograd::TensorPtr DistributedLlama::operator()(
     return logits;
 }
 
-std::shared_ptr<DistributedLlama> create(const LlamaConfig& config) {
-    return std::make_shared<DistributedLlama>(config);
+std::shared_ptr<DistributedLlama> create(const LlamaConfig& config, bool gather_output_at_lm_head) {
+    return std::make_shared<DistributedLlama>(config, gather_output_at_lm_head);
 }
-std::shared_ptr<DistributedLlama> create(const YAML::Node& config) {
+std::shared_ptr<DistributedLlama> create(const YAML::Node& config, bool gather_output_at_lm_head) {
     LlamaConfig llama_config = models::llama::read_config(config);
-    return std::make_shared<DistributedLlama>(llama_config);
+    return std::make_shared<DistributedLlama>(llama_config, gather_output_at_lm_head);
 }
 
 }  // namespace ttml::models::distributed::llama
