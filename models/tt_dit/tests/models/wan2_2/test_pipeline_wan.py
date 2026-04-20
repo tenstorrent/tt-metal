@@ -26,17 +26,23 @@ from ....utils.test import line_params, ring_params
     [
         [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        # BH on 2x4
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        # BH (ring) on 4x8
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
         [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
         "2x4sp0tp1",
+        "bh_2x4sp1tp0",
         "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0",
+        "bh_4x8sp1tp0_linear",
+        "bh_4x8sp1tp0_ring",
         "bh_4x32sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
@@ -80,6 +86,9 @@ def test_pipeline_inference(
         topology=topology,
         is_fsdp=is_fsdp,
         checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        target_height=height,
+        target_width=width,
+        num_frames=num_frames,
     )
 
     prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."

@@ -39,9 +39,9 @@ void kernel_main() {
     constexpr auto input_args = TensorAccessorArgs<2>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
-    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
-    const auto weight_address_generator = TensorAccessor(weight_args, weight_address, tile_bytes);
-    const auto bias_address_generator = TensorAccessor(bias_args, bias_address, tile_bytes);
+    const auto input_address_generator = TensorAccessor(input_args, input_address);
+    const auto weight_address_generator = TensorAccessor(weight_args, weight_address);
+    const auto bias_address_generator = TensorAccessor(bias_args, bias_address);
 
     constexpr uint32_t cb_scratch = tt::CBIndex::c_4;
     const uint16_t w0_bf16 =

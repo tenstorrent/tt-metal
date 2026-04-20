@@ -4,17 +4,26 @@ on:
   workflow_call:
     inputs:
       manifest-path:
-        required: true
+        required: false
         type: string
+        default: ""
       scope-targets:
-        required: true
+        required: false
         type: string
+        default: ""
       models:
-        required: true
+        required: false
         type: string
+        default: ""
       trace-ids:
-        required: true
+        required: false
         type: string
+        default: ""
+      pinned-trace-id:
+        description: "Single trace_run_id produced by the multi-model trace pipeline. When set, bypasses manifest resolution."
+        required: false
+        type: string
+        default: ""
       caller-id:
         required: false
         type: string
@@ -22,6 +31,11 @@ on:
         required: false
         type: boolean
         default: false
+      models-filter:
+        required: false
+        type: string
+        description: "Comma-separated model names to filter reconstruction (empty = all models in registry)"
+        default: ""
 
 permissions:
   contents: read
@@ -48,7 +62,7 @@ jobs:
       preflight-artifact-name: ${{ steps.set-artifact-names.outputs.preflight-artifact-name }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       - name: Display validation request
         env:
@@ -56,6 +70,7 @@ jobs:
           SCOPE_TARGET: ${{ inputs.scope-targets }}
           MODELS: ${{ inputs.models }}
           TRACE_IDS: ${{ inputs.trace-ids }}
+          PINNED_TRACE_ID: ${{ inputs.pinned-trace-id }}
           CALLER_ID: ${{ inputs.caller-id }}
           ALLOW_PARTIAL_HASH_CHANGES: ${{ inputs.allow-partial-hash-changes }}
         run: |
@@ -63,10 +78,15 @@ jobs:
           echo " Sweep Validation"
           echo "========================================"
           echo "  Branch:        ${GITHUB_REF_NAME}"
-          echo "  Registry:      ${MANIFEST_PATH}"
-          echo "  Scope target:  ${SCOPE_TARGET}"
-          echo "  Models:        ${MODELS}"
-          echo "  Trace IDs:     ${TRACE_IDS}"
+          if [ -n "${PINNED_TRACE_ID}" ]; then
+            echo "  Mode:          pinned (bypasses manifest)"
+            echo "  Pinned ID:     ${PINNED_TRACE_ID}"
+          else
+            echo "  Registry:      ${MANIFEST_PATH}"
+            echo "  Scope target:  ${SCOPE_TARGET}"
+            echo "  Models:        ${MODELS}"
+            echo "  Trace IDs:     ${TRACE_IDS}"
+          fi
           echo "  Allow partial: ${ALLOW_PARTIAL_HASH_CHANGES}"
           if [ -n "${CALLER_ID}" ]; then
             echo "  Caller ID:     ${CALLER_ID}"
@@ -74,7 +94,7 @@ jobs:
           echo "========================================"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.10"
 
@@ -88,14 +108,32 @@ jobs:
           echo "master-json-artifact-name=ttnn-operations-master-json" >> "$GITHUB_OUTPUT"
           echo "preflight-artifact-name=validation-preflight" >> "$GITHUB_OUTPUT"
 
-      - name: Generate JSON from database via trace selection registry
+      - name: Reconstruct master JSON from manifest
+        if: ${{ inputs.pinned-trace-id == '' }}
         env:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
           MANIFEST_PATH: ${{ inputs.manifest-path }}
+          MODELS_FILTER: ${{ inputs.models-filter }}
         run: |
           mkdir -p model_tracer/traced_operations
+          FILTER_ARGS=""
+          if [[ -n "$MODELS_FILTER" ]]; then
+            FILTER_ARGS="--models-filter $MODELS_FILTER"
+          fi
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
             "$MANIFEST_PATH" \
+            model_tracer/traced_operations/ttnn_operations_master.json \
+            $FILTER_ARGS
+
+      - name: Reconstruct master JSON from pinned trace
+        if: ${{ inputs.pinned-trace-id != '' }}
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          PINNED_TRACE_ID: ${{ inputs.pinned-trace-id }}
+        run: |
+          mkdir -p model_tracer/traced_operations
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-trace \
+            "$PINNED_TRACE_ID" \
             model_tracer/traced_operations/ttnn_operations_master.json
 
       - name: Run config hash preflight
@@ -113,7 +151,7 @@ jobs:
 
       - name: Upload master JSON artifact
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ttnn-operations-master-json
           path: model_tracer/traced_operations/ttnn_operations_master.json
@@ -121,7 +159,7 @@ jobs:
 
       - name: Upload preflight artifact
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: validation-preflight
           path: validation_artifacts/config_hash_preflight.md
@@ -148,7 +186,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           submodules: recursive
           path: docker-job
@@ -161,7 +199,7 @@ jobs:
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
       - name: Download master JSON artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
           path: /work/model_tracer/traced_operations
@@ -178,6 +216,7 @@ jobs:
       - name: Generate sweep vectors
         env:
           SCOPE_TARGET: ${{ inputs.scope-targets }}
+          PINNED_TRACE_ID: ${{ inputs.pinned-trace-id }}
         run: |
           EXPORT_DIR="tests/sweep_framework/vectors_export"
           SCOPED_VECTORS_DIR="tests/sweep_framework/validation_vectors"
@@ -197,6 +236,16 @@ jobs:
             mkdir -p "$SCOPED_VECTORS_DIR/$scope_name"
             cp -a "$EXPORT_DIR"/. "$SCOPED_VECTORS_DIR/$scope_name"/
           }
+
+          if [[ -n "${PINNED_TRACE_ID}" ]]; then
+            generate_scope_vectors \
+              pinned \
+              --model-traced all \
+              --suite-name model_traced \
+              --group-by hw \
+              --master-trace /work/model_tracer/traced_operations/ttnn_operations_master.json \
+              --tag ci-validate-pinned
+          fi
 
           if [[ "${SCOPE_TARGET}" == "model_traced" || "${SCOPE_TARGET}" == "all" ]]; then
             generate_scope_vectors \
@@ -218,9 +267,17 @@ jobs:
               --tag ci-validate-lead-models
           fi
 
+      - name: Upload pinned sweep vectors
+        if: ${{ inputs.pinned-trace-id != '' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: sweeps-vectors-pinned
+          path: /work/tests/sweep_framework/validation_vectors/pinned/
+          retention-days: 1
+
       - name: Upload model traced sweep vectors
         if: ${{ inputs.scope-targets == 'model_traced' || inputs.scope-targets == 'all' }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-vectors-model_traced
           path: /work/tests/sweep_framework/validation_vectors/model_traced/
@@ -228,7 +285,7 @@ jobs:
 
       - name: Upload lead models sweep vectors
         if: ${{ inputs.scope-targets == 'lead_models' || inputs.scope-targets == 'all' }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-vectors-lead_models
           path: /work/tests/sweep_framework/validation_vectors/lead_models/
@@ -244,10 +301,10 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.10"
 
@@ -256,21 +313,28 @@ jobs:
           pip install pyyaml
 
       - name: Download master JSON artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
           path: /tmp/validation-master-json
 
+      - name: Download pinned sweep vectors
+        if: ${{ inputs.pinned-trace-id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sweeps-vectors-pinned
+          path: /tmp/validation-vectors/pinned
+
       - name: Download model traced sweep vectors
         if: ${{ inputs.scope-targets == 'model_traced' || inputs.scope-targets == 'all' }}
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sweeps-vectors-model_traced
           path: /tmp/validation-vectors/model_traced
 
       - name: Download lead models sweep vectors
         if: ${{ inputs.scope-targets == 'lead_models' || inputs.scope-targets == 'all' }}
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sweeps-vectors-lead_models
           path: /tmp/validation-vectors/lead_models
@@ -281,15 +345,23 @@ jobs:
           MANIFEST_PATH: ${{ inputs.manifest-path }}
           MASTER_JSON_PATH: /tmp/validation-master-json/ttnn_operations_master.json
           VECTORS_ROOT: /tmp/validation-vectors
-          SCOPE_TARGET: ${{ inputs.scope-targets }}
+          SCOPE_TARGET: ${{ inputs.pinned-trace-id != '' && 'pinned' || inputs.scope-targets }}
+          PINNED_TRACE_RUN_ID: ${{ inputs.pinned-trace-id }}
         run: |
-          matrix_json=$(
-            python3 tests/sweep_framework/framework/compute_validation_sweep_matrix.py \
-              --manifest-path "$MANIFEST_PATH" \
-              --master-json-path "$MASTER_JSON_PATH" \
-              --vectors-root "$VECTORS_ROOT" \
-              --scope-target "$SCOPE_TARGET"
+          CMD=(
+            python3 tests/sweep_framework/framework/compute_validation_sweep_matrix.py
+            --master-json-path "$MASTER_JSON_PATH"
+            --vectors-root "$VECTORS_ROOT"
+            --scope-target "$SCOPE_TARGET"
+            --write-to-file
           )
+          if [[ -n "$MANIFEST_PATH" && "$SCOPE_TARGET" != "pinned" ]]; then
+            CMD+=(--manifest-path "$MANIFEST_PATH")
+          fi
+          if [[ -n "$PINNED_TRACE_RUN_ID" ]]; then
+            CMD+=(--pinned-trace-run-id "$PINNED_TRACE_RUN_ID")
+          fi
+          matrix_json=$("${CMD[@]}")
           echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
 
       - name: Show execution matrix
@@ -332,7 +404,7 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           submodules: recursive
           path: docker-job
@@ -345,7 +417,7 @@ jobs:
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
       - name: Download sweep vectors
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ matrix.vectors_artifact_name }}
           path: /work/tests/sweep_framework/vectors_export
@@ -380,7 +452,7 @@ jobs:
 
       - name: Upload sweep traces
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweep-traces-${{ matrix.validation_scope }}-${{ matrix.test_group_name }}-batch-${{ matrix.batch_index }}
           path: /work/model_tracer/traced_operations/sweep_trace_${{ matrix.test_group_name }}_batch${{ matrix.batch_index }}.json
@@ -388,7 +460,7 @@ jobs:
 
       - name: Upload sweep results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-results-${{ matrix.validation_scope }}-${{ matrix.test_group_name }}-batch-${{ matrix.batch_index }}
           path: /work/tests/sweep_framework/results_export/
@@ -401,23 +473,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       - name: Download master JSON artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
           path: model_tracer/traced_operations
 
       - name: Download sweep traces
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: sweep-traces-*
           path: validation_traces
           merge-multiple: true
 
       - name: Download sweep results
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: sweeps-results-*
           path: validation_results
@@ -452,7 +524,14 @@ jobs:
         if: always()
         run: |
           if [[ -f validation_summary.md ]]; then
-            cat validation_summary.md >> "$GITHUB_STEP_SUMMARY"
+            # Guard against exceeding the 1MB GitHub step summary limit
+            file_size=$(stat -c%s validation_summary.md 2>/dev/null || echo 0)
+            if (( file_size > 900000 )); then
+              head -c 890000 validation_summary.md >> "$GITHUB_STEP_SUMMARY"
+              echo -e "\n\n---\n⚠️ Report truncated (${file_size} bytes exceeded 1MB step summary limit)." >> "$GITHUB_STEP_SUMMARY"
+            else
+              cat validation_summary.md >> "$GITHUB_STEP_SUMMARY"
+            fi
           else
             cat <<'EOF' > validation_summary.md
           # Sweep Validation Summary
@@ -482,7 +561,7 @@ jobs:
 
       - name: Upload validation summary
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: validation-summary
           path: validation_summary.md

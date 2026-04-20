@@ -54,12 +54,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -81,7 +81,7 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"memory_config"})
+    op_kwargs = build_op_kwargs(kwargs)
 
     # Handle tuple input_a_shape
     if isinstance(input_a_shape, (tuple, list)):
@@ -125,23 +125,34 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    # nlp_create_qkv_heads_segformer doesn't support sharded output
-    # Force to DRAM interleaved if output is sharded
-    actual_output_mem_config = output_memory_config
-    if isinstance(output_memory_config, dict):
-        mem_layout = output_memory_config.get("memory_layout", "")
-        if not mem_layout and "data" in output_memory_config:
-            mem_layout = output_memory_config.get("data", {}).get("memory_layout", "")
-        if "SHARDED" in str(mem_layout):
-            actual_output_mem_config = ttnn.DRAM_MEMORY_CONFIG
-    elif hasattr(output_memory_config, "is_sharded") and callable(output_memory_config.is_sharded):
-        if output_memory_config.is_sharded():
-            actual_output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    # nlp_create_qkv_heads_segformer doesn't support sharded output.
+    # build_op_kwargs filters out memory_config, so we must retrieve it from
+    # the raw kwargs and add it back explicitly.
+    from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+    raw_mem_cfg = kwargs.get("memory_config", None)
+    if raw_mem_cfg is not None:
+        mem_cfg = parse_dict_value("memory_config", raw_mem_cfg)
+    else:
+        mem_cfg = output_memory_config
+
+    # Determine if the memory config is sharded and override to DRAM if so
+    is_sharded = False
+    if isinstance(mem_cfg, dict):
+        mem_layout = mem_cfg.get("memory_layout", "")
+        if not mem_layout and "data" in mem_cfg:
+            mem_layout = mem_cfg.get("data", {}).get("memory_layout", "")
+        is_sharded = "SHARDED" in str(mem_layout)
+    elif hasattr(mem_cfg, "is_sharded") and callable(mem_cfg.is_sharded):
+        is_sharded = mem_cfg.is_sharded()
+
+    if is_sharded or mem_cfg is None:
+        op_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        op_kwargs["memory_config"] = mem_cfg
 
     start_time = start_measuring_time()
-    q = ttnn.experimental.nlp_create_qkv_heads_segformer(
-        input_tensor_a, memory_config=actual_output_mem_config, **op_kwargs
-    )[0]
+    q = ttnn.experimental.nlp_create_qkv_heads_segformer(input_tensor_a, **op_kwargs)[0]
     q_torch = mesh_tensor_to_torch(q, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

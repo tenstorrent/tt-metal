@@ -1547,14 +1547,7 @@ class MoeRoutedExpertOp:
             ("gate_input_cb", ctx.gate_params["input_cb"] if ctx.enable_routing else 0),
             ("gate_bias_cb", ctx.gate_params["bias_cb"] if ctx.enable_routing else 0),
             ("gate_input_indices_cb", ctx.gate_params["indices_cb"] if ctx.enable_routing else 0),
-            # Index mcast receiver (routing only)
-            ("index_mcast_receiver_semaphore_addr", ctx.index_mcast_receiver_semaphore_addr),
             ("gate_proj_cb_index", ctx.gate_proj_cb_index),
-            ("index_mcast_num_pages", ctx.index_mcast_num_pages),
-            # Expert scale mcast receiver (routing only)
-            ("expert_scale_mcast_receiver_semaphore_addr", ctx.expert_scale_mcast_receiver_semaphore_addr),
-            ("mul_cb_scalar_src", ctx.mul_cb_scalar_src),
-            ("expert_scale_mcast_num_pages", ctx.expert_scale_mcast_num_pages),
             # Mul reader (setup mul_in1 buffer)
             ("mul_cb_in1", ctx.mul_cb_in1),
             ("mul_num_tiles", ctx.mul_num_tiles),
@@ -1571,10 +1564,6 @@ class MoeRoutedExpertOp:
             ),
             ("down_proj_gather_dst_cb", ctx.down_proj_gather_params["dst_cb"]),
             ("down_proj_gather_dst_num_pages", ctx.down_proj_gather_params["dst_num_pages"]),
-            # down_proj mcast receiver
-            ("down_proj_mcast_receiver_semaphore_addr", ctx.down_proj_mcast_params["receiver_semaphore_addr"]),
-            ("down_proj_mcast_dst_cb", ctx.down_proj_mcast_params["dst_cb"]),
-            ("down_proj_mcast_dst_num_pages", ctx.down_proj_mcast_params["dst_num_pages"]),
             # Eltwise add
             ("add_cb_in0", ctx.add_cb_in0),
             ("add_cb_in1", ctx.add_cb_in1),
@@ -1716,6 +1705,8 @@ class MoeRoutedExpertOp:
             ("down_proj_mcast_src_cb", ctx.down_proj_mcast_params["src_cb"]),
             ("down_proj_mcast_dst_cb", ctx.down_proj_mcast_params["dst_cb"]),
             ("down_proj_mcast_src_num_pages", ctx.down_proj_mcast_params["src_num_pages"]),
+            # down_proj mcast receiver
+            ("down_proj_mcast_dst_num_pages", ctx.down_proj_mcast_params["dst_num_pages"]),
             # CB reset addresses for DRAM matmul working buffers
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
@@ -2622,9 +2613,6 @@ class MoeSharedExpertOp:
             ("shared_og_noc1_receiver_semaphore_addr", shared_ctx.output_gather_params["noc1_receiver_semaphore_addr"]),
             ("shared_og_dst_cb", shared_ctx.output_gather_params["dst_cb"]),
             ("shared_og_dst_num_pages", shared_ctx.output_gather_params["dst_num_pages"]),
-            # Output mcast receiver (DRAM cores receive into add_cb_in1) — separate semaphore
-            ("shared_output_mcast_data_receiver_semaphore_addr", shared_ctx.output_mcast_receiver_semaphore_addr),
-            ("shared_output_mcast_dst_num_pages", shared_ctx.output_mcast_params["dst_num_pages"]),
         ]
         brisc_args = [
             # Gate gather (A) sender (MoeGather: sender on BRISC)
@@ -2664,6 +2652,8 @@ class MoeSharedExpertOp:
             ("shared_output_mcast_data_size_bytes", shared_ctx.output_mcast_params["data_size_bytes"]),
             ("shared_output_mcast_src_cb", shared_ctx.output_gather_params["dst_cb"]),  # read from output gather dst
             ("shared_output_mcast_src_num_pages", shared_ctx.output_mcast_params["src_num_pages"]),
+            # Output mcast receiver
+            ("shared_output_mcast_dst_num_pages", shared_ctx.output_mcast_params["dst_num_pages"]),
         ]
         trisc_args = [
             # Gate/Up matmul
@@ -4038,6 +4028,7 @@ class MoeOp:
                 ("reduce_total_num_workers", reduce_params["num_workers"]),
                 ("reduce_agg_output_size_bytes", routed_ctx.num_tiles_k * 32 * 2 if self.downstream_sockets else 0),
                 ("reduce_packet_cb", routed_ctx.reduce_packet_cb),
+                ("reduce_enable_downstream_socket", 1 if self.downstream_sockets else 0),
             ]
         )
         self.trisc_args.extend([("reduce_device_role", device_role), ("reduce_num_tiles", reduce_params["num_tiles"])])
@@ -4704,7 +4695,12 @@ class MoeOp:
                 ctx.gate_output_scores_tensor,
                 ctx.gate_output_indices_tensor,
             ]
-        io_tensors += [ctx.gate_proj_weights_tensor, ctx.up_proj_weights_tensor, ctx.down_proj_weights_tensor]
+        for wt in [ctx.gate_proj_weights_tensor, ctx.up_proj_weights_tensor, ctx.down_proj_weights_tensor]:
+            backing = getattr(wt, "data", None)
+            if backing is not None:
+                io_tensors += [backing, wt.assignment]
+            else:
+                io_tensors += [wt]
         if ctx.final_output_tensor is not None:
             io_tensors += [ctx.final_output_tensor]
         io_tensors += [

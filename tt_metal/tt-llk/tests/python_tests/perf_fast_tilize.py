@@ -63,7 +63,6 @@ def test_fast_tilize_perf(
     output_format,
     dest_acc,
     input_dimensions,
-    workers_tensix_coordinates,
 ):
     tile_count = input_dimensions[0] * input_dimensions[1]
     input_dimensions = (input_dimensions[0] * 32, input_dimensions[1] * 32)
@@ -95,4 +94,4 @@ def test_fast_tilize_perf(
         compile_time_formats=True,
     )
 
-    configuration.run(perf_report, run_count=2, location=workers_tensix_coordinates)
+    configuration.run(perf_report, run_count=2)
