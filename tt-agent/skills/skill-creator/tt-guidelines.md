@@ -15,8 +15,13 @@ Skills are flat under `skills/<name>/` — layers are metadata, not directories.
 |---|---|---|
 | Orchestration | `metadata: { layer: orchestration }` | Routes work to other skills? |
 | Workflow | `metadata: { layer: workflow }` | Runs until a goal is met? |
-| Tool | `metadata: { layer: tool }` | Does one concrete thing? |
-| Meta | `metadata: { layer: meta }` | Builds or introspects tt-agent? |
+| Tool | `metadata: { layer: tool }` | Does one concrete thing tied to a pipeline (build, run, profile, debug)? |
+| Meta | `metadata: { layer: meta }` | Cross-cutting utility, or builds/introspects tt-agent? |
+
+Tool vs Meta: both "do one concrete thing". The distinguishing question is whether the
+skill is **pipeline-bound** (domain tool: `tt-run` for execution, `tt-profiler` for
+profiling) or **cross-cutting** (invoked by any skill at any time, produces a notes
+artifact: `tt-learn`, `tt-code-review`). Cross-cutting utilities go in Meta.
 
 ---
 
@@ -91,14 +96,23 @@ Any skill involving code generation must verify:
 
 ## Notes Naming
 
-| Type | Filename pattern |
-|---|---|
-| Context brief | `context-<topic>.md` |
-| Experiment log | `experiments-<task>.md` |
-| Plan | `plan-<task>.md` |
-| Profile | `profile-<workload>.md` |
-| Debug findings | `findings-debug-<target>.md` |
-| Perf findings | `findings-perf-<target>.md` |
+Each skill owns the naming of the notes it produces. Declare the exact filename
+pattern in the skill's `SKILL.md` (or the sub-file that writes the note) — not
+here. Keeping the inventory out of this file prevents drift.
+
+### Convention
+
+Note filenames follow `<kind>-<scope>.md`, with a timestamp suffix when multiple
+instances can coexist in a single session:
+
+- `<kind>` is what the file *is* (`context`, `plan`, `findings-review`,
+  `profile`, `experiments`, …). Dash-separated words, all lowercase.
+- `<scope>` is what the file *is about* — topic, task, target, or scope slug.
+- Append `-<YYYY-MM-DD-HHMMSS>` when overwrite-on-rerun is unacceptable
+  (e.g., review findings: one per session, never clobbered).
+
+All notes include, in their body, the date, the repo name, and the commit hash
+at time of writing.
 
 ---
 

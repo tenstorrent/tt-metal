@@ -126,8 +126,8 @@ Four layers, declared via `metadata.layer` in YAML frontmatter. Skills are flat 
 |---|---|---|
 | `orchestration` | Routes work to other skills | tt-orchestrator |
 | `workflow` | Runs until a goal is met, has phases | tt-optimizer, tt-debugger, tt-tester |
-| `tool` | Does one concrete thing | tt-run |
-| `meta` | Builds or introspects the system | tt-skill-creator, tt-learn |
+| `tool` | Does one concrete thing tied to a pipeline | tt-run |
+| `meta` | Cross-cutting utility, or builds/introspects the system | tt-skill-creator, tt-learn, tt-code-review |
 
 **Workflow skills declare phases.** Each phase specifies what knowledge to load (Loads)
 and what it produces (Produces). After each phase, the agent summarizes in 3-5 lines

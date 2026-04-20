@@ -21,18 +21,20 @@ Add to your root `CLAUDE.md` or ensure it references `tt-agent/adapters/claude-c
 - "Write tests for this new eltwise op"         → tt-tester
 - "Just run this pytest on device"              → tt-run
 - "I need to understand how CCL works"          → tt-learn
+- "Review my changes before I merge"            → tt-code-review
 
 ## Architecture
 
 ```
 skills/             — how to accomplish tasks (procedural instructions)
-  orchestrator/     — routes requests to the right skill
-  run/              — workspace detection, build, execute (tool layer)
+  orchestrator/     — routes requests to the right skill (orchestration)
+  run/              — workspace detection, build, execute (tool)
   optimizer/        — profile → analyze → optimize → verify (workflow)
   debugger/         — reproduce → diagnose → fix → verify (workflow)
   tester/           — design → execute → stress (workflow)
   skill-creator/    — create and validate new skills (meta)
   learn/            — research live codebases on demand (meta)
+  code-review/      — strict, challenging parallel review (meta)
 
 knowledge/          — stable facts and patterns
   hardware/         — silicon-stable facts (Tensix architecture, CB model)

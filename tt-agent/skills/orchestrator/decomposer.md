@@ -20,9 +20,10 @@ The first decision changes the entire task shape.
 - Optimizer profiles, analyzes, applies targeted improvements, and verifies
 - Profile again to confirm the improvement is real
 
-**Fix failure** — something that worked has broken:
-- If CI failure or wrong outputs: `tt-debugger` (reproduces, diagnoses, fixes, verifies)
-- If regression in perf or accuracy: `tt-bisect` to find the commit, then `tt-debugger`
+**Fix failure** — something is broken. Pick by failure shape:
+- **Regression** (was working, now isn't — accuracy drop, broken output, test that used to pass): `tt-recover` (workflow). Owns the full loop: reproduce, localize (bisects commits, diffs configs, isolates kernels), apply or propose a fix, verify the model is restored.
+- **Kernel-level diagnosis** (hang, crash, wrong RISC-V core state, live device misbehavior): `tt-debugger` (tool). Inspects device state, traces hangs, interprets cores. Point-in-time — not a loop.
+- **Mixed** (CI went red, root cause unknown): `tt-recover` drives the loop and invokes `tt-debugger` during its localize phase when the cause is kernel-level.
 
 ---
 

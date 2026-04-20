@@ -6,13 +6,17 @@ Stable silicon facts. Update only when hardware changes.
 
 Each Tensix core contains five 32-bit in-order RISC-V CPUs:
 
-| CPU | Role | Coprocessor thread |
-|-----|------|--------------------|
-| DM0 (B) | Reader: moves data from DRAM/L1 into CBs | — |
-| DM1 (NC) | Writer: moves data from CBs to DRAM/L1 | — |
-| T0 (Unpack) | Unpacks tiles from L1 into register file | T0 |
-| T1 (Math) | Executes FPU/SFPU operations | T1 |
-| T2 (Pack) | Packs results from register file to L1 | T2 |
+| CPU | Aliases | Role | Coprocessor thread |
+|-----|---------|------|--------------------|
+| DM0 | B, BRISC | Reader: moves data from DRAM/L1 into CBs | — |
+| DM1 | NC, NCRISC | Writer: moves data from CBs to DRAM/L1 | — |
+| T0 | TRISC0 (Unpack) | Unpacks tiles from L1 into register file | T0 |
+| T1 | TRISC1 (Math) | Executes FPU/SFPU operations | T1 |
+| T2 | TRISC2 (Pack) | Packs results from register file to L1 | T2 |
+
+Nomenclature note: `BRISC` / `NCRISC` / `TRISC{0,1,2}` are the historical RISC-V
+aliases seen in kernel source and toolchain symbols. `DM0/DM1/T0/T1/T2` are the
+functional names used in newer docs. Both refer to the same five CPUs.
 
 ## Compute Units
 

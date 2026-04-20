@@ -151,6 +151,64 @@ def test_workflow_loads_files_exist(skill_file):
     assert not missing, f"{skill_file}: Loads references missing files: {missing}"
 
 
+# --- code-review skill structural checks ---
+
+CODE_REVIEW_DIR = SKILLS_ROOT / "code-review"
+REVIEWER_REQUIRED_SECTIONS = [
+    "## Mission",
+    "## Base Checklist",
+    "## TT Checklist",
+    "## Severity Definitions",
+]
+
+
+def find_reviewer_files():
+    reviewers = CODE_REVIEW_DIR / "reviewers"
+    if not reviewers.exists():
+        return []
+    return sorted(reviewers.glob("*.md"))
+
+
+_reviewer_files = find_reviewer_files()
+
+
+@pytest.mark.parametrize(
+    "reviewer_file",
+    _reviewer_files if _reviewer_files else [pytest.param(None, marks=pytest.mark.skip)],
+)
+def test_reviewer_file_has_required_sections(reviewer_file):
+    """Each code-review reviewer file must contain the required section headers."""
+    if reviewer_file is None:
+        return
+    content = reviewer_file.read_text()
+    missing = [s for s in REVIEWER_REQUIRED_SECTIONS if s not in content]
+    assert not missing, f"{reviewer_file}: missing required sections: {missing}"
+
+
+# --- cross-reference check: orchestrator dispatch table lists every skill ---
+
+ORCHESTRATOR_SKILL = SKILLS_ROOT / "orchestrator" / "SKILL.md"
+# Skills intentionally excluded from the orchestrator dispatch table.
+# - orchestrator: does not dispatch to itself
+# - skill-creator: dev-facing, invoked directly when building new skills
+ORCHESTRATOR_EXEMPT = {"orchestrator", "skill-creator"}
+
+
+@pytest.mark.parametrize("skill_file", find_skill_files())
+def test_skill_referenced_in_orchestrator(skill_file):
+    """Every skill (except the orchestrator itself) must be named in the dispatch table."""
+    if not ORCHESTRATOR_SKILL.exists():
+        pytest.skip("orchestrator SKILL.md not present")
+    name = skill_file.parent.name
+    if name in ORCHESTRATOR_EXEMPT:
+        return
+    content = ORCHESTRATOR_SKILL.read_text()
+    # Accept either /tt:<name> or plain <name> mentions
+    assert f"tt:{name}" in content or f"`{name}`" in content or f"/{name}" in content, (
+        f"{skill_file}: skill '{name}' not referenced in orchestrator dispatch table " f"({ORCHESTRATOR_SKILL})"
+    )
+
+
 def find_recipe_dirs():
     """Find all recipe directories under knowledge/recipes/."""
     if not RECIPES_ROOT.exists():

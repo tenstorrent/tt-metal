@@ -56,12 +56,12 @@ analyze → scope → decompose → dispatch → verify → iterate
 |---|---|
 | Build, run, or execute on device | `/tt:run` |
 | Profile bottleneck, optimize throughput | `/tt:optimizer` |
-| Debug wrong outputs, crashes, or CI failures | `/tt:debugger` |
+| Regression recovery (was working, now broken) | `/tt:recover` |
+| Kernel-level diagnosis (hang, crash, RISC-V state) | `/tt:debugger` |
 | Write or run tests for an op/kernel/model | `/tt:tester` |
 | Need codebase context before proceeding | `/tt:learn` |
 | Design a new op or kernel | `/tt:designer` (future) |
-| Review code before merging | `/tt:code-review` (future) |
-| Performance regression bisect | `/tt:bisect` (future) |
+| Review code before merging | `/tt:code-review` |
 
 ## Document Protocol
 
