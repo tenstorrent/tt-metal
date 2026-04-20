@@ -1,8 +1,7 @@
 # How to Retrain When Matmul Internals Change
 
 This document describes how to update the auto-config infrastructure when
-underlying matmul implementations change. This is an explicit bounty
-deliverable for retrainability.
+underlying matmul implementations change.
 
 ## When to Retrain
 
