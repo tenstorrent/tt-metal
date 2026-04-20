@@ -36,10 +36,12 @@ class TtRoutedExpert(LightweightModule):
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str, experts_per_chip: int) -> bool:
         """Check if all routed expert weight cache files exist."""
+        from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
         for local_expert_idx in range(experts_per_chip):
             for proj in ["gate", "up", "down"]:
                 pattern = f"{cache_name_prefix}.local_{local_expert_idx}_{proj}*.tensorbin"
-                if not list(cache_path.glob(pattern)):
+                if not pattern_exists(pattern, "RoutedExpert"):
                     logger.debug(f"TTNN cache missing: {cache_name_prefix}.local_{local_expert_idx}_{proj}")
                     return False
         return True

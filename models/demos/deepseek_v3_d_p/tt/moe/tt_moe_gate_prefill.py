@@ -93,10 +93,12 @@ class TtMoEGatePrefill(LightweightModule):
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
         """Check if gate weight and bias cache files exist."""
-        if not list(cache_path.glob(f"{cache_name_prefix}.weight*.tensorbin")):
+        from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
+        if not pattern_exists(f"{cache_name_prefix}.weight*.tensorbin", "MoEGate"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}.weight")
             return False
-        if not list(cache_path.glob(f"{cache_name_prefix}.e_score_correction_bias*.tensorbin")):
+        if not pattern_exists(f"{cache_name_prefix}.e_score_correction_bias*.tensorbin", "MoEGate"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}.e_score_correction_bias")
             return False
         return True
