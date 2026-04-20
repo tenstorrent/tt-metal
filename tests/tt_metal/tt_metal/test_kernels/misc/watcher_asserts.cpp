@@ -32,6 +32,7 @@ void kernel_main() {
 #if (defined(UCK_CHLKC_UNPACK) and defined(TRISC0)) or \
     (defined(UCK_CHLKC_MATH) and defined(TRISC1)) or \
     (defined(UCK_CHLKC_PACK) and defined(TRISC2)) or \
+    (defined(UCK_CHLKC_ISOLATE_SFPU) and defined(TRISC3)) or \
     (defined(COMPILE_FOR_BRISC) or defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_ERISC) or defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DRISC) or defined(COMPILE_FOR_DM))
     WATCHER_RING_BUFFER_PUSH(a);
     WATCHER_RING_BUFFER_PUSH(b);
@@ -57,8 +58,15 @@ void kernel_main() {
     }
 #else
 #if defined(COMPILE_FOR_TRISC)
-    volatile tt_l1_ptr uint8_t * const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))
-        ->subordinate_sync.map[COMPILE_FOR_TRISC + 1];  // first entry is for NCRISC
+    // Signal TRISC completion via subordinate_sync map using hw_thread_idx
+    uint32_t hw_idx = internal_::get_hw_thread_idx();
+#if defined(ARCH_QUASAR)
+    volatile tt_l1_ptr uint8_t* const trisc_run =
+        &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->subordinate_sync.map[hw_idx];
+#else
+    volatile tt_l1_ptr uint8_t* const trisc_run =
+        &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.map[hw_idx];
+#endif
     *trisc_run = RUN_SYNC_MSG_DONE;
 #endif
 #endif
