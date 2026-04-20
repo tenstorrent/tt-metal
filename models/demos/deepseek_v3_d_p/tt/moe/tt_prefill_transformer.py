@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 
 
 class TtPrefillTransformer(LightweightModule):
@@ -71,6 +72,9 @@ class TtPrefillTransformer(LightweightModule):
         if not cache_path or not cache_path.exists():
             logger.debug(f"TTNN cache path does not exist: {cache_path}")
             return False
+
+        # Initialize fast cache checker for this directory
+        init_checker(cache_path)
 
         # Embedding
         if not TtParallelEmbedding.check_cache_complete(cache_path):
