@@ -639,6 +639,56 @@ jobs:
       gtest-shard-total: 2
       gtest-shard-index: ${{ matrix.shard }}
 
+  # LLK Slow Dispatch Unit Tests — runs ONLY the LLK tests that the FD jobs above skip:
+  # the LLKMeshDeviceFixtureSlowDispatchOnly.* set (FD-incompatible test bodies) plus all
+  # Quasar-* tests (which arch-skip on N150/p150b today, but are wired in so they'll run
+  # automatically once Quasar runners exist in the PR-gate pool). This complements
+  # llk-fd-unit-tests-* — together they give the PR gate full LLK coverage on every PR.
+  llk-sd-unit-tests-wormhole:
+    needs: [ build, find-changed-files ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-unit-tests-changed == 'true')
+      }}
+    secrets: inherit
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    with:
+      arch: wormhole_b0
+      runner-label: N150
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      test-group-name: llk
+      gtest_filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+      enable-llk-asserts: true
+
+  llk-sd-unit-tests-blackhole:
+    needs: [ build, find-changed-files ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-unit-tests-changed == 'true')
+      }}
+    secrets: inherit
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    with:
+      arch: blackhole
+      # Reuse the same p150b pool as llk-fd-unit-tests-blackhole so contention is bounded.
+      runner-label: p150b
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      test-group-name: llk
+      gtest_filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+      enable-llk-asserts: true
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -666,6 +716,8 @@ jobs:
       - llk-build-quasar
       - llk-fd-unit-tests-wormhole
       - llk-fd-unit-tests-blackhole
+      - llk-sd-unit-tests-wormhole
+      - llk-sd-unit-tests-blackhole
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
@@ -677,6 +729,7 @@ jobs:
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             model-charts-sync, build-docs,
             llk-test-wormhole, llk-test-blackhole, llk-build-quasar,
-            llk-fd-unit-tests-wormhole, llk-fd-unit-tests-blackhole
+            llk-fd-unit-tests-wormhole, llk-fd-unit-tests-blackhole,
+            llk-sd-unit-tests-wormhole, llk-sd-unit-tests-blackhole
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
