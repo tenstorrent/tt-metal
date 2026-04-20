@@ -153,10 +153,6 @@ private:
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.
     void quiesce_internal();
-    // Drain all CQs for this mesh and its submeshes without restarting fabric.
-    void drain_cqs_for_quiesce();
-    // Restart fabric workers for this mesh and its submeshes (call after all drains).
-    void restart_fabric_workers_for_quiesce();
 
     // Check if the mesh device or any of its parents have a CQ in use, and returns one of the parent mesh IDs if found.
     std::optional<int> get_parent_mesh_id_with_in_use_cq(uint32_t cq_id) const;
@@ -376,6 +372,10 @@ public:
      * called.
      */
     void quiesce_devices();
+    // Internal helpers used by quiesce_internal() to separate drain from fabric
+    // restart across submeshes.
+    void drain_cqs_for_quiesce();
+    void restart_fabric_workers_for_quiesce();
 
     std::shared_ptr<MeshDevice> create_submesh(
         const std::shared_ptr<MeshDevice>& parent_mesh,
