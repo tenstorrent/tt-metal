@@ -416,6 +416,12 @@ void py_module(nb::module_& m) {
 
     {
         auto py_unary = static_cast<nb::module_>(m.attr("unary"));
+        nb::enum_<ttml::ops::PolyNorm3ForwardVariant>(py_unary, "PolyNorm3ForwardVariant")
+            .value("FUSED", ttml::ops::PolyNorm3ForwardVariant::Fused)
+            .value("COMPOSITE_COMPARISON_ONLY", ttml::ops::PolyNorm3ForwardVariant::CompositeComparisonOnly);
+        nb::enum_<ttml::ops::PolyNorm3BackwardVariant>(py_unary, "PolyNorm3BackwardVariant")
+            .value("FUSED", ttml::ops::PolyNorm3BackwardVariant::Fused)
+            .value("COMPOSITE_COMPARISON_ONLY", ttml::ops::PolyNorm3BackwardVariant::CompositeComparisonOnly);
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
         py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
@@ -425,7 +431,9 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("weight"),
             nb::arg("bias"),
-            nb::arg("epsilon") = 1e-5F);
+            nb::arg("epsilon") = 1e-5F,
+            nb::arg("forward_variant") = ttml::ops::PolyNorm3ForwardVariant::Fused,
+            nb::arg("backward_variant") = ttml::ops::PolyNorm3BackwardVariant::Fused);
         py_unary.def("mean", &ttml::ops::mean, nb::arg("tensor"));
         // py_unary.def("sum", &ttml::ops::sum,
         //              nb::arg("tensor"));
