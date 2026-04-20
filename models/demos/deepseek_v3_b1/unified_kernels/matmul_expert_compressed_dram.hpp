@@ -350,7 +350,7 @@ struct MatmulExpertCompressedDRAM {
 
                     // Pass the token NOW (before our old-trid barrier below) so the
                     // next core's reads aren't gated on our barrier completing.
-                    bool batch_end = ((iter + 1) % num_buffers == 0) || (iter + 1 == num_iterations);
+                    bool batch_end = ((iter + 1) % num_buffers == 0) || (iter == (num_iterations - 1));
                     if constexpr (CTArgs::cores_per_bank > 1) {
                         if (batch_end) {
                             noc_semaphore_inc(next_sem_noc_addr, 1);
