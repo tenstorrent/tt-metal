@@ -23,20 +23,20 @@ protected:
 };
 
 // CPU reference: logit holds the LOCAL shard [first_v, last_v) of the vocabulary.
-// For each (n, b): output = logit[n, 0, b, c - first_v] if c in [first_v, last_v), else 0.
+// For each (n, s): output = logit[n, 0, s, c - first_v] if c in [first_v, last_v), else 0.
 static xt::xarray<float> select_target_logit_reference(
-    const xt::xarray<float>& logit,      // [N, 1, B, local_V]  where local_V = last_v - first_v
-    const xt::xarray<uint32_t>& target,  // [N, B]
+    const xt::xarray<float>& logit,      // [N, 1, S, local_V]  where local_V = last_v - first_v
+    const xt::xarray<uint32_t>& target,  // [N, S]
     uint32_t first_v,
     uint32_t last_v) {
     const uint32_t N = static_cast<uint32_t>(target.shape(0));
-    const uint32_t B = static_cast<uint32_t>(target.shape(1));
-    xt::xarray<float> result = xt::zeros<float>({N, 1U, B, 1U});
+    const uint32_t S = static_cast<uint32_t>(target.shape(1));
+    xt::xarray<float> result = xt::zeros<float>({N, 1U, S, 1U});
     for (uint32_t n = 0; n < N; ++n) {
-        for (uint32_t b = 0; b < B; ++b) {
-            const uint32_t c = target(n, b);
+        for (uint32_t s = 0; s < S; ++s) {
+            const uint32_t c = target(n, s);
             if (c >= first_v && c < last_v) {
-                result(n, 0U, b, 0U) = logit(n, 0U, b, c - first_v);
+                result(n, 0U, s, 0U) = logit(n, 0U, s, c - first_v);
             }
         }
     }
@@ -46,7 +46,7 @@ static xt::xarray<float> select_target_logit_reference(
 TEST_F(SelectTargetLogitTest, SmallFullVocab) {
     using namespace ttml;
 
-    // logit [1, 1, 1, 8], target [1, 1], full vocab (B=1)
+    // logit [1, 1, 1, 8], target [1, 1], full vocab (S=1)
     xt::xarray<float> logit_t = {{{{1.F, 2.F, 3.F, 4.F, 5.F, 6.F, 7.F, 8.F}}}};
     xt::xarray<uint32_t> target_t = xt::zeros<uint32_t>({1U, 1U});
     target_t(0, 0) = 3U;
@@ -94,21 +94,21 @@ TEST_F(SelectTargetLogitTest, SmallPartialVocab) {
 TEST_F(SelectTargetLogitTest, BatchedNonAlignedShape) {
     using namespace ttml;
 
-    // Non-tile-aligned B and V — mirrors cross_entropy_fw_op_test pattern
-    const uint32_t N = 2U, B = 91U, V = 157U;
+    // Non-tile-aligned S and V — mirrors cross_entropy_fw_op_test pattern
+    const uint32_t N = 2U, S = 91U, V = 157U;
 
     std::mt19937 gen(42);
-    xt::xarray<float> logit_t = xt::empty<float>({N, 1U, B, V});
+    xt::xarray<float> logit_t = xt::empty<float>({N, 1U, S, V});
     std::uniform_real_distribution<float> float_dist(-5.F, 5.F);
     for (auto& v : logit_t) {
         v = float_dist(gen);
     }
 
-    xt::xarray<uint32_t> target_t = xt::zeros<uint32_t>({N, B});
+    xt::xarray<uint32_t> target_t = xt::zeros<uint32_t>({N, S});
     std::uniform_int_distribution<uint32_t> idx_dist(0U, V - 1U);
     for (uint32_t n = 0; n < N; ++n) {
-        for (uint32_t b = 0; b < B; ++b) {
-            target_t(n, b) = idx_dist(gen);
+        for (uint32_t s = 0; s < S; ++s) {
+            target_t(n, s) = idx_dist(gen);
         }
     }
 
@@ -129,24 +129,24 @@ TEST_F(SelectTargetLogitTest, BatchedPartialVocabShard) {
     // Simulates a TP shard: logit holds only the second half of the vocab [64, 128).
     using namespace ttml;
 
-    const uint32_t N = 2U, B = 64U, global_V = 128U;
+    const uint32_t N = 2U, S = 64U, global_V = 128U;
     const uint32_t first_v = global_V / 2;      // 64
     const uint32_t last_v = global_V;           // 128
     const uint32_t local_V = last_v - first_v;  // 64
 
     std::mt19937 gen(7);
-    xt::xarray<float> logit_t = xt::empty<float>({N, 1U, B, local_V});
+    xt::xarray<float> logit_t = xt::empty<float>({N, 1U, S, local_V});
     std::uniform_real_distribution<float> float_dist(-3.F, 3.F);
     for (auto& v : logit_t) {
         v = float_dist(gen);
     }
 
-    xt::xarray<uint32_t> target_t = xt::zeros<uint32_t>({N, B});
+    xt::xarray<uint32_t> target_t = xt::zeros<uint32_t>({N, S});
     // Half the targets fall in [0, 64), half in [64, 128)
     std::uniform_int_distribution<uint32_t> idx_dist(0U, global_V - 1U);
     for (uint32_t n = 0; n < N; ++n) {
-        for (uint32_t b = 0; b < B; ++b) {
-            target_t(n, b) = idx_dist(gen);
+        for (uint32_t s = 0; s < S; ++s) {
+            target_t(n, s) = idx_dist(gen);
         }
     }
 
@@ -166,16 +166,16 @@ TEST_F(SelectTargetLogitTest, BatchedPartialVocabShard) {
 TEST_F(SelectTargetLogitTest, LargeVocab) {
     using namespace ttml;
 
-    const uint32_t N = 1U, H = 1U, V = 32768U;
+    const uint32_t N = 1U, S = 1U, V = 32768U;
 
     std::mt19937 gen(99);
-    xt::xarray<float> logit_t = xt::empty<float>({N, 1U, H, V});
+    xt::xarray<float> logit_t = xt::empty<float>({N, 1U, S, V});
     std::uniform_real_distribution<float> float_dist(-10.F, 10.F);
     for (auto& v : logit_t) {
         v = float_dist(gen);
     }
 
-    xt::xarray<uint32_t> target_t = xt::zeros<uint32_t>({N, H});
+    xt::xarray<uint32_t> target_t = xt::zeros<uint32_t>({N, S});
     target_t(0, 0) = 12345U;
 
     auto logit_dev = core::from_xtensor(logit_t, &autograd::ctx().get_device());
@@ -194,10 +194,10 @@ TEST_F(SelectTargetLogitTest, LargeVocab) {
 TEST_F(SelectTargetLogitTest, NIGHTLY_LargeBatchLargeVocab) {
     using namespace ttml;
 
-    const uint32_t N = 64U, B = 32U, V = 128000U;
+    const uint32_t N = 64U, S = 32U, V = 128000U;
 
     std::mt19937 gen(42);
-    xt::xarray<float> logit_t = xt::empty<float>({N, 1U, B, V});
+    xt::xarray<float> logit_t = xt::empty<float>({N, 1U, S, V});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
@@ -205,11 +205,11 @@ TEST_F(SelectTargetLogitTest, NIGHTLY_LargeBatchLargeVocab) {
         []() { return std::uniform_real_distribution<float>(-10.F, 10.F); },
         seed);
 
-    xt::xarray<uint32_t> target_t = xt::zeros<uint32_t>({N, B});
+    xt::xarray<uint32_t> target_t = xt::zeros<uint32_t>({N, S});
     std::uniform_int_distribution<uint32_t> idx_dist(0U, V - 1U);
     for (uint32_t n = 0; n < N; ++n) {
-        for (uint32_t b = 0; b < B; ++b) {
-            target_t(n, b) = idx_dist(gen);
+        for (uint32_t s = 0; s < S; ++s) {
+            target_t(n, s) = idx_dist(gen);
         }
     }
 
