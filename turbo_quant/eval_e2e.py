@@ -65,13 +65,26 @@ def main():
     mesh_device = ttnn.open_mesh_device(mesh_shape)
 
     print(f"Creating ModelArgs (batch_size={args.batch_size})...")
+
+    # For BFP4 cache mode, override KV_CACHE precision to BFP4 in the default
+    # accuracy optimization. Otherwise model init allocates BFP8 paged cache,
+    # limiting max_num_blocks to BFP8's memory footprint (defeating TQ's 2x
+    # memory savings at max-batch stress tests).
+    def make_optimizations(ma):
+        from models.tt_transformers.tt.model_config import TensorGroup, PrecisionSetting
+
+        opts = DecodersPrecision.accuracy(ma.n_layers, ma.model_name)
+        if args.bfp4_cache:
+            for decoder_id, dec_conf in opts.decoder_optimizations.items():
+                dec_conf.tensor_dtype_settings[TensorGroup.KV_CACHE] = PrecisionSetting.BFP4
+        return opts
+
     model_args = ModelArgs(
         mesh_device,
         instruct=args.instruct,
         max_batch_size=args.batch_size,
         max_seq_len=args.max_seq_len,
-        # accuracy mode keeps weights in BF16 where possible
-        optimizations=lambda ma: DecodersPrecision.accuracy(ma.n_layers, ma.model_name),
+        optimizations=make_optimizations,
         cache_hf=True,
     )
     if args.num_layers is not None:
@@ -126,17 +139,18 @@ def main():
     # allocated but bypassed when tq_cache is active.
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
-    # Cache dtype and block budget depend on mode:
-    # BFP4: 0.5 bytes/elem → 4× more blocks than BFP8 baseline
-    # BF16: 2 bytes/elem → ~75% of BFP8 capacity
-    # BFP8: 1 byte/elem (baseline)
-    if args.no_turbo_quant:
-        tq_max_blocks = 1024 * num_devices  # BFP8 baseline
-    elif args.bfp4_cache:
-        tq_max_blocks = 1024 * num_devices  # BFP4: same block count as baseline, 2× less total memory
-    else:
-        tq_max_blocks = 768 * num_devices  # BF16 TQ: ~75% of baseline capacity
-    paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=tq_max_blocks)
+    # Block budget must cover batch_size × max_seq_len tokens.
+    # Each batch gets its own contiguous slab of pages.
+    block_size = 32
+    blocks_per_batch = (args.max_seq_len + block_size - 1) // block_size
+    min_blocks = args.batch_size * blocks_per_batch
+    # Keep at least 1024 blocks to match existing warmup/trace state.
+    tq_max_blocks = max(1024, min_blocks + 32)  # +32 padding for tile alignment
+    print(
+        f"  Paged attention: block_size={block_size}, max_num_blocks={tq_max_blocks} "
+        f"(batch={args.batch_size} x {blocks_per_batch} blocks/batch)"
+    )
+    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=tq_max_blocks)
     print("Loading TT model (paged attention, block_size=32)...")
     tt_model = Transformer(
         args=model_args,
@@ -160,13 +174,12 @@ def main():
 
     if args.no_turbo_quant:
         print("  (--no-turbo-quant: using standard BFP8 paged_update_cache path)")
+    elif args.bfp4_cache:
+        # KV_CACHE already allocated as BFP4 at model init (via make_optimizations override).
+        print("  Using BFP4 paged cache (allocated at model init via optimization override)")
     else:
-        # Replace BFP8 layer_past with TQ-compatible paged cache.
-        # BFP4: 0.5 bytes/elem (2× smaller than baseline) — pre-rescaled centroid×norm
-        # BF16: 2 bytes/elem (2× larger than baseline) — pre-rescaled centroid×norm
-        cache_dtype = ttnn.bfloat4_b if args.bfp4_cache else ttnn.bfloat16
-        cache_label = "BFP4" if args.bfp4_cache else "BF16"
-        print(f"  Replacing BFP8 layer_past with {cache_label} paged cache...")
+        # BF16 mode: model init'd BFP8, swap to BF16 (2 bytes/elem).
+        print("  Replacing BFP8 layer_past with BF16 paged cache...")
         lp_shape = None
         for layer in tt_model.layers:
             attn = layer.attention
@@ -176,12 +189,11 @@ def main():
                     ttnn.deallocate(t)
                 attn.layer_past = None
 
-        # Allocate new caches (BFP8 DRAM is freed).
         for layer in tt_model.layers:
             layer.attention.layer_past = [
                 ttnn.from_torch(
                     torch.zeros(lp_shape, dtype=torch.bfloat16),
-                    dtype=cache_dtype,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     device=mesh_device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
