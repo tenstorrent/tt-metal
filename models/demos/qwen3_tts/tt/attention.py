@@ -39,11 +39,66 @@ TRACE-COMPATIBLE DECODE:
   When cur_pos_tensor is None, falls back to non-traceable update_cache+slice.
 """
 
+import math
 from typing import Optional, Tuple
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.rope import ttnn_rearrange_to_interleaved, ttnn_rearrange_to_noninterleaved
+
+
+def build_multicast_linear_program_config(
+    activation: ttnn.Tensor,
+    weight: ttnn.Tensor,
+    grid_x: int,
+    grid_y: int,
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    """
+    Shared MatmulMultiCoreReuseMultiCastProgramConfig for narrow TTNN linears (Attention o_proj, MLP projs).
+
+    Uses full compute grid (grid_x × grid_y) and fuse_batch=True with activation/weight tile geometry.
+    """
+    TILE = ttnn.TILE_SIZE
+    padded = activation.padded_shape
+    padded_list = [int(x) for x in padded]
+    volume = math.prod(padded_list)
+    mt = (volume // int(padded[-1])) // TILE
+    kt = int(padded[-1]) // TILE
+    nt = int(weight.padded_shape[-1]) // TILE
+    gx, gy = grid_x, grid_y
+    per_core_M = max(1, math.ceil(mt / gy))
+    per_core_N = max(1, math.ceil(nt / gx))
+    # Large in0_block_w (8–16) with fp32_dest_acc LoFi matmuls can oversize circular buffers vs
+    # remaining L1 (TT_THROW: static CB clash with L1 buffers). Prefer ≤4 tiles—still divides
+    # Kt when possible—without shrinking the compute grid or dropping 2D multicast utilization.
+    in0_block_w = 1
+    for cand in (4, 2, 1):
+        if kt % cand == 0:
+            in0_block_w = cand
+            break
+    max_sub_prod = 4  # fp32_dest_acc_en on these linears → subblock product ≤ 4
+    out_subblock_w = 1
+    for sw in range(min(per_core_N, max_sub_prod), 0, -1):
+        if per_core_N % sw == 0:
+            out_subblock_w = sw
+            break
+    max_sh = max(1, max_sub_prod // out_subblock_w)
+    out_subblock_h = 1
+    for sh in range(min(per_core_M, max_sh), 0, -1):
+        if per_core_M % sh == 0:
+            out_subblock_h = sh
+            break
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
 
 
 class Attention(LightweightModule):
@@ -314,6 +369,40 @@ class Attention(LightweightModule):
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(paged_shard_grid, [kv_shard_height, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+        cg = device.compute_with_storage_grid_size()
+        self._oproj_grid_x = int(cg.x)
+        self._oproj_grid_y = int(cg.y)
+
+        # Pre-allocated zero pad for o_proj (DRAM). Runtime ttnn.zeros forces host writes
+        # (trace capture TT_FATAL); slicing this bank is device-only.
+        _TILE = ttnn.TILE_SIZE
+        _min_total = (hidden_size + 7) // 8
+        _need_top = ((_min_total + _TILE - 1) // _TILE) * _TILE
+        self._oproj_pad_bank_rows = max(_need_top - _TILE, 0)
+        self._oproj_pad_bank_rows = ((self._oproj_pad_bank_rows + _TILE - 1) // _TILE) * _TILE
+        if self._oproj_pad_bank_rows > 0:
+            # Match o_proj input width (tile-padded) — same last dim as activations into wo.
+            _pad_w = int(self.wo.shape[-2])
+            self._oproj_pad_bank = ttnn.zeros(
+                [1, 1, self._oproj_pad_bank_rows, _pad_w],
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=_dram,
+            )
+        else:
+            self._oproj_pad_bank = None
+
+    def _output_proj_program_config(
+        self, attn_output_bf16: ttnn.Tensor
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+        return build_multicast_linear_program_config(
+            attn_output_bf16,
+            self.wo,
+            self._oproj_grid_x,
+            self._oproj_grid_y,
         )
 
     def forward(
@@ -697,12 +786,51 @@ class Attention(LightweightModule):
         # Reshape: [b, num_heads, seq, head_dim] → [b, 1, seq, hidden_size]
         attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        # Pad M rows (tile-aligned) so Mt grows → schedulers use ~gy×gx blocks (~104+) vs ~4×13 (~52).
+        # Pad comes from self._oproj_pad_bank (allocated in __init__), not ttnn.zeros in forward.
+        batch_sz = int(attn_output.shape[0])
+        seq_logical = int(attn_output.shape[2])
+        ps = list(attn_output.padded_shape)
+        rank = len(ps)
+        batch_prod = math.prod([int(ps[i]) for i in range(rank - 2)])
+        cur_m = int(ps[-2])
+        TILE = ttnn.TILE_SIZE
+        min_total_m_rows = (self.hidden_size + 7) // 8
+        need_m_dim = (min_total_m_rows + batch_prod - 1) // batch_prod
+        need_m_dim = ((need_m_dim + TILE - 1) // TILE) * TILE
+        pad_seq = need_m_dim - cur_m
+        padded_for_multicast = self._oproj_pad_bank is not None and pad_seq > 0 and pad_seq <= self._oproj_pad_bank_rows
+        h_last = int(ps[-1])
+        hidden_width_logical = int(attn_output.shape[-1])
+        if padded_for_multicast:
+            # Match MLP: do not free L1 attn_output until after concat (copy may alias source).
+            attn_pre = attn_output
+            attn_dram = ttnn.to_memory_config(attn_pre, ttnn.DRAM_MEMORY_CONFIG)
+            pad_part = ttnn.slice(self._oproj_pad_bank, [0, 0, 0, 0], [1, 1, pad_seq, h_last])
+            attn_output = ttnn.concat([attn_dram, pad_part], dim=rank - 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(attn_pre)
+            ttnn.deallocate(attn_dram)
+
+        o_proj_mem = ttnn.DRAM_MEMORY_CONFIG if padded_for_multicast else ttnn.L1_MEMORY_CONFIG
         output = ttnn.linear(
             attn_output,
             self.wo,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=o_proj_mem,
+            program_config=self._output_proj_program_config(attn_output),
         )
         ttnn.deallocate(attn_output)
+
+        if padded_for_multicast:
+            output = ttnn.slice(
+                output,
+                [0, 0, 0, 0],
+                [
+                    batch_sz,
+                    1,
+                    min(seq_logical, int(output.shape[2])),
+                    min(hidden_width_logical, int(output.shape[-1])),
+                ],
+            )
 
         return output, updated_kv_cache

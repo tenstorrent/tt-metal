@@ -6,8 +6,11 @@ SwiGLU MLP implementation for Qwen3-TTS.
 """
 
 
+import math
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.attention import build_multicast_linear_program_config
 
 
 class MLP(LightweightModule):
@@ -143,6 +146,34 @@ class MLP(LightweightModule):
             packer_l1_acc=True,
         )
 
+        cg = device.compute_with_storage_grid_size()
+        self._mlp_grid_x = int(cg.x)
+        self._mlp_grid_y = int(cg.y)
+
+        TILE = ttnn.TILE_SIZE
+        min_total_m_rows = max(
+            (intermediate_size + 7) // 8,
+            (hidden_size + 7) // 8,
+        )
+        need_top = ((min_total_m_rows + TILE - 1) // TILE) * TILE
+        bank_r = max(need_top - TILE, 0)
+        bank_r = ((bank_r + TILE - 1) // TILE) * TILE
+        if bank_r > 0:
+            # Last dim must match gate/up linear input width (tile-padded), not config hidden_size —
+            # otherwise pad slice ends conflict with activations / matmul K mismatch.
+            _pad_w = int(self.gate_proj.shape[-2])
+            self._mlp_pad_bank = ttnn.zeros(
+                [1, 1, bank_r, _pad_w],
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=_dram,
+            )
+            self._mlp_pad_bank_rows = bank_r
+        else:
+            self._mlp_pad_bank = None
+            self._mlp_pad_bank_rows = 0
+
     def forward(self, x: ttnn.Tensor, mode: str = "prefill") -> ttnn.Tensor:
         """
         Apply SwiGLU MLP.
@@ -163,12 +194,56 @@ class MLP(LightweightModule):
         if seq_len >= 1024:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
+        ps = list(x.padded_shape)
+        rank = len(ps)
+        batch_prod = math.prod([int(ps[i]) for i in range(rank - 2)])
+        cur_m = int(ps[-2])
+        TILE = ttnn.TILE_SIZE
+        min_total_m_rows = max(
+            (self.intermediate_size + 7) // 8,
+            (self.hidden_size + 7) // 8,
+        )
+        need_m_dim = (min_total_m_rows + batch_prod - 1) // batch_prod
+        need_m_dim = ((need_m_dim + TILE - 1) // TILE) * TILE
+        pad_seq = need_m_dim - cur_m
+        shape_ok = rank == 4 and int(ps[0]) == 1 and int(ps[1]) == 1
+        padded_for_multicast = (
+            shape_ok and self._mlp_pad_bank is not None and pad_seq > 0 and pad_seq <= self._mlp_pad_bank_rows
+        )
+        spatial_m_before = int(x.shape[-2])
+        h_last = int(ps[-1])
+        hidden_width_logical = int(x.shape[-1])
+        if padded_for_multicast:
+            # Never deallocate inputs before concat: L1→DRAM copy may still depend on the L1 buffer
+            # until the op completes; deallocating early yields "Tensor is not allocated" on concat.
+            # If x is already DRAM, to_memory_config may alias x — also do not free before concat.
+            # After concat: free L1 source and the DRAM tile used as concat input when we created it
+            # from L1; do not free the original DRAM x when it was passed through (may alias concat).
+            moved_from_l1 = mem_cfg != ttnn.DRAM_MEMORY_CONFIG
+            x_pre = x
+            if moved_from_l1:
+                x_dram = ttnn.to_memory_config(x_pre, ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                x_dram = x_pre
+            pad_part = ttnn.slice(
+                self._mlp_pad_bank,
+                [0, 0, 0, 0],
+                [1, 1, pad_seq, h_last],
+            )
+            x = ttnn.concat([x_dram, pad_part], dim=rank - 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if moved_from_l1:
+                ttnn.deallocate(x_pre)
+                ttnn.deallocate(x_dram)
+
+        lin_mem = ttnn.DRAM_MEMORY_CONFIG if padded_for_multicast else mem_cfg
+
         # Gate projection with SiLU activation
         gate_out = ttnn.linear(
             x,
             self.gate_proj,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=mem_cfg,
+            memory_config=lin_mem,
+            program_config=build_multicast_linear_program_config(x, self.gate_proj, self._mlp_grid_x, self._mlp_grid_y),
         )
 
         # Up projection
@@ -176,7 +251,8 @@ class MLP(LightweightModule):
             x,
             self.up_proj,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=mem_cfg,
+            memory_config=lin_mem,
+            program_config=build_multicast_linear_program_config(x, self.up_proj, self._mlp_grid_x, self._mlp_grid_y),
         )
 
         # SwiGLU: silu(gate) * up
@@ -184,7 +260,7 @@ class MLP(LightweightModule):
             gate_out,
             up_out,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            memory_config=mem_cfg,
+            memory_config=lin_mem,
         )
 
         ttnn.deallocate(gate_out)
@@ -195,10 +271,19 @@ class MLP(LightweightModule):
             hidden,
             self.down_proj,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=mem_cfg,
+            memory_config=lin_mem,
+            program_config=build_multicast_linear_program_config(
+                hidden, self.down_proj, self._mlp_grid_x, self._mlp_grid_y
+            ),
         )
 
         ttnn.deallocate(hidden)
+
+        if padded_for_multicast:
+            ends = [int(output.shape[i]) for i in range(rank)]
+            ends[-2] = min(spatial_m_before, ends[-2])
+            ends[-1] = min(hidden_width_logical, ends[-1])
+            output = ttnn.slice(output, [0] * rank, ends)
 
         # Reshape back if needed
         if seq_len >= 1024:
