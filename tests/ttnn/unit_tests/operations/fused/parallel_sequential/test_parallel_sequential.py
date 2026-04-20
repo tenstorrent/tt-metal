@@ -29,16 +29,16 @@ from models.common.utility_functions import comp_pcc, skip_with_llk_assert
 
 
 def stress_test_program_cache(fn):
-    """Decorator (#41622): run test 3x to exercise both program cache paths.
+    """Decorator (#41622): run test 5x to exercise both program cache paths.
 
-    Run 1: normal (program cache miss — builds and caches the program).
-    Run 2: program cache enabled (hit — C++ patches the cached Program via
-            override_runtime_arguments with fresh tensor addresses).
-    Run 3: program cache disabled (miss — Program{descriptor} is reconstructed
-            from the cached descriptor with stale addresses, exercising
-            patch_stale_descriptor).
+    Run 1:   normal (program cache miss — builds and caches the program).
+    Runs 2-3: program cache enabled (hit — C++ patches the cached Program via
+              override_runtime_arguments with fresh tensor addresses).
+    Runs 4-5: program cache cleared then re-enabled (miss — Program{descriptor}
+              is reconstructed from the cached descriptor with stale addresses,
+              exercising patch_stale_descriptor).
 
-    The fusion build cache persists across all runs (same device), so runs 2-3
+    The fusion build cache persists across all runs (same device), so runs 2-5
     hit it with stale CBDescriptor.buffer pointers and runtime arg addresses.
     """
 

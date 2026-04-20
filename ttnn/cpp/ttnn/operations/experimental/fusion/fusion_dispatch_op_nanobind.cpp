@@ -4,6 +4,8 @@
 
 #include "fusion_dispatch_op_nanobind.hpp"
 
+#include <unordered_set>
+
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/vector.h>
 
@@ -188,8 +190,8 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
 
     mod.def(
         "fusion_dispatch_op",
-        [](nb::list ops_input_tensors,
-           nb::list output_specs_py,
+        [](const nb::list& ops_input_tensors,
+           const nb::list& output_specs_py,
            const std::vector<std::uint32_t>& shared_output_map,
            const std::vector<std::uint32_t>& result_reorder,
            const tt::tt_metal::ProgramDescriptor& program_descriptor,

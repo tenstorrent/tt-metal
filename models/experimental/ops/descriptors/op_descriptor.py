@@ -269,6 +269,11 @@ class OpDescriptor:
         if args:
             if kwargs:
                 raise ValueError("update(): positional OR keyword arguments, not both")
+            if len(args) > len(self.input_tensors):
+                raise ValueError(
+                    f"update(): got {len(args)} positional args but "
+                    f"descriptor only has {len(self.input_tensors)} input(s)"
+                )
             updated = self._updated_indices
             for i, t in enumerate(args):
                 self.input_tensors[i] = t
