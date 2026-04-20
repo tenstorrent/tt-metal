@@ -19,10 +19,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
-    // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
-
     // Create experimental objects for Device 2.0 API
     experimental::CircularBuffer cb_out(cb_id_out);
+
+    // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
+    const uint32_t page_bytes = cb_out.get_tile_size();
     experimental::Noc noc;
 
 #ifdef OUT_SHARDED

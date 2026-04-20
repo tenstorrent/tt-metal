@@ -37,6 +37,9 @@ void kernel_main() {
     experimental::CircularBuffer cb_tensor(cb_id_tensor);
     experimental::Noc noc;
 
+    // Get tile size from CB interface
+    const uint32_t tile_size = cb_in0.get_tile_size();
+
     // Create TensorAccessors for start and end tensors
     const auto start_tensor_accessor = TensorAccessor(start_args, start_addr);
     const auto end_tensor_accessor = TensorAccessor(end_args, end_addr);

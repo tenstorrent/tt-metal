@@ -29,6 +29,9 @@ void kernel_main() {
     experimental::CircularBuffer cb_in0(cb_id_in0);
     experimental::Noc noc;
 
+    // Get tile size from CB interface
+    const uint32_t tile_size = cb_in0.get_tile_size();
+
     uint32_t src_tile_id = start_id;
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
