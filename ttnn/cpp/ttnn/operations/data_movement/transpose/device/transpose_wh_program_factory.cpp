@@ -393,14 +393,12 @@ void TransposeWHProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
-    {
-        auto* src = tensor_args.input.buffer();
-        auto* dst = output_tensor.buffer();
-        auto* reader_args = GetCommonRuntimeArgs(program, shared_variables.reader_kernel_id).data();
-        ttnn::operations::data_movement::transpose::copy_transpose_common_runtime_args(*src, reader_args);
-        auto* writer_args = GetCommonRuntimeArgs(program, shared_variables.writer_kernel_id).data();
-        ttnn::operations::data_movement::transpose::copy_transpose_common_runtime_args(*dst, writer_args);
-    }
+    ttnn::operations::data_movement::transpose::refresh_transpose_common_runtime_args(
+        program,
+        shared_variables.reader_kernel_id,
+        shared_variables.writer_kernel_id,
+        *tensor_args.input.buffer(),
+        *output_tensor.buffer());
 
     if (shared_variables.is_row_major) {
         set_runtime_args_wh_rm(

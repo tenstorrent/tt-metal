@@ -293,3 +293,68 @@ def test_transpose_native_height_sharded_wh(device):
 def test_transpose_interleaved_baseline(device):
     shape = (2, 3, 64, 96)
     run_transpose_test(shape, 2, 3, device)
+
+
+# ---------------------------------------------------------------------------
+# 15. ROW_MAJOR height-sharded input (exercises ROW_MAJOR branch in
+# get_transpose_shard_specs / is_shard_tile_aligned)
+# ---------------------------------------------------------------------------
+def test_transpose_row_major_height_sharded_hc(device):
+    shape = (1, 4, 32, 64)
+    run_transpose_test(
+        shape,
+        1,
+        2,
+        device,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_mem_config=_height_shard_config(shape, device),
+        output_mem_config=L1_INTERLEAVED,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 16. DRAM-sharded input falls back to interleaved
+# (is_native_transpose_sharding rejects BufferType::DRAM)
+# ---------------------------------------------------------------------------
+def test_transpose_dram_sharded_fallback(device):
+    shape = (1, 1, 128, 64)
+    compute_grid = device.compute_with_storage_grid_size()
+    num_cores = min(4, compute_grid.x * compute_grid.y)
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
+    total_height = shape[0] * shape[1] * shape[2]
+    shard_spec = ttnn.ShardSpec(shard_grid, (total_height // num_cores, shape[3]), ttnn.ShardOrientation.ROW_MAJOR)
+    dram_sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    torch.manual_seed(12345)
+    x = torch.rand(shape).bfloat16().float()
+    ttnn_input = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=dram_sharded
+    )
+    result = ttnn.transpose(ttnn_input, 2, 3, memory_config=L1_INTERLEAVED)
+    actual = result.memory_config()
+    assert (
+        actual.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    ), f"Expected fallback to INTERLEAVED, got {actual.memory_layout}"
+
+    ref = x.transpose(2, 3)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    passing, output = comp_equal(ref, got)
+    logger.info(output)
+    assert passing, f"Transpose mismatch for DRAM-sharded fallback, shape={shape}"
+
+
+# ---------------------------------------------------------------------------
+# 17. Block-sharded output without shard_spec — exercises the block-shard
+# branch of generate_transpose_shard_spec (interleaved input, no spec)
+# ---------------------------------------------------------------------------
+def test_transpose_block_sharded_output_no_shard_spec(device):
+    shape = (1, 1, 128, 128)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    run_transpose_test(
+        shape,
+        2,
+        3,
+        device,
+        input_mem_config=L1_INTERLEAVED,
+        output_mem_config=output_mem_config,
+    )
