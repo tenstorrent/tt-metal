@@ -174,7 +174,8 @@ def test_mla(
 
     # Conditionally load fixtures - only load what we need!
     if use_pretrained:
-        config, weights = request.getfixturevalue("pretrained_weights")
+        config, sd = request.getfixturevalue("pretrained_transformer_weights")
+        weights = sd["layers"][0]["mla_weights"]
     else:
         config, weights = request.getfixturevalue("random_weights")
 
