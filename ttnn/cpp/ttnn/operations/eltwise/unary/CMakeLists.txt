@@ -30,14 +30,17 @@ target_sources(
     PRIVATE
         common/unary_op_utils.cpp
         device/unary_composite_op.cpp
-        device/unary_device_operation.cpp
-        device/unary_program_factory.cpp
-        device/unary_sharded_program_factory.cpp
-        unary.cpp
 )
 
 target_include_directories(ttnn_op_eltwise_unary PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(ttnn_op_eltwise_unary PUBLIC TTNN::Core PRIVATE TT::Metalium)
+target_link_libraries(
+    ttnn_op_eltwise_unary
+    PUBLIC
+        TTNN::Core
+        TTNN::Ops::Eltwise::UnaryNG
+    PRIVATE
+        TT::Metalium
+)
 
 install(
     TARGETS
