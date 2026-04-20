@@ -53,7 +53,7 @@ def test_e2e_structural_pcc(tmp_path):
 
         spec = HFLoadSpec(
             model_id=os.environ.get("HF_MODEL", "hf-internal-testing/tiny-random-LlamaForCausalLM"),
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
         )
         try:
             ref = DotsOCRReference(spec)

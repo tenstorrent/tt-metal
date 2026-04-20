@@ -21,11 +21,26 @@ def test_dots_decoder_import_smoke():
     from models.demos.dots_ocr.tt.model import DotsTransformer
     from models.demos.dots_ocr.tt.model_config import DotsModelArgs
 
-    cfg = AutoConfig.from_pretrained("rednote-hilab/dots.mocr", trust_remote_code=True)
+    try:
+        cfg = AutoConfig.from_pretrained(
+            "rednote-hilab/dots.mocr",
+            trust_remote_code=True,
+            attn_implementation="eager",
+        )
+    except TypeError:
+        cfg = AutoConfig.from_pretrained("rednote-hilab/dots.mocr", trust_remote_code=True)
     device = open_mesh_device()
     try:
         args = DotsModelArgs(device, hf_config=cfg, dummy_weights=True, max_batch_size=1, max_seq_len=2048)
-        model = DotsTransformer(args, dtype=ttnn.bfloat16, mesh_device=device, state_dict={}, weight_cache_path=None)
+        # ``Embedding`` reads ``tok_embeddings.weight`` from ``state_dict``; an empty dict raises KeyError.
+        state_dict = args.load_state_dict()
+        model = DotsTransformer(
+            args,
+            dtype=ttnn.bfloat16,
+            mesh_device=device,
+            state_dict=state_dict,
+            weight_cache_path=None,
+        )
         assert model.args.dim == cfg.hidden_size
     finally:
         ttnn.close_mesh_device(device)

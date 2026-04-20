@@ -6,7 +6,7 @@ Pure-Python tests for ``models.demos.dots_ocr.tt.mesh``.
 
 These tests are device-free and validate the topology resolution / clamping
 logic that keeps dots.mocr runnable on N150 / N300 / T3K (auto-clamped to a
-1x2 submesh because ``dots.mocr`` has ``num_key_value_heads=2``).
+supported submesh because ``dots.mocr`` has ``num_key_value_heads=2``).
 """
 
 from __future__ import annotations
@@ -53,9 +53,9 @@ def test_supported_mesh_shape_passthrough_for_n150_n300():
 )
 def test_supported_mesh_shape_clamps_multi_chip(selector):
     """
-    T3K / N150x4 must be clamped because dots.mocr has ``n_kv_heads=2`` and the
-    base ``ModelArgs`` requires ``n_kv_heads % cluster_shape[1] == 0``. The
-    clamp opens a 1x2 submesh on the same hardware.
+    T3K / N150x4 / TG must be clamped because dots.mocr has ``n_kv_heads=2``.
+    The clamp opens a supported submesh (TP<=2). For T3K we default to TP=1
+    unless DOTS_T3K_TP=2 is set.
     """
     rows, cols = resolve_supported_mesh_shape(selector)
     assert rows <= DOTS_MAX_DP_ROWS

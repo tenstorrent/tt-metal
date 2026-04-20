@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import os
+import time
+
 import torch
 from loguru import logger
 
@@ -137,10 +140,11 @@ class Generator(WarmupForwardMixin):
 
                 (
                     chunk_prefill_input,
-                    chunk_rot_mats_prefill,
+                    chunk_rot_mats_prefill_global,
+                    chunk_rot_mats_prefill_local,
                     page_table_tt,
                     chunk_page_table_tt,
-                ) = self.model.prepare_inputs_prefill(
+                ) = self._prepare_inputs_prefill_compat(
                     chunk_tokens,
                     rot_mats=rot_mats,
                     start_pos=chunk_start,
@@ -149,7 +153,12 @@ class Generator(WarmupForwardMixin):
                 )
                 tt_logits = self.model.ttnn_prefill_forward(
                     chunk_prefill_input,
-                    rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in chunk_rot_mats_prefill],
+                    rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in chunk_rot_mats_prefill_global],
+                    rot_mats_local=(
+                        [rm[user_id : user_id + 1, ...] for rm in chunk_rot_mats_prefill_local]
+                        if chunk_rot_mats_prefill_local is not None
+                        else None
+                    ),
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
@@ -168,21 +177,134 @@ class Generator(WarmupForwardMixin):
             ttnn = get_ttnn()
             if ttnn is None:
                 raise RuntimeError("ttnn is required for prefill_forward")
-            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model.prepare_inputs_prefill(
+            debug_sync = os.getenv("DOTS_PREFILL_DEBUG_SYNC", "").lower() in ("1", "true", "yes", "y")
+            t0 = time.time()
+            logger.info(f"Prefill(single-user): preparing inputs seq_len={seq_len} user_id={user_id}")
+
+            # tt_transformers prefill kernels (attention/MLP) commonly assume the input sequence
+            # length is padded to a multiple of 128. Padding at the end is safe here because
+            # causal attention prevents earlier tokens from attending to future (padded) tokens.
+            padded_len = ((int(seq_len) + 127) // 128) * 128
+            if padded_len != seq_len:
+                if tokens.dim() == 3:
+                    pad = torch.zeros(tokens.shape[0], padded_len - seq_len, tokens.shape[2], dtype=tokens.dtype)
+                    tokens = torch.cat([tokens, pad], dim=1)
+                    # Ensure RoPE matrices cover the padded length too *if* caller supplied host rot_mats.
+                    if rot_mats is not None:
+                        from models.tt_transformers.tt.common import precompute_freqs
+
+                        head_dim = getattr(self.model_args, "head_dim", 128)
+                        theta = getattr(self.model_args, "rope_theta", 10000.0)
+                        rope_scaling = getattr(self.model_args, "rope_scaling", None)
+                        scale_factor = getattr(rope_scaling, "factor", None) if rope_scaling is not None else None
+                        orig_context_len = (
+                            getattr(rope_scaling, "original_max_position_embeddings", None)
+                            if rope_scaling is not None
+                            else None
+                        )
+                        rope_type = (
+                            getattr(getattr(rope_scaling, "rope_type", None), "value", "llama3")
+                            if rope_scaling
+                            else "llama3"
+                        )
+
+                        cos_freqs, sin_freqs = precompute_freqs(
+                            head_dim,
+                            padded_len * 2,
+                            theta=theta,
+                            scale_factor=scale_factor,
+                            orig_context_len=orig_context_len,
+                            rope_type=rope_type,
+                        )
+                        cos_hf = (
+                            torch.cat([cos_freqs[:padded_len], cos_freqs[:padded_len]], dim=-1)
+                            .unsqueeze(0)
+                            .unsqueeze(0)
+                        )
+                        sin_hf = (
+                            torch.cat([sin_freqs[:padded_len], sin_freqs[:padded_len]], dim=-1)
+                            .unsqueeze(0)
+                            .unsqueeze(0)
+                        )
+                        rot_mats = (cos_hf, sin_hf)
+                elif tokens.dim() == 2:
+                    # Token-id prefill: pad with zeros (usually <pad> / <unk>, but attention is causal so it won't affect earlier tokens).
+                    pad = torch.zeros(tokens.shape[0], padded_len - seq_len, dtype=tokens.dtype)
+                    tokens = torch.cat([tokens, pad], dim=1)
+                    # If caller supplied host rot_mats, ensure they cover the padded length too.
+                    if rot_mats is not None:
+                        from models.tt_transformers.tt.common import precompute_freqs
+
+                        head_dim = getattr(self.model_args, "head_dim", 128)
+                        theta = getattr(self.model_args, "rope_theta", 10000.0)
+                        rope_scaling = getattr(self.model_args, "rope_scaling", None)
+                        scale_factor = getattr(rope_scaling, "factor", None) if rope_scaling is not None else None
+                        orig_context_len = (
+                            getattr(rope_scaling, "original_max_position_embeddings", None)
+                            if rope_scaling is not None
+                            else None
+                        )
+                        rope_type = (
+                            getattr(getattr(rope_scaling, "rope_type", None), "value", "llama3")
+                            if rope_scaling
+                            else "llama3"
+                        )
+
+                        cos_freqs, sin_freqs = precompute_freqs(
+                            head_dim,
+                            padded_len * 2,
+                            theta=theta,
+                            scale_factor=scale_factor,
+                            orig_context_len=orig_context_len,
+                            rope_type=rope_type,
+                        )
+                        cos_hf = (
+                            torch.cat([cos_freqs[:padded_len], cos_freqs[:padded_len]], dim=-1)
+                            .unsqueeze(0)
+                            .unsqueeze(0)
+                        )
+                        sin_hf = (
+                            torch.cat([sin_freqs[:padded_len], sin_freqs[:padded_len]], dim=-1)
+                            .unsqueeze(0)
+                            .unsqueeze(0)
+                        )
+                        rot_mats = (cos_hf, sin_hf)
+                else:
+                    raise AssertionError(f"Unexpected tokens rank {tokens.dim()} in prefill")
+
+            (
+                prefill_input,
+                rot_mats_prefill_global,
+                rot_mats_prefill_local,
+                page_table_tt,
+                _,
+            ) = self._prepare_inputs_prefill_compat(
                 tokens,
                 rot_mats=rot_mats,
                 page_table=page_table,
             )
+            logger.info(
+                f"Prefill(single-user): inputs prepared in {(time.time() - t0):.2f}s; launching ttnn_prefill_forward"
+            )
 
             tt_logits = self.model.ttnn_prefill_forward(
                 prefill_input,
-                rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in rot_mats_prefill],
+                rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in rot_mats_prefill_global],
+                rot_mats_local=(
+                    [rm[user_id : user_id + 1, ...] for rm in rot_mats_prefill_local]
+                    if rot_mats_prefill_local is not None
+                    else None
+                ),
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
             )
+            if debug_sync:
+                logger.info("Prefill(single-user): synchronizing mesh device (DOTS_PREFILL_DEBUG_SYNC=1)")
+                ttnn.synchronize_device(self.mesh_device)
 
+            logger.info("Prefill(single-user): transferring logits to host (tt_logits.cpu())")
             logits = self.model.process_output_prefill(tt_logits.cpu(), last_token_idx=(last_token_idx % 32))
 
             ttnn.deallocate(tt_logits)
@@ -191,6 +313,31 @@ class Generator(WarmupForwardMixin):
                 ttnn.deallocate(page_table_tt)
 
             return logits
+
+    def _prepare_inputs_prefill_compat(self, *args, **kwargs):
+        """
+        Compatibility wrapper around `prepare_inputs_prefill`.
+
+        `DotsTransformer.prepare_inputs_prefill` (embeddings path) returns 4-tuple:
+          (prefill_input, rot_mats_prefill, page_table_tt, chunk_page_table_tt)
+
+        The parent `tt_transformers` implementation (token-id path) returns a 5-tuple:
+          (prefill_input, rot_mats_global, rot_mats_local, page_table_tt, chunk_page_table_tt)
+
+        This wrapper always returns a 5-tuple:
+          (prefill_input, rot_mats_global, rot_mats_local, page_table_tt, chunk_page_table_tt)
+        For embedding-prefill paths that don't have `rot_mats_local`, it returns None for that slot.
+        """
+        out = self.model.prepare_inputs_prefill(*args, **kwargs)
+        if not isinstance(out, (tuple, list)):
+            raise TypeError(f"prepare_inputs_prefill returned {type(out).__name__}, expected tuple")
+        if len(out) == 4:
+            prefill_input, rot_mats_global, page_table_tt, chunk_page_table_tt = out
+            return prefill_input, rot_mats_global, None, page_table_tt, chunk_page_table_tt
+        if len(out) == 5:
+            prefill_input, rot_mats_global, _rot_mats_local, page_table_tt, chunk_page_table_tt = out
+            return prefill_input, rot_mats_global, _rot_mats_local, page_table_tt, chunk_page_table_tt
+        raise ValueError(f"prepare_inputs_prefill returned {len(out)} values, expected 4 or 5")
 
     def read_decode_output(self, tt_out, async_read=False):
         return self._ttt.read_decode_output(tt_out, async_read=async_read)

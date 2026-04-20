@@ -111,16 +111,14 @@ class VisionEncoder(LightweightModule):
 
     def _create_dummy_state_dict(self, prefix: str = "vision_tower") -> dict:
         """Create synthetic weights for testing (matches test_patch_merger_pcc.py pattern)."""
+        mlp = self.hidden_size * (self.spatial_merge_size**2)
+        # ``nn.Linear`` weights are ``[out_features, in_features]``; ``PatchMergerTT`` transposes once for ttnn.
         return {
             f"{prefix}.patch_merger.ln_q.weight": torch.ones(self.hidden_size, dtype=torch.bfloat16),
-            f"{prefix}.patch_merger.feed_forward.0.weight": torch.randn(
-                self.hidden_size * (self.spatial_merge_size**2),
-                self.hidden_size * (self.spatial_merge_size**2),
-                dtype=torch.bfloat16,
-            ).T,
+            f"{prefix}.patch_merger.feed_forward.0.weight": torch.randn(mlp, mlp, dtype=torch.bfloat16),
             f"{prefix}.patch_merger.feed_forward.2.weight": torch.randn(
-                self.out_hidden_size, self.hidden_size * (self.spatial_merge_size**2), dtype=torch.bfloat16
-            ).T,
+                self.out_hidden_size, mlp, dtype=torch.bfloat16
+            ),
         }
 
     def _create_mock_patch_merger(self, hidden_size, out_hidden_size, spatial_merge_size, state_dict):

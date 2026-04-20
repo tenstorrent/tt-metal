@@ -57,10 +57,13 @@ def test_patch_merger_pcc_gt_0_99(tmp_path):
     ref = PatchMergerRef(hidden_size=hidden, out_hidden_size=out_hidden, spatial_merge_size=spatial_merge_size)
     # Create synthetic state_dict that matches TT module's expected keys
     state_dict_prefix = "patch_merger"
+    # PyTorch ``nn.Linear`` weights are ``[out_features, in_features]``. ``PatchMergerTT``
+    # applies the same ``transpose`` as qwen25_vl (HF-style layout), so store **raw** linear
+    # weights — do **not** pre-transpose here (double-transpose made ``w2`` wrong and broke matmul).
     state_dict = {
         f"{state_dict_prefix}.ln_q.weight": ref.norm.weight.detach().clone(),
-        f"{state_dict_prefix}.feed_forward.0.weight": ref.fc1.weight.detach().clone().T,
-        f"{state_dict_prefix}.feed_forward.2.weight": ref.fc2.weight.detach().clone().T,
+        f"{state_dict_prefix}.feed_forward.0.weight": ref.fc1.weight.detach().clone(),
+        f"{state_dict_prefix}.feed_forward.2.weight": ref.fc2.weight.detach().clone(),
     }
 
     device = _open_device()

@@ -127,7 +127,7 @@ def test_patch_embed_with_device(tmp_path):
 
 def test_vision_config_defaults():
     """Test that default vision configuration matches Dots.mocr specs."""
-    from models.demos.dots_ocr.tt.vision_model_config import DotsVisionConfig
+    from models.demos.dots_ocr.tt.vision_config_dataclass import DotsVisionConfig
 
     config = DotsVisionConfig()
 

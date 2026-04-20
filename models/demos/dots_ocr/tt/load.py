@@ -8,12 +8,14 @@ and full TTNN vision transformer weights from real dots.mocr checkpoints.
 
 from __future__ import annotations
 
+import os
+
 from loguru import logger
 
 from models.tt_transformers.tt.load_checkpoints import (
+    convert_hf_to_meta,
     convert_hf_to_meta_no_qkv_permute,
     load_hf_state_dict_filtered,
-    standardize_hf_keys_multimodal,
 )
 
 
@@ -29,6 +31,7 @@ def load_dots_text_state_dict(hf_model_id_or_dir: str, *, head_dim: int, n_heads
         "model.",  # Standard HF pattern
         "language_model.",  # Some multimodal wrappers
         "text_model.",  # Alternative naming
+        "lm_head.",  # Unwrapped HF head
     )
 
     logger.info(f"Loading text weights from {hf_model_id_or_dir} with prefixes: {key_prefixes}")
@@ -44,7 +47,20 @@ def load_dots_text_state_dict(hf_model_id_or_dir: str, *, head_dim: int, n_heads
 
     logger.info(f"Loaded {len(loaded)} text-related tensors before standardization")
 
-    loaded = standardize_hf_keys_multimodal(loaded)
+    # Do NOT call `standardize_hf_keys_multimodal` here: it invokes `standardize_hf_keys`,
+    # which maps `model.embed_tokens.weight` -> `lm_head.weight` and deletes the embedding key.
+    # TT text stack requires both `tok_embeddings.weight` and `output.weight`.
+    #
+    # We only normalize the common wrapper prefixes Dots may use.
+    normalized = {}
+    for k, v in loaded.items():
+        if k.startswith("model.language_model."):
+            normalized[k.replace("model.language_model.", "model.", 1)] = v
+        elif k.startswith("language_model."):
+            normalized["model." + k[len("language_model.") :]] = v
+        else:
+            normalized[k] = v
+    loaded = normalized
 
     # Strip a leading "model." if present; convert expects HF-like keys.
     stripped = {}
@@ -56,13 +72,43 @@ def load_dots_text_state_dict(hf_model_id_or_dir: str, *, head_dim: int, n_heads
         else:
             stripped[k] = v
 
-    converted = convert_hf_to_meta_no_qkv_permute(stripped, head_dim, n_heads=n_heads, n_kv_heads=n_kv_heads)
+    # Dots runs with `use_hf_rope=True`. Some stacks want HF-layout Q/K (no permute), others want Meta-layout
+    # (permute). Provide an A/B switch so we can converge on the correct setting for dots.mocr.
+    permute = os.environ.get("DOTS_TEXT_QKV_PERMUTE", "0").strip() in ("1", "true", "yes", "y")
+    if permute:
+        logger.info("Dots text weight conversion: using convert_hf_to_meta (Q/K permute enabled)")
+        converted = convert_hf_to_meta(stripped, head_dim, n_heads=n_heads, n_kv_heads=n_kv_heads)
+    else:
+        logger.info("Dots text weight conversion: using convert_hf_to_meta_no_qkv_permute (Q/K permute disabled)")
+        converted = convert_hf_to_meta_no_qkv_permute(stripped, head_dim, n_heads=n_heads, n_kv_heads=n_kv_heads)
 
-    # Re-add "model." prefix that TTTransformer expects by default.
-    final = {f"model.{k}": v for k, v in converted.items()}
+    # IMPORTANT: tt_transformers TT modules expect *Meta-style* keys without a leading "model.".
+    # For example, Embedding looks up "tok_embeddings.weight" (see `tt/embedding.py`).
+    final = dict(converted)
+
+    # Belt-and-braces: ensure embedding + lm_head keys exist under the exact names expected by
+    # `tt_transformers` modules (`tok_embeddings.weight`, `output.weight`). Depending on upstream
+    # checkpoint layouts and standardization, these may appear under `embed_tokens` / `lm_head`.
+    if "tok_embeddings.weight" not in final:
+        for candidate in ("embed_tokens.weight", "model.embed_tokens.weight"):
+            if candidate in final:
+                final["tok_embeddings.weight"] = final[candidate]
+                break
+    if "output.weight" not in final:
+        for candidate in ("lm_head.weight", "model.lm_head.weight"):
+            if candidate in final:
+                final["output.weight"] = final[candidate]
+                break
 
     logger.info(f"Successfully loaded {len(final)} converted text weights for Dots OCR")
     logger.info(f"Key examples: {list(final.keys())[:5] if final else 'None'}")
+    if "tok_embeddings.weight" not in final or "output.weight" not in final:
+        logger.warning(
+            "Dots text weights missing expected keys: tok_embeddings.weight={}, output.weight={}. "
+            "This usually indicates an HF->Meta key mapping mismatch.",
+            "tok_embeddings.weight" in final,
+            "output.weight" in final,
+        )
 
     return final
 
