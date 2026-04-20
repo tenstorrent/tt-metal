@@ -122,6 +122,7 @@ def run_mla_inference(
         # Warmup / compile run (kernels cached).
         logger.info("Perf: warmup forward pass")
         _ = _forward()
+        logger.info("Starting synchronize after warmup")
         ttnn.synchronize_device(mesh_device)
         ttnn.distributed_context_barrier()
 
@@ -130,6 +131,7 @@ def run_mla_inference(
         for i in range(num_loops):
             logger.info(f"Perf: forward pass {i + 1}/{num_loops}")
             tt_output = _forward()
+            logger.info(f"Sync call started for forward pass {i + 1}/{num_loops}")
             ttnn.synchronize_device(mesh_device)
             ttnn.distributed_context_barrier()
         signpost("stop")
