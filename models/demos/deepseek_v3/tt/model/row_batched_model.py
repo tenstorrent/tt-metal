@@ -22,7 +22,7 @@ from models.demos.deepseek_v3.tt.mtp import MTP2D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig, ReshardConfig
-from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config, get_prefill_chunk_sizes, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -111,7 +111,9 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         """Create the model configuration for prefill mode."""
+        model_chunk = get_prefill_chunk_sizes(hf_config.max_seq_len, mesh_device.shape[0]).model_chunk
         model_cfg = {
+            "model_chunk": model_chunk,
             "embedding": Embedding2D.prefill_model_config(hf_config, mesh_device),
             "mlp_decoder_block": [
                 DecoderBlock2D.prefill_model_config(
@@ -377,7 +379,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         ``_forward_prefill`` performs a post-LMHead row all-gather so every device
         converges on the target token's logits.
         """
-        CHUNK_SIZE = 1024
+        CHUNK_SIZE = cfg["model_chunk"]
         cos_dim = rope_tensors["cos_matrix"].shape[3]
         sin_dim = rope_tensors["sin_matrix"].shape[3]
         logits = []

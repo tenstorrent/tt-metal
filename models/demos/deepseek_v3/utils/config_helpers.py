@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import DeepseekSamplingArgs, SavedWeight
+from models.demos.deepseek_v3.utils.config_dataclass import DeepseekSamplingArgs, PrefillChunkSizes, SavedWeight
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
 # Constants
@@ -32,6 +32,50 @@ DEFAULT_SAMPLING_TOP_P = 0.95
 # So, using 32 as default value for top-k when sampling on device. If top-k = 0 is needed, then
 # do sampling on host.
 DEFAULT_SAMPLING_TOP_K = 32
+
+
+# Each value is a tuple of (seq_len_threshold, PrefillChunkSizes) pairs, sorted ascending by threshold.
+PREFILL_CHUNK_SIZES = {
+    # QUAD
+    16: (
+        (0, PrefillChunkSizes(DEFAULT_MAX_SEQ_LEN, DEFAULT_MAX_SEQ_LEN, 2 * 1024)),
+        (48 * 1024, PrefillChunkSizes(48 * 1024, 48 * 1024, 2 * 1024)),
+        (64 * 1024, PrefillChunkSizes(64 * 1024, 32 * 1024, 2 * 1024)),
+        (96 * 1024, PrefillChunkSizes(32 * 1024, 16 * 1024, 2 * 1024)),
+        (112 * 1024, PrefillChunkSizes(16 * 1024, 8 * 1024, 2 * 1024)),
+        (120 * 1024, PrefillChunkSizes(8 * 1024, 4 * 1024, 1 * 1024)),
+        (124 * 1024, PrefillChunkSizes(2 * 1024, 2 * 1024, 1 * 1024)),
+        (128 * 1024, PrefillChunkSizes(1 * 1024, 1 * 1024, 1 * 1024)),
+    ),
+    # DUAL
+    8: (
+        (0, PrefillChunkSizes(DEFAULT_MAX_SEQ_LEN, DEFAULT_MAX_SEQ_LEN, 2 * 1024)),
+        (16 * 1024, PrefillChunkSizes(16 * 1024, 8 * 1024, 2 * 1024)),
+        (24 * 1024, PrefillChunkSizes(4 * 1024, 1 * 1024, 1 * 1024)),
+        (32 * 1024, PrefillChunkSizes(4 * 1024, 1 * 1024, 1 * 1024)),
+    ),
+    # TG
+    4: ((0, PrefillChunkSizes(DEFAULT_MAX_SEQ_LEN, DEFAULT_MAX_SEQ_LEN, 2 * 1024)),),
+}
+
+
+def get_prefill_chunk_sizes(max_seq_len: int, num_rows: int) -> PrefillChunkSizes:
+    """Return PrefillChunkSizes for the given (num_rows, max_seq_len).
+
+    For configurations not in the lookup table, falls back to no-chunking defaults.
+    """
+    if num_rows not in PREFILL_CHUNK_SIZES:
+        raise ValueError(f"num_rows should be in (4, 8, 16), got {num_rows}")
+    chunk_sizes = PREFILL_CHUNK_SIZES[num_rows]
+
+    chunks_to_return = chunk_sizes[0][1]
+    for seq_len, chunks in chunk_sizes:
+        if seq_len <= max_seq_len:
+            chunks_to_return = chunks
+        else:
+            break
+    logger.info(f"Prefill chunks: {chunks_to_return}")
+    return chunks_to_return
 
 
 def get_fabric_config():

@@ -34,6 +34,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
     even_int_div,
     get_mesh_coords,
+    get_prefill_chunk_sizes,
     get_state_dicts,
     shard_and_save,
     sub_state_dicts,
@@ -576,6 +577,8 @@ class MLA1D(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        chunk_sizes = get_prefill_chunk_sizes(hf_config.max_seq_len, mesh_shape[0])
+
         return {
             "batch_size_per_row": batch_size_per_row,
             "num_heads": num_heads,
@@ -599,6 +602,8 @@ class MLA1D(AbstractModule):
             "wq_kv_a_r_prefill": wq_kv_a_r_config,
             "wkv_b2_ag_prefill": wkv_b2_ag_config,
             "wo_ag_prefill": wo_ag_config,
+            "mla_chunk": chunk_sizes.mla_chunk,
+            "wkv_b2_chunk": chunk_sizes.wkv_b2_chunk,
             "mesh_device": mesh_device,
         }
 
@@ -1707,10 +1712,7 @@ class MLA1D(AbstractModule):
 
             return v_out_chunk
 
-        WKV_B2_AG_SEQ_CHUNK_SIZE = int(os.getenv("DEEPSEEK_WKV_B2_AG_PREFILL_CHUNK_SIZE", "1024"))
-        assert WKV_B2_AG_SEQ_CHUNK_SIZE > 0, (
-            "DEEPSEEK_WKV_B2_AG_PREFILL_CHUNK_SIZE must be > 0, " f"got {WKV_B2_AG_SEQ_CHUNK_SIZE}"
-        )
+        WKV_B2_AG_SEQ_CHUNK_SIZE = cfg["wkv_b2_chunk"]
         wo_k = num_heads * v_head_dim
 
         # Fuse wkv_b2 and wo into a single chunked loop to avoid materializing the full
@@ -1792,9 +1794,7 @@ class MLA1D(AbstractModule):
         Returns:
             Output tensor after MLP computation
         """
-        # chunk_size = 8192
-        chunk_size = 4096
-        # chunk_size = 2048
+        chunk_size = cfg["mla_chunk"]
         mesh_shape = cfg["mesh_shape"]
 
         sdpa_dp_factor = mla_tp_factor = mesh_shape[1]

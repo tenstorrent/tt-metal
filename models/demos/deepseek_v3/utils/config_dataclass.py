@@ -430,6 +430,13 @@ class TypecastConfig(OpConfigBase):
     sub_core_grids: ttnn.CoreRangeSet | None = None
 
 
+@dataclass(frozen=True)
+class PrefillChunkSizes:
+    model_chunk: int
+    mla_chunk: int
+    wkv_b2_chunk: int
+
+
 @dataclass
 class KvCacheConfig(OpConfigBase):
     """Common parameters for a kv cache.
