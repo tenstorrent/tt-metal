@@ -56,6 +56,18 @@ class TtMoe(LightweightModule):
     """
 
     @staticmethod
+    def check_cache_complete(cache_path: Path, layer_idx: int, experts_per_chip: int) -> bool:
+        """Check if MoE cache is complete (gate + routed experts + shared expert)."""
+        prefix = f"layer_{layer_idx}"
+        if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate"):
+            return False
+        if not TtRoutedExpert.check_cache_complete(cache_path, f"{prefix}.routed_expert", experts_per_chip):
+            return False
+        if not TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert"):
+            return False
+        return True
+
+    @staticmethod
     def build_ttnn_cache(
         gate_weights: dict | None,
         routed_expert_weights: list[dict] | None,

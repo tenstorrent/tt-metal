@@ -81,6 +81,8 @@ def test_rms_norm_weights_cold_warm_cache(mesh_device, device_params):
     output1 = to_torch_concat(output1_tt)
 
     # === Path 2: Cold Cache ===
+    assert not TtDistributedRmsNorm.check_cache_complete(CACHE_DIR, "rms_norm"), "Cache should be empty before build"
+
     TtDistributedRmsNorm.build_ttnn_cache(
         torch_weight,
         emb_dim,
@@ -88,6 +90,8 @@ def test_rms_norm_weights_cold_warm_cache(mesh_device, device_params):
         CACHE_DIR,
         "rms_norm",
     )
+
+    assert TtDistributedRmsNorm.check_cache_complete(CACHE_DIR, "rms_norm"), "Cache should be complete after build"
 
     norm_cold = TtDistributedRmsNorm(
         mesh_device,

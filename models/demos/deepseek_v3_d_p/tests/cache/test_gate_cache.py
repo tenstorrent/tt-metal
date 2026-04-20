@@ -111,6 +111,8 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     output1 = to_torch_gate(scores1)
 
     # === Path 2: Cold Cache (build + load) ===
+    assert not TtMoEGatePrefill.check_cache_complete(CACHE_DIR, "gate"), "Cache should be empty before build"
+
     # Build cache
     logger.info(f"Building cache to {CACHE_DIR}")
     try:
@@ -127,10 +129,7 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         logger.error(f"Cache building failed: {e}")
         raise
 
-    # Verify cache files exist (ttnn adds dtype/layout suffix)
-    cache_files = list(CACHE_DIR.glob("gate.*"))
-    logger.info(f"Cache files created: {len(cache_files)} files")
-    assert len(cache_files) >= 2, f"Expected at least 2 cache files, found {len(cache_files)}"
+    assert TtMoEGatePrefill.check_cache_complete(CACHE_DIR, "gate"), "Cache should be complete after build"
 
     # Load from cold cache
     gate_cold = TtMoEGatePrefill(
