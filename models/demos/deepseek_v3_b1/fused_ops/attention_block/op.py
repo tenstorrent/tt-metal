@@ -3438,20 +3438,32 @@ class AttentionBlock:
                 krope_sin_tensor_address = krope_sin_tensor_device.buffer_address()
                 position_ids_tensor_addr = position_ids_tensor_device.buffer_address()
 
-                # Compute address overrides for each matmul's weights within the fused buffer
-                fused_weights_base_addr = ref_fused_weights_tensor.buffer_address()
+                # Compute address overrides for each matmul's weights within the fused buffer.
+                # Some fused buffers (e.g. from fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a)
+                # are per-core allocated; buffer_address() is not defined for them and we must
+                # query a specific core via experimental_per_core_buffer_address. Per-core
+                # addresses are uniform across the shard grid (asserted by
+                # assert_uniform_per_core_addresses), so any core returns the same base.
+                def _fused_base_addr(t):
+                    if t.is_per_core_allocated():
+                        core = t.memory_config().shard_spec.grid.bounding_box().start
+                        return t.experimental_per_core_buffer_address(core)
+                    return t.buffer_address()
+
+                fused_weights_base_addr = _fused_base_addr(ref_fused_weights_tensor)
+                gamma_base_addr = _fused_base_addr(ref_gamma_fused_tensor)
                 matmul_weights_addr = fused_weights_base_addr + matmul_weights_tensor.byte_offset
                 matmul2_weights_addr = fused_weights_base_addr + matmul2_weights_tensor.byte_offset
                 dkv_matmul_weights_addr = fused_weights_base_addr + dkv_matmul_weights_tensor.byte_offset
-                gamma_addr = ref_gamma_fused_tensor.buffer_address() + gamma_tensor.byte_offset
-                rmsnorm2_gamma_addr = ref_gamma_fused_tensor.buffer_address() + rmsnorm2_gamma_tensor.byte_offset
-                kv_rmsnorm_gamma_addr = ref_gamma_fused_tensor.buffer_address() + dkv_rmsnorm_gamma_tensor.byte_offset
-                matmul3_weights_addr = ref_kv_b12_fused_tensor.buffer_address() + matmul3_weights_tensor.byte_offset
+                gamma_addr = gamma_base_addr + gamma_tensor.byte_offset
+                rmsnorm2_gamma_addr = gamma_base_addr + rmsnorm2_gamma_tensor.byte_offset
+                kv_rmsnorm_gamma_addr = gamma_base_addr + dkv_rmsnorm_gamma_tensor.byte_offset
+                matmul3_weights_addr = _fused_base_addr(ref_kv_b12_fused_tensor) + matmul3_weights_tensor.byte_offset
                 matmul4_weights_addr = (
-                    ref_post_sdpa_weights1_fused_tensor.buffer_address() + post_sdpa_weights1_tensor.byte_offset
+                    _fused_base_addr(ref_post_sdpa_weights1_fused_tensor) + post_sdpa_weights1_tensor.byte_offset
                 )
                 matmul5_weights_addr = (
-                    ref_post_sdpa_weights2_fused_tensor.buffer_address() + post_sdpa_weights2_tensor.byte_offset
+                    _fused_base_addr(ref_post_sdpa_weights2_fused_tensor) + post_sdpa_weights2_tensor.byte_offset
                 )
                 qrope_trans_mat_addr = ref_trans_mat_tensor.buffer_address()
 

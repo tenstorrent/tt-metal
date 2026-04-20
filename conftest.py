@@ -784,6 +784,13 @@ def check_requires_grid_size(request):
     )
 
 
+requires_hybrid_allocator = pytest.mark.skipif(
+    os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID") != "1",
+    reason="Test requires TT_METAL_ALLOCATOR_MODE_HYBRID=1 for per-core L1 allocation; "
+    "the env var must be exported before pytest starts so ttnn.open_device() sees it.",
+)
+
+
 @pytest.fixture()
 def ensure_devices_tg():
     import ttnn
