@@ -68,7 +68,6 @@ jobs:
               ".github/workflows/t3000-e2e-tests.yaml",
               ".github/workflows/t3000-integration-tests.yaml",
               ".github/workflows/t3000-profiler-tests.yaml",
-              ".github/workflows/t3000-perplexity-tests.yaml",
               ".github/workflows/t3000-demo-tests.yaml",
               ".github/workflows/t3000-unit-tests.yaml",
 

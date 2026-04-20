@@ -48,7 +48,6 @@ on:
       - "(T3K) T3000 integration tests"
       - "(T3K) T3000 perf tests"
       - "(T3K) T3000 e2e tests"
-      - "(T3K) T3000 perplexity tests"
       - "(T3K) T3000 profiler tests"
       - "(T3K) T3000 unit tests"
       - "(T3K) T3000 fast tests"
