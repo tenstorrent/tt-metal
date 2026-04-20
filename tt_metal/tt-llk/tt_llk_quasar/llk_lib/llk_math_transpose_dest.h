@@ -46,9 +46,9 @@ inline void _llk_math_transpose_dest_addrmod_()
 template <bool TRANSPOSE_OF_FACES, bool EN_32BIT_DEST>
 inline void _llk_math_transpose_dest_mop_config_()
 {
-    if (EN_32BIT_DEST)
+    if constexpr (EN_32BIT_DEST)
     {
-        if (TRANSPOSE_OF_FACES)
+        if constexpr (TRANSPOSE_OF_FACES)
         {
             constexpr std::uint32_t replay_buf_len = 24;
             load_replay_buf<0, replay_buf_len>(
@@ -86,7 +86,7 @@ inline void _llk_math_transpose_dest_mop_config_()
                     TTI_MOVD2B(p_mov::DEST_32B_LOW, 48, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
                     TTI_MOVD2B(p_mov::DEST_32B_LOW, 56, ADDR_MOD_2, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 8); // dst -= 16 → F1
 
-                    // Write F2^T SrcB[48:63] → DEST[F1 slot]
+                    // Write F2^T SrcB[32:63] → DEST[F1 slot]
                     TTI_MOVB2D(p_mov::DEST_NORM, 32, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
                     TTI_MOVB2D(p_mov::DEST_NORM, 40, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8);
                     TTI_MOVB2D(p_mov::DEST_32B_LOW, 48, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
@@ -191,7 +191,7 @@ inline void _llk_math_transpose_dest_(const std::uint32_t tile_idx)
     // for SrcA[MatrixUnit.SrcABank].AllowedClient == SrcClient::MatrixUnit.
     // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
     // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SFPU1, p_stall::SRCB_VLD, p_stall::SRCA_VLD);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU, p_stall::SRCB_VLD, p_stall::SRCA_VLD);
 
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 
