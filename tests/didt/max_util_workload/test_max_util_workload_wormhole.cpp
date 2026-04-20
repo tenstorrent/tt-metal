@@ -865,7 +865,10 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
             }
 
             auto eth_kernel = CreateKernel(
-                program, "tests/didt/max_util_workload/kernels/eth_dram_reader.cpp", CoreRangeSet(eth_ranges), eth_cfg);
+                program,
+                "tests/didt/max_util_workload/kernels/wormhole_b0/eth_dram_reader.cpp",
+                CoreRangeSet(eth_ranges),
+                eth_cfg);
 
             for (const auto& [core, bank_id] : assignments) {
                 SetRuntimeArgs(program, eth_kernel, core, {cfg.eth_dram_buffer_addr, cfg.eth_l1_staging_addr, bank_id});
