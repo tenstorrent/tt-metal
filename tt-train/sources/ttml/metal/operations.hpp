@@ -14,6 +14,7 @@
 #include "ops/rmsnorm_fw/rmsnorm_fw.hpp"
 #include "ops/sdpa_bw/sdpa_bw.hpp"
 #include "ops/sdpa_fw/sdpa_fw.hpp"
+#include "ops/select_target_logit/select_target_logit.hpp"
 #include "ops/silu_bw/silu_bw.hpp"
 #include "ops/softmax/softmax.hpp"
 #include "ops/softmax_backward/softmax_backward.hpp"
