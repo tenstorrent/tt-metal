@@ -17,7 +17,7 @@ struct AllBroadcastParams {
     std::optional<uint32_t> cluster_axis;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     tt::tt_fabric::Topology topology{};
-    bool use_l1_small_for_semaphores = false;
+    bool use_l1_small_for_semaphores = true;
 };
 
 }  // namespace ttnn::prim

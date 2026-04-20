@@ -19,6 +19,6 @@ std::vector<ttnn::Tensor> all_broadcast(
     std::optional<ttnn::ccl::Topology> topology =
         ttnn::ccl::Topology::Linear,  // change to std::nullopt when we add support/test for non-linear topologies
                                       // #30798
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = true);
 
 }  // namespace ttnn

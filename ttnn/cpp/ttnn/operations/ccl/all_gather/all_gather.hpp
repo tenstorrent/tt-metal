@@ -23,6 +23,6 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = true);
 
 }  // namespace ttnn

@@ -25,6 +25,6 @@ ttnn::Tensor reduce_scatter(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = true);
 
 }  // namespace ttnn

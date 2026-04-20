@@ -34,7 +34,7 @@ struct ReduceScatterDeviceOperation {
         const std::optional<uint32_t> num_workers_per_link;
         const std::optional<uint32_t> num_buffers_per_channel;
         const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
-        const bool use_l1_small_for_semaphores = false;
+        const bool use_l1_small_for_semaphores = true;
     };
 
     struct tensor_args_t {
@@ -100,5 +100,5 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = true);
 }  // namespace ttnn::prim

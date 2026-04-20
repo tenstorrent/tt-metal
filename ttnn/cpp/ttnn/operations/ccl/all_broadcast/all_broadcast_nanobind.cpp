@@ -31,7 +31,7 @@ void bind_all_broadcast(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Defaults to input tensor memory config.
             num_links (int, optional): The number of links to use for the all-broadcast operation. Defaults to `1`.
             topology (ttnn.Topology, optional): Fabric topology. Defaults to `ttnn.Topology.Linear`.
-            use_l1_small_for_semaphores (bool, optional): If True, allocate internal global semaphores in L1_SMALL instead of L1 to reduce L1 fragmentation. Defaults to `False`.
+            use_l1_small_for_semaphores (bool, optional): If True, allocate internal global semaphores in L1_SMALL instead of L1 to reduce L1 fragmentation. Defaults to `True`.
 
         Returns:
             List[ttnn.Tensor]: A list of tensors, one from each device, where each tensor has the same shape as the input.
@@ -60,7 +60,7 @@ void bind_all_broadcast(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("num_links") = 1,
         nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear),
-        nb::arg("use_l1_small_for_semaphores") = false);
+        nb::arg("use_l1_small_for_semaphores") = true);
 }
 
 }  // namespace ttnn::operations::ccl

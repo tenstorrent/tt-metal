@@ -38,5 +38,5 @@ std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::MemoryConfig& output_mem_config,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = true);
 }  // namespace ttnn::prim
