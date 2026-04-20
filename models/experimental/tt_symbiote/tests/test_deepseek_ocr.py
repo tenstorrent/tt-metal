@@ -41,6 +41,15 @@ from tqdm import tqdm
 # tt_symbiote handles device placement via set_device(), so .cuda() is a no-op.
 torch.Tensor.cuda = lambda self, *args, **kwargs: self
 
+# transformers >= 4.48 unified attention impls and removed LlamaFlashAttention2,
+# but DeepSeek-OCR's remote modeling_deepseekv2.py still imports it at module
+# load. The symbol is only used in a lookup table that the eager-MLA config
+# never hits, so aliasing it to LlamaAttention is enough to satisfy the import.
+from transformers.models.llama import modeling_llama as _llama_modeling
+
+if not hasattr(_llama_modeling, "LlamaFlashAttention2"):
+    _llama_modeling.LlamaFlashAttention2 = _llama_modeling.LlamaAttention
+
 # The model's prepare_inputs_for_generation uses DynamicCache.seen_tokens,
 # which was removed in transformers >=4.57. Restore it as a property.
 from transformers import DynamicCache
@@ -75,22 +84,27 @@ def _install_vision_cache(model):
     eliminates both problems: conv2d never re-executes, and vision features are
     bit-identical across runs.
     """
+    from models.experimental.tt_symbiote.modules.conv import _unwrap_ttnn as _uw
+    import torch.nn.functional as F
+
     sam = getattr(model.model, "sam_model", None)
     if sam is not None and isinstance(sam, TTNNModule):
-        from models.experimental.tt_symbiote.modules.conv import _unwrap_ttnn as _uw
-        import torch.nn.functional as F
 
         def _cached_sam_forward(x):
-            if "sam" in _vision_cache:
+            # Key the cache on input shape: with crop_mode=True the SAM tower
+            # is invoked twice per infer() (base image + 9 cropped patches),
+            # and a single shared key would corrupt the second call.
+            x_raw = _uw(x)
+            sam_key = ("sam", tuple(x_raw.shape))
+            if sam_key in _vision_cache:
                 return ttnn.from_torch(
-                    _vision_cache["sam"],
+                    _vision_cache[sam_key],
                     device=sam.device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
 
-            x_raw = _uw(x)
             if isinstance(x_raw, torch.Tensor):
                 x_raw = ttnn.from_torch(x_raw, device=sam.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
             if x_raw.layout != ttnn.TILE_LAYOUT:
@@ -134,7 +148,7 @@ def _install_vision_cache(model):
             x_conv = _uw(sam.net_3(x_conv))
 
             x_conv = ttnn.permute(x_conv, (0, 3, 1, 2))
-            _vision_cache["sam"] = ttnn.to_torch(x_conv).detach().clone()
+            _vision_cache[sam_key] = ttnn.to_torch(x_conv).detach().clone()
             return x_conv
 
         sam.forward = _cached_sam_forward
@@ -144,16 +158,18 @@ def _install_vision_cache(model):
         orig_vit_forward = vit.forward
 
         def _cached_vit_forward(x, patch_embeds=None):
-            if "vit" in _vision_cache:
+            # Same shape-keying rationale as SAM above.
+            vit_key = ("vit", tuple(_uw(x).shape))
+            if vit_key in _vision_cache:
                 return ttnn.from_torch(
-                    _vision_cache["vit"],
+                    _vision_cache[vit_key],
                     device=vit.device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             result = orig_vit_forward(x, patch_embeds)
-            _vision_cache["vit"] = ttnn.to_torch(result).detach().clone()
+            _vision_cache[vit_key] = ttnn.to_torch(result).detach().clone()
             return result
 
         vit.forward = _cached_vit_forward
