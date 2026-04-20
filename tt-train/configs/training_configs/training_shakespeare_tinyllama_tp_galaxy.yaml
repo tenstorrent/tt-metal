@@ -11,7 +11,7 @@ training_config:
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama.yaml"
   optimizer:
     type: AdamW
-    lr: 0.0003
+    lr: 0.00003
     beta1: 0.9
     beta2: 0.999
     epsilon: 1.0e-8
@@ -21,7 +21,7 @@ training_config:
 
 device_config:
   enable_tp: true
-  mesh_shape: [1, 32]
+  mesh_shape: [1, 8]
 
 eval_config:
   repetition_penalty: 1.0
