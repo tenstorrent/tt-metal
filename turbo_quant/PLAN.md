@@ -60,6 +60,36 @@ Latency barely grows (14.2 → 14.5ms). TQ's compressed BFP4 cache (0.5 bytes/el
 2× smaller than baseline BFP8) enables these large batch sizes at long seqlens
 without running out of DRAM — this is the key benefit of KV compression for serving.
 
+### Token Accuracy Benchmark — BFP4 Storage is the Culprit (2026-04-20)
+
+Rigorous token accuracy on the 1024-token reference corpus
+(`models/tt_transformers/tests/reference_outputs/Llama-3.1-8B-Instruct.refpt`)
+reveals BFP4 cache itself is lossy — **TurboQuant doesn't mitigate it**.
+
+| Mode | Top-1 | Top-5 | Latency |
+|------|-------|-------|---------|
+| Baseline BFP8 | **96.7%** | 99.8% | 14.1 ms |
+| Baseline BFP4 (no TQ) | 71.3% | 90.1% | 14.1 ms |
+| TQ 3-bit + BFP4 cache | 72.5% | 88.2% | 18.9 ms |
+| TQ 4-bit + BFP4 cache | 74.3% | 89.1% | 20.1 ms |
+
+**TQ + BFP4 (72.5%) ≈ BFP4 alone (71.3%).** The BFP4 shared-exponent compression
+(32-element blocks share 1 exponent) dominates the error — moving from 3-bit to
+4-bit TQ barely helps (72.5% → 74.3%). TurboQuant's rotation + centroid approach
+is being wasted when the storage format is BFP4.
+
+**Qualitative vs Quantitative:** Our 31-prompt test showed factually correct
+outputs for all TQ configs, matching the 82-88% top-5 numbers. Top-1 matches
+baseline less often, but top-5 remains reasonable, which is enough for coherent
+generation. But for rigorous accuracy (teacher-forced matching against a reference),
+there's a significant gap.
+
+**Implications:**
+- Current "TQ BFP4 paged" path = half memory but ~25% top-1 accuracy loss
+- TQ's design assumes high-precision storage (e.g. BF16); BFP4 breaks that assumption
+- To recover accuracy, either use higher-precision cache (BFP8 or BF16) or accept
+  the quality/memory tradeoff
+
 ### T3K Max Batch at Long Context (2026-04-20)
 
 **The key serving benefit of KV compression:** TQ fits 2× the batch of baseline

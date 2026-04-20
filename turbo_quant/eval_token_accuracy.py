@@ -35,6 +35,9 @@ def build_parser():
     p.add_argument("--seed", type=int, default=42, help="TurboQuant rotation seed")
     p.add_argument("--no-turbo-quant", action="store_true", help="Baseline BFP8 KV cache")
     p.add_argument("--bfp4-cache", action="store_true", help="TurboQuant BFP4 paged cache")
+    p.add_argument(
+        "--bfp4-baseline", action="store_true", help="Baseline with BFP4 cache (no TQ) — isolate storage vs TQ loss"
+    )
     p.add_argument("--max-seq-len", type=int, default=1024, help="Must be >= 1024 for full reference")
     p.add_argument(
         "--num-eval-tokens",
@@ -62,7 +65,7 @@ def main():
     # ------------------------------------------------------------------ #
     def make_optimizations(ma):
         opts = DecodersPrecision.accuracy(ma.n_layers, ma.model_name)
-        if args.bfp4_cache:
+        if args.bfp4_cache or args.bfp4_baseline:
             for dec_id, dec_conf in opts.decoder_optimizations.items():
                 dec_conf.tensor_dtype_settings[TensorGroup.KV_CACHE] = PrecisionSetting.BFP4
         return opts
@@ -106,7 +109,8 @@ def main():
     print("\nLoading state dict...")
     state_dict = model_args.load_state_dict()
 
-    if not args.no_turbo_quant:
+    use_tq = not args.no_turbo_quant and not args.bfp4_baseline
+    if use_tq:
         from turbo_quant.rotation import generate_rotation_matrix
         from turbo_quant.ttnn_integration import absorb_rotation_into_state_dict
 
@@ -132,7 +136,7 @@ def main():
     from pathlib import Path
     import tempfile
 
-    wcache = model_args.weight_cache_path(dtype) if args.no_turbo_quant else Path(tempfile.mkdtemp(prefix="tq_acc_"))
+    wcache = model_args.weight_cache_path(dtype) if not use_tq else Path(tempfile.mkdtemp(prefix="tq_acc_"))
 
     print("Loading TT model...")
     tt_model = Transformer(
@@ -148,7 +152,7 @@ def main():
     # ------------------------------------------------------------------ #
     # Attach TQ cache (for non-baseline modes)                            #
     # ------------------------------------------------------------------ #
-    if not args.no_turbo_quant:
+    if use_tq:
         from turbo_quant.ttnn_integration import TTNNTurboQuantCache
 
         n_local_kv_heads = model_args.n_kv_heads // model_args.cluster_shape[1]
@@ -248,6 +252,8 @@ def main():
     # ------------------------------------------------------------------ #
     if args.no_turbo_quant:
         mode = "baseline BFP8"
+    elif args.bfp4_baseline:
+        mode = "baseline BFP4 (no TQ)"
     elif args.bfp4_cache:
         mode = f"TurboQuant {args.bits}-bit BFP4"
     else:
@@ -264,7 +270,7 @@ def main():
     print(f"{'='*60}")
 
     ttnn.release_trace(mesh_device, trace_id)
-    if not args.no_turbo_quant:
+    if use_tq:
         for layer in tt_model.layers:
             tq = getattr(layer.attention, "tq_cache", None)
             if tq is not None:
