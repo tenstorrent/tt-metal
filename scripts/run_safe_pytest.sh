@@ -192,19 +192,22 @@ if [[ $EXIT_CODE -eq 0 ]]; then
     exit 0
 fi
 
-# Pytest exit code 5 = no tests collected (typo in path, bad marker filter, etc.)
-if [[ $EXIT_CODE -eq 5 ]]; then
+# Pytest setup errors (no device touched):
+#   4 = usage error (bad args, nonexistent path)
+#   5 = no tests collected (typo in path, bad marker filter, etc.)
+if [[ $EXIT_CODE -eq 4 || $EXIT_CODE -eq 5 ]]; then
     rm -f "$DIRTY_FLAG"
     rm -f "$TRIAGE_LOG"
-    echo "SAFE_PYTEST_ERROR: No tests collected" >&2
+    if [[ $EXIT_CODE -eq 4 ]]; then
+        echo "SAFE_PYTEST_ERROR: Pytest usage error (invalid path or arguments)" >&2
+    else
+        echo "SAFE_PYTEST_ERROR: No tests collected" >&2
+    fi
     exit 3
 fi
 
-# Kill any remaining child processes and their descendants.
-for child_pid in $(pgrep -P $$ 2>/dev/null); do
-    pkill -9 -P "$child_pid" 2>/dev/null || true
-    kill -9 "$child_pid" 2>/dev/null || true
-done
+# Kill any remaining child processes (pytest may have left orphans)
+pkill -9 -P $$ 2>/dev/null || true
 
 # Determine if this was a hang:
 #   Triage log non-empty = dispatch timeout handler ran tt-triage (definitive hang signal)
