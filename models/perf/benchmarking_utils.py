@@ -10,6 +10,9 @@ from typing import List
 import pytz
 from loguru import logger
 
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from ttnn import ttnn
+
 # Decouple dependency of model tests on infra folder unless running in CI
 IS_CI_ENV = os.getenv("CI") == "true"
 if IS_CI_ENV:
@@ -17,7 +20,22 @@ if IS_CI_ENV:
 else:
     logger.warning("Skipping import of pydantic_models for benchmarking since not running in CI environment")
 
-
+UNIFIED_DEVICE_NAME_MAP = {
+    # Blackhole
+    "P100": "p100",
+    "P150": "p150",
+    "P300": "p300",
+    "P150x4": "p150x4",
+    "P150x8": "p150x8",
+    "BHGLX": "galaxy_bh",
+    # Wormhole
+    "N150": "n150",
+    "N300": "n300",
+    "N150x4": "n150x4",
+    "T3K": "t3k",
+    "TG": "galaxy",
+}
+            
 class BenchmarkProfiler:
     def __init__(self):
         self.start_times = dict()
@@ -130,6 +148,7 @@ class BenchmarkData:
         run_type: str,
         ml_model_name: str,
         ml_model_type: str = None,
+        device_name: str = "",
         num_layers: int = None,
         batch_size: int = None,
         config_params: dict = None,
@@ -148,10 +167,17 @@ class BenchmarkData:
 
             run_start_ts = profiler.get_str_start("run")
             run_end_ts = profiler.get_str_end("run")
+            
+            device_info = None
+            if device_name:
+                device_name = UNIFIED_DEVICE_NAME_MAP.get(device_name, device_name)
+                device_info = {"device_name": device_name}
+
             partial_benchmark_run = PartialBenchmarkRun(
                 run_start_ts=run_start_ts,
                 run_end_ts=run_end_ts,
                 run_type=run_type,
+                device_info=device_info,
                 ml_model_name=ml_model_name,
                 ml_model_type=ml_model_type,
                 num_layers=num_layers,
