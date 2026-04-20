@@ -28,28 +28,29 @@ def make_sharded_memory_config(device, shape, strategy, layout):
     """Create a valid sharded MemoryConfig for `shape` on `device`.
 
     For TILE layout the shard dims must be tile-aligned (multiples of 32).
-    For ROW_MAJOR the shard width × element_size must satisfy the device L1
-    alignment; for bfloat16 (2 bytes/element):
-      - Wormhole: L1 alignment = 128 bytes → shard width multiple of 64
-      - Blackhole: L1 alignment = 64 bytes  → shard width multiple of 32
+    For ROW_MAJOR, derive the shard-width step from the implementation's
+    current recommended memory alignment. With the current 64-byte
+    recommendation and bfloat16 (2 bytes/element), shard width should be a
+    multiple of 32 elements.
     """
     grid = device.compute_with_storage_grid_size()
     max_x, max_y = grid.x, grid.y
     tile_h, tile_w = 32, 32
 
-    # Flatten all dims except the last two into a single H for shard purposes
+    # Flatten all dims except the last one into a single H for shard purposes.
     total_h = 1
     for d in shape[:-1]:
         total_h *= d
     total_w = shape[-1]
 
     step_h = tile_h if layout == ttnn.TILE_LAYOUT else 1
-    # L1 alignment varies by arch (128 bytes on WH, 64 bytes on BH).
-    # For bfloat16 (2 bytes/elem): shard_width must be a multiple of
-    # alignment_bytes / element_size so that shard_width * 2 % alignment == 0.
-    l1_alignment = 128 if ttnn.device.is_wormhole_b0(device) else 64
+    # Match the implementation's current recommended ROW_MAJOR alignment.
+    # For bfloat16 (2 bytes/elem), shard_width must be a multiple of
+    # recommended_alignment_bytes / element_size so that
+    # shard_width * element_size is aligned.
+    recommended_alignment_bytes = 64
     element_size = 2  # bfloat16
-    rm_step_w = l1_alignment // element_size  # 64 on WH, 32 on BH
+    rm_step_w = recommended_alignment_bytes // element_size  # 32 for BF16
     step_w = tile_w if layout == ttnn.TILE_LAYOUT else rm_step_w
 
     if strategy == ttnn.ShardStrategy.HEIGHT:
@@ -89,14 +90,6 @@ RESHAPE_CASES = [
     ([1, 4, 128, 256], [1, 4, 256, 128], "halve_w_double_h"),
     ([1, 4, 256, 128], [1, 4, 512, 64], "double_h_halve_w"),
 ]
-
-SHARDING_STRATEGIES = [
-    ttnn.ShardStrategy.HEIGHT,
-    ttnn.ShardStrategy.WIDTH,
-    ttnn.ShardStrategy.BLOCK,
-]
-
-MEMORY_CONFIGS = ["DRAM", "L1", "HEIGHT_SHARDED", "WIDTH_SHARDED", "BLOCK_SHARDED"]
 
 LAYOUTS = [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
 
@@ -198,16 +191,12 @@ def test_reshape_block_sharded_input(device, input_shape, output_shape, case_id,
     ids=[cid for _, _, cid in RESHAPE_CASES],
 )
 @pytest.mark.parametrize(
-    "strategy,strat_id",
-    [
-        (ttnn.ShardStrategy.HEIGHT, "height"),
-        (ttnn.ShardStrategy.WIDTH, "width"),
-        (ttnn.ShardStrategy.BLOCK, "block"),
-    ],
+    "strategy",
+    [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK],
     ids=["height", "width", "block"],
 )
 @pytest.mark.parametrize("layout", LAYOUTS, ids=["TILE", "ROW_MAJOR"])
-def test_reshape_sharded_output(device, input_shape, output_shape, case_id, strategy, strat_id, layout):
+def test_reshape_sharded_output(device, input_shape, output_shape, case_id, strategy, layout):
     """DRAM interleaved input, sharded output (reshape into a sharded tensor)."""
     torch.manual_seed(0)
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -247,16 +236,12 @@ def test_reshape_sharded_output(device, input_shape, output_shape, case_id, stra
     ids=["merge_ch", "swap_hw", "halve_w_double_h", "double_h_halve_w"],
 )
 @pytest.mark.parametrize(
-    "strategy,strat_id",
-    [
-        (ttnn.ShardStrategy.HEIGHT, "height"),
-        (ttnn.ShardStrategy.WIDTH, "width"),
-        (ttnn.ShardStrategy.BLOCK, "block"),
-    ],
+    "strategy",
+    [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK],
     ids=["height", "width", "block"],
 )
 @pytest.mark.parametrize("layout", LAYOUTS, ids=["TILE", "ROW_MAJOR"])
-def test_reshape_sharded_to_sharded(device, input_shape, output_shape, case_id, strategy, strat_id, layout):
+def test_reshape_sharded_to_sharded(device, input_shape, output_shape, case_id, strategy, layout):
     """Both input and output are sharded with the same strategy."""
     torch.manual_seed(0)
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
