@@ -34,6 +34,7 @@ from matrix_runner_config import (
     LEAD_MODELS_BATCH_POLICY,
     LEAD_MODELS_DEFAULT_TEST_GROUP,
     LEAD_MODELS_SUITE_NAME,
+    MODEL_TRACED_BATCH_POLICY,
     SCHEDULE_TYPES,
     SUPPORTED_VECTOR_GROUPING_MODES,
     SWEEP_TYPES,
@@ -289,6 +290,7 @@ def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=N
             test_group_name,
             batch_size,
             suite_name,
+            MODEL_TRACED_BATCH_POLICY.get(test_group_name),
         )
 
     grouped = sorted(hw_modules.items(), key=lambda x: x[0])
@@ -296,15 +298,17 @@ def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=N
         grouped.append((None, unmatched))
 
     for hw_group, mods in grouped:
+        hw_test_group = get_test_group_name_for_hardware_group(hw_group)
         _append_routed_group(
             include_entries,
             batches,
             log_groups,
             f"hardware {_hw_label(hw_group)}",
             mods,
-            get_test_group_name_for_hardware_group(hw_group),
+            hw_test_group,
             batch_size,
             suite_name,
+            MODEL_TRACED_BATCH_POLICY.get(hw_test_group),
         )
 
     _log_module_groups(f"Model traced run ({mode}-grouped)", modules, log_groups)

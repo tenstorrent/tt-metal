@@ -99,7 +99,7 @@ void kernel_main() {
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
-    const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
+    const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address);
 
     // L1 intermediate: discover the recv CB base address (same on neighbor device due to identical program)
     uint32_t recv_buf_base = 0;

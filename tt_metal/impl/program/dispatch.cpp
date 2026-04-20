@@ -2082,6 +2082,18 @@ void assemble_device_commands(
         program_command_sequence.kernel_bins_base_addr = program.get_kernels_buffer(device)->address();
     }
 
+    // Assemble wait barrier command sequence
+    {
+        DeviceCommandCalculator calculator;
+        calculator.add_dispatch_wait();
+        program_command_sequence.wait_barrier_command_sequence = HostMemDeviceCommand(calculator.write_offset_bytes());
+        program_command_sequence.wait_barrier_command_sequence.add_dispatch_wait(
+            CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+        TT_ASSERT(
+            program_command_sequence.wait_barrier_command_sequence.size_bytes() ==
+            program_command_sequence.wait_barrier_command_sequence.write_offset_bytes());
+    }
+
     // Assemble launch message
     LaunchMessageGenerator launch_message_generator;
     DeviceCommandCalculator launch_message_calculator;
@@ -2517,6 +2529,22 @@ void update_traced_program_dispatch_commands(
             trace_node.cb_configs_payloads[i].size() * sizeof(uint32_t));
         i++;
     }
+    // Update DFB Configs
+    TT_ASSERT(
+        trace_node.dfb_configs_payloads.size() ==
+        cached_program_command_sequence.dataflow_buffers_on_core_ranges.size());
+    {
+        uint32_t dfb_i = 0;
+        for ([[maybe_unused]] const auto& dfbs_on_core_range :
+             cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
+            uint8_t* dfb_config_payload = cached_program_command_sequence.dfb_configs_payloads[dfb_i];
+            std::memcpy(
+                dfb_config_payload,
+                trace_node.dfb_configs_payloads[dfb_i].data(),
+                trace_node.dfb_configs_payloads[dfb_i].size());
+            dfb_i++;
+        }
+    }
     // Update RTAs.
     TT_ASSERT(cached_program_command_sequence.rta_updates.size() == trace_node.rta_data.size());
     for (size_t i = 0; i < cached_program_command_sequence.rta_updates.size(); i++) {
@@ -2705,6 +2733,11 @@ void write_program_command_sequence(
         write_data_to_cq(
             program_command_sequence.program_binary_command_sequence.data(),
             program_command_sequence.program_binary_command_sequence.size_bytes());
+    } else {
+        // Write the wait barrier before writing launch messages.
+        write_data_to_cq(
+            program_command_sequence.wait_barrier_command_sequence.data(),
+            program_command_sequence.wait_barrier_command_sequence.size_bytes());
     }
 
     // Write the launch message
@@ -2727,7 +2760,7 @@ void write_program_command_sequence(
     LOG_TRACE_LAZY(tt::LogDispatch, "");
 }
 
-TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_prefetcher_cache) {
+TraceNode create_trace_node(ProgramImpl& program, IDevice* device, uint32_t num_workers, bool use_prefetcher_cache) {
     std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(device)};
     program.generate_trace_dispatch_commands(device, use_prefetcher_cache);
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
@@ -2777,12 +2810,36 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_pref
         cb_config_payload.resize(first_unused_index);
     }
 
+    std::vector<std::vector<uint8_t>> all_dfb_configs_payloads;
+    if (!hal.has_tile_counter_registers()) {
+        for (const auto& dfbs_on_core_range : cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
+            std::vector<uint8_t> dfb_config_payload(
+                max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t), 0);
+            size_t first_unused_byte = 0;
+            for (const auto& dfb : dfbs_on_core_range) {
+                size_t base_index = static_cast<size_t>(dfb->id) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
+                size_t byte_offset = base_index * sizeof(uint32_t);
+                uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload.data()) + base_index;
+                words[0] = dfb->uniform_alloc_addr();
+                words[1] = dfb->config.entry_size * dfb->config.num_entries;
+                words[2] = dfb->config.num_entries;
+                words[3] = dfb->config.entry_size;
+                first_unused_byte = std::max(
+                    first_unused_byte, byte_offset + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t));
+            }
+            dfb_config_payload.resize(first_unused_byte);
+            all_dfb_configs_payloads.push_back(std::move(dfb_config_payload));
+        }
+    }
+
     return TraceNode{
         program.shared_from_this(),
         static_cast<uint32_t>(program.get_runtime_id()),
         sub_device_ids[0],
+        num_workers,
         std::move(rta_data),
-        std::move(all_cb_configs_payloads)};
+        std::move(all_cb_configs_payloads),
+        std::move(all_dfb_configs_payloads)};
 }
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {

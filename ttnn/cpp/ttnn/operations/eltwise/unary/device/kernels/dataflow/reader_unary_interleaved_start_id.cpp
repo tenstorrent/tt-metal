@@ -22,7 +22,7 @@ void kernel_main() {
     // ublocks size defined in pages (works for both TILE and ROW_MAJOR layouts)
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(src_args, src_addr, page_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb(cb_id_in0);

@@ -58,6 +58,7 @@ enum DataFormat : uint8 {
   Tf32 = 4,
   UInt8 = 30,
   UInt16 = 9,
+  Int16 = 13,
   Int32 = 8,
   UInt32 = 24,
   RawUInt8 = 240, // 0xf0 in decimal

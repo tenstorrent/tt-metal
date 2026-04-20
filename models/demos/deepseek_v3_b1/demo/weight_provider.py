@@ -267,8 +267,6 @@ class CacheWeightProvider:
         t_after_with = time.perf_counter()
         fd_teardown_s = t_after_with - t_before_teardown
 
-        ttnn.enable_asynchronous_slow_dispatch(device)
-
         logger.info(f"CacheWeightProvider MoE layer {layer_id}: setup (cache_config) {setup_s:.3f}s")
         logger.info(f"CacheWeightProvider MoE layer {layer_id}: fast_dispatch initialize {fd_init_s:.3f}s")
         logger.info(f"CacheWeightProvider MoE layer {layer_id}: prepare_routed_expert_weights {routed_prepare_s:.3f}s")
