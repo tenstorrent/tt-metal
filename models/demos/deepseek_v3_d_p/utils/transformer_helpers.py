@@ -575,6 +575,32 @@ def load_and_compute_layer_by_layer(
     )
 
 
+def check_reference_cache_exists(cache_key: str) -> bool:
+    """
+    Check if reference output cache exists for the given cache key.
+
+    Reference cache contains forward pass outputs from HF model for PCC validation.
+    This cache is machine-independent and can be generated once and shared.
+
+    Args:
+        cache_key: Cache identifier like "pretrained_json_prompts_isl1024_layers24_experts256"
+
+    Returns:
+        True if cache file exists, False otherwise
+    """
+    cache_dir = Path(os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp/deepseek_v3_transformer_ref_cache"))
+    cache_path = cache_dir / f"{cache_key}.pt"
+
+    exists = cache_path.exists()
+
+    if exists:
+        logger.info(f"Reference cache found: {cache_path}")
+    else:
+        logger.debug(f"Reference cache not found: {cache_path}")
+
+    return exists
+
+
 def save_reference_cache(cache_key: str, ref_snapshots, ref_kvpe_list):
     """Save reference outputs to cache file."""
     cache_dir = Path(os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp/deepseek_v3_transformer_ref_cache"))
