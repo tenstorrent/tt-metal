@@ -38,7 +38,7 @@ struct DeviceMemoryRegion {
     // Header information
     uint32_t version;                       // Structure version (for compatibility)
     uint32_t num_active_processes;          // Number of processes currently tracked (in per-PID array)
-    uint64_t last_update_timestamp;         // Last update time (nanoseconds since epoch)
+    std::atomic<uint64_t> last_update_timestamp;  // Last update time (nanoseconds since epoch)
     std::atomic<uint32_t> reference_count;  // Number of processes currently attached (always tracked)
 
     // Physical chip identification (for proper device correlation)
@@ -59,8 +59,8 @@ struct DeviceMemoryRegion {
     // chip_stats[0] = gateway (local) chip allocations
     // chip_stats[1..N] = remote chip allocations accessed through this gateway
     struct ChipStats {
-        uint32_t chip_id;    // Metal chip ID (CHIP_STATS_UNUSED = empty slot)
-        uint32_t is_remote;  // 1 if remote chip, 0 if local (gateway)
+        std::atomic<uint32_t> chip_id;    // Metal chip ID (CHIP_STATS_UNUSED = empty slot)
+        std::atomic<uint32_t> is_remote;  // 1 if remote chip, 0 if local (gateway)
         std::atomic<uint64_t> dram_allocated;
         std::atomic<uint64_t> l1_allocated;
         std::atomic<uint64_t> l1_small_allocated;
