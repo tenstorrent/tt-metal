@@ -57,23 +57,6 @@ IGNORED_KEYS = frozenset(
     }
 )
 
-# Keys ignored ONLY at the top level of the arguments dict (not inside nested
-# tensor descriptors).  These are optional runtime parameters that the sweep
-# tracer may capture but the master trace may omit.
-TOP_LEVEL_IGNORED_KEYS = frozenset(
-    {
-        # Output memory config — the sweep test may pass an explicit output
-        # memory_config kwarg that the original model call did not include.
-        # Inside tensor descriptors (arg0.memory_config) this field is
-        # meaningful and must still be compared.
-        "memory_config",
-        # Runtime scheduling hints that vary between environments.
-        "core_grid",
-        "global_cb",
-        "sub_device_id",
-    }
-)
-
 # ---------------------------------------------------------------------------
 # Operation-specific argument remapping
 # ---------------------------------------------------------------------------
@@ -105,68 +88,6 @@ OP_IGNORED_KEYS: dict[str, frozenset[str]] = {
         "is_causal",
     }),
 }
-
-
-# ---------------------------------------------------------------------------
-# Expected-missing configs — known gaps that cannot produce sweep traces
-# ---------------------------------------------------------------------------
-# Maps (op_name, config_hash_prefix) → reason.  These configs are promoted
-# from "missing_sweep" to "expected_missing" and count toward coverage so
-# that the CI gate passes.  Each entry documents WHY the config can't
-# produce a trace today; as fixes land, entries should be removed.
-
-EXPECTED_MISSING_REASONS: dict[tuple[str, str], str] = {
-    # --- Galaxy / TG-only all_gather_async configs ---
-    # These configs require multi-chip TG topology (32+ devices) that is
-    # unavailable on N150/N300 CI runners.  The sweep test either crashes
-    # with TT_FATAL or runs in single-device fallback mode that doesn't
-    # invoke the collective op, so no trace is captured.
-    ("ttnn.experimental.all_gather_async", "2f029486f43ff816"): "Galaxy/TG-only topology — crashes on N300",
-    ("ttnn.experimental.all_gather_async", "5f585f11ee0aef7d"): "Galaxy/TG-only topology — crashes on N300",
-    ("ttnn.experimental.all_gather_async", "8dca03c38271c143"): "Galaxy/TG-only topology — crashes on N300",
-    ("ttnn.experimental.all_gather_async", "9a5f06e0eab29970"): "Galaxy/TG-only topology — crashes on N300",
-    ("ttnn.experimental.all_gather_async", "a1e8f4c7a308c4e5"): "Galaxy/TG-only topology — no trace on N300",
-    ("ttnn.experimental.all_gather_async", "a44c4f247b6f1d73"): "Galaxy/TG-only topology — no trace on N300",
-    # --- SDPA configs that crash with TT_FATAL ---
-    # program.cpp:2130 state.offset <= max_size — device program compilation
-    # fails for these specific shapes on N300 (works on TG with different
-    # core grids).  No trace is captured because the op never completes.
-    ("ttnn.transformer.scaled_dot_product_attention", "760094af6a5cbac1"): "TT_FATAL crash: program.cpp state.offset <= max_size on N300",
-    ("ttnn.transformer.scaled_dot_product_attention", "b72bb5a827cafe25"): "TT_FATAL crash: program.cpp state.offset <= max_size on N300",
-    ("ttnn.transformer.scaled_dot_product_attention", "be8e3e361087cd6b"): "TT_FATAL crash: program.cpp state.offset <= max_size on N300",
-    # --- Slice config that crashes with TT_FATAL ---
-    ("ttnn.slice", "53374243a5898e15"): "TT_FATAL crash during slice device operation on N300",
-    # --- Tracer infrastructure gaps ---
-    # These configs run successfully (status=pass) but the operation tracer
-    # does not capture their invocation.  This is a known tracer limitation
-    # where some op calls within a sweep process are not flushed to the
-    # trace JSON.  Root cause is under investigation.
-    ("ttnn.add", "16ce94ff22baea39"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.add", "349b1f0ec226f808"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.add", "6e66a7f24c769801"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.add", "7c5a4fb30c2be981"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.add", "826bcc26a23aea82"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.add", "83ee51b97a9dba98"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.linear", "5305dff3b23f08b6"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.linear", "acd2a70a2a90857c"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.reshape", "260339df78db4cda"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.reshape", "f4855e00b8a30a56"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.rms_norm", "a6008262215c1979"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.rms_norm", "aeb5708f104c9d3d"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.rms_norm", "baaab23588a4e6ce"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.rms_norm", "e172b26fba55a308"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.rms_norm", "e409d3144c2451eb"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.rms_norm", "fd0055e98002f9eb"): "Tracer infrastructure: op runs but trace not captured",
-    ("ttnn.typecast", "93a64de22a68de14"): "Tracer infrastructure: op runs but trace not captured",
-}
-
-
-def _is_expected_missing(op_name: str, config_hash: str) -> str | None:
-    """Return the reason if (op_name, config_hash) is in the expected-missing list."""
-    for (exp_op, exp_prefix), reason in EXPECTED_MISSING_REASONS.items():
-        if op_name == exp_op and config_hash.startswith(exp_prefix):
-            return reason
-    return None
 
 
 def _parse_shard_spec_string(s: str) -> Any:
@@ -248,9 +169,6 @@ def normalize(obj: Any, *, _parent_key: str = "", _op_name: str = "") -> Any:
         result = {}
         for k, v in sorted(obj.items()):
             if k in IGNORED_KEYS or k in op_ignore:
-                continue
-            # Top-level-only ignored keys (e.g. output memory_config)
-            if _parent_key == "" and k in TOP_LEVEL_IGNORED_KEYS:
                 continue
             # Apply positional → semantic key remapping
             out_key = remap.get(k, k)
@@ -407,10 +325,9 @@ class ConfigResult:
     op_name: str
     master_config_id: int | None
     sweep_config_id: int | None
-    status: str  # "match", "diff", "hash_mismatch", "missing_sweep", "expected_missing", "incidental"
+    status: str  # "match", "diff", "hash_mismatch", "missing_sweep", "incidental"
     diffs: list[Diff] = field(default_factory=list)
     sweep_config_hash: str | None = None  # the sweep trace's own computed config_hash
-    expected_missing_reason: str | None = None  # reason for expected_missing status
 
 
 @dataclass
@@ -430,10 +347,6 @@ class ValidationReport:
         return [r for r in self.results if r.status == "missing_sweep"]
 
     @property
-    def expected_missing(self) -> list[ConfigResult]:
-        return [r for r in self.results if r.status == "expected_missing"]
-
-    @property
     def hash_mismatch(self) -> list[ConfigResult]:
         return [r for r in self.results if r.status == "hash_mismatch"]
 
@@ -450,8 +363,7 @@ class ValidationReport:
         targeted = [r for r in self.results if r.status != "incidental"]
         if not targeted:
             return 0.0
-        # expected_missing configs count toward coverage (they are documented gaps)
-        exercised = [r for r in targeted if r.status in ("match", "diff", "hash_mismatch", "expected_missing")]
+        exercised = [r for r in targeted if r.status in ("match", "diff", "hash_mismatch")]
         return len(exercised) / len(targeted)
 
 
@@ -571,28 +483,15 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
     # Report master configs with no sweep execution
     for ch, (op_name, cid, _args) in master_index.items():
         if ch not in matched_hashes:
-            reason = _is_expected_missing(op_name, ch)
-            if reason:
-                report.results.append(
-                    ConfigResult(
-                        config_hash=ch,
-                        op_name=op_name,
-                        master_config_id=cid,
-                        sweep_config_id=None,
-                        status="expected_missing",
-                        expected_missing_reason=reason,
-                    )
+            report.results.append(
+                ConfigResult(
+                    config_hash=ch,
+                    op_name=op_name,
+                    master_config_id=cid,
+                    sweep_config_id=None,
+                    status="missing_sweep",
                 )
-            else:
-                report.results.append(
-                    ConfigResult(
-                        config_hash=ch,
-                        op_name=op_name,
-                        master_config_id=cid,
-                        sweep_config_id=None,
-                        status="missing_sweep",
-                    )
-                )
+            )
 
     # Sort results for stable output
     report.results.sort(key=lambda r: (r.op_name, r.status, r.config_hash))
@@ -618,7 +517,6 @@ def render_report(report: ValidationReport) -> str:
     lines.append(f"**Exact matches:** {len(report.matched)}")
     lines.append(f"**With diffs:** {len(report.diffed)}")
     lines.append(f"**Hash mismatch (args match, hash differs):** {len(report.hash_mismatch)}")
-    lines.append(f"**Expected missing (documented gaps):** {len(report.expected_missing)}")
     lines.append(f"**Not exercised by sweep:** {len(report.missing_sweep)}")
     lines.append(f"**Incidental (non-target ops):** {len(report.incidental)}")
     lines.append(f"**Coverage:** {report.coverage:.1%}")
@@ -629,46 +527,20 @@ def render_report(report: ValidationReport) -> str:
     for r in report.results:
         if r.status == "incidental":
             continue
-        stats = op_stats.setdefault(
-            r.op_name,
-            {"match": 0, "diff": 0, "hash_mismatch": 0, "expected_missing": 0, "missing_sweep": 0},
-        )
+        stats = op_stats.setdefault(r.op_name, {"match": 0, "diff": 0, "hash_mismatch": 0, "missing_sweep": 0})
         stats[r.status] = stats.get(r.status, 0) + 1
 
     if op_stats:
         lines.append("## Per-operation summary")
         lines.append("")
-        lines.append("| Operation | Match | Diff | Hash Mismatch | Expected Missing | Missing | Total |")
-        lines.append("|-----------|------:|-----:|--------------:|-----------------:|--------:|------:|")
+        lines.append("| Operation | Match | Diff | Hash Mismatch | Missing | Total |")
+        lines.append("|-----------|------:|-----:|--------------:|--------:|------:|")
         for op in sorted(op_stats):
             s = op_stats[op]
             total = sum(s.values())
             lines.append(
-                f"| `{op}` | {s['match']} | {s['diff']} | {s['hash_mismatch']} "
-                f"| {s['expected_missing']} | {s['missing_sweep']} | {total} |"
+                f"| `{op}` | {s['match']} | {s['diff']} | {s['hash_mismatch']} | {s['missing_sweep']} | {total} |"
             )
-        lines.append("")
-
-    # Expected-missing configs (documented gaps)
-    if report.expected_missing:
-        lines.append("## Expected missing configs (documented gaps)")
-        lines.append("")
-        lines.append(
-            f"{len(report.expected_missing)} configs are expected to be missing "
-            f"and count toward coverage."
-        )
-        lines.append("")
-        lines.append("<details><summary>Show all</summary>")
-        lines.append("")
-        lines.append("| Operation | Config ID | Config Hash | Reason |")
-        lines.append("|-----------|----------:|-------------|--------|")
-        for r in report.expected_missing:
-            lines.append(
-                f"| `{r.op_name}` | {r.master_config_id} "
-                f"| `{r.config_hash[:16]}...` | {r.expected_missing_reason or 'N/A'} |"
-            )
-        lines.append("")
-        lines.append("</details>")
         lines.append("")
 
     # Missing sweep configs (collapsed for brevity)
