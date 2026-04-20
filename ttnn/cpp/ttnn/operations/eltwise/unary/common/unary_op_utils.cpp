@@ -90,6 +90,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::GEZ:
         case UnaryOpType::NEZ: return "SFPU_OP_UNARY_COMP_INCLUDE";
         case UnaryOpType::WHERE_TSS: return "SFPU_OP_WHERE_INCLUDE";
+        case UnaryOpType::MAC_TSS: return "SFPU_OP_MAC_INCLUDE";
         case UnaryOpType::CLAMP_TSS: return "SFPU_OP_CLAMP_INCLUDE";
         case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::HARDSHRINK:
@@ -535,6 +536,12 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             std::string where_call =
                 fmt::format("where_tile<DataFormat::{0}>({1}, {2}, {3}, {1});", data_format, idst, 1, 2);
             return std::make_pair("where_tile_init();", where_call);
+        }
+        case UnaryOpType::MAC_TSS: {
+            const char* data_format = (input_dtype == DataType::FLOAT32) ? "Float32" : "Float16_b";
+            std::string mac_call =
+                fmt::format("mac_tile<DataFormat::{0}>({1}, {2}, {3}, {1});", data_format, idst, 1, 2);
+            return std::make_pair(fmt::format("mac_tile_init<DataFormat::{0}>();", data_format), mac_call);
         }
         case UnaryOpType::CLAMP_TSS: {
             float param1 = params[1];
@@ -1023,6 +1030,7 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
             }
         case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
         case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
+        case UnaryOpType::MAC_TSS: return "mac_tss_kernel.cpp";
         case UnaryOpType::HARDSWISH:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
                 return "hardswish_kernel_sfpu.cpp";

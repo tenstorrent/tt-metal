@@ -168,6 +168,10 @@
 #include "api/compute/eltwise_unary/where.h"
 #endif
 
+#if SFPU_OP_MAC_INCLUDE
+#include "api/compute/eltwise_unary/mac.h"
+#endif
+
 #if SFPU_OP_CLAMP_INCLUDE
 #include "api/compute/eltwise_unary/clamp.h"
 #endif
