@@ -32,8 +32,12 @@ blocking on socket_wait_for_pages() and cb_wait_front() operations.
 """
 
 import ttnn
-from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import get_interleaved_tensor_accessor_args
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
+
+
+def get_interleaved_tensor_accessor_args(tensor):
+    is_dram = tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
+    return [2 if is_dram else 0]
 
 
 class HostInterface:
