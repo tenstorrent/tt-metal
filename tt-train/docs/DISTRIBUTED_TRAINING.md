@@ -399,10 +399,10 @@ export TT_MESH_GRAPH_DESC_PATH="/path/to/your/mesh_graph_descriptor.textproto"
 
 ### Where to Find MGD Files
 
-Default MGD files are located in the tt-metal repository:
+The default MGD directory used by the training scripts is:
 
 ```
-$TT_METAL_HOME/tests/tt_metal/tt_fabric/custom_mesh_descriptors/
+$TT_METAL_RUNTIME_ROOT/tt_metal/fabric/mesh_graph_descriptors/
 ```
 
 Common examples include:
@@ -411,15 +411,17 @@ Common examples include:
 
 You can also find additional MGD files in:
 - `$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/` - Standard mesh descriptors
+- `$TT_METAL_HOME/tt-train/configs/mgd/` - Training-oriented MGDs paired with ready-to-run llama8b training configs (see [Ready-to-Run Examples](#ready-to-run-examples) below)
 - `$TT_METAL_HOME/tt-train/sources/examples/python/multihost/*/configurations/` - Example configurations for multihost training
 
 ### Automatic MGD Selection
 
-If `TT_MESH_GRAPH_DESC_PATH` is not set, the training script will automatically select an MGD file based on the number of devices:
-- **8 devices**: Uses `t3k_1x8_mesh_graph_descriptor.textproto`
-- **32 devices**: Uses `galaxy_1x32_mesh_graph_descriptor.textproto`
+If `TT_MESH_GRAPH_DESC_PATH` is not set, the training binary (via `get_mgd_path` in `tt-train/sources/ttml/ttnn_fixed/distributed/tt_metal.cpp`) will automatically select an MGD file based on the number of devices:
+- **8 devices**: `$TT_METAL_RUNTIME_ROOT/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto`
+- **32 devices**: `$TT_METAL_RUNTIME_ROOT/tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto`
+- Anything else: no default — you must set `TT_MESH_GRAPH_DESC_PATH` explicitly.
 
-This automatic selection requires `TT_METAL_HOME` to be set.
+This automatic selection requires `TT_METAL_RUNTIME_ROOT` to be set.
 
 ### MGD File Format
 
@@ -496,49 +498,52 @@ The mesh shape must match the total number of devices available and be compatibl
 
 ### Automatic Axis Determination
 
-The parallelism axes are **automatically determined** based on the order you enable parallelism strategies in your device config:
+The mesh is always **2-dimensional** (`mesh_shape: [R, C]`). The `ParallelismContext` classifies it as one of two cases and assigns axes accordingly:
 
-1. **Data Parallel (DP) axis**: Always assigned to **axis 0** (first dimension) if `enable_ddp` is true
-2. **Context Parallel (CP) axis**: Assigned to **axis 1** (second dimension) if `enable_cp` is true
-2. **Tensor Parallel (TP) axis**: Assigned to **axis 2** (third dimension) if `enable_tp` is true
+**Case 1 — Line topology** (one dimension is 1, e.g. `[1, 32]` or `[32, 1]`):
+- Exactly **one** parallelism strategy must be enabled
+- It is assigned to whichever axis has size > 1
 
-Please keep an mind mesh is not more than 2 dimensional, so maximum two of those parallelism strategies can be enabled at the same time and they will take axis according to the arrangement above.
+**Case 2 — True 2D mesh** (both dimensions > 1, e.g. `[4, 8]`, `[8, 4]`):
+- Exactly **two** parallelism strategies must be enabled (matching the 2 mesh dims)
+- Axes are assigned in the fixed order **DDP → CP → TP**, starting at axis 0
 
-This means:
-- For `mesh_shape: [4, 8]` with both DDP and TP enabled:
-  - DP uses axis 0 → 4 DP groups
-  - TP uses axis 1 → 8 TP devices per group
-- For `mesh_shape: [1, 32]` with only TP enabled:
-  - TP uses axis 1 → 32 TP devices
-- For `mesh_shape: [32, 1]` with only DDP enabled:
-  - DP uses axis 0 → 32 DP groups
-- For `mesh_shape: [8, 4]` with both CP and DDP enabled:
-  - DP uses axis 0 → 8 DP groups
-  - CP uses axis 1 → 4 CP groups
+So for a 2D mesh, DDP always takes axis 0 if enabled. If DDP is not enabled, CP takes axis 0; otherwise CP takes axis 1. TP takes whichever axis is left.
+
+Examples:
+- `mesh_shape: [1, 32]`, `enable_tp: true` → TP on axis 1 (the non-trivial axis), 32 TP devices
+- `mesh_shape: [32, 1]`, `enable_ddp: true` → DDP on axis 0 (the non-trivial axis), 32 DDP replicas
+- `mesh_shape: [4, 8]`, `enable_ddp: true` + `enable_tp: true` → DDP on axis 0 (4 replicas), TP on axis 1 (8 devices/replica)
+- `mesh_shape: [8, 4]`, `enable_ddp: true` + `enable_cp: true` → DDP on axis 0 (8 replicas), CP on axis 1 (4 shards)
+- `mesh_shape: [4, 8]`, `enable_cp: true` + `enable_tp: true` → CP on axis 0, TP on axis 1
 
 ### Implementation Details
 
-The axis assignment happens in `ParallelismContext`:
+From `ParallelismContext::ParallelismContext` in `tt-train/sources/ttml/autograd/auto_context.cpp`:
 
 ```cpp
-uint32_t axis = 0;
-if (config.enable_ddp && mesh_shape[axis] > 1U) {
-    m_ddp_axis = axis++;
-    m_num_ddp_devices = mesh_shape[m_ddp_axis.value()];
-}
-if (config.enable_cp && mesh_shape[axis] > 1U) {
-    m_cp_axis = axis++;
-    m_num_cp_devices = mesh_shape[m_cp_axis.value()];
-}
-if (config.enable_tp && mesh_shape[axis] > 1U) {
-    m_tp_axis = axis++;
-    m_num_tp_devices = mesh_shape[m_tp_axis.value()];
+if (is_line_topology) {
+    // Exactly one parallelism; find the non-trivial axis and assign it
+    uint32_t active_axis = 0;
+    for (uint32_t i = 0; i < mesh_shape.dims(); ++i) {
+        if (mesh_shape[i] > 1) { active_axis = i; break; }
+    }
+    if (config.enable_ddp)      m_ddp_axis = active_axis;
+    else if (config.enable_cp)  m_cp_axis  = active_axis;
+    else if (config.enable_tp)  m_tp_axis  = active_axis;
+} else {
+    // 2D mesh: must enable exactly 2 parallelisms; assign in order DDP -> CP -> TP
+    uint32_t axis = 0;
+    if (config.enable_ddp) { m_ddp_axis = axis++; }
+    if (config.enable_cp)  { m_cp_axis  = axis++; }
+    if (config.enable_tp)  { m_tp_axis  = axis++; }
 }
 ```
 
-**Key constraint**: The number of enabled parallelism strategies must equal the number of mesh shape dimensions:
-- 1D mesh `[N]`: Can use either DP or TP (but not both)
-- 2D mesh `[M, N]`: Can use both DP and TP together
+**Key constraints** (enforced via `TT_FATAL`):
+- **Line topology** (`[N, 1]` or `[1, N]`): exactly one of DDP/CP/TP enabled
+- **2D mesh** (`[M, N]` with both > 1): number of enabled parallelisms must equal 2 (i.e. exactly two of DDP/CP/TP)
+- At most two parallelism strategies can ever be active at once (mesh is 2D)
 
 ## Complete Example
 
@@ -561,14 +566,14 @@ device_config:
 ### 2. Set MGD File
 
 ```bash
-export TT_METAL_HOME=/path/to/tt-metal
-export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto
+export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_RUNTIME_ROOT/tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto
 ```
 
 Or let it auto-select (for 32 devices):
 ```bash
-export TT_METAL_HOME=/path/to/tt-metal
-# TT_MESH_GRAPH_DESC_PATH will be auto-set to galaxy_1x32_mesh_graph_descriptor.textproto
+export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
+# TT_MESH_GRAPH_DESC_PATH will be auto-set to single_galaxy_mesh_graph_descriptor.textproto
 ```
 
 ### 3. Run Training
@@ -589,6 +594,30 @@ export TT_METAL_HOME=/path/to/tt-metal
 5. Model parameters are sharded across TP devices
 6. Data batches are distributed across DP groups
 
+## Ready-to-Run Examples
+
+The table below lists pre-built training configs paired with matching MGDs for llama 8B on a single Blackhole Galaxy (32 devices). Each pair is self-contained: just export the MGD and run.
+
+| Strategy | Mesh shape | Training config | MGD |
+|---|---|---|---|
+| TP=8 only | `[8, 1]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp8.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8.yaml) | [`mgd/bh_galaxy_tp8.textproto`](../configs/mgd/bh_galaxy_tp8.textproto) |
+| TP=8, DDP=4 | `[4, 8]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml) | [`mgd/bh_galaxy_tp8_ddp4.textproto`](../configs/mgd/bh_galaxy_tp8_ddp4.textproto) |
+| TP=4, DDP=8 | `[8, 4]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp4_ddp8.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp4_ddp8.yaml) | [`mgd/bh_galaxy_tp4_ddp8.textproto`](../configs/mgd/bh_galaxy_tp4_ddp8.textproto) |
+| DDP=32 | `[32, 1]` | (bring your own — set `mesh_shape: [32, 1]`, `enable_ddp: true`) | [`mgd/bh_galaxy_ddp32.textproto`](../configs/mgd/bh_galaxy_ddp32.textproto) |
+
+### Run command
+
+```bash
+export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
+cd $TT_METAL_RUNTIME_ROOT
+
+# Pick one of the MGDs from the table
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_RUNTIME_ROOT/tt-train/configs/mgd/bh_galaxy_tp8_ddp4.textproto
+
+./build/tt-train/sources/examples/nano_gpt/nano_gpt \
+    --config tt-train/configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml
+```
+
 ## Troubleshooting
 
 ### MGD Shape Mismatch
@@ -607,10 +636,10 @@ export TT_METAL_HOME=/path/to/tt-metal
 
 ### MGD File Not Found
 
-**Error**: MGD file path not found or `TT_METAL_HOME` not set
+**Error**: MGD file path not found or `TT_METAL_RUNTIME_ROOT` not set
 
 **Solution**:
-- Set `TT_METAL_HOME` to your tt-metal repository root
+- Set `TT_METAL_RUNTIME_ROOT` to your tt-metal repository root
 - Explicitly set `TT_MESH_GRAPH_DESC_PATH` to your MGD file path
 - Or ensure you're using 8 or 32 devices for automatic selection
 
@@ -716,7 +745,7 @@ Check that your mesh graph descriptor specifies the correct topology
 
 ## Additional Resources
 
-- **MGD Format Documentation**: `$TT_METAL_HOME/tt_metal/fabric/MGD_README.md`
-- **Multihost Training Examples**: `$TT_METAL_HOME/tt-train/sources/examples/python/multihost/`
-- **Device Config Examples**: `$TT_METAL_HOME/tt-train/configs/training_configs/`
-- **TP+DP Example (Python)**: `$TT_METAL_HOME/tt-train/sources/examples/linear_regression_tp_dp/linear_regression_tp_dp.py` - Complete example demonstrating combined Tensor Parallelism and Data Parallelism with proper mesh configuration, parallelism context initialization, and distributed tensor mapping
+- **MGD Format Documentation**: `$TT_METAL_RUNTIME_ROOT/tt_metal/fabric/MGD_README.md`
+- **Multihost Training Examples**: `$TT_METAL_RUNTIME_ROOT/tt-train/sources/examples/python/multihost/`
+- **Device Config Examples**: `$TT_METAL_RUNTIME_ROOT/tt-train/configs/training_configs/`
+- **TP+DP Example (Python)**: `$TT_METAL_RUNTIME_ROOT/tt-train/sources/examples/linear_regression_tp_dp/linear_regression_tp_dp.py` - Complete example demonstrating combined Tensor Parallelism and Data Parallelism with proper mesh configuration, parallelism context initialization, and distributed tensor mapping
