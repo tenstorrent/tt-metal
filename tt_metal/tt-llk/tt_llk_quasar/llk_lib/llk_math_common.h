@@ -38,6 +38,7 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
 
     // Set implied math dest format mode
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
+    cfg[DISABLE_IMPLIED_SRCB_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
 
     std::uint8_t SRCA_FORMAT_MASKED = static_cast<std::uint8_t>(srcA_format) & 0xFF;
     std::uint8_t SRCB_FORMAT_MASKED = static_cast<std::uint8_t>(srcB_format) & 0xFF;
