@@ -11,7 +11,9 @@ if TYPE_CHECKING:
     from .fuser_config import GlobalConfig
 
 from helpers.llk_params import (
+    AccToDest,
     BroadcastType,
+    ClearFP32DstAcc,
     DataCopyType,
     EltwiseBinaryReuseDestType,
     EnforceFP32Accumulation,
@@ -44,6 +46,8 @@ class ComputeNode:
         reduce_pool: ReducePool = ReducePool.Max,
         math_fidelity: MathFidelity = MathFidelity.LoFi,
         enforce_fp32_accumulation: EnforceFP32Accumulation = EnforceFP32Accumulation.No,
+        clear_fp32_dst_acc: ClearFP32DstAcc = ClearFP32DstAcc.No,
+        acc_to_dest: AccToDest = AccToDest.No,
     ):
         if fpu is None and sfpu is None:
             raise ValueError("Compute unit needs an fpu or sfpu unit")
@@ -63,6 +67,8 @@ class ComputeNode:
         self.reduce_pool = reduce_pool
         self.math_fidelity = math_fidelity
         self.enforce_fp32_accumulation = enforce_fp32_accumulation
+        self.clear_fp32_dst_acc = clear_fp32_dst_acc
+        self.acc_to_dest = acc_to_dest
 
         if (
             self.broadcast_type != BroadcastType.None_
