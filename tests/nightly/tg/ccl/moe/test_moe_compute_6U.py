@@ -897,17 +897,16 @@ def compute_matmul_golden(
     # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
     torch_w0_output_ref = torch_input_ref @ torch_w0
     if torch_b0 is not None:
-        # The kernel computes matmul(ones(32,32), bias_tile(32,N)) which sums all 32 rows
-        # per column. The golden matches via sum(dim=2, keepdim=True).
-        # .repeat([1, devices, 1, 1]): biases are replicated per-device (same as weights,
-        # which use ReplicateTensorToMesh), so all devices share identical biases.
-        b0 = torch_b0.sum(dim=2, keepdim=True).repeat([1, devices, 1, 1])  # (L, E, 1, N)
+        # True MoE math: x @ W + bias where bias is the first row of the bias tile.
+        # The bias tile has shape (L, E, 32, N) with only row 0 populated.
+        # Broadcast bias across all tokens: (L, E, 1, N) broadcasts to (L, E, T, N).
+        b0 = torch_b0[:, :, 0:1, :].repeat([1, devices, 1, 1])  # (L, E, 1, N)
         torch_w0_output_ref = torch_w0_output_ref + b0
 
     torch_w1_output_ref = torch_input_ref @ torch_w1
     if torch_b1 is not None:
         # Same reasoning as b0.
-        b1 = torch_b1.sum(dim=2, keepdim=True).repeat([1, devices, 1, 1])  # (L, E, 1, N)
+        b1 = torch_b1[:, :, 0:1, :].repeat([1, devices, 1, 1])  # (L, E, 1, N)
         torch_w1_output_ref = torch_w1_output_ref + b1
 
     if activation_type == MoEActivationFunction.SILU:
@@ -923,8 +922,8 @@ def compute_matmul_golden(
     # (L, E, T, N) @ (L, E, N, K) -> (L, E, T, K)
     torch_output_ref = torch_intermediate_ref @ torch_w2
     if torch_b2 is not None:
-        # Same reasoning as b0.
-        b2 = torch_b2.sum(dim=2, keepdim=True).repeat([1, devices, 1, 1])  # (L, E, 1, K)
+        # Same reasoning as b0: take first row of bias tile, broadcast across tokens.
+        b2 = torch_b2[:, :, 0:1, :].repeat([1, devices, 1, 1])  # (L, E, 1, K)
         torch_output_ref = torch_output_ref + b2
 
     # pull device dim back out for comparison
@@ -1323,14 +1322,19 @@ def test_moe_compute(
     # under this assumption.
     if has_bias:
         _bias_std = 0.12
-        torch_b0 = (torch.randn(num_layers, experts_per_device, ttnn.TILE_SIZE, N, dtype=torch.float32) * _bias_std).to(
+        # Bias tile: only row 0 is populated (kernel reads 32 rows but only first row has bias values).
+        # Shape: (L, E, 32, N) where only [L, E, 0, :] contains actual bias.
+        torch_b0 = torch.zeros(num_layers, experts_per_device, ttnn.TILE_SIZE, N, dtype=torch.bfloat16)
+        torch_b0[:, :, 0, :] = (torch.randn(num_layers, experts_per_device, N, dtype=torch.float32) * _bias_std).to(
             torch.bfloat16
         )
-        torch_b1 = (torch.randn(num_layers, experts_per_device, ttnn.TILE_SIZE, N, dtype=torch.float32) * _bias_std).to(
+        torch_b1 = torch.zeros(num_layers, experts_per_device, ttnn.TILE_SIZE, N, dtype=torch.bfloat16)
+        torch_b1[:, :, 0, :] = (torch.randn(num_layers, experts_per_device, N, dtype=torch.float32) * _bias_std).to(
             torch.bfloat16
         )
-        torch_b2 = (
-            torch.randn(num_layers, experts_per_device, ttnn.TILE_SIZE, hidden_size, dtype=torch.float32) * _bias_std
+        torch_b2 = torch.zeros(num_layers, experts_per_device, ttnn.TILE_SIZE, hidden_size, dtype=torch.bfloat16)
+        torch_b2[:, :, 0, :] = (
+            torch.randn(num_layers, experts_per_device, hidden_size, dtype=torch.float32) * _bias_std
         ).to(torch.bfloat16)
 
     # now we can create our golden reference
