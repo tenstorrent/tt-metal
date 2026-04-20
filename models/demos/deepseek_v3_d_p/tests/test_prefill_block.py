@@ -40,6 +40,7 @@ PCC_THRESHOLD_MOE_GATE_DEVICE = 0.992
 PCC_THRESHOLD_KVPE = 0.999
 
 SEQ_LEN_100K = 100 * 1024
+L1_SMALL_SIZE = 1024 * 4
 
 
 @pytest.mark.parametrize(
@@ -64,7 +65,7 @@ SEQ_LEN_100K = 100 * 1024
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-                "l1_small_size": 1024,
+                "l1_small_size": L1_SMALL_SIZE,
             },
             1,
             ttnn.Topology.Linear,
@@ -76,7 +77,7 @@ SEQ_LEN_100K = 100 * 1024
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-                "l1_small_size": 1024,
+                "l1_small_size": L1_SMALL_SIZE,
             },
             2,
             ttnn.Topology.Linear,
