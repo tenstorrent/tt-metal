@@ -868,7 +868,7 @@ output = dense_mlp_output + moe_output   (parallel dense + MoE, not sequential!)
 
 ---
 
-## Appendix B: Existing TT-Metal Implementations — Comparison (as of main@437da8d3796)
+## Appendix B: Existing TT-Metal Implementations — Comparison (as of main@5e955223a1d)
 
 Based on code exploration of:
 - `ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/` (DeepSeek)
@@ -889,17 +889,21 @@ Based on code exploration of:
 | **Combine module** | Delegates to `SelectiveReduceCombineDeviceOperation` | Fused combine in MoEGPTMeshWorkloadFactory |
 | **Core placement** | Hardcoded cores | Dynamic rectangle search avoiding matmul cores |
 | **Ring tile counts** | W0/W1=224, W2=64 | W0/W1=90, W2=90 (symmetric) |
-| **Activation** | Standard | Custom gated activation (see §A.1 for details; `swiglu_sfpu.h`) |
+| **Activation** | Standard (SiLU/SwiGLU) or optional GPT-OSS style (f9ba5b323f4) | Custom gated activation (see §A.1 for details; `swiglu_sfpu.h`) |
 | **Cross-device** | Full fabric support (topology, num_links, semaphores) | Simpler, cluster_axis only |
 | **Semaphores** | Init + final barrier, explicit | Optional (fused mode only) |
-| **Namespace** | `ttnn::experimental::prim` | `ttnn::operations::experimental::moe_gpt::program` |
+| **Namespace** | `ttnn::experimental` | `ttnn::experimental` |
 
 #### Implications for Generalization
 - Ring tile counts and hidden_size must be parameterized (not hardcoded)
-- Activation function must be selectable (SiLU/SwiGLU vs others)
+- Activation function must be selectable (SiLU/SwiGLU vs others) — moe_compute now has optional GPT-OSS activation (f9ba5b323f4)
 - Core placement strategy needs to be configurable (fixed vs dynamic)
 - Cross-device support should be optional but available
 - Combine module approach needs unification
+
+#### Recent Changes Since Initial Analysis
+- **f9ba5b323f4** (MoE: Add optional GPT-OSS style clamped SwiGlu activation): Added optional `activation_type` parameter to moe_compute, reducing the activation gap with moe_gpt
+- **d6cb8e9ec29** (MoE: Arbitrary experts per device): Refactored semaphore communication to L1 tensor, enabling more flexible expert-per-device configurations
 
 ---
 
