@@ -96,7 +96,7 @@ run_t3000_ttnn_tests() {
   # (e.g. Device 4 ETH channels) is severely corrupted and needs a host reboot.
   # 120s is generous for a normal PCIe reset cycle; if it exceeds that we bail
   # rather than letting the whole test script hang forever.
-  timeout 120 tt-smi -r || true
+  timeout 30 tt-smi -r || true
 
   # Per-test-failure hardware reset hook.
   # Call immediately after each test line: `cmd; record_test`
@@ -108,7 +108,7 @@ run_t3000_ttnn_tests() {
     fail+=$rc
     if [[ $rc -ne 0 ]]; then
       echo "LOG_METAL: test returned rc=$rc — resetting hardware via tt-smi"
-      timeout 120 tt-smi -r || true
+      timeout 30 tt-smi -r || true
     fi
   }
 
