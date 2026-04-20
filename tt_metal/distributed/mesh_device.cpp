@@ -2144,6 +2144,16 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
                 device, realtime_profiler_core, ring_buffer_addr, zero_header, CoreType::WORKER);
         }
 
+        // Zero config_buffer_addr in the profiler mailbox BEFORE launching the
+        // kernel.  L1 is not guaranteed to be zero-initialized, and a stale
+        // non-zero value here will cause the NCRISC to exit its config wait
+        // loop immediately and read garbage socket config.
+        {
+            std::vector<uint32_t> zero_config = {0};
+            tt::tt_metal::detail::WriteToDeviceL1(
+                device, realtime_profiler_core, realtime_profiler_mailbox_addr, zero_config, CoreType::WORKER);
+        }
+
         // Compile and launch real-time profiler kernels (BRISC reader + NCRISC pusher)
         {
             Program realtime_profiler_program;
