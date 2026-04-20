@@ -24,6 +24,7 @@
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/distributed/losses.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/remote_optimizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
@@ -637,14 +638,19 @@ int main(int argc, char **argv) {
         },
         model_config.transformer_config);
 
+    // When TP is enabled we always use vocab_parallel_cross_entropy_loss, which expects
+    // vocab-sharded logits ([B,1,S,V/tp_size] per device).
+    const bool use_vocab_parallel_loss = device_config.enable_tp;
+    const bool gather_output_at_lm_head = !use_vocab_parallel_loss;
+
     Model model = std::visit(
-        [&device_config, &multihost_config](auto &&arg) -> Model {
+        [&device_config, &multihost_config, gather_output_at_lm_head](auto &&arg) -> Model {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
                 if (multihost_config.pipeline_parallel_config) {
                     return ttml::models::distributed::pipeline_parallel_llama::create(
                         arg, *multihost_config.pipeline_parallel_config, device_config.enable_tp);
                 } else if (device_config.enable_tp || device_config.enable_cp) {
-                    return ttml::models::distributed::llama::create(arg);
+                    return ttml::models::distributed::llama::create(arg, gather_output_at_lm_head);
                 } else {
                     return ttml::models::llama::create(arg);
                 }
@@ -792,7 +798,9 @@ int main(int argc, char **argv) {
             auto output = run_model(model, features, masks);
             float loss_float = 0.0F;
             if (needs_to_call_loss) {
-                auto loss = ttml::ops::cross_entropy_loss(output, target);
+                auto loss = use_vocab_parallel_loss
+                                ? ttml::ops::distributed::vocab_parallel_cross_entropy_loss(output, target, 1U)
+                                : ttml::ops::cross_entropy_loss(output, target);
                 loss = gradient_accumulator_helper.scale(loss);
                 loss_float = get_loss_value(loss);
                 ttml::autograd::ctx().get_profiler().read_results(device, "forward_pass_done");
