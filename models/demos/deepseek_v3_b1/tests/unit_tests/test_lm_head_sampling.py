@@ -52,7 +52,8 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import (
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
-from models.demos.deepseek_v3_b1.prepare_weights import (
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import StageMetadata
+from models.demos.deepseek_v3_b1.weights.prepare import (
     _MTP_LAYER_IDX,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
@@ -1475,7 +1476,13 @@ def _compute_reference_payload_mtp_metrics_ttnn(
         fp32_dest_acc_en=use_fp32,
         persistent_mode=True,
     )
-    pipeline = config.build_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
+    pipeline = config.build_pipeline(
+        mesh_device,
+        stages_metadata=stages_metadata,
+        pipeline_config=pipeline_config,
+    )
 
     try:
         pipeline.setup_and_run()
@@ -4350,7 +4357,13 @@ def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32, device_p
         fp32_dest_acc_en=use_fp32,
         persistent_mode=False,
     )
-    pipeline = config.build_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
+    pipeline = config.build_pipeline(
+        mesh_device,
+        stages_metadata=stages_metadata,
+        pipeline_config=pipeline_config,
+    )
     try:
         pipeline.setup_and_run()
 
@@ -4414,7 +4427,13 @@ def test_persistent_mode(mesh_device, use_fp32, device_params):
         SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,
     )
-    pipeline = config.build_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
+    pipeline = config.build_pipeline(
+        mesh_device,
+        stages_metadata=stages_metadata,
+        pipeline_config=pipeline_config,
+    )
     pipeline.setup_and_run()
 
     if pipeline.my_mesh_id == 0:
@@ -4489,7 +4508,19 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
         fp32_dest_acc_en=use_fp32,
     )
     print(f"[TEST] config created, building pipeline", flush=True)
-    pipeline = config.build_pipeline(mesh_device)
+    # Propagate an identical, explicit pipeline_config and stages_metadata to
+    # every rank. Without this, each rank independently calls
+    # generate_blitz_decode_pipeline() and the submesh-aware code paths added
+    # in #42002 can produce inconsistent entry/exit MeshCoordinates across
+    # ranks, causing the inter-mesh MeshSocket handshake in
+    # _CombinedPipelineBlock.__init__'s h2d_host_io to time out.
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
+    pipeline = config.build_pipeline(
+        mesh_device,
+        stages_metadata=stages_metadata,
+        pipeline_config=pipeline_config,
+    )
     pid = pipeline.my_mesh_id
     print(f"[TEST P{pid}] pipeline built, calling setup_and_run", flush=True)
     try:
@@ -4711,7 +4742,13 @@ def test_persistent_mode_real_weights(mesh_device, use_fp32, hf_model_path, hf_s
         StateDictWeightProvider(hf_model_path),
         lm_head_fp32_dest_acc_en=use_fp32,
     )
-    pipeline = config.build_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
+    pipeline = config.build_pipeline(
+        mesh_device,
+        stages_metadata=stages_metadata,
+        pipeline_config=pipeline_config,
+    )
     pipeline.setup_and_run()
 
     if pipeline.my_mesh_id == 0:
@@ -4808,7 +4845,13 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
         SyntheticWeightProvider(),
         lm_head_fp32_dest_acc_en=use_fp32,
     )
-    pipeline = config.build_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
+    pipeline = config.build_pipeline(
+        mesh_device,
+        stages_metadata=stages_metadata,
+        pipeline_config=pipeline_config,
+    )
     pipeline.setup_and_run()
 
     if pipeline.my_mesh_id == 0:
@@ -4882,7 +4925,13 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
         fp32_dest_acc_en=use_fp32,
     )
     print(f"[TEST] config created, building pipeline", flush=True)
-    pipeline = config.build_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
+    pipeline = config.build_pipeline(
+        mesh_device,
+        stages_metadata=stages_metadata,
+        pipeline_config=pipeline_config,
+    )
     pid = pipeline.my_mesh_id
     print(f"[TEST P{pid}] pipeline built, calling setup_and_run", flush=True)
 
