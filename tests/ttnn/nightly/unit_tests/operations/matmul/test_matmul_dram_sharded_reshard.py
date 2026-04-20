@@ -32,15 +32,20 @@ def pad_to_dram_banks(num, num_banks):
     return num if rem == 0 else num + (lcm - rem)
 
 
-# Shapes sorted by weight size (K * N).
-# Larger shapes (e.g. K=8192 N=4096, K=32768 N=1024) currently OOM the staging
-# CB in interleaved_to_sharded and require the follow-up L1-budgeted chunking
-# change to the reader/writer kernels.
+# Shapes sorted by weight size (K * N). Larger entries would OOM the staging CB
+# in interleaved_to_sharded without the L1-budgeted chunking in the reader/writer
+# kernels; they exercise the chunked path with progressively smaller chunks.
 @pytest.mark.parametrize(
     "M, K, N, grid",
     [
         (32, 8192, 1024, (8, 1)),
         (32, 8192, 1280, (8, 1)),
+        (32, 8192, 2048, (8, 1)),
+        (32, 8192, 4096, (8, 1)),
+        (32, 16384, 2048, (8, 1)),
+        (32, 16384, 4096, (8, 1)),
+        (32, 32768, 1024, (8, 1)),
+        (32, 32768, 2048, (8, 1)),
     ],
 )
 def test_matmul_dram_sharded_via_reshard(device, M, K, N, grid):

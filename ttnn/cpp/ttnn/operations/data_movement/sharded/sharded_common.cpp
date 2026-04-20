@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 #include "sharded_common.hpp"
 
@@ -24,6 +27,47 @@ uint32_t calculate_starting_idx_h(const Tensor& tensor, uint32_t num_slices, uin
     uint32_t num_tiles_per_slice = total_num_tiles / num_slices;
     uint32_t starting_tile_in_slice = num_tiles_per_slice * slice_index;
     return starting_tile_in_slice;
+}
+
+std::pair<uint32_t, uint32_t> compute_staging_cb_chunk(
+    const Tensor& input,
+    bool dst_is_dram,
+    bool is_tile_layout,
+    bool is_width_sharded,
+    bool convert_df,
+    uint32_t input_page_size,
+    uint32_t output_page_size,
+    uint32_t scratch_cb_bytes,
+    uint32_t num_units_per_shard_height,
+    uint32_t num_units_per_shard_width,
+    uint32_t num_units_per_shard) {
+    // Only the DRAM-dst WIDTH-sharded TILE path stages in local L1 at scale we care about.
+    // The row-major DRAM-sharded reader/writer have the same one-shot reserve/push shape,
+    // but they live in separate kernels and aren't on a hot path yet — DRAM matmul weights
+    // are always tiled. If that changes, port the same pattern to the stick-layout kernels.
+    if (!(dst_is_dram && is_tile_layout && is_width_sharded)) {
+        return {num_units_per_shard_height, num_units_per_shard};
+    }
+
+    // get_max_l1_space() reads lowest_occupied_compute_l1_address, so it already subtracts
+    // L1 tensors allocated before this op (e.g. an L1-sharded activation on the same cores).
+    uint32_t l1_budget = ttnn::operations::data_movement::get_max_l1_space(input);
+
+    // Reserve half of the L1 budget for kernel binaries, runtime args, semaphores, and
+    // downstream consumer CBs in a graph. Matches the safety margin in
+    // untilize_single_core_program_factory.cpp (l1_size_per_core / 2 minus allocator base).
+    uint32_t staging_budget = l1_budget / 2;
+    staging_budget = staging_budget > scratch_cb_bytes ? staging_budget - scratch_cb_bytes : 0;
+
+    // Both the input CB (when convert_df) and the output CB are sized by num_input_units,
+    // so the budget must cover their sum.
+    uint32_t per_tile_bytes = output_page_size + (convert_df ? input_page_size : 0);
+    uint32_t max_tiles = std::max<uint32_t>(staging_budget / per_tile_bytes, 1);
+    uint32_t tiles_per_row = std::max<uint32_t>(num_units_per_shard_width, 1);
+    uint32_t max_rows = std::max<uint32_t>(max_tiles / tiles_per_row, 1);
+    uint32_t chunk_height_tiles = std::min<uint32_t>(num_units_per_shard_height, max_rows);
+    uint32_t num_input_units = chunk_height_tiles * tiles_per_row;
+    return {chunk_height_tiles, num_input_units};
 }
 
 std::tuple<std::vector<std::vector<WidthShardingReshardSegment>>, uint32_t, uint32_t, uint32_t>
