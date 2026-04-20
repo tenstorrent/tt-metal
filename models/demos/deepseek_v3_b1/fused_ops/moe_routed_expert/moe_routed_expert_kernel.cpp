@@ -93,6 +93,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather_row_major"),
                 get_named_compile_time_arg_val("gather_receiver_data_addr"),
                 0,  // sender_idx (unused when UsePerCoreSenderIdx=false)
+                noc_index,
             },
         .receiver = {},
     };
@@ -179,6 +180,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_gather_receiver_data_addr"),
                 get_named_compile_time_arg_val(
                     "down_proj_gather_sender_idx"),  // Explicit sender index (UsePerCoreSenderIdx=true)
+                noc_index,
             },
         .receiver = {},
     };

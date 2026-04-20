@@ -401,13 +401,14 @@ void kernel_main() {
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
 
     // Lightweight mask: generate all mask tiles once into single CB before the ring loop.
-    // Only needed when any K/joint dimension has padding that doesn't fill a chunk.
+    // Needed when any K/joint dimension has padding, or when causal masking is active.
     constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
     constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-    constexpr bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) && !is_causal;
+    constexpr bool needs_lightweight_mask =
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) || is_causal;
     if constexpr (needs_lightweight_mask) {
-        generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in>();
+        generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in, is_causal>();
     }
 
     const uint32_t last_active_ring_iter =
@@ -682,19 +683,6 @@ void kernel_main() {
 
                 if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
                     continue;
-                }
-
-                if (is_causal) {
-                    generate_mask<false, 0, true, cb_mask_in>(
-                        Sq_chunk_t,
-                        Sk_chunk_t,
-                        q_chunk,
-                        0,
-                        ring_iter_needs_global_n_mask || ring_iter_needs_local_n_mask,
-                        ring_iter_needs_joint_n_mask,
-                        ring_iter_needs_global_n_mask ? global_n_within_ring_iter : local_padded_N,
-                        L,
-                        causality);
                 }
 
                 // If not on the first iteration, read LSE and previous output chunk.

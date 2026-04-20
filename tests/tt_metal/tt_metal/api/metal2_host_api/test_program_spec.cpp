@@ -138,6 +138,40 @@ TEST_F(ProgramSpecTestQuasar, DuplicateLocalAccessorNameFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
+    NodeCoord node{0, 0};
+
+    const std::vector<std::string> invalid_names = {
+        "",               // empty
+        "has-dash",       // hyphen
+        "has space",      // whitespace
+        "1starts_digit",  // leading digit
+        "has.dot",        // punctuation
+        "class",          // C++ keyword
+        "namespace",      // C++ keyword
+        "int",            // C++ keyword
+        "_Foo",           // reserved: underscore + uppercase
+        "__foo",          // reserved: leading double underscore
+        "foo__bar",       // reserved: embedded double underscore
+    };
+
+    for (const auto& bad_name : invalid_names) {
+        ProgramSpec spec;
+        spec.program_id = "test_program";
+
+        auto kernel = MakeMinimalDMKernel("kernel", node);
+        auto dfb = MakeMinimalDFB("dfb", node);
+
+        BindDFBToKernel(kernel, "dfb", bad_name, KernelSpec::DFBEndpointType::PRODUCER);
+
+        spec.kernels = {kernel};
+        spec.dataflow_buffers = {dfb};
+        spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"}, {"dfb"})};
+
+        EXPECT_ANY_THROW(MakeProgramFromSpec(spec)) << "Expected rejection for name: '" << bad_name << "'";
+    }
+}
+
 TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBFails) {
     NodeCoord node{0, 0};
 
@@ -745,9 +779,11 @@ TEST_F(ProgramSpecTestQuasar, DFBNotInAnyWorkerSpecFails) {
 // ============================================================================
 // SECTION 4: Programs Creation Tests
 // ============================================================================
-// These verify that valid configurations succeed.
-// NOTE: Program creation needs full HAL support.
-// TODO: Enable these tests with a Quasar mock device.
+// These verify that valid ProgramSpec configurations produce a Program without throwing.
+// They exercise the full MakeProgramFromSpec pipeline, but only on mock device.
+//
+// Coverage gaps (JIT compilation, device-side execution) are covered by HW tests.
+// (see test_program_spec_hw.cpp)
 
 TEST_F(ProgramSpecTestQuasar, MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
@@ -1554,15 +1590,18 @@ TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
 }
 
-// WH N150 grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
-//   - compute_grid = 8x8 (valid nodes: x in [0,7], y in [0,7])
-//   - OOB examples: {8, 0} (x too large), {0, 8} (y too large), {0, 100} (far OOB)
+// WH N150 mock grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
+//   - Fast dispatch: compute_grid = 8x8 (y in [0,7]; one row reserved for dispatch)
+//   - Slow dispatch: compute_grid = 8x9 (y in [0,8]; full logical tensix grid, no rows reserved)
+//
+// The apparent grid size is different in slow dispatch vs. fast dispatch mode. CI runs with
+// both, so choose OOB coordinates that will fail in both cases.
 //
 // These tests use the WH mock device, not real hardware.
 
 TEST_F(ProgramSpecTestGen1, KernelTargetsNodeBeyondGridYFails) {
-    // {0, 8}: y=8 is one past the 8-tall compute grid.
-    const NodeCoord oob_node{0, 8};
+    // y=9 is just outside the 9-row slow-dispatch grid (also outside the 8-row fast-dispatch grid).
+    const NodeCoord oob_node{0, 9};
 
     ProgramSpec spec;
     spec.program_id = "test_program";
@@ -1577,7 +1616,7 @@ TEST_F(ProgramSpecTestGen1, KernelTargetsNodeBeyondGridYFails) {
 }
 
 TEST_F(ProgramSpecTestGen1, KernelTargetsOutOfBoundsNodeFails) {
-    // {8, 0} is out of bounds: x=8 is beyond the 8-wide compute grid.
+    // x=8 is just outside the 8-column grid (same in fast and slow dispatch).
     const NodeCoord oob_node{8, 0};
 
     ProgramSpec spec;
@@ -1596,7 +1635,7 @@ TEST_F(ProgramSpecTestGen1, DFBTargetsOutOfBoundsNodeFails) {
     // Bounds checking applies to DFBs as well as kernels. The kernel itself is on a
     // valid node, but the DFB it produces to targets an OOB node.
     const NodeCoord valid_node{0, 0};
-    const NodeCoord oob_node{0, 100};
+    const NodeCoord oob_node{0, 9};  // just outside the 9-row slow-dispatch grid
 
     ProgramSpec spec;
     spec.program_id = "test_program";
