@@ -14,23 +14,26 @@ same directory and atomically renaming it into place so the dashboard never
 reads a half-written file.
 
 Subcommands:
-    init         Write the initial run.json at run start (status=running,
-                 first step_history entry in_progress).
-    advance      Transition from the current step to a new step. Closes out
-                 the in-flight step_history entry and appends a new one.
-    message      Mid-step update of current_step_message (and optionally the
-                 current in-flight step_history entry's message).
-    phase-start  Mark a per_phase[] entry as started (start_time, name).
-    phase-test   Set per_phase[].test_result to "running" or "fixing" while
-                 the simulator / debugger is live.
-    phase-end    Finalize a per_phase[] entry (end_time, duration, test
-                 result, compile_errors, test_details).
-    failure      Append an entry to the top-level failures[] array.
-    metric       Patch arbitrary top-level scalar fields (compilation_attempts,
-                 debug_cycles, tests_total, tests_passed, etc.).
-    finalize     Close out the last step_history entry, set end_time, flip
-                 status to a terminal value, merge in any remaining summary
-                 fields passed via --patch-json.
+    init            Write the initial run.json at run start (status=running,
+                    first step_history entry in_progress).
+    advance         Transition from the current step to a new step. Closes out
+                    the in-flight step_history entry and appends a new one.
+    message         Mid-step update of current_step_message (and optionally the
+                    current in-flight step_history entry's message).
+    phase-start     Mark a per_phase[] entry as started (start_time, name).
+    phase-test      Set per_phase[].test_result to "running" or "fixing" while
+                    the simulator / debugger is live.
+    phase-end       Finalize a per_phase[] entry (end_time, duration, test
+                    result, compile_errors, test_details).
+    failure         Append an entry to the top-level failures[] array.
+    metric          Patch arbitrary top-level scalar fields (compilation_attempts,
+                    debug_cycles, tests_total, tests_passed, etc.).
+    link-siblings   Patch issue_run_id and sibling_runs on an existing run.json.
+                    Used by the multi-arch issue-solver flow to group N per-arch
+                    runs under one shared issue_run_id for the dashboard.
+    finalize        Close out the last step_history entry, set end_time, flip
+                    status to a terminal value, merge in any remaining summary
+                    fields passed via --patch-json.
 
 Every subcommand is idempotent in the sense that running it twice with the
 same arguments produces the same final document (modulo timestamps the
@@ -163,6 +166,15 @@ def cmd_init(args: argparse.Namespace) -> None:
             "cost_usd": 0,
         },
         "agents": [],
+        # Multi-arch grouping (optional).
+        #   issue_run_id    — shared ID across N per-arch runs for one issue.
+        #                     None for single-arch runs (today's default).
+        #   sibling_runs    — list of {arch, run_id} pointers to the other
+        #                     per-arch runs in the same issue. Empty for
+        #                     single-arch runs. The dashboard uses these to
+        #                     group multi-arch runs under one row.
+        "issue_run_id": args.issue_run_id,
+        "sibling_runs": _json_arg(args.sibling_runs, []),
         # Activity Monitor live-state fields.
         "current_step": args.first_step,
         "current_step_started": start_time,
@@ -418,6 +430,27 @@ def cmd_finalize(args: argparse.Namespace) -> None:
 
 
 # --------------------------------------------------------------------------
+# Subcommand: link-siblings (multi-arch grouping, optional)
+# --------------------------------------------------------------------------
+
+
+def cmd_link_siblings(args: argparse.Namespace) -> None:
+    log_dir = Path(args.log_dir)
+    doc = _load(log_dir)
+
+    siblings = _json_arg(args.siblings, [])
+    if not isinstance(siblings, list):
+        raise SystemExit("--siblings must be a JSON array")
+
+    doc["sibling_runs"] = siblings
+    if args.issue_run_id is not None:
+        doc["issue_run_id"] = args.issue_run_id
+
+    _atomic_write(log_dir, doc)
+    print(f"link-siblings: {len(siblings)} sibling(s) linked")
+
+
+# --------------------------------------------------------------------------
 # CLI wiring
 # --------------------------------------------------------------------------
 
@@ -463,6 +496,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "--pipeline-steps", default=None, help="JSON array of {id,name,desc} objects"
     )
     init.add_argument("--issue", default=None, help="JSON object for issue-solver runs")
+    init.add_argument(
+        "--issue-run-id",
+        default=None,
+        help="Shared ID across N per-arch runs of one multi-arch issue (optional)",
+    )
+    init.add_argument(
+        "--sibling-runs",
+        default=None,
+        help=(
+            "JSON array of {arch, run_id} pointers to other per-arch runs in "
+            "the same issue (optional; defaults to [])"
+        ),
+    )
     init.add_argument(
         "--patch-json",
         default=None,
@@ -552,6 +598,24 @@ def _build_parser() -> argparse.ArgumentParser:
         "--patch-json", required=True, help="JSON object of key/value pairs to merge in"
     )
     mt.set_defaults(func=cmd_metric)
+
+    # link-siblings --------------------------------------------------------
+    ls = sub.add_parser(
+        "link-siblings",
+        help="Patch issue_run_id and sibling_runs on an existing run.json",
+    )
+    _add_common(ls)
+    ls.add_argument(
+        "--siblings",
+        required=True,
+        help="JSON array of {arch, run_id} objects (may be empty)",
+    )
+    ls.add_argument(
+        "--issue-run-id",
+        default=None,
+        help="Shared ID across N per-arch runs (optional; unchanged if omitted)",
+    )
+    ls.set_defaults(func=cmd_link_siblings)
 
     # finalize -------------------------------------------------------------
     fz = sub.add_parser("finalize", help="Close out run.json at run end")

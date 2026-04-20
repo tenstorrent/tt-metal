@@ -243,3 +243,173 @@ def test_finalize_computes_duration_seconds(tmp_path):
     )
     doc = json.loads((tmp_path / "run.json").read_text())
     assert doc["duration_seconds"] == 225  # 3m45s
+
+
+# --------------------------------------------------------------------------
+# Multi-arch grouping — issue_run_id + sibling_runs
+#
+# In the shared-design multi-arch issue-solver flow, one issue produces N
+# per-arch runs, each with its own run.json. They are grouped via an
+# `issue_run_id` (shared across the N runs) and a `sibling_runs` array that
+# names the other runs' arch + run_id. Both fields are optional and additive
+# so single-arch runs (today's default) are unaffected.
+# --------------------------------------------------------------------------
+
+
+def test_init_without_multi_arch_fields_defaults(tmp_path):
+    """Single-arch (today's default) runs get issue_run_id=None, sibling_runs=[]."""
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "r_solo",
+        "--kernel",
+        "issue_42",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "go",
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["issue_run_id"] is None
+    assert doc["sibling_runs"] == []
+
+
+def test_init_accepts_issue_run_id(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "r_bh",
+        "--kernel",
+        "issue_1089",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "go",
+        "--issue-run-id",
+        "issue-1089-multi-abc",
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["issue_run_id"] == "issue-1089-multi-abc"
+
+
+def test_init_accepts_sibling_runs(tmp_path):
+    siblings = [{"arch": "wormhole", "run_id": "r_wh"}]
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "r_bh",
+        "--kernel",
+        "issue_1089",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "go",
+        "--sibling-runs",
+        json.dumps(siblings),
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["sibling_runs"] == siblings
+
+
+def test_link_siblings_replaces_sibling_runs(tmp_path):
+    """link-siblings patches the sibling_runs list on an existing run.json."""
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "r_bh",
+        "--kernel",
+        "issue_1089",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "go",
+    )
+    siblings = [
+        {"arch": "wormhole", "run_id": "r_wh"},
+        {"arch": "quasar", "run_id": "r_qs"},
+    ]
+    _run(tmp_path, "link-siblings", "--siblings", json.dumps(siblings))
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["sibling_runs"] == siblings
+
+
+def test_link_siblings_sets_issue_run_id(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "r_bh",
+        "--kernel",
+        "issue_1089",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "go",
+    )
+    _run(
+        tmp_path,
+        "link-siblings",
+        "--issue-run-id",
+        "issue-1089-shared",
+        "--siblings",
+        "[]",
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["issue_run_id"] == "issue-1089-shared"
+    # link-siblings also accepts an empty siblings list (valid — single-arch
+    # runs may still want to set issue_run_id for dashboard grouping).
+    assert doc["sibling_runs"] == []
+
+
+def test_link_siblings_preserves_other_fields(tmp_path):
+    """Regression: link-siblings must not overwrite unrelated run.json state."""
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "r_bh",
+        "--kernel",
+        "issue_1089",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "go",
+    )
+    # Advance so step_history has a closed entry; link-siblings must not reset it.
+    _run(
+        tmp_path,
+        "advance",
+        "--new-step",
+        "planner",
+        "--new-message",
+        "planning",
+        "--prev-result",
+        "success",
+    )
+    _run(
+        tmp_path,
+        "link-siblings",
+        "--siblings",
+        json.dumps([{"arch": "wormhole", "run_id": "r_wh"}]),
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["current_step"] == "planner"
+    assert len(doc["step_history"]) == 2
+    assert doc["step_history"][0]["result"] == "success"
+    assert doc["sibling_runs"] == [{"arch": "wormhole", "run_id": "r_wh"}]

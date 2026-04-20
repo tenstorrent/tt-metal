@@ -48,7 +48,6 @@ case "$TARGET_ARCH" in
   blackhole)
     export LLK_DIR=tt_llk_blackhole
     export TESTS_DIR=tests/python_tests/blackhole
-    export SIM_PORT=5555
     export REF_ARCH=wormhole
     export REF_LLK_DIR=tt_llk_wormhole_b0
     export LOGS_BASE=/proj_sw/user_dev/llk_code_gen/blackhole_issue_solver
@@ -57,7 +56,7 @@ case "$TARGET_ARCH" in
   quasar)
     export LLK_DIR=tt_llk_quasar
     export TESTS_DIR=tests/python_tests/quasar
-    export SIM_PORT=5556
+    export SIM_PORT=5556                                  # Quasar-only carve-out: no silicon, runs on emu-quasar-1x3
     export REF_ARCH=blackhole
     export REF_LLK_DIR=tt_llk_blackhole
     export LOGS_BASE=/proj_sw/user_dev/llk_code_gen/quasar_issue_solver
@@ -66,7 +65,6 @@ case "$TARGET_ARCH" in
   wormhole)
     export LLK_DIR=tt_llk_wormhole_b0
     export TESTS_DIR=tests/python_tests/wormhole
-    export SIM_PORT=5557
     export REF_ARCH=
     export REF_LLK_DIR=
     export LOGS_BASE=/proj_sw/user_dev/llk_code_gen/wormhole_issue_solver
@@ -79,7 +77,7 @@ case "$TARGET_ARCH" in
 esac
 ```
 
-Every path, port, and log-root in this orchestrator below uses these variables — no other file should hardcode arch-specific values.
+Every path and log-root in this orchestrator below uses these variables — no other file should hardcode arch-specific values. Functional tests default to **local hardware** via `run_hw` in `tester.md` (see that playbook for the detect-and-dispatch logic). The one exception is Quasar, which has no silicon — it exports `SIM_PORT=5556` above and the tester routes Quasar runs to `run_quasar_sim` (flock-wrapped `emu-quasar-1x3`). Blackhole and Wormhole do not fall back to simulator: if the right card is absent, the tester finalizes `failed` with `ENV_ERROR`.
 
 ---
 
@@ -165,11 +163,11 @@ All writes are atomic (write-to-temp + rename).
 PIPELINE_STEPS='[
   {"id":"analyzer",   "name":"Analyze",      "desc":"Analyze the GitHub issue"},
   {"id":"arch_lookup","name":"Research",     "desc":"Gather architecture details"},
-  {"id":"planner",    "name":"Plan",         "desc":"Plan the fix"},
+  {"id":"planner",    "name":"Plan",         "desc":"Plan the fix (may re-run once for scope expansion)"},
   {"id":"writer",     "name":"Fix",          "desc":"Implement the fix"},
   {"id":"fix_compile","name":"Fix Compile",  "desc":"Resolve compile errors"},
   {"id":"tester",     "name":"Test",         "desc":"Run compile + functional tests"},
-  {"id":"fix_tests",  "name":"Fix Tests",    "desc":"Resolve test failures"}
+  {"id":"fix_tests",  "name":"Fix Tests",    "desc":"Resolve test failures (Class A — LLK bug in fix)"}
 ]'
 
 ISSUE_JSON=$(python - <<PY
@@ -466,14 +464,24 @@ Agent tool:
   prompt: |
     Read and follow codegen/agents/issue-solver/tester.md.
 
+    TARGET_ARCH: ${TARGET_ARCH}
     Issue number: {ISSUE_NUMBER}
     Fix plan: codegen/artifacts/issue_{ISSUE_NUMBER}_fix_plan.md
 
     Changed files:
     {list of files modified by the fixer}
 
-    Run compilation checks and functional tests as described in the fix plan's
-    test strategy section.
+    Default path: local hardware (blackhole, wormhole). If /dev/tenstorrent/0
+    is missing OR its PCI_ID does not correspond to ${TARGET_ARCH}, finalize
+    this run as `failed` with an ENV_ERROR diagnostic — do NOT finalize as
+    `compiled` when you simply couldn't run tests.
+
+    Carve-out: if TARGET_ARCH=quasar, tester.md dispatches to run_quasar_sim
+    (SIM_PORT=${SIM_PORT:-5556}, emu-quasar-1x3, flock-serialized). No other
+    arch falls back to simulator.
+
+    Run compilation checks and functional tests as described in the fix
+    plan's test strategy section, using the run_test helper from tester.md.
 
     WORKTREE_DIR: {WORKTREE_DIR}
     LOG_DIR: {LOG_DIR}
@@ -533,7 +541,7 @@ Agent tool:
     LOG_DIR: {LOG_DIR}
 ```
 
-After debug → re-run Step 5 (test). Max 2 debug→test cycles before proceeding to Step 6 with status `"failed"`.
+After debug → re-run Step 5 (test). Max 2 debug→test cycles.
 
 **LIVE LOG — after each `fix_tests` cycle, transition back to `tester` before re-running:**
 ```bash
@@ -545,6 +553,55 @@ python codegen/scripts/run_json_writer.py advance \
     --prev-message "Debugger applied runtime fix" \
     --agent "tester"
 ```
+
+**NEEDS_PLAN_REVISION** (debugger signals that a test failure is a direct semantic consequence of the `## API Contract` — the plan is missing `### shared test sources` entries — or two debug→test cycles exhaust without green tests):
+
+Do NOT finalize `failed` yet. Instead, re-spawn the planner **once** with the failure evidence so it can expand plan scope to include the missing test-source updates. This is the only path to "all tests pass" when the initial planner missed a call site. Max one plan revision per run.
+
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "planner" \
+    --new-message "Revising plan — tests require expanded scope per debugger/tester feedback" \
+    --prev-result "test_failure" \
+    --prev-message "Debugger flagged needs_plan_revision (or two debug cycles exhausted)" \
+    --agent "planner"
+```
+
+Spawn planner with revision context:
+```
+Agent tool:
+  subagent_type: "general-purpose"
+  description: "Revise plan for ${TARGET_ARCH} issue #{ISSUE_NUMBER}"
+  prompt: |
+    Read and follow codegen/agents/issue-solver/fix-planner.md.
+
+    This is a PLAN REVISION. Your prior plan at
+    codegen/artifacts/issue_{ISSUE_NUMBER}_fix_plan.md produced test failures
+    that the debugger classified as Class B (direct semantic consequence of the
+    ## API Contract, not an LLK bug). The plan is missing entries under
+    ## Implementation → ### shared test sources.
+
+    Failing test evidence (verbatim from tester/debugger):
+    {paste: failing test ids, file:line of stale call sites, old vs required
+     call shape, which test-harness wiring needs updating}
+
+    Produce a REVISED plan that:
+    1. Keeps the ## API Contract identical (it is correct — the tests are stale)
+    2. Expands the ## Implementation → ### shared test sources subsection to
+       include explicit edits to every stale call site and test-harness helper
+       flagged above
+    3. Re-audits the repo for any other call sites of the changed symbol that
+       might be similarly stale (per Principle 7)
+
+    Overwrite codegen/artifacts/issue_{ISSUE_NUMBER}_fix_plan.md with the
+    revised plan.
+
+    WORKTREE_DIR: {WORKTREE_DIR}
+    LOG_DIR: {LOG_DIR}
+```
+
+After the revised plan lands, re-run Step 4 (fixer) followed by Step 5 (tester) with the new scope. If that second pass is still red (debug cycles exhaust again), THEN finalize Step 6 with `STATUS = "failed"` and `final_result = "test_failure"` — the scope expansion wasn't enough and human review is required. Record this as an `OBSTACLE` on the run for the dashboard.
 
 **COMPILE_FAILED**: Return to Step 4b.
 
@@ -764,16 +821,19 @@ CHIP_ARCH=$TARGET_ARCH python scripts/compiler.py \
     {path_to_test_source} \
     -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
 
-# Functional tests — ALWAYS use flock wrapper
-flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
-  STALE=$(lsof -ti :$SIM_PORT 2>/dev/null || true)
-  [ -n "$STALE" ] && echo "Killing stale port $SIM_PORT processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
-  pkill -9 -f "tt-exalens.*--port=$SIM_PORT" 2>/dev/null || true
-  sleep 1
-  source ../tests/.venv/bin/activate
-  cd ../$TESTS_DIR
-  CHIP_ARCH=$TARGET_ARCH pytest -x --run-simulator --port=$SIM_PORT {test_file}
-'
+# Functional tests — hardware for BH/WH, sim for Quasar (see tester.md run_test).
+# BH/WH preconditions: /dev/tenstorrent/0 exists AND PCI_ID matches $TARGET_ARCH.
+# Quasar carve-out: TT_UMD_SIMULATOR_PATH discovered from user or /proj_sw/user_dev/*/
+#                   tt-umd-simulators/build/emu-quasar-1x3; --port=$SIM_PORT=5556.
+[ -f ../tests/.venv/bin/activate ] && source ../tests/.venv/bin/activate || \
+    export PYTHONPATH="${PYTHONPATH:-}:${HOME}/.local/lib/python3.10/site-packages"
+cd ../$TESTS_DIR
+if [ "$TARGET_ARCH" = "quasar" ]; then
+    flock --timeout 900 /tmp/tt-llk-test-simulator.lock \
+        bash -c 'CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port='"$SIM_PORT"' {test_file}'
+else
+    CHIP_ARCH=$TARGET_ARCH pytest -x {test_file}
+fi
 
 # List available tests
 ls $TESTS_DIR/test_*.py 2>/dev/null

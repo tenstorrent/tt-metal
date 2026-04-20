@@ -39,13 +39,21 @@ Extract and store verbatim:
 
 **CRITICAL: Never alter, summarize, paraphrase, or truncate any issue content.** The raw title, body, and comments must be passed as-is to every subagent. Agents depend on exact error messages, code snippets, and reproduction steps from the issue to do their work correctly.
 
-#### Determine Architecture (issues only)
+#### Determine Architecture(s) (issues only)
 
-1. **Check labels** — look for `blackhole`, `quasar`, `wormhole` in the issue labels.
-2. **Fallback: scan content** — if no architecture label found, scan the issue title and body for:
-   - `blackhole`, `bh`, `tt_llk_blackhole` → **blackhole**
-   - `quasar`, `qs`, `tt_llk_quasar`, `trinity` → **quasar**
-3. **Default** — if still ambiguous, default to **blackhole**.
+Collect **all** relevant architectures into `TARGET_ARCHES` (a list). Issues labeled for more than one arch are real — an API change to an LLK function usually needs to land on every arch that implements it — and must be handled as a single coordinated fix, not N independent runs.
+
+1. **Check labels** — collect every matching label into a list: `blackhole`, `quasar`, `wormhole`. All are equally valid entries.
+2. **Fallback: scan content** — if no architecture labels are found, scan the issue title and body for:
+   - `blackhole`, `bh`, `tt_llk_blackhole` → add **blackhole**
+   - `quasar`, `qs`, `tt_llk_quasar`, `trinity` → add **quasar**
+   - `wormhole`, `wh`, `tt_llk_wormhole_b0` → add **wormhole**
+3. **Default** — if `TARGET_ARCHES` is still empty, default to `[blackhole]`.
+
+Then set:
+- `TARGET_ARCHES` — the list (always at least one element).
+- `TARGET_ARCH` — single-arch convenience: `TARGET_ARCHES[0]` when `len(TARGET_ARCHES) == 1`, else **unset** (the multi-arch orchestrator uses `TARGET_ARCHES`).
+- `MULTI_ARCH` — `true` if `len(TARGET_ARCHES) > 1`, else `false`. Used for routing in Step 3.
 
 #### Determine Task Type (issues only)
 
@@ -92,20 +100,23 @@ Pass to the orchestrator:
 
 ### Solve Issue
 
-| Architecture | Task Type | Orchestrator | TARGET_ARCH |
-|-------------|-----------|-------------|-------------|
-| **blackhole** | issue fix | `codegen/agents/issue-solver/orchestrator.md` | `blackhole` |
-| **quasar** | issue fix | `codegen/agents/issue-solver/orchestrator.md` | `quasar` |
-| **wormhole** | issue fix | `codegen/agents/issue-solver/orchestrator.md` | `wormhole` |
+Route by task type and by `len(TARGET_ARCHES)`:
+
+| Architecture(s) | Task Type | Orchestrator | Arch input |
+|-----------------|-----------|--------------|------------|
+| single (any of blackhole / quasar / wormhole) | issue fix | `codegen/agents/issue-solver/orchestrator.md` | `TARGET_ARCH` |
+| **multiple** (e.g. `blackhole + wormhole`) | issue fix | `codegen/agents/issue-solver/orchestrator-multi.md` | `TARGET_ARCHES` (JSON array) |
 | **quasar** | new kernel | `codegen/agents/quasar/orchestrator.md` | — |
 | **blackhole** | new kernel | Not yet supported — inform the user | — |
+
+The single-arch path (`orchestrator.md`) is **unchanged** from before — today's callers keep working bit-for-bit. The multi-arch path (`orchestrator-multi.md`) runs a **shared analyzer + planner** once, then forks per-arch **fixer + tester** subagents against a single shared design doc. This prevents each arch from inventing its own API shape for the same conceptual change.
 
 Pass **all** fetched issue context verbatim to the selected orchestrator: `ISSUE_NUMBER`, `ISSUE_TITLE`, `ISSUE_BODY`, `ISSUE_LABELS`, `ISSUE_COMMENTS`. Never summarize or alter any of these fields — agents need the raw content to parse error messages, stack traces, and reproduction steps.
 
 Also pass:
-- `TARGET_ARCH` — the value from the table above (omit for kernel-gen — the quasar orchestrator hardcodes its own arch)
-- `WORKTREE_DIR` — the absolute path to the worktree where agents must make all code changes
-- `WORKTREE_BRANCH` — the branch name for commits and PRs
+- `TARGET_ARCH` (single-arch path) **or** `TARGET_ARCHES` (multi-arch path) — never both.
+- `WORKTREE_DIR` — the absolute path to the worktree where agents must make all code changes. For multi-arch issues the worktree is shared: every arch's fixer edits files under its own `tt_llk_{arch}/` subdirectory, so there's no conflict surface and the final branch carries all changes in one place.
+- `WORKTREE_BRANCH` — the branch name for commits and PRs.
 
 ---
 
@@ -124,9 +135,10 @@ If the orchestrator succeeded and changes should be preserved, commit and push f
 
 ## Orchestrators
 
-Two flows: kernel generation (arch-specific) and issue solving (shared, arch-parameterized).
+Three flows: kernel generation (arch-specific), single-arch issue solving, and multi-arch issue solving (shared design + per-arch fork).
 
 | Flow | Orchestrator | Agents | Notes |
 |------|--------------|--------|-------|
-| Kernel gen | `codegen/agents/quasar/orchestrator.md` | `codegen/agents/quasar/llk-*.md` | Quasar only today |
-| Issue solver | `codegen/agents/issue-solver/orchestrator.md` | `codegen/agents/issue-solver/*.md` | Multi-arch via `TARGET_ARCH` — see `codegen/references/arch-profiles.md` |
+| Kernel gen | `codegen/agents/quasar/orchestrator.md` | `codegen/agents/quasar/llk-*.md` | Quasar only today. Unaffected by multi-arch issue-solver work. |
+| Issue solver (single-arch) | `codegen/agents/issue-solver/orchestrator.md` | `codegen/agents/issue-solver/*.md` | Used when `len(TARGET_ARCHES) == 1`. Parameterized by `TARGET_ARCH` — see `codegen/references/arch-profiles.md`. |
+| Issue solver (multi-arch) | `codegen/agents/issue-solver/orchestrator-multi.md` | same `codegen/agents/issue-solver/*.md` agents, spawned with a shared plan | Used when `len(TARGET_ARCHES) > 1`. Shared `issue_analyzer` + `fix_planner` produce one `issue_{N}_shared_design.md` with a locked `## API Contract`, then `fixer` + `tester` fork per-arch. One worktree, one branch, one PR. |

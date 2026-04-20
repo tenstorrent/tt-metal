@@ -28,7 +28,20 @@ You will receive:
 
 ## Output
 
-Working code that compiles (and addresses the reported test failure if runtime).
+One of:
+
+1. **Working code** that compiles and/or passes the reported test (when the failure is a bug in the LLK change the fixer applied).
+2. **`needs_plan_revision` signal** (when the failure is a direct semantic consequence of the `## API Contract` in the plan, NOT a bug — e.g., the plan intentionally changed a function's semantics and existing test goldens are now stale). Report this back to the orchestrator with:
+   - the failing test name and exact failure mode (numerical mismatch, not crash/hang)
+   - the file:line of the stale call site(s)
+   - the old call shape vs. the new API Contract shape
+   - which plan subsection (e.g., `### shared test sources`) should be expanded to cover the update
+   The orchestrator will re-spawn the planner with this evidence and produce a revised plan that puts those test-source updates in scope.
+
+**When to choose which:**
+- If the fix to make the test pass is "tweak the LLK code" → fix it here.
+- If the fix to make the test pass is "update `tests/sources/*.cpp` or `tests/python_tests/helpers/*.py` to match the new API" → signal `needs_plan_revision` instead of editing those files yourself. The plan must own that scope expansion, not you.
+- Do NOT silently paper over a test failure by reverting part of the LLK change just to make the golden match — that defeats the issue.
 
 ---
 
@@ -160,10 +173,25 @@ Instead:
 
 ### Runtime/Test Errors
 
+Before proposing a fix, classify the failure:
+
+**Class A — bug in the LLK change** (fix it here). The numerical or timing failure is a consequence of an incorrect register, wrong MOP config, off-by-one, etc. Proceed with the normal debug loop.
+
+**Class B — direct semantic consequence of the `## API Contract`** (signal `needs_plan_revision` instead). The LLK change is exactly what the plan prescribed; the test is failing because some call site still uses the old API shape and its pinned golden references the old semantics. Symptom: numerical mismatch concentrated in tests whose call sites match the plan's `## API Contract` pre-image (e.g., old positional-arg form where the 2nd arg used to drive two flags), with the failure set matching the plan's Risk Assessment prose **verbatim**.
+
+Decision rubric: if making the failing test pass would require *editing a test source or helper the plan did NOT list*, OR if it would require *reverting the LLK change to pre-contract behavior*, it's Class B. Signal `needs_plan_revision` with:
+- failing test ids
+- file:line of the stale call site(s)
+- old call shape vs. required call shape under `## API Contract`
+- which `### shared test sources` entry should have been present in the plan
+
+Do not try to fix Class B by editing LLK code to accommodate stale goldens — that erases the issue's semantic change.
+
 | Error Type | Symptom | Investigation |
 |-----------|---------|---------------|
-| TIMEOUT | Test hangs, "TENSIX TIMED OUT" | Wrong MOP config, missing tile dims, wrong instruction sequence |
-| DATA_MISMATCH | Wrong output values | Incorrect algorithm, wrong register usage, off-by-one |
+| TIMEOUT | Test hangs, "TENSIX TIMED OUT" | Class A almost always — wrong MOP config, missing tile dims, wrong instruction sequence |
+| DATA_MISMATCH | Wrong output values | Class A if failure is erratic across parametrizations; Class B if failure is concentrated in the slice the plan's Risk Assessment flagged and the call sites match old API shape |
+| ASSERTION | Test assertion fails | Class A if inside LLK; Class B if the assertion is in a test harness helper whose wiring assumes old API |
 | ASSERTION | Test assertion fails | Parameter constraint violated |
 
 For runtime errors:

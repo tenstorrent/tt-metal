@@ -9,29 +9,123 @@ tools: Bash, Read, Write, Glob, Grep
 
 Your mission is to validate that an LLK fix works — compilation passes, the original bug is fixed, and no regressions are introduced.
 
-## Pre-Test Protocol (MANDATORY — before EVERY pytest --run-simulator invocation)
+## Test Target: hardware for BH/WH, simulator for Quasar only
 
-Multiple codegen instances may run in parallel. To prevent conflicts, you MUST wrap **every** `pytest --run-simulator` command using the flock pattern below. **NEVER run `pytest --run-simulator` without the flock wrapper.**
+Functional tests run on the locally-attached Tenstorrent card for every arch **except Quasar**. Quasar has no silicon, so it runs on the `emu-quasar-1x3` simulator — this is the only surviving simulator path in the issue-solver, kept because every Quasar run (kernel-gen and issue-fix) has always been sim-based. Blackhole and Wormhole do **not** fall back to simulator: if the right card is missing, the run finalizes `failed` with a clear `ENV_ERROR`.
+
+### Hardware mode (blackhole, wormhole)
+
+This applies when `$TARGET_ARCH` is `blackhole` or `wormhole`.
 
 ```bash
-flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
-  # Clean stale simulator processes
-  STALE=$(lsof -ti :$SIM_PORT 2>/dev/null || true)
-  [ -n "$STALE" ] && echo "Killing stale port $SIM_PORT processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
-  pkill -9 -f "tt-exalens.*--port=$SIM_PORT" 2>/dev/null || true
-  sleep 1
+detect_hw_arch() {
+  # Returns the arch of the first locally-attached Tenstorrent card, or empty.
+  [ -e /dev/tenstorrent/0 ] || return 0
+  local pci_id
+  pci_id=$(awk -F= '/^PCI_ID=/ {print toupper($2)}' /sys/class/tenstorrent/tenstorrent\!0/device/uevent 2>/dev/null)
+  case "$pci_id" in
+    1E52:B*)             echo blackhole ;;   # Blackhole PCI device IDs start with B (e.g. B140)
+    1E52:401*)           echo wormhole ;;    # Wormhole_b0 PCI device IDs (best-known prefix)
+    1E52:FAC*|1E52:FA0*) echo grayskull ;;
+    *)                   echo "" ;;          # Unknown — treat as no usable hardware
+  esac
+}
 
-  # Run the test
-  source ../tests/.venv/bin/activate
-  cd ../$TESTS_DIR
-  CHIP_ARCH=$TARGET_ARCH pytest -x --run-simulator --port=$SIM_PORT {test_file} {extra_args}
-'
-TEST_EXIT=$?
+if [ "$TARGET_ARCH" != "quasar" ]; then
+  HW_ARCH=$(detect_hw_arch)
+  if [ -z "$HW_ARCH" ]; then
+    echo "ENV_ERROR: no Tenstorrent card detected (/dev/tenstorrent/0 missing)."
+    exit 1
+  fi
+  if [ "$HW_ARCH" != "$TARGET_ARCH" ]; then
+    echo "ENV_ERROR: local card is $HW_ARCH but TARGET_ARCH is $TARGET_ARCH."     \
+         "No simulator fallback for $TARGET_ARCH — finalize this run as failed."
+    exit 1
+  fi
+fi
 ```
 
-- The `flock --timeout 900` waits up to 15 minutes for another test to finish.
-- If it times out, report as **ENV_ERROR**: "Could not acquire simulator lock within 15 minutes."
-- Adapt the pytest command inside as needed, but always keep the flock+cleanup wrapper.
+If the detection heuristic can't classify the PCI ID but `/dev/tenstorrent/0` exists, cross-check against `/sys/class/tenstorrent/tenstorrent!0/device/tt_card_type` or `tt-smi` before concluding "no hardware".
+
+Running pytest on hardware — **no** `--run-simulator`, **no** `--port`, **no** `flock`. The conftest routes to `tt_exalens_init.init_ttexalens()` which talks directly to the local card. The card enforces single-user claim via ARC `GO_BUSY`/`GO_IDLE`.
+
+```bash
+run_hw() {
+  # Activate the test venv. On hosts where tests/.venv does not exist, fall
+  # back to the system interpreter plus user-site packages.
+  if [ -f ../tests/.venv/bin/activate ]; then
+    source ../tests/.venv/bin/activate
+  else
+    export PYTHONPATH="${PYTHONPATH:-}:${HOME}/.local/lib/python3.10/site-packages"
+  fi
+  cd ../$TESTS_DIR
+  CHIP_ARCH=$TARGET_ARCH pytest -x "$@"
+}
+```
+
+### Simulator mode (Quasar only — carve-out)
+
+This applies **only** when `$TARGET_ARCH == "quasar"`. Every other arch uses `run_hw`. The Quasar kernel-gen playbooks have used this same pattern for a long time; we keep it here verbatim so issue-fix runs match kernel-gen's environment expectations.
+
+```bash
+# Discover the emu-quasar-1x3 build. Prefer TT_UMD_SIMULATOR_PATH if already
+# set, else the current user's build, else the first build under another user.
+discover_quasar_sim_path() {
+  if [ -n "${TT_UMD_SIMULATOR_PATH:-}" ] && [ -d "$TT_UMD_SIMULATOR_PATH" ]; then
+    echo "$TT_UMD_SIMULATOR_PATH"; return 0
+  fi
+  local user_path="/proj_sw/user_dev/${USER}/tt-umd-simulators/build/emu-quasar-1x3"
+  if [ -d "$user_path" ]; then
+    echo "$user_path"; return 0
+  fi
+  local p
+  for p in /proj_sw/user_dev/*/tt-umd-simulators/build/emu-quasar-1x3; do
+    [ -d "$p" ] && echo "$p" && return 0
+  done
+  return 1
+}
+
+run_quasar_sim() {
+  export TT_UMD_SIMULATOR_PATH=$(discover_quasar_sim_path) || {
+    echo "ENV_ERROR: no emu-quasar-1x3 build found under /proj_sw/user_dev/*/tt-umd-simulators/build/."
+    exit 1
+  }
+  # Serialize simulator access — multiple codegen instances share port 5556.
+  flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
+    STALE=$(lsof -ti :5556 2>/dev/null || true)
+    [ -n "$STALE" ] && echo "Killing stale port 5556 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
+    pkill -9 -f "tt-exalens.*--port=5556" 2>/dev/null || true
+    sleep 1
+    if [ -f ../tests/.venv/bin/activate ]; then
+      source ../tests/.venv/bin/activate
+    else
+      export PYTHONPATH="${PYTHONPATH:-}:${HOME}/.local/lib/python3.10/site-packages"
+    fi
+    cd ../'"$TESTS_DIR"'
+    CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 "$@"
+  ' -- "$@"
+}
+```
+
+The `flock --timeout 900` waits up to 15 minutes for a sibling Quasar run to release the lock; if it times out, report `ENV_ERROR: simulator lock timeout`.
+
+### Unified entry point
+
+Test steps (Step 4/5 below) use a single helper that picks the right mode by arch:
+
+```bash
+run_test() {
+  if [ "$TARGET_ARCH" = "quasar" ]; then
+    run_quasar_sim "$@"
+  else
+    run_hw "$@"
+  fi
+}
+```
+
+### When the target is unavailable
+
+If the preconditions fail (no card for BH/WH, no emu-quasar build for Quasar), finalize the run as **`failed`** with a specific `ENV_ERROR` diagnostic describing which check failed. **Do NOT finalize as `compiled`** when you simply couldn't run tests — `compiled` is reserved for cases where the fix compiled but no tests exist for the affected code (or the plan's test strategy explicitly said "compile-only is sufficient"). "Infra couldn't run tests" is a real failure to surface, not a clean skip.
 
 ---
 
@@ -55,10 +149,16 @@ A clear test report with:
 
 ### Step 1: Read the Fix Plan's Test Strategy
 
-Read `codegen/artifacts/issue_{number}_fix_plan.md` and find the "Test Strategy" section:
+Read `codegen/artifacts/issue_{number}_fix_plan.md` and find the `## Test Strategy` section:
 - What reproduction test to run
 - What regression tests to run
 - What compile checks to run
+
+In multi-arch runs the `## Test Strategy` section contains a **per-arch table**:
+```
+| Arch | Compile-check test source | Simulator tests to run |
+```
+Read only **your arch's row** — that's the test matrix you own. Do not run sibling arches' tests; a parallel tester is handling those.
 
 ### Step 2: Compile Check (ALWAYS)
 
@@ -91,43 +191,31 @@ ls $TESTS_DIR/ 2>/dev/null
 
 ### Step 4: Run the Reproduction Test
 
-If the fix plan specifies a reproduction command, run it:
+If the fix plan specifies a reproduction command, dispatch through the unified `run_test` helper from the "Test Target" section — BH/WH hit `run_hw`, Quasar hits `run_quasar_sim`:
+
 ```bash
-flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
-  STALE=$(lsof -ti :$SIM_PORT 2>/dev/null || true)
-  [ -n "$STALE" ] && echo "Killing stale port $SIM_PORT processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
-  pkill -9 -f "tt-exalens.*--port=$SIM_PORT" 2>/dev/null || true
-  sleep 1
-  source ../tests/.venv/bin/activate
-  cd ../$TESTS_DIR
-  CHIP_ARCH=$TARGET_ARCH pytest -x --run-simulator --port=$SIM_PORT {reproduction_test}
-'
+run_test {reproduction_test}
 ```
 
 ### Step 5: Run Regression Tests
 
-Run related tests to verify no regressions:
+Run related tests to verify no regressions with the same helper:
 ```bash
-flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
-  STALE=$(lsof -ti :$SIM_PORT 2>/dev/null || true)
-  [ -n "$STALE" ] && echo "Killing stale port $SIM_PORT processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
-  pkill -9 -f "tt-exalens.*--port=$SIM_PORT" 2>/dev/null || true
-  sleep 1
-  source ../tests/.venv/bin/activate
-  cd ../$TESTS_DIR
-  CHIP_ARCH=$TARGET_ARCH pytest -x --run-simulator --port=$SIM_PORT {regression_test}
-'
+run_test {regression_test}
 ```
 
 If no target-arch-specific tests exist but general tests cover the kernel, run those instead.
 
 ### Step 6: Classify Results
 
+**Hard rule: the terminal state is "all tests pass".** There is no "expected failure per plan" classification. If the fix plan's Risk Assessment or rationale text claims that certain tests will fail post-fix, that plan is incomplete — it should have included the matching test-source updates under `## Implementation → ### shared test sources` so those tests stay green. When you see any test fail, it is always the next step to fix it (either in the LLK change via the debugger, or by expanding plan scope via `needs_plan_revision`). Never finalize with red tests and a "told you so" explanation.
+
 | Result | Meaning | Next Step |
 |--------|---------|-----------|
 | Compile PASS + Tests PASS | Fix is verified | Report success |
-| Compile PASS + Tests FAIL | Fix compiles but doesn't solve the issue | Report to debugger with test output |
-| Compile PASS + No tests | Fix compiles but can't be validated | Report as compiled-only |
+| Compile PASS + Tests FAIL | Fix has a bug OR the plan is missing test-source updates | Report to debugger with test output — debugger will classify as either a real bug (fixable in LLK) or a direct semantic consequence of the API change that needs `needs_plan_revision` |
+| Compile PASS + No tests exist for affected code AND the plan's Test Strategy explicitly said compile-only | Fix compiles; no functional coverage exists to run | Report as **compiled-only** — acceptable ONLY when the plan's `## Test Strategy` declared compile-only upfront, not as a retroactive escape |
+| Compile PASS + Tests exist but no matching hardware for `$TARGET_ARCH` | Environment problem, not a fix problem | Report as **failed** with `ENV_ERROR` — do NOT mark compiled-only |
 | Compile FAIL | Fix broke compilation | Report to debugger with compile error |
 
 ---
