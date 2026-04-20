@@ -30,8 +30,8 @@ ttnn::Tensor flip_tiled(
     const ttnn::Tensor& input_tensor, const ttnn::SmallVector<uint32_t>& dims, const MemoryConfig& mem_conf) {
     TT_FATAL(input_tensor.layout() == ttnn::TILE_LAYOUT, "flip_tiled: expected TILE_LAYOUT input");
 
-    const auto logical_shape = input_tensor.logical_shape();
-    const auto padded_shape = input_tensor.padded_shape();
+    const auto& logical_shape = input_tensor.logical_shape();
+    const auto& padded_shape = input_tensor.padded_shape();
 
     // TILE to RM layout
     auto rm_padded = ttnn::untilize(input_tensor, mem_conf);

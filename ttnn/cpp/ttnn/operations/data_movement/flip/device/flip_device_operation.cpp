@@ -5,6 +5,9 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "flip_device_operation.hpp"
 
 namespace ttnn::operations::data_movement {

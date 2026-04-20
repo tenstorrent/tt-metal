@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
 #pragma once
 
 #include "flip_device_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
