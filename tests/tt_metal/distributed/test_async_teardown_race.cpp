@@ -2044,4 +2044,106 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RapidFabric2DInitTeardownStress) {
         kCycles);
 }
 
+// ---------------------------------------------------------------------------
+// Scenario T: DISPATCH_S WAIT-without-CLEAR counter preservation.
+//
+// GAP 3 (Opus analysis): No test explicitly verifies that dispatch_s stream
+// counters accumulate correctly across multiple program dispatches when WAIT
+// commands are issued WITHOUT the CLEAR_STREAM flag.
+//
+// Background:
+//   On ETH 1CQ (distributed_dispatcher=true), dispatch_s runs on a different
+//   physical core from dispatch_d.  Program execution uses two wait variants:
+//
+//   - CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM
+//     (uncached stall, no CLEAR): waits for stream counter == N, preserves N.
+//   - CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM (cached stall, no CLEAR): same.
+//   - CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM
+//     (used in event recording): waits then resets counter to 0.
+//
+//   The stall paths (lines 447, 455 in dispatch.cpp) do NOT issue CLEAR_STREAM.
+//   If the dispatch_s firmware erroneously reset the counter on every WAIT, the
+//   counter would be 0 before the second program's stall fires, causing dispatch_d
+//   to wait forever for the acknowledgement (hang at dispatch_thread_pool->wait).
+//
+// What this test exercises:
+//   Runs 5 blank programs sequentially on a FABRIC_2D 2x4 mesh (ETH 1CQ, so
+//   dispatch_s IS on a separate ETH core from dispatch_d).  After each program,
+//   the stream counter in dispatch_s has been incremented (not reset to 0) by
+//   the WAIT-without-CLEAR path.  If counter were reset to 0, the second program's
+//   stall command would hang because dispatch_d would wait for a counter value >0
+//   that dispatch_s had already zeroed.
+//
+//   A final buffer round-trip confirms no CQ state corruption accumulated over
+//   the 5 dispatches.
+//
+// Pass = all 5 programs complete + buffer matches within 120s watchdog.
+// Fail = hang (watchdog kills at 120s) or data corruption — indicates counter
+//        was erroneously cleared between dispatches.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DFixture, DispatchSWaitWithoutClearPreservesCounter) {
+    constexpr int kRounds = 5;
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    auto device_range = MeshCoordinateRange(mesh_device_->shape());
+    auto& cq = mesh_device_->mesh_command_queue();
+
+    // Dispatch kRounds blank programs sequentially (blocking=true).
+    // Each program goes through the uncached-stall WAIT-without-CLEAR path in
+    // dispatch_s.  The stream counter accumulates: 1, 2, 3, 4, 5.
+    // If the counter were cleared to 0 after each WAIT, the second program's
+    // stall command would hang waiting for counter == 2 when dispatch_s only
+    // sees 0.
+    for (int round = 1; round <= kRounds; round++) {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(device_range, std::move(program));
+        log_info(
+            tt::LogTest,
+            "[Scenario T] Round {}/{}: blocking dispatch — verifying dispatch_s "
+            "stream counter is preserved (not cleared) after WAIT-without-CLEAR",
+            round, kRounds);
+        // blocking=true: dispatch_d stalls at CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM
+        // (no CLEAR) until dispatch_s signals completion.  Counter increments to
+        // `round` on each iteration; if dispatch_s zeroed the counter, the stall
+        // in round 2+ would never be satisfied.
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+        log_info(tt::LogTest, "[Scenario T] Round {}/{}: complete — counter preserved", round, kRounds);
+    }
+
+    // Final: buffer round-trip confirms no CQ state corruption accumulated across
+    // the 5 WAIT-without-CLEAR dispatch cycles.
+    {
+        uint32_t page_size = 1024;
+        auto local_config =
+            DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        auto global_shape = Shape2D{
+            static_cast<uint32_t>(mesh_device_->num_rows()),
+            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto dist_config = ShardedBufferConfig{
+            .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
+            .global_buffer_shape = global_shape,
+            .shard_shape = Shape2D{1, 1}};
+        auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
+        size_t n_words = page_size / sizeof(uint32_t) * mesh_device_->num_rows() * mesh_device_->num_cols();
+        std::vector<uint32_t> src(n_words);
+        for (size_t i = 0; i < n_words; i++) {
+            src[i] = static_cast<uint32_t>(0xD15C0000 | (i & 0xFFFF));
+        }
+        EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
+        std::vector<uint32_t> dst;
+        EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
+        ASSERT_EQ(dst.size(), src.size()) << "[Scenario T] Buffer size mismatch";
+        for (size_t i = 0; i < src.size(); i++) {
+            ASSERT_EQ(dst[i], src[i])
+                << "[Scenario T] Data corruption at index " << i
+                << " — indicates dispatch_s stream counter was erroneously cleared";
+        }
+        log_info(
+            tt::LogTest,
+            "[Scenario T] {} sequential dispatches complete + buffer round-trip clean — "
+            "dispatch_s WAIT-without-CLEAR counter preservation verified",
+            kRounds);
+    }
+}
+
 }  // namespace tt::tt_metal::distributed::test

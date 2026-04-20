@@ -74,6 +74,11 @@ run_t3000_ttfabric_tests() {
 
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
 
+  # GAP 1: Regression tests for pre-send teardown escape (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA=false).
+  # FabricTeardownEscapeFixture verifies that FABRIC_2D init and teardown do not hang on T3K,
+  # and that the can_send predicate + single pre-send teardown check prevent infinite TXQ spin.
+  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricTeardownEscapeFixture.*"
+
   ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
   ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
   ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
