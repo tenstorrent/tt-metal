@@ -74,6 +74,7 @@ void kernel_main() {
     //   +3: experts_tok_counter_pages             - number of counter pages multicasted
     //   +4: aligned_experts_tok_counter_page_size - aligned counter page size (L1 stride)
     //   +5: read_batch_size                       - number of rows per untilize batch
+    //   +6: cb_metadata_batch_id                  - this idle core's c_9 CB (target of sender's metadata unicast)
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t cb_stop_signal_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t cb_experts_tok_counter_id =
@@ -83,6 +84,7 @@ void kernel_main() {
     constexpr uint32_t aligned_experts_tok_counter_page_size =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 4);
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 5);
+    constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 6);
     constexpr uint32_t total_transfer_size = read_batch_size * aligned_output_page_size;
     constexpr uint32_t counter_data_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
 
@@ -90,12 +92,15 @@ void kernel_main() {
     //   counter_ready_semaphore_id   - sem the sender increments once after its counter multicast
     //   sender_noc_x / sender_noc_y  - NOC coords of the owning sender core
     //   data_ready_semaphore_id      - sender-side sem this kernel increments after each send
+    //                                  (also used once up-front to signal the c_9 addr handshake)
     //   start_semaphore_id           - local sem the sender increments to say "send now"
+    //   core_id                      - this idle core's local index within its sender's group (0..k_s-1)
     uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t start_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t core_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     uint64_t sender_data_ready_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_ready_semaphore_id));
@@ -104,15 +109,31 @@ void kernel_main() {
 
     // Wait on the same counter_ready sem reader_untilize waits on (neither kernel resets it,
     // so both see the single increment from the sender's multicast).  Then read the sender's
-    // receive_buf_addr out of c_1's trailer — shared L1 on this core.
+    // receive_buf_addr AND its idle-c9-addr scratch L1 offset from c_1's trailer on this core.
+    //   trailer[0] = sender's c_18 L1 offset (receive buffer for untilized data)
+    //   trailer[1] = sender's c_10 L1 offset (scratch where this kernel writes its own c_9 addr)
     volatile tt_l1_ptr uint32_t* counter_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(counter_ready_semaphore_id));
     noc_semaphore_wait(counter_ready_sem_ptr, 1);
 
     uint32_t counter_cb_base = get_write_ptr(cb_experts_tok_counter_id);
-    const volatile tt_l1_ptr uint32_t* recv_buf_addrs =
+    const volatile tt_l1_ptr uint32_t* trailer =
         reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counter_cb_base + counter_data_total_size);
-    uint64_t sender_receive_buf_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, recv_buf_addrs[0]);
+    uint32_t sender_receive_buf_l1_offset = trailer[0];
+    uint32_t sender_idle_c9_scratch_l1_offset = trailer[1];
+    uint64_t sender_receive_buf_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_receive_buf_l1_offset);
+
+    // ===== c_9 address handshake =====
+    // Write this core's c_9 L1 offset into sender's c_10 scratch at slot core_id, then increment
+    // sender's data_ready_sem.  After all k_s idle cores have done this the sender sees
+    // data_ready_sem == num_idle_cores_group and reads the array of addresses.  data_ready_sem
+    // is reset to 0 by the sender before the batch loop, so it can be reused per-batch below.
+    uint32_t my_c9_l1_offset = get_write_ptr(cb_metadata_batch_id);
+    uint64_t sender_c9_slot_noc_addr =
+        get_noc_addr(sender_noc_x, sender_noc_y, sender_idle_c9_scratch_l1_offset + core_id * sizeof(uint32_t));
+    noc_inline_dw_write(sender_c9_slot_noc_addr, my_c9_l1_offset);
+    noc_semaphore_inc(sender_data_ready_noc_addr, 1);
+    noc_async_atomic_barrier();
 
     // Process untilized batches until compute pushes ROUTE_INFO_SENTINEL onto cb_stop_signal_id.
     // A non-sentinel value means "another batch is on cb_untilize_id, send it to the owning sender".

@@ -294,6 +294,24 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             /*buffering_factor=*/read_batch_size,
             /*cb_id=*/tt::CBIndex::c_18,
             "untilized_output");
+        // c_10: sender-side NOC scratch that receives each idle core's c_9 L1 address during
+        //       the startup handshake (idle core writes its get_write_ptr(c_9) to slot
+        //       core_id * sizeof(uint32_t)). Sender copies this scratch into a plain local
+        //       uint32_t[num_idle_cores_group] array before the batch loop.
+        //       Sender's own c_10 L1 offset is appended to the counter multicast trailer so
+        //       idle cores know where to unicast their addresses.
+        {
+            uint32_t max_idle_group_size = 0;
+            for (uint32_t s = 0; s < num_cores; s++) {
+                max_idle_group_size = std::max(max_idle_group_size, (uint32_t)sender_idle_groups[s].size());
+            }
+            uint32_t needed_bytes = std::max(max_idle_group_size * (uint32_t)sizeof(uint32_t), l1_alignment);
+            uint32_t idle_c9_scratch_size = ((needed_bytes + l1_alignment - 1) / l1_alignment) * l1_alignment;
+            tt::tt_metal::CircularBufferConfig idle_c9_scratch_cfg =
+                tt::tt_metal::CircularBufferConfig(idle_c9_scratch_size, {{tt::CBIndex::c_10, tt::DataFormat::UInt8}})
+                    .set_page_size(tt::CBIndex::c_10, idle_c9_scratch_size);
+            tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, idle_c9_scratch_cfg);
+        }
     } else {
         // c_0 on sender cores: dispatched_buffer rows for ROW_MAJOR DMA reads
         detail::create_tensor_cb(
@@ -579,6 +597,21 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                     .set_page_size(tt::CBIndex::c_8, stop_signal_page_size);
             tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, stop_signal_cb_config);
         }
+        // c_9 on idle cores: metadata-batch CB. The owning sender unicasts one read_batch_size
+        // worth of metadata here per iteration. Idle cores report this CB's L1 address to their
+        // owning sender once at startup (via the idle_c9_addr handshake below) so the sender
+        // knows where to unicast. First uint32 of each unicast is a sender-written sentinel:
+        // 0xFFFFFFFF → non-local writes exist → idle sends its untilized data back to sender.
+        // Any other value → all-local → idle does the local writes itself using this metadata.
+        {
+            uint32_t metadata_batch_page_size = detail::get_aligned_page_size(dispatched_metadata);
+            auto metadata_fmt = tt::tt_metal::datatype_to_dataformat_converter(dispatched_metadata.dtype());
+            uint32_t metadata_batch_cb_size = read_batch_size * metadata_batch_page_size;
+            tt::tt_metal::CircularBufferConfig metadata_batch_idle_config =
+                tt::tt_metal::CircularBufferConfig(metadata_batch_cb_size, {{tt::CBIndex::c_9, metadata_fmt}})
+                    .set_page_size(tt::CBIndex::c_9, metadata_batch_page_size);
+            tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, metadata_batch_idle_config);
+        }
     }
 
     // counter_offset mirrors the constexpr calculation in reader_combine.cpp
@@ -697,6 +730,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         zi_compile_time_args.push_back(detail::get_num_pages(expert_token_counts));  // experts_tok_counter_pages
         zi_compile_time_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // counter page size
         zi_compile_time_args.push_back(read_batch_size);
+        zi_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));  // cb_metadata_batch_id
 
         std::map<std::string, std::string> zi_defines;
         zi_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
@@ -734,6 +768,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
             per_sender_compile_args.push_back(k_s);                                       // num_idle_cores (per-sender)
             per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_untilize_id
+            per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));   // cb_metadata_batch_id
+            per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_10));  // cb_idle_c9_addr_scratch_id
         }
         CoreRangeSet single_sender_core({CoreRange(sender_cores[s])});
         reader_kernel_ids.push_back(tt::tt_metal::CreateKernel(
@@ -811,15 +847,26 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                 zi_runtime_args.push_back(noc_y);
             }
 
-            // TILE_LAYOUT: append owning-sender info so zero_init_writer can run its send loop.
-            // In ROW_MAJOR the trailing args are ignored (kernel compiled with IS_TILE_LAYOUT=0).
+            // TILE_LAYOUT: append owning-sender info so zero_init_writer can run its send loop
+            // + its c_9 address handshake.  In ROW_MAJOR the trailing args are ignored
+            // (kernel compiled with IS_TILE_LAYOUT=0).
             if (is_tile_layout) {
                 uint32_t s = idle_sender_map[idle_idx];
+                // core_id = this idle core's local index within sender s's group (0..k_s-1).
+                // Compute it by finding idle_idx's position in the sequential ordering of
+                // idle cores that belong to sender s.
+                uint32_t local_core_id = 0;
+                for (uint32_t j = 0; j < idle_idx; j++) {
+                    if (idle_sender_map[j] == s) {
+                        local_core_id++;
+                    }
+                }
                 zi_runtime_args.push_back(counter_ready_semaphore_id);
                 zi_runtime_args.push_back(sender_noc_coords[s].first);
                 zi_runtime_args.push_back(sender_noc_coords[s].second);
                 zi_runtime_args.push_back(data_ready_semaphore_ids[s]);
                 zi_runtime_args.push_back(start_semaphore_ids[s]);
+                zi_runtime_args.push_back(local_core_id);
             }
 
             tt::tt_metal::SetRuntimeArgs(program, zero_init_kernel_id, zero_init_cores_vec[idle_idx], zi_runtime_args);

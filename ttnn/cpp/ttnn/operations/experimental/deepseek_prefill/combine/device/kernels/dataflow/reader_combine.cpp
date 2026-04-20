@@ -99,6 +99,8 @@ void kernel_main() {
 #if IS_TILE_LAYOUT
     constexpr uint32_t num_idle_cores_group = get_compile_time_arg_val(tile_layout_args_base);
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(tile_layout_args_base + 1);
+    constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(tile_layout_args_base + 2);
+    constexpr uint32_t cb_idle_c9_addr_scratch_id = get_compile_time_arg_val(tile_layout_args_base + 3);
 #endif
 
     // ===== Runtime Args =====
@@ -160,10 +162,12 @@ void kernel_main() {
     uint32_t start_semaphore_id = get_arg_val<uint32_t>(rt_args++);
     uint32_t start_sem_l1_offset = get_semaphore(start_semaphore_id);
     uint64_t idle_start_noc_addrs[num_idle_cores_group];
+    uint32_t idle_noc_x[num_idle_cores_group];
+    uint32_t idle_noc_y[num_idle_cores_group];
     for (uint32_t c = 0; c < num_idle_cores_group; c++) {
-        uint32_t noc_x = get_arg_val<uint32_t>(rt_args++);
-        uint32_t noc_y = get_arg_val<uint32_t>(rt_args++);
-        idle_start_noc_addrs[c] = get_noc_addr(noc_x, noc_y, start_sem_l1_offset);
+        idle_noc_x[c] = get_arg_val<uint32_t>(rt_args++);
+        idle_noc_y[c] = get_arg_val<uint32_t>(rt_args++);
+        idle_start_noc_addrs[c] = get_noc_addr(idle_noc_x[c], idle_noc_y[c], start_sem_l1_offset);
     }
 #endif
 
@@ -201,16 +205,19 @@ void kernel_main() {
     constexpr uint32_t offset = dispatch_group_idx * experts_per_dispatch_group + mesh_row * experts_per_chip;
     // Multicast expert token counts + receive_buf_addr to all idle cores
 #if IS_TILE_LAYOUT
-    // Each sender multicasts token counts + its own receive_buf_addr to its dedicated idle group.
-    // The mcast destination covers only this sender's k_s idle cores (per-sender bounding box),
-    // so all senders can multicast in parallel without interfering with each other.
+    // Each sender multicasts token counts + its own receive_buf_addr + its c_10 scratch L1
+    // address to its dedicated idle group. The mcast destination covers only this sender's
+    // k_s idle cores (per-sender bounding box), so all senders can multicast in parallel.
+    // Trailer layout (one l1_alignment region after counter_total_size bytes):
+    //   [0]: receive_buf_addr  — sender's c_18 L1 offset (where idle NOC-writes untilized data)
+    //   [1]: idle_c9_scratch_addr — sender's c_10 L1 offset (where idle NOC-writes its c_9 addr)
     {
         constexpr uint32_t counter_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
 
-        // Append this sender's receive_buf_addr so its idle cores know where to write untilized data.
-        volatile tt_l1_ptr uint32_t* receive_buf_slot =
+        volatile tt_l1_ptr uint32_t* trailer_slot =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr + counter_total_size);
-        receive_buf_slot[0] = get_write_ptr(cb_untilize_id);
+        trailer_slot[0] = get_write_ptr(cb_untilize_id);
+        trailer_slot[1] = get_write_ptr(cb_idle_c9_addr_scratch_id);
 
         constexpr uint32_t mcast_total_size = counter_total_size + l1_alignment;
         uint32_t off = 0;
@@ -248,6 +255,24 @@ void kernel_main() {
 
 #if IS_TILE_LAYOUT
     uint32_t untilize_base = get_write_ptr(cb_untilize_id);
+
+    // ===== Idle c_9 address handshake =====
+    // After the counter multicast above, each idle core knows where our c_10 scratch lives and
+    // will write its get_write_ptr(c_9) L1 offset to slot core_id * sizeof(uint32_t).  They then
+    // increment data_ready_sem (same sem reused for its normal per-batch role below).  Once we
+    // see data_ready_sem == num_idle_cores_group, all idle c_9 addresses are in our c_10 scratch.
+    noc_semaphore_wait(data_ready_sem_ptr, num_idle_cores_group);
+    noc_semaphore_set(data_ready_sem_ptr, 0);
+
+    // Copy the received L1 offsets out of c_10 into a plain uint32_t[] array, then build the
+    // per-idle-core NOC addresses used by the batch loop below for the metadata unicast.
+    uint32_t idle_c9_scratch_base = get_write_ptr(cb_idle_c9_addr_scratch_id);
+    uint32_t idle_c9_addrs[num_idle_cores_group];
+    uint64_t idle_metadata_noc_addrs[num_idle_cores_group];
+    for (uint32_t c = 0; c < num_idle_cores_group; c++) {
+        idle_c9_addrs[c] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idle_c9_scratch_base + c * sizeof(uint32_t));
+        idle_metadata_noc_addrs[c] = get_noc_addr(idle_noc_x[c], idle_noc_y[c], idle_c9_addrs[c]);
+    }
 #else
     cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
@@ -278,24 +303,51 @@ void kernel_main() {
 #if IS_TILE_LAYOUT
             uint32_t current_idle_core = B % num_idle_cores_group;
 
-            // Signal idle core to send its untilized batch
-            noc_semaphore_inc(idle_start_noc_addrs[current_idle_core], 1);
-            noc_async_atomic_barrier();
-
-            // Speculatively read metadata for this batch
+            // Read metadata FIRST (we need to inspect it to decide if idle can handle the whole
+            // batch locally or whether we need untilized data back to do non-local routing).
             for (uint32_t t = 0; t < batch_count; t++) {
                 noc_async_read_page(
                     batch_start + t,
                     dispatched_metadata_addr_gen,
                     metadata_base + t * aligned_dispatched_metadata_page_size);
             }
+            noc_async_read_barrier();
 
-            // Wait for idle core to write untilized data
+            // Scan metadata for any non-local writes (dst_chip != our linearized_mesh_coord).
+            bool has_non_local = false;
+            for (uint32_t t = 0; t < batch_count; t++) {
+                volatile tt_l1_ptr uint32_t* m = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    metadata_base + t * aligned_dispatched_metadata_page_size);
+                if (m[0] != linearized_mesh_coord) {
+                    has_non_local = true;
+                    break;
+                }
+            }
+
+            // Unicast the metadata batch to the current idle core's c_9 CB.
+            uint32_t metadata_unicast_bytes = batch_count * aligned_dispatched_metadata_page_size;
+            noc_async_write(metadata_base, idle_metadata_noc_addrs[current_idle_core], metadata_unicast_bytes);
+            noc_async_write_barrier();
+
+            // If any non-local writes exist, overwrite the first uint32 on idle's c_9 with the
+            // sentinel so the idle core knows to send its untilized data back to us.  Otherwise
+            // the first uint32 is the real dst_chip (== linearized_mesh_coord) and idle handles
+            // the entire batch locally.
+            if (has_non_local) {
+                noc_inline_dw_write(idle_metadata_noc_addrs[current_idle_core], ROUTE_INFO_SENTINEL);
+            }
+
+            // Signal the idle core that the metadata batch is ready in its c_9.
+            noc_semaphore_inc(idle_start_noc_addrs[current_idle_core], 1);
+            noc_async_atomic_barrier();
+
+            // Always wait on data_ready — even if has_non_local is false — to keep start_sem
+            // strictly 1:1 with idle's consume/reset.  Idle's `wait(>=1); set(0)` collapses
+            // multiple pending increments into a single consume, so if we advance without
+            // syncing, a later start_sem inc to the same idle core gets silently dropped and
+            // the idle deadlocks waiting for a signal that never re-arrives.
             noc_semaphore_wait(data_ready_sem_ptr, 1);
             noc_semaphore_set(data_ready_sem_ptr, 0);
-
-            // Ensure metadata is ready
-            noc_async_read_barrier();
 #else
             // ROW_MAJOR: DMA read dispatched_buffer rows + metadata
             for (uint32_t t = 0; t < batch_count; t++) {
@@ -309,59 +361,66 @@ void kernel_main() {
             noc_async_read_barrier();
 #endif
 
-            // Route tokens
-            for (uint32_t t = 0; t < batch_count; t++) {
+            // In TILE_LAYOUT the sender only routes tokens when has_non_local is true (the idle
+            // core already did the writes for all-local batches). In ROW_MAJOR there's no idle
+            // offload, so we always route.
 #if IS_TILE_LAYOUT
-                uint32_t buffer_scratch_addr = untilize_base + t * aligned_output_page_size;
-#else
-                uint32_t buffer_scratch_addr = buffer_base + t * aligned_dispatched_buffer_page_size;
+            if (has_non_local)
 #endif
-                uint32_t metadata_scratch_addr = metadata_base + t * aligned_dispatched_metadata_page_size;
-                volatile tt_l1_ptr uint32_t* metadata =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_scratch_addr);
-
-                auto dst_chip = metadata[0];
-                auto dst_token_idx = metadata[1];
-                auto dst_topk_indice = metadata[2];
-                uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
-
-                if (dst_chip == linearized_mesh_coord) {
-                    noc_async_write_page(output_page_idx, output_addr_gen, buffer_scratch_addr);
-                    noc_async_writes_flushed();
-                    batch_did_local_write = true;
-                } else {
-                    if constexpr (is_1d_topology<topology>()) {
-                        uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
-                        uint32_t distance =
-                            manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
-
-                        // Push route info to writer
-                        cb_reserve_back(cb_route_info_id, 1);
-                        volatile tt_l1_ptr uint32_t* route_info =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
-                        route_info[0] = route;
-                        route_info[1] = distance;
-                        route_info[2] = output_page_idx;
-                        route_info[3] = 0;
-                        cb_push_back(cb_route_info_id, 1);
-
-                        // Push output payload to writer
-                        cb_reserve_back(cb_output_for_writer_id, 1);
-                        uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
+            {
+                for (uint32_t t = 0; t < batch_count; t++) {
 #if IS_TILE_LAYOUT
-                        noc_async_read(get_noc_addr(buffer_scratch_addr), output_dst, aligned_output_page_size);
+                    uint32_t buffer_scratch_addr = untilize_base + t * aligned_output_page_size;
 #else
-                        noc_async_read(
-                            get_noc_addr(buffer_scratch_addr), output_dst, aligned_dispatched_buffer_page_size);
+                    uint32_t buffer_scratch_addr = buffer_base + t * aligned_dispatched_buffer_page_size;
 #endif
-                        noc_async_read_barrier();
-                        cb_push_back(cb_output_for_writer_id, 1);
+                    uint32_t metadata_scratch_addr = metadata_base + t * aligned_dispatched_metadata_page_size;
+                    volatile tt_l1_ptr uint32_t* metadata =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_scratch_addr);
+
+                    auto dst_chip = metadata[0];
+                    auto dst_token_idx = metadata[1];
+                    auto dst_topk_indice = metadata[2];
+                    uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
+
+                    if (dst_chip == linearized_mesh_coord) {
+                        noc_async_write_page(output_page_idx, output_addr_gen, buffer_scratch_addr);
+                        noc_async_writes_flushed();
+                        batch_did_local_write = true;
+                    } else {
+                        if constexpr (is_1d_topology<topology>()) {
+                            uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                            uint32_t distance =
+                                manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+
+                            // Push route info to writer
+                            cb_reserve_back(cb_route_info_id, 1);
+                            volatile tt_l1_ptr uint32_t* route_info =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
+                            route_info[0] = route;
+                            route_info[1] = distance;
+                            route_info[2] = output_page_idx;
+                            route_info[3] = 0;
+                            cb_push_back(cb_route_info_id, 1);
+
+                            // Push output payload to writer
+                            cb_reserve_back(cb_output_for_writer_id, 1);
+                            uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
+#if IS_TILE_LAYOUT
+                            noc_async_read(get_noc_addr(buffer_scratch_addr), output_dst, aligned_output_page_size);
+#else
+                            noc_async_read(
+                                get_noc_addr(buffer_scratch_addr), output_dst, aligned_dispatched_buffer_page_size);
+#endif
+                            noc_async_read_barrier();
+                            cb_push_back(cb_output_for_writer_id, 1);
+                        }
                     }
                 }
-            }
 
-            if (batch_did_local_write) {
-                noc_async_write_barrier();
+                if (batch_did_local_write) {
+                    noc_async_write_barrier();
+                }
             }
         }
     }
