@@ -24,41 +24,26 @@
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
 
+// Timeout hierarchy (all host-side wall-clock):
+//   5000ms — teardown/init per-phase: covers full firmware startup/shutdown cycle
+//    150ms — quiesce Phase 2.5 ERISC terminate: cooperative shutdown, faster path
+//    100ms — stale ERISC probe: base firmware never responds, fail fast
+//    150ms — verify_all_fabric_channels_healthy: 3×50ms retry window
+// Device-side poll bounds: 1M iterations + PAUSE ≈ seconds of wall-clock coverage
+//
+// These values are spread across fabric_firmware_initializer.cpp, device.cpp, and
+// metal_env.cpp. If you adjust one timeout, review the others for consistency.
 
 namespace tt::tt_metal {
 
 namespace {
 
-// Returns true iff `status` is one of the well-known EDMStatus sentinel values written by
-// a live fabric ERISC router at some point in its lifecycle. Any other nonzero value at
-// the router_sync_address indicates the L1 slot is corrupt or has been overwritten by
-// unrelated NOC traffic — the ERISC is NOT running recognizable firmware and the
-// TERMINATE handshake will not complete.
+// Returns a human-readable name for a known EDMStatus value, or "(unknown)" if the value
+// does not match any enumerator. This is the single source of truth for EDMStatus → string
+// mapping; is_known_edm_status() delegates to this function.
 //
-// See tt_metal/fabric/fabric_edm_packet_header.hpp for the authoritative enum list.
-bool is_known_edm_status(uint32_t status) {
-    switch (status) {
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::STARTED):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TXQ_INITIALIZED):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::VCS_OPENED):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED):
-        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE): return true;
-        default: return false;
-    }
-}
-
-// NOTE: If a new EDMStatus enumerator is added, update is_known_edm_status() above.
-
+// UPDATE THIS FUNCTION WHEN ADDING NEW EDMStatus VALUES in
+// tt_metal/fabric/fabric_edm_packet_header.hpp (currently 15 enumerators).
 static const char* edm_status_name(tt::tt_fabric::EDMStatus s) {
     switch (s) {
         case tt::tt_fabric::EDMStatus::STARTED:                     return "STARTED";
@@ -78,6 +63,20 @@ static const char* edm_status_name(tt::tt_fabric::EDMStatus s) {
         case tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE:     return "INITIALIZATION_COMPLETE";
         default: return "(unknown)";
     }
+}
+
+// Returns true iff `status` is one of the well-known EDMStatus sentinel values written by
+// a live fabric ERISC router at some point in its lifecycle. Any other nonzero value at
+// the router_sync_address indicates the L1 slot is corrupt or has been overwritten by
+// unrelated NOC traffic — the ERISC is NOT running recognizable firmware and the
+// TERMINATE handshake will not complete.
+//
+// Delegates to edm_status_name() so there is only one switch over EDMStatus values.
+bool is_known_edm_status(uint32_t status) {
+    // Cast raw uint32_t to the enum and check if edm_status_name recognises it.
+    // "(unknown)" is the sentinel returned for unrecognised values.
+    const char* name = edm_status_name(static_cast<tt::tt_fabric::EDMStatus>(status));
+    return name[0] != '(';
 }
 
 }  // namespace
@@ -279,6 +278,14 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             builder_ctx.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL);
         detail::WriteToDeviceL1(
             dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
+
+        // Ensure the TERMINATE write has landed in L1 before we begin polling for
+        // EDMStatus::TERMINATED.  The Tensix MUX path has an equivalent l1_barrier
+        // after its TERMINATE writes (see above).  While the NOC protocol guarantees
+        // read-after-write ordering for the *same* core, the barrier also flushes any
+        // in-flight NOC writes to *other* cores on this chip, preventing stale reads
+        // during the round-robin poll across all active channels.
+        cluster_.l1_barrier(dev->id());
     }
 
     // Fix B: Poll ALL active ETH router channels per device for EDMStatus::TERMINATED before
