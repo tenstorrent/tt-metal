@@ -50,7 +50,7 @@ void kernel_main() {
         // Process each tile in the width dimension
         for (uint32_t tile_idx = 0; tile_idx < tiles_per_width_dim; tile_idx++) {
             input_cb.wait_front(tiles_per_channel_dim);
-            uint64_t l1_read_addr = input_cb.get_read_ptr();
+            uint32_t l1_read_addr = input_cb.get_read_ptr();
 
             const uint32_t width_limit =
                 (remaining_width < tt::constants::TILE_HEIGHT) ? remaining_width : tt::constants::TILE_HEIGHT;

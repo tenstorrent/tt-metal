@@ -158,6 +158,12 @@ void kernel_main() {
 
     std::array<uint32_t, N> coord{from_id<N>(start_stick_id, input_dims)};
 
+    experimental::CircularBuffer input_cb(ctas.input_cb);
+    experimental::CircularBuffer fp32_temp_cb(ctas.fp32_temp_cb);
+    experimental::CircularBuffer output_cb(ctas.output_cb);
+    experimental::CircularBuffer index_cb(ctas.index_cb);
+    experimental::CircularBuffer source_cb(ctas.source_cb);
+
     for (uint32_t input_stick_id = start_stick_id; input_stick_id < start_stick_id + sticks_for_core;
          ++input_stick_id) {
         // process input/output chunks sequentially
@@ -173,9 +179,6 @@ void kernel_main() {
                 input_offset * sizeof(input_std_type),
                 input_chunk_length * sizeof(input_std_type),
                 input_stick_id);
-            experimental::CircularBuffer input_cb(ctas.input_cb);
-            experimental::CircularBuffer fp32_temp_cb(ctas.fp32_temp_cb);
-            experimental::CircularBuffer output_cb(ctas.output_cb);
             input_cb.wait_front(ONE_PAGE);
             fp32_temp_cb.reserve_back(ONE_PAGE);
 
@@ -206,8 +209,6 @@ void kernel_main() {
                         source_offset * sizeof(input_std_type),
                         source_chunk_length * sizeof(input_std_type),
                         index_stick_id);
-                    experimental::CircularBuffer index_cb(ctas.index_cb);
-                    experimental::CircularBuffer source_cb(ctas.source_cb);
                     index_cb.wait_front(ONE_PAGE);
                     source_cb.wait_front(ONE_PAGE);
                     scatter_along_chunk<index_std_type>(
