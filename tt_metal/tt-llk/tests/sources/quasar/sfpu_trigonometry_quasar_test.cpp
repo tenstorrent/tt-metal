@@ -95,27 +95,27 @@ inline void call_trig_operation(int tile_idx, int num_sfpu_iterations)
     if constexpr (SFPU_OP_TYPE == 0)
     {
         // sine: takes runtime iterations parameter
-        _llk_math_eltwise_unary_sfpu_params_<false>(_calculate_sine_<true>, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_sine_<true>, tile_idx, num_sfpu_iterations);
     }
     else if constexpr (SFPU_OP_TYPE == 1)
     {
         // cosine: takes runtime iterations parameter
-        _llk_math_eltwise_unary_sfpu_params_<false>(_calculate_cosine_<true>, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_cosine_<true>, tile_idx, num_sfpu_iterations);
     }
     else if constexpr (SFPU_OP_TYPE == 2)
     {
         // acosh: ITERATIONS is template-only (default 8), no runtime iterations param
-        _llk_math_eltwise_unary_sfpu_params_<false>(_calculate_acosh_<true>, tile_idx);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_acosh_<true>, tile_idx);
     }
     else if constexpr (SFPU_OP_TYPE == 3)
     {
         // asinh: ITERATIONS is template-only (default 8), no runtime iterations param
-        _llk_math_eltwise_unary_sfpu_params_<false>(_calculate_asinh_<true>, tile_idx);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_asinh_<true>, tile_idx);
     }
     else if constexpr (SFPU_OP_TYPE == 4)
     {
         // atanh: extra is_fp32_dest_acc_en template param, ITERATIONS template-only, no runtime param
-        _llk_math_eltwise_unary_sfpu_params_<false>(_calculate_atanh_<true, is_fp32_dest_acc_en>, tile_idx);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_atanh_<true, is_fp32_dest_acc_en>, tile_idx);
     }
 }
 
@@ -166,7 +166,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_eltwise_unary_datacopy_(num_rows, i);
         }
 
-        _llk_math_set_dvalid_<p_cleardvalid::FPU>();
+        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 
     _llk_math_eltwise_unary_sfpu_init_();
@@ -178,7 +178,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         call_trig_operation(i, num_sfpu_iterations);
     }
 
-    _llk_math_set_dvalid_<p_cleardvalid::SFPU>();
+    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 
     // Wait for all operations to complete
     wait_sfpu_idle();
