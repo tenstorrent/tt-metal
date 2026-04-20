@@ -17,7 +17,9 @@
 | **T3K 8-device, batch=1** | 14.0 ms/tok | **14.2 ms/tok** (71 tok/s, 2.6× speedup) |
 | **T3K 8-device, batch=32** | (KV-limited) | **2,213 tok/s** (14.5ms, 31× scaling) |
 | **KV cache memory** | 1× (~1 byte/elem) | **0.5×** (~0.5 byte/elem) |
-| **Quality** | — | Correct output at all seq lengths 128–131072 |
+| **Qualitative quality** | — | Correct output at all seq lengths 128–131072 (31 prompts) |
+| **Top-1 token accuracy** (T3K) | 96.7% | **72.5%** |
+| **Top-5 token accuracy** (T3K) | 99.8% | **88.2%** |
 | **Cosine vs CPU ref** | — | > 0.999 (synthetic SDPA test at all seqlens) |
 | **MSE vs float32 CPU** | — | 0.034 (matches paper bound) |
 | **Max context** | 128K | **128K** |
@@ -26,6 +28,13 @@ Verified 2026-04-14: BFP4 paged cache + standard SDPA decode, flat 37.1–37.2 m
 from seq=128 to seq=131072. Pre-rescaled centroid×norm values stored as BFP4 in paged
 `layer_past`, fed directly to `scaled_dot_product_attention_decode` which natively
 accepts BFP4 inputs. No custom SDPA kernel needed for this path.
+
+**Accuracy caveat (2026-04-20):** Rigorous token-accuracy benchmarking revealed
+that BFP4 cache storage itself causes ~25% top-1 accuracy loss vs BFP8 baseline.
+TurboQuant doesn't mitigate this — BFP4's shared-exponent compression dominates
+the error. Qualitative tests (31 prompts, all factually correct) passed because
+top-5 stays at 88-90%, enough for coherent output, but top-1 matching drops
+substantially. See "Token Accuracy Benchmark" section below for full analysis.
 
 ### T3K Multi-Device Result (2026-04-17)
 
