@@ -483,8 +483,10 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
         const auto shard_volumes = get_shard_volumes(
             input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), compute_output_specs(attributes, tensor_args));
 
+        auto program_factory = select_program_factory(attributes, tensor_args);
         return operation::hash_operation<BinaryNgDeviceOperation>(
             attributes,
+            program_factory.index(),
             input_tensor_a.dtype(),
             input_tensor_a.memory_config(),
             input_tensor_b->dtype(),
