@@ -8,7 +8,6 @@
 
 #include "ckernel_sfpu.h"
 #include "ckernel_sfpu_add_top_row.h"
-#include "ckernel_sfpu_binary.h"
 #include "sfpu/ckernel_sfpu_topk.h"
 
 // To add a new metal SFPU operation:
@@ -18,6 +17,24 @@
 #include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
+#include "sfpu/ckernel_sfpu_abs.h"
+#include "sfpu/ckernel_sfpu_activations.h"
+#include "sfpu/ckernel_sfpu_elu.h"
+#include "sfpu/ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_exp2.h"
+#include "sfpu/ckernel_sfpu_fill.h"
+#include "sfpu/ckernel_sfpu_log.h"
+#include "sfpu/ckernel_sfpu_negative.h"
+#include "sfpu/ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_relu.h"
+#include "sfpu/ckernel_sfpu_rsqrt.h"
+#include "sfpu/ckernel_sfpu_shift.h"
+#include "sfpu/ckernel_sfpu_silu.h"
+#include "sfpu/ckernel_sfpu_sqrt.h"
+#include "sfpu/ckernel_sfpu_square.h"
+#include "sfpu/ckernel_sfpu_threshold.h"
+#include "sfpu/ckernel_sfpu_trigonometry.h"
+#include "sfpu/ckernel_sfpu_binary.h"
 
 namespace test_utils
 {
@@ -68,31 +85,28 @@ void call_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0, floa
             _calculate_exp2_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>();
             break;
         case SfpuType::exponential:
-            _init_exponential_<APPROX_MODE, FAST_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE>();
-            if constexpr (FAST_MODE && APPROX_MODE && CLAMP_NEGATIVE)
+            _init_exponential_<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE>();
+            if constexpr (APPROX_MODE && CLAMP_NEGATIVE)
             {
                 // In this case each call to _calculate_exponential_ processes 8 iterations
                 // and we iterate over 4 faces, so we process 32 iterations overall.
                 static_assert(ITERATIONS == 32);
                 for (int i = 0; i < 4; i++)
                 {
-                    _calculate_exponential_<APPROX_MODE, false /* scale_en */, 8, FAST_MODE, false /* skip_positive_check */, CLAMP_NEGATIVE>(
-                        p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
+                    _calculate_exponential_<APPROX_MODE, false /* scale_en */, 8, CLAMP_NEGATIVE>(p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
                     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
                     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
                 }
             }
-            else if constexpr (FAST_MODE && APPROX_MODE)
+            else if constexpr (APPROX_MODE)
             {
                 // In this case each call to _calculate_exponential_ can process either 8 or 32 iterations.
                 static_assert(ITERATIONS == 8 || ITERATIONS == 32);
-                _calculate_exponential_<APPROX_MODE, false /* scale_en */, ITERATIONS, FAST_MODE, false /* skip_positive_check */, CLAMP_NEGATIVE>(
-                    p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
+                _calculate_exponential_<APPROX_MODE, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE>(p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
             }
             else
             {
-                _calculate_exponential_<APPROX_MODE, false /* scale_en */, ITERATIONS, FAST_MODE, false /* skip_positive_check */, CLAMP_NEGATIVE>(
-                    p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
+                _calculate_exponential_<APPROX_MODE, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE>(p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
             }
             break;
         case SfpuType::fill:

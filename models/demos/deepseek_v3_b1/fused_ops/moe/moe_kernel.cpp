@@ -93,7 +93,7 @@ struct Core {
 };
 
 void kernel_main() {
-#if defined(RECONFIG_MOE_CBS) && !defined(UCK_CHLKC_MATH)
+#if defined(RECONFIG_MOE_CBS)
     {
         constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
         uint32_t tt_l1_ptr* cb_config = reinterpret_cast<uint32_t tt_l1_ptr*>(cb_config_l1_addr);
@@ -553,6 +553,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_num_workers"),
                 get_named_compile_time_arg_val("reduce_slot_size_bytes"),
                 get_named_compile_time_arg_val("is_reduce_fabric_core"),
+                get_named_compile_time_arg_val("reduce_enable_downstream_socket"),
                 get_named_compile_time_arg_val("reduce_brisc_fabric_rt_arg_base"),
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
                 get_named_compile_time_arg_val("reduce_agg_output_size_bytes"),
@@ -958,7 +959,7 @@ void kernel_main() {
         }
 #endif
 
-#if defined(RECONFIG_MOE_CBS) && !defined(UCK_CHLKC_MATH)
+#if defined(RECONFIG_MOE_CBS)
         {
             constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
             uint32_t tt_l1_ptr* cb_config = reinterpret_cast<uint32_t tt_l1_ptr*>(cb_config_l1_addr);
@@ -1077,6 +1078,7 @@ void kernel_main() {
             deepseek_b1_ops::Matmul::Op<Moe::Routed::GateMMCTArgs, Core::Routed::is_gate_mm_core, false, false> gate_mm;
             gate_mm(moe.routed.gate_mm_args);
         }
+#endif  // ENABLE_ROUTING
 
         // 3. Shared Expert: Gate/Up KN-sliced matmul on 128 compute cores
         //     CB 1 (act) is shared: on gate_proj cores it is also consumed by gate_proj (step 6)
