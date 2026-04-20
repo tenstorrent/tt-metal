@@ -598,11 +598,11 @@ DeviceMemoryRegion::ChipStats* SharedMemoryStatsProvider::find_or_create_chip_en
             chip_stat.trace_allocated.store(0, std::memory_order_relaxed);
             chip_stat.cb_allocated.store(0, std::memory_order_relaxed);
             return &chip_stat;
-        } else if (expected == chip_id) {
+        }
+        if (expected == chip_id) {
             // Another thread claimed this slot for the same chip_id concurrently
             return &chip_stat;
         }
-        // else: slot was claimed by a different chip_id, try next
     }
 
     // No free slots
