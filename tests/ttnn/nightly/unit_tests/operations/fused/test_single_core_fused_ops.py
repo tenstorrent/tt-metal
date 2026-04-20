@@ -11,7 +11,9 @@ import ttnn
 from models.common.utility_functions import pad_by_zero
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
-shapes = [[1, 1, 32, 32], [1, 1, 32, 128], [1, 2, 128, 128]]
+TEST_PADDING_VALUE = -42
+
+shapes = [[1, 1, 32, 32], [1, 1, 32, 128], [1, 2, 128, 128], [1, 1, 28, 42]]
 
 
 @pytest.mark.parametrize("shape", shapes)
@@ -19,6 +21,7 @@ def test_softmax(shape, device):
     torch.manual_seed(1234)
     x = torch.randn(shape).bfloat16().float()
     xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    xt = ttnn.fill_implicit_tile_padding(xt, TEST_PADDING_VALUE)
     xtt = ttnn.softmax_in_place(xt)
 
     tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
@@ -43,6 +46,7 @@ def test_layernorm(shape, device):
     beta = torch.randn([shape[-1]]).bfloat16().float()
 
     xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    xt = ttnn.fill_implicit_tile_padding(xt, TEST_PADDING_VALUE)
     gammat = pad_by_zero(gamma, device)[0]
     betat = pad_by_zero(beta, device)[0]
 
