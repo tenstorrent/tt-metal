@@ -49,7 +49,7 @@ SEQ_LEN_100_K = 100 * 1024
     ],
     ids=["moe-gate_device"],
 )
-@pytest.mark.parametrize("num_iterations", [100])
+@pytest.mark.parametrize("num_iterations", [1000])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -78,7 +78,7 @@ SEQ_LEN_100_K = 100 * 1024
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.timeout(600 * 100)
+@pytest.mark.timeout(600 * 1000)
 def test_prefill_block(
     config_only,
     mesh_device,
@@ -178,6 +178,9 @@ def test_prefill_block(
     group_size = 58
     group_start_time = time.time()
 
+    # Store group timing and element data
+    group_data = []
+
     for i in range(num_iterations):
         # Start of new group
         if i % group_size == 0:
@@ -202,8 +205,34 @@ def test_prefill_block(
             group_time = group_end_time - group_start_time
             group_num = i // group_size + 1
             actual_group_size = group_size if (i + 1) % group_size == 0 else (i % group_size) + 1
+
+            # Store group data
+            group_data.append({"group_num": group_num, "num_elements": actual_group_size, "execution_time": group_time})
+
             logger.info(
                 f"Rank: {rank} Group {group_num} ({actual_group_size} iterations) completed in {group_time:.3f}s"
             )
 
     logger.info("Forward pass loop completed successfully")
+
+    # Print group execution summary
+    logger.info("=" * 80)
+    logger.info("GROUP EXECUTION SUMMARY")
+    logger.info("=" * 80)
+    total_time = sum(data["execution_time"] for data in group_data)
+    total_elements = sum(data["num_elements"] for data in group_data)
+
+    for data in group_data:
+        avg_per_element = data["execution_time"] / data["num_elements"] if data["num_elements"] > 0 else 0
+        logger.info(
+            f"Group {data['group_num']:2d}: {data['num_elements']:2d} elements, "
+            f"{data['execution_time']:7.3f}s total, {avg_per_element:7.3f}s/element"
+        )
+
+    avg_time_per_element = total_time / total_elements if total_elements > 0 else 0
+    logger.info("-" * 80)
+    logger.info(
+        f"TOTAL: {len(group_data)} groups, {total_elements} elements, "
+        f"{total_time:.3f}s total, {avg_time_per_element:.3f}s/element"
+    )
+    logger.info("=" * 80)
