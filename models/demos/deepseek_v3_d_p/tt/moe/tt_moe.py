@@ -455,7 +455,9 @@ class TtMoe(LightweightModule):
 
         # Add back the batch dimensions for combine
         # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
+        logger.debug(f"Unsqueeze 1")
         expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
+        logger.debug(f"Unsqueeze 2")
         expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
         # logger.debug(f"[TtMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
 
@@ -463,6 +465,7 @@ class TtMoe(LightweightModule):
         # Step 4: Combine (enabled)
         # ========================================
         # Combine expects ROW_MAJOR input
+        logger.debug(f"To Layout")
         expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
         # logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
 
