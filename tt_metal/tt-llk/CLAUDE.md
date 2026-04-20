@@ -36,10 +36,15 @@ tt-llk/
 ## Commands
 
 ### Environment Setup
+
+Run inside the **tt-metal Docker image** (the default for codegen and internal work — Python test deps like `ml_dtypes`, `torch`, `tt-exalens` are already installed at the system level):
+
 ```bash
 cd tests
-./setup_testing_env.sh
+./setup_testing_env.sh          # fetches SFPI; no venv needed in the image
 ```
+
+Outside the image, use `source ./setup_external_testing_env.sh` instead — that variant creates `tests/.venv` and installs `requirements.txt`. See `tests/README.md` for details.
 
 ### MCP Servers
 Pre-configured in `.mcp.json`. Atlassian requires authentication on first use.
