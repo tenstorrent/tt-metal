@@ -5,11 +5,16 @@
 """
 MoE Decode Block End-to-End Test
 
-4x8
+Supports:
+Single Galaxy 8x1 Torus: Development/testing setup using TG
+   - Requires: TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_8x1_torus_graph_descriptor.textproto"
 
-Running with:
-'MESH_DEVICE=TG USE_TORUS_MODE=1 TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_4x8_torus_graph_descriptor.textproto"
- pytest models/demos/deepseek_v3/tests/tg_moe_tests/test_optimized_moe_decode_block_tg_4x8.py -v'
+For 8x1, run with:
+'MESH_DEVICE=TG8X1 USE_TORUS_MODE=1 TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_8x1_torus_graph_descriptor.textproto" \
+ pytest models/demos/deepseek_v3/tests/tg_moe_tests/test_optimized_moe_decode_block_tg_8x1.py -v'
+
+For 8x4, run with:
+'MESH_DEVICE=TG8X4 USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/tg_moe_tests/test_optimized_moe_decode_block_tg.py -v'
 """
 
 import os
@@ -447,6 +452,16 @@ def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_
             tt_combine_tensor, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
         )
 
+    # Debug: Check the actual output tensor
+    logger.info(
+        f"[DEBUG] TT combine output - shape: {torch_combine_output.shape}, "
+        f"has_nan: {torch.isnan(torch_combine_output).any()}, "
+        f"has_inf: {torch.isinf(torch_combine_output).any()}, "
+        f"all_zero: {(torch_combine_output == 0).all()}, "
+        f"mean: {torch_combine_output.float().mean()}, "
+        f"std: {torch_combine_output.float().std()}"
+    )
+
     # check pcc
     pcc_passed, pcc_output = comp_pcc(torch_combine_output, torch_combine_golden, pcc=PCC_THRESHOLD)
     logger.info(f"Combine Output - Iteration: {iteration} - PCC: {pcc_output}")
@@ -533,7 +548,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     return pcc_passed and allclose_passed
 
 
-@pytest.mark.requires_device(["QUAD", "TG"])
+@pytest.mark.requires_device(["QUAD", "TG8X1", "TG8X4"])
 @pytest.mark.skipif(
     (os.getenv("USE_TORUS_MODE") is None),
     reason=f"Requires ring fabric",
@@ -541,7 +556,8 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
     [
-        pytest.param((4, 8), (4, 8), id="4x8_tg"),
+        # pytest.param((8, 1), (8, 1), id="8x1_tg"),
+        pytest.param((8, 4), (8, 4), id="8x4_tg"),
     ],
     indirect=["mesh_device"],
 )
@@ -566,7 +582,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     "device_params",
     [
         {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            # "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "trace_region_size": 500000,
         },
@@ -604,6 +620,7 @@ def test_optimized_moe_decode_block(
     random.seed(2003)
 
     num_devices = mesh_shape[0] * mesh_shape[1]
+    print("NUM DEVICES: ", num_devices)
     experts = experts_per_device * num_devices  # Calculate total experts from mesh shape
     num_dispatch_devices = mesh_shape[cluster_axis]
     num_replicated_devices = num_devices // num_dispatch_devices
@@ -1128,7 +1145,6 @@ def test_optimized_moe_decode_block(
             # No replication: final output is the only item in the list
             tt_final_output = tt_fast_reduce_output_tensors[0]
         else:
-            # Normal reduce scatter for 4x8
             tt_summed_output = ttnn.sum(tt_scaled_output, dim=0)
             tt_final_output = ttnn.reduce_scatter(
                 tt_summed_output,
@@ -1182,6 +1198,17 @@ def test_optimized_moe_decode_block(
     all_iterations_passed = True
     for iteration in range(num_iterations):
         logger.info(f"Validating iteration: {iteration}")
+
+        # Debug: Check for NaN/inf in golden reference
+        golden_combine = torch_combine_goldens[iteration]
+        logger.info(
+            f"[DEBUG] Golden combine - shape: {golden_combine.shape}, "
+            f"has_nan: {torch.isnan(golden_combine).any()}, "
+            f"has_inf: {torch.isinf(golden_combine).any()}, "
+            f"all_zero: {(golden_combine == 0).all()}, "
+            f"mean: {golden_combine.float().mean()}, "
+            f"std: {golden_combine.float().std()}"
+        )
 
         if not verify_combine(
             iteration,
