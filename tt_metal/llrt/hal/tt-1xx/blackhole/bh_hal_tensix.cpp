@@ -16,7 +16,7 @@ using namespace tt::tt_metal::blackhole::tensix;
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
 

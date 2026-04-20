@@ -26,8 +26,8 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "vector_aligned.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 

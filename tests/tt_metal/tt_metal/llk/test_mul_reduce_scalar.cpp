@@ -23,7 +23,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "device_fixture.hpp"
 #include "test_golden_impls.hpp"

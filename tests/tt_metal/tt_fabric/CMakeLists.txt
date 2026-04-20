@@ -146,8 +146,8 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
-        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/api
-        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/generated
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/tt-umd/api
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/tt-umd/generated
 )
 
 set_target_properties(
@@ -183,8 +183,8 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
-        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/api
-        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/generated
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/tt-umd/api
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/tt-umd/generated
 )
 
 set_target_properties(
@@ -220,8 +220,8 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
-        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/api
-        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/generated
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/tt-umd/api
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/tt-umd/generated
 )
 
 set_target_properties(

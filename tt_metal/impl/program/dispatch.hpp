@@ -23,7 +23,7 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class IDevice;

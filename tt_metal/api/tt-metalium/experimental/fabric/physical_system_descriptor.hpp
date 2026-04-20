@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/strong_type.hpp>
 

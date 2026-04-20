@@ -32,7 +32,7 @@
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
 
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "debug/inspector/data.hpp"
 #include "debug/noc_logging.hpp"
 #include "debug/watcher_server.hpp"
@@ -48,8 +48,8 @@
 #include <system_mesh.hpp>
 
 #include <tt_metal.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
 
 #include <dispatch/dispatch_query_manager.hpp>

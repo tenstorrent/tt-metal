@@ -12,7 +12,7 @@
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-metalium/tt_align.hpp>
-#include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <tt-umd/chip_helpers/tlb_manager.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <cstdlib>
 #include <cstring>

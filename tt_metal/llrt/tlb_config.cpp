@@ -14,12 +14,12 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "common/tt_backend_api_types.hpp"
-#include <umd/device/arch/blackhole_implementation.hpp>
-#include <umd/device/cluster.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/arch/wormhole_implementation.hpp>
+#include <tt-umd/arch/blackhole_implementation.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/arch/wormhole_implementation.hpp>
 
 namespace ll_api {
 

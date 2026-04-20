@@ -22,7 +22,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 // Internal access
 #include "dispatch/system_memory_manager.hpp"

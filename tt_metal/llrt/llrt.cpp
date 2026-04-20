@@ -24,8 +24,8 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
-#include <umd/device/driver_atomics.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/driver_atomics.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
 
 // llrt = lower-level runtime

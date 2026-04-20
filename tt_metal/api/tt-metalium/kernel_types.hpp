@@ -14,7 +14,7 @@
 
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal {
 

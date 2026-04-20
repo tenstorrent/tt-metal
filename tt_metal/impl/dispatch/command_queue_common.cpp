@@ -10,7 +10,7 @@
 
 #include "impl/context/metal_context.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>

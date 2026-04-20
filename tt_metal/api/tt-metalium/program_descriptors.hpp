@@ -13,7 +13,7 @@
 #include <tt_stl/small_vector.hpp>
 
 // UMD: re-exports CoreType (used in SemaphoreDescriptor::core_type member).
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #include <bitset>
 #include <optional>

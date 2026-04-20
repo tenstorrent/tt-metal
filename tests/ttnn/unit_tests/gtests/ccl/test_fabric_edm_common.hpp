@@ -33,8 +33,8 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tile.hpp>
 
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "gtest/gtest.h"
 #include "common/tt_backend_api_types.hpp"
 

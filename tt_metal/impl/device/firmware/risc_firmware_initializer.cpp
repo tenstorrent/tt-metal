@@ -34,8 +34,8 @@
 #include "fabric/fabric_context.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_align.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 

@@ -6,7 +6,7 @@
 
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <array>
 #include <atomic>
 #include <cstddef>

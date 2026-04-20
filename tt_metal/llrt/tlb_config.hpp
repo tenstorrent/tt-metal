@@ -8,8 +8,8 @@
 #include <tt_backend_api_types.hpp>
 #include <unordered_map>
 
-#include <umd/device/cluster.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 struct metal_SocDescriptor;
 

@@ -11,7 +11,7 @@
 
 namespace tt::tt_metal::experimental::noc_estimator {
 
-// Values match tt::ARCH from umd/device/types/arch.hpp
+// Values match tt::ARCH from tt-umd/types/arch.hpp
 enum class Architecture { WORMHOLE_B0 = 2, BLACKHOLE = 3 };
 
 enum class NocMechanism { UNICAST, MULTICAST, MULTICAST_LINKED };

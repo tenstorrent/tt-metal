@@ -7,7 +7,7 @@
 
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 

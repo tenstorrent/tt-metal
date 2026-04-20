@@ -16,7 +16,7 @@
 #include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_stl/assert.hpp"
-#include "umd/device/types/core_coordinates.hpp"
+#include "tt-umd/types/core_coordinates.hpp"
 
 namespace tt::tt_fabric {
 

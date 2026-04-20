@@ -46,9 +46,9 @@
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/shape2d.hpp>
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {

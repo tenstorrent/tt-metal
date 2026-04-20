@@ -23,11 +23,11 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/simulation/simulation_chip.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 
 namespace tt {

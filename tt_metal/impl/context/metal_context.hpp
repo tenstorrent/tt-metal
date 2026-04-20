@@ -11,7 +11,7 @@
 #include <impl/allocator/allocator_types.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "impl/device/firmware/firmware_initializer.hpp"
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "context_types.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"

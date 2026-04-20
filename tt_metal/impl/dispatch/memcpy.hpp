@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/aligned_allocator.hpp>
-#include <umd/device/driver_atomics.hpp>
+#include <tt-umd/driver_atomics.hpp>
 
 #include <tt-metalium/vector_aligned.hpp>
 

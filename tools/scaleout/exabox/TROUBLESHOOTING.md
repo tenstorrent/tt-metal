@@ -341,7 +341,7 @@ If this issue persists, report to infra team to fix group synchronization.
 Waiting for AICLK value to settle failed on timeout after <timeout_ms>. Expected to see <target_aiclk>, last value observed <aiclk>. This can be due to possible overheating of the chip or other issues. ASIC temperature: <temp>
 ```
 
-This error originates from UMD during chip initialization (`tt_metal/third_party/umd/device/chip/chip.cpp`).
+This error originates from UMD during chip initialization (`tt_metal/third_party/tt-umd/chip/chip.cpp`).
 
 **Cause**: The AICLK (AI Clock) failed to stabilize to the expected frequency. This has been observed across multiple systems and can indicate:
 

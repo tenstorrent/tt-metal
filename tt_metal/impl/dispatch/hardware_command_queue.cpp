@@ -13,7 +13,7 @@
 #include <tracy/Tracy.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "llrt/tt_cluster.hpp"
 #include "dispatch_query_manager.hpp"
 #include "device_command.hpp"

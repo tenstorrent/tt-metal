@@ -37,7 +37,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 #include <ttnn/distributed/distributed_tensor.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "ttnn/tensor/shape/shape.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>

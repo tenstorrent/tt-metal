@@ -59,8 +59,8 @@
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include <distributed.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/debug/noc_debugging.hpp>
 

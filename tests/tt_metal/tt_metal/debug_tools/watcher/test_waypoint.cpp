@@ -22,7 +22,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/host_api.hpp>
 

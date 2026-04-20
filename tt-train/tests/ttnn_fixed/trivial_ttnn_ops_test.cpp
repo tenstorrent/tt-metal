@@ -7,7 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <memory>
-#include <umd/device/cluster.hpp>
+#include <tt-umd/cluster.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"

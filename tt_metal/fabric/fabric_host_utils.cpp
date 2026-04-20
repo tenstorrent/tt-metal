@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "erisc_datamover_builder.hpp"

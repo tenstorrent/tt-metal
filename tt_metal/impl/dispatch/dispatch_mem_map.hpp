@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <vector>
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
 

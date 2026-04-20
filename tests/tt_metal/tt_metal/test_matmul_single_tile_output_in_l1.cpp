@@ -16,7 +16,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 using std::vector;
 using namespace tt;

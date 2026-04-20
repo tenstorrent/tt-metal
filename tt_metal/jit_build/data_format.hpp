@@ -7,7 +7,7 @@
 #include <vector>
 #include <span>
 #include <tt-metalium/tt_backend_api_types.hpp>     // for DataFormat
-#include <umd/device/types/arch.hpp>                // for ARCH
+#include <tt-umd/types/arch.hpp>                    // for ARCH
 
 namespace tt::tt_metal {
 enum class UnpackToDestMode : std::uint8_t;

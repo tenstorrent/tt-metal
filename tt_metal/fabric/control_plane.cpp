@@ -48,10 +48,10 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/cluster.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/cluster.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"

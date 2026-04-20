@@ -7,7 +7,7 @@
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <factory_system_descriptor/utils.hpp>
 #include <gtest/gtest.h>
 #include <yaml-cpp/yaml.h>

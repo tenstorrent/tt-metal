@@ -31,7 +31,7 @@
 #include <tt-metalium/experimental/host_api.hpp>
 
 #include "device_fixture.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
 #include "impl/program/program_impl.hpp"

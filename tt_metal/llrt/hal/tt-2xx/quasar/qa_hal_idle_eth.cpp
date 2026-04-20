@@ -18,7 +18,7 @@ using namespace tt::tt_metal::quasar::idle_eth;
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
 

@@ -15,7 +15,7 @@
 
 #include <tt-metalium/hal_types.hpp>
 #include "jit_build_options.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::llrt {
 class RunTimeOptions;

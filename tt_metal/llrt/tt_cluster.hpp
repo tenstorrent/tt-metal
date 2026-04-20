@@ -23,15 +23,15 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include <umd/device/cluster.hpp>
-#include <umd/device/driver_atomics.hpp>
-#include <umd/device/cluster_descriptor.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/tt_io.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/cluster_types.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/driver_atomics.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/tt_io.hpp>
+#include <tt-umd/soc_descriptor.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_types.hpp>
 
 namespace tt {
 namespace llrt {

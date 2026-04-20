@@ -14,8 +14,8 @@
 // clang-format off
 #include "hal.hpp"
 #include "tt_memory.h"
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 // clang-format on
 

@@ -20,8 +20,8 @@
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "impl/kernels/kernel.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////

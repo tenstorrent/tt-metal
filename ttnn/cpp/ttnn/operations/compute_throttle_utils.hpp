@@ -7,7 +7,7 @@
 #include <string>
 #include <map>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace ttnn::operations::compute_throttle_utils {
 

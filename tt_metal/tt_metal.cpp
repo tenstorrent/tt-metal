@@ -34,8 +34,8 @@
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <umd/device/cluster.hpp>
-#include <umd/device/cluster_descriptor.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
 #include <filesystem>
 #include "device.hpp"
 #include "context/metal_context.hpp"
@@ -55,7 +55,7 @@
 #include "program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt_stl/enum.hpp>
 #include <graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>

@@ -19,8 +19,8 @@
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "tests/tt_metal/tt_metal/eth/eth_test_common.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////

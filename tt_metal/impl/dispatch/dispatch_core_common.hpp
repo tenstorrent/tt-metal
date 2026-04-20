@@ -7,8 +7,8 @@
 #include <cstdint>
 
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/core_coordinates.hpp>  // CoreType
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>  // CoreType
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal {

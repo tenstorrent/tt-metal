@@ -6,8 +6,8 @@
 #include <tt_stl/reflection.hpp>
 #include "dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 

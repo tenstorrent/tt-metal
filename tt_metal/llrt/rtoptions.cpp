@@ -18,7 +18,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <experimental/fabric/control_plane.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <system_mesh.hpp>

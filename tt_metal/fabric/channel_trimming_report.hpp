@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string>
 
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>       // ChipId
 #include <hostdevcommon/fabric_common.h>                   // chan_id_t
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 

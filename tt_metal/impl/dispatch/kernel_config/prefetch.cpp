@@ -26,8 +26,8 @@
 #include "hal_types.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "impl/debug/inspector/inspector.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>

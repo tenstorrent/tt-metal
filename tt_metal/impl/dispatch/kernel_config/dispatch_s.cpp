@@ -21,8 +21,8 @@
 #include "prefetch.hpp"
 #include "context/context_descriptor.hpp"
 #include "debug/inspector/inspector.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include "device/device_manager.hpp"
 #include <dispatch/dispatch_query_manager.hpp>

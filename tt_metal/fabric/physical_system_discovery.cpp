@@ -16,8 +16,8 @@
 #include <set>
 #include <unordered_map>
 
-#include <umd/device/cluster.hpp>
-#include <umd/device/soc_descriptor.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/soc_descriptor.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"
 #include "tt_metal/llrt/hal.hpp"

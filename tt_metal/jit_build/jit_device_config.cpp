@@ -14,7 +14,7 @@
 #include "impl/profiler/profiler_state_manager.hpp"
 #include "llrt/tt_cluster.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 

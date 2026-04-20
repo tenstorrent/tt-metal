@@ -20,10 +20,10 @@
 #include <fmt/ranges.h>
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "core_descriptor.hpp"

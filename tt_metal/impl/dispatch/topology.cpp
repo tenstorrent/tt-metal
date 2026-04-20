@@ -28,8 +28,8 @@
 #include <tt_stl/span.hpp>
 #include <experimental/fabric/fabric.hpp>
 #include "system_memory_manager.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "dispatch_mem_map.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "dispatch_core_manager.hpp"

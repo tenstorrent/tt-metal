@@ -8,7 +8,7 @@
 
 #include <array>
 #include <core/xtensor_utils.hpp>
-#include <umd/device/cluster.hpp>
+#include <tt-umd/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"

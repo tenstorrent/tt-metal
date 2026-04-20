@@ -39,7 +39,7 @@
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "test_host_kernel_common.hpp"
 

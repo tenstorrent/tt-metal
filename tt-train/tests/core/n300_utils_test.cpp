@@ -6,7 +6,7 @@
 
 #include <array>
 #include <core/xtensor_utils.hpp>
-#include <umd/device/cluster.hpp>
+#include <tt-umd/cluster.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"

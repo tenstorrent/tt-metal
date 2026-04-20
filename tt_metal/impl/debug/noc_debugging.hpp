@@ -8,7 +8,7 @@
 #include <compare>
 #include <cstdint>
 #include <mutex>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <unordered_map>
 #include <array>
 #include <tools/profiler/event_metadata.hpp>

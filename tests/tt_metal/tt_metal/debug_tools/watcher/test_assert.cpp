@@ -28,7 +28,7 @@
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/host_api.hpp>
 #include "impl/debug/debug_helpers.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher asserts.

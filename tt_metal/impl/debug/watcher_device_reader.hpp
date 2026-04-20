@@ -11,8 +11,8 @@
 #include <string>
 #include <vector>
 
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/soc_descriptor.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "debug_helpers.hpp"
 #include "impl/context/metal_env_impl.hpp"
 

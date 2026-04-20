@@ -13,7 +13,7 @@ using namespace tt::tt_metal::wormhole::active_eth;
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "wormhole/wh_hal.hpp"
 #include "wormhole/wh_hal_eth_asserts.hpp"
 

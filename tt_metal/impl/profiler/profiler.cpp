@@ -45,10 +45,10 @@
 #include "common/filesystem_utils.hpp"
 #include "context/metal_context.hpp"
 #include "context/context_types.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/arch/wormhole_implementation.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/arch/wormhole_implementation.hpp>
 #include "device/device_manager.hpp"
 #include "tt_cluster.hpp"
 #include "tools/profiler/perf_counters.hpp"

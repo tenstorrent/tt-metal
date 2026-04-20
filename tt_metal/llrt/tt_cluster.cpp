@@ -32,15 +32,15 @@
 #include "tracy/Tracy.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
 #include "tunnels_from_mmio_device.hpp"
-#include "umd/device/utils/semver.hpp"
-#include <umd/device/cluster.hpp>
-#include <umd/device/cluster_descriptor.hpp>
-#include <umd/device/simulation/simulation_chip.hpp>
-#include <umd/device/pcie/pci_device.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/cluster_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include "tt-umd/utils/semver.hpp"
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
+#include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <unistd.h>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;

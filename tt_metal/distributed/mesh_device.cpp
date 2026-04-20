@@ -53,12 +53,12 @@
 #include "debug/inspector/inspector.hpp"
 #include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "context/metal_context.hpp"
 #include <experimental/context/metal_env.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include <llrt/tt_cluster.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "mesh_device_view_impl.hpp"
 #include "dummy_mesh_command_queue.hpp"
 #include "impl/context/metal_env_accessor.hpp"

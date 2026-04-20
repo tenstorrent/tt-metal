@@ -10,9 +10,9 @@
 #include <tt_stl/assert.hpp>
 #include "llrt/rtoptions.hpp"
 #include "tracy/Tracy.hpp"
-#include <umd/device/pcie/pci_device.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/simulation/simulation_chip.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/soc_descriptor.hpp>
+#include <tt-umd/simulation/simulation_chip.hpp>
 
 namespace tt::tt_metal {
 

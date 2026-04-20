@@ -34,7 +34,7 @@
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 
 using namespace tt;

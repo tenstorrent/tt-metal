@@ -18,9 +18,9 @@
 #include <functional>
 #include <memory>
 #include <ostream>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_types.hpp>
-#include <umd/device/utils/semver.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_types.hpp>
+#include <tt-umd/utils/semver.hpp>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -31,8 +31,8 @@
 #include "hal/generated/fabric_telemetry.hpp"  // IWYU pragma: export
 
 #include <tt_stl/overloaded.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include "llrt/hal_proc_set.hpp"  // IWYU pragma: export
 

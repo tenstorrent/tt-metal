@@ -39,9 +39,9 @@
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
 using namespace tt;

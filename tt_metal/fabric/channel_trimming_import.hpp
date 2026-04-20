@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>       // ChipId
 #include <hostdevcommon/fabric_common.h>                   // chan_id_t
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"

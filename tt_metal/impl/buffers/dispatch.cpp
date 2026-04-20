@@ -35,7 +35,7 @@
 #include <tracy/Tracy.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "tt_metal/api/tt-metalium/experimental/pinned_memory.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal::buffer_dispatch {

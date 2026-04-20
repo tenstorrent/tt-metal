@@ -36,7 +36,7 @@
 #include "core_coord.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_common.hpp"

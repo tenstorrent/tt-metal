@@ -377,7 +377,7 @@ foreach(ARCH IN LISTS ARCHS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/${ARCH}/${ARCH_ALIAS}_defines
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/${ARCH}/noc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/${ARCH}/overlay
-        -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/${ARCH}
+        -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt-umd/${ARCH}
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/common
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/llk_io
         -I${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_ALIAS}/common/inc

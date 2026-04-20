@@ -24,7 +24,7 @@
 #include "impl/kernels/kernel.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 using std::vector;
 using namespace tt;
