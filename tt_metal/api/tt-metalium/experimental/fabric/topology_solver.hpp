@@ -22,6 +22,10 @@ namespace tt::tt_metal {
 class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
+namespace CaDiCaL {
+class Solver;
+}
+
 namespace tt::tt_fabric {
 
 /**
@@ -477,8 +481,26 @@ private:
  * @brief Mode for connection count validation
  */
 enum class ConnectionValidationMode {
-    STRICT,  ///< Strict mode: require exact channel counts, fail if not met
-    RELAXED  ///< Relaxed mode: prefer correct channel counts, but allow mismatches with warnings (default)
+    /// Strict mode: require exact channel counts, fail if not met
+    STRICT,
+    /// Relaxed mode: allow insufficient channels (warnings) but prefer mappings with better-matched physical link
+    /// capacity. Current DFS biases search via candidate ordering; SAT/MaxSAT backend should add automatic weighted
+    /// soft objectives for channel alignment (see migration plan).
+    RELAXED
+};
+
+/**
+ * @brief Search backend for solve_topology_mapping
+ *
+ * Use Dfs or Sat for explicit control (e.g. unit tests). Auto uses a size-based heuristic: small problems
+ * (n_target * n_global < threshold) use DFS for minimal overhead, while large problems use SAT for
+ * superior search efficiency. The environment variable TT_TOPOLOGY_SOLVER_ENGINE can override Auto:
+ * set to "sat" to force SAT everywhere, or "dfs" to force DFS everywhere.
+ */
+enum class TopologyMappingSolverEngine {
+    Auto,
+    Dfs,
+    Sat,
 };
 
 /**
@@ -550,15 +572,20 @@ void print_mapping_result(const MappingResult<TargetNode, GlobalNode>& result);
  *
  * Stateless function that performs constraint satisfaction search to find a valid
  * mapping from target graph to global graph. Enforces required constraints first,
- * then optimizes for preferred constraints.
+ * then optimizes for preferred constraints. In RELAXED mode, the search also favors
+ * embeddings that better match target edge channel counts on the physical graph
+ * (more capacity satisfied is preferred over less), without requiring explicit
+ * preferred constraints for that behavior.
  *
  * @tparam TargetNode The type used to identify nodes in the target graph (must be explicitly specified)
  * @tparam GlobalNode The type used to identify nodes in the global graph (must be explicitly specified)
  * @param target_graph The target graph (subgraph pattern to find)
  * @param global_graph The global graph (larger host graph that contains the target)
  * @param constraints The mapping constraints to satisfy
- * @param connection_validation_mode How to validate connection counts (default: RELAXED)
+ * @param connection_validation_mode STRICT fails on insufficient channels; RELAXED allows them but still prefers
+ *        stronger channel alignment among feasible mappings (default: RELAXED)
  * @param quiet_mode If true, log errors at debug level instead of error level (useful for auto-discovery)
+ * @param solver_engine Auto uses TT_TOPOLOGY_SOLVER_ENGINE; Dfs/Sat force that backend regardless of env.
  * @return MappingResult containing success status, bidirectional mappings, and warnings
  */
 template <typename TargetNode, typename GlobalNode>
@@ -567,9 +594,13 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     const AdjacencyGraph<GlobalNode>& global_graph,
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
-    bool quiet_mode = false);
+    bool quiet_mode = false,
+    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto);
 
 namespace detail {
+
+bool topology_mapping_should_use_sat_engine(
+    TopologyMappingSolverEngine engine, size_t n_target = 0, size_t n_global = 0);
 
 /**
  * @brief Indexed graph representation for efficient lookups
@@ -731,6 +762,44 @@ struct ConstraintIndexData {
         const std::string& label = "Resolved mapping constraints",
         bool quiet_mode = false) const;
 };
+
+/**
+ * @brief Bookkeeping for hard CNF encoding of topology subgraph isomorphism constraints (SAT backend).
+ *
+ * Encodes: domain (required + forbidden via ConstraintIndexData::is_valid_mapping), global degree ≥ target
+ * degree (matching DFS hard checks), injective use of global nodes, target-edge → global-edge preservation,
+ * same-rank target-group → matching global rank labels, and cardinality (at-least-k over allowed pair literals).
+ * In ConnectionValidationMode::STRICT, per-edge channel capacity (parallel links) is enforced in the adjacency
+ * literals alongside graph adjacency. Residual channel / warning behavior in RELAXED remains with MappingValidator.
+ */
+struct TopologySatHardEncoding {
+    bool trivial_unsat = false;
+    std::string trivial_reason;
+    /// For each target index, parallel entries: global index and CaDiCaL positive literal (var = true ⇒ pick).
+    std::vector<std::vector<size_t>> allowed_global_idx;
+    std::vector<std::vector<int>> assign_lit;
+};
+
+/**
+ * @brief Push hard clauses onto `solver` and fill `enc` with variable layout for decode.
+ * @return false if trivially UNSAT (empty domain for some target); true if clauses were added (or nothing to do).
+ */
+template <typename TargetNode, typename GlobalNode>
+bool topology_sat_encode_hard_constraints(
+    CaDiCaL::Solver& solver,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    TopologySatHardEncoding& enc,
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED);
+
+/**
+ * @brief Read a satisfying CaDiCaL model into `mapping_out` (mapping[target_idx] = global_idx, or -1).
+ * @pre solver.solve() returned SATISFIABLE and encode succeeded with the same `enc`.
+ * @note Non-const solver: CaDiCaL::Solver::val is not const-qualified.
+ */
+template <typename TargetNode, typename GlobalNode>
+bool topology_sat_decode_hard_solution(
+    CaDiCaL::Solver& solver, const TopologySatHardEncoding& enc, std::vector<int>& mapping_out);
 
 /**
  * @brief Unified heuristic for node selection and candidate generation
@@ -922,34 +991,36 @@ template <typename TargetNode, typename GlobalNode>
 struct PathGraphDetector;
 
 /**
+ * @brief Shared search state for DFS and SAT topology engines
+ *
+ * The `mapping` vector contains the best or final assignment (global index per target, or -1).
+ * DFS fills partial progress on failure; SAT typically leaves -1 on failure.
+ */
+struct TopologySearchState {
+    std::vector<int> mapping;                    // mapping[target_idx] = global_idx or -1
+    std::vector<bool> used;                      // used[global_idx] = true if assigned
+    std::unordered_set<uint64_t> failed_states;  // DFS memoization cache (unused by SAT)
+    size_t dfs_calls = 0;                        // DFS call count (0 for SAT)
+    size_t backtrack_count = 0;                  // DFS backtracks (0 for SAT)
+    size_t memoization_hits = 0;                 // DFS memoization hits (0 for SAT)
+    std::string error_message;                   // Error message if search fails
+};
+
+/**
  * @brief DFS search engine for topology mapping
  *
  * Implements backtracking search with memoization and consistency checking.
  * Uses SearchHeuristic for node selection and candidate generation.
  *
  * **Important**: Even if the search fails to find a complete valid mapping, the
- * `SearchState::mapping` will contain the best/closest partial mapping found.
+ * state's `mapping` will contain the best/closest partial mapping found.
  * This allows users to see what progress was made and diagnose why the search failed.
  * The MappingValidator will save this partial mapping in the result even if validation fails.
  */
 template <typename TargetNode, typename GlobalNode>
 class DFSSearchEngine {
 public:
-    /**
-     * @brief Search state tracking mapping progress and statistics
-     *
-     * **Note**: The `mapping` vector always contains the best mapping found so far,
-     * even if the search fails. This allows users to inspect partial mappings for debugging.
-     */
-    struct SearchState {
-        std::vector<int> mapping;                    // mapping[target_idx] = global_idx or -1 (best found so far)
-        std::vector<bool> used;                      // used[global_idx] = true if assigned
-        std::unordered_set<uint64_t> failed_states;  // Memoization cache of failed states
-        size_t dfs_calls = 0;                        // Number of DFS calls made
-        size_t backtrack_count = 0;                  // Number of backtracks performed
-        size_t memoization_hits = 0;                 // Number of times memoization cache was hit
-        std::string error_message;                   // Error message if search fails
-    };
+    using SearchState = TopologySearchState;
 
     /**
      * @brief Start DFS search
@@ -973,10 +1044,10 @@ public:
      *
      * @return const reference to the internal search state
      */
-    const SearchState& get_state() const { return state_; }
+    const TopologySearchState& get_state() const { return state_; }
 
 private:
-    SearchState state_;  // Internal state for the search
+    TopologySearchState state_;  // Internal state for the search
     bool quiet_mode_ = false;  // Quiet mode flag to suppress verbose debug messages
     /**
      * @brief Hash state for memoization (FNV-1a hash)
@@ -1001,6 +1072,51 @@ private:
         const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
         ConnectionValidationMode validation_mode);
 };
+
+/**
+ * @brief SAT (CaDiCaL) search engine using hard CNF encoding plus preferred-hit maximization
+ *
+ * Encodes domain, degree, injectivity, edge preservation, same-rank groups, and cardinality, then searches for a
+ * model that **maximizes the number of targets** whose chosen global lies in that target's preferred set (same notion
+ * as `ConstraintIndexData::compute_constraint_stats` for `preferred_satisfied`). This uses auxiliary indicator
+ * literals and repeated solves with an at-least-k cardinality over those indicators (small instance cap). When the
+ * cap is exceeded or cardinality encoding is too large, falls back to a single satisfiability solve without that
+ * objective. DFS still returns the **first** complete feasible mapping under its heuristic order, which can satisfy
+ * strictly fewer preferred targets on the same instance.
+ *
+ * Channel/STRICT checks are still applied by MappingValidator after decode.
+ *
+ * In RELAXED mode, after locking the preferred-hit count (when that optimization runs), a second pass maximizes
+ * auxiliary literals for per-edge channel thresholds so the embedding maximizes the same sum as DFS's relaxed
+ * channel ordering objective (sum of min(required, actual) over target edges). When the number of threshold
+ * literals exceeds a small cap, that k-descent pass is skipped (one final satisfiability solve still returns a valid
+ * embedding). Other caps may also skip encoding or cardinality on very large instances.
+ */
+template <typename TargetNode, typename GlobalNode>
+class SatSearchEngine {
+public:
+    bool search(
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        ConnectionValidationMode validation_mode,
+        bool quiet_mode = false);
+
+    const TopologySearchState& get_state() const { return state_; }
+
+private:
+    TopologySearchState state_;
+    bool quiet_mode_ = false;
+};
+
+/**
+ * @brief If true, `solve_topology_mapping` uses the SAT backend when solver_engine is Auto.
+ *
+ * Controlled by environment variable `TT_TOPOLOGY_SOLVER_ENGINE` (case-insensitive):
+ * `sat`, `1`, `true`, or `yes` force SAT for all problem sizes;
+ * `dfs`, `0`, `false`, or `no` force DFS for all problem sizes;
+ * unset uses a size-based heuristic (small problems → DFS, large problems → SAT).
+ */
+inline bool topology_mapping_use_sat_engine();
 
 /**
  * @brief Validates mappings and builds MappingResult
@@ -1087,7 +1203,7 @@ struct MappingValidator {
         const std::vector<int>& mapping,
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-        const DFSSearchEngine<TargetNode, GlobalNode>::SearchState& state,
+        const TopologySearchState& state,
         ConnectionValidationMode validation_mode,
         bool quiet_mode = false);
 };

@@ -12,6 +12,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <queue>
 #include <string>
 #include <utility>
 #include <tuple>

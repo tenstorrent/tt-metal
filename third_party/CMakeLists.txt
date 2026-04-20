@@ -413,3 +413,35 @@ CPMAddPackage(
         capnproto_capture_this.patch
         capnproto_pthread.patch
 )
+
+####################################################################################################################
+# CaDiCaL SAT solver (MIT): https://github.com/arminbiere/cadical — no external deps, used by topology_solver MaxSAT
+#
+# Pinned to upstream release tag rel-3.0.0 (latest rel-* on the repo as of this CMake; bump when a newer tag ships).
+####################################################################################################################
+CPMAddPackage(
+    NAME cadical
+    GITHUB_REPOSITORY arminbiere/cadical
+    GIT_TAG rel-3.0.0
+    DOWNLOAD_ONLY YES
+    PATCHES
+        "${CMAKE_CURRENT_SOURCE_DIR}/cadical_vivify_include_tuple.patch"
+)
+
+file(GLOB CADICAL_SRCS CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.cpp")
+list(FILTER CADICAL_SRCS EXCLUDE REGEX "/cadical\\.cpp$")
+list(FILTER CADICAL_SRCS EXCLUDE REGEX "/mobical\\.cpp$")
+
+# CaDiCaL 3.x links internal "kitten" proof checker (C translation unit).
+set(CADICAL_KITTEN_C "${cadical_SOURCE_DIR}/src/kitten.c")
+
+add_library(
+    cadical
+    STATIC
+    ${CADICAL_SRCS}
+    ${CADICAL_KITTEN_C}
+)
+add_library(TT::ThirdParty::cadical ALIAS cadical)
+target_include_directories(cadical PUBLIC "${cadical_SOURCE_DIR}/src")
+target_compile_definitions(cadical PRIVATE NBUILD)
+target_compile_features(cadical PUBLIC cxx_std_11)

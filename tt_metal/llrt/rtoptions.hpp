@@ -282,6 +282,10 @@ class RunTimeOptions {
     // Enable fabric performance telemetry
     bool enable_fabric_bw_telemetry = false;
 
+    /// When true, topology mapping prefers the SAT backend (same rule as TT_TOPOLOGY_SOLVER_ENGINE / Auto in
+    /// solve_topology_mapping). Set from env at RunTimeOptions construction.
+    bool topology_mapping_use_sat_engine_ = false;
+
     // Enable channel trimming resource usage capture
     bool enable_channel_trimming_capture = false;
 
@@ -678,6 +682,8 @@ public:
     //
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
     bool get_enable_fabric_bw_telemetry() const { return enable_fabric_bw_telemetry; }
+
+    bool get_topology_mapping_use_sat_engine() const { return topology_mapping_use_sat_engine_; }
     void set_enable_fabric_bw_telemetry(bool enable) { enable_fabric_bw_telemetry = enable; }
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
