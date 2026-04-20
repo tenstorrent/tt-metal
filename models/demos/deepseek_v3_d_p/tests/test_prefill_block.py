@@ -102,9 +102,9 @@ def test_prefill_block(
     if mesh_shape[0] == 32 and mesh_shape[1] == 4:
         if isl_total != SEQ_LEN_100_K:
             pytest.skip("For mesh shape (32, 4) we only run the test with isl_total=100K")
-    if mesh_shape[0] == 8 and mesh_shape[1] == 4:
-        if isl_total != SEQ_LEN_25_K:
-            pytest.skip("For mesh shape (8, 4) we only run the test with isl_total=25K")
+    # if mesh_shape[0] == 8 and mesh_shape[1] == 4:
+    #     if isl_total != SEQ_LEN_25_K:
+    #         pytest.skip("For mesh shape (8, 4) we only run the test with isl_total=25K")
     sp_factor = mesh_shape[sp_axis]
     tp_factor = mesh_shape[tp_axis]
     emb_dim = config.hidden_size
