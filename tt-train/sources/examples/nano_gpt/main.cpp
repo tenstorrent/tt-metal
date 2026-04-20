@@ -24,6 +24,7 @@
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/distributed/losses.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/remote_optimizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
@@ -349,6 +350,7 @@ int main(int argc, char **argv) {
     bool add_time_to_name = true;
     std::string safetensors_path = "";
     std::string save_and_exit_path = "";
+    std::string loss_impl = "auto";
 
     app.add_option("-c,--config", training_config_name, "Training Config name")->default_val(training_config_name);
     app.add_option("--multihost", multihost_config_name, "Multihost Config name")->default_val(multihost_config_name);
@@ -360,6 +362,14 @@ int main(int argc, char **argv) {
         ->default_val(save_and_exit_path);
     app.add_option("--safetensors", safetensors_path, "Loads safetensors model from the given path")
         ->default_val(safetensors_path);
+    app.add_option(
+           "--loss-impl",
+           loss_impl,
+           "Cross-entropy loss implementation: 'auto' (vocab_parallel iff TP enabled), 'reference' "
+           "(ttml::ops::cross_entropy_loss), or 'vocab_parallel' "
+           "(ttml::ops::distributed::vocab_parallel_cross_entropy_loss)")
+        ->default_val(loss_impl)
+        ->check(CLI::IsMember({"auto", "reference", "vocab_parallel"}));
     bool track_memory = false;
     app.add_flag("--track_memory", track_memory, "Enable memory usage tracking during first iteration");
     CLI11_PARSE(app, argc, argv);
@@ -637,14 +647,28 @@ int main(int argc, char **argv) {
         },
         model_config.transformer_config);
 
+    // Decide once, up-front, whether the LM head should all-gather logits.  When the
+    // downstream loss is the vocab-parallel one, leaving logits sharded saves the all_gather
+    // *and* is required for correctness — feeding fully-replicated logits into
+    // vocab_parallel_cross_entropy_loss inflates the loss by log(tp_size) because every shard's
+    // local_sum_exp ends up identical and the all_reduce(SUM) over them multiplies by
+    // tp_size.
+    if (loss_impl == "vocab_parallel" && !device_config.enable_tp) {
+        throw std::runtime_error(
+            "--loss-impl=vocab_parallel requires tensor parallelism (enable_tp=true in the device config)");
+    }
+    const bool use_vocab_parallel_loss =
+        device_config.enable_tp && ((loss_impl == "vocab_parallel") || (loss_impl == "auto"));
+    const bool gather_output_at_lm_head = !use_vocab_parallel_loss;
+
     Model model = std::visit(
-        [&device_config, &multihost_config](auto &&arg) -> Model {
+        [&device_config, &multihost_config, gather_output_at_lm_head](auto &&arg) -> Model {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
                 if (multihost_config.pipeline_parallel_config) {
                     return ttml::models::distributed::pipeline_parallel_llama::create(
                         arg, *multihost_config.pipeline_parallel_config, device_config.enable_tp);
                 } else if (device_config.enable_tp || device_config.enable_cp) {
-                    return ttml::models::distributed::llama::create(arg);
+                    return ttml::models::distributed::llama::create(arg, gather_output_at_lm_head);
                 } else {
                     return ttml::models::llama::create(arg);
                 }
@@ -777,6 +801,8 @@ int main(int argc, char **argv) {
 
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(multihost_config);
 
+    bool loss_impl_logged = false;
+
     // Training loop
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
@@ -792,7 +818,19 @@ int main(int argc, char **argv) {
             auto output = run_model(model, features, masks);
             float loss_float = 0.0F;
             if (needs_to_call_loss) {
-                auto loss = ttml::ops::cross_entropy_loss(output, target);
+                if (!loss_impl_logged) {
+                    fmt::print(
+                        "Using {} for training loss (--loss-impl={}, gather_output_at_lm_head={})\n",
+                        use_vocab_parallel_loss ? "distributed::vocab_parallel_cross_entropy_loss"
+                                                : "cross_entropy_loss",
+                        loss_impl,
+                        gather_output_at_lm_head);
+                    loss_impl_logged = true;
+                }
+
+                auto loss = use_vocab_parallel_loss
+                                ? ttml::ops::distributed::vocab_parallel_cross_entropy_loss(output, target, 1U)
+                                : ttml::ops::cross_entropy_loss(output, target);
                 loss = gradient_accumulator_helper.scale(loss);
                 loss_float = get_loss_value(loss);
                 ttml::autograd::ctx().get_profiler().read_results(device, "forward_pass_done");
