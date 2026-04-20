@@ -29,6 +29,7 @@ static bool run_test_bandwidth(
     const CoreCoord& send_core,
     const CoreCoord& recv_core,
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0) {
+    /* ======================= */
     bool same_device = send_mesh_device == recv_mesh_device;
     auto* const send_device = send_mesh_device->get_devices()[0];
     auto* const recv_device = recv_mesh_device->get_devices()[0];

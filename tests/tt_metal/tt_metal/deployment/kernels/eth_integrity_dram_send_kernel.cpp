@@ -48,7 +48,7 @@ void kernel_main() {
         std::swap(send_buffer, send_buffer_next);
         std::swap(recv_buffer, recv_buffer_next);
     }
-    noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, curr_addr);
+
     eth_send_bytes(send_buffer, recv_buffer, transfer_size, num_bytes_per_send, num_bytes_per_send >> 4);
 
     eth_wait_for_receiver_done();
