@@ -387,7 +387,6 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         for i in range(0, x.shape[2], CHUNK_SIZE):
             start = i
             end = min(i + CHUNK_SIZE, x.shape[2])
-            logger.info(f"start-end: {start} - {end}")
             x_chunk = ttnn.slice(x, [0, 0, start], [1, 1, end])
             rope_chunk = {
                 "cos_matrix": ttnn.slice(rope_tensors["cos_matrix"], [0, 0, start, 0], [1, 1, end, cos_dim]),
