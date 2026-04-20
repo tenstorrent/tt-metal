@@ -469,7 +469,9 @@ class TtMoe(LightweightModule):
         logger.debug(
             f"expert_outputs.memory_config is {expert_outputs.memory_config()} and shape is: {expert_outputs.shape}"
         )
+        ttnn.dump_device_memory_state(self.mesh_device, "pre untilize")
         expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
+
         # logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
 
         logger.debug("Moe combine start")
