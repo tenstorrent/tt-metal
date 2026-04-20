@@ -419,7 +419,6 @@ class BroadcastConfig:
             payload.append(d["dst_chip_ids"][i])
             dst_node = d["dst_nodes"][i]
             for link_idx in range(self.num_links):
-                print(f"[ccl_broadcast] src_node={src_node}, dst_node={dst_node}, link_idx={link_idx}", flush=True)
                 setup_args = ttnn.setup_fabric_connection(src_node, dst_node, link_idx, program, core)
                 if self._setup_fabric_rt_arg_count is None:
                     self._setup_fabric_rt_arg_count = len(setup_args)

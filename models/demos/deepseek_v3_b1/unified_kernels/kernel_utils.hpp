@@ -206,7 +206,7 @@ FORCE_INLINE void reconfig_cbs_for_mask(uint32_t tt_l1_ptr* cb_config, uint32_t 
 }
 
 FORCE_INLINE void reconfig_cb_interfaces(uint32_t tt_l1_ptr* cb_config) {
-#if defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_BRISC) or defined(COMPILE_FOR_TRISC)
+#if defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_BRISC) or defined(UCK_CHLKC_UNPACK) or defined(UCK_CHLKC_PACK)
 #if defined(COMPILE_FOR_NCRISC)
     constexpr bool do_read = true;
     constexpr bool do_write = true;
@@ -234,7 +234,6 @@ FORCE_INLINE void reconfig_cb_interfaces(uint32_t tt_l1_ptr* cb_config) {
 
     reconfig_cbs_for_mask<do_read, do_write, do_write_tile_ptr, do_reset_stream_regs>(cb_config, cb_config[256], 0);
     reconfig_cbs_for_mask<do_read, do_write, do_write_tile_ptr, do_reset_stream_regs>(cb_config, cb_config[257], 32);
-#endif
 
     sync_riscs_exit<false>(reconfig_sem);
 #else

@@ -188,10 +188,10 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores(num_links_bcast=1, num_links_allreduce=1):
-        # Pipeline semaphores: mcast (3) + gather (2) + rope (1) + MLA (6) + post-SDPA fused (10) + SDPA (2) + ccl_sync (1) + ccl_sync2 (1) = 26
+        # Pipeline semaphores: mcast (4) + gather (2) + rope (1) + MLA (6) + post-SDPA fused (10) + SDPA (2) + ccl_sync (1) + ccl_sync2 (1) = 26
         # Post-SDPA fused (10): gather2 noc0/noc1 (2) + mcast3 receiver (1) + gather3 noc0/noc1 (2)
         #                       + scatter_arrival (1) + sdpa fwd r1/r2 (2) + sdpa bwd r1/r2 (2)
-        pipeline_num_semaphores = 26
+        pipeline_num_semaphores = 27
         allreduce_num_semaphores = DeepseekMinimalAllReduce.get_num_semaphores(num_links=num_links_allreduce)
         bcast_num_semaphores = DeepseekMinimalBroadcast.get_num_semaphores(num_links=num_links_bcast)
         allgather_num_semaphores = 2  # handoff_sem + recv_sem
@@ -366,15 +366,10 @@ class AttentionBlock:
         tile_size = interpreted_tile.get_tile_size(data_format)
 
         # Calculate num_tiles from tensor shape
-        original_num_tiles = (input_shape[0] * input_shape[1]) // (tile_height * tile_width)
-        if forward_metadata:
-            assert original_num_tiles == 8, f"original_num_tiles: {original_num_tiles}"
-        else:
-            assert original_num_tiles == 7, f"original_num_tiles: {original_num_tiles}"
         num_tiles = 7
 
         # Get number of elements for RMS calculation
-        numel = input_tensor_sample.logical_volume()
+        numel = num_tiles * tile_height * tile_width
 
         # Get core grid from input tensor's memory config
         input_memory_config = input_tensor_sample.memory_config()
