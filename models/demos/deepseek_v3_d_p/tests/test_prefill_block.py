@@ -185,7 +185,7 @@ def test_prefill_block(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        capacity_factor=32,
+        capacity_factor=8,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
