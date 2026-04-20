@@ -1767,8 +1767,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)
         """
-        if teacher_forcing is not None and self.sample_on_device:
-            raise ValueError("teacher_forcing is not supported when sample_on_device is True")
+
         # Initialize profiler
         profiler = BenchmarkProfiler()
         profiler.start("run")
