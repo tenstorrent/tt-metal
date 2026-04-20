@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
+from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     extract_mesh_config,
@@ -15,6 +17,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_ep_mesh_mapper,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CACHE_DIR = Path("/tmp/DS_PREFILL_routed_expert")
@@ -26,6 +29,7 @@ def cleanup_cache():
         shutil.rmtree(CACHE_DIR)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     yield
+    report_and_clear()
 
 
 @pytest.mark.parametrize(
@@ -110,8 +114,6 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     weights_dtype = ttnn.bfloat4_b
 
     # === Path 1: From Weights ===
-    from loguru import logger
-
     logger.info(f"Test params: experts_per_chip={experts_per_chip}, max_tokens={max_dispatched_tokens_per_expert}")
     logger.info(f"Dimensions: emb_dim={emb_dim}, hidden_dim={hidden_dim}")
     logger.info(f"dispatched_buffer_tt.shape={dispatched_buffer_tt.shape}")
@@ -130,11 +132,14 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     output1 = to_torch_expert(output1_tt)
 
     # === Path 2: Cold Cache ===
+    init_checker(CACHE_DIR)
     assert not TtRoutedExpert.check_cache_complete(
         CACHE_DIR, "routed_expert", experts_per_chip
     ), "Cache should be empty before build"
 
     logger.info(f"Building cache to {CACHE_DIR}")
+    profiler.clear()
+    profiler.start("build_cache")
     TtRoutedExpert.build_ttnn_cache(
         torch_weights,
         experts_per_chip,
@@ -143,11 +148,14 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         CACHE_DIR,
         "routed_expert",
     )
+    profiler.end("build_cache")
 
+    init_checker(CACHE_DIR)
     assert TtRoutedExpert.check_cache_complete(
         CACHE_DIR, "routed_expert", experts_per_chip
     ), "Cache should be complete after build"
 
+    profiler.start("cold_load")
     expert_cold = TtRoutedExpert(
         mesh_device,
         experts_per_chip,
@@ -159,10 +167,12 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         weight_cache_path=CACHE_DIR,
         cache_name_prefix="routed_expert",
     )
+    profiler.end("cold_load")
     output2_tt = expert_cold(dispatched_buffer_tt)
     output2 = to_torch_expert(output2_tt)
 
     # === Path 3: Warm Cache ===
+    profiler.start("warm_load")
     expert_warm = TtRoutedExpert(
         mesh_device,
         experts_per_chip,
@@ -174,12 +184,11 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         weight_cache_path=CACHE_DIR,
         cache_name_prefix="routed_expert",
     )
+    profiler.end("warm_load")
     output3_tt = expert_warm(dispatched_buffer_tt)
     output3 = to_torch_expert(output3_tt)
 
     # === Validation ===
-    from loguru import logger
-
     # Debug: check output stats
     logger.info(
         f"Output1 (from weights): shape={output1.shape}, min={output1.min():.4f}, max={output1.max():.4f}, mean={output1.mean():.4f}"
@@ -197,6 +206,9 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     logger.info(f"Routed Expert Cache Test:")
     logger.info(f"  Weights vs Cold Cache PCC: {pcc_cold}")
     logger.info(f"  Weights vs Warm Cache PCC: {pcc_warm}")
+    logger.info(f"  build_cache: {profiler.get('build_cache')*1000:.1f} ms")
+    logger.info(f"  cold_load:   {profiler.get('cold_load')*1000:.1f} ms")
+    logger.info(f"  warm_load:   {profiler.get('warm_load')*1000:.1f} ms")
 
     assert passed_cold, f"Cold cache mismatch: PCC={pcc_cold}"
     assert passed_warm, f"Warm cache mismatch: PCC={pcc_warm}"
