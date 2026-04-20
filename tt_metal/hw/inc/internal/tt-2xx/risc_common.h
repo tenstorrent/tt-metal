@@ -382,30 +382,18 @@ inline __attribute__((always_inline)) void setup_isr_csrs() {
 
 inline __attribute__((always_inline)) void enable_dfb_tile_isr() {
     // Enable ROCC interrupt in mie
-    uint64_t mie_val;
-    asm volatile("csrr %0, mie" : "=r"(mie_val));
-    mie_val |= (1 << 13);
-    asm volatile("csrrs zero, mie, %0" : : "r"(mie_val));
+    asm volatile("csrrs zero, mie, %0" : : "r"(1 << 13));
 
     // Enable MIE in mstatus
-    uint64_t mstatus_val;
-    asm volatile("csrr %0, mstatus" : "=r"(mstatus_val));
-    mstatus_val |= (1 << 3);
-    asm volatile("csrrs zero, mstatus, %0" : : "r"(mstatus_val));
+    asm volatile("csrrs zero, mstatus, %0" : : "r"(1 << 3));
 }
 
 inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
     // Disable ROCC interrupt in mie
-    uint64_t mie_val;
-    asm volatile("csrr %0, mie" : "=r"(mie_val));
-    mie_val &= ~(1 << 13);
-    asm volatile("csrrc zero, mie, %0" : : "r"(mie_val));
+    asm volatile("csrrc zero, mie, %0" : : "r"(1 << 13));
 
     // Disable MIE in mstatus
-    uint64_t mstatus_val;
-    asm volatile("csrr %0, mstatus" : "=r"(mstatus_val));
-    mstatus_val &= ~(1 << 3);
-    asm volatile("csrrc zero, mstatus, %0" : : "r"(mstatus_val));
+    asm volatile("csrrc zero, mstatus, %0" : : "r"(1 << 3));
 }
 
 #endif  // !defined(COMPILE_FOR_TRISC)
