@@ -315,6 +315,84 @@ const core_descriptor_t& get_core_descriptor_config(
     return config_by_num_cqs[num_hw_cqs].at(fast_dispatch);
 }
 
+std::vector<CoreCoord> get_logical_fabric_mux_cores_wh_b0_worker_fabric_mux_yaml_overlay(
+    tt::tt_metal::MetalEnvImpl& env,
+    ChipId device_id,
+    uint8_t num_hw_cqs,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config) {
+    if (env.get_rtoptions().get_simulator_enabled()) {
+        return {};
+    }
+    if (env.get_cluster().arch() != ARCH::WORMHOLE_B0) {
+        return {};
+    }
+    if (tt_metal::get_core_type_from_config(dispatch_core_config) != CoreType::WORKER) {
+        return {};
+    }
+    if (env.get_fabric_tensix_config() != tt_fabric::FabricTensixConfig::DISABLED) {
+        return {};
+    }
+
+    std::string core_desc_dir = env.get_rtoptions().get_root_dir();
+    if (core_desc_dir.back() != '/') {
+        core_desc_dir += "/";
+    }
+    core_desc_dir += "tt_metal/core_descriptors/wormhole_b0_80_arch_fabric_mux.yaml";
+
+    ARCH arch = env.get_cluster().arch();
+    uint32_t harvesting_mask = env.get_cluster().get_harvesting_mask(device_id);
+    std::bitset<32> mask_bitset(harvesting_mask);
+    uint32_t num_harvested_on_axis = mask_bitset.count();
+    if (num_harvested_on_axis > 2) {
+        return {};
+    }
+
+    std::string product_name = get_product_name(arch, num_harvested_on_axis);
+    if (env.get_cluster().is_galaxy_cluster()) {
+        if (env.get_cluster().get_board_type(device_id) == BoardType::N150) {
+            product_name = "nebula_x1";
+        }
+    }
+
+    tt_fabric::FabricTensixConfig fabric_tensix_config = env.get_fabric_tensix_config();
+    tt_metal::DispatchCoreAxis resolved_axis =
+        tt_metal::resolve_dispatch_core_axis(dispatch_core_config, arch, fabric_tensix_config);
+
+    YAML::Node core_descriptor_yaml;
+    try {
+        core_descriptor_yaml = YAML::LoadFile(core_desc_dir);
+    } catch (const YAML::Exception&) {
+        return {};
+    }
+
+    YAML::Node product_node = core_descriptor_yaml[product_name];
+    if (!product_node || !product_node.IsMap()) {
+        return {};
+    }
+    YAML::Node axis_node = product_node[(resolved_axis == tt_metal::DispatchCoreAxis::ROW) ? "row" : "col"];
+    if (!axis_node || !axis_node.IsMap()) {
+        return {};
+    }
+    YAML::Node desc_yaml = axis_node[std::to_string(num_hw_cqs)];
+    if (!desc_yaml || !desc_yaml.IsMap() || !desc_yaml["fabric_mux_cores"]) {
+        return {};
+    }
+
+    CoreCoord grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    std::vector<CoreCoord> logical_fabric_mux_cores;
+    for (const auto& core_node : desc_yaml["fabric_mux_cores"]) {
+        if (!core_node.IsSequence()) {
+            continue;
+        }
+        RelativeCoreCoord coord = {
+            .x = core_node[0].as<int>(),
+            .y = core_node[1].as<int>(),
+        };
+        logical_fabric_mux_cores.push_back(get_core_coord_from_relative(coord, grid_size));
+    }
+    return logical_fabric_mux_cores;
+}
+
 const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,

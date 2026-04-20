@@ -274,17 +274,25 @@ std::optional<tt_cxy_pair> dispatch_core_manager::get_closest_available_dispatch
     // Exclude them here: otherwise get_closest_available_dispatch_core_to_pcie can pick the tensix closest
     // to PCIe that overlaps the fabric-mux row/column (e.g. N300 nebula_x1 bottom-row layout), colliding with
     // live fabric or dispatch and corrupting device state.
-    const std::vector<CoreCoord>& fabric_mux_reserved =
+    std::vector<CoreCoord> fabric_mux_exclusion =
         tt::get_logical_fabric_mux_cores(env_, device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_);
-    if (!fabric_mux_reserved.empty()) {
+    if (fabric_mux_exclusion.empty()) {
+        // With FabricTensix DISABLED, wormhole_b0_80_arch.yaml has no fabric_mux_cores entry, so the vector
+        // above is empty even though wormhole_b0_80_arch_fabric_mux.yaml still defines canonical mux tensixes.
+        auto overlay = tt::get_logical_fabric_mux_cores_wh_b0_worker_fabric_mux_yaml_overlay(
+            env_, device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_);
+        fabric_mux_exclusion.insert(fabric_mux_exclusion.end(), overlay.begin(), overlay.end());
+    }
+    if (!fabric_mux_exclusion.empty()) {
         unused_cores.erase(
             std::remove_if(
                 unused_cores.begin(),
                 unused_cores.end(),
-                [&fabric_mux_reserved](const CoreCoord& c) {
-                    return std::any_of(fabric_mux_reserved.begin(), fabric_mux_reserved.end(), [&](const CoreCoord& r) {
-                        return r.x == c.x && r.y == c.y;
-                    });
+                [&fabric_mux_exclusion](const CoreCoord& c) {
+                    return std::any_of(
+                        fabric_mux_exclusion.begin(), fabric_mux_exclusion.end(), [&](const CoreCoord& r) {
+                            return r.x == c.x && r.y == c.y;
+                        });
                 }),
             unused_cores.end());
     }
