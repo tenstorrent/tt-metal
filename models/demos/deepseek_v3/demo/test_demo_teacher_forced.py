@@ -32,7 +32,7 @@ CACHE_DIR = Path(
 REFERENCE_FILE = Path(
     os.getenv(
         "DEEPSEEK_V3_TEACHER_REF",
-        str(Path(__file__).with_name("deepseek_r1_teacher_forcing_512.refpt")),
+        str(Path(__file__).with_name("deepseek_r1_teacher_forcing_256.refpt")),
     )
 )
 
@@ -45,13 +45,18 @@ def tile_align(length: int) -> int:
     return ((int(length) + aligned_size - 1) // aligned_size) * aligned_size
 
 
-def resolve_prompt_count(system_name: str) -> int:
-    name = system_name.upper()
-    if name == "QUAD":
-        return 512
-    if name == "DUAL":
-        return 256
-    return 1
+def tile_entries_to_target(entries: list[dict], target_prompt_count: int) -> tuple[list[dict], int]:
+    if target_prompt_count <= 0:
+        raise ValueError(f"target_prompt_count must be > 0, got {target_prompt_count}")
+    if not entries:
+        raise ValueError("entries must be non-empty")
+
+    if len(entries) >= target_prompt_count:
+        return entries[:target_prompt_count], 1
+
+    repeats = (target_prompt_count + len(entries) - 1) // len(entries)
+    tiled_entries = (entries * repeats)[:target_prompt_count]
+    return tiled_entries, repeats
 
 
 def entry_prompt_text(entry: dict, tokenizer) -> str:
@@ -81,12 +86,14 @@ def entry_generated_text(entry: dict, tokenizer) -> str:
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("reference_file", [REFERENCE_FILE])
 @pytest.mark.parametrize("max_new_tokens", [128], ids=["128"])
+@pytest.mark.parametrize("max_users_per_row", [8], ids=["8"])
 def test_demo_teacher_forcing_accuracy(
     reference_file: Path,
     max_new_tokens: int,
     is_ci_env: bool,
     force_recalculate_weight_config: bool,
     tmp_path: Path,
+    max_users_per_row: int,
 ):
     if not reference_file.exists():
         pytest.fail(
@@ -99,18 +106,9 @@ def test_demo_teacher_forcing_accuracy(
     if requested_system_name is None:
         pytest.fail("Environment variable $MESH_DEVICE is not set. Please set it to DUAL or QUAD.")
 
-    desired_prompt_count = resolve_prompt_count(requested_system_name)
-    if is_ci_env:
-        desired_prompt_count = 1
-
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
     mesh_rows = mesh_shape[0]
-    if desired_prompt_count % mesh_rows != 0:
-        pytest.fail(
-            f"Desired prompt count {desired_prompt_count} is not divisible by "
-            f"mesh rows {mesh_rows} for {requested_system_name}."
-        )
-    max_users_per_row = desired_prompt_count // mesh_rows
+    desired_prompt_count = mesh_rows * max_users_per_row
     num_users = max_users_per_row * mesh_rows
 
     tokenizer = load_tokenizer(MODEL_PATH)
@@ -124,12 +122,18 @@ def test_demo_teacher_forcing_accuracy(
         entries = payload.get("entries")
     if not isinstance(entries, list) or not entries:
         pytest.fail("Reference payload must contain non-empty 'entries'.")
-    if len(entries) < desired_prompt_count:
-        pytest.fail(
-            f"Reference contains {len(entries)} prompts, but "
-            f"{requested_system_name} requires {desired_prompt_count}."
+    available_entry_count = len(entries)
+    entries, entry_repeats = tile_entries_to_target(entries, desired_prompt_count)
+    if entry_repeats > 1:
+        logger.info(
+            "Reference has {} prompts; repeating {}x to fill {} prompts " "({} rows x {} users/row) for {}",
+            available_entry_count,
+            entry_repeats,
+            desired_prompt_count,
+            mesh_rows,
+            max_users_per_row,
+            requested_system_name,
         )
-    entries = entries[:desired_prompt_count]
 
     max_prompt_len = max(int(entry["tf_prompt_len"]) for entry in entries)
     configured_max_seq_len = tile_align(max_prompt_len + max_new_tokens)
@@ -273,8 +277,8 @@ def test_demo_teacher_forcing_accuracy(
         total_top5,
     )
 
-    min_expected_top1 = 0.70
-    min_expected_top5 = 0.85
+    min_expected_top1 = 0.84
+    min_expected_top5 = 0.98
     assert total_top1 >= min_expected_top1, (
         f"Aggregate top-1 accuracy {total_top1:.4f} is below minimum {min_expected_top1:.2f} "
         f"across {len(entries)} prompts / {overall_compared} tokens."

@@ -11,7 +11,8 @@ Usage:
 
     python convert_api_json_to_refpt.py \\
         --input  results-512.json \\
-        --output deepseek_r1_teacher_forcing_512.refpt \\
+        --output deepseek_r1_teacher_forcing_256.refpt \\
+        --num-entries 256 \\
         --model-path /data/deepseek/DeepSeek-R1-0528-dequantized
 
 The resulting ``.refpt`` stores only the tensors the test needs (prompt token

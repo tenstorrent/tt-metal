@@ -193,11 +193,11 @@ You can verify accuracy under teacher forcing using a multi-prompt reference fil
 
 Generate a compatible multi-prompt reference file with:
 
-- `python models/demos/deepseek_v3/demo/convert_api_json_to_refpt.py --input <api-results.json> --output models/demos/deepseek_v3/demo/deepseek_r1_teacher_forcing_512.refpt --model-path <local-hf-model-path> --num-entries 512 --max-new-tokens 128`
+- `python models/demos/deepseek_v3/demo/convert_api_json_to_refpt.py --input <api-results.json> --output models/demos/deepseek_v3/demo/deepseek_r1_teacher_forcing_256.refpt --model-path <local-hf-model-path> --num-entries 256 --max-new-tokens 128`
 
 Run the DeepSeek-V3 demo with teacher forcing:
 
-- `python models/demos/deepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/demos/deepseek_v3/demo/deepseek_r1_teacher_forcing_512.refpt --max-new-tokens 256`
+- `python models/demos/deepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/demos/deepseek_v3/demo/deepseek_r1_teacher_forcing_256.refpt --max-new-tokens 256`
 
 Notes:
 
