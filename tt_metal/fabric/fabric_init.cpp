@@ -11,6 +11,9 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
+#include "llrt/tt_cluster.hpp"
+
+#include <cstdlib>
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -56,7 +59,8 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_
 }
 
 void configure_fabric_cores(tt::tt_metal::IDevice* device) {
-    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto soc_desc = cluster.get_soc_desc(device->id());
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
     const auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
@@ -65,6 +69,65 @@ void configure_fabric_cores(tt::tt_metal::IDevice* device) {
     const auto addresses_to_clear = builder_context.get_fabric_router_addresses_to_clear();
     const auto& router_config = builder_context.get_fabric_router_config();
     std::vector<uint32_t> router_zero_buf(router_config.router_buffer_clear_size_words, 0);
+
+    // Fix #42429: After a cancelled CI run (or SIGKILL), BRISC on ERISC cores may remain halted
+    // from a prior process's teardown.  When BRISC is halted, L1 firmware writes below have no
+    // effect because the core never executes the new firmware.  Detect this condition and perform
+    // a BRISC-only soft reset (assert + deassert) to restart the core into base firmware.
+    //
+    // Safety: resetting only ERISC0/BRISC keeps the subordinate ERISC (NCRISC) running, which
+    // maintains the ETH PHY link.  The reset window is brief (PCIe round-trip, microseconds)
+    // and mirrors the pattern used in risc_firmware_initializer.cpp reset_cores().
+    //
+    // Guarded by env var so it can be disabled if unexpected side effects appear.
+    static const bool enable_erisc_soft_reset =
+        std::getenv("TT_METAL_ENABLE_FABRIC_ERISC_SOFT_RESET") != nullptr;
+
+    if (enable_erisc_soft_reset) {
+        const auto chip_id = device->id();
+        for (const auto& [router_chan, _] : router_chans_and_direction) {
+            try {
+                // get_virtual_eth_core_from_channel returns the virtual CoreCoord needed
+                // for tt_cxy_pair, which is what assert/deassert_risc_reset_at_core expect.
+                auto virtual_core = cluster.get_virtual_eth_core_from_channel(chip_id, router_chan);
+                tt_cxy_pair core_loc(chip_id, virtual_core);
+
+                // Assert ERISC0 (== BRISC) reset — halts only the main ERISC processor.
+                // The subordinate ERISC continues running and maintains the ETH PHY link.
+                cluster.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+
+                // Immediately deassert so ERISC0 restarts into base UMD firmware.
+                // The window where ERISC0 is halted is limited to the PCIe write round-trip.
+                cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+
+                log_debug(
+                    tt::LogMetal,
+                    "configure_fabric_cores: ERISC0 soft reset bounce on device {} channel {} "
+                    "(BRISC halt recovery)",
+                    chip_id,
+                    router_chan);
+            } catch (const std::exception& e) {
+                // Non-fatal: if the reset fails (e.g. remote chip unreachable), we still attempt
+                // the L1 writes below.  The worst case is the same as without this fix — the
+                // firmware doesn't start on this channel.
+                log_warning(
+                    tt::LogMetal,
+                    "configure_fabric_cores: Failed ERISC0 soft reset on device {} channel {}: {}. "
+                    "Proceeding with L1 clear — firmware may not start on this channel.",
+                    chip_id,
+                    router_chan,
+                    e.what());
+            } catch (...) {
+                log_warning(
+                    tt::LogMetal,
+                    "configure_fabric_cores: Failed ERISC0 soft reset on device {} channel {} "
+                    "(unknown exception). Proceeding with L1 clear.",
+                    chip_id,
+                    router_chan);
+            }
+        }
+    }
+
     for (const auto& [router_chan, _] : router_chans_and_direction) {
         auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
         for (const auto& address : addresses_to_clear) {

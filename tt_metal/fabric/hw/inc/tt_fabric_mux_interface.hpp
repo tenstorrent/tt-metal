@@ -61,7 +61,7 @@ WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabr
 // permanently wedging the calling Tensix kernel.  On timeout the function falls
 // through; the caller (dispatch relay / MUX) will proceed on a best-effort basis
 // and host-side reset logic recovers the device if the endpoint never becomes ready.
-FORCE_INLINE void wait_for_fabric_endpoint_ready(
+FORCE_INLINE bool wait_for_fabric_endpoint_ready(
     uint8_t fabric_ep_x,
     uint8_t fabric_ep_y,
     size_t fabric_ep_status_address,
@@ -76,11 +76,12 @@ FORCE_INLINE void wait_for_fabric_endpoint_ready(
         noc_async_read_barrier();
         invalidate_l1_cache();
         if (local_fabric_ep_status_ptr[0] == tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC) {
-            return;
+            return true;
         }
     }
     // Fall through on timeout: host-side reset logic recovers. Avoid infinite spin
     // so a stuck peer cannot permanently wedge this kernel.
+    return false;
 }
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>

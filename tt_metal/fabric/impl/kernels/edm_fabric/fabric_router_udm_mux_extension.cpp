@@ -190,16 +190,21 @@ void wait_for_static_connection_to_ready(
 }
 
 FORCE_INLINE void wait_for_mux_endpoint_ready(
-    uint8_t mux_noc_x, uint8_t mux_noc_y, size_t mux_status_address, uint32_t mux_status_readback_address) {
+    uint8_t mux_noc_x, uint8_t mux_noc_y, size_t mux_status_address, uint32_t mux_status_readback_address,
+    uint32_t max_poll_iterations = 1'000'000) {
     uint64_t noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, mux_status_address);
     auto ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mux_status_readback_address);
 
     ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
-    do {
+    for (uint32_t i = 0; i < max_poll_iterations; ++i) {
         noc_async_read_one_packet(noc_addr, mux_status_readback_address, 4);
         noc_async_read_barrier();
         invalidate_l1_cache();
-    } while (ptr[0] != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC);
+        if (ptr[0] == tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
+            return;
+        }
+    }
+    // Fall through on timeout — caller or host Phase 4 handles recovery.
 }
 
 template <uint8_t NUM_BUFFERS>
@@ -481,11 +486,15 @@ void kernel_main() {
     if constexpr (has_fabric_router) {
         // wait for fabric router to be ready before setting up the connection
         if constexpr (wait_for_fabric_endpoint) {
-            tt::tt_fabric::wait_for_fabric_endpoint_ready(
+            bool erisc_ready = tt::tt_fabric::wait_for_fabric_endpoint_ready(
                 fabric_connection.edm_noc_x,
                 fabric_connection.edm_noc_y,
                 fabric_router_status_address,
                 local_fabric_router_status_address);
+            if (!erisc_ready) {
+                status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+                return;
+            }
         }
 
         fabric_connection.open<false>();

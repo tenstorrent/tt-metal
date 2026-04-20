@@ -854,6 +854,95 @@ void Device::quiesce_and_restart_fabric_workers() {
         }
     }
 
+    // Phase 5: Post-restart ERISC health check.
+    //
+    // After Phase 3 re-launched firmware and Phase 4 confirmed Tensix MUX readiness, verify
+    // that ALL active ERISC channels on this device have reached READY_FOR_TRAFFIC.  If a
+    // prior process crash left BRISC-halted ERISC cores with corrupt L1, Phase 3's firmware
+    // re-launch may not have recovered them — and the next dispatch op (e.g. all_gather) will
+    // hang in completion_queue_wait_front with no useful diagnostic.
+    //
+    // This check catches that failure mode and throws immediately with a clear message,
+    // preventing the downstream hang.  We retry a few times with short delays to tolerate
+    // channels that are a few ms away from ready.
+    {
+        const auto [router_sync_addr, sync_status] =
+            builder_ctx.get_fabric_router_sync_address_and_status();
+        constexpr uint32_t expected_status =
+            static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+        constexpr uint32_t kHealthCheckRetries = 3;
+        constexpr uint32_t kHealthCheckRetryDelayMs = 10;
+
+        struct UnhealthyChannel {
+            uint32_t eth_chan_id;
+            uint32_t actual_status;
+        };
+        std::vector<UnhealthyChannel> unhealthy;
+
+        // Build list of (eth_chan_id, eth_logical_core) pairs to check.
+        struct ChanToCheck {
+            uint32_t eth_chan_id;
+            CoreCoord eth_logical_core;
+        };
+        std::vector<ChanToCheck> chans;
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            const auto eth_logical_core = env_impl.get_cluster()
+                                              .get_soc_desc(this->id())
+                                              .get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+            chans.push_back({eth_chan_id, eth_logical_core});
+        }
+
+        // Retry loop: on each attempt, only re-check channels that haven't passed yet.
+        std::vector<size_t> pending;
+        pending.reserve(chans.size());
+        for (size_t i = 0; i < chans.size(); i++) {
+            pending.push_back(i);
+        }
+
+        for (uint32_t attempt = 0; attempt < kHealthCheckRetries && !pending.empty(); attempt++) {
+            if (attempt > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kHealthCheckRetryDelayMs));
+            }
+            std::vector<size_t> still_pending;
+            for (size_t idx : pending) {
+                const auto& ch = chans[idx];
+                std::vector<uint32_t> status_buf(1, 0);
+                detail::ReadFromDeviceL1(
+                    this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                if (status_buf[0] != expected_status) {
+                    still_pending.push_back(idx);
+                    if (attempt == kHealthCheckRetries - 1) {
+                        unhealthy.push_back({ch.eth_chan_id, status_buf[0]});
+                    }
+                }
+            }
+            pending = std::move(still_pending);
+        }
+
+        if (!unhealthy.empty()) {
+            std::string details;
+            for (const auto& u : unhealthy) {
+                details += fmt::format(
+                    "  dev={} chan={} status=0x{:08x}\n", this->id(), u.eth_chan_id, u.actual_status);
+            }
+            TT_THROW(
+                "Fabric health check failed after quiesce restart on Device {} — "
+                "{} ERISC channel(s) not at READY_FOR_TRAFFIC (0x{:08x}). "
+                "Possible corrupt ERISC state from prior process crash (#42429). "
+                "Run tt-smi -r to reset chips.\n{}",
+                this->id(),
+                unhealthy.size(),
+                expected_status,
+                details);
+        }
+
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} Phase 5: all {} ERISC channels healthy",
+            this->id(),
+            chans.size());
+    }
+
     log_info(tt::LogMetal, "Fabric MUX workers restarted on Device {}", this->id_);
 }
 
