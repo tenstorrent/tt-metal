@@ -8,6 +8,7 @@ import time
 from functools import partial
 
 import pytest
+from models.tt_transformers.tt.model_config import determine_device_name
 import torch
 import torch.nn.functional as F
 from loguru import logger
@@ -596,7 +597,7 @@ def run_falcon_demo_kv(
 
     # Save benchmark data (will only save if running in CI environment)
     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets=perf_targets)
-    run_type = f"demo_{'perf' if perf_mode else 'generate'}_{mesh_device.get_num_devices()}chip"
+    run_type = "demo_perf" if perf_mode else "demo_generate"
 
     data_parallel = 1
     tensor_parallel = mesh_device.get_num_devices() // data_parallel
@@ -605,8 +606,9 @@ def run_falcon_demo_kv(
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=run_type,
-        ml_model_name=model_version,
+        ml_model_name=model_version.removeprefix("tiiuae/"),
         ml_model_type="llm",
+        device_name=determine_device_name(mesh_device),
         num_layers=num_layers,
         batch_size=batch_size,
         config_params=config_params,

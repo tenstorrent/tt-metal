@@ -8,6 +8,7 @@ import time
 from functools import partial
 from pathlib import Path
 
+from models.tt_transformers.tt.model_config import determine_device_name
 import torch
 import torch.nn.functional as F
 from loguru import logger
@@ -133,7 +134,6 @@ def run_falcon_demo_kv(
     save_generated_text_path=None,  # If provided, save generated text to this path (e.g. set to expected_greedy_output_path to update expected output)
     json_perf_targets={},  # Optional perf targets for CSV output
     is_ci_env=False,  # Whether is running in CI environment
-    galaxy_type=None,  # "4U" or "6U" when running on WH-Galaxy
 ):
     profiler = BenchmarkProfiler()
     profiler.start("run")
@@ -538,15 +538,14 @@ def run_falcon_demo_kv(
 
     # Save benchmark data (will only save if running in CI environment)
     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, json_perf_targets)
-    run_type = f"demo_perf_{num_devices}chip" if perf_mode else f"demo_generate_{num_devices}chip"
-    if galaxy_type:
-        run_type += f"_{galaxy_type}"
+    run_type = "demo_perf" if perf_mode else "demo_generate"
 
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=run_type,
-        ml_model_name=model_version,
+        ml_model_name=model_version.removeprefix("tiiuae/"),
         ml_model_type="llm",
+        device_name=determine_device_name(mesh_device),
         num_layers=num_layers,
         batch_size=batch_size,
         config_params={"data_parallel": num_devices, "tensor_parallel": 1},
