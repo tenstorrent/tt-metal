@@ -1,0 +1,3 @@
+diffusers>=0.37.1
+transformers>=5.5.4
+huggingface-hub>=1.11.0
