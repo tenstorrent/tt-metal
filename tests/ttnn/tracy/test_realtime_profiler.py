@@ -701,27 +701,36 @@ def _parse_device_sync_zones(csv_path: Path) -> list[int]:
 
 
 def _pair_sync(host_msgs, device_zones):
-    """For each host sync message, pick the closest device SYNC_CHECK zone."""
+    """
+    Pair host messages with device zones in strict timeline order.
+
+    Each device timestamp is consumed at most once (1:1 pairing), preventing
+    duplicate matches that can happen with independent nearest-neighbor picks.
+    """
     pairs = []
-    for name, h_ns in host_msgs:
-        if not device_zones:
+    next_device_idx = 0
+    total_devices = len(device_zones)
+    total_hosts = len(host_msgs)
+
+    for host_idx, (name, h_ns) in enumerate(host_msgs):
+        if next_device_idx >= total_devices:
             pairs.append((name, h_ns, None, None))
             continue
-        # Binary search for insertion point.
-        lo, hi = 0, len(device_zones) - 1
-        while lo < hi:
-            mid = (lo + hi) // 2
-            if device_zones[mid] < h_ns:
-                lo = mid + 1
-            else:
-                hi = mid
-        candidates = []
-        if lo < len(device_zones):
-            candidates.append(device_zones[lo])
-        if lo > 0:
-            candidates.append(device_zones[lo - 1])
-        best = min(candidates, key=lambda d: abs(d - h_ns))
+
+        # Keep enough device points for remaining host points.
+        remaining_hosts_after = total_hosts - host_idx - 1
+        last_allowed_idx = total_devices - remaining_hosts_after - 1
+        if next_device_idx > last_allowed_idx:
+            pairs.append((name, h_ns, None, None))
+            continue
+
+        best_idx = min(
+            range(next_device_idx, last_allowed_idx + 1),
+            key=lambda idx: abs(device_zones[idx] - h_ns),
+        )
+        best = device_zones[best_idx]
         pairs.append((name, h_ns, best, best - h_ns))
+        next_device_idx = best_idx + 1
     return pairs
 
 

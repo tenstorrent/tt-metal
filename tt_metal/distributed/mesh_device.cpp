@@ -1862,17 +1862,18 @@ void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
         // 4. Send host timestamp to trigger device response.
+        // Place the host-side Tracy marker right before the PCIe write so both
+        // FINISH_SYNC and SYNC_CHECK use the same timing convention.
         dev_state.sync_host_time_before = TracyGetCpuTime();
         uint32_t host_time_id = static_cast<uint32_t>(dev_state.sync_host_time_before & 0xFFFFFFFF);
         std::vector<uint32_t> host_time_data = {host_time_id};
+        TracyMessageL("FINISH_SYNC");
         tt::tt_metal::detail::WriteToDeviceL1(
             dev_state.device,
             dev_state.realtime_profiler_core,
             dev_state.sync_host_ts_addr,
             host_time_data,
             CoreType::WORKER);
-
-        TracyMessageL("FINISH_SYNC");
 
         // 5. Read directly from the socket until we get the sync response
         //    (or timeout). Any data pages that arrive before the sync response
