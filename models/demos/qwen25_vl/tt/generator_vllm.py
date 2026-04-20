@@ -20,6 +20,7 @@ from vllm.model_executor.models.qwen2_5_vl import (
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf, preprocess_inputs_prefill
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
@@ -122,6 +123,26 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         ), "Reference model and visual model must be provided for vLLM"
 
         super().__init__(*args, **kwargs)
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        *args,
+        **kwargs,
+    ) -> int:
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        if "Qwen2.5-VL-72B" in model_name and devices_per_dp_cache == 8 and is_wormhole_b0():
+            return 65_536
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            *args,
+            **kwargs,
+        )
 
     @classmethod
     def initialize_vllm_model(

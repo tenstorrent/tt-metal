@@ -25,6 +25,7 @@ from models.common.sampling import (
     format_sampling_params,
 )
 from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
+from models.common.max_tokens_policy import MaxTokensAllUsersMixin
 from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
     Mode,
@@ -42,12 +43,6 @@ MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 # Power-of-2 batch sizes supported by trace caching for batched prefill.
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 
-# Defaults to 131,072 set by
-# vllm.worker.tt_worker::get_num_available_blocks_tt (#409b1cd).
-# NOTE: includes number of vision tokens for multi-modal models.
-MAX_TOKENS_ALL_USERS = 131_072
-
-
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
 
@@ -56,17 +51,7 @@ def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
-class Generator(WarmupForwardMixin):
-    @classmethod
-    def get_max_tokens_all_users(cls, *args, **kwargs) -> int:
-        """Returns default `max_tokens_all_users`.
-
-        Should be reimplemented in model- and device-specific cases.
-        See subclasses such as ``QwenForCausalLM``.
-
-        See also https://github.com/tenstorrent/vllm/issues/315
-        """
-        return MAX_TOKENS_ALL_USERS
+class Generator(MaxTokensAllUsersMixin, WarmupForwardMixin):
 
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """

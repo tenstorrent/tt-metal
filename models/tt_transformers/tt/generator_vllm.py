@@ -253,10 +253,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         *args,
         **kwargs,
     ) -> int:
-        """(Re)Sets `max_tokens_all_users` based on model and device configurations.
-
-        See https://github.com/tenstorrent/vllm/issues/315
-        """
+        """Returns model/device-specific `max_tokens_all_users` when needed."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
@@ -371,10 +368,7 @@ class LlamaForCausalLM(Generator):
         *args,
         **kwargs,
     ) -> int:
-        """(Re)Sets `max_tokens_all_users` based on model and device configurations.
-
-        See https://github.com/tenstorrent/vllm/issues/315
-        """
+        """Returns model/device-specific `max_tokens_all_users` when needed."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
@@ -454,10 +448,7 @@ class QwenForCausalLM(Generator):
         *args,
         **kwargs,
     ) -> int:
-        """(Re)Sets `max_tokens_all_users` based on model and device configurations.
-
-        See https://github.com/tenstorrent/vllm/issues/315
-        """
+        """Returns model/device-specific `max_tokens_all_users` when needed."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
@@ -524,10 +515,7 @@ class MistralForCausalLM(Generator):
         *args,
         **kwargs,
     ) -> int:
-        """(Re)Sets `max_tokens_all_users` based on model and device configurations.
-
-        See https://github.com/tenstorrent/vllm/issues/315
-        """
+        """Returns model/device-specific `max_tokens_all_users` when needed."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
@@ -599,14 +587,11 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         *args,
         **kwargs,
     ) -> int:
-        """(Re)Sets `max_tokens_all_users` based on model and device configurations.
-
-        See https://github.com/tenstorrent/vllm/issues/315
-        """
+        """Returns model/device-specific `max_tokens_all_users` when needed."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
-        # gemma3-4b on N150
+        # gemma3-4b on wormhole configurations with up to 2 devices per DP shard
         if "4b" in model_name.lower() and devices_per_dp_cache <= 2 and is_wormhole:
             return 65_536
         return super().get_max_tokens_all_users(*args, **kwargs)

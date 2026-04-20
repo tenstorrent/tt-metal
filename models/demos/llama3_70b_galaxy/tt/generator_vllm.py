@@ -5,6 +5,7 @@
 import ttnn
 import torch
 from tqdm import tqdm
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.llama3_70b_galaxy.tt.generator import Generator
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
@@ -214,6 +215,33 @@ class LlamaForCausalLM(Generator):
 class QwenForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        *args,
+        **kwargs,
+    ) -> int:
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        is_wormhole = is_wormhole_b0()
+
+        if (
+            ("DeepSeek-R1-Distill-Qwen-14B" in model_name or "Qwen2.5-14B" in model_name)
+            and devices_per_dp_cache == 2
+            and is_wormhole
+        ):
+            return 65_536
+
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            *args,
+            **kwargs,
+        )
 
     @classmethod
     def initialize_vllm_model(
