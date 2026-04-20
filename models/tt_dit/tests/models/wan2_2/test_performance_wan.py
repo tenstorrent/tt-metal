@@ -7,7 +7,6 @@ import statistics
 import numpy as np
 import pytest
 import torch
-from diffusers.utils import export_to_video
 from loguru import logger
 from PIL import Image
 
@@ -16,6 +15,7 @@ from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
+from models.tt_dit.utils.video import export_to_video
 
 from ....utils.test import line_params, ring_params, ring_params_8k
 
@@ -276,6 +276,7 @@ def test_pipeline_performance(
                     profiler_iteration=i,
                     seed=42,
                     traced=traced,
+                    output_type="uint8",
                 )
                 ttnn.synchronize_device(mesh_device)
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
@@ -294,22 +295,22 @@ def test_pipeline_performance(
 
     # Basic validation
     if isinstance(frames, np.ndarray):
-        print(f"  Video data range: [{frames.min():.3f}, {frames.max():.3f}]")
+        print(f"  Video dtype:      {frames.dtype}")
+        print(f"  Video data range: [{frames.min()}, {frames.max()}]")
     elif isinstance(frames, torch.Tensor):
-        print(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
+        print(f"  Video dtype:      {frames.dtype}")
+        print(f"  Video data range: [{frames.min().item()}, {frames.max().item()}]")
 
-    # Save video using diffusers utility
+    # Save video
     # Remove batch dimension
     frames = frames[0]
-    try:
-        if not is_ci_env:
-            if int(ttnn.distributed_context_get_rank()) == 0:
-                export_to_video(frames, f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4", fps=16)
-                print(f"✓ Saved video to: wan_output_video_{model_type}{'_traced' if traced else ''}.mp4")
-            else:
-                print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
-    except AttributeError as e:
-        logger.info(f"AttributeError: {e}")
+    if not is_ci_env:
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            output_path = f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4"
+            export_to_video(frames, output_path, fps=16)
+            print(f"✓ Saved video to: {output_path}")
+        else:
+            print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
 
     # Calculate statistics
     text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
