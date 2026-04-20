@@ -112,6 +112,85 @@ def reference_attention_with_kv_cache(
     return output
 
 
+def reference_decode_intermediates(
+    hidden_states,
+    wq,
+    wk,
+    wv,
+    wo,
+    q_norm_weight,
+    k_norm_weight,
+    kv_cache_k,
+    kv_cache_v,
+    current_pos,
+    num_heads=32,
+    num_kv_heads=8,
+    head_dim=128,
+    rope_theta=1000000.0,
+):
+    """
+    Same math as reference_attention_with_kv_cache, but return tensors after QK-norm,
+    after RoPE (current token K only), attention pre-output-proj, and final output.
+    Used to localize PCC loss (RoPE vs SDPA vs output proj).
+    """
+    batch_size = hidden_states.shape[0]
+    num_kv_groups = num_heads // num_kv_heads
+
+    q = F.linear(hidden_states, wq)
+    k = F.linear(hidden_states, wk)
+    v = F.linear(hidden_states, wv)
+
+    q = q.view(batch_size, 1, num_heads, head_dim).transpose(1, 2)
+    k = k.view(batch_size, 1, num_kv_heads, head_dim).transpose(1, 2)
+    v = v.view(batch_size, 1, num_kv_heads, head_dim).transpose(1, 2)
+
+    def rms_norm(x, weight, eps=1e-5):
+        variance = x.pow(2).mean(-1, keepdim=True)
+        x = x * torch.rsqrt(variance + eps)
+        return x * weight
+
+    q = rms_norm(q, q_norm_weight)
+    k = rms_norm(k, k_norm_weight)
+
+    q_for_rope = q.transpose(1, 2)
+    k_for_rope = k.transpose(1, 2)
+    position_ids = torch.full(
+        (batch_size, 1),
+        float(current_pos),
+        dtype=torch.float32,
+        device=hidden_states.device,
+    )
+    q_rot, k_rot = _apply_rope(q_for_rope, k_for_rope, position_ids, head_dim, rope_theta)
+    q_rot = q_rot.transpose(1, 2)
+    k_rot = k_rot.transpose(1, 2)
+
+    kv_cache_k = kv_cache_k.clone()
+    kv_cache_v = kv_cache_v.clone()
+    kv_cache_k[:, :, current_pos : current_pos + 1, :] = k_rot
+    kv_cache_v[:, :, current_pos : current_pos + 1, :] = v
+
+    k_full = kv_cache_k[:, :, : current_pos + 1, :]
+    v_full = kv_cache_v[:, :, : current_pos + 1, :]
+    k_expanded = k_full.repeat_interleave(num_kv_groups, dim=1)
+    v_expanded = v_full.repeat_interleave(num_kv_groups, dim=1)
+
+    scale = 1.0 / (head_dim**0.5)
+    attn_weights = torch.matmul(q_rot, k_expanded.transpose(-2, -1)) * scale
+    attn_weights = F.softmax(attn_weights, dim=-1)
+    attn_output = torch.matmul(attn_weights, v_expanded)
+    attn_merged = attn_output.transpose(1, 2).contiguous().view(batch_size, 1, num_heads * head_dim)
+    output = F.linear(attn_merged, wo)
+
+    return {
+        "q_after_norm": q,
+        "k_after_norm": k,
+        "q_after_rope": q_rot,
+        "k_new_after_rope": k_rot,
+        "attn_pre_wo": attn_merged,
+        "output": output,
+    }
+
+
 def test_decode_pcc():
     """Test decode step PCC."""
     from models.demos.molmo2.demo.demo import load_model_weights
@@ -266,7 +345,11 @@ def test_decode_pcc():
             # Generate random decode hidden state
             decode_hidden = torch.randn(1, 1, hidden_dim)
 
-            # Reference decode
+            # Snapshot KV before this token (staged reference must use the same state as one-shot ref)
+            kv_k_snapshot = ref_k_cache.clone()
+            kv_v_snapshot = ref_v_cache.clone()
+
+            # Reference decode (updates ref_k_cache / ref_v_cache)
             ref_output = reference_attention_with_kv_cache(
                 decode_hidden,
                 wq,
@@ -283,6 +366,71 @@ def test_decode_pcc():
                 head_dim,
             )
 
+            # Same forward on KV snapshot for per-stage tensors (for logging / isolation)
+            stages = reference_decode_intermediates(
+                decode_hidden,
+                wq,
+                wk,
+                wv,
+                wo,
+                q_norm,
+                k_norm,
+                kv_k_snapshot,
+                kv_v_snapshot,
+                pos,
+                num_heads,
+                num_kv_heads,
+                head_dim,
+            )
+            pcc_ref_vs_stages = calculate_pcc(ref_output.squeeze(0), stages["output"].squeeze(0))
+            logger.info(f"  Reference self-check (full vs staged): PCC = {pcc_ref_vs_stages:.6f} " f"(should be ~1.0)")
+            assert pcc_ref_vs_stages >= 0.99999, "Staged reference should match one-shot reference"
+
+            # TTNN RoPE-only vs reference (uses same cos/sin cache + token index as forward_decode)
+            if step == 0:
+                q_pre = stages["q_after_norm"].transpose(1, 2).contiguous().to(torch.bfloat16)  # [1,1,H,D]
+                k_pre = stages["k_after_norm"].transpose(1, 2).contiguous().to(torch.bfloat16)
+                q_tt = ttnn.from_torch(
+                    q_pre,
+                    device=device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=mesh_mapper,
+                )
+                k_tt = ttnn.from_torch(
+                    k_pre,
+                    device=device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=mesh_mapper,
+                )
+                q_rr = ttnn.experimental.rotary_embedding(
+                    q_tt,
+                    rotary_setup.cos_matrix,
+                    rotary_setup.sin_matrix,
+                    int(pos),
+                )
+                k_rr = ttnn.experimental.rotary_embedding(
+                    k_tt,
+                    rotary_setup.cos_matrix,
+                    rotary_setup.sin_matrix,
+                    int(pos),
+                )
+                ttnn.synchronize_device(device)
+                q_rr_t = ttnn.to_torch(q_rr)[0, 0, :num_heads, :].float()
+                k_rr_t = ttnn.to_torch(k_rr)[0, 0, :num_kv_heads, :].float()
+                ref_qr = stages["q_after_rope"][0, :, 0, :].float()
+                ref_kr = stages["k_new_after_rope"][0, :, 0, :].float()
+                pcc_rope_q = calculate_pcc(ref_qr, q_rr_t)
+                pcc_rope_k = calculate_pcc(ref_kr, k_rr_t)
+                logger.info(
+                    f"  TTNN RoPE vs ref (step 0, pos={pos}): PCC Q = {pcc_rope_q:.6f}, " f"PCC K = {pcc_rope_k:.6f}"
+                )
+                ttnn.deallocate(q_tt)
+                ttnn.deallocate(k_tt)
+                ttnn.deallocate(q_rr)
+                ttnn.deallocate(k_rr)
+
             # TTNN decode
             decode_hidden_ttnn = ttnn.from_torch(
                 decode_hidden.unsqueeze(0).to(torch.bfloat16),  # [1, 1, 1, hidden_dim]
@@ -295,16 +443,35 @@ def test_decode_pcc():
             pos_tensor = torch.tensor([pos], dtype=torch.int32)
             rot_mats = rotary_setup.get_rot_mats_decode(pos_tensor)
 
-            ttnn_output = ttnn_attn.forward_decode(
+            ret = ttnn_attn.forward_decode(
                 decode_hidden_ttnn,
                 rot_mats,
                 transformation_mats["decode"],
                 ttnn_kv_cache,
                 current_pos,
+                return_attn_pre_wo=(step == 0),
             )
+            if step == 0:
+                ttnn_output, attn_pre_wo_tt = ret
+            else:
+                ttnn_output = ret
             ttnn.synchronize_device(device)
 
             ttnn_output_torch = ttnn.to_torch(ttnn_output)[0, 0, :, :]
+
+            if step == 0:
+                ref_attn_vec = stages["attn_pre_wo"].reshape(-1).float()
+                attn_tt_vec = attn_pre_wo_tt.float().reshape(-1)
+                min_len = min(ref_attn_vec.numel(), attn_tt_vec.numel())
+                pcc_attn = calculate_pcc(ref_attn_vec[:min_len], attn_tt_vec[:min_len])
+                # Isolate output projection: fp32 Wo on TTNN pre-Wo vs full reference output
+                attn_row = attn_pre_wo_tt[0, 0, 0, :].float()
+                out_via_fp32_wo = F.linear(attn_row.unsqueeze(0), wo).squeeze(0)
+                pcc_out_fp32_wo = calculate_pcc(ref_output[0, 0].float(), out_via_fp32_wo)
+                logger.info(
+                    f"Step {step + 1} (pos={pos}): PCC attn (pre-Wo, ref vs TTNN) = {pcc_attn:.6f}; "
+                    f"PCC if Wo were fp32 (ref vs attn_tt @ Wo_fp32) = {pcc_out_fp32_wo:.6f}"
+                )
 
             # Calculate PCC and assert — decode hidden states must meet >= 0.99
             pcc = calculate_pcc(ref_output.squeeze(0), ttnn_output_torch)

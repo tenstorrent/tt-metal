@@ -20,7 +20,7 @@ Uses ttnn.experimental.rotary_embedding (half-span RoPE) for device-side RoPE.
 """
 
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 from loguru import logger
@@ -484,6 +484,33 @@ class TextAttention(LightweightModule):
 
         return output, new_kv_cache
 
+    def _nonpaged_sdpa_torch_reference(
+        self,
+        q: torch.Tensor,
+        k_cache: torch.Tensor,
+        v_cache: torch.Tensor,
+        current_pos: ttnn.Tensor,
+    ) -> torch.Tensor:
+        """
+        PyTorch SDPA for decode: ``q`` ``[1, B, H, D]``, KV cache ``[B, n_kv, S_max, D]``.
+        Repeats KV heads for GQA. Slice KV to valid length ``current_pos + 1``.
+        """
+        int_cur = int(current_pos.reshape(-1)[0].item())
+        seq_len = int_cur + 1
+
+        k_s = k_cache[:, :, :seq_len, :]
+        v_s = v_cache[:, :, :seq_len, :]
+        ng = self.num_kv_groups
+        k_exp = k_s.repeat_interleave(ng, dim=1)
+        v_exp = v_s.repeat_interleave(ng, dim=1)
+
+        # (B, H, 1, D) x (B, H, S, D) -> PyTorch SDPA layout
+        qh = q.squeeze(0).unsqueeze(2)
+        # Full attention over KV prefix ``0:seq_len`` (decode). ``is_causal`` triangular mask
+        # does not apply when ``Lq=1`` and ``Lk=seq_len`` in the same way as prefill; use
+        # unmasked SDPA to match the GQA reference (same as ``matmul @ softmax @ V``).
+        return torch.nn.functional.scaled_dot_product_attention(qh, k_exp, v_exp, is_causal=False)
+
     def forward_decode(
         self,
         x: ttnn.Tensor,
@@ -492,6 +519,7 @@ class TextAttention(LightweightModule):
         kv_cache: Tuple[ttnn.Tensor, ttnn.Tensor],
         current_pos: ttnn.Tensor,
         page_table: Optional[ttnn.Tensor] = None,
+        capture_decode_stages: Optional[Dict[str, Any]] = None,
     ) -> ttnn.Tensor:
         """
         Decode-mode forward pass with KV cache update and tensor parallelism.
@@ -507,10 +535,24 @@ class TextAttention(LightweightModule):
             current_pos: Current decode position tensor [batch]
             page_table: Optional page table for paged attention (vLLM)
                 Shape: [batch, max_num_blocks_per_req] mapping positions to block IDs
-
+            capture_decode_stages: If a dict is passed, it is filled with host ``torch.Tensor``
+                snapshots (float32) at key stages for PCC debugging vs a reference. Keys:
+                ``q_after_heads``, ``k_after_heads``, ``v_after_heads``, ``q_after_rms``,
+                ``k_after_rms``, ``q_after_rope``, ``k_after_rope``, ``v_sliced``,
+                ``q_before_sdpa``, ``attn_after_sdpa``, ``attn_after_concat``, ``output``.
         Returns:
             Output tensor [1, 1, 1, hidden_dim]
         """
+        cap = capture_decode_stages
+
+        def _save_stage(name: str, t: Union[ttnn.Tensor, torch.Tensor]) -> None:
+            if cap is None:
+                return
+            if isinstance(t, torch.Tensor):
+                cap[name] = t.detach().cpu().float()
+            else:
+                cap[name] = ttnn.to_torch(t).detach().cpu().float()
+
         # Derive batch_size from input tensor (shape: [1, 1, batch_size, hidden_dim])
         # Note: Don't use kv_cache[0].shape[0] because paged cache has shape
         # [num_blocks, num_kv_heads, block_size, head_dim] where shape[0] is num_blocks
@@ -538,6 +580,10 @@ class TextAttention(LightweightModule):
         )
         ttnn.deallocate(xqkv)
 
+        _save_stage("q_after_heads", q)
+        _save_stage("k_after_heads", k)
+        _save_stage("v_after_heads", v)
+
         # Apply QK-norm (RMSNorm on Q and K)
         # RMSNorm doesn't support HEIGHT_SHARDED, convert to interleaved first
         q = ttnn.to_memory_config(q, ttnn.L1_MEMORY_CONFIG)
@@ -550,6 +596,9 @@ class TextAttention(LightweightModule):
             q = ttnn.typecast(q, dtype=ttnn.bfloat16)
         if k.dtype != ttnn.bfloat16:
             k = ttnn.typecast(k, dtype=ttnn.bfloat16)
+
+        _save_stage("q_after_rms", q)
+        _save_stage("k_after_rms", k)
 
         # Apply RoPE using TTNN rotary embedding
         # Two paths based on batch size:
@@ -600,18 +649,22 @@ class TextAttention(LightweightModule):
             q = apply_rope_batched(q, cos, sin)
             k = apply_rope_batched(k, cos, sin)
         else:
-            # Traced path (batch=1): rot_mats already contain position-specific cos/sin
-            # (via embedding lookup in get_rot_mats_decode_traced), so no position param needed
+            # Full cos/sin cache [1, 1, max_seq_len, head_dim]: rotary_embedding must receive the
+            # decode position index (same pattern as tt_transformers _hf_rope_decode). Without it,
+            # RoPE defaults to the wrong slice and decode PCC collapses.
+            int_current_pos = int(ttnn.to_torch(current_pos).reshape(-1)[0].item())
             q = ttnn.experimental.rotary_embedding(
                 q,
-                cos,  # position-specific cos
-                sin,  # position-specific sin
+                cos,
+                sin,
+                int_current_pos,
             )
 
             k = ttnn.experimental.rotary_embedding(
                 k,
-                cos,  # position-specific cos
-                sin,  # position-specific sin
+                cos,
+                sin,
+                int_current_pos,
             )
 
         logger.debug(f"After RoPE: q.shape={q.shape}, k.shape={k.shape}")
@@ -625,6 +678,10 @@ class TextAttention(LightweightModule):
         q = q[:, :, : self.num_heads_per_device]
         k = k[:, :, : self.num_kv_heads_per_device]
         v = v[:, :, : self.num_kv_heads_per_device]  # Same slice pattern as K
+
+        _save_stage("q_after_rope", q)
+        _save_stage("k_after_rope", k)
+        _save_stage("v_sliced", v)
 
         # Get KV cache references
         k_cache, v_cache = kv_cache
@@ -686,9 +743,8 @@ class TextAttention(LightweightModule):
         # Convert Q back to interleaved for SDPA (keep bfloat16 for GQA decode)
         q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
 
-        # Scaled dot-product attention decode
-        # Uses the full KV cache up to current_pos
-        # Configure SDPA for tensor parallel setup with few heads per device
+        _save_stage("q_before_sdpa", q)
+
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 4),  # Limit cores
             exp_approx_mode=False,
@@ -697,7 +753,7 @@ class TextAttention(LightweightModule):
         )
 
         if page_table is not None:
-            # Paged attention: use paged SDPA decode
+            # Paged attention: use paged SDPA decode (requires device tensors)
             attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q,
                 k_cache,
@@ -724,6 +780,7 @@ class TextAttention(LightweightModule):
 
         ttnn.deallocate(q)
 
+        _save_stage("attn_after_sdpa", attn_output)
         # Convert SDPA output to sharded for nlp_concat_heads_decode
         # SDPA output: [1, B, H, d] needs HEIGHT sharded memory config
         # nlp_concat_heads_decode requires num_cores == batch_size
@@ -762,6 +819,8 @@ class TextAttention(LightweightModule):
             attn_output = ttnn.to_memory_config(attn_output, ttnn.DRAM_MEMORY_CONFIG)
             attn_output = attn_output[:, :, :batch_size, :]
 
+        _save_stage("attn_after_concat", attn_output)
+
         # Output projection (row parallel) - use L1 for decode
         output = ttnn.linear(
             attn_output,
@@ -771,6 +830,8 @@ class TextAttention(LightweightModule):
         )
 
         ttnn.deallocate(attn_output)
+
+        _save_stage("output", output)
 
         # All-reduce for tensor parallelism (async CCL with reduce_scatter + all_gather)
         # Note: all_reduce needs DRAM input, convert from L1 first
