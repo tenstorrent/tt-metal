@@ -130,6 +130,10 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     output1 = to_torch_expert(output1_tt)
 
     # === Path 2: Cold Cache ===
+    assert not TtRoutedExpert.check_cache_complete(
+        CACHE_DIR, "routed_expert", experts_per_chip
+    ), "Cache should be empty before build"
+
     logger.info(f"Building cache to {CACHE_DIR}")
     TtRoutedExpert.build_ttnn_cache(
         torch_weights,
@@ -139,8 +143,10 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         CACHE_DIR,
         "routed_expert",
     )
-    cache_files = list(CACHE_DIR.glob("routed_expert.*"))
-    logger.info(f"Cache files created: {len(cache_files)} files")
+
+    assert TtRoutedExpert.check_cache_complete(
+        CACHE_DIR, "routed_expert", experts_per_chip
+    ), "Cache should be complete after build"
 
     expert_cold = TtRoutedExpert(
         mesh_device,
