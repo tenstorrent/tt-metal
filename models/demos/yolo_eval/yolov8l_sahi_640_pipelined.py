@@ -42,7 +42,6 @@ from models.demos.yolo_eval.yolov8l_native_vs_sahi_demo import (
     _load_coco_names,
     draw_hud,
     scale_to_width,
-    write_frame,
 )
 from models.demos.yolo_eval.yolov8l_sahi_pipelined import (
     TileGrid,
@@ -438,6 +437,7 @@ def _postprocess_worker_shm(
     except OSError:
         pass
     torch.set_num_threads(2)
+    cv2.setNumThreads(2)  # Limit OpenCV threads to avoid oversubscription
 
     TAG = "[bg-640]"
     ema_fps = 0.0
@@ -446,15 +446,33 @@ def _postprocess_worker_shm(
     t_wall_start = 0.0
     LOG_INTERVAL = 10
     nms_pool = ThreadPoolExecutor(max_workers=4)
-    encode_pool = ThreadPoolExecutor(max_workers=1)
-    encode_future = None
+    # 3 encode workers: each cv2.imencode takes ~28ms, NMS+merge+draw takes ~13ms.
+    # With 3 workers, encode(N) completes before we need its slot (3*13=39 > 28ms),
+    # so the encode wait drops to ~0ms.
+    encode_pool = ThreadPoolExecutor(max_workers=3)
+    encode_futures: list = []
+
+    def _write_frame_ts(path: str, img: np.ndarray, quality: int):
+        """Thread-safe write_frame: unique tmp name per thread."""
+        import threading
+
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not ok:
+            return
+        tmp = path + f".tmp.{threading.get_ident()}"
+        try:
+            with open(tmp, "wb") as f:
+                f.write(buf.tobytes())
+            os.replace(tmp, path)
+        except OSError:
+            pass
 
     while True:
         try:
             item = q_in.get()
             if item is None:
-                if encode_future is not None:
-                    encode_future.result()
+                for ef in encode_futures:
+                    ef.result()
                 return
 
             (pred_slot, ring_slot, shifts, tpf, scale_x, scale_y) = item
@@ -469,8 +487,9 @@ def _postprocess_worker_shm(
             # for 4 more frames (~133ms at 30 FPS), well after BG finishes.
             canvas = shm_ring[ring_slot].numpy()
 
-            # Debug raw model output stats (infrequent — bf16 min/max is slow)
-            if fc % 30 == 0:
+            # Debug raw model output stats (very infrequent — bf16 min/max
+            # takes ~95ms with 2 threads on 24×84×8400 elements).
+            if fc % 300 == 0:
                 raw = preds_torch  # [24, 84, 8400]
                 bbox_raw = raw[:, :4, :]  # cx, cy, w, h
                 cls_raw = raw[:, 4:, :]  # class logits
@@ -532,15 +551,18 @@ def _postprocess_worker_shm(
             _draw_scaled_preds(canvas, scaled)
             t_draw = time.perf_counter() - t0
 
-            # Encode previous frame finishes in background thread while we did
-            # NMS+merge+draw above.  Wait here (bounded: at most 1 pending),
-            # then submit this frame's encode.  cv2.imencode releases the GIL
-            # so the thread gives real parallelism with the next iteration's NMS.
+            # Multi-worker encode: 3 threads overlap cv2.imencode (~28ms each)
+            # with NMS+merge+draw (~13ms).  Only block if all 3 workers busy.
+            # cv2.imencode releases the GIL so threads give real parallelism.
             t0 = time.perf_counter()
             canvas = draw_hud(canvas, hud_label, ema_fps)
-            if encode_future is not None:
-                encode_future.result()
-            encode_future = encode_pool.submit(write_frame, frame_file, canvas, jpeg_quality)
+            # Drain completed futures
+            encode_futures = [ef for ef in encode_futures if not ef.done()]
+            # Block only if all workers are saturated
+            if len(encode_futures) >= 3:
+                encode_futures[0].result()
+                encode_futures.pop(0)
+            encode_futures.append(encode_pool.submit(_write_frame_ts, frame_file, canvas, jpeg_quality))
             t_encode = time.perf_counter() - t0
 
             dt_post = time.perf_counter() - t_post_start
