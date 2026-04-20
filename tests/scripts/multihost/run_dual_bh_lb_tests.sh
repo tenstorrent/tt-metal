@@ -60,7 +60,7 @@ run_dual_bh_lb_demo_tests() {
   tt-run --rank-binding "$rank_binding_dual_bh_lb" --mpi-args "$mpi_args" \
     bash -c "export HF_MODEL=/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct && \
              export TT_CACHE_PATH=/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct && \
-             pytest models/tt_transformers/demo/simple_text_demo.py -k 'performance and batch-1' --data_parallel 8" ; fail+=$?
+             pytest models/tt_transformers/demo/simple_text_demo.py -k 'performance and batch-1' --data_parallel 8  --timeout 600" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

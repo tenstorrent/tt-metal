@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -8,6 +8,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#include "sfpu/ckernel_sfpu_negative.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 

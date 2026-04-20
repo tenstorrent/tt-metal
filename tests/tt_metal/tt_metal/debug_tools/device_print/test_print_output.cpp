@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,8 @@ public:
 TEST_F(DevicePrintOutputFixture, PrintSimpleString) {
     std::vector<std::string> messages = {
         "Hello world!",
+        "First line.",
+        "Second line.",
     };
 
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_simple_string.cpp", messages);
@@ -121,7 +123,7 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
         auto& program_ = workload.get_programs().at(device_range);
 
         constexpr CoreCoord core = {0, 0};
-        uint32_t iterations_count = 100;
+        uint32_t iterations_count = 1000;
         std::vector<uint32_t> runtime_args = {iterations_count};
 
         // BRISC
@@ -211,4 +213,62 @@ TEST_F(DevicePrintOutputFixture, PrintAllArgumentSizes) {
     };
 
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp", messages);
+}
+
+// When DWARF debug info is present in the ELF, enum values are printed as their symbolic names.
+// Without '#' the output is just the value name; with '#' the full qualified type::value name is printed.
+// Bit-field enums print each active flag separated by " | ".
+// Unrecognised values are printed as (EnumType)integer.
+TEST_F(DevicePrintOutputFixture, PrintEnumValue) {
+    std::vector<std::string> messages = {
+        // Plain format: only the value name
+        "Enum1 value: Value2",
+        // Alternate form (#): full qualified type name + value name
+        "Enum1 full name value: test::deep::Enum1::Value3",
+        "Enum1 unrecognized value: (test::deep::Enum1)100",
+        "Enum1 full name unrecognized value: (test::deep::Enum1)100",
+        "Enum2 value: ValueB",
+        "Enum2 full name value: test_shallow::Enum2::ValueC",
+        "EnumClass value: ValueY",
+        "EnumClass full name value: EnumClass::ValueZ",
+        // Bit-field enum: active flags joined by " | "
+        "BitEnum value: Flag1 | Flag3",
+        "BitEnum full name value: flags::BitEnum::Flag2 | flags::BitEnum::Flag3",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_enum_value.cpp", messages);
+}
+
+TEST_F(DevicePrintOutputFixture, PrintBuiltinTypes) {
+    std::vector<std::string> messages = {
+        "i=1",
+        "unknown=5",
+        "u=42",
+        "ll=-123456789012345",
+        "ull=123456789012345",
+        "s=-12345",
+        "us=12345",
+        "cvllu=98765432109876",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_builtin_types.cpp", messages);
+}
+
+TEST_F(DevicePrintOutputFixture, PrintStringTypes) {
+    std::vector<std::string> messages = {
+        // Runtime const char* prints as hex address (we just check the prefix)
+        "Sample string: 0x",
+        // Compile-time CTSTR resolves to the actual string content from the ELF
+        "Compile time string: Hello world!",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_string_types.cpp", messages);
+}
+
+TEST_F(DevicePrintOutputFixture, PrintReorder) {
+    std::vector<std::string> messages = {
+        "u16_1: 16 u16_2: 32 u32_1: 1 u32_2: 2 u32_3: 4 u32_4: 8",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_reorder.cpp", messages);
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/zero_init_common.hpp"
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
@@ -17,23 +18,8 @@
     DebugPrinter()
 #endif
 
+// Signal last element to writer to break out of loop
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
-
-void zero_page_async(uint64_t noc_addr, uint32_t page_size) {
-    uint32_t bytes = page_size;
-    while (bytes > 0) {
-        uint32_t curr_bytes = (bytes < (uint32_t)MEM_ZEROS_SIZE) ? bytes : (uint32_t)MEM_ZEROS_SIZE;
-        noc_async_write(MEM_ZEROS_BASE, noc_addr, curr_bytes);
-        noc_addr += curr_bytes;
-        bytes -= curr_bytes;
-    }
-}
-
-#if defined(IS_L1_OUTPUT) && IS_L1_OUTPUT && defined(L1_BANK_NOC_X_START) && defined(NUM_L1_BANKS)
-#define USE_L1_MULTICAST_ZERO 1
-#else
-#define USE_L1_MULTICAST_ZERO 0
-#endif
 
 void kernel_main() {
     using namespace ttnn::operations::ccl::common;
@@ -88,13 +74,22 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(31);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(32);
 
-    // TensorAccessorArgs for all 4 tensors (starting at index 33)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<33>();
+    // Batch configuration (index 33)
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(33);
+
+    // TensorAccessorArgs for all 4 tensors (starting at index 34)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<34>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
         TensorAccessorArgs<dispatched_metadata_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<experts_tok_counter_args.next_compile_time_args_offset()>();
+
+#if INIT_ZEROS
+    // Zero-init args follow immediately after the TensorAccessorArgs block
+    constexpr uint32_t zi_cb_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
+#endif
 
     // ===== Runtime Args =====
     uint32_t rt_args = 0;
@@ -113,32 +108,29 @@ void kernel_main() {
     DPRINT_COMBINE << "Combine Reader: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
                    << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
+    const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
-    // Only core 0 (expert_start_idx == 0) performs zero-init to avoid race between cores
 #if INIT_ZEROS
-    if (expert_start_idx == 0) {
-#if USE_L1_MULTICAST_ZERO
-        constexpr uint32_t per_bank_bytes = OUTPUT_BYTES_PER_BANK;
-        for (uint32_t offset = 0; offset < per_bank_bytes; offset += MEM_ZEROS_SIZE) {
-            uint32_t chunk_size = ((uint32_t)MEM_ZEROS_SIZE < (per_bank_bytes - offset)) ? (uint32_t)MEM_ZEROS_SIZE
-                                                                                         : (per_bank_bytes - offset);
-            uint64_t mcast_addr = get_noc_multicast_addr(
-                L1_BANK_NOC_X_START, L1_BANK_NOC_Y_START, L1_BANK_NOC_X_END, L1_BANK_NOC_Y_END, output_addr + offset);
-            noc_async_write_multicast_loopback_src(MEM_ZEROS_BASE, mcast_addr, chunk_size, NUM_L1_BANKS);
-        }
-        noc_async_write_barrier();
-#else
-        for (uint32_t page = 0; page < output_pages; page++) {
-            uint64_t page_noc_addr = get_noc_addr(page, output_addr_gen);
-            zero_page_async(page_noc_addr, aligned_output_page_size);
-        }
-        noc_async_write_barrier();
-#endif
+    // Hybrid row zero-init: this core zeroes its assigned page range, then waits for idle row cores
+    {
+        uint32_t page_start = get_arg_val<uint32_t>(rt_args++);
+        uint32_t page_end = get_arg_val<uint32_t>(rt_args++);
+        uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
+        uint32_t zi_done_sem_address = get_semaphore(zi_done_semaphore_id);
+
+        fill_zero_buffer(zi_cb_id);
+        uint32_t zero_buf = get_write_ptr(zi_cb_id);
+
+        zero_pages(zero_buf, page_start, page_end, aligned_output_page_size, output_addr_gen);
+
+        volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
+        noc_semaphore_wait(zi_done_sem_ptr, num_idle_cores);
+        noc_semaphore_set(zi_done_sem_ptr, 0);
     }
 #endif
 
-    // Signal writer that zero-init is complete (or skipped for non-core-0)
+    // Signal writer that zero-init is complete
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
     noc_semaphore_set(zero_init_sem_ptr, 1);
@@ -152,8 +144,7 @@ void kernel_main() {
     noc_semaphore_set(barrier_sem_ptr, 0);
 
     // Read expert token counts
-    const auto experts_tok_counter_addr_gen =
-        TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr, aligned_experts_tok_counter_page_size);
+    const auto experts_tok_counter_addr_gen = TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr);
     cb_reserve_back(cb_experts_tok_counter_id, experts_tok_counter_pages);
     uint32_t counter_base_addr = get_write_ptr(cb_experts_tok_counter_id);
     for (uint32_t i = 0; i < experts_tok_counter_pages; i++) {
@@ -161,20 +152,29 @@ void kernel_main() {
             i, experts_tok_counter_addr_gen, counter_base_addr + i * aligned_experts_tok_counter_page_size);
     }
     noc_async_read_barrier();
-    volatile tt_l1_ptr uint32_t* experts_tok_counter_l1 =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr);
 
-    // Set up scratch buffers for batched reads
-    constexpr uint32_t read_batch_size = 8;
+    // Expert token counts are laid out as [n_dispatch_groups, experts_per_dispatch_group]
+    // where each dispatch group is a mesh column (all rows in that column).
+    // Row-major linearization: linearized_mesh_coord = mesh_row * mesh_cols + mesh_col
+    constexpr uint32_t mesh_row = linearized_mesh_coord / mesh_cols;  // position within dispatch group
+    constexpr uint32_t mesh_col = linearized_mesh_coord % mesh_cols;  // which dispatch group
+    constexpr uint32_t experts_per_dispatch_group = experts_per_chip * mesh_rows;
+    constexpr uint32_t offset = mesh_col * experts_per_dispatch_group + mesh_row * experts_per_chip;
+    volatile tt_l1_ptr uint32_t* experts_tok_counter_l1 =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr) + offset;
+
+    // Reserve scratch space once — these CBs are not used as FIFOs. Each batch
+    // overwrites the same region at offsets [0, batch_count) without push/pop.
+    // DRAM reads are batched to saturate DRAM bandwidth, while the scratch-to-writer-CB
+    // copies below are done one page at a time — this avoids CB FIFO pointer wrapping
+    // and measured faster in practice.
     cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
     uint32_t metadata_base = get_write_ptr(cb_dispatched_metadata_id);
 
-    const auto dispatched_buffer_addr_gen =
-        TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr, aligned_dispatched_buffer_page_size);
-    const auto dispatched_metadata_addr_gen =
-        TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr, aligned_dispatched_metadata_page_size);
+    const auto dispatched_buffer_addr_gen = TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr);
+    const auto dispatched_metadata_addr_gen = TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr);
 
     constexpr auto expert_stride = max_dispatched_tokens_per_expert;
 
@@ -182,6 +182,9 @@ void kernel_main() {
     for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
         uint32_t start_page = local_expert * expert_stride;
         uint32_t expert_tokens = experts_tok_counter_l1[local_expert];
+        if (expert_tokens > max_dispatched_tokens_per_expert) {
+            expert_tokens = max_dispatched_tokens_per_expert;
+        }
         uint32_t end_page = start_page + expert_tokens;
 
         DPRINT_COMBINE << "Expert=" << local_expert << " tokens=" << expert_tokens << ENDL();

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,6 +21,12 @@ void copy_dest_value(const uint dst_index_in, const uint dst_index_out, const ui
     // size of each tile in Dest is 64 rows
     constexpr uint dst_tile_size = 64;
     for (int d = 0; d < ITERATIONS; d++) {
+        // For some reason using __builtin_rvtt_sfp{load,store} here
+        // results in test failures.  The compiler unrolls this loop
+        // and with the builtin emits assembly directly, rather than
+        // synthesize the insn.  Presumably the same problem occurs
+        // with using sfpi -- if it was extended to expose the
+        // ADDR_MOD PR #41879
         TT_SFPLOAD(p_sfpu::LREG0, instr_mod_index, ADDR_MOD_3, dst_index_in * dst_tile_size);
         TT_SFPSTORE(p_sfpu::LREG0, instr_mod_index, ADDR_MOD_3, dst_index_out * dst_tile_size);
         dst_reg++;
@@ -34,7 +40,7 @@ void copy_dest_value(const uint dst_index_in, const uint dst_index_out, const ui
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr uint dst_tile_size_sfpi = 32;
-        dst_reg[dst_index_out * dst_tile_size_sfpi] = dst_reg[dst_index_in * dst_tile_size_sfpi];
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = sfpi::vFloat(sfpi::dst_reg[dst_index_in * dst_tile_size_sfpi]);
         dst_reg++;
     }
 }

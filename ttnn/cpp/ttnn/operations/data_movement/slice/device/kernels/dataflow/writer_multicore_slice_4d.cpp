@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,6 +42,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     // Runtime arguments for 4D slice support with multi-core work distribution
@@ -65,13 +66,16 @@ void kernel_main() {
     uint32_t output_bytes_per_row = output_w * element_size;  // Dynamic element size
 
     // Set up TensorAccessor for output data - use row size as page size
-    const auto s0 = TensorAccessor(dst_args, dst_addr, output_bytes_per_row);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
+
+    // Create experimental CircularBuffer for Device 2.0 API
+    experimental::CircularBuffer cb_in(cb_id_in);
 
     // Multi-core work distribution: this core writes rows starting from start_row_for_this_core
     // Write each row from circular buffer to output tensor at the correct logical position
     for (uint32_t local_row = 0; local_row < num_rows_for_this_core; ++local_row) {
-        cb_wait_front(cb_id_in, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_in);
+        cb_in.wait_front(1);
+        uint32_t l1_read_addr = cb_in.get_read_ptr();
 
         // Calculate global output row index for this local row
         uint32_t global_output_row = start_row_for_this_core + local_row;
@@ -83,7 +87,7 @@ void kernel_main() {
         noc_async_write(l1_read_addr, output_row_noc_addr, output_bytes_per_row);
         noc_async_writes_flushed();
 
-        cb_pop_front(cb_id_in, 1);
+        cb_in.pop_front(1);
     }
     noc_async_write_barrier();
 }

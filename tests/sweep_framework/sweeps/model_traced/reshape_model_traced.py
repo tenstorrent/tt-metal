@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,14 +9,14 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 TIMEOUT = 300
 
@@ -40,25 +40,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -81,8 +67,14 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
 
     # v2 tracer puts target shape in arg1 or shape; arg2 may hold a
-    # secondary shape (e.g. padded output shape) used by some internal paths
-    tgt_shape = target_shape or shape or kwargs.get("arg1", None)
+    # secondary shape (e.g. padded output shape) used by some internal paths.
+    # Filter out "__ABSENT__" sentinel values from the V2 loader.
+    def _clean_absent(val):
+        """Return None if val is the __ABSENT__ sentinel."""
+        return None if val == "__ABSENT__" else val
+
+    pos_args = extract_positional_args(kwargs)
+    tgt_shape = _clean_absent(target_shape) or _clean_absent(shape) or _clean_absent(pos_args.get(1, None))
     if tgt_shape is None:
         tgt_shape = (1, 32, 1, 32)  # fallback for sample
 
@@ -94,19 +86,43 @@ def run(
         m = re.search(r"\[([0-9, ]+)\]", str(tgt_shape["value"]))
         if m:
             tgt_shape = tuple(int(x) for x in m.group(1).split(","))
+    elif isinstance(tgt_shape, dict):
+        # Unrecognized dict format -- try to extract shape from any string repr
+        import re
+
+        m = re.search(r"\[([0-9, ]+)\]", str(tgt_shape))
+        if m:
+            tgt_shape = tuple(int(x) for x in m.group(1).split(","))
 
     # arg2 may be a padded output shape; extract if present
-    arg2 = kwargs.get("arg2", None)
+    arg2 = _clean_absent(pos_args.get(2, None))
     if arg2 is not None and isinstance(arg2, dict) and "value" in arg2:
         import re
 
         m = re.search(r"\[([0-9, ]+)\]", str(arg2["value"]))
         if m:
             arg2 = tuple(int(x) for x in m.group(1).split(","))
+        else:
+            arg2 = None  # Could not parse dict-style arg2
+    elif arg2 is not None and isinstance(arg2, dict):
+        import re
+
+        m = re.search(r"\[([0-9, ]+)\]", str(arg2))
+        if m:
+            arg2 = tuple(int(x) for x in m.group(1).split(","))
+        else:
+            arg2 = None  # Could not parse dict-style arg2
     if isinstance(arg2, list):
         arg2 = tuple(arg2)
+    # Final guard: arg2 must be a tuple of ints if present
+    if arg2 is not None and not isinstance(arg2, tuple):
+        arg2 = None
 
     in_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+
+    # Ensure shape is at least 2D for TILE_LAYOUT compatibility
+    if len(in_shape) == 1 and input_a_layout == ttnn.TILE_LAYOUT:
+        in_shape = (1, in_shape[0])
 
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         in_shape
@@ -135,6 +151,17 @@ def run(
                 input_a_layout,
                 input_a_memory_config,
                 input_a_tensor_placement,
+            )
+        elif is_mesh_device:
+            # No placement info on a mesh device (e.g. model_traced_sample suite).
+            # Replicate the tensor to all devices to avoid undefined behaviour.
+            input_tensor = ttnn.from_torch(
+                torch_input,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
             )
         else:
             input_tensor = ttnn.from_torch(

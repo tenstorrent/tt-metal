@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 TIMEOUT = 300
 
@@ -49,12 +49,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -78,13 +78,15 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "keepdim"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1"}, output_memory_config=output_memory_config)
 
+    pos_args = extract_positional_args(kwargs)
     if dim is None:
-        dim = kwargs.get("arg1", None)
-    keepdim = kwargs.get("keepdim", True)
+        dim = pos_args.get(1, None)
+    # Read keepdim from op_kwargs (from traced config), defaulting to False (TTNN default)
+    keepdim = op_kwargs.get("keepdim", False)
     if keepdim is None:
-        keepdim = True
+        keepdim = False
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
@@ -126,7 +128,7 @@ def run(
     if dim is None:
         output_tensor = ttnn.sum(input_tensor_a, **op_kwargs)
     else:
-        output_tensor = ttnn.sum(input_tensor_a, dim=dim, keepdim=keepdim, **op_kwargs)
+        output_tensor = ttnn.sum(input_tensor_a, dim=dim, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

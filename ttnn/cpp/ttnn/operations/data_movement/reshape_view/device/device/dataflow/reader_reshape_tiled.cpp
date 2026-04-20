@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,8 +31,8 @@ void kernel_main() {
     constexpr uint32_t Max_Map_Entries = Max_Map_Size_Bytes / sizeof(SegmentMapData);
     constexpr uint32_t Max_Map_Elements = Max_Map_Entries * SegmentMapData::size;
 
-    const auto input_addr_gen = TensorAccessor(input_args, input_addr, Tile_Size_Bytes);
-    const auto map_addr_gen = TensorAccessor(map_args, map_addr, Max_Map_Size_Bytes);
+    const auto input_addr_gen = TensorAccessor(input_args, input_addr);
+    const auto map_addr_gen = TensorAccessor(map_args, map_addr);
 
     bool first = true;
     for (uint32_t out_page_idx = start_output_page_idx; out_page_idx < end_output_page_idx; ++out_page_idx) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,6 @@ void kernel_main() {
     constexpr bool use_welford = get_compile_time_arg_val(4) == 1;
     constexpr auto gamma_args = TensorAccessorArgs<5>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
-    constexpr uint32_t stick_size = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
     constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 1) == 1;
     constexpr bool FLOAT32_DTYPE_BETA = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 2) == 1;
 
@@ -74,7 +73,7 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-        const auto gamma = TensorAccessor(gamma_args, gamma_addr, stick_size);
+        const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
         constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
@@ -105,7 +104,7 @@ void kernel_main() {
 
     if constexpr (fuse_beta) {
         const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
-        const auto beta = TensorAccessor(beta_args, beta_addr, stick_size);
+        const auto beta = TensorAccessor(beta_args, beta_addr);
 
         uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_BETA ? 64 : 32;
         uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_BETA ? 1024 : 512;

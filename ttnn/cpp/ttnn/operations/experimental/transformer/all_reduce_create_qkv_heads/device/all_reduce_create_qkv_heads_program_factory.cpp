@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_reduce_create_qkv_heads_program_factory.hpp"
@@ -400,13 +400,14 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
     }
 
     // Create output tensor page splits
-    std::vector<uint32_t> output_tensor_pages_in_link(operation_attributes.num_links, 0);
+    std::vector<uint32_t> output_tensor_pages_in_link;
+    output_tensor_pages_in_link.reserve(operation_attributes.num_links);
     uint32_t num_assigned_pages = 0;
     for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
         uint32_t num_output_pages_per_link = output_tensor_shard_num_pages * num_output_cores_in_link[link];
         uint32_t num_pages_this_link =
             std::min(num_output_pages_per_link, output_tensor_num_pages - num_assigned_pages);
-        output_tensor_pages_in_link[link] = num_pages_this_link;
+        output_tensor_pages_in_link.push_back(num_pages_this_link);
         num_assigned_pages += num_pages_this_link;
     }
 
@@ -429,7 +430,8 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
             to the end_core_idx of the current link. Ie, 2 links read from the same core
     */
     std::vector<std::pair<uint32_t, uint32_t>> input_cores_idx_per_link(operation_attributes.num_links, {0, 0});
-    std::vector<uint32_t> input_tensor_tile_offset_per_link(operation_attributes.num_links, 0);
+    std::vector<uint32_t> input_tensor_tile_offset_per_link;
+    input_tensor_tile_offset_per_link.reserve(operation_attributes.num_links);
     uint32_t start_core_idx = 0;
     uint32_t num_pages_overflow = 0;
     for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
@@ -438,7 +440,7 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
         // Get offset based on previous overflow
         uint32_t input_tensor_tile_offset =
             (input_tensor_shard_num_pages - num_pages_overflow) % input_tensor_shard_num_pages;
-        input_tensor_tile_offset_per_link[link] = input_tensor_tile_offset;
+        input_tensor_tile_offset_per_link.push_back(input_tensor_tile_offset);
 
         uint32_t end_core_idx = std::min(
             start_core_idx + tt::div_up(num_pages_this_link + input_tensor_tile_offset, input_tensor_shard_num_pages),
@@ -463,9 +465,10 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
     }
 
     // Create reduction semaphores for each link
-    std::vector<uint32_t> reduction_semaphore_ids(operation_attributes.num_links, 0);
+    std::vector<uint32_t> reduction_semaphore_ids;
+    reduction_semaphore_ids.reserve(operation_attributes.num_links);
     for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
-        reduction_semaphore_ids[link] = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+        reduction_semaphore_ids.push_back(tt::tt_metal::CreateSemaphore(program, all_cores, 0));
     }
 
     /* reduction cb */

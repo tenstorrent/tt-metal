@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_pre_all_gather_device_operation.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/device_operation.hpp"
@@ -102,6 +103,7 @@ Tensor layer_norm_pre_all_gather(
     const LayerNormProgramConfig& program_config,
     const std::optional<bool>& use_2d_core_grid) {
     using OperationType = LayerNormPreAllGatherDeviceOperation;
+    auto input_padded = ttnn::fill_implicit_tile_padding(input, 0.0f);
     return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{
             .norm_type = norm_type,
@@ -111,7 +113,7 @@ Tensor layer_norm_pre_all_gather(
             .use_2d_core_grid = use_2d_core_grid,
         },
         OperationType::tensor_args_t{
-            .input = input,
+            .input = input_padded,
             .recip_tensor = recip_tensor,
         });
 }

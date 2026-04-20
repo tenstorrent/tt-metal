@@ -1,9 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in");
@@ -19,20 +22,24 @@ void kernel_main() {
 
     tt_l1_ptr uint32_t* id_per_dim = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
 
-    constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
-
     // In and out are assumed to be same dataformat
-    const auto s0 = TensorAccessor(src_args, src_addr, tile_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
+
+    // Create experimental objects for Device 2.0 API
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::Noc noc;
+
+    // Get tile size from CB interface
+    const uint32_t tile_size = cb_in0.get_tile_size();
 
     uint32_t src_tile_id = start_id;
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         // Copy Input
-        cb_reserve_back(cb_id_in0, 1);
-        uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(src_tile_id, s0, src_buffer_l1_addr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, 1);
+        cb_in0.reserve_back(1);
+        noc.async_read(s0, cb_in0, tile_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_in0.push_back(1);
         src_tile_id++;
         for (uint32_t j = 0; j < num_dims; ++j) {
             id_per_dim[j]++;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -817,11 +817,19 @@ tt::tt_fabric::AdjacencyGraph<uint32_t> join_mesh_level(
     return ::tt::tt_metal::ASICLocation{0};
 }
 
-// Rebuild GroupingInfo.items from FlattenedMesh. Graph nodes are 0..n-1; items[i] is the item for node i.
+// Rebuild GroupingInfo.items from FlattenedMesh. items[node_id] is the item for graph node `node_id`.
+// Joined meshes may use non-contiguous node IDs (e.g. 0..3 and 8..11); index by node_id, not push order.
 void rebuild_items_from_flattened_mesh(tt::tt_fabric::GroupingInfo& info, const FlattenedMesh& mesh) {
     info.items.clear();
     const auto& node_ids = mesh.graph.get_nodes();
-    info.items.reserve(node_ids.size());
+    if (node_ids.empty()) {
+        return;
+    }
+    uint32_t max_node_id = 0;
+    for (uint32_t node_id : node_ids) {
+        max_node_id = std::max(max_node_id, node_id);
+    }
+    info.items.resize(max_node_id + 1);
 
     for (uint32_t node_id : node_ids) {
         tt::tt_fabric::GroupingItemInfo item;
@@ -836,7 +844,7 @@ void rebuild_items_from_flattened_mesh(tt::tt_fabric::GroupingInfo& info, const 
             item.asic_location = extract_asic_location_from_path(metadata.grouping_path);
             item.grouping_path = metadata.grouping_path;
         }
-        info.items.push_back(std::move(item));
+        info.items[node_id] = std::move(item);
     }
 }
 
@@ -1042,12 +1050,11 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
             rebuild_items_from_flattened_mesh(info, meshe);
             info.adjacency_graph = std::move(meshe.graph);
 
-            // If PSD is provided, validate that the graph can be mapped to it
+            // If PSD is provided, fast feasibility check: verify the PSD has matching
+            // (tray_id, asic_location) slots without doing full graph isomorphism.
             if (physical_system_descriptor != nullptr) {
-                // solve_for_one_grouping_to_psd uses items[node_id] for trait constraints
-                auto mapping_result = find_any_in_psd(info, *physical_system_descriptor);
-                if (mapping_result.empty()) {
-                    continue;  // Skip this combination if it can't be mapped
+                if (!PhysicalGroupingDescriptor::can_map_to_psd(info, *physical_system_descriptor)) {
+                    continue;
                 }
             }
 
@@ -1120,12 +1127,11 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
         rebuild_items_from_flattened_mesh(info, joined_mesh);
         info.adjacency_graph = std::move(joined_mesh.graph);
 
-        // If PSD is provided, validate that the top-level joined graph can be mapped to it
+        // If PSD is provided, fast feasibility check: verify the PSD has matching
+        // (tray_id, asic_location) slots without doing full graph isomorphism.
         if (physical_system_descriptor != nullptr) {
-            // solve_for_one_grouping_to_psd uses items[node_id] for trait constraints
-            auto mapping_result = find_any_in_psd(info, *physical_system_descriptor);
-            if (mapping_result.empty()) {
-                return;  // Skip this combination if it can't be mapped
+            if (!PhysicalGroupingDescriptor::can_map_to_psd(info, *physical_system_descriptor)) {
+                return;
             }
         }
 

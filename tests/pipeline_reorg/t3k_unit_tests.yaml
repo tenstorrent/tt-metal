@@ -10,14 +10,16 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: t3k_ttmetal_tests
+  model-name: t3k_ttmetal_tests
   cmd: run_t3000_ttmetal_tests
   skus:
     wh_llmbox:
       timeout: 40
   owner_id: ULMEPM2MA # Sean Nijjar
-  team: fabric
+  team: scaleout
 
 - name: t3k_ttnn_tests
+  model-name: t3k_ttnn_tests
   cmd: run_t3000_ttnn_tests
   skus:
     wh_llmbox:
@@ -147,10 +149,19 @@
   cmd: run_t3000_mistral_tests
   skus:
     wh_llmbox:
-      timeout: 15
+      timeout: 45
   owner_id: U0896VBAKFC # Pratikkumar Prajapati
   team: models
   model-name: mistral
+
+- name: t3k_mistral-small-3.1-24b-vision_tests
+  cmd: run_t3000_mistral-small-3.1-24b-vision_unit_tests
+  skus:
+    wh_llmbox:
+      timeout: 20
+  owner_id: U08GEGWHQJF # Adam Roberge
+  team: models
+  model-name: mistral-small-3.1-24b-vision
 
 - name: t3k_qwen25_vl_tests
   cmd: run_t3000_qwen25_vl_unit_tests

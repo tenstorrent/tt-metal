@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -101,7 +101,7 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
 }
 
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
-inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1) {
+inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1, const std::uint32_t input_operand = 0) {
     // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -113,6 +113,22 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
             pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),
         "");
 
+#ifdef ARCH_BLACKHOLE
+    // For pack with tilize enabled, check if the original input format is 8-bit.
+    // 8-bit datums (Int8, UInt8, Fp8_e4m3, Lf8) do not require the tilize workaround on Blackhole.
+    const std::uint32_t src_format = static_cast<std::uint32_t>(unpack_src_format[input_operand]);
+    const bool is_input_8bit_format = IS_8BIT_FORMAT(src_format);
+    _llk_pack_init_<untilize, zero_output, tilize>(
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        face_r_dim,
+        tile_c_dim,
+        num_faces,
+        false,  // partial_face,
+        false,  // narrow_tile,
+        num_tiles,
+        is_input_8bit_format);
+#else
     _llk_pack_init_<untilize, zero_output, tilize>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
@@ -122,6 +138,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
         false,  // partial_face,
         false,  // narrow_tile,
         num_tiles);
+#endif
 }
 
 template <bool out_of_order_output, bool untilize>
@@ -155,7 +172,9 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
             pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output))),
         "");
 
-    LLK_ASSERT((tile_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+    LLK_ASSERT(
+        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
 }
 
@@ -262,8 +281,8 @@ inline void llk_pack_rows(
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t pack_addr = get_output_tile_address<true, false>(output_id, output_index);
     LLK_ASSERT(
-        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
-        "Dst tile exceeds maximum allowed for the given tile shape and accumulation mode.");
+        (dst_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     // Pack rows uses pack_reads_per_xy_plane=1 (set in _llk_pack_rows_init_) for row packing,
     // which differs from standard tile face_r_dim. Use ProgramByTile to skip face_r_dim check.
@@ -293,7 +312,9 @@ inline void llk_matmul_pack(
         (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
             pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output))),
         "");
-    LLK_ASSERT(((start_tile_index + ntiles - 1) < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+    LLK_ASSERT(
+        ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         std::uint32_t pack_tile_addr =

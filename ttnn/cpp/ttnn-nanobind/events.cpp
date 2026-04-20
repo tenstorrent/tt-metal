@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -74,6 +74,7 @@ void py_module(nb::module_& mod) {
     mod.def(
         "event_synchronize",
         nb::overload_cast<const MeshEvent&>(&event_synchronize),
+        nb::call_guard<nb::gil_scoped_release>(),
         nb::arg("mesh_event"),
         R"doc(
             Synchronizes a mesh event, blocking until the event is completed.

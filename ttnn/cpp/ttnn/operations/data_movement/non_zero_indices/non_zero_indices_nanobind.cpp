@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,8 +33,10 @@ void bind_non_zero(nb::module_& mod) {
     ttnn::bind_function<"nonzero">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::nonzero, nb::arg("input_tensor").noconvert(), nb::kw_only(), nb::arg("memory_config") = nb::none()));
+        &ttnn::nonzero,
+        nb::arg("input_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace

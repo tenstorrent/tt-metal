@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -414,13 +414,15 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
              TILE_HEIGHT, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major))
             .bounding_box()
             .grid_size();
-    std::vector<uint32_t> in1_mcast_sender_noc_x(mcast_sender_grid.x);
-    std::vector<uint32_t> in1_mcast_sender_noc_y(mcast_sender_grid.y);
+    std::vector<uint32_t> in1_mcast_sender_noc_x;
+    std::vector<uint32_t> in1_mcast_sender_noc_y;
+    in1_mcast_sender_noc_x.reserve(mcast_sender_grid.x);
+    in1_mcast_sender_noc_y.reserve(mcast_sender_grid.y);
     for (uint32_t core_idx_x = 0; core_idx_x < mcast_sender_grid.x; ++core_idx_x) {
-        in1_mcast_sender_noc_x[core_idx_x] = device->worker_core_from_logical_core({core_idx_x, 0}).x;
+        in1_mcast_sender_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
     }
     for (uint32_t core_idx_y = 0; core_idx_y < mcast_sender_grid.y; ++core_idx_y) {
-        in1_mcast_sender_noc_y[core_idx_y] = device->worker_core_from_logical_core({0, core_idx_y}).y;
+        in1_mcast_sender_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
     }
 
     // Set up CBs

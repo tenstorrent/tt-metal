@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -14,7 +14,7 @@
 namespace ckernel {
 
 ALWI void mask_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_mask_init<true>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_mask_init()));  // TODO(AP): move out init
 }
 
 // clang-format off
