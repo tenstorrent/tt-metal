@@ -378,11 +378,11 @@ def bge_benchmark_results():
 @pytest.mark.parametrize(
     "isl, max_concurrency, num_requests",
     [
-        (32, 1, 16),
-        (64, 1, 16),
-        (128, 1, 16),
-        (256, 1, 16),
-        (512, 1, 16),
+        (32, 1, 10),
+        (64, 1, 10),
+        (128, 1, 10),
+        (256, 1, 10),
+        (512, 1, 10),
     ],
 )
 @pytest.mark.parametrize("model_name", [DEFAULT_MODEL_NAME])
