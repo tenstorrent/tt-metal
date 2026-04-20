@@ -747,9 +747,31 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
 
     const auto& builder_context = control_plane_.get_fabric_context().get_builder_context();
 
-    size_t configured_count = 0;
+    // Join ALL futures before acting on any exception.  If we rethrow immediately on
+    // the first error, the remaining taskflow tasks are abandoned as orphans — they
+    // continue running and access BuildEnvManager::device_id_to_build_env_ via the
+    // non-const operator[] while the main thread's exception-cleanup path corrupts the
+    // map's internal storage, causing SIGSEGV ("Address not mapped" at
+    // unordered_map<int,DeviceBuildEnv>::operator[]).
+    std::exception_ptr first_ex;
+    std::vector<Device*> compiled_devices;
+    compiled_devices.reserve(events.size());
     for (const auto& event : events) {
-        auto* dev = event.get();
+        try {
+            compiled_devices.push_back(event.get());
+        } catch (...) {
+            if (!first_ex) {
+                first_ex = std::current_exception();
+            }
+        }
+    }
+    // Rethrow now that all tasks have completed — no orphaned threads remain.
+    if (first_ex) {
+        std::rethrow_exception(first_ex);
+    }
+
+    size_t configured_count = 0;
+    for (auto* dev : compiled_devices) {
         if (dev) {
             // Fix A: probe for stale ERISC firmware on all active channels BEFORE
             // configure_fabric_cores() clears L1 and loads the new firmware image.

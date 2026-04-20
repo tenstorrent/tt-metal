@@ -94,6 +94,20 @@ run_t3000_ttnn_tests() {
   # Reset hardware state from any prior hung job
   tt-smi -r || true
 
+  # Per-test-failure hardware reset hook.
+  # Call immediately after each test line: `cmd; record_test`
+  # Captures $? from the preceding command, accumulates into $fail, and
+  # triggers tt-smi -r on any individual failure so subsequent tests start
+  # from a clean hardware state rather than inheriting stale ERISC/ETH residue.
+  record_test() {
+    local rc=$?
+    fail+=$rc
+    if [[ $rc -ne 0 ]]; then
+      echo "LOG_METAL: test returned rc=$rc — resetting hardware via tt-smi"
+      tt-smi -r || true
+    fi
+  }
+
   # Record the start time
   fail=0
   start_time=$(date +%s)
@@ -117,14 +131,14 @@ run_t3000_ttnn_tests() {
   # --solo: skip the predecessor (unit_tests_ttnn_ccl_ops) here — it runs again
   # below at full coverage. Running it twice (641s each) consumed the entire
   # budget before unit_tests_ttnn could complete.
-  ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh --solo ; fail+=$?
-  timeout 900 ./build/test/ttnn/unit_tests_ttnn ; fail+=$?
-  timeout 600 ./build/test/ttnn/unit_tests_ttnn_tensor ; fail+=$?
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; fail+=$?
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; fail+=$?
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; fail+=$?
+  ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh --solo ; record_test
+  timeout 900 ./build/test/ttnn/unit_tests_ttnn ; record_test
+  timeout 600 ./build/test/ttnn/unit_tests_ttnn_tensor ; record_test
+  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; record_test
+  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; record_test
+  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; record_test
   # Disabled: ManualPagesIterationInterleaved rank_6+ hangs with unsafe NOC read on T3K (issue #42195)
-  # timeout 300 ./build/test/ttnn/unit_tests_ttnn_accessor ; fail+=$?
+  # timeout 300 ./build/test/ttnn/unit_tests_ttnn_accessor ; record_test
   #
   # test_ccl_multi_cq_multi_device: chip-3 CQ0 AllGather hang investigation.
   # - Split each TEST_F into its own subprocess so predecessor state cannot bleed
@@ -144,17 +158,17 @@ run_t3000_ttnn_tests() {
       "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksMultithreadCQ0"; do
       echo "LOG_METAL: running test_ccl_multi_cq_multi_device --gtest_filter=${ccl_mcq_test}"
       timeout 600 ./build/test/ttnn/test_ccl_multi_cq_multi_device --gtest_filter="${ccl_mcq_test}"
-      fail+=$?
+      record_test
       sleep 1
   done
-  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; fail+=$?
-  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; fail+=$?
-  pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
-  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device.py ; fail+=$?
-  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_async.py ; fail+=$?
-  pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
-  pytest tests/ttnn/distributed/test_data_parallel_example.py ; fail+=$?
-  pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; fail+=$?
+  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; record_test
+  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; record_test
+  pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; record_test
+  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device.py ; record_test
+  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_async.py ; record_test
+  pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; record_test
+  pytest tests/ttnn/distributed/test_data_parallel_example.py ; record_test
+  pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; record_test
   # Targeted async-dispatch + teardown race condition regression tests.
   # Validates fixes for the ERISC stale firmware race (AI-JOURNAL.md Pass A-F).
   # Run at the end: a failure here points at the teardown/reinit path, not CCL ops.
@@ -173,7 +187,7 @@ run_t3000_ttnn_tests() {
   # parent re-opens → terminate_stale_erisc_routers() ACTIVE path exercised for the first
   # time. This is the exact CI failure scenario the fix was written to handle. (+15s wait)
   timeout 360 ./build/test/tt_metal/distributed/distributed_unit_tests \
-    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*' ; fail+=$?
+    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*' ; record_test
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
