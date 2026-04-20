@@ -30,10 +30,10 @@ def cleanup_cache():
     "mesh_device, device_params",
     [
         pytest.param(
-            (2, 4),
+            (2, 2),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="linear"),
-            id="linear-2x4",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
+            id="linear-2x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],
