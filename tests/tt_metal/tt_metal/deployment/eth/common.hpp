@@ -196,14 +196,91 @@ static bool data_dram_check(
                         dram_start_addr + i * sizeof(uint32_t));
                 }
                 total_mismatches++;
-                // log_critical(tt::LogTest, "      Input and output data don't match at {}: {} {}", i, inputs[i],
-                // outputs[i]);
+                // log_critical(tt::LogTest, "      Input and output data don't match at {:08x}: {:08x} {:08x}", i,
+                // inputs[i], outputs[i]);
             }
         }
         log_critical(tt::LogTest, "      Total mismatches: {} words", total_mismatches);
     }
 
     return pass;
+}
+
+template <typename FIXTURE>
+[[maybe_unused]]
+static void tensix_zero_dram(
+    FIXTURE* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t dram_start_addr,
+    uint32_t dram_end_addr,
+    uint32_t dram_bank_id) {
+    /* ==================== */
+    TT_FATAL(dram_start_addr < dram_end_addr, "start addr must be less than end addr");
+    tt_metal::Program zero_program = tt_metal::Program();
+
+    auto* const device = mesh_device->get_devices()[0];
+    CoreCoord core_grid = device->compute_with_storage_grid_size();
+    uint32_t total_bytes = dram_end_addr - dram_start_addr;
+    uint32_t core_count = core_grid.x * core_grid.y;
+    uint64_t per_core_bytes = total_bytes / core_count;
+    per_core_bytes = ((per_core_bytes + 15) >> 4) << 4;
+    TT_FATAL((total_bytes % 16) == 0, "Total size must be divisible by 16");
+    TT_FATAL((per_core_bytes % 16) == 0, "Per core size must be divisible by 16");
+
+    uint32_t transfer_size = 160 * 1024;
+    struct l1_allocator alloc = new_erisc_allocator();
+    uint32_t buffer0 = l1_alloc(&alloc, transfer_size);
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
+
+    // log_info(tt::LogTest, "      start {:8x}", dram_start_addr);
+    // log_info(tt::LogTest, "      end   {:8x}", dram_end_addr);
+    uint32_t kernel_id = 0;
+    for (uint32_t x = 0; x < core_grid.x; x++) {
+        for (uint32_t y = 0; y < core_grid.y; y++) {
+            CoreCoord core = CoreCoord(x, y);
+
+            uint32_t id = kernel_id++;
+            uint32_t start_addr = dram_start_addr + id * per_core_bytes;
+            uint32_t end_addr =
+                start_addr + per_core_bytes > dram_end_addr ? dram_end_addr : start_addr + per_core_bytes;
+
+            start_addr = (start_addr >> 4) << 4;
+            end_addr = ((end_addr + 15) >> 4) << 4;
+
+            // log_info(tt::LogTest, "      kernel {}, {}", id, core);
+            // log_info(tt::LogTest, "      start  {:8x}", start_addr);
+            // log_info(tt::LogTest, "      end    {:8x}", end_addr);
+            // log_info(tt::LogTest, "      size   {:8x}", end_addr - start_addr);
+            DataMovementConfig config = {
+                .compile_args =
+                    {
+                        dram_bank_id,
+                        buffer0,
+                        transfer_size,
+                    },
+            };
+            auto kernel = tt_metal::CreateKernel(
+                zero_program, "tests/tt_metal/tt_metal/deployment/kernels/zero_kernel.cpp", core, config);
+            tt_metal::SetRuntimeArgs(
+                zero_program,
+                kernel,
+                core,
+                {
+                    id,
+                    start_addr,
+                    end_addr,
+                });
+        }
+    }
+
+    workload.add_program(device_range, std::move(zero_program));
+    fixture->RunProgram(mesh_device, workload, true);
+    fixture->FinishCommands(mesh_device);
+
+    // log_info(tt::LogTest, "      done zeroing bank {}", dram_bank_id);
 }
 
 }  // namespace tt::tt_metal
