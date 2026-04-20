@@ -1,6 +1,7 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 #
+# SPDX-License-Identifier: Apache-2.0
+
 # validate.py -- Stage 1 validation for Depth-Anything-V2-Large on N300
 #
 # Produces:
@@ -21,9 +22,11 @@ try:
     from scipy.stats import pearsonr
 except ImportError:
     print("WARNING: scipy not installed, PCC will use numpy fallback")
+
     def pearsonr(x, y):
         r = np.corrcoef(x, y)[0, 1]
         return r, 0.0
+
 
 import ttnn
 from PIL import Image
@@ -40,6 +43,7 @@ OUTPUT_DIR = "validation"
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
+
 
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
@@ -60,6 +64,7 @@ def save_side_by_side(input_img, ref_depth, tt_depth, path):
 
     # Resize all to same height
     from PIL import Image as PILImage
+
     ref_pil = PILImage.fromarray(ref_vis).resize((256, 256))
     tt_pil = PILImage.fromarray(tt_vis).resize((256, 256))
     inp_pil = PILImage.fromarray(input_np)
@@ -75,6 +80,7 @@ def save_side_by_side(input_img, ref_depth, tt_depth, path):
 # Main
 # --------------------------------------------------------------------------
 
+
 def main():
     ensure_dir(OUTPUT_DIR)
     ensure_dir(os.path.join(OUTPUT_DIR, "depth_maps"))
@@ -83,9 +89,7 @@ def main():
     from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 
     # 1. Load PyTorch reference model
-    torch_model = AutoModelForDepthEstimation.from_pretrained(
-        MODEL_ID, torch_dtype=torch.float32
-    ).eval()
+    torch_model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=torch.float32).eval()
     image_processor = AutoImageProcessor.from_pretrained(MODEL_ID)
     print("PyTorch model loaded.")
 
@@ -95,9 +99,7 @@ def main():
 
     # 3. Convert weights & init TT model
     sys.path.insert(0, "/workdir/tt-metal")
-    from models.experimental.depth_anything_v2.tt.model_def import (
-        TtDepthAnythingV2, custom_preprocessor
-    )
+    from models.experimental.depth_anything_v2.tt.model_def import TtDepthAnythingV2, custom_preprocessor
 
     print("Converting weights...")
     parameters = custom_preprocessor(torch_model, "depth_anything_v2")
@@ -130,21 +132,23 @@ def main():
     for idx, img in enumerate(test_images):
         inputs = image_processor(images=img, return_tensors="pt")
         pv = inputs["pixel_values"]
-        tt_pv = ttnn.from_torch(
-            pv, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-        )
+        tt_pv = ttnn.from_torch(pv, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         try:
             tt_out = tt_model(tt_pv)
             tt_depth_torch = ttnn.to_torch(tt_out).squeeze()
 
             # Interpolate to match reference size
-            tt_interp = torch.nn.functional.interpolate(
-                tt_depth_torch.unsqueeze(0).unsqueeze(0).float(),
-                size=ref_depths[idx].shape,
-                mode="bicubic",
-                align_corners=False,
-            ).squeeze().numpy()
+            tt_interp = (
+                torch.nn.functional.interpolate(
+                    tt_depth_torch.unsqueeze(0).unsqueeze(0).float(),
+                    size=ref_depths[idx].shape,
+                    mode="bicubic",
+                    align_corners=False,
+                )
+                .squeeze()
+                .numpy()
+            )
 
             tt_depths.append(tt_interp)
 
@@ -155,8 +159,7 @@ def main():
 
             # Save side-by-side
             save_side_by_side(
-                img, ref_depths[idx], tt_interp,
-                os.path.join(OUTPUT_DIR, "depth_maps", f"comparison_{idx}.png")
+                img, ref_depths[idx], tt_interp, os.path.join(OUTPUT_DIR, "depth_maps", f"comparison_{idx}.png")
             )
 
         except Exception as e:
@@ -169,9 +172,7 @@ def main():
     print(f"\nBenchmarking ({WARMUP_ITERS} warmup + {BENCH_ITERS} timed)...")
     sample_inputs = image_processor(images=test_images[0], return_tensors="pt")
     sample_pv = sample_inputs["pixel_values"]
-    sample_tt = ttnn.from_torch(
-        sample_pv, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-    )
+    sample_tt = ttnn.from_torch(sample_pv, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     # Warmup
     for _ in range(WARMUP_ITERS):
@@ -204,7 +205,9 @@ def main():
     bench_csv = os.path.join(OUTPUT_DIR, "benchmark.csv")
     with open(bench_csv, "w") as f:
         f.write("device,model,resolution,warmup_iters,bench_iters,elapsed_s,fps\n")
-        f.write(f"N300,DepthAnythingV2Large,{INPUT_SIZE[0]}x{INPUT_SIZE[1]},{WARMUP_ITERS},{successful_iters},{elapsed:.3f},{fps:.2f}\n")
+        f.write(
+            f"N300,DepthAnythingV2Large,{INPUT_SIZE[0]}x{INPUT_SIZE[1]},{WARMUP_ITERS},{successful_iters},{elapsed:.3f},{fps:.2f}\n"
+        )
 
     # 9. Save numeric outputs
     npz_path = os.path.join(OUTPUT_DIR, "depth_outputs.npz")
