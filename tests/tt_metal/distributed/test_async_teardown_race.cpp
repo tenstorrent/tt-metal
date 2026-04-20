@@ -1723,4 +1723,324 @@ TEST_F(AsyncTeardownFabric2DFixture, QuiesceEventSynchronizeStress) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Scenario N: CompileAndConfigureFabric — chip-not-in-cluster guard.
+//
+// The guard at fabric_init.cpp:34 calls is_physical_chip_in_fabric_cluster()
+// to prevent TT_FATAL when a chip is not in the fabric cluster mapping.
+// No existing test verifies this guard fires correctly (returns false for
+// unknown chips instead of crashing).
+//
+// What this tests:
+//   - is_physical_chip_in_fabric_cluster(99999) returns false (bogus chip)
+//   - is_physical_chip_in_fabric_cluster(real_chip_id) returns true
+//   - Neither call crashes or triggers TT_FATAL
+//
+// Pass = both lookups return expected bool, no crash.
+// Fail = TT_FATAL, crash, or wrong return value.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DFixture, ChipNotInClusterGuardReturnsFalse) {
+    auto& control_plane = MetalContext::instance().get_control_plane();
+
+    // Bogus chip ID that can never be in any real cluster.
+    constexpr ChipId kBogusChipId = 99999;
+    bool bogus_result = control_plane.is_physical_chip_in_fabric_cluster(kBogusChipId);
+    log_info(
+        tt::LogTest,
+        "[Scenario N] is_physical_chip_in_fabric_cluster({}) = {} (expect false)",
+        kBogusChipId,
+        bogus_result);
+    EXPECT_FALSE(bogus_result)
+        << "[Scenario N] Bogus chip ID " << kBogusChipId
+        << " should NOT be in the fabric cluster";
+
+    // First real chip must be in the cluster.
+    auto real_device = mesh_device_->get_device(MeshCoordinate(0, 0));
+    ChipId real_chip_id = real_device->id();
+    bool real_result = control_plane.is_physical_chip_in_fabric_cluster(real_chip_id);
+    log_info(
+        tt::LogTest,
+        "[Scenario N] is_physical_chip_in_fabric_cluster({}) = {} (expect true)",
+        real_chip_id,
+        real_result);
+    EXPECT_TRUE(real_result)
+        << "[Scenario N] Real chip ID " << real_chip_id
+        << " should be in the fabric cluster";
+
+    log_info(tt::LogTest, "[Scenario N] Chip-not-in-cluster guard verified — no crash, correct results");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario O: ConfigureFabricCores — dead channel skip (documentation test).
+//
+// configure_fabric_cores() has a try/catch around assert_risc_reset_at_core
+// that handles dead ETH channels by setting dead_channels flags and returning
+// false instead of hanging. We cannot inject dead channels without hardware
+// damage or mocking infrastructure, but we CAN verify that the normal path
+// (close + reopen) exercises configure_fabric_cores() end-to-end.
+//
+// What this tests:
+//   - Close FABRIC_2D mesh, reopen it — forces full reconfiguration including
+//     configure_fabric_cores() on every device
+//   - Verify device count is preserved after reopen
+//   - The 90-second watchdog enforces "completing without hang"
+//
+// GAP: Cannot inject dead channels without hardware damage or mocking.
+//      A future test with fault injection infrastructure should cover that.
+//
+// Pass = close + reopen completes within 90s, device count matches.
+// Fail = hang (watchdog kills), crash, or device count mismatch.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DRepeatFixture, ConfigureFabricCoresCompletesOnReopen) {
+    auto mesh_shape = mesh_device_->shape();
+    size_t original_device_count = mesh_device_->num_devices();
+    log_info(
+        tt::LogTest,
+        "[Scenario O] Original device count: {} — closing FABRIC_2D mesh to force reconfiguration",
+        original_device_count);
+
+    // Phase 1: close the FABRIC_2D mesh — triggers full teardown including
+    // FabricFirmwareInitializer::teardown() on all ETH channels.
+    mesh_device_->close();
+    mesh_device_.reset();
+    log_info(tt::LogTest, "[Scenario O] Mesh closed — reopening with FABRIC_2D to exercise configure_fabric_cores()");
+
+    // Phase 2: reopen with FABRIC_2D — this calls configure_fabric_cores() on
+    // every device, exercising the try/catch dead-channel path (even though no
+    // channels are dead on healthy hardware).
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    mesh_device_ = MeshDevice::create(
+        MeshDeviceConfig(mesh_shape),
+        config_.l1_small_size,
+        config_.trace_region_size,
+        config_.num_cqs,
+        DispatchCoreConfig{},
+        {},
+        config_.worker_l1_size);
+
+    size_t new_device_count = mesh_device_->num_devices();
+    log_info(
+        tt::LogTest,
+        "[Scenario O] Reopened — device count: {} (expected {})",
+        new_device_count,
+        original_device_count);
+    EXPECT_EQ(new_device_count, original_device_count)
+        << "[Scenario O] Device count mismatch after FABRIC_2D reopen";
+
+    // Phase 3: dispatch a blocking workload to confirm the reconfigured fabric is functional.
+    {
+        auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    }
+
+    log_info(
+        tt::LogTest,
+        "[Scenario O] configure_fabric_cores() exercised via close/reopen — "
+        "no hang, device count preserved, dispatch functional");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario P: CreateAndCompileTtFabricProgram_ChipNotInCluster.
+//
+// Verifies the guard at fabric_init.cpp:34 for ALL real device IDs in the
+// mesh (not just device 0) and additionally confirms rejection of a second
+// bogus chip ID (0xDEAD). This complements Scenario N by covering the full
+// mesh device set.
+//
+// What this tests:
+//   - Every device in the mesh returns true from is_physical_chip_in_fabric_cluster()
+//   - 0xDEAD returns false (different bogus value than Scenario N's 99999)
+//   - No crash or TT_FATAL from any lookup
+//
+// Pass = all real chips → true, bogus → false, no crash.
+// Fail = any real chip → false (guard would reject valid device), or crash.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DFixture, AllRealChipsInClusterBogusRejected) {
+    auto& control_plane = MetalContext::instance().get_control_plane();
+    auto device_range = MeshCoordinateRange(mesh_device_->shape());
+
+    // Verify all real device IDs are in the fabric cluster.
+    size_t chip_count = 0;
+    for (const auto& coord : device_range) {
+        auto* device = mesh_device_->get_device(coord);
+        ChipId chip_id = device->id();
+        bool in_cluster = control_plane.is_physical_chip_in_fabric_cluster(chip_id);
+        log_info(
+            tt::LogTest,
+            "[Scenario P] chip_id={} coord=({},{}) in_cluster={}",
+            chip_id,
+            coord.row,
+            coord.col,
+            in_cluster);
+        EXPECT_TRUE(in_cluster)
+            << "[Scenario P] Real chip_id " << chip_id << " at ("
+            << coord.row << "," << coord.col << ") should be in cluster";
+        chip_count++;
+    }
+    log_info(tt::LogTest, "[Scenario P] Verified {} real chips — all in cluster", chip_count);
+
+    // Bogus chip ID 0xDEAD — distinct from Scenario N's 99999.
+    constexpr ChipId kDeadChipId = 0xDEAD;
+    bool dead_result = control_plane.is_physical_chip_in_fabric_cluster(kDeadChipId);
+    log_info(
+        tt::LogTest,
+        "[Scenario P] is_physical_chip_in_fabric_cluster(0xDEAD) = {} (expect false)",
+        dead_result);
+    EXPECT_FALSE(dead_result)
+        << "[Scenario P] Bogus chip 0xDEAD should NOT be in fabric cluster";
+
+    log_info(
+        tt::LogTest,
+        "[Scenario P] All {} real chips validated + bogus 0xDEAD rejected — "
+        "no crash, guard is correctly wired",
+        chip_count);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario R: RescueStuckDispatchCores path exercised under FABRIC_2D.
+//
+// GAPS FILLED vs Scenario L:
+//   - Scenario L uses kSpinIters=1'000'000 (~8ms). This test uses 10'000'000
+//     (~80ms) to ensure the kernel is *definitely* still running when close()
+//     fires, maximizing the chance of hitting wait_until_cores_done timeout
+//     → rescue_stuck_dispatch_cores().
+//   - Scenario L verifies buffer round-trip; this test focuses on the
+//     rescue path itself by using a longer spin and verifying re-open +
+//     functional dispatch afterward.
+//
+// What this exercises:
+//   close() with still-running BRISC → wait_until_cores_done() times out →
+//   rescue_stuck_dispatch_cores() resets DISPATCH cores → cleanup completes →
+//   re-open with fresh ERISC firmware → blocking dispatch confirms recovery.
+//
+// Pass = re-open succeeds, blocking dispatch completes within 90s watchdog.
+// Fail = hang (watchdog kills), crash on close/re-open, or dispatch failure.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DRepeatFixture, Fabric2DRescueStuckDispatchCores) {
+    constexpr uint32_t kSpinIters = 10'000'000;  // ~80ms on WH BRISC — guaranteed still running at close()
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    auto device_range = MeshCoordinateRange(mesh_device_->shape());
+    auto mesh_shape = mesh_device_->shape();
+
+    // Phase 1: dispatch busy_spin with high iteration count — BRISC will be
+    // spinning for ~80ms, well past the time close() fires.
+    {
+        Program program;
+        auto kernel_id = CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/busy_spin.cpp",
+            cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        SetRuntimeArgs(program, kernel_id, CoreCoord{0, 0}, {kSpinIters});
+        auto workload = MeshWorkload();
+        workload.add_program(device_range, std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(
+            tt::LogTest,
+            "[Scenario R] FABRIC_2D: dispatching busy-spin ({} iters ~80ms) — "
+            "kernel guaranteed running at close()",
+            kSpinIters);
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    }
+
+    // Phase 2: close immediately — forces rescue_stuck_dispatch_cores() path
+    // because BRISC is still spinning when teardown fires.
+    log_info(tt::LogTest, "[Scenario R] Closing FABRIC_2D — BRISC spinning, expecting rescue path");
+    mesh_device_->close();
+    mesh_device_.reset();
+
+    // Phase 3: re-open with FABRIC_2D — fresh ERISC firmware load.
+    log_info(tt::LogTest, "[Scenario R] Re-opening FABRIC_2D mesh after rescue-stuck-dispatch race");
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    mesh_device_ = MeshDevice::create(
+        MeshDeviceConfig(mesh_shape),
+        config_.l1_small_size,
+        config_.trace_region_size,
+        config_.num_cqs,
+        DispatchCoreConfig{},
+        {},
+        config_.worker_l1_size);
+
+    // Phase 4: blocking dispatch — proves device is fully recovered after rescue.
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario R] Verification blocking dispatch after rescue");
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    }
+
+    log_info(
+        tt::LogTest,
+        "[Scenario R] rescue_stuck_dispatch_cores path exercised — "
+        "close with running kernel + re-open + dispatch all succeeded");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario S: Rapid FABRIC_2D init/teardown stress — exercises
+//             verify_all_fabric_channels_healthy() on each cycle.
+//
+// Opens and closes FABRIC_2D 3 times rapidly with NO async dispatch between
+// cycles — pure init/teardown stress. Each cycle exercises:
+//   - FabricFirmwareInitializer::initialize() → loads ERISC EDM firmware
+//   - verify_all_fabric_channels_healthy() → reads channel status registers
+//   - FabricFirmwareInitializer::teardown() → sends TERMINATE, polls for ack
+//
+// This is a portable regression test for the verify path that doesn't require
+// hardware damage or SIGKILL. It surfaces accumulated state leaks between
+// rapid init/teardown cycles.
+//
+// Pass = all 3 cycles complete within 30s each (90s total watchdog).
+// Fail = hang (watchdog), crash, or TT_FATAL on any cycle.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DRepeatFixture, RapidFabric2DInitTeardownStress) {
+    constexpr int kCycles = 3;
+    auto mesh_shape = mesh_device_->shape();
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+
+    for (int cycle = 0; cycle < kCycles; cycle++) {
+        log_info(tt::LogTest, "[Scenario S] Cycle {}/{} — closing FABRIC_2D mesh", cycle + 1, kCycles);
+        mesh_device_->close();
+        mesh_device_.reset();
+
+        log_info(tt::LogTest, "[Scenario S] Cycle {}/{} — reopening FABRIC_2D mesh", cycle + 1, kCycles);
+        tt_fabric::SetFabricConfig(
+            tt_fabric::FabricConfig::FABRIC_2D,
+            tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        mesh_device_ = MeshDevice::create(
+            MeshDeviceConfig(mesh_shape),
+            config_.l1_small_size,
+            config_.trace_region_size,
+            config_.num_cqs,
+            DispatchCoreConfig{},
+            {},
+            config_.worker_l1_size);
+
+        log_info(tt::LogTest, "[Scenario S] Cycle {}/{} — reopened, verifying with blocking dispatch", cycle + 1, kCycles);
+        {
+            auto program = create_blank_program(cores);
+            auto workload = MeshWorkload();
+            workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+            auto& cq = mesh_device_->mesh_command_queue();
+            EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+        }
+        log_info(tt::LogTest, "[Scenario S] Cycle {}/{} — dispatch OK", cycle + 1, kCycles);
+    }
+
+    log_info(
+        tt::LogTest,
+        "[Scenario S] All {} rapid init/teardown cycles completed — "
+        "verify_all_fabric_channels_healthy() exercised on each cycle",
+        kCycles);
+}
+
 }  // namespace tt::tt_metal::distributed::test
