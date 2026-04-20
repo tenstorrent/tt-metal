@@ -126,8 +126,7 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, PARAM0)
 
 #define SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(FN, MODE, APPROXIMATE, DST_IDX, PARAM0) \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                               \
-        ckernel::sfpu::FN<uint32_t, APPROXIMATE, 8, uint32_t>, DST_IDX, PARAM0)
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(ckernel::sfpu::FN<APPROXIMATE, SFPU_ITERATIONS>, DST_IDX, PARAM0)
 
 #define SFPU_UNARY_ONE_PARAM_KERNEL_FN_INT(FN, MODE, APPROXIMATE, DST_IDX, PARAM0) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                             \
