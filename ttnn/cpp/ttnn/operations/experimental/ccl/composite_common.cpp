@@ -255,13 +255,7 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
     return false;
 }
 
-bool use_composite_all_gather(
-    const ttnn::Tensor& input_tensor, const int32_t dim, const std::optional<ttnn::MemoryConfig>& memory_config) {
-    auto is_true_2d_mesh = [](const ttnn::Tensor& t) {
-        const auto mesh_shape = t.device()->shape();
-        return mesh_shape.dims() >= 2 && mesh_shape[0] > 1 && mesh_shape[1] > 1;
-    };
-
+bool use_composite_all_gather(const ttnn::Tensor& input_tensor, const int32_t dim) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -271,12 +265,6 @@ bool use_composite_all_gather(
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
-    auto input_memory_config = input_tensor.memory_config();
-    auto output_memory_config = memory_config.value_or(input_memory_config);
-
-    if (tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D && is_true_2d_mesh(input_tensor)) {
-        return true;
-    }
     // Use composite for row-major tensors
     if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR) {
         return true;

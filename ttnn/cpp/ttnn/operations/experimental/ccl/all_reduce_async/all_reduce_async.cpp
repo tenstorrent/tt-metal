@@ -51,15 +51,6 @@ uint32_t finding_scatter_dim(const ttnn::Tensor& input_tensor, size_t num_worker
     auto end_it = shape_vec.crend();
     return (dim_it == end_it) ? rank : end_it - dim_it - 1;  // forward index
 }
-
-// True 2D mesh when both mesh axes have more than one device.
-bool is_true_2d_mesh(const ttnn::Tensor& input_tensor, tt::tt_fabric::Topology topology) {
-    if (topology != tt::tt_fabric::Topology::Mesh && topology != tt::tt_fabric::Topology::Torus) {
-        return false;
-    }
-    const auto mesh_shape = input_tensor.device()->shape();
-    return mesh_shape.dims() >= 2 && mesh_shape[0] > 1 && mesh_shape[1] > 1;
-}
 }  // namespace detail
 
 Tensor local_sum(
@@ -178,8 +169,7 @@ ttnn::Tensor all_reduce_async(
 
     auto initial_shape = input_tensor.logical_shape();
     auto composite_dim = (dim == input_tensor.padded_shape().size()) ? 0 : dim;
-    bool composite_all_gather =
-        composite_common::use_composite_all_gather(input_tensor, composite_dim, out_memory_config);
+    bool composite_all_gather = composite_common::use_composite_all_gather(input_tensor, composite_dim);
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, std::nullopt);
 
@@ -196,11 +186,7 @@ ttnn::Tensor all_reduce_async(
     const ttnn::Tensor& working_input_tensor =
         interleaved_input_tensor.has_value() ? interleaved_input_tensor.value() : input_tensor;
 
-    const bool composite_for_2d_mesh =
-        tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D &&
-        ttnn::operations::experimental::ccl::detail::is_true_2d_mesh(input_tensor, topology);
-
-    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || composite_for_2d_mesh) {
+    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim)) {
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
 
         // All reduce = all gather + local reduce
@@ -315,15 +301,10 @@ ttnn::Tensor all_reduce_async(
 
     // Logic for taking the AG+local reduce code path
     auto composite_dim = (dim == input_tensor.padded_shape().size()) ? 0 : dim;
-    bool composite_all_gather =
-        composite_common::use_composite_all_gather(input_tensor, composite_dim, out_memory_config);
+    bool composite_all_gather = composite_common::use_composite_all_gather(input_tensor, composite_dim);
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, cluster_axis);
-    const bool composite_for_2d_mesh =
-        tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D &&
-        ttnn::operations::experimental::ccl::detail::is_true_2d_mesh(input_tensor, topology_);
-
-    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || composite_for_2d_mesh) {
+    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim)) {
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
         // All reduce = all gather + local reduce
         composite_dim = 0;
