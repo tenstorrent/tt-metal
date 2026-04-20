@@ -213,7 +213,18 @@ def main():
     )
     args = ap.parse_args()
 
-    paths = [Path(p) for p in args.paths] if args.paths else [DEFAULT_ROOT]
+    # Contain user-supplied paths to the tt-metal workspace root. Prevents
+    # accidental/malicious scans of unrelated filesystem locations.
+    allowed_root = DEFAULT_ROOT.resolve()
+    paths = []
+    for raw in args.paths or [allowed_root]:
+        resolved = Path(raw).resolve()
+        try:
+            resolved.relative_to(allowed_root)
+        except ValueError:
+            ap.error(f"path {raw!r} is outside the allowed root {allowed_root}")
+        paths.append(resolved)
+
     csvs = list(_iter_csv_paths(paths, args.date))
     if not csvs:
         print(f"No device_perf_*.csv files found under: {', '.join(str(p) for p in paths)}", file=sys.stderr)
