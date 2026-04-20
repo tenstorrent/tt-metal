@@ -289,8 +289,6 @@ COUNTER_TYPE_NAMES = {
 }
 
 
-
-
 # Perf counter headers are only included in CSV output when perf counter data is available.
 PERF_COUNTER_CSV_HEADERS = [
     "SFPU Util Min (%)",
