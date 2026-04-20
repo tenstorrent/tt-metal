@@ -36,7 +36,8 @@ REFERENCE_FILE = Path(
     )
 )
 
-GENERATED_OUTPUTS_FILE = Path(__file__).with_name("teacher_forced_generated_outputs.json")
+ARTIFACT_DIR = Path("generated/artifacts")
+GENERATED_OUTPUTS_FILE = ARTIFACT_DIR / "teacher_forced_generated_outputs.json"
 
 
 def tile_align(length: int) -> int:

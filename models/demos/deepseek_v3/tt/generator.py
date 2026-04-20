@@ -1884,6 +1884,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                                 self._sample_on_host(last_token_logits.unsqueeze(0), start_user_idx=user_id).item()
                             )
                         prefill_tokens.append(torch.tensor(pred_token, dtype=torch.int64))
+                    ttnn.synchronize_device(self.mesh_device)
                     self.ccl.reset_sem_counters()
                 if use_mtp_path:
                     assert last_logits is not None
@@ -2356,6 +2357,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                     ttnn.deallocate(tokens_shifted)
                     self._deallocate_rope_tensors(mtp_rope_tensors)
                     ttnn.deallocate(mtp_logits_tt)
+                    ttnn.synchronize_device(self.mesh_device)
                     self.ccl.reset_sem_counters()
 
             if return_last_hidden:
