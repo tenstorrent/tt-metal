@@ -25,3 +25,6 @@ tests/helpers/include/build.h
 
 # Ignore generated compile_flags.txt
 compile_flags.txt
+
+# Unignore .claude
+!.claude
