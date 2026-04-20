@@ -1549,8 +1549,17 @@ void DeviceProfiler::readRiscProfilerResults(
             // Pre-sentinel TS_DATA: perf_counter_flush writes custom marker data
             // to DRAM before the header (which contains the sentinel). These
             // markers are valid TS_DATA that should be associated with this run.
-            // We buffer their indices and re-process them after the run is established.
-            std::vector<int> pre_sentinel_indices;
+            // We buffer their (index, timer_id, timestamp, data) after the run is established.
+            // Parse each marker here so we correctly advance past TS_DATA's 4-slot layout
+            // (header at N/N+1, data payload at N+2/N+3); otherwise the 2-slot main loop
+            // would treat the payload as a new marker and read out-of-range slots
+            // belonging to an adjacent RISC's buffer.
+            struct PreSentinelMarker {
+                uint32_t timer_id;
+                uint64_t timestamp;
+                uint64_t data;  // only valid for TS_DATA
+            };
+            std::vector<PreSentinelMarker> pre_sentinel_markers;
 
             for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
@@ -1560,11 +1569,31 @@ void DeviceProfiler::readRiscProfilerResults(
                     opTime_H = 0;
                     opTime_L = 0;
                 } else if (!oneStartFound) {
-                    // Data before first sentinel — buffer index for later processing
+                    // Data before first sentinel — parse marker by packet type and buffer
+                    // for later processing. Only TS_DATA is expected (from perf_counter_flush);
+                    // TS_DATA spans 4 slots, so we advance the loop index by an extra
+                    // PROFILER_L1_MARKER_UINT32_SIZE after capturing the payload. Other
+                    // packet types are skipped (they shouldn't appear pre-sentinel).
                     uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
                     uint32_t time_H = data_buffer.at(index) & 0xFFF;
                     if (timer_id || time_H) {
-                        pre_sentinel_indices.push_back(index);
+                        kernel_profiler::PacketTypes pre_packet_type = get_packet_type(timer_id);
+                        if (pre_packet_type == kernel_profiler::TS_DATA) {
+                            uint32_t time_L = data_buffer.at(index + 1);
+                            int data_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                            // Guard against a truncated TS_DATA marker at the very end of
+                            // the risc's region — skip it rather than reading adjacent data.
+                            if (data_index + 1 < bufferRiscShift + bufferEndIndex) {
+                                uint64_t data_H = data_buffer.at(data_index);
+                                uint64_t data_L = data_buffer.at(data_index + 1);
+                                uint64_t data = (data_H << 32) | data_L;
+                                uint64_t timestamp = (static_cast<uint64_t>(time_H) << 32) | time_L;
+                                pre_sentinel_markers.push_back({timer_id, timestamp, data});
+                            }
+                            // Consume the data payload slot; loop will advance by
+                            // PROFILER_L1_MARKER_UINT32_SIZE, totalling 4 slots for TS_DATA.
+                            index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                        }
                     }
                     continue;
                 } else if (newRunStart) {
@@ -1582,32 +1611,22 @@ void DeviceProfiler::readRiscProfilerResults(
                         detail::DecodePerDeviceProgramID(runHostCounterRead).base_program_id;
                     opname = getOpNameIfAvailable(device_id, base_program_id);
 
-                    // Re-process any TS_DATA that appeared before this sentinel
-                    // (from perf_counter_flush which writes data before the header)
-                    for (int pre_idx : pre_sentinel_indices) {
-                        uint32_t pre_timer_id = (data_buffer.at(pre_idx) >> 12) & 0x7FFFF;
-                        kernel_profiler::PacketTypes pre_packet_type = get_packet_type(pre_timer_id);
-                        if (pre_packet_type == kernel_profiler::TS_DATA) {
-                            uint32_t pre_time_H = data_buffer.at(pre_idx) & 0xFFF;
-                            uint32_t pre_time_L = data_buffer.at(pre_idx + 1);
-                            uint64_t pre_data_H = data_buffer.at(pre_idx + 2);
-                            uint64_t pre_data_L = data_buffer.at(pre_idx + 3);
-                            uint64_t pre_data = (pre_data_H << 32) | pre_data_L;
-                            uint64_t pre_timestamp = (static_cast<uint64_t>(pre_time_H) << 32) | pre_time_L;
-                            readDeviceMarkerData(
-                                device_markers_for_core_risc,
-                                runHostCounterRead,
-                                deviceTraceCounterRead,
-                                opname,
-                                device_id,
-                                phys_coord,
-                                riscType,
-                                pre_data,
-                                pre_timer_id,
-                                pre_timestamp);
-                        }
+                    // Associate any TS_DATA captured before this sentinel with this run
+                    // (perf_counter_flush writes data before the header gets its sentinel).
+                    for (const auto& pre : pre_sentinel_markers) {
+                        readDeviceMarkerData(
+                            device_markers_for_core_risc,
+                            runHostCounterRead,
+                            deviceTraceCounterRead,
+                            opname,
+                            device_id,
+                            phys_coord,
+                            riscType,
+                            pre.data,
+                            pre.timer_id,
+                            pre.timestamp);
                     }
-                    pre_sentinel_indices.clear();
+                    pre_sentinel_markers.clear();
 
                 } else if (oneStartFound) {
                     uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
