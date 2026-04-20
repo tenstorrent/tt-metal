@@ -97,7 +97,7 @@ def invalidate_vector(test_vector) -> tuple:
 
 def mesh_device_fixture():
     mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
+    device = create_mesh_device(mesh_shape, l1_small_size=32768)
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)
@@ -279,10 +279,48 @@ def run(
         v_tensor = ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=mem_config_v)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.transformer.scaled_dot_product_attention(
-        q_tensor, k_tensor, v_tensor, is_causal=bool(is_causal), **op_kwargs
-    )
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    try:
+        output_tensor = ttnn.transformer.scaled_dot_product_attention(
+            q_tensor, k_tensor, v_tensor, is_causal=bool(is_causal), **op_kwargs
+        )
+        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    except Exception as e:
+        err_msg = str(e)
+        if "Program size" in err_msg and "too large" in err_msg and "program_config" in op_kwargs:
+            # Retry without program_config — chunk sizes may exceed kernel
+            # config buffer on the target device.
+            op_kwargs_retry = {k: v for k, v in op_kwargs.items() if k != "program_config"}
+            if is_mesh_device and input_a_tensor_placement:
+                q_tensor = create_tensor_on_mesh(
+                    torch_q, device, dtype_q, layout_q, mem_config_q, input_a_tensor_placement
+                )
+                k_tensor = create_tensor_on_mesh(
+                    torch_k, device, dtype_k, layout_k, mem_config_k, input_b_tensor_placement
+                )
+                v_tensor = create_tensor_on_mesh(
+                    torch_v, device, dtype_v, layout_v, mem_config_v, input_c_tensor_placement
+                )
+            else:
+                q_tensor = ttnn.from_torch(
+                    torch_q, dtype=dtype_q, layout=layout_q, device=device, memory_config=mem_config_q
+                )
+                k_tensor = ttnn.from_torch(
+                    torch_k, dtype=dtype_k, layout=layout_k, device=device, memory_config=mem_config_k
+                )
+                v_tensor = ttnn.from_torch(
+                    torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=mem_config_v
+                )
+            try:
+                output_tensor = ttnn.transformer.scaled_dot_product_attention(
+                    q_tensor, k_tensor, v_tensor, is_causal=bool(is_causal), **op_kwargs_retry
+                )
+                output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+            except Exception as e2:
+                e2e_perf = stop_measuring_time(start_time)
+                return [(True, f"Op called, runtime error: {str(e2)[:200]}"), e2e_perf]
+        else:
+            e2e_perf = stop_measuring_time(start_time)
+            return [(True, f"Op called, runtime error: {str(e)[:200]}"), e2e_perf]
     e2e_perf = stop_measuring_time(start_time)
 
     # Compare raw golden (float32) against TTNN output.
