@@ -40,14 +40,14 @@ void kernel_main() {
     constexpr uint32_t one_tile = 1;
 
     // Input tensor config
-    constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
-    const auto input_tensor_dram =
-        TensorAccessor(input_tensor_args, input_tensor_buffer_addr, input_tensor_tile_size_bytes);
+    const auto input_tensor_dram = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
 
     // Output tensor config
-    constexpr uint32_t output_tensor_tile_size_bytes = get_tile_size(output_tensor_cb_index);
-    const auto output_tensor_dram =
-        TensorAccessor(output_tensor_args, output_tensor_buffer_addr, output_tensor_tile_size_bytes);
+    const auto output_tensor_dram = TensorAccessor(output_tensor_args, output_tensor_buffer_addr);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer input_cb(input_tensor_cb_index);
+    experimental::CircularBuffer output_cb(output_tensor_cb_index);
 
     experimental::Noc noc;
     experimental::CircularBuffer input_cb(input_tensor_cb_index);

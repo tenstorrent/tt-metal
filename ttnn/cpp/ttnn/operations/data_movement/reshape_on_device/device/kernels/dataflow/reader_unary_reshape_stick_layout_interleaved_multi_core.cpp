@@ -19,7 +19,9 @@ void kernel_main() {
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
 
-    const auto s = TensorAccessor(src_args, src_addr, old_stick_size);
+    const auto s = TensorAccessor(src_args, src_addr);
+
+    experimental::CircularBuffer cb_input(cb_in0);
 
     experimental::CircularBuffer cb_input(cb_in0);
 

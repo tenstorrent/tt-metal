@@ -36,7 +36,7 @@ void kernel_main() {
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = src_addr, .shard_array = mapping_table};
 #else
     constexpr auto src_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 #endif
 
 // read a ublock of tiles from src to CB, and then push the ublock to unpacker

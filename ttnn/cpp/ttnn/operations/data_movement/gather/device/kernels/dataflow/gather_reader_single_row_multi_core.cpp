@@ -73,8 +73,7 @@ void kernel_main() {
     // Index tensor config
     constexpr uint32_t input_index_tensor_tile_size_bytes = get_tile_size(input_index_tensor_cb_index);
     constexpr DataFormat input_index_tensor_data_format = get_dataformat(input_index_tensor_cb_index);
-    const auto input_index_tensor_dram =
-        TensorAccessor(input_index_tensor_args, input_index_tensor_buffer_addr, input_index_tensor_tile_size_bytes);
+    const auto input_index_tensor_dram = TensorAccessor(input_index_tensor_args, input_index_tensor_buffer_addr);
 
     // Dataformats size
     constexpr uint32_t input_tensor_data_format_size =
