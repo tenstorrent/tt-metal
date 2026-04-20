@@ -270,7 +270,7 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
     // the size of the inner dimensions in tiles (inner_num_tiles). The number
     // of tiles to process is the size of the reduce dimension in tiles
     // (reduction_num_tiles).
-    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
+    for (const auto & core : all_cores) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
         uint32_t num_tiles_per_core;
