@@ -65,7 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (unpack_to_dest)
     {
-        _llk_unpack_dest_dvalid_section_done_();
+        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
     }
 }
 
