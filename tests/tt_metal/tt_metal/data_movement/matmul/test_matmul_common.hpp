@@ -12,6 +12,11 @@
 
 namespace tt::tt_metal::unit_tests::dm::matmul {
 
+// 16-byte gap inserted between distinct L1 regions. L1 is pre-zeroed, so this
+// padding leaves a visually identifiable strip of zeros between chunks when
+// inspecting L1 memory during debugging.
+constexpr uint32_t L1_DEBUG_PADDING_BYTES = 0x10;
+
 struct MatmulTestConfig {
     uint32_t test_id = 0;
     CoreCoord start_logical_core;

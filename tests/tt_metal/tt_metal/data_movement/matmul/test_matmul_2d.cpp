@@ -116,17 +116,17 @@ bool run_dm_2d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
 
     // ---- L1 Memory Layout ----
     // l1_base:                                    in0 source data (this col's K subblocks)
-    // in0_source_end + 0x10:                      in0 mcast output (K * in0_k_sub_size)
-    // in0_mcast_end + 0x10:                       in1 source data (this row's K subblocks)
-    // in1_source_end + 0x10:                      in1 mcast output (K * in1_k_sub_size)
+    // in0_source_end + pad:                       in0 mcast output (K * in0_k_sub_size)
+    // in0_mcast_end + pad:                        in1 source data (this row's K subblocks)
+    // in1_source_end + pad:                       in1 mcast output (K * in1_k_sub_size)
     // align16(in1_mcast_end):                     RISCV_0 barrier scratch (16 bytes)
     // align16(risc0_scratch + 16):                RISCV_1 barrier scratch (16 bytes)
 
-    uint32_t in0_mcast_output_addr = l1_base_address + in0_max_source_data_bytes + 0x10;
+    uint32_t in0_mcast_output_addr = l1_base_address + in0_max_source_data_bytes + matmul::L1_DEBUG_PADDING_BYTES;
     uint32_t in0_output_total_bytes = K * in0_k_subblock_size_bytes;
 
-    uint32_t in1_source_addr = in0_mcast_output_addr + in0_output_total_bytes + 0x10;
-    uint32_t in1_mcast_output_addr = in1_source_addr + in1_max_source_data_bytes + 0x10;
+    uint32_t in1_source_addr = in0_mcast_output_addr + in0_output_total_bytes + matmul::L1_DEBUG_PADDING_BYTES;
+    uint32_t in1_mcast_output_addr = in1_source_addr + in1_max_source_data_bytes + matmul::L1_DEBUG_PADDING_BYTES;
     uint32_t in1_output_total_bytes = K * in1_k_subblock_size_bytes;
 
     uint32_t risc0_local_barrier_addr = (in1_mcast_output_addr + in1_output_total_bytes + 15) & ~15U;

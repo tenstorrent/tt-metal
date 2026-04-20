@@ -106,13 +106,14 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
 
     // ---- L1 Memory Layout ----
     // l1_base_address:                              in0 source data (per-core K subblocks)
-    // l1_base_address + max_source_data + 0x10:     in0 multicast output (all K subblocks)
-    // aligned(output_end + gap):                    in1 DRAM read output
+    // l1_base_address + max_source_data + pad:      in0 multicast output (all K subblocks)
+    // aligned(output_end + pad):                    in1 DRAM read output
     // after in1: barrier scratch
-    uint32_t in0_mcast_output_addr = l1_base_address + max_source_data_bytes + 0x10;
+    uint32_t in0_mcast_output_addr = l1_base_address + max_source_data_bytes + matmul::L1_DEBUG_PADDING_BYTES;
     uint32_t in0_output_total_bytes = K * k_subblock_size_bytes;
 
-    uint32_t in1_output_addr_unaligned = in0_mcast_output_addr + in0_output_total_bytes + 0x10;
+    uint32_t in1_output_addr_unaligned =
+        in0_mcast_output_addr + in0_output_total_bytes + matmul::L1_DEBUG_PADDING_BYTES;
     uint32_t in1_output_addr = (in1_output_addr_unaligned + 63) & ~63U;
 
     // ---- Generate in0 data ----

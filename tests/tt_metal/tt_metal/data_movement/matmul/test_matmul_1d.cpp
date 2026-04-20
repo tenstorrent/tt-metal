@@ -138,12 +138,13 @@ for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
         in1_per_core_read_addr.push_back(input_dram_address + i * in1_per_core_read_size_bytes);
     }
     // in0_mcast_output_addr is the memory address where each core will leave the in0 mcast output in L1
-    uint32_t in0_mcast_output_addr = l1_base_address + pages_per_core_size_bytes + 0x10;
+    uint32_t in0_mcast_output_addr = l1_base_address + pages_per_core_size_bytes + matmul::L1_DEBUG_PADDING_BYTES;
 
     // in1_output_addr is the memory address where each core will leave the in1 read output in L1. It is placed after
     // in0 mcast output in L1. Must be aligned to NOC_DRAM_READ_ALIGNMENT_BYTES (64 on Blackhole) so the low bits match
     // the DRAM source address.
-    uint32_t in1_output_addr_unaligned = l1_base_address + ((pages_per_core_size_bytes + 0x10) << 1);
+    uint32_t in1_output_addr_unaligned =
+        l1_base_address + ((pages_per_core_size_bytes + matmul::L1_DEBUG_PADDING_BYTES) << 1);
     uint32_t in1_output_addr = (in1_output_addr_unaligned + 63) & ~63U;
 
     // ---- in0 multicast semaphores ----
