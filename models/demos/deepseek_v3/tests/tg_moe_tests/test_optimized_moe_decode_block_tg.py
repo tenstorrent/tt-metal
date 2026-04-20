@@ -582,7 +582,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     "device_params",
     [
         {
-            # "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "trace_region_size": 500000,
         },
