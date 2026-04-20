@@ -71,15 +71,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
     }
-    _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, 1 /*num_tiles_per_unpack*/);
-    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
-    {
-        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(i);
-    }
 
     if constexpr (unpack_to_dest)
     {
-        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+        const std::uint32_t tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
+        const std::uint32_t num_blocks     = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);
+
+        // ISSUE #988: For unpack to dest cannot init the unpacker with 1 tile per unpack, because it will keep writing to dest_idx=0
+        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tiles_in_block /*num_tiles_per_unpack*/);
+        for (std::uint32_t block = 0; block < num_blocks; block++)
+        {
+            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block * tiles_in_block);
+            _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+        }
+    }
+    else
+    {
+        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, 1 /*num_tiles_per_unpack*/);
+        for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+        {
+            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(i);
+        }
     }
 }
 
@@ -177,13 +189,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
     const ckernel::ReluConfig relu_config = ckernel::ReluConfig::from_packed(params.RELU_CONFIG);
     _llk_pack_init_<is_fp32_dest_acc_en>(buf_desc_id, 1 /*num_tiles_per_pack*/, relu_config);
-    _llk_pack_set_l1_acc_<p_pacr::PACK0>(1 /*l1_acc_en*/);
 
     const std::uint32_t output_num_blocks     = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);
     const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
 
     for (std::uint32_t block = 0; block < output_num_blocks; block++)
     {
+        // First iteration should have L1 accumulation disabled, otherwise partials will be accumulated on top of the L1 data left by the previous test variant
+        _llk_pack_set_l1_acc_<p_pacr::PACK0>(block == 0 ? 0 : 1 /*l1_acc_en*/);
         for (std::uint32_t tile = 0; tile < output_tiles_in_block; tile++)
         {
             // Accumulate each block on top of the previous one
