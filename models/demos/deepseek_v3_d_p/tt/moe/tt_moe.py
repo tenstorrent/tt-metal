@@ -466,6 +466,9 @@ class TtMoe(LightweightModule):
         # ========================================
         # Combine expects ROW_MAJOR input
         logger.debug(f"To Layout")
+        logger.debug(
+            f"expert_outputs.memory_config is {expert_outputs.memory_config()} and shape is: {expert_outputs.shape}"
+        )
         expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
         # logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
 
