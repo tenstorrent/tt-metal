@@ -74,7 +74,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (unpack_to_dest)
     {
-        _llk_unpack_dest_dvalid_section_done_();
+        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
     }
 }
 
@@ -132,7 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_eltwise_unary_datacopy_(num_rows, i);
         }
 
-        _llk_math_set_dvalid_<p_cleardvalid::FPU>();
+        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 
     _llk_math_eltwise_unary_sfpu_init_();
@@ -140,10 +140,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Apply SFPU absolute value (SFPABS instruction) to all tiles
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_math_eltwise_unary_sfpu_params_<false>(ckernel::sfpu::_calculate_abs_, i, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_abs_, i, num_sfpu_iterations);
     }
 
-    _llk_math_set_dvalid_<p_cleardvalid::SFPU>();
+    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 
     // Wait for SFPU, FPU, and MOP to finish their Dest sections.
     // No REPLAY wait needed because this kernel uses straight-line SFPU execution (no replay buffer).
