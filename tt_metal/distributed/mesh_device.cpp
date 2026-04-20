@@ -1430,13 +1430,52 @@ bool MeshDeviceImpl::is_mmio_capable() const {
     return reference_device()->is_mmio_capable();
 }
 
+void MeshDeviceImpl::drain_cqs_for_quiesce() {
+    // Recursively drain submeshes first (depth-first).
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->drain_cqs_for_quiesce();
+        }
+    }
+    // Drain this mesh's own command queues.
+    bool have_reset_launch_msg_state = false;
+    for (auto& command_queue : mesh_command_queues_) {
+        command_queue->wait_for_completion(!have_reset_launch_msg_state);
+        have_reset_launch_msg_state = true;
+    }
+    for (auto& command_queue : mesh_command_queues_) {
+        command_queue->finish_and_reset_in_use();
+    }
+}
+
+void MeshDeviceImpl::restart_fabric_workers_for_quiesce() {
+    // Recursively restart submesh fabric workers first (depth-first).
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->restart_fabric_workers_for_quiesce();
+        }
+    }
+    // Restart fabric workers for devices in this mesh.
+    for (auto* idev : get_devices()) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev) {
+            dev->quiesce_and_restart_fabric_workers();
+        }
+    }
+}
+
 void MeshDeviceImpl::quiesce_internal() {
     TT_FATAL(
         get_active_sub_device_manager_id() == get_default_sub_device_manager_id(),
         "Cannot quiesce when non-default sub-device manager is active");
+
+    // Phase 1: Drain ALL submesh command queues before restarting any fabric
+    // workers. On T3K, device 3's fabric restart disrupts device 5's dispatch
+    // relay path (they are mesh-adjacent); draining all CQs first prevents the
+    // 5-second completion_queue_wait_front hang on device 5.
     for (const auto& submesh : submeshes_) {
         if (auto submesh_ptr = submesh.lock()) {
-            submesh_ptr->quiesce_devices();
+            submesh_ptr->drain_cqs_for_quiesce();
         }
     }
     bool have_reset_launch_msg_state = false;
@@ -1448,8 +1487,14 @@ void MeshDeviceImpl::quiesce_internal() {
         command_queue->finish_and_reset_in_use();
     }
 
+    // Phase 2: All CQs are drained; now safely restart fabric workers.
     // Reset fabric MUX worker cores so stale router state from the previous
     // iteration doesn't cause data-mismatch / NOC hangs on the next dispatch.
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->restart_fabric_workers_for_quiesce();
+        }
+    }
     for (auto* idev : get_devices()) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
@@ -1712,6 +1757,8 @@ bool MeshDevice::is_parent_mesh() const { return pimpl_->is_parent_mesh(); }
 const std::shared_ptr<MeshDevice>& MeshDevice::get_parent_mesh() const { return pimpl_->get_parent_mesh(); }
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { return pimpl_->get_submeshes(); }
 void MeshDevice::quiesce_devices() { pimpl_->quiesce_devices(); }
+void MeshDevice::drain_cqs_for_quiesce() { pimpl_->drain_cqs_for_quiesce(); }
+void MeshDevice::restart_fabric_workers_for_quiesce() { pimpl_->restart_fabric_workers_for_quiesce(); }
 std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset) {
     return pimpl_->create_submesh(shared_from_this(), submesh_shape, offset);

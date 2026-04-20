@@ -277,6 +277,11 @@ public:
      */
     void quiesce_devices();
 
+    // Internal helpers used by quiesce_internal() to separate drain from fabric
+    // restart across submeshes. Not part of the public API.
+    void drain_cqs_for_quiesce();
+    void restart_fabric_workers_for_quiesce();
+
     std::shared_ptr<MeshDevice> create_submesh(
         const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);
 
