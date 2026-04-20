@@ -109,7 +109,10 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "from_device",
-        &ttnn::operations::core::from_device,
+        [](const ttnn::Tensor& tensor, bool blocking, std::optional<ttnn::QueueId> queue_id) {
+            nb::gil_scoped_release release;
+            return ttnn::operations::core::from_device(tensor, blocking, queue_id);
+        },
         nb::arg("tensor"),
         nb::arg("blocking") = true,
         nb::kw_only(),
@@ -272,6 +275,7 @@ void py_module(nb::module_& mod) {
     mod.def(
         "copy_host_to_device_tensor",
         [](const ttnn::Tensor& host_tensor, ttnn::Tensor& device_tensor, const std::optional<QueueId>& cq_id) {
+            nb::gil_scoped_release release;
             copy_to_device(host_tensor, device_tensor, cq_id);
         },
         nb::arg("host_tensor"),
@@ -310,8 +314,9 @@ void py_module(nb::module_& mod) {
         "copy_device_to_host_tensor",
         [](const ttnn::Tensor& device_tensor,
            ttnn::Tensor& host_tensor,
-           bool blocking = true,
-           std::optional<ttnn::QueueId> cq_id = std::nullopt) {
+           bool blocking,
+           std::optional<ttnn::QueueId> cq_id) {
+            nb::gil_scoped_release release;
             copy_to_host(device_tensor, host_tensor, blocking, cq_id);
         },
         nb::arg("device_tensor"),

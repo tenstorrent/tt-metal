@@ -4,6 +4,8 @@
 
 import time
 
+import torch
+
 import ttnn
 from models.demos.yolov8l.runner.performant_runner_infra import YOLOv8lPerformanceRunnerInfra
 
@@ -101,13 +103,32 @@ class YOLOv8lPerformantRunner:
         self.staging_ready_event = ttnn.record_event(self.device, 0)
         self.read_done_event = ttnn.record_event(self.device, 1)
         self._pipeline_frame = 0
+        self._compose_timing = 0.0
+
+        # Pre-allocate compose output buffer sized for PHYSICAL shape (includes
+        # tile-alignment padding).  batch_to_torch(physical=True) copies the full
+        # physical buffer contiguously (24 large memcpy calls instead of 2016
+        # strided ones).  Callers slice [:, :log_h, :log_w] to get logical data.
+        n_devices = len(ttnn.get_device_tensors(self.host_staging))
+        _padded = self.dram_staging.padded_shape
+        _logical = self.dram_staging.shape
+        _phys_h = int(_padded[-2]) if len(_padded) >= 2 else 1
+        _phys_w = int(_padded[-1])
+        _log_h = int(_logical[-2]) if len(_logical) >= 2 else 1
+        _log_w = int(_logical[-1])
+        self._phys_per_shard = (_phys_h, _phys_w)
+        self._log_per_shard = (_log_h, _log_w)
+        self._compose_buf = torch.empty(n_devices, _phys_h, _phys_w, dtype=torch.bfloat16)
+        self._compose_physical = _phys_h != _log_h or _phys_w != _log_w
         print(
-            f"[runner] staging shape={self.dram_staging.shape} dtype={self.dram_staging.dtype} "
-            f"volume={self.dram_staging.volume()}",
+            f"[runner] staging logical={list(_logical)} padded={list(_padded)} "
+            f"physical=({_phys_h}×{_phys_w}) logical=({_log_h}×{_log_w}) "
+            f"compose_physical={self._compose_physical} "
+            f"compose_buf={list(self._compose_buf.shape)}",
             flush=True,
         )
 
-        # Capture
+        # Capture trace
         ttnn.wait_for_event(1, self.op_event)
         ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
@@ -119,7 +140,7 @@ class YOLOv8lPerformantRunner:
         trace_input_addr = self.runner_infra.input_tensor.buffer_address()
         self.tid = ttnn.begin_trace_capture(self.device, cq_id=0)
         self.runner_infra.run()
-        # Untilize inside trace — replayed every frame at device speed
+        # On-device output processing inside trace — replayed every frame
         tile_output_traced = self.runner_infra.output_tensor[0]
         self.runner_infra.output_tensor[0] = ttnn.untilize(
             tile_output_traced, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -282,31 +303,36 @@ class YOLOv8lPerformantRunner:
         self.last_timing["pcie_d2h_ms"] = (t_pcie - t_wait) * 1000
         return True
 
-    def compose(self, mesh_composer=None):
+    def compose(self, mesh_composer=None, dest=None):
         """Host-side compose of previously D2H'd data.
 
-        Must be called after ``pcie_d2h()``.  Returns the composed
-        torch tensor (bfloat16).
+        Must be called after ``pcie_d2h()``.
+
+        Uses ``batch_to_torch`` — a single C++ call that memcpy's all 24
+        shard buffers contiguously into a pre-allocated torch tensor.
+        Eliminates per-shard Python to_torch calls, per-shard allocations,
+        and torch.cat entirely.
+
+        If ``dest`` is provided, writes directly into it; otherwise uses
+        the pre-allocated ``_compose_buf``.
+
+        Thread-safe: only writes to ``_compose_timing`` (not ``last_timing``
+        which may be overwritten by a concurrent ``submit`` call).
         """
         t0 = time.perf_counter()
-        composer = mesh_composer or self.mesh_composer
-        result = ttnn.to_torch(
-            self.host_staging,
-            mesh_composer=composer,
-        )
+        out = dest if dest is not None else self._compose_buf
+        self.host_staging.batch_to_torch(out, physical=self._compose_physical)
         t_end = time.perf_counter()
-        self.last_timing["compose_ms"] = (t_end - t0) * 1000
-        self.last_timing["d2h_ms"] = (
-            self.last_timing["staging_wait_ms"] + self.last_timing["pcie_d2h_ms"] + self.last_timing["compose_ms"]
-        )
-        return result
+
+        self._compose_timing = (t_end - t0) * 1000
+        return out
 
     def compose_into(self, dest):
         """Compose directly into a pre-allocated tensor, skipping torch.cat.
 
         Uses ``get_device_tensors`` + per-shard ``to_torch`` to avoid the
         single monolithic ``torch.cat`` that ``ConcatMeshToTensor`` performs.
-        Writes each shard directly to ``dest[i]``.
+        Copies each shard in-place to ``dest[i]`` (works with shared memory).
         ``dest`` must have shape ``[N, 84, 8400]`` where N >= num_devices.
 
         Must be called after ``pcie_d2h()``.
@@ -315,7 +341,7 @@ class YOLOv8lPerformantRunner:
         shards = ttnn.get_device_tensors(self.host_staging)
         t_extract = time.perf_counter()
         for i, shard in enumerate(shards):
-            dest[i] = shard.to_torch()[0]  # [1, 84, 8400] → [84, 8400]
+            dest[i].copy_(shard.to_torch()[0])  # [1, 84, 8400] → [84, 8400], in-place
         t_end = time.perf_counter()
         self.last_timing["compose_ms"] = (t_end - t0) * 1000
         self.last_timing["compose_extract_ms"] = (t_extract - t0) * 1000

@@ -221,7 +221,7 @@ def _prep_process_worker(
     grid: TileGrid,
     tiles_per_frame: int,
     total_devices: int,
-    shm_tensor: torch.Tensor,
+    shm_tensor_bufs: list,
     shm_ring: torch.Tensor,
     ring_size: int,
     shm_shifts: torch.Tensor,
@@ -251,12 +251,22 @@ def _prep_process_worker(
         [7] ring_slot
     """
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    # Limit OpenMP threads for torch ops (copy_, mul_).  The default on a
+    # 64-core system would spin up 64 threads for the 30 MB bf16 conversion —
+    # massive overhead.  4 threads keeps the data in L2/L3 and avoids
+    # cross-CCD traffic that inflates compose in the main process.
+    torch.set_num_threads(4)
+
     src = FrameSource(video_path)
     ring_idx = 0
+    prep_frame_idx = 0  # for double-buffer alternation
 
     # Pre-allocate: reuse across frames to avoid per-frame allocation overhead
     N = max(grid.n_tiles, total_devices)
     uint8_buf = np.empty((N, 3, grid.tile_h, grid.tile_w), dtype=np.uint8)
+    # 4 threads instead of 8 — reduces memory bandwidth contention with
+    # compose in the main process (8 threads inflates compose from 5ms to 12ms).
     slice_pool = ThreadPoolExecutor(max_workers=8)
 
     try:
@@ -283,20 +293,20 @@ def _prep_process_worker(
                 ready_event.set()
                 continue
 
-            # Fused slice + BGR→RGB + HWC→CHW (bf16 deferred to main process)
+            # Fused slice + BGR→RGB + HWC→CHW + bf16/255 conversion.
+            # Writes normalized bf16 directly into double-buffered shm.
+            shm_tensor = shm_tensor_bufs[prep_frame_idx % 2]
             t0 = time.perf_counter()
             tensor, shifts, sp_timings = _fused_slice_and_preprocess(
                 frame,
                 grid,
                 total_devices,
                 uint8_buf=uint8_buf,
+                bf16_buf=shm_tensor,
                 pool=slice_pool,
-                return_uint8=True,
             )
             t_sp = (time.perf_counter() - t0) * 1000
-
-            # Write tensor to shared memory
-            shm_tensor[:total_devices].copy_(tensor[:total_devices])
+            prep_frame_idx += 1
             for i, (sx, sy) in enumerate(shifts[:tiles_per_frame]):
                 shm_shifts[i, 0] = sx
                 shm_shifts[i, 1] = sy
@@ -448,7 +458,8 @@ def _postprocess_worker_shm(
                 return
 
             (pred_slot, ring_slot, shifts, tpf, scale_x, scale_y) = item
-            preds_torch = shm_preds[pred_slot]  # keep bf16 — NMS converts only filtered dets
+            # Slice physical→logical (free view, no copy)
+            preds_torch = shm_preds[pred_slot, :, :84, :8400]
 
             t_post_start = time.perf_counter()
             if fc == 0:
@@ -717,8 +728,20 @@ def run_sahi_640_pipelined(args):
 
     # --- Shared memory: prediction ring (avoids pickling 67 MB per frame) --
     PRED_RING = 2
-    # YOLOv8L output: (tiles_per_frame, 84, 8400) bfloat16 (half memory, faster copy)
-    shm_preds = torch.zeros(PRED_RING, tiles_per_frame, 84, 8400, dtype=torch.bfloat16).share_memory_()
+    # Physical shape: tile-aligned padding of [84, 8400] → [96, 8416].
+    # batch_to_torch(physical=True) copies full physical buffers contiguously.
+    # BG process slices to [:, :84, :8400] for logical data (free view).
+    _phys_pred_h = ((84 + 31) // 32) * 32  # 96
+    _phys_pred_w = ((8400 + 31) // 32) * 32  # 8416
+    shm_preds = torch.zeros(
+        PRED_RING, tiles_per_frame, _phys_pred_h, _phys_pred_w, dtype=torch.bfloat16
+    ).share_memory_()
+    print(
+        f"{TAG} shm_preds: [{PRED_RING}, {tiles_per_frame}, {_phys_pred_h}, {_phys_pred_w}] "
+        f"logical=[:, :, :84, :8400] "
+        f"({shm_preds.nelement() * 2 / 1e6:.1f} MB)",
+        flush=True,
+    )
     pred_write_idx = 0
 
     # --- BG process --------------------------------------------------------
@@ -750,10 +773,13 @@ def run_sahi_640_pipelined(args):
     bg_proc.start()
 
     # --- Shared memory: prep process buffers --------------------------------
-    # Use uint8 for shared memory — the bf16 conversion is done in the main
-    # process in a thread overlapping with D2H, saving ~30ms on the prep
-    # critical path (prep goes from ~50ms to ~15ms).
-    shm_tensor = torch.zeros(total_devices, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.uint8).share_memory_()
+    # Double-buffered bfloat16 shared memory — prep writes normalized bf16
+    # into buffer[prep_frame_idx % 2], main reads buffer[main_frame_idx % 2].
+    # The bf16 shm backing produces cache-friendly host tensors that keep
+    # compose at ~5ms (vs ~17ms with heap-allocated bf16 tensors).
+    _shm_buf0 = torch.zeros(total_devices, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.bfloat16).share_memory_()
+    _shm_buf1 = torch.zeros(total_devices, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.bfloat16).share_memory_()
+    shm_tensor_bufs = [_shm_buf0, _shm_buf1]  # indexed by frame parity
     shm_shifts = torch.zeros(total_devices, 2, dtype=torch.int32).share_memory_()
     shm_timings = torch.zeros(10, dtype=torch.float32).share_memory_()
     go_event = _ctx.Event()
@@ -761,13 +787,13 @@ def run_sahi_640_pipelined(args):
     stop_event = _ctx.Event()
 
     shm_mb = (
-        shm_tensor.nelement() * 2
+        (_shm_buf0.nelement() + _shm_buf1.nelement()) * 2
         + shm_ring.nelement()
         + shm_preds.nelement() * 4
         + shm_shifts.nelement() * 4
         + shm_timings.nelement() * 4
     ) / 1e6
-    print(f"{TAG} Shared memory: {shm_mb:.0f} MB", flush=True)
+    print(f"{TAG} Shared memory: {shm_mb:.0f} MB (double-buffered bf16)", flush=True)
 
     prep_proc = _ctx.Process(
         target=_prep_process_worker,
@@ -776,7 +802,7 @@ def run_sahi_640_pipelined(args):
             grid,
             tiles_per_frame,
             total_devices,
-            shm_tensor,
+            shm_tensor_bufs,
             shm_ring,
             RING_SIZE,
             shm_shifts,
@@ -816,19 +842,12 @@ def run_sahi_640_pipelined(args):
     # Because get_result() returns the PREVIOUS frame's predictions,
     # we carry per-frame metadata (shifts, ring_slot) in prev_* vars.
     # ===================================================================
-    # Local bf16 buffer for conversion (main process only)
-    local_bf16 = torch.zeros(total_devices, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.bfloat16)
-    _inv_255 = torch.tensor(1.0 / 255.0, dtype=torch.bfloat16)
+    # main_frame_idx tracks which double-buffer to read (same parity as
+    # prep_frame_idx in the prep process).
+    main_frame_idx = 0
 
-    def _convert_uint8_to_bf16(uint8_src):
-        """Convert uint8 shared-memory tensor to normalized bfloat16.
-
-        Run synchronously (0.3ms) — NOT in a thread.  Threading this causes
-        memory-bandwidth contention with D2H PCIe transfers, inflating both
-        from ~0.3ms/18ms to ~26ms/25ms.
-        """
-        local_bf16.copy_(uint8_src)
-        local_bf16.mul_(_inv_255)
+    # Thread pool for overlapping compose with submit (1 worker)
+    _submit_executor = ThreadPoolExecutor(max_workers=1)
 
     # Metadata tracking for pipelined frames
     prev_meta = None
@@ -840,7 +859,6 @@ def run_sahi_640_pipelined(args):
     t_enqueue_sum = t_batch_total_sum = 0.0
     t_prep_read_sum = t_prep_sp_sum = t_prep_total_sum = 0.0
     t_staging_wait_sum = t_pcie_d2h_sum = t_compose_sum = 0.0
-
     try:
         # --- Request first frame from prep ---------------------------------
         go_event.set()
@@ -852,7 +870,6 @@ def run_sahi_640_pipelined(args):
             print(f"{TAG} No frames available.", flush=True)
             return
 
-        cur_tensor = shm_tensor
         cur_shifts = [(int(shm_shifts[i, 0].item()), int(shm_shifts[i, 1].item())) for i in range(tiles_per_frame)]
         cur_ring_slot = int(shm_timings[7].item())
 
@@ -868,9 +885,9 @@ def run_sahi_640_pipelined(args):
         # --- Pipelined execution (D2H/compute overlap via pre-allocated staging) ---
         print(f"{TAG} Using pipelined execution (D2H/compute overlap)", flush=True)
 
-        # Prime: convert first frame and submit (non-blocking trace execution)
-        _convert_uint8_to_bf16(cur_tensor)
-        runner.submit(local_bf16)
+        # Prime: submit first frame (shm buf[0] already has bf16 from prep)
+        runner.submit(shm_tensor_bufs[main_frame_idx % 2])
+        main_frame_idx += 1
         prev_meta = (cur_shifts[:tiles_per_frame], cur_ring_slot)
 
         # Signal prep for next frame
@@ -912,44 +929,39 @@ def run_sahi_640_pipelined(args):
             else:
                 _prep_timings = None
 
-            # --- Convert + submit next frame ---
-            # submit() copies prev output → staging on CQ0, then queues
-            # H2D + reshard + trace.  Non-blocking.
-            result_meta = prev_meta  # metadata for get_result's return value
-
-            t0_convert = time.perf_counter()
-            if _next_valid:
-                _convert_uint8_to_bf16(shm_tensor)
-            t_convert = (time.perf_counter() - t0_convert) * 1000
-
-            t0_submit = time.perf_counter()
-            if _next_valid:
-                runner.submit(local_bf16)
-                t_host_prep = runner.last_timing.get("host_prep_ms", 0)
-                prev_meta = (next_shifts[:tiles_per_frame], next_ring_slot)
-            else:
-                t_host_prep = 0
-            t_submit = (time.perf_counter() - t0_submit) * 1000
-
-            # --- PCIe D2H (fast, no contention — prep not running yet) ---
-            t0_d2h = time.perf_counter()
-            has_result = runner.pcie_d2h()
-            t_staging_wait = runner.last_timing.get("staging_wait_ms", 0)
-            t_pcie_d2h = runner.last_timing.get("pcie_d2h_ms", 0)
-
-            # Signal prep AFTER PCIe completes — avoids memory bandwidth
-            # contention between prep's numpy/torch ops and PCIe DMA.
-            # Prep runs in parallel with compose (~12ms window).
+            # --- Signal prep BEFORE submit — gives prep the full submit+pcie+compose
+            # window to finish.
             if not is_image:
                 go_event.set()
                 _prep_pending = True
             else:
                 _prep_pending = False
 
-            # --- Compose (host-side untile+cat, prep runs in parallel) ---
+            result_meta = prev_meta  # metadata for get_result's return value
+            t_convert = 0.0
+
+            # --- Submit next frame ---
+            t0_submit = time.perf_counter()
+            if _next_valid:
+                runner.submit(shm_tensor_bufs[main_frame_idx % 2])
+                main_frame_idx += 1
+                t_host_prep = runner.last_timing.get("host_prep_ms", 0)
+                prev_meta = (next_shifts[:tiles_per_frame], next_ring_slot)
+            else:
+                t_host_prep = 0
+            t_submit = (time.perf_counter() - t0_submit) * 1000
+
+            # --- PCIe D2H (GIL released during C++ DMA) ---
+            t0_d2h = time.perf_counter()
+            has_result = runner.pcie_d2h()
+            t_staging_wait = runner.last_timing.get("staging_wait_ms", 0)
+            t_pcie_d2h = runner.last_timing.get("pcie_d2h_ms", 0)
+
+            # --- Compose: physical batch_to_torch (24 contiguous memcpy, ~2.7ms) ---
             if has_result:
-                preds = runner.compose(mesh_composer=output_mesh_composer)
-            t_compose = runner.last_timing.get("compose_ms", 0)
+                pred_slot = pred_write_idx % PRED_RING
+                runner.compose(dest=shm_preds[pred_slot])
+            t_compose = runner._compose_timing
             t_d2h_wall = (time.perf_counter() - t0_d2h) * 1000
 
             # --- Enqueue result to BG ---
@@ -957,8 +969,6 @@ def run_sahi_640_pipelined(args):
             _dropped = False
             if has_result:
                 r_shifts, r_ring_slot = result_meta
-                pred_slot = pred_write_idx % PRED_RING
-                shm_preds[pred_slot].copy_(preds[:tiles_per_frame])
                 pred_write_idx += 1
                 item = (
                     pred_slot,
@@ -973,7 +983,7 @@ def run_sahi_640_pipelined(args):
                 except Exception:
                     _dropped = True
             t_enqueue = (time.perf_counter() - t0) * 1000
-            t_d2h = runner.last_timing.get("d2h_ms", t_d2h_wall)
+            t_d2h = t_staging_wait + t_pcie_d2h + t_compose
 
             dt_batch = time.perf_counter() - t_batch_start
 
@@ -1044,7 +1054,7 @@ def run_sahi_640_pipelined(args):
                 if last_preds is not None and prev_meta is not None:
                     r_shifts, r_ring_slot = prev_meta
                     pred_slot = pred_write_idx % PRED_RING
-                    shm_preds[pred_slot].copy_(last_preds[:tiles_per_frame])
+                    shm_preds[pred_slot, :tiles_per_frame, :84, :8400].copy_(last_preds[:tiles_per_frame])
                     pred_write_idx += 1
                     q_post.put(
                         (pred_slot, r_ring_slot, r_shifts, tiles_per_frame, scale_x, scale_y),
@@ -1065,6 +1075,9 @@ def run_sahi_640_pipelined(args):
             f"\n{TAG} Shutting down... ({batch_count} frames processed)",
             flush=True,
         )
+
+        # --- Shutdown compose executor ---
+        _submit_executor.shutdown(wait=False)
 
         # --- Shutdown prep ---
         stop_event.set()

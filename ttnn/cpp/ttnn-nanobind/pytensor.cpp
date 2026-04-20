@@ -213,10 +213,17 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             return RowMajorHostBuffer::create_padded(std::move(host_buffer), tensor_spec);
         }
 
-        // Previous impl only copied if data needed transformation. Instead *always* copy
-        // because the HostBuffer will be returned directly to the other python frameworks
-        // wrapped in an ndarray
+        // Zero-copy fast path: ROW_MAJOR layout with no padding and no BFP unpacking.
+        // The physical data IS the logical data — skip decode_tensor_data entirely.
+        // HostBuffer is ref-counted (shared_ptr<vector>), so the ndarray capsule
+        // will keep the underlying data alive via a shallow copy.
+        if (tensor_spec.layout() != Layout::TILE && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape() &&
+            tensor_spec.data_type() != DataType::BFLOAT8_B && tensor_spec.data_type() != DataType::BFLOAT4_B) {
+            return RowMajorHostBuffer::create_logical(std::move(host_buffer), tensor_spec);
+        }
 
+        // Fallback: always copy because the HostBuffer will be returned directly
+        // to the other python frameworks wrapped in an ndarray
         auto logical_data = tensor_impl::decode_tensor_data(host_buffer.view_as<const T>(), tensor_spec);
         return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
     };
@@ -823,6 +830,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "cpu",
             [](const Tensor& self, bool blocking, std::optional<ttnn::QueueId> cq_id) {
+                nb::gil_scoped_release release;
                 return self.cpu(blocking, cq_id);
             },
             nb::arg("blocking") = true,
@@ -1255,8 +1263,12 @@ void pytensor_module(nb::module_& mod) {
             "to_torch",
             [](const Tensor& self, const ttnn::distributed::MeshToTensor* mesh_composer) -> nb::ndarray<nb::pytorch> {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
-                auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
-                                            : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
+                RowMajorHostBuffer buffer;
+                {
+                    nb::gil_scoped_release release;
+                    buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
+                                           : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
+                }
                 return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
             },
             nb::rv_policy::take_ownership,
@@ -1272,12 +1284,116 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
+            "batch_to_torch",
+            [](const Tensor& self, nb::ndarray<nb::pytorch> dest, bool physical) {
+                // Batch compose: concatenate all shards of a multi-device host tensor
+                // directly into a pre-allocated torch tensor, in a single C++ call.
+                // Eliminates 24 Python to_torch calls + 24 allocations + torch.cat.
+                //
+                // physical=false (default): strip padding, dest gets logical-shape data.
+                // physical=true: copy full physical buffers contiguously (24 large
+                // memcpy calls instead of 2016 strided ones). dest must be large enough
+                // for physical volume × n_shards. Caller slices the view to logical.
+                using namespace CMAKE_UNIQUE_NAMESPACE;
+                TT_FATAL(is_cpu_tensor(self), "batch_to_torch requires a host tensor, got {}", self.storage_type());
+
+                const auto& storage = self.host_storage();
+                std::vector<HostBuffer> buffers;
+                storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+
+                const auto& spec = self.tensor_spec();
+                const auto& logical_shape = spec.logical_shape();
+                const auto& physical_shape = spec.physical_shape();
+                const size_t n_shards = buffers.size();
+                const size_t elem_size = self.element_size();
+
+                const size_t phys_h = physical_shape.height();
+                const size_t phys_w = physical_shape.width();
+                const size_t phys_shard_bytes = phys_h * phys_w * elem_size;
+
+                if (physical) {
+                    // Physical copy: contiguous memcpy per shard, including padding
+                    const size_t total_phys_bytes = phys_shard_bytes * n_shards;
+                    TT_FATAL(
+                        dest.nbytes() >= total_phys_bytes,
+                        "batch_to_torch(physical=True): dest buffer too small ({} bytes vs {} needed)",
+                        dest.nbytes(),
+                        total_phys_bytes);
+
+                    auto* dst = static_cast<std::byte*>(dest.data());
+                    {
+                        nb::gil_scoped_release release;
+                        for (size_t i = 0; i < n_shards; i++) {
+                            auto src = buffers[i].view_bytes();
+                            std::memcpy(dst + i * phys_shard_bytes, src.data(), phys_shard_bytes);
+                        }
+                    }
+                } else {
+                    // Logical copy: strip padding if needed
+                    const size_t logical_volume = logical_shape.volume();
+                    const size_t logical_shard_bytes = logical_volume * elem_size;
+                    const size_t total_logical_bytes = logical_shard_bytes * n_shards;
+
+                    TT_FATAL(
+                        dest.nbytes() >= total_logical_bytes,
+                        "batch_to_torch: dest buffer too small ({} bytes vs {} needed)",
+                        dest.nbytes(),
+                        total_logical_bytes);
+
+                    auto* dst = static_cast<std::byte*>(dest.data());
+                    const bool needs_depad =
+                        (spec.logical_2d_shape() != physical_shape) && (spec.layout() != Layout::TILE);
+
+                    {
+                        nb::gil_scoped_release release;
+                        if (!needs_depad) {
+                            for (size_t i = 0; i < n_shards; i++) {
+                                auto src = buffers[i].view_bytes();
+                                std::memcpy(dst + i * logical_shard_bytes, src.data(), logical_shard_bytes);
+                            }
+                        } else {
+                            const size_t log_h = spec.logical_2d_shape().height();
+                            const size_t log_w = spec.logical_2d_shape().width();
+                            const size_t row_bytes = log_w * elem_size;
+                            const size_t phys_row_bytes = phys_w * elem_size;
+
+                            for (size_t i = 0; i < n_shards; i++) {
+                                auto src = buffers[i].view_bytes();
+                                auto* src_ptr = src.data();
+                                auto* dst_shard = dst + i * log_h * row_bytes;
+                                for (size_t r = 0; r < log_h; r++) {
+                                    std::memcpy(dst_shard + r * row_bytes, src_ptr + r * phys_row_bytes, row_bytes);
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            nb::arg("dest"),
+            nb::arg("physical") = false,
+            R"doc(
+            Batch-compose a multi-device host tensor into a pre-allocated torch tensor.
+
+            Copies all shard data contiguously into ``dest`` in a single C++ call.
+            Avoids per-shard Python to_torch overhead and torch.cat allocation.
+
+            Args:
+                dest: Pre-allocated torch tensor to copy into.
+                physical: If True, copy full physical buffers (including tile padding)
+                    contiguously. dest must hold n_shards × phys_h × phys_w elements.
+                    Caller can then slice [:, :log_h, :log_w] to get logical data.
+                    If False (default), strip padding during copy.
+        )doc")
+        .def(
             "to_numpy",
             [](const Tensor& self, const ttnn::distributed::MeshToTensor* mesh_composer) -> nb::ndarray<nb::numpy> {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
-
-                auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
-                                            : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
+                RowMajorHostBuffer buffer;
+                {
+                    nb::gil_scoped_release release;
+                    buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
+                                           : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
+                }
                 return convert_tt_tensor_to_framework_tensor<nb::numpy>(buffer);
             },
             nb::rv_policy::take_ownership,
