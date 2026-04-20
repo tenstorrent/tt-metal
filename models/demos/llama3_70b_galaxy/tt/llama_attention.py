@@ -111,6 +111,9 @@ class TtLlamaAttention(LightweightModule):
             self.sliding_window_size = configuration.get_sliding_window_size(layer_num)
         else:
             self.sliding_window_size = None
+        # SWA enabled in decode — matches training. bf16 KV cache prevents the
+        # bf8 precision noise that previously caused premature EOS with SWA.
+        self._use_sliding_window_decode = True
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
@@ -916,7 +919,7 @@ class TtLlamaAttention(LightweightModule):
                 cur_pos_tensor=current_pos,
                 page_table_tensor=page_table,
                 scale=self.scale,
-                sliding_window_size=self.sliding_window_size,  # OLMo: 4096 for sliding layers, None for full
+                sliding_window_size=self.sliding_window_size if self._use_sliding_window_decode else None,
                 program_config=self.model_config["PAGED_SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
                 memory_config=sdpa_out_mem_cfg,
@@ -928,7 +931,7 @@ class TtLlamaAttention(LightweightModule):
                 values,
                 cur_pos_tensor=current_pos,
                 scale=self.scale,
-                sliding_window_size=self.sliding_window_size,  # OLMo: 4096 for sliding layers, None for full
+                sliding_window_size=self.sliding_window_size if self._use_sliding_window_decode else None,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
                 memory_config=sdpa_out_mem_cfg,
@@ -1334,9 +1337,8 @@ class TtLlamaAttention(LightweightModule):
         else:
             ring_distributed_sdpa = seq_len > 4096 and batch_size == 1
 
-        # Cast K and V to bfloat8_b for KV cache fill (cache is always bf8).
-        # OLMo: keep the bfloat16 K/V alive for both ring and non-ring SDPA calls;
-        # bf8 copies are only for cache fill and deallocated after fill.
+        # Cast K and V to bfloat8_b for KV cache fill (cache is bf8).
+        # OLMo: keep the bfloat16 K/V alive for SDPA; bf8 copies only for cache fill.
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
         if not self.is_olmo:
             ttnn.deallocate(k_heads_1KSD)
@@ -1380,7 +1382,6 @@ class TtLlamaAttention(LightweightModule):
                 user_id % self.batch_size_per_device_group,
             )
 
-        # SDPA
         # SDPA
         # OLMo: always use bfloat16 Q/K/V for SDPA for maximum precision.
         if self.is_olmo:

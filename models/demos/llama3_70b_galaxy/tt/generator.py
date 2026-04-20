@@ -136,35 +136,6 @@ class Generator(WarmupForwardMixin):
                     warmup_empty_slots,
                     tt_out_logits_all_users,
                 )
-        # OLMo long-ISL eager warmup (no trace). Sync CCL cold-start: a 32K prefill
-        # deadlocks without ascending warmup (8K→16K→32K) to prime ring fabric state.
-        # Root cause: barrier_semaphore accumulates ring fabric signals across 384+
-        # sequential CCL ops (64 layers × 6 ops per layer); warmup progressively drains them.
-        # Auto-configured from max_seq_len; no drains between steps (matches working state).
-        if getattr(self.model_args, "is_olmo", False) and not getattr(self, "long_isl_warmup_seqlens", None):
-            max_sl = self.model_args.max_seq_len
-            self.long_isl_warmup_seqlens = [sl for sl in [8192, 16384, 32768] if sl <= max_sl]
-            logger.info(f"OLMo: auto-configured long-ISL warmup sequence lengths: {self.long_isl_warmup_seqlens}")
-        long_isl_warmup = getattr(self, "long_isl_warmup_seqlens", None)
-        if long_isl_warmup:
-            for supported_length in sorted(long_isl_warmup):
-                logger.info(f"Long-ISL eager warmup (no trace) for sequence length: {supported_length}")
-                warmup_tokens = torch.zeros(1, supported_length, dtype=torch.long)
-                warmup_prompt_lens = torch.tensor([supported_length], dtype=torch.long)
-                warmup_empty_slots = [0]
-                warmup_page_table_long = (
-                    page_table[:1] if (page_table is not None and page_table.shape[0] > 1) else page_table
-                )
-                self.prefill_forward_text(
-                    warmup_tokens,
-                    warmup_page_table_long,
-                    kv_cache,
-                    warmup_prompt_lens,
-                    enable_trace=False,
-                    sampling_params=None,
-                    empty_slots=warmup_empty_slots,
-                    tt_out_logits_all_users=tt_out_logits_all_users,
-                )
         logger.info("Prefill traces warmup completed")
 
     def prefill_forward_text(

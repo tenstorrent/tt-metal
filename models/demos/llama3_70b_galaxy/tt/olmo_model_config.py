@@ -1141,9 +1141,9 @@ class TtOlmoModelArgs(TtModelArgs):
             k_chunk_size=256,
         )
 
-        # SDPA compute kernel config
+        # SDPA compute kernel config — HiFi4 for higher precision with bf16 K/V
         self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
