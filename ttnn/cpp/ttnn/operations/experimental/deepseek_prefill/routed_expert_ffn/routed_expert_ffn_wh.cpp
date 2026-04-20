@@ -4,6 +4,8 @@
 
 #include "routed_expert_ffn_common.hpp"
 
+#include <numeric>
+
 #include "tt-metalium/distributed.hpp"
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
@@ -113,12 +115,15 @@ ttnn::Tensor routed_expert_ffn_wh(
     const uint32_t down_per_core_N = tt::div_up(N_down_tiles, GRID_X);
 
     // In0 is L1 block-sharded from gate_up (shard width = gate_up_per_core_N), so
-    // maximizing in0_block_w minimizes mcast syncs. Going above the shard width
-    // offers no reuse benefit, so cap the search there and let best_in0_block_w
-    // walk divisors downward until CB usage fits L1 — shrinks only when forced
-    // (e.g. bfloat16 weights doubling the in1 CB), instead of blindly halving.
+    // maximizing in0_block_w minimizes mcast syncs. in0_block_w must divide both
+    // the full Kt (=N_gate_tiles, validated by matmul) and the per-core shard
+    // width (gate_up_per_core_N, for sharded kernel consumption) — search divisors
+    // of their gcd. Going above the shard width offers no reuse benefit anyway.
+    // best_in0_block_w walks divisors downward until CB usage fits L1 — shrinks
+    // only when forced (e.g. bfloat16 weights doubling the in1 CB), instead of
+    // blindly halving.
     const uint32_t down_in0_bw = best_in0_block_w(
-        /*K_tiles=*/gate_up_per_core_N,
+        /*K_tiles=*/std::gcd(N_gate_tiles, gate_up_per_core_N),
         /*per_core_M=*/down_per_core_M,
         /*per_core_N=*/down_per_core_N,
         /*input_tensor_a=*/gate_result,
