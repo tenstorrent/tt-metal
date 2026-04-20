@@ -160,9 +160,10 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     uint32_t experts_per_core_range = tt::div_up(operation_attributes.experts_per_chip, num_cores);
 
     // Core layout depends on dispatched_buffer layout:
-    //   TILE_LAYOUT: sender in the middle of its idle group to reduce NOC congestion.
-    //     Cores are divided into groups, sender placed at group_size/2:
-    //     [idle0_0..idle0_{m-1}, sender0, idle0_m..idle0_{k0-1}, ..., sender1, ...]
+    //   TILE_LAYOUT: sender placed at the end of its idle group so every idle core sits to the
+    //     sender's left and can write rightward on NOC0 (the +X NOC).
+    //     Cores are divided into groups, sender placed at group_size-1:
+    //     [idle0_0..idle0_{k0-1}, sender0, idle1_0..idle1_{k1-1}, sender1, ...]
     //   ROW_MAJOR: first num_cores cores are senders, remaining are idle (for zero-init only).
     //     [sender0, sender1, idle0, idle1, idle2, ...]
     // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
@@ -190,14 +191,14 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     std::vector<uint32_t> idle_sender_map;
 
     if (is_tile_layout) {
-        // TILE_LAYOUT: divide into groups, sender in the middle of each group
+        // TILE_LAYOUT: divide into groups, sender at the end of each group
         uint32_t base_group_size = total_row_cores / num_cores;
         uint32_t extra_groups = total_row_cores % num_cores;
 
         uint32_t pos = 0;
         for (uint32_t s = 0; s < num_cores; s++) {
             uint32_t group_size = base_group_size + (s >= num_cores - extra_groups ? 1 : 0);
-            uint32_t sender_offset = group_size / 2;
+            uint32_t sender_offset = group_size - 1;
 
             for (uint32_t j = 0; j < group_size; j++) {
                 if (j == sender_offset) {
