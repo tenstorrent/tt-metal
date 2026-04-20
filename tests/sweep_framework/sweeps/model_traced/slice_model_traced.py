@@ -83,25 +83,36 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Some configs use named params (starts/ends/steps), others use positional (arg1/arg2/arg3)
-    # Handle multi-device slice where arg1/arg2 are tensor dicts instead of coordinate arrays
-    _arg1 = arg1 if not isinstance(arg1, dict) else None
-    _arg2 = arg2 if not isinstance(arg2, dict) else None
-    slice_start = kwargs.get("starts", None) or _arg1 or [0] * len(shape)
-    slice_end = kwargs.get("ends", None) or _arg2
-    slice_step = kwargs.get("steps", None) or arg3 or [1] * len(shape)
+    # Detect multi-device tensor-arg slice (arg1/arg2 are tensor dicts, not coordinate arrays)
+    _tensor_arg_slice = isinstance(arg1, dict) and isinstance(arg2, dict)
 
-    if not slice_end:
+    if _tensor_arg_slice:
+        slice_dim = kwargs.get("slice_dim", len(shape) - 1)
+        num_devices = kwargs.get("num_devices", 2)
+        chunk = shape[slice_dim] // num_devices
+        slice_start = [0] * len(shape)
         slice_end = list(shape)
-        slice_end[-1] = shape[-1] // 2
+        slice_end[slice_dim] = chunk
+        slices = [slice(s, e) for s, e in zip(slice_start, slice_end)]
+        torch_output_tensor = torch_input_tensor_a[tuple(slices)]
+    else:
+        _arg1 = arg1 if not isinstance(arg1, dict) else None
+        _arg2 = arg2 if not isinstance(arg2, dict) else None
+        slice_start = kwargs.get("starts", None) or _arg1 or [0] * len(shape)
+        slice_end = kwargs.get("ends", None) or _arg2
+        slice_step = kwargs.get("steps", None) or arg3 or [1] * len(shape)
 
-    slices = []
-    for start, end, step in zip(slice_start, slice_end, slice_step):
-        if step == 1:
-            slices.append(slice(start, end))
-        else:
-            slices.append(slice(start, end, step))
-    torch_output_tensor = torch_input_tensor_a[tuple(slices)]
+        if not slice_end:
+            slice_end = list(shape)
+            slice_end[-1] = shape[-1] // 2
+
+        slices = []
+        for start, end, step in zip(slice_start, slice_end, slice_step):
+            if step == 1:
+                slices.append(slice(start, end))
+            else:
+                slices.append(slice(start, end, step))
+        torch_output_tensor = torch_input_tensor_a[tuple(slices)]
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -127,9 +138,46 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # Only pass step when it was explicitly in the traced config (arg3 is not None).
-    # When arg3 is None, the master trace didn't pass step, so we shouldn't either.
-    if arg3 is not None:
+    if _tensor_arg_slice:
+        start_tensor = ttnn.from_torch(
+            torch.tensor(slice_start, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        end_tensor = ttnn.from_torch(
+            torch.tensor(slice_end, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        extra = {}
+        if kwargs.get("output_tensor") is not None and isinstance(kwargs["output_tensor"], dict):
+            out_shape = kwargs["output_tensor"].get("original_shape", slice_end)
+            ot_torch = gen_func_with_cast_tt(
+                partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+            )(tuple(out_shape))
+            if is_mesh_device and input_a_tensor_placement:
+                extra["output_tensor"] = create_tensor_on_mesh(
+                    ot_torch,
+                    device,
+                    input_a_dtype,
+                    input_a_layout,
+                    output_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                    input_a_tensor_placement,
+                )
+            else:
+                extra["output_tensor"] = ttnn.from_torch(
+                    ot_torch,
+                    dtype=input_a_dtype,
+                    layout=input_a_layout,
+                    device=device,
+                    memory_config=output_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                )
+        output_tensor = ttnn.slice(input_tensor_a, start_tensor, end_tensor, **extra, **op_kwargs)
+    elif arg3 is not None:
         output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
     else:
         output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, **op_kwargs)

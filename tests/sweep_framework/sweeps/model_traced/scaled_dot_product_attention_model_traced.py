@@ -101,7 +101,7 @@ def mesh_device_fixture():
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)
-        del device
+    del device
 
 
 def run(
@@ -147,7 +147,10 @@ def run(
     if output_memory_config is not None and "SHARDED" in str(output_memory_config):
         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config,
+    op_kwargs = build_op_kwargs(
+        kwargs,
+        exclude={"is_causal"},
+        output_memory_config=output_memory_config,
     )
 
     # Re-inject sliding_window_size when present in the traced config.

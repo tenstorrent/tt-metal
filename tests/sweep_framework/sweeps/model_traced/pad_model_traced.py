@@ -94,6 +94,11 @@ def run(
 
     if value is None:
         value = 0.0
+    import math
+
+    if isinstance(value, (int, float)) and not math.isnan(value):
+        _BF16_MAX = 3.3895313892515355e38
+        value = max(-_BF16_MAX, min(_BF16_MAX, float(value)))
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 

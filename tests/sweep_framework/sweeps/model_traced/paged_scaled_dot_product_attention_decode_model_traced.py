@@ -114,19 +114,21 @@ def run(
         shape_d = input_a_shape.get("input_d")
         shape_e = input_a_shape.get("input_e")
     else:
-        # Fallback for sample configurations
         if isinstance(input_a_shape, (tuple, list)):
             shape = tuple(input_a_shape)
         else:
             shape = input_a_shape
-        shape_a = shape_b = shape_c = shape_d = shape_e = shape
+        shape_a = shape
+        shape_b = tuple(kwargs["input_b_shape"]) if "input_b_shape" in kwargs else shape
+        shape_c = tuple(kwargs["input_c_shape"]) if "input_c_shape" in kwargs else shape
+        shape_d = tuple(kwargs.get("input_d_shape") or kwargs.get("page_table_tensor_shape") or shape)
+        shape_e = tuple(kwargs.get("input_e_shape") or kwargs.get("cur_pos_tensor_shape") or (1,))
 
-    # Use provided params directly - these are optional (None is fine if not in V2 JSON)
     dtype_a = input_a_dtype
     dtype_b = input_b_dtype
     dtype_c = input_c_dtype
-    dtype_d = input_d_dtype
-    dtype_e = input_e_dtype
+    dtype_d = input_d_dtype or kwargs.get("page_table_tensor_dtype", ttnn.int32)
+    dtype_e = input_e_dtype or kwargs.get("cur_pos_tensor_dtype", ttnn.int32)
 
     layout_a = input_a_layout
     layout_b = input_b_layout
@@ -135,14 +137,22 @@ def run(
     mem_config_a = input_a_memory_config
     mem_config_b = input_b_memory_config
     mem_config_c = input_c_memory_config
-    mem_config_d = input_d_memory_config
-    mem_config_e = input_e_memory_config
-    # Create input tensors
+    mem_config_d = input_d_memory_config or kwargs.get("page_table_tensor_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+    mem_config_e = input_e_memory_config or kwargs.get("cur_pos_tensor_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+
+    if not input_d_tensor_placement:
+        input_d_tensor_placement = kwargs.get("page_table_tensor_tensor_placement")
+    if not input_e_tensor_placement:
+        input_e_tensor_placement = kwargs.get("cur_pos_tensor_tensor_placement")
     torch_input_a = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_a)(shape_a)
     torch_input_b = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_b)(shape_b)
     torch_input_c = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_c)(shape_c)
-    torch_input_d = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_d)(shape_d)
-    torch_input_e = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_e)(shape_e)
+
+    torch_input_d = torch.zeros(shape_d, dtype=torch.int32)
+    for i in range(torch_input_d.numel()):
+        torch_input_d.view(-1)[i] = i % max(1, shape_b[0] if len(shape_b) > 0 else 1)
+
+    torch_input_e = torch.zeros(shape_e, dtype=torch.int32)
 
     # TODO: Compute a true PyTorch attention golden using traced K/V/page table inputs.
     torch_output_tensor = torch_input_a.clone()
