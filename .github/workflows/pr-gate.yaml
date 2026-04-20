@@ -144,7 +144,10 @@ jobs:
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
       tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
       model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
-      llk-engine-changed: ${{ steps.find-changes.outputs.llk-engine-changed }}
+      llk-wormhole-changed: ${{ steps.find-changes.outputs.llk-wormhole-changed }}
+      llk-blackhole-changed: ${{ steps.find-changes.outputs.llk-blackhole-changed }}
+      llk-common-changed: ${{ steps.find-changes.outputs.llk-common-changed }}
+      llk-sfpi-changed: ${{ steps.find-changes.outputs.llk-sfpi-changed }}
       llk-quasar-changed: ${{ steps.find-changes.outputs.llk-quasar-changed }}
       llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
@@ -436,16 +439,89 @@ jobs:
         # Without this, fixes.yml paths don't match the PR diff and comments are silently dropped.
         repo_path_prefix: /__w
 
-  # LLK Functional Unit Tests on Wormhole (PR gate - runs when LLK engine, tests, or perf code changed)
+  # LLK PR Labeling — auto-apply labels based on which LLK directories changed
+  llk-label-pr:
+    needs: find-changed-files
+    permissions:
+      issues: write
+      pull-requests: write
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-quasar-changed == 'true')
+      }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync LLK labels based on changes
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const expectedLabels = new Set();
+            if ("${{ needs.find-changed-files.outputs.llk-wormhole-changed }}" === "true") expectedLabels.add("llk:wormhole");
+            if ("${{ needs.find-changed-files.outputs.llk-blackhole-changed }}" === "true") expectedLabels.add("llk:blackhole");
+            if ("${{ needs.find-changed-files.outputs.llk-common-changed }}" === "true") expectedLabels.add("llk:common");
+            if ("${{ needs.find-changed-files.outputs.llk-sfpi-changed }}" === "true") expectedLabels.add("sfpi");
+            if ("${{ needs.find-changed-files.outputs.llk-tests-changed }}" === "true") expectedLabels.add("llk:test-infra");
+            if ("${{ needs.find-changed-files.outputs.llk-ci-changed }}" === "true") expectedLabels.add("llk:ci");
+            if ("${{ needs.find-changed-files.outputs.llk-perf-changed }}" === "true") expectedLabels.add("llk:performance");
+            if ("${{ needs.find-changed-files.outputs.llk-quasar-changed }}" === "true") expectedLabels.add("llk:quasar");
+
+            const managedLabels = new Set(["llk:wormhole", "llk:blackhole", "llk:common",
+                                           "sfpi", "llk:ci", "llk:test-infra",
+                                           "llk:performance", "llk:quasar"]);
+
+            const {data: currentLabels} = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+            const currentLabelSet = new Set(currentLabels.map(label => label.name));
+
+            const labelsToAdd = [...expectedLabels].filter(label => !currentLabelSet.has(label));
+            const labelsToRemove = [...currentLabelSet]
+              .filter(label => managedLabels.has(label) && !expectedLabels.has(label));
+
+            if (labelsToAdd.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: labelsToAdd
+              });
+            }
+
+            if (labelsToRemove.length > 0) {
+              await Promise.all(labelsToRemove.map(label =>
+                github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  name: label
+                })
+              ));
+            }
+
+  # LLK Functional Unit Tests on Wormhole (PR gate - runs on wormhole/common/sfpi/test/ci changes)
   llk-test-wormhole:
     needs: [ build-docker-images, find-changed-files ]
     if: ${{
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
-         needs.find-changed-files.outputs.llk-engine-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-perf-changed == 'true')
+         needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
     uses: ./.github/workflows/llk-setup-and-test.yaml
     secrets: inherit
@@ -454,18 +530,19 @@ jobs:
       runs_on: tt-ubuntu-2204-n150-stable
       test_splits: 2
       pytest_markers: "not perf and not nightly and not quasar"
-      use_durations: false
 
-  # LLK Functional Unit Tests on Blackhole (PR gate - runs when LLK engine, tests, or perf code changed)
+  # LLK Functional Unit Tests on Blackhole (PR gate - runs on blackhole/common/sfpi/test/ci changes)
   llk-test-blackhole:
     needs: [ build-docker-images, find-changed-files ]
     if: ${{
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
-         needs.find-changed-files.outputs.llk-engine-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-perf-changed == 'true')
+         needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
     uses: ./.github/workflows/llk-setup-and-test.yaml
     secrets: inherit
@@ -474,7 +551,6 @@ jobs:
       runs_on: tt-ubuntu-2204-p150b-stable
       test_splits: 2
       pytest_markers: "not perf and not nightly and not quasar"
-      use_durations: false
 
   # LLK Quasar Build Check (compile-only, no hardware needed)
   llk-build-quasar:
@@ -483,7 +559,11 @@ jobs:
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
-         needs.find-changed-files.outputs.llk-quasar-changed == 'true')
+         needs.find-changed-files.outputs.llk-quasar-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
     uses: ./.github/workflows/llk-build-quasar.yaml
     secrets: inherit

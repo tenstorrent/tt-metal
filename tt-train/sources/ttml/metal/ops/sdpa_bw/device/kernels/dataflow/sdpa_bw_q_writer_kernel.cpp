@@ -40,8 +40,8 @@ void kernel_main() {
     constexpr auto u_scaler_args = TensorAccessorArgs<grad_query_args.next_compile_time_args_offset()>();
 
     // Create TensorAccessor generators
-    const auto grad_query_addr_generator = TensorAccessor(grad_query_args, grad_query_addr, tile_bytes);
-    const auto u_scaler_addr_generator = TensorAccessor(u_scaler_args, u_scaler_output_addr, u_scaler_tile_bytes);
+    const auto grad_query_addr_generator = TensorAccessor(grad_query_args, grad_query_addr);
+    const auto u_scaler_addr_generator = TensorAccessor(u_scaler_args, u_scaler_output_addr);
 
     auto write_u_scaler_for_row = [&](const uint32_t global_row_idx) {
         // u_scaler tensor: one tile per query row, indexed by global_row_idx

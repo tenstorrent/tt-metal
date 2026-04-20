@@ -37,18 +37,13 @@ void kernel_main() {
     constexpr uint32_t one_tile = 1;
 
     // Input tensor config
-    constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
-    const auto input_tensor_addr_ger =
-        TensorAccessor(input_tensor_args, input_tensor_buffer_addr, input_tensor_tile_size_bytes);
+    const auto input_tensor_addr_ger = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
 
     // Output tensor config
-    const auto output_tensor_addr_gen =
-        TensorAccessor(output_tensor_args, output_tensor_buffer_addr, input_tensor_tile_size_bytes);
+    const auto output_tensor_addr_gen = TensorAccessor(output_tensor_args, output_tensor_buffer_addr);
 
     // Output index tensor config
-    const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_cb_index);
-    const auto output_index_tensor_addr_gen =
-        TensorAccessor(output_index_tensor_args, output_index_tensor_buffer_addr, index_tensor_output_tile_size_bytes);
+    const auto output_index_tensor_addr_gen = TensorAccessor(output_index_tensor_args, output_index_tensor_buffer_addr);
 
     // Semaphore setup
     volatile tt_l1_ptr uint32_t* semaphore_ptr =

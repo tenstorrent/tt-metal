@@ -65,25 +65,26 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t onetile = 1U;
-    constexpr uint32_t num_of_interm_tiles = 2U;
+    constexpr uint32_t num_of_interm_tiles = 1U;
 
     const uint32_t tile_bytes = get_tile_size(cb_grad_output);
+    const uint32_t interm_tile_bytes = get_tile_size(cb_intermediates);
 
     // Create TensorAccessor generators
-    const auto grad_output_address_generator = TensorAccessor(grad_output_args, grad_output_addr, tile_bytes);
+    const auto grad_output_address_generator = TensorAccessor(grad_output_args, grad_output_addr);
 #ifndef USE_PRECOMPUTED_U_SCALER
-    const auto attn_output_address_generator = TensorAccessor(attn_output_args, attn_output_addr, tile_bytes);
+    const auto attn_output_address_generator = TensorAccessor(attn_output_args, attn_output_addr);
 #endif
-    const auto query_address_generator = TensorAccessor(query_args, query_addr, tile_bytes);
-    const auto key_address_generator = TensorAccessor(key_args, key_addr, tile_bytes);
-    const auto value_address_generator = TensorAccessor(value_args, value_addr, tile_bytes);
+    const auto query_address_generator = TensorAccessor(query_args, query_addr);
+    const auto key_address_generator = TensorAccessor(key_args, key_addr);
+    const auto value_address_generator = TensorAccessor(value_args, value_addr);
 #ifdef USE_ATTN_MASK
-    const auto mask_address_generator = TensorAccessor(mask_args, mask_addr, tile_bytes);
+    const auto mask_address_generator = TensorAccessor(mask_args, mask_addr);
 #endif
-    const auto intermediates_address_generator = TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
+    const auto intermediates_address_generator =
+        TensorAccessor(intermediates_args, intermediates_addr, interm_tile_bytes);
 #ifdef USE_PRECOMPUTED_U_SCALER
-    const uint32_t u_scaler_tile_bytes = get_tile_size(cb_u_scalar_row);
-    const auto u_scaler_address_generator = TensorAccessor(u_scaler_args, u_scaler_addr, u_scaler_tile_bytes);
+    const auto u_scaler_address_generator = TensorAccessor(u_scaler_args, u_scaler_addr);
 #endif
 
     generate_matmul_row_reduce_tile(cb_matmul_reduce);
@@ -129,7 +130,7 @@ void kernel_main() {
                     intermediates_address_generator,
                     intermediates_idx,
                     num_of_interm_tiles,
-                    tile_bytes,
+                    interm_tile_bytes,
                     num_of_interm_tiles);
 
                 read_tiles_by_row(cb_grad_output, grad_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
@@ -212,7 +213,7 @@ void kernel_main() {
                     intermediates_address_generator,
                     intermediates_idx,
                     num_of_interm_tiles,
-                    tile_bytes,
+                    interm_tile_bytes,
                     num_of_interm_tiles);
 
                 read_tiles_by_row(cb_grad_output, grad_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);

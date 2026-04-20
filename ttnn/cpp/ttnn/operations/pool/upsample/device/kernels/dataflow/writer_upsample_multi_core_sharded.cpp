@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
@@ -23,13 +24,19 @@ void kernel_main() {
         ((in_nsticks_per_core * scale_h + 1) / 2) *
         scale_w;  // divided by 2 because each core has 2 readers which get near equal number of output sticks
 
-    uint32_t l1_read_addr = get_read_ptr(in_cb_id);
-    uint32_t l1_write_addr = get_write_ptr(out_cb_id);
+    experimental::CB in_cb(in_cb_id);
+    experimental::CB out_cb(out_cb_id);
+    experimental::CB config_cb(config_cb_id);
+    experimental::Noc noc;
+    experimental::UnicastEndpoint remote_ep;
+
+    uint32_t l1_read_addr = in_cb.get_read_ptr();
+    uint32_t write_offset = 0;
     if (!is_reader) {
-        l1_write_addr += out_nsticks_per_core * stick_nbytes;
+        write_offset = out_nsticks_per_core * stick_nbytes;
     }
 
-    uint32_t config_l1_addr = get_read_ptr(config_cb_id);
+    uint32_t config_l1_addr = config_cb.get_read_ptr();
     // Interpreted as a vector of 32bit elements to lessen the number of l1 reads
     volatile tt_l1_ptr uint32_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_l1_addr);
 
@@ -50,14 +57,19 @@ void kernel_main() {
         const uint16_t offset_end = offset_info >> 16;
 
         for (uint32_t offset = offset_start; offset <= offset_end; offset++) {
-            uint64_t src_remote_addr = get_noc_addr(corex, corey, l1_read_addr + offset * stick_nbytes);
+            uint32_t src_addr = l1_read_addr + offset * stick_nbytes;
             // replicate stick scale_w times.
             for (uint32_t sw = 0; sw < scale_w; sw++) {
-                noc_async_read(src_remote_addr, l1_write_addr, stick_nbytes);
-                l1_write_addr += stick_nbytes;
+                noc.async_read(
+                    remote_ep,
+                    out_cb,
+                    stick_nbytes,
+                    {.noc_x = corex, .noc_y = corey, .addr = src_addr},
+                    {.offset_bytes = write_offset});
+                write_offset += stick_nbytes;
             }
         }
     }
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }

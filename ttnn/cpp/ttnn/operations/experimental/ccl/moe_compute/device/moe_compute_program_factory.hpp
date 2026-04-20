@@ -37,6 +37,9 @@ struct MoEComputeMeshWorkloadFactory {
         // CB handle for combine global sharded input tensor
         tt::tt_metal::CBHandle combine_data_cb_handle;
 
+        // CB handle for token counts per expert
+        tt::tt_metal::CBHandle expert_tokens_cb_handle;
+
         // Combine cores
         std::vector<CoreCoord> combine_cores;
 
