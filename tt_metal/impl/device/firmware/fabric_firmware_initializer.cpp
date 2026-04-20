@@ -773,8 +773,33 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
 
         auto start_time = std::chrono::steady_clock::now();
         while (master_router_status[0] != expected_status) {
-            detail::ReadFromDeviceL1(
-                dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
+            // Wrap in try/catch: on a T3K after an abrupt prior-process crash, the master
+            // router channel may be completely unresponsive — l1_barrier or read_non_mmio
+            // will block for the UMD timeout or throw instead of returning cleanly.
+            // Treat a read exception as an immediate timeout so we fail with a diagnostic
+            // rather than hanging indefinitely (seen as exit=124 after 10+ minutes).
+            try {
+                detail::ReadFromDeviceL1(
+                    dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
+            } catch (const std::exception& read_ex) {
+                log_warning(
+                    tt::LogMetal,
+                    "wait_for_fabric_router_sync: Device {} master chan={} read TIMED OUT ({}). "
+                    "Treating as router sync failure.",
+                    dev->id(),
+                    master_router_chan,
+                    read_ex.what());
+                TT_THROW(
+                    "Fabric Router Sync: Device {} master chan={} read timed out: {}",
+                    dev->id(),
+                    master_router_chan,
+                    read_ex.what());
+            } catch (...) {
+                TT_THROW(
+                    "Fabric Router Sync: Device {} master chan={} read failed (unknown exception).",
+                    dev->id(),
+                    master_router_chan);
+            }
             if (master_router_status[0] == expected_status) {
                 break;
             }
@@ -911,8 +936,40 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
         for (size_t idx : pending_indices) {
             const auto& ch = channels_to_check[idx];
             std::vector<uint32_t> status_buf(1, 0);
-            detail::ReadFromDeviceL1(
-                ch.dev, ch.eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+            // Wrap in try/catch: on a T3K after an abrupt prior-process crash, some ERISC
+            // channels are completely unresponsive — l1_barrier or read_non_mmio will throw
+            // (or in rare cases block for the UMD timeout) rather than returning cleanly.
+            // Treat a read exception as "corrupt L1" so we fail-fast with a diagnostic
+            // instead of hanging here indefinitely (exit=124 after 10+ minutes).
+            try {
+                detail::ReadFromDeviceL1(
+                    ch.dev, ch.eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+            } catch (const std::exception& read_ex) {
+                log_warning(
+                    tt::LogMetal,
+                    "verify_all_fabric_channels_healthy: Device {} chan={} read TIMED OUT ({}). "
+                    "Treating channel as CORRUPT.",
+                    ch.dev->id(),
+                    ch.eth_chan_id,
+                    read_ex.what());
+                // Mark as unrecoverable — no point retrying a completely unresponsive channel.
+                if (attempt == kMaxRetries - 1) {
+                    failed_channels.push_back({ch.dev->id(), ch.eth_chan_id, 0xDEAD'DEAD, /*is_corrupt=*/true});
+                }
+                // Skip retry for this channel.
+                continue;
+            } catch (...) {
+                log_warning(
+                    tt::LogMetal,
+                    "verify_all_fabric_channels_healthy: Device {} chan={} read failed (unknown exception). "
+                    "Treating channel as CORRUPT.",
+                    ch.dev->id(),
+                    ch.eth_chan_id);
+                if (attempt == kMaxRetries - 1) {
+                    failed_channels.push_back({ch.dev->id(), ch.eth_chan_id, 0xDEAD'DEAD, /*is_corrupt=*/true});
+                }
+                continue;
+            }
             if (status_buf[0] != expected_status) {
                 still_pending.push_back(idx);
                 // On last attempt, record the failure.
