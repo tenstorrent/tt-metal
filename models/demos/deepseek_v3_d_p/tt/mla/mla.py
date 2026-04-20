@@ -30,8 +30,10 @@ class ttMLA:
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
         """Check if all 8 MLA weight cache files exist."""
+        from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
         for name in ttMLA.MLA_WEIGHT_NAMES:
-            if not list(cache_path.glob(f"{cache_name_prefix}.{name}*.tensorbin")):
+            if not pattern_exists(f"{cache_name_prefix}.{name}*.tensorbin", "MLA"):
                 logger.debug(f"TTNN cache missing: {cache_name_prefix}.{name}")
                 return False
         return True

@@ -52,8 +52,10 @@ class TtSharedExpert(LightweightModule):
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
         """Check if all shared expert weight cache files exist."""
+        from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
         for proj in ["gate_proj", "up_proj", "down_proj"]:
-            if not list(cache_path.glob(f"{cache_name_prefix}.{proj}*.tensorbin")):
+            if not pattern_exists(f"{cache_name_prefix}.{proj}*.tensorbin", "SharedExpert"):
                 logger.debug(f"TTNN cache missing: {cache_name_prefix}.{proj}")
                 return False
         return True

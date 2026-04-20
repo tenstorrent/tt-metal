@@ -46,7 +46,9 @@ class TtDistributedRmsNorm(LightweightModule):
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
         """Check if norm weight cache files exist."""
-        if not list(cache_path.glob(f"{cache_name_prefix}_weight*.tensorbin")):
+        from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
+        if not pattern_exists(f"{cache_name_prefix}_weight*.tensorbin", "RmsNorm"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}_weight")
             return False
         return True
