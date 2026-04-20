@@ -29,10 +29,14 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 // TODO: Move to utilities?
 uint32_t get_noc_max_burst_size(const ttnn::MeshDevice& mesh_device) {
+    // TODO: What about QUASAR?
     uint32_t noc_max_burst_size;
     const auto arch = mesh_device.arch();
     if (arch == tt::ARCH::BLACKHOLE) {
         noc_max_burst_size = 16384;
+        // ttsim doesn't support 16384 bytes burst size( ERROR: UnimplementedFunctionality: tensix_execute_elw_op:
+        // dst_row=1024)
+        noc_max_burst_size /= 2;
     } else if (arch == tt::ARCH::WORMHOLE_B0) {
         noc_max_burst_size = 8192;
     } else {
