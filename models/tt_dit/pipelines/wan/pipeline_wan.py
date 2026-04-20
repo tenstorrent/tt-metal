@@ -359,7 +359,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
     def warmup_buffers(self, height: int, width: int, num_frames: int):
         logger.info(f"Warming up buffers at {height}x{width}x{num_frames}")
-        self(prompt="warmup", height=height, width=width, num_frames=num_frames)
+        self(prompt="warmup", height=height, width=width, num_frames=num_frames, num_inference_steps=2)
         logger.info("Warmup complete")
 
     @staticmethod
@@ -774,7 +774,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         latents: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
-        output_type: Optional[str] = "np",
+        output_type: Optional[str] = "uint8",
         return_dict: bool = True,
         max_sequence_length: int = 512,
         traced: bool = False,
