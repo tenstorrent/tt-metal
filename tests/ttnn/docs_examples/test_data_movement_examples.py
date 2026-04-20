@@ -29,6 +29,15 @@ def test_nonzero(device):
     logger.info("Non-zero Indices:", nonzero_indices)
 
 
+def test_flip(device):
+    # Create a tensor to flip
+    input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, device=device)
+
+    # Flip the tensor along the last dimension
+    flipped_tensor = ttnn.flip(input_tensor, dims=[3])
+    logger.info("Flipped Tensor Shape:", flipped_tensor.shape)
+
+
 def test_pad(device):
     # Create a tensor to pad
     input_tensor = ttnn.rand((1, 1, 4, 4), dtype=ttnn.bfloat16, device=device)

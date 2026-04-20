@@ -19,6 +19,7 @@ file(
     common/kernels/*
     fill_pad/device/kernels/*
     fill_rm/device/kernels/*
+    flip/device/kernels/*
     fold/device/kernels/*
     gather/device/kernels/*
     copy/device/kernels/*
@@ -64,6 +65,7 @@ target_sources(
             fill_pad/device/fill_pad_device_operation.hpp
             fill_rm/fill_rm.hpp
             fill_rm/device/fill_rm_device_operation.hpp
+            flip/flip.hpp
             move/device/move_device_operation.hpp
             pad/pad.hpp
             permute/permute.hpp
@@ -143,6 +145,9 @@ target_sources(
             fill_rm/fill_rm_nanobind.hpp
             fill_rm/device/fill_rm_device_operation_types.hpp
             fill_rm/device/fill_rm_program_factory.hpp
+            # flip/
+            flip/flip_nanobind.hpp
+            flip/device/flip_device_operation.hpp
             # fold/
             fold/fold.hpp
             fold/fold_nanobind.hpp
@@ -380,6 +385,9 @@ target_sources(
         fill_rm/device/fill_rm_device_operation.cpp
         fill_rm/device/fill_rm_program_factory.cpp
         fill_rm/fill_rm.cpp
+        flip/device/flip_device_operation.cpp
+        flip/device/flip_rm_program_factory.cpp
+        flip/flip.cpp
         fold/device/fold_device_op.cpp
         fold/device/fold_multi_core_dram_program_factory.cpp
         fold/device/fold_multi_core_program_factory.cpp
