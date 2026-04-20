@@ -88,13 +88,6 @@ def unpack_uint8(packed_list):
 
 
 def bfp8_to_float_block(exponent, bfp8_mantissas, unpacked_bfp8):
-    # Bug fix and improvement:
-    # 1. Caching: If the (exponent, mantissa) pair is already processed, the precomputed value is reused.
-    # 2. Sign and Fractional Calculation: The sign bit is extracted, and the fractional part is calculated by iterating
-    #    over the mantissa bits, adding `1 / (2 ** i)` for each '1' bit.
-    # 3. Exponent Scaling: The final value is scaled by `2^exponent` and adjusted by the sign bit.
-    # 4. Efficient Storage: The computed value is stored in `unpacked_bfp8` for future use.
-
     bfloat16_values = []
     exponent = exponent - 127
 
@@ -104,22 +97,22 @@ def bfp8_to_float_block(exponent, bfp8_mantissas, unpacked_bfp8):
             continue
 
         sign_mantissa = str(format(mantissa, "08b"))
-        # Extract the sign bit (most significant bit)
         sign = int(sign_mantissa[0], 2)
-        # Get the remaining bits which represent the fractional part of the mantissa
         mantissa_value = sign_mantissa[1:]
-        # Changed computation of mantissa to fix , accumulate fractional value
+
         fract_value = 0.0
         for i in range(len(mantissa_value)):
-            # If the bit is '1', add the corresponding fractional value to fract_value
             if mantissa_value[i] == "1":
                 fract_value += 1 / (2 ** (i))
 
-        bfloat16_values.append(((-1.0) ** sign) * (2**exponent) * (fract_value))
+        # ISA spec: sign=1, mag=0 → -Inf (BF16 0xff80); sign=0, mag=0 → +0
+        if fract_value == 0.0:
+            value = -float("inf") if sign == 1 else 0.0
+        else:
+            value = ((-1.0) ** sign) * (2**exponent) * fract_value
 
-        unpacked_bfp8[(exponent, mantissa)] = (
-            ((-1.0) ** sign) * (2**exponent) * (fract_value)
-        )
+        bfloat16_values.append(value)
+        unpacked_bfp8[(exponent, mantissa)] = value
 
     return bfloat16_values
 
@@ -164,8 +157,13 @@ def bfp4_to_float_block(exponent, bfp4_mantissas, unpacked_bfp4):
     for mantissa in bfp4_mantissas:
         mag = mantissa & 0x7
         if mag == 0:
-            bfloat16_values.append(0.0)
-            unpacked_bfp4[(exp_adj, mantissa)] = 0.0
+            # ISA spec: sign=1, mag=0 → -Inf (BF16 0xff80); sign=0, mag=0 → +0
+            if mantissa & 0x8:
+                value = -float("inf")
+            else:
+                value = 0.0
+            bfloat16_values.append(value)
+            unpacked_bfp4[(exp_adj, mantissa)] = value
             continue
 
         key = (exp_adj, mantissa)

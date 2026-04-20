@@ -523,6 +523,7 @@ class TestConfig:
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
+            DataFormat.Bfp4_b: 36,
             DataFormat.Float32: 256,
         }
 
