@@ -24,8 +24,6 @@
 #include "api/compute/experimental/pack_block.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/add_rsqrt.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/rmsnorm.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-
 #endif
 
 namespace deepseek_b1_ops {
@@ -126,6 +124,7 @@ struct RMSNorm {
             pack_reconfig_data_format<true>(CTArgs::output_cb);
             pack_block_contiguous_init(CTArgs::output_cb);
             {
+                // Square the input
                 mul_reduce_scalar_init(CTArgs::input_cb, CTArgs::input_cb);
                 add_rsqrt_tile_init();
                 cb_wait_front(CTArgs::input_cb, num_tiles);

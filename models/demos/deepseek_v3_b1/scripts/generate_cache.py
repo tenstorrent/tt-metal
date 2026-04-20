@@ -464,6 +464,7 @@ def main() -> int:
             schema_version=args.schema_version,
         )
         return 0 if ok else 1
+
     return 0
 
 
