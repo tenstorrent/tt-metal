@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Union
 
+import numpy as np
+
 import ttnn
 from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
 
@@ -92,7 +94,43 @@ class FusionGroupSpec:
     transform_version: int = 0  # bump when shuffle/preprocess logic changes
 
 
-ArtifactTarget = TensorTarget | FusionGroupSpec
+@dataclass(frozen=True)
+class CompressedTensorTarget:
+    """Specification for a cached BSPM CompressedTensor artifact (one expert, one projection).
+
+    All fields participate in the fingerprint hash.
+    ``num_banks`` is ``device.dram_grid_size().x``.
+
+    Each expert is stored with its own natural DRAM shard size (no cross-expert
+    uniform padding).  Routing kernels that need per-expert DRAM offsets must use
+    the absolute-address approach (F1 style), not a fixed stride.
+    """
+
+    kind: Literal["compressed_tensor"] = "compressed_tensor"
+    name: str = ""  # e.g. "routed_gate_proj"
+    K: int = 0  # weight inner dimension (rows in logical K×N layout)
+    N_padded: int = 0  # padded weight outer dimension (multiple of num_banks * tile_hw)
+    num_banks: int = 0  # DRAM bank count (device.dram_grid_size().x)
+    bspm_variant: str = "B"  # allocation variant letter
+    bspm_budget: float = 3.5  # bits-per-element budget
+    transform_version: int = 3  # bumped: invalidate entries written with correct version but buggy reshape code
+
+
+@dataclass
+class CompressedTensorBuildInputs:
+    """Pre-shuffle weight matrix and assignment for a single expert projection.
+
+    Returned by the ``preprocess`` callback on the :class:`CompressedTensorTarget`
+    path.  Stored compact to disk by :class:`TensorCache` (tile bytes in logical
+    row-major order); reconstructed to the DRAM-sharded on-device layout on load.
+    Not frozen: numpy arrays are not hashable.
+    """
+
+    w_logical: np.ndarray  # (K, N_padded) float32, logical tile order (pre-DRAM-shuffle)
+    assignment_logical: np.ndarray  # (tiles_h, tiles_w) int8, logical tile order
+
+
+ArtifactTarget = TensorTarget | FusionGroupSpec | CompressedTensorTarget
 
 
 @dataclass(frozen=True)
