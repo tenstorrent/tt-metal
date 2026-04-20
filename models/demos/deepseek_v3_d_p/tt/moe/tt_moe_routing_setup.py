@@ -88,7 +88,7 @@ class TtMoERoutingSetup(LightweightModule):
 
         if len(ttnn_top_k_experts_indices.shape) == 3:
             ttnn_top_k_experts_indices = ttnn.squeeze(ttnn_top_k_experts_indices, 0)
-        # logger.debug(f"{ttnn_top_k_experts_indices.shape=}")
+        logger.debug(f"{ttnn_top_k_experts_indices.shape=}")
 
         # Squeeze to rank 1 — masked_bincount doesn't support rank 2
         if len(self.experts_in_dispatch_group.shape) != 1:

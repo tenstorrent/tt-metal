@@ -354,8 +354,8 @@ class TtMoe(LightweightModule):
         # Reshape 3D -> 2D for gate: (batch, seq, emb) -> (batch*seq, emb)
         x_for_gate = ttnn.reshape(x, (x.shape[0] * x.shape[1], x.shape[2]))
         x_for_gate = ttnn.to_layout(x_for_gate, ttnn.TILE_LAYOUT)
-        if self.gate_input_mem_config is not None:
-            x_for_gate = ttnn.to_memory_config(x_for_gate, self.gate_input_mem_config)
+        # if self.gate_input_mem_config is not None:
+        #     x_for_gate = ttnn.to_memory_config(x_for_gate, self.gate_input_mem_config)
 
         logger.debug("Moe gate out start")
         ttnn.synchronize_device(self.mesh_device)
@@ -389,6 +389,8 @@ class TtMoe(LightweightModule):
         batch_dim = x.shape[0]
         weights = ttnn.reshape(scores, (batch_dim, seq_dim, scores.shape[-1]))
         indices = ttnn.reshape(indices_raw, (batch_dim, seq_dim, indices_raw.shape[-1]))
+
+        ttnn.deallocate(indices_raw)
 
         # logger.debug(f"  weights.shape={weights.shape}")
         # logger.debug(f"  indices.shape={indices.shape}")
@@ -488,7 +490,7 @@ class TtMoe(LightweightModule):
             f"expert_outputs.memory_config is {expert_outputs.memory_config()} and shape is: {expert_outputs.shape}"
         )
         print_l1_buffers(self.mesh_device, "before untilize")
-        ttnn.dump_device_memory_state(self.mesh_device, "pre untilize")
+        ttnn.dump_device_memory_state(self.mesh_device, "pre_untilize")
         expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
 
         # logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
