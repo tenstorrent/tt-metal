@@ -41,7 +41,9 @@ class TtParallelEmbedding(LightweightModule):
     @staticmethod
     def check_cache_complete(cache_path: Path) -> bool:
         """Check if embedding weight cache files exist."""
-        if not list(cache_path.glob("embed_weight*.tensorbin")):
+        from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
+        if not pattern_exists("embed_weight*.tensorbin", "Embedding"):
             logger.debug("TTNN cache missing: embed_weight")
             return False
         return True
