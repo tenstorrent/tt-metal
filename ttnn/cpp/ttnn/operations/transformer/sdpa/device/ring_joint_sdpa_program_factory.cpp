@@ -6,6 +6,7 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <optional>
 #include <cmath>
 #include <string>
@@ -537,6 +538,16 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+
+    // TT_METAL_RING_ITER_ONLY: measurement hook. Unset = production (all iters + AllGather).
+    // Set to N = only ring iter N executes, AllGather is skipped at the host side, and reader
+    // skips its CCL semaphore wait. Reported duration then reflects pure SDPA compute for iter N.
+    const char* ring_iter_only_env = std::getenv("TT_METAL_RING_ITER_ONLY");
+    const bool ring_iter_only_enabled = (ring_iter_only_env != nullptr);
+    if (ring_iter_only_enabled) {
+        defines["RING_ITER_ONLY_ENABLED"] = "1";
+        defines["RING_ITER_ONLY_TARGET"] = std::to_string(std::atoi(ring_iter_only_env));
+    }
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
@@ -1193,43 +1204,54 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
 
-    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> all_gather_fused_op_signaler =
-        ttnn::experimental::ccl::AllGatherFusedOpSignaler();
+    experimental::prim::RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::shared_variables_t
+        all_gather_shared_variables{};
 
-    all_gather_fused_op_signaler->init_fused_op(
-        sdpa_fused_op_signaler->fused_op_receiver_cores_noc,
-        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
-        sdpa_fused_op_signaler->fused_op_signaler_mode);
+    if (!ring_iter_only_enabled) {
+        std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> all_gather_fused_op_signaler =
+            ttnn::experimental::ccl::AllGatherFusedOpSignaler();
 
-    std::vector<Tensor> all_gather_input_tensors = {
-        input_tensor_k,
-        input_tensor_v,
-    };
-    std::vector<Tensor> all_gather_output_tensors = {
-        gathered_input_tensor_k,
-        gathered_input_tensor_v,
-    };
-    auto all_gather_shared_variables = ring_attention_all_gather_async_multi_core_with_workers_helper(
-        program,  // Must pass ring_joint_sdpa's program
-        all_gather_input_tensors,
-        coord,
-        forward_coord,
-        backward_coord,
-        all_gather_output_tensors,
-        args.all_gather_operation_attributes.dim,
-        args.all_gather_operation_attributes.num_links,
-        args.all_gather_operation_attributes.ring_size,
-        device_index,
-        args.all_gather_operation_attributes.topology,
-        args.all_gather_operation_attributes.semaphore,
-        args.all_gather_operation_attributes.sub_device_id,
-        all_gather_fused_op_signaler,
-        args.ccl_core_grid_offset,
-        args.all_gather_operation_attributes.core_allocation_strategy);
+        all_gather_fused_op_signaler->init_fused_op(
+            sdpa_fused_op_signaler->fused_op_receiver_cores_noc,
+            sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
+            sdpa_fused_op_signaler->fused_op_signaler_mode);
+
+        std::vector<Tensor> all_gather_input_tensors = {
+            input_tensor_k,
+            input_tensor_v,
+        };
+        std::vector<Tensor> all_gather_output_tensors = {
+            gathered_input_tensor_k,
+            gathered_input_tensor_v,
+        };
+        all_gather_shared_variables = ring_attention_all_gather_async_multi_core_with_workers_helper(
+            program,  // Must pass ring_joint_sdpa's program
+            all_gather_input_tensors,
+            coord,
+            forward_coord,
+            backward_coord,
+            all_gather_output_tensors,
+            args.all_gather_operation_attributes.dim,
+            args.all_gather_operation_attributes.num_links,
+            args.all_gather_operation_attributes.ring_size,
+            device_index,
+            args.all_gather_operation_attributes.topology,
+            args.all_gather_operation_attributes.semaphore,
+            args.all_gather_operation_attributes.sub_device_id,
+            all_gather_fused_op_signaler,
+            args.ccl_core_grid_offset,
+            args.all_gather_operation_attributes.core_allocation_strategy);
+    }
 
     return cached_program_t{
         std::move(program),
-        {num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id, all_gather_shared_variables}};
+        {num_cores,
+         grid_size,
+         reader_kernels_id,
+         writer_kernels_id,
+         compute_kernels_id,
+         all_gather_shared_variables,
+         ring_iter_only_enabled}};
 }
 
 void RingJointSDPAProgramFactory::override_runtime_arguments(
@@ -1240,12 +1262,14 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-        ring_attention_all_gather_async_multicore_with_workers_override_runtime_arguments(
-            shared_vars.all_gather_shared_variables,
-            program,
-            {tensor_args.input_k, tensor_args.input_v},       /*input_tensors*/
-            {tensor_args.gathered_k, tensor_args.gathered_v}, /*output_tensors*/
-            args.all_gather_operation_attributes.semaphore);
+        if (!shared_vars.skip_all_gather) {
+            ring_attention_all_gather_async_multicore_with_workers_override_runtime_arguments(
+                shared_vars.all_gather_shared_variables,
+                program,
+                {tensor_args.input_k, tensor_args.input_v},       /*input_tensors*/
+                {tensor_args.gathered_k, tensor_args.gathered_v}, /*output_tensors*/
+                args.all_gather_operation_attributes.semaphore);
+        }
 
         // Get addresses for regular tensors
         auto* q_buffer = tensor_args.input_q.buffer();

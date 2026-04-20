@@ -70,9 +70,14 @@ void kernel_main() {
     const uint32_t mcast_num_dests = get_arg_val<uint32_t>(argidx++);
     const uint32_t mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
 
-    RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
-        true, /* wait_for_op_signal */
-        argidx);
+#ifdef RING_ITER_ONLY_ENABLED
+    // RING_ITER_ONLY_ENABLED: AllGather is skipped at the host side, so the reader must
+    // not wait on its (nonexistent) semaphore signals.
+    constexpr bool sdpa_wait_for_op_signal = false;
+#else
+    constexpr bool sdpa_wait_for_op_signal = true;
+#endif
+    RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(sdpa_wait_for_op_signal, argidx);
 
     // After fused-op receiver consumed its runtime args, remaining RT args are S&F chain metadata
 
@@ -172,6 +177,12 @@ void kernel_main() {
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+#ifdef RING_ITER_ONLY_ENABLED
+        // Measurement hook: sync still advances, but IO is skipped for non-target iters.
+        if (ring_iter != RING_ITER_ONLY_TARGET) {
+            continue;
+        }
+#endif
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;
