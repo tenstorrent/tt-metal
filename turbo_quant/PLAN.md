@@ -60,6 +60,26 @@ Latency barely grows (14.2 → 14.5ms). TQ's compressed BFP4 cache (0.5 bytes/el
 2× smaller than baseline BFP8) enables these large batch sizes at long seqlens
 without running out of DRAM — this is the key benefit of KV compression for serving.
 
+### T3K Max Batch at Long Context (2026-04-20)
+
+**The key serving benefit of KV compression:** TQ fits 2× the batch of baseline
+at long sequence lengths where KV cache dominates DRAM usage.
+
+| seqlen | TQ BFP4 max batch | Baseline BFP8 max batch | TQ throughput @ max | TQ advantage |
+|--------|-------------------|-------------------------|--------------------:|--------------|
+| 8K | 32+ (KV < 1GB) | 32+ | 2,222 tok/s | — |
+| 32K | 32+ | 32+ | 2,217 tok/s | — |
+| **64K** | **32** | 16 | **2,242 tok/s** | **2×** |
+| **128K** | **16** | 8 | **1,136 tok/s** | **2×** |
+
+Beyond max batch, baseline OOMs while TQ still runs. Baseline 64K×32 and 128K×16
+both fail with DRAM OOM; TQ succeeds at the same config.
+
+**Required fix:** Override `KV_CACHE` precision to BFP4 at **model init time**
+(not just after init). Previously the model allocated BFP8 paged cache first,
+limiting `max_num_blocks` to BFP8's memory footprint. See `make_optimizations`
+in eval_e2e.py.
+
 ### T3K Multi-Device + Multi-Batch Quality (2026-04-17)
 
 End-to-end quality verified on T3K with rotation-absorbed model and BF16 migration:
