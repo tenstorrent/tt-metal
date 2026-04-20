@@ -92,7 +92,7 @@
 
 - name: bh_p150b_civ2_viommu_DeepSeek_B1_Full_Unit_Tests_SlowDispatch
   cmd: |
-    TT_METAL_SLOW_DISPATCH_MODE=1 pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
   model: deepseek_decode
   skus:
     bh_galaxy:
