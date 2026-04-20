@@ -45,13 +45,20 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
 
 
 def _deallocate_layer(layer: DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWeights) -> None:
-    """Deallocate all tensors in a single decoder layer (e.g. after TensorCache cold path)."""
+    """Deallocate all tensors in a single decoder layer (e.g. after TensorCache cold path).
+
+    ``gate_mm`` is listed explicitly because MoE layers pack it into its own
+    per-core fusion artefact (see ``MERGED_TP4_GATE_SPEC``), so its
+    ``fused_tensor`` is distinct from the main attention buffer and is not
+    freed transitively by deallocating ``o_proj``.
+    """
     seen: set[int] = set()
     for f in (
         "q_a_proj",
         "q_b_proj",
         "kv_a_proj",
         "o_proj",
+        "gate_mm",
         "attn_norm",
         "q_norm",
         "kv_norm",
@@ -404,7 +411,8 @@ def test_prepare_attention_weights_dense_4x2(bh_2d_mesh_device):
     assert attn.q_a_proj.tensor_shape == (3584, 3072)
     assert attn.q_b_proj.tensor_shape == (LogicalModelDimensions.Q_A_DIM, 12288)
     assert attn.kv_a_proj.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.KV_A_DIM)
-    assert attn.o_proj.tensor_shape == (8192, LogicalModelDimensions.HIDDEN_SIZE)
+    # o_proj is TP4-shuffle-packed to (8192, 2 * HIDDEN_SIZE); see pack_o_proj_weights_tp4_shuffled.
+    assert attn.o_proj.tensor_shape == (8192, 2 * LogicalModelDimensions.HIDDEN_SIZE)
     assert attn.attn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
     assert attn.kv_b1_proj.tensor_shape == (8192, LogicalModelDimensions.KV_B_LORA_RANK)
     assert attn.kv_b2_proj.tensor_shape == (LogicalModelDimensions.KV_B_LORA_RANK, 8192)
@@ -427,7 +435,8 @@ def test_prepare_attention_weights_moe_4x2(bh_2d_mesh_device):
     assert attn.gate_bias is not None
     assert attn.gate_bias.shape == (16, 16)
     assert attn.q_a_proj.tensor_shape == (3584, 3072)
-    assert attn.o_proj.tensor_shape == (8192, LogicalModelDimensions.HIDDEN_SIZE)
+    # o_proj is TP4-shuffle-packed to (8192, 2 * HIDDEN_SIZE); see pack_o_proj_weights_tp4_shuffled.
+    assert attn.o_proj.tensor_shape == (8192, 2 * LogicalModelDimensions.HIDDEN_SIZE)
 
 
 @pytest.mark.parametrize(
@@ -533,7 +542,8 @@ def test_prepare_dense_layer_single_layer_4x2(bh_2d_mesh_device):
     assert layer.q_a_proj.tensor_shape == (3584, 3072)
     assert layer.q_b_proj.tensor_shape == (LogicalModelDimensions.Q_A_DIM, 12288)
     assert layer.kv_a_proj.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.KV_A_DIM)
-    assert layer.o_proj.tensor_shape == (8192, LogicalModelDimensions.HIDDEN_SIZE)
+    # o_proj is TP4-shuffle-packed to (8192, 2 * HIDDEN_SIZE); see pack_o_proj_weights_tp4_shuffled.
+    assert layer.o_proj.tensor_shape == (8192, 2 * LogicalModelDimensions.HIDDEN_SIZE)
     assert layer.attn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
     assert layer.q_norm.tensor_shape == (1, LogicalModelDimensions.Q_A_DIM)
     assert layer.kv_norm.tensor_shape == (1, LogicalModelDimensions.KV_B_LORA_RANK)
@@ -569,7 +579,8 @@ def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     assert layer.q_a_proj.tensor_shape == (3584, 3072)
     assert layer.q_b_proj.tensor_shape == (LogicalModelDimensions.Q_A_DIM, 12288)
     assert layer.kv_a_proj.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.KV_A_DIM)
-    assert layer.o_proj.tensor_shape == (8192, LogicalModelDimensions.HIDDEN_SIZE)
+    # o_proj is TP4-shuffle-packed to (8192, 2 * HIDDEN_SIZE); see pack_o_proj_weights_tp4_shuffled.
+    assert layer.o_proj.tensor_shape == (8192, 2 * LogicalModelDimensions.HIDDEN_SIZE)
     assert layer.gate_mm.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.GATE_NUM_INDICES)
     assert layer.gate_bias.shape == (16, 16)
     assert layer.attn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
@@ -761,9 +772,8 @@ def test_prepare_attention_weights_with_cache_dense_4x2(bh_2d_mesh_device, tmp_p
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
-    assert (
-        len(artifact_dirs) >= 3
-    ), f"Expected 3 fusion artifacts (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms), found {len(artifact_dirs)}"
+    # Dense mla_tp==2: kv_b12 + merged_tp4_main (o_proj + norms + q_ab + kv_a). gate_mm is MoE-only.
+    assert len(artifact_dirs) >= 2, f"Expected 2 fusion artifacts (kv_b12, merged_tp4_main), found {len(artifact_dirs)}"
 
 
 @pytest.mark.parametrize(
@@ -792,7 +802,10 @@ def test_prepare_attention_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp_pat
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
-    assert len(artifact_dirs) >= 4, f"Expected 3 fusion artifacts + gate_bias, found {len(artifact_dirs)}"
+    # MoE mla_tp==2: kv_b12 + merged_tp4_main + merged_tp4_gate (standalone gate_mm) + gate_bias.
+    assert (
+        len(artifact_dirs) >= 4
+    ), f"Expected 3 fusion artifacts (kv_b12, merged_tp4_main, merged_tp4_gate) + gate_bias, found {len(artifact_dirs)}"
 
 
 @pytest.mark.parametrize(
@@ -951,9 +964,10 @@ def test_prepare_dense_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path)
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    # Dense mla_tp==2: 2 attn fusion (kv_b12 + merged_tp4_main) + gate_up + shared_down + 3 routed stacked.
     assert (
-        len(artifact_dirs) >= 8
-    ), f"Expected 3 attention fusion + gate_up + shared_down + 3 routed stacked (8), found {len(artifact_dirs)}"
+        len(artifact_dirs) >= 7
+    ), f"Expected 2 attn fusion + gate_up + shared_down + 3 routed stacked (7), found {len(artifact_dirs)}"
 
 
 @pytest.mark.parametrize(
@@ -999,10 +1013,11 @@ def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
     n_r = NUM_ROUTED_EXPERTS_FOR_TESTS
-    # 3 attention fusion + gate_bias + gate_up + shared_down + n_r * 3 routed = 6 + n_r * 3
+    # MoE mla_tp==2: kv_b12 + merged_tp4_main + merged_tp4_gate + gate_bias + gate_up + shared_down
+    # + n_r * 3 routed = 6 + n_r * 3.
     assert len(artifact_dirs) >= 6 + n_r * 3, (
-        f"Expected 3 attn + gate_bias + gate_up + shared_down + {n_r * 3} routed ({6 + n_r * 3}), "
-        f"found {len(artifact_dirs)}"
+        f"Expected kv_b12 + merged_tp4_main + merged_tp4_gate + gate_bias + gate_up + shared_down + "
+        f"{n_r * 3} routed ({6 + n_r * 3}), found {len(artifact_dirs)}"
     )
 
 
