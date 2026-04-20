@@ -171,7 +171,7 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 *Pipeline Efficiency*
 
-- **Packer Efficiency (%)**: On Wormhole: fraction of packer busy cycles where dest data was available (``PACKER_DEST_READ_AVAILABLE / PACKER_BUSY``). On Blackhole: fraction of dest read requests that were granted (``DEST_READ_GRANTED_1 / PACKER_DEST_READ_AVAILABLE``). 100% means the packer never waited for data.
+- **Packer Efficiency (%)**: On Wormhole: fraction of packer busy cycles where dest data was available (``PACKER_DEST_READ_AVAILABLE / PACKER_BUSY``). On Blackhole: fraction of dest read requests that were granted (``DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE``). 100% means the packer never waited for data.
 - **Math-to-Pack Handoff Efficiency (%)**: On Wormhole: how quickly math results reach the packer (``AVAILABLE_MATH / PACKER_BUSY``). On Blackhole: fraction of cycles the math pipeline was not stalled by the scoreboard (``AVAILABLE_MATH / ref_cnt``), since ``PACKER_BUSY`` is inactive.
 - **Unpacker-to-Math Data Flow (%)**: Ratio of source register write availability to unpacker busy time. Higher means data flows smoothly from unpack to math.
 
@@ -195,7 +195,6 @@ The following metrics are automatically computed from raw counters. Each metric 
 *TDMA Stall Metrics*
 
 - **Data Hazard Stall Rate (%)**: Cycles stalled by dest-to-src data hazards (MOVD2A/MOVD2B). High values in matmul are expected.
-- **Fidelity Phase Overhead (%)**: Cycles spent on HiFi fidelity phases. Higher fidelity = higher accuracy but more overhead.
 - **SrcA Write Port Blocked Rate (%)**: Cycles where DMA to srcA was blocked by overwrite protection.
 - **Dest Read Backpressure (%)**: Cycles where destination register read was requested but not granted.
 - **Math Dest Write Port Stall Rate (%)**: Cycles where math was stalled by destination register write port contention. Wormhole only — on Blackhole, ``MATH_NOT_STALLED_DEST_WR_PORT`` is inactive and this metric is hidden.
@@ -239,7 +238,7 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 These metrics depend on hardware signals inactive on Blackhole and are automatically hidden from BH output.
 
-- **Math Pipeline Utilization (%)**: Math instruction flow efficiency (MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE). On Blackhole, falls back to ``FIDELITY_PHASE_STALLS / ref_cnt`` since ``MATH_INSTRN_STARTED`` is inactive.
+- **Math Pipeline Utilization (%)**: Math instruction flow efficiency (``MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE``). Hidden on Blackhole, where ``MATH_INSTRN_STARTED`` is empirically inactive.
 - **SrcB Write Actual Efficiency (%)**: Fraction of srcB write attempts that succeeded.
 - **Packer Engine 0/1/2/3 Util (%)**: Per-engine packer utilization (Wormhole has 4 packer engines).
 - **Packer Load Imbalance (%)**: Spread between most and least utilized pack engines.

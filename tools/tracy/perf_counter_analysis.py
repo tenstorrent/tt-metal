@@ -14,27 +14,12 @@ from loguru import logger
 OpDict = Dict[str, Any]
 DeviceOpsDict = Dict[int, List[OpDict]]
 
-# BH empirically-dead counters: signals that are NOT hardwired to 0 in RTL but
-# never produce useful data on BH silicon (verified across 8 diverse workloads).
-# RTL-hardwired-dead counters have been removed from the hw_counters.h arrays
-# entirely (FIDELITY_PHASE_STALLS, MATH_INSTRN_NOT_BLOCKED_SRC, INSTRN_2_HF_CYCLES,
-# PACK_BANK7_GRANT) and are not read from hardware.
-# The remaining entries here are empirically dead despite having live RTL signals:
-# - PACK banks 2-3 req/grant: PACK_COUNT=1 means only 1 packer engine active
-# - PACKER_BUSY_0/1/2: per-engine busy tied to 1'b0 (PACK_COUNT=1)
-# - DEST_READ_GRANTED_2/3: same (PACK_COUNT=1)
+# BH empirically-dead counters: RTL-live signals that never produce useful data
+# on BH silicon (verified across 8 diverse workloads):
 # - MATH_INSTRN_STARTED: o_math_instrnbuf_rden never fires on BH silicon
-# - INSTRN_1_HF_CYCLE: equals o_math_instrnbuf_rden (also never fires)
-# - SFPU_IDLE counters (sels 55-57): 0 across all workloads including SFPU-heavy
+# - WAITING_FOR_SFPU_IDLE_0/1/2: 0 across all workloads including SFPU-heavy
 BH_RTL_DEAD_COUNTERS = frozenset(
     {
-        "PACKER_DEST_READ_2",
-        "PACKER_DEST_READ_3",
-        "PACKER_BUSY_0",
-        "PACKER_BUSY_1",
-        "PACKER_BUSY_2",
-        "DEST_READ_GRANTED_2",
-        "DEST_READ_GRANTED_3",
         "MATH_INSTRN_STARTED",
         "WAITING_FOR_SFPU_IDLE_0",
         "WAITING_FOR_SFPU_IDLE_1",
@@ -42,8 +27,7 @@ BH_RTL_DEAD_COUNTERS = frozenset(
     }
 )
 
-# WH: all RTL-dead counters have been removed from the hw_counters.h arrays.
-# No filtering needed — every counter read from WH hardware produces live data.
+# WH: every counter read from WH hardware produces live data; no filtering needed.
 WH_RTL_DEAD_COUNTERS = frozenset()
 
 # Counter type enum from perf_counters.hpp — auto-generated, must match C++ enum order
@@ -53,259 +37,258 @@ COUNTER_TYPE_NAMES = {
     1: "FPU_COUNTER",
     2: "SFPU_COUNTER",
     3: "MATH_COUNTER",
-    # TDMA_UNPACK Group (11 req + 11 grant = 22)
+    # TDMA_UNPACK Group
     4: "MATH_SRC_DATA_READY",
     5: "DATA_HAZARD_STALLS_MOVD2A",
-    6: "FIDELITY_PHASE_STALLS",
-    7: "MATH_INSTRN_STARTED",
-    8: "MATH_INSTRN_AVAILABLE",
-    9: "SRCB_WRITE_AVAILABLE",
-    10: "SRCA_WRITE_AVAILABLE",
-    11: "UNPACK0_BUSY_THREAD0",
-    12: "UNPACK1_BUSY_THREAD0",
-    13: "UNPACK0_BUSY_THREAD1",
-    14: "UNPACK1_BUSY_THREAD1",
-    15: "SRCB_WRITE",
-    16: "SRCA_WRITE",
-    # TDMA_PACK Group (8 req + 6 grant = 14)
-    17: "PACKER_DEST_READ_AVAILABLE",
-    18: "PACKER_BUSY",
-    19: "AVAILABLE_MATH",
-    # INSTRN_THREAD Group (61 req + 24 grant = 85)
-    20: "CFG_INSTRN_AVAILABLE_0",
-    21: "CFG_INSTRN_AVAILABLE_1",
-    22: "CFG_INSTRN_AVAILABLE_2",
-    23: "SYNC_INSTRN_AVAILABLE_0",
-    24: "SYNC_INSTRN_AVAILABLE_1",
-    25: "SYNC_INSTRN_AVAILABLE_2",
-    26: "THCON_INSTRN_AVAILABLE_0",
-    27: "THCON_INSTRN_AVAILABLE_1",
-    28: "THCON_INSTRN_AVAILABLE_2",
-    29: "XSEARCH_INSTRN_AVAILABLE_0",
-    30: "XSEARCH_INSTRN_AVAILABLE_1",
-    31: "XSEARCH_INSTRN_AVAILABLE_2",
-    32: "MOVE_INSTRN_AVAILABLE_0",
-    33: "MOVE_INSTRN_AVAILABLE_1",
-    34: "MOVE_INSTRN_AVAILABLE_2",
-    35: "FPU_INSTRN_AVAILABLE_0",
-    36: "FPU_INSTRN_AVAILABLE_1",
-    37: "FPU_INSTRN_AVAILABLE_2",
-    38: "UNPACK_INSTRN_AVAILABLE_0",
-    39: "UNPACK_INSTRN_AVAILABLE_1",
-    40: "UNPACK_INSTRN_AVAILABLE_2",
-    41: "PACK_INSTRN_AVAILABLE_0",
-    42: "PACK_INSTRN_AVAILABLE_1",
-    43: "PACK_INSTRN_AVAILABLE_2",
-    44: "THREAD_STALLS_0",
-    45: "THREAD_STALLS_1",
-    46: "THREAD_STALLS_2",
-    47: "WAITING_FOR_SRCA_CLEAR",
-    48: "WAITING_FOR_SRCB_CLEAR",
-    49: "WAITING_FOR_SRCA_VALID",
-    50: "WAITING_FOR_SRCB_VALID",
-    51: "WAITING_FOR_THCON_IDLE_0",
-    52: "WAITING_FOR_THCON_IDLE_1",
-    53: "WAITING_FOR_THCON_IDLE_2",
-    54: "WAITING_FOR_UNPACK_IDLE_0",
-    55: "WAITING_FOR_UNPACK_IDLE_1",
-    56: "WAITING_FOR_UNPACK_IDLE_2",
-    57: "WAITING_FOR_PACK_IDLE_0",
-    58: "WAITING_FOR_PACK_IDLE_1",
-    59: "WAITING_FOR_PACK_IDLE_2",
-    60: "WAITING_FOR_MATH_IDLE_0",
-    61: "WAITING_FOR_MATH_IDLE_1",
-    62: "WAITING_FOR_MATH_IDLE_2",
-    63: "WAITING_FOR_NONZERO_SEM_0",
-    64: "WAITING_FOR_NONZERO_SEM_1",
-    65: "WAITING_FOR_NONZERO_SEM_2",
-    66: "WAITING_FOR_NONFULL_SEM_0",
-    67: "WAITING_FOR_NONFULL_SEM_1",
-    68: "WAITING_FOR_NONFULL_SEM_2",
-    69: "WAITING_FOR_MOVE_IDLE_0",
-    70: "WAITING_FOR_MOVE_IDLE_1",
-    71: "WAITING_FOR_MOVE_IDLE_2",
-    72: "WAITING_FOR_MMIO_IDLE_0",
-    73: "WAITING_FOR_MMIO_IDLE_1",
-    74: "WAITING_FOR_MMIO_IDLE_2",
-    75: "WAITING_FOR_SFPU_IDLE_0",
-    76: "WAITING_FOR_SFPU_IDLE_1",
-    77: "WAITING_FOR_SFPU_IDLE_2",
-    78: "THREAD_INSTRUCTIONS_0",
-    79: "THREAD_INSTRUCTIONS_1",
-    80: "THREAD_INSTRUCTIONS_2",
+    6: "MATH_INSTRN_STARTED",
+    7: "MATH_INSTRN_AVAILABLE",
+    8: "SRCB_WRITE_AVAILABLE",
+    9: "SRCA_WRITE_AVAILABLE",
+    10: "UNPACK0_BUSY_THREAD0",
+    11: "UNPACK1_BUSY_THREAD0",
+    12: "UNPACK0_BUSY_THREAD1",
+    13: "UNPACK1_BUSY_THREAD1",
+    14: "SRCB_WRITE",
+    15: "SRCA_WRITE",
+    # TDMA_PACK Group
+    16: "PACKER_DEST_READ_AVAILABLE",
+    17: "PACKER_BUSY",
+    18: "AVAILABLE_MATH",
+    # INSTRN_THREAD Group (req)
+    19: "CFG_INSTRN_AVAILABLE_0",
+    20: "CFG_INSTRN_AVAILABLE_1",
+    21: "CFG_INSTRN_AVAILABLE_2",
+    22: "SYNC_INSTRN_AVAILABLE_0",
+    23: "SYNC_INSTRN_AVAILABLE_1",
+    24: "SYNC_INSTRN_AVAILABLE_2",
+    25: "THCON_INSTRN_AVAILABLE_0",
+    26: "THCON_INSTRN_AVAILABLE_1",
+    27: "THCON_INSTRN_AVAILABLE_2",
+    28: "XSEARCH_INSTRN_AVAILABLE_0",
+    29: "XSEARCH_INSTRN_AVAILABLE_1",
+    30: "XSEARCH_INSTRN_AVAILABLE_2",
+    31: "MOVE_INSTRN_AVAILABLE_0",
+    32: "MOVE_INSTRN_AVAILABLE_1",
+    33: "MOVE_INSTRN_AVAILABLE_2",
+    34: "FPU_INSTRN_AVAILABLE_0",
+    35: "FPU_INSTRN_AVAILABLE_1",
+    36: "FPU_INSTRN_AVAILABLE_2",
+    37: "UNPACK_INSTRN_AVAILABLE_0",
+    38: "UNPACK_INSTRN_AVAILABLE_1",
+    39: "UNPACK_INSTRN_AVAILABLE_2",
+    40: "PACK_INSTRN_AVAILABLE_0",
+    41: "PACK_INSTRN_AVAILABLE_1",
+    42: "PACK_INSTRN_AVAILABLE_2",
+    43: "THREAD_STALLS_0",
+    44: "THREAD_STALLS_1",
+    45: "THREAD_STALLS_2",
+    46: "WAITING_FOR_SRCA_CLEAR",
+    47: "WAITING_FOR_SRCB_CLEAR",
+    48: "WAITING_FOR_SRCA_VALID",
+    49: "WAITING_FOR_SRCB_VALID",
+    50: "WAITING_FOR_THCON_IDLE_0",
+    51: "WAITING_FOR_THCON_IDLE_1",
+    52: "WAITING_FOR_THCON_IDLE_2",
+    53: "WAITING_FOR_UNPACK_IDLE_0",
+    54: "WAITING_FOR_UNPACK_IDLE_1",
+    55: "WAITING_FOR_UNPACK_IDLE_2",
+    56: "WAITING_FOR_PACK_IDLE_0",
+    57: "WAITING_FOR_PACK_IDLE_1",
+    58: "WAITING_FOR_PACK_IDLE_2",
+    59: "WAITING_FOR_MATH_IDLE_0",
+    60: "WAITING_FOR_MATH_IDLE_1",
+    61: "WAITING_FOR_MATH_IDLE_2",
+    62: "WAITING_FOR_NONZERO_SEM_0",
+    63: "WAITING_FOR_NONZERO_SEM_1",
+    64: "WAITING_FOR_NONZERO_SEM_2",
+    65: "WAITING_FOR_NONFULL_SEM_0",
+    66: "WAITING_FOR_NONFULL_SEM_1",
+    67: "WAITING_FOR_NONFULL_SEM_2",
+    68: "WAITING_FOR_MOVE_IDLE_0",
+    69: "WAITING_FOR_MOVE_IDLE_1",
+    70: "WAITING_FOR_MOVE_IDLE_2",
+    71: "WAITING_FOR_MMIO_IDLE_0",
+    72: "WAITING_FOR_MMIO_IDLE_1",
+    73: "WAITING_FOR_MMIO_IDLE_2",
+    74: "WAITING_FOR_SFPU_IDLE_0",
+    75: "WAITING_FOR_SFPU_IDLE_1",
+    76: "WAITING_FOR_SFPU_IDLE_2",
+    77: "THREAD_INSTRUCTIONS_0",
+    78: "THREAD_INSTRUCTIONS_1",
+    79: "THREAD_INSTRUCTIONS_2",
     # L1 Bank 0 req (ports 0-7)
-    81: "L1_0_UNPACKER_0",
-    82: "L1_0_UNPACKER_1_ECC_PACK1",
-    83: "L1_0_TDMA_BUNDLE_0_RISC",
-    84: "L1_0_TDMA_BUNDLE_1_TRISC",
-    85: "L1_0_NOC_RING0_OUTGOING_0",
-    86: "L1_0_NOC_RING0_OUTGOING_1",
-    87: "L1_0_NOC_RING0_INCOMING_0",
-    88: "L1_0_NOC_RING0_INCOMING_1",
+    80: "L1_0_UNPACKER_0",
+    81: "L1_0_UNPACKER_1_ECC_PACK1",
+    82: "L1_0_TDMA_BUNDLE_0_RISC",
+    83: "L1_0_TDMA_BUNDLE_1_TRISC",
+    84: "L1_0_NOC_RING0_OUTGOING_0",
+    85: "L1_0_NOC_RING0_OUTGOING_1",
+    86: "L1_0_NOC_RING0_INCOMING_0",
+    87: "L1_0_NOC_RING0_INCOMING_1",
     # L1 Bank 1 req (ports 8-15)
-    89: "L1_1_TDMA_PACKER_2",
-    90: "L1_1_EXT_UNPACKER_1",
-    91: "L1_1_EXT_UNPACKER_2",
-    92: "L1_1_EXT_UNPACKER_3",
-    93: "L1_1_NOC_RING1_OUTGOING_0",
-    94: "L1_1_NOC_RING1_OUTGOING_1",
-    95: "L1_1_NOC_RING1_INCOMING_0",
-    96: "L1_1_NOC_RING1_INCOMING_1",
+    88: "L1_1_TDMA_PACKER_2",
+    89: "L1_1_EXT_UNPACKER_1",
+    90: "L1_1_EXT_UNPACKER_2",
+    91: "L1_1_EXT_UNPACKER_3",
+    92: "L1_1_NOC_RING1_OUTGOING_0",
+    93: "L1_1_NOC_RING1_OUTGOING_1",
+    94: "L1_1_NOC_RING1_INCOMING_0",
+    95: "L1_1_NOC_RING1_INCOMING_1",
     # Blackhole-specific L1 ports
-    97: "L1_0_UNIFIED_PACKER",
-    98: "L1_1_RISC_CORE",
+    96: "L1_0_UNIFIED_PACKER",
+    97: "L1_1_RISC_CORE",
     # L1 Bank 0 grant counters
-    99: "L1_0_UNPACKER_0_GRANT",
-    100: "L1_0_PORT1_GRANT",
-    101: "L1_0_TDMA_BUNDLE_0_GRANT",
-    102: "L1_0_TDMA_BUNDLE_1_GRANT",
-    103: "L1_0_NOC_RING0_OUTGOING_0_GRANT",
-    104: "L1_0_NOC_RING0_OUTGOING_1_GRANT",
-    105: "L1_0_NOC_RING0_INCOMING_0_GRANT",
-    106: "L1_0_NOC_RING0_INCOMING_1_GRANT",
+    98: "L1_0_UNPACKER_0_GRANT",
+    99: "L1_0_PORT1_GRANT",
+    100: "L1_0_TDMA_BUNDLE_0_GRANT",
+    101: "L1_0_TDMA_BUNDLE_1_GRANT",
+    102: "L1_0_NOC_RING0_OUTGOING_0_GRANT",
+    103: "L1_0_NOC_RING0_OUTGOING_1_GRANT",
+    104: "L1_0_NOC_RING0_INCOMING_0_GRANT",
+    105: "L1_0_NOC_RING0_INCOMING_1_GRANT",
     # L1 Bank 1 grant counters
-    107: "L1_1_PORT8_GRANT",
-    108: "L1_1_EXT_UNPACKER_1_GRANT",
-    109: "L1_1_EXT_UNPACKER_2_GRANT",
-    110: "L1_1_EXT_UNPACKER_3_GRANT",
-    111: "L1_1_NOC_RING1_OUTGOING_0_GRANT",
-    112: "L1_1_NOC_RING1_OUTGOING_1_GRANT",
-    113: "L1_1_NOC_RING1_INCOMING_0_GRANT",
-    114: "L1_1_NOC_RING1_INCOMING_1_GRANT",
-    # INSTRN_THREAD grant counters (instruction issue counts)
-    115: "CFG_INSTRN_ISSUED_0",
-    116: "CFG_INSTRN_ISSUED_1",
-    117: "CFG_INSTRN_ISSUED_2",
-    118: "SYNC_INSTRN_ISSUED_0",
-    119: "SYNC_INSTRN_ISSUED_1",
-    120: "SYNC_INSTRN_ISSUED_2",
-    121: "THCON_INSTRN_ISSUED_0",
-    122: "THCON_INSTRN_ISSUED_1",
-    123: "THCON_INSTRN_ISSUED_2",
-    124: "XSEARCH_INSTRN_ISSUED_0",
-    125: "XSEARCH_INSTRN_ISSUED_1",
-    126: "XSEARCH_INSTRN_ISSUED_2",
-    127: "MOVE_INSTRN_ISSUED_0",
-    128: "MOVE_INSTRN_ISSUED_1",
-    129: "MOVE_INSTRN_ISSUED_2",
-    130: "FPU_INSTRN_ISSUED_0",
-    131: "FPU_INSTRN_ISSUED_1",
-    132: "FPU_INSTRN_ISSUED_2",
-    133: "UNPACK_INSTRN_ISSUED_0",
-    134: "UNPACK_INSTRN_ISSUED_1",
-    135: "UNPACK_INSTRN_ISSUED_2",
-    136: "PACK_INSTRN_ISSUED_0",
-    137: "PACK_INSTRN_ISSUED_1",
-    138: "PACK_INSTRN_ISSUED_2",
-    # TDMA_UNPACK grant counters
-    139: "INSTRN_2_HF_CYCLES",
-    141: "SRCB_WRITE_ACTUAL",
-    142: "SRCA_WRITE_NOT_BLOCKED_OVR",
-    143: "SRCA_WRITE_ACTUAL",
-    144: "SRCB_WRITE_NOT_BLOCKED_PORT",
-    145: "SRCA_WRITE_THREAD0",
-    146: "SRCB_WRITE_THREAD0",
-    147: "SRCA_WRITE_THREAD1",
-    148: "SRCB_WRITE_THREAD1",
-    149: "MATH_INSTRN_NOT_BLOCKED_SRC",
-    # TDMA_PACK additional req counters
-    150: "PACKER_DEST_READ_1",
-    151: "PACKER_DEST_READ_2",
-    152: "PACKER_DEST_READ_3",
-    153: "PACKER_BUSY_0",
-    154: "PACKER_BUSY_1",
-    155: "PACKER_BUSY_2",
+    106: "L1_1_PORT8_GRANT",
+    107: "L1_1_EXT_UNPACKER_1_GRANT",
+    108: "L1_1_EXT_UNPACKER_2_GRANT",
+    109: "L1_1_EXT_UNPACKER_3_GRANT",
+    110: "L1_1_NOC_RING1_OUTGOING_0_GRANT",
+    111: "L1_1_NOC_RING1_OUTGOING_1_GRANT",
+    112: "L1_1_NOC_RING1_INCOMING_0_GRANT",
+    113: "L1_1_NOC_RING1_INCOMING_1_GRANT",
+    # INSTRN_THREAD grant counters (instruction issues)
+    114: "CFG_INSTRN_ISSUED_0",
+    115: "CFG_INSTRN_ISSUED_1",
+    116: "CFG_INSTRN_ISSUED_2",
+    117: "SYNC_INSTRN_ISSUED_0",
+    118: "SYNC_INSTRN_ISSUED_1",
+    119: "SYNC_INSTRN_ISSUED_2",
+    120: "THCON_INSTRN_ISSUED_0",
+    121: "THCON_INSTRN_ISSUED_1",
+    122: "THCON_INSTRN_ISSUED_2",
+    123: "XSEARCH_INSTRN_ISSUED_0",
+    124: "XSEARCH_INSTRN_ISSUED_1",
+    125: "XSEARCH_INSTRN_ISSUED_2",
+    126: "MOVE_INSTRN_ISSUED_0",
+    127: "MOVE_INSTRN_ISSUED_1",
+    128: "MOVE_INSTRN_ISSUED_2",
+    129: "FPU_INSTRN_ISSUED_0",
+    130: "FPU_INSTRN_ISSUED_1",
+    131: "FPU_INSTRN_ISSUED_2",
+    132: "UNPACK_INSTRN_ISSUED_0",
+    133: "UNPACK_INSTRN_ISSUED_1",
+    134: "UNPACK_INSTRN_ISSUED_2",
+    135: "PACK_INSTRN_ISSUED_0",
+    136: "PACK_INSTRN_ISSUED_1",
+    137: "PACK_INSTRN_ISSUED_2",
+    # TDMA_UNPACK grant counters (write/port info)
+    138: "SRCB_WRITE_ACTUAL",
+    139: "SRCA_WRITE_NOT_BLOCKED_OVR",
+    140: "SRCA_WRITE_ACTUAL",
+    141: "SRCB_WRITE_NOT_BLOCKED_PORT",
+    142: "SRCA_WRITE_THREAD0",
+    143: "SRCB_WRITE_THREAD0",
+    144: "SRCA_WRITE_THREAD1",
+    145: "SRCB_WRITE_THREAD1",
+    # TDMA_PACK additional req counters (WH only, PACK_COUNT=4)
+    146: "PACKER_DEST_READ_1",
+    147: "PACKER_DEST_READ_2",
+    148: "PACKER_DEST_READ_3",
+    149: "PACKER_BUSY_0",
+    150: "PACKER_BUSY_1",
+    151: "PACKER_BUSY_2",
     # TDMA_PACK grant counters
-    156: "DEST_READ_GRANTED_0",
-    157: "DEST_READ_GRANTED_1",
-    158: "DEST_READ_GRANTED_2",
-    159: "DEST_READ_GRANTED_3",
-    160: "MATH_NOT_STALLED_DEST_WR_PORT",
-    # L1 Bank 4 req counters (BH only, mux position 4, misc ports 32-39)
-    161: "L1_4_MISC_PORT_0",
-    162: "L1_4_MISC_PORT_1",
-    163: "L1_4_MISC_PORT_2",
-    164: "L1_4_MISC_PORT_3",
-    165: "L1_4_MISC_PORT_4",
-    166: "L1_4_MISC_PORT_5",
-    167: "L1_4_MISC_PORT_6",
-    168: "L1_4_MISC_PORT_7",
+    152: "DEST_READ_GRANTED_0",
+    153: "DEST_READ_GRANTED_1",
+    154: "DEST_READ_GRANTED_2",
+    155: "DEST_READ_GRANTED_3",
+    156: "MATH_NOT_STALLED_DEST_WR_PORT",
+    # L1 Bank 4 req (BH only, mux position 4, misc ports 32-39)
+    157: "L1_4_MISC_PORT_0",
+    158: "L1_4_MISC_PORT_1",
+    159: "L1_4_MISC_PORT_2",
+    160: "L1_4_MISC_PORT_3",
+    161: "L1_4_MISC_PORT_4",
+    162: "L1_4_MISC_PORT_5",
+    163: "L1_4_MISC_PORT_6",
+    164: "L1_4_MISC_PORT_7",
     # L1 Bank 4 grant counters
-    169: "L1_4_MISC_PORT_0_GRANT",
-    170: "L1_4_MISC_PORT_1_GRANT",
-    171: "L1_4_MISC_PORT_2_GRANT",
-    172: "L1_4_MISC_PORT_3_GRANT",
-    173: "L1_4_MISC_PORT_4_GRANT",
-    174: "L1_4_MISC_PORT_5_GRANT",
-    175: "L1_4_MISC_PORT_6_GRANT",
-    176: "L1_4_MISC_PORT_7_GRANT",
+    165: "L1_4_MISC_PORT_0_GRANT",
+    166: "L1_4_MISC_PORT_1_GRANT",
+    167: "L1_4_MISC_PORT_2_GRANT",
+    168: "L1_4_MISC_PORT_3_GRANT",
+    169: "L1_4_MISC_PORT_4_GRANT",
+    170: "L1_4_MISC_PORT_5_GRANT",
+    171: "L1_4_MISC_PORT_6_GRANT",
+    172: "L1_4_MISC_PORT_7_GRANT",
     # L1 Bank 2 (BH only, mux position 2, NOC Ring 2 ports 16-23)
-    177: "L1_2_NOC_RING2_PORT_0",
-    178: "L1_2_NOC_RING2_PORT_1",
-    179: "L1_2_NOC_RING2_PORT_2",
-    180: "L1_2_NOC_RING2_PORT_3",
-    181: "L1_2_NOC_RING2_PORT_4",
-    182: "L1_2_NOC_RING2_PORT_5",
-    183: "L1_2_NOC_RING2_PORT_6",
-    184: "L1_2_NOC_RING2_PORT_7",
-    185: "L1_2_NOC_RING2_PORT_0_GRANT",
-    186: "L1_2_NOC_RING2_PORT_1_GRANT",
-    187: "L1_2_NOC_RING2_PORT_2_GRANT",
-    188: "L1_2_NOC_RING2_PORT_3_GRANT",
-    189: "L1_2_NOC_RING2_PORT_4_GRANT",
-    190: "L1_2_NOC_RING2_PORT_5_GRANT",
-    191: "L1_2_NOC_RING2_PORT_6_GRANT",
-    192: "L1_2_NOC_RING2_PORT_7_GRANT",
+    173: "L1_2_NOC_RING2_PORT_0",
+    174: "L1_2_NOC_RING2_PORT_1",
+    175: "L1_2_NOC_RING2_PORT_2",
+    176: "L1_2_NOC_RING2_PORT_3",
+    177: "L1_2_NOC_RING2_PORT_4",
+    178: "L1_2_NOC_RING2_PORT_5",
+    179: "L1_2_NOC_RING2_PORT_6",
+    180: "L1_2_NOC_RING2_PORT_7",
+    181: "L1_2_NOC_RING2_PORT_0_GRANT",
+    182: "L1_2_NOC_RING2_PORT_1_GRANT",
+    183: "L1_2_NOC_RING2_PORT_2_GRANT",
+    184: "L1_2_NOC_RING2_PORT_3_GRANT",
+    185: "L1_2_NOC_RING2_PORT_4_GRANT",
+    186: "L1_2_NOC_RING2_PORT_5_GRANT",
+    187: "L1_2_NOC_RING2_PORT_6_GRANT",
+    188: "L1_2_NOC_RING2_PORT_7_GRANT",
     # L1 Bank 3 (BH only, mux position 3, NOC Ring 3 ports 24-31)
-    193: "L1_3_NOC_RING3_PORT_0",
-    194: "L1_3_NOC_RING3_PORT_1",
-    195: "L1_3_NOC_RING3_PORT_2",
-    196: "L1_3_NOC_RING3_PORT_3",
-    197: "L1_3_NOC_RING3_PORT_4",
-    198: "L1_3_NOC_RING3_PORT_5",
-    199: "L1_3_NOC_RING3_PORT_6",
-    200: "L1_3_NOC_RING3_PORT_7",
-    201: "L1_3_NOC_RING3_PORT_0_GRANT",
-    202: "L1_3_NOC_RING3_PORT_1_GRANT",
-    203: "L1_3_NOC_RING3_PORT_2_GRANT",
-    204: "L1_3_NOC_RING3_PORT_3_GRANT",
-    205: "L1_3_NOC_RING3_PORT_4_GRANT",
-    206: "L1_3_NOC_RING3_PORT_5_GRANT",
-    207: "L1_3_NOC_RING3_PORT_6_GRANT",
-    208: "L1_3_NOC_RING3_PORT_7_GRANT",
+    189: "L1_3_NOC_RING3_PORT_0",
+    190: "L1_3_NOC_RING3_PORT_1",
+    191: "L1_3_NOC_RING3_PORT_2",
+    192: "L1_3_NOC_RING3_PORT_3",
+    193: "L1_3_NOC_RING3_PORT_4",
+    194: "L1_3_NOC_RING3_PORT_5",
+    195: "L1_3_NOC_RING3_PORT_6",
+    196: "L1_3_NOC_RING3_PORT_7",
+    197: "L1_3_NOC_RING3_PORT_0_GRANT",
+    198: "L1_3_NOC_RING3_PORT_1_GRANT",
+    199: "L1_3_NOC_RING3_PORT_2_GRANT",
+    200: "L1_3_NOC_RING3_PORT_3_GRANT",
+    201: "L1_3_NOC_RING3_PORT_4_GRANT",
+    202: "L1_3_NOC_RING3_PORT_5_GRANT",
+    203: "L1_3_NOC_RING3_PORT_6_GRANT",
+    204: "L1_3_NOC_RING3_PORT_7_GRANT",
     # INSTRN_THREAD stall condition grant counters
-    209: "STALL_GRANT_SRCA_CLEAR",
-    210: "STALL_GRANT_SRCB_CLEAR",
-    211: "STALL_GRANT_SRCA_VALID",
-    212: "STALL_GRANT_SRCB_VALID",
-    213: "STALL_GRANT_THCON_0",
-    214: "STALL_GRANT_THCON_1",
-    215: "STALL_GRANT_THCON_2",
-    216: "STALL_GRANT_UNPACK_0",
-    217: "STALL_GRANT_UNPACK_1",
-    218: "STALL_GRANT_UNPACK_2",
-    219: "STALL_GRANT_PACK_0",
-    220: "STALL_GRANT_PACK_1",
-    221: "STALL_GRANT_PACK_2",
-    222: "STALL_GRANT_MATH_0",
-    223: "STALL_GRANT_MATH_1",
-    224: "STALL_GRANT_MATH_2",
-    225: "STALL_GRANT_SEM_ZERO_0",
-    226: "STALL_GRANT_SEM_ZERO_1",
-    227: "STALL_GRANT_SEM_ZERO_2",
-    228: "STALL_GRANT_SEM_MAX_0",
-    229: "STALL_GRANT_SEM_MAX_1",
-    230: "STALL_GRANT_SEM_MAX_2",
-    231: "STALL_GRANT_MOVE_0",
-    232: "STALL_GRANT_MOVE_1",
-    233: "STALL_GRANT_MOVE_2",
-    234: "STALL_GRANT_MMIO_0",
-    235: "STALL_GRANT_MMIO_1",
-    236: "STALL_GRANT_MMIO_2",
-    237: "STALL_GRANT_SFPU_0",
-    238: "STALL_GRANT_SFPU_1",
-    239: "STALL_GRANT_SFPU_2",
+    205: "STALL_GRANT_SRCA_CLEAR",
+    206: "STALL_GRANT_SRCB_CLEAR",
+    207: "STALL_GRANT_SRCA_VALID",
+    208: "STALL_GRANT_SRCB_VALID",
+    209: "STALL_GRANT_THCON_0",
+    210: "STALL_GRANT_THCON_1",
+    211: "STALL_GRANT_THCON_2",
+    212: "STALL_GRANT_UNPACK_0",
+    213: "STALL_GRANT_UNPACK_1",
+    214: "STALL_GRANT_UNPACK_2",
+    215: "STALL_GRANT_PACK_0",
+    216: "STALL_GRANT_PACK_1",
+    217: "STALL_GRANT_PACK_2",
+    218: "STALL_GRANT_MATH_0",
+    219: "STALL_GRANT_MATH_1",
+    220: "STALL_GRANT_MATH_2",
+    221: "STALL_GRANT_SEM_ZERO_0",
+    222: "STALL_GRANT_SEM_ZERO_1",
+    223: "STALL_GRANT_SEM_ZERO_2",
+    224: "STALL_GRANT_SEM_MAX_0",
+    225: "STALL_GRANT_SEM_MAX_1",
+    226: "STALL_GRANT_SEM_MAX_2",
+    227: "STALL_GRANT_MOVE_0",
+    228: "STALL_GRANT_MOVE_1",
+    229: "STALL_GRANT_MOVE_2",
+    230: "STALL_GRANT_MMIO_0",
+    231: "STALL_GRANT_MMIO_1",
+    232: "STALL_GRANT_MMIO_2",
+    233: "STALL_GRANT_SFPU_0",
+    234: "STALL_GRANT_SFPU_1",
+    235: "STALL_GRANT_SFPU_2",
 }
+
+
 
 
 # Perf counter headers are only included in CSV output when perf counter data is available.
@@ -484,7 +467,6 @@ PERF_COUNTER_CSV_HEADERS = [
     "L1 Packer Port Backpressure Median (%)",
     "L1 Packer Port Backpressure Max (%)",
     "L1 Packer Port Backpressure Avg (%)",
-    # Fidelity cycle breakdown
     # Math pipeline stall breakdown
     "SrcA Write Port Blocked Rate Min (%)",
     "SrcA Write Port Blocked Rate Median (%)",
@@ -650,7 +632,13 @@ def extract_perf_counters(events: List[Any], arch: str = "") -> Optional[pd.Data
         for event in events:
             metadata = event[EVENT_METADATA_IDX]
             if metadata["id"] == PERF_COUNTER_ID:
-                meta_dict = json.loads(metadata["meta_data"].replace(";", ",").replace("'", '"'))
+                raw_md = metadata.get("meta_data", "")
+                if not raw_md:
+                    continue
+                try:
+                    meta_dict = json.loads(raw_md.replace(";", ",").replace("'", '"'))
+                except (json.JSONDecodeError, AttributeError):
+                    continue
 
                 # Decode counter type to human-readable name
                 counter_type_raw = meta_dict.get("counter type", 0)
@@ -791,7 +779,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "NOC Ring 1 Incoming Backpressure",
         "L1 Unpacker Backpressure",
         "L1 Packer Port Backpressure",
-        # Fidelity and math pipeline stall breakdown
+        # Math pipeline stall breakdown
         "SrcA Write Port Blocked Rate",
         "Dest Read Backpressure",
         "Math Dest Write Port Stall Rate",
@@ -987,6 +975,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
 
     def _group_to_stat_dict(series):
         """Group a per-core series by op and return min/median/max/avg dicts."""
+        if series.empty or not isinstance(series.index, pd.MultiIndex):
+            return {"min": {}, "median": {}, "max": {}, "avg": {}}
         grouped = series.groupby(level=["run_host_id", "trace_id_count"])
         return {
             "min": grouped.min().to_dict(),
@@ -1046,14 +1036,13 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
 
     # Packer Efficiency: On WH, PACKER_DEST_READ_AVAILABLE / PACKER_BUSY.
     # On BH, PACKER_BUSY is always 0 (packer completes within gated clock window).
-    # Fallback: use DEST_READ_GRANTED_1 / PACKER_DEST_READ_AVAILABLE which measures
-    # what fraction of dest read requests were granted (same signal on silicon,
-    # confirmed both read 3968 on matmul = 0% backpressure = 100% efficiency).
+    # Fallback: DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE measures what fraction
+    # of dest read requests were granted (req/grant pair for BH's single packer engine).
     if packer_busy is not None and packer_busy.sum() > 0:
         pack_eff = (packer_dest_read / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
-    elif has_counter("DEST_READ_GRANTED_1"):
-        dest_granted_1 = get_counter_series("DEST_READ_GRANTED_1")
-        pack_eff = (dest_granted_1 / packer_dest_read * 100).replace([float("inf"), -float("inf")], nan)
+    elif has_counter("DEST_READ_GRANTED_0"):
+        dest_granted_0 = get_counter_series("DEST_READ_GRANTED_0")
+        pack_eff = (dest_granted_0 / packer_dest_read * 100).replace([float("inf"), -float("inf")], nan)
     else:
         pack_eff = pd.Series(dtype=float)
 
@@ -1185,8 +1174,9 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         ratio = ((avail - unblocked) / avail * 100).replace([float("inf"), -float("inf")], nan)
         per_op_stats["SrcA Write Port Blocked Rate"] = _group_to_stat_dict(ratio)
 
-    # Dest read backpressure
-    dest_grant_name = "DEST_READ_GRANTED_1" if has_counter("DEST_READ_GRANTED_1") else "DEST_READ_GRANTED_0"
+    # Dest read backpressure: DEST_READ_GRANTED_0 is the matched grant for
+    # PACKER_DEST_READ_AVAILABLE (req[0]/grant[0] pair, live on WH and BH).
+    dest_grant_name = "DEST_READ_GRANTED_0"
     if has_counter("PACKER_DEST_READ_AVAILABLE") and has_counter(dest_grant_name):
         req = get_counter_series("PACKER_DEST_READ_AVAILABLE")
         grant = get_counter_series(dest_grant_name)
@@ -1250,6 +1240,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         # mismatch, not real L1 contention. Only compute when the median
         # grant/req ratio is reasonable (>10%), indicating the counters track
         # related events.
+        req, grant = req.align(grant, join="inner")
         valid = req[req > 0]
         grant_valid = grant[req > 0]
         median_ratio = (grant_valid / valid).median() if len(valid) > 0 else 0
@@ -1538,17 +1529,17 @@ def compute_device_only_metrics(
             axis=1,
         )
     # Packer Efficiency: On WH, PACKER_DEST_READ_AVAILABLE / PACKER_BUSY.
-    # On BH, PACKER_BUSY is always 0. Fallback: DEST_READ_GRANTED_1 / PACKER_DEST_READ_AVAILABLE
-    # (grant rate for dest reads — both signals track the same event on BH silicon).
+    # On BH, PACKER_BUSY is always 0. Fallback: DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE
+    # (grant/req pair for BH's single packer engine, both RTL-live).
     has_packer_busy = "value_PACKER_BUSY" in eff_pivot.columns and eff_pivot["value_PACKER_BUSY"].sum() > 0
     if has_packer_busy:
         eff_pivot["Packer Efficiency"] = eff_pivot.apply(
             lambda x: safe_div(x.get("value_PACKER_DEST_READ_AVAILABLE", 0), x.get("value_PACKER_BUSY", 0)),
             axis=1,
         )
-    elif "value_DEST_READ_GRANTED_1" in eff_pivot.columns:
+    elif "value_DEST_READ_GRANTED_0" in eff_pivot.columns:
         eff_pivot["Packer Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_DEST_READ_GRANTED_1", 0), x.get("value_PACKER_DEST_READ_AVAILABLE", 0)),
+            lambda x: safe_div(x.get("value_DEST_READ_GRANTED_0", 0), x.get("value_PACKER_DEST_READ_AVAILABLE", 0)),
             axis=1,
         )
 
@@ -1853,12 +1844,10 @@ def compute_device_only_metrics(
 
         return fn
 
-    # BH uses DEST_READ_GRANTED_1 (268), WH uses DEST_READ_GRANTED_0 (267)
-    dest_grant_col = (
-        "value_DEST_READ_GRANTED_1" if "value_DEST_READ_GRANTED_1" in eff_pivot.columns else "value_DEST_READ_GRANTED_0"
-    )
+    # DEST_READ_GRANTED_0 is the matched grant for PACKER_DEST_READ_AVAILABLE
+    # (req[0]/grant[0] pair, RTL-live on both WH and BH).
     eff_pivot["Dest Read Backpressure"] = eff_pivot.apply(
-        safe_bp_single("value_PACKER_DEST_READ_AVAILABLE", dest_grant_col),
+        safe_bp_single("value_PACKER_DEST_READ_AVAILABLE", "value_DEST_READ_GRANTED_0"),
         axis=1,
     )
     if (
@@ -1900,7 +1889,6 @@ def compute_device_only_metrics(
         axis=1,
     )
 
-    # Fidelity analysis
     # Packer engine granularity (WH only — BH has PACK_COUNT=1, counters not collected)
     if "value_PACKER_BUSY_0" in eff_pivot.columns:
         eff_pivot["Packer Engine 0 Util"] = eff_pivot.apply(

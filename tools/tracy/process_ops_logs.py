@@ -826,10 +826,6 @@ def _enrich_ops_from_device_logs(
                 assign_metric("L1 Unpacker Backpressure", per_op_stats.get("L1 Unpacker Backpressure", {}))
                 assign_metric("L1 Packer Port Backpressure", per_op_stats.get("L1 Packer Port Backpressure", {}))
 
-                # Fidelity cycle breakdown
-                assign_metric("HiFi2 Instrn Rate", per_op_stats.get("HiFi2 Instrn Rate", {}))
-                assign_metric("LoFi Instrn Rate", per_op_stats.get("LoFi Instrn Rate", {}))
-
                 # Math pipeline stall breakdown
                 assign_metric("Math Src Data Ready Rate", per_op_stats.get("Math Src Data Ready Rate", {}))
                 assign_metric("SrcA Write Port Blocked Rate", per_op_stats.get("SrcA Write Port Blocked Rate", {}))
@@ -859,10 +855,6 @@ def _enrich_ops_from_device_logs(
                 assign_metric("SrcB Write Port Blocked Rate", per_op_stats.get("SrcB Write Port Blocked Rate", {}))
                 assign_metric("SrcA Write Actual Efficiency", per_op_stats.get("SrcA Write Actual Efficiency", {}))
                 assign_metric("SrcB Write Actual Efficiency", per_op_stats.get("SrcB Write Actual Efficiency", {}))
-
-                # Fidelity analysis
-                assign_metric("HiFi4 Instrn Rate", per_op_stats.get("HiFi4 Instrn Rate", {}))
-                assign_metric("Fidelity Phase Overhead", per_op_stats.get("Fidelity Phase Overhead", {}))
 
                 # Packer engine granularity
                 assign_metric("Packer Engine 0 Util", per_op_stats.get("Packer Engine 0 Util", {}))

@@ -16,7 +16,6 @@ enum PerfCounterType : uint16_t {
     // TDMA_UNPACK Group (11 req + 11 grant = 22 counters)
     MATH_SRC_DATA_READY,        // Req 0: math instrn valid & src_data_ready
     DATA_HAZARD_STALLS_MOVD2A,  // Req 1: math instrn not stalled by D2A
-    FIDELITY_PHASE_STALLS,      // Req 2: fidelity (HiFi) phase stalls
     MATH_INSTRN_STARTED,
     MATH_INSTRN_AVAILABLE,
     SRCB_WRITE_AVAILABLE,
@@ -160,9 +159,7 @@ enum PerfCounterType : uint16_t {
     PACK_INSTRN_ISSUED_0,
     PACK_INSTRN_ISSUED_1,
     PACK_INSTRN_ISSUED_2,
-    // TDMA_UNPACK grant counters (11): detailed write/HF info
-    INSTRN_2_HF_CYCLES,           // Math instrns that took 2 HF cycles (grant 257)
-    INSTRN_1_HF_CYCLE,            // Math instrns that took 1 HF cycle (grant 258)
+    // TDMA_UNPACK grant counters: write/port info
     SRCB_WRITE_ACTUAL,            // srcB writes not blocked by overwrite (grant 259)
     SRCA_WRITE_NOT_BLOCKED_OVR,   // srcA writes not blocked by overwrite (grant 260)
     SRCA_WRITE_ACTUAL,            // srcA writes not blocked by port (grant 261)
@@ -171,8 +168,7 @@ enum PerfCounterType : uint16_t {
     SRCB_WRITE_THREAD0,           // srcB writes from thread 0 (grant 264)
     SRCA_WRITE_THREAD1,           // srcA writes from thread 1 (grant 265)
     SRCB_WRITE_THREAD1,           // srcB writes from thread 1 (grant 266)
-    MATH_INSTRN_NOT_BLOCKED_SRC,  // BH: Math not blocked by src_data_ready (grant 256)
-    // TDMA_PACK additional req counters (WH only, BH has these tied to 0)
+    // TDMA_PACK additional req counters (WH only: PACK_COUNT=4)
     PACKER_DEST_READ_1,  // Dest accumulator register 1 read request (req 12)
     PACKER_DEST_READ_2,  // Dest accumulator register 2 read request (req 13)
     PACKER_DEST_READ_3,  // Dest accumulator register 3 read request (req 14)
@@ -186,8 +182,6 @@ enum PerfCounterType : uint16_t {
     DEST_READ_GRANTED_3,           // Dest register 3 read granted (grant 270)
     MATH_NOT_STALLED_DEST_WR_PORT,  // Math not stalled by dest write port (grant 271)
     // Note: AVAILABLE_MATH (existing, counter_sel 272) = math not stalled by scoreboard (grant 272)
-    PACK_BANK6_GRANT,   // PACK bank 6 grant (counter_sel 273) — tied to 0 in RTL (2'b00)
-    PACK_BANK7_GRANT,   // PACK bank 7 grant (counter_sel 274) — tied to 0 in RTL (2'b00)
     // L1 Bank 4 (BH only, MUX_CTRL[6:4] = 4, monitors misc ports 32-39)
     L1_4_MISC_PORT_0,  // Port 32: misc interface 0
     L1_4_MISC_PORT_1,  // Port 33: misc interface 1

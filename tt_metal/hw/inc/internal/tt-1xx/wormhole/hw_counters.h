@@ -11,17 +11,17 @@
 // Wormhole-specific perf counter arrays.
 // Included by perf_counters.hpp after PerfCounterType enum is defined.
 
-// FPU bank (2 banks, same on WH and BH): sel 0 req, sel 1 req, sel 257 grant.
-// Bank 0 grant (fpu_req_ready) is an undriven wire in RTL — not read.
+// FPU bank (2 banks, same on WH and BH):
+//   sel 0 req   = th_fpu_op_valid       (FPU_COUNTER)
+//   sel 1 req   = th_sfpu_op_valid_s1   (SFPU_COUNTER)
+//   sel 257 grant = th_sfpu_op_valid_s1 | th_fpu_op_valid  (MATH_COUNTER)
+// Sel 256 grant is fpu_req_ready — driven but not a useful utilization metric;
+// sel 257 grant counts "any FPU/SFPU op issued" which is what we want.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;
 
-// WH TDMA_UNPACK: 11 req banks + 11 grant banks.
-// RTL-dead counters removed (not read from hardware):
-//   sel 2 req: fidelity_phases_ongoing = 1'b0 (always 0)
-//   sel 256 grant: hf_cycles==2'b11 (always false, fidelity off)
-//   sel 257 grant: hf_cycles==2'b01 (always false, fidelity off)
+// WH TDMA_UNPACK: 8 req + 8 grant counters read (live in RTL).
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
@@ -43,7 +43,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters =
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
 constexpr size_t NUM_UNPACK_COUNTERS = 18;
 
-// WH TDMA_PACK: PACK_COUNT=4, 8 req + 6 grant (banks 6-7 grant tied to 2'b00, removed).
+// WH TDMA_PACK: PACK_COUNT=4, 8 req + 6 grant (live in RTL).
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_DEST_READ_1, 12},

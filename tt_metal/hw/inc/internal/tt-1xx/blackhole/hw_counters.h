@@ -11,21 +11,21 @@
 // Blackhole-specific perf counter arrays.
 // Included by perf_counters.hpp after PerfCounterType enum is defined.
 
-// FPU bank (2 banks, same on WH and BH): sel 0 req, sel 1 req, sel 257 grant.
-// Bank 0 grant (fpu_req_ready) is hardwired to 0 in RTL — not read.
+// FPU bank (2 banks, same on WH and BH):
+//   sel 0 req   = th_fpu_op_valid       (FPU_COUNTER)
+//   sel 1 req   = th_sfpu_op_valid_s1   (SFPU_COUNTER)
+//   sel 257 grant = th_sfpu_op_valid_s1 | th_fpu_op_valid  (MATH_COUNTER)
+// Sel 256 grant is fpu_req_ready — a driven signal but not useful as a utilization metric;
+// we prefer sel 257 grant which counts "any FPU/SFPU op issued".
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;
 
-// BH TDMA_UNPACK: 11 req banks + 11 grant banks.
-// Grant banks 4-6 (sels 260-262) have IDENTICAL wiring on WH and BH (verified in RTL):
+// BH TDMA_UNPACK: 8 req + 8 grant counters read (live in RTL).
+// Grant banks 4-6 (sels 260-262) have identical wiring on WH and BH (verified in RTL):
 //   grant[4] (sel 260) = srcB not blocked by write port   (dma_srcb_wr_port_avail)
 //   grant[5] (sel 261) = srcA not blocked by overwrite    (srca_write_ready)
 //   grant[6] (sel 262) = srcA not blocked by write port   (dma_srca_wr_port_avail)
-// RTL-dead counters removed (not read):
-//   sel 2: fidelity_phases_ongoing = 1'b0
-//   sel 256: hf_cycles==2'b11 always false (fidelity off)
-//   sel 257: hf_cycles==2'b01 always false (fidelity off)
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
@@ -47,30 +47,17 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters =
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
 constexpr size_t NUM_UNPACK_COUNTERS = 18;
 
-// BH TDMA_PACK: PACK_COUNT=1, 8 req + 8 grant.
-// RTL-dead removed: sel 274 (PACK_BANK7_GRANT, tied to 2'b00[0]).
-// PACK_BANK6_GRANT (sel 273) kept: RTL shows 2'b00[1] but silicon reads nonzero.
-// Empirically-dead counters (read but filtered in Python):
-//   PACKER_DEST_READ_2/3, PACKER_BUSY_0/1/2, DEST_READ_GRANTED_2/3 (PACK_COUNT=1)
-//   MATH_INSTRN_STARTED, INSTRN_1_HF_CYCLE (o_math_instrnbuf_rden empirically dead)
+// BH TDMA_PACK: PACK_COUNT=1, 2 req + 3 grant live.
+// Empirically-dead counters (RTL-live, filtered in Python):
+//   MATH_INSTRN_STARTED (o_math_instrnbuf_rden never fires on BH)
 //   WAITING_FOR_SFPU_IDLE_0/1/2 (empirically 0 across all workloads)
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 15> pack_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
-     {PerfCounterType::PACKER_DEST_READ_1, 12},
-     {PerfCounterType::PACKER_DEST_READ_2, 13},
-     {PerfCounterType::PACKER_DEST_READ_3, 14},
-     {PerfCounterType::PACKER_BUSY_0, 15},
-     {PerfCounterType::PACKER_BUSY_1, 16},
-     {PerfCounterType::PACKER_BUSY_2, 17},
      {PerfCounterType::PACKER_BUSY, 18},
      {PerfCounterType::DEST_READ_GRANTED_0, 267},
-     {PerfCounterType::DEST_READ_GRANTED_1, 268},
-     {PerfCounterType::DEST_READ_GRANTED_2, 269},
-     {PerfCounterType::DEST_READ_GRANTED_3, 270},
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
-     {PerfCounterType::AVAILABLE_MATH, 272},
-     {PerfCounterType::PACK_BANK6_GRANT, 273}}};
-constexpr size_t NUM_PACK_COUNTERS = 15;
+     {PerfCounterType::AVAILABLE_MATH, 272}}};
+constexpr size_t NUM_PACK_COUNTERS = 5;
 
 // Tensix L1 bank 0 counters
 // Tensix L1 bank 0 (MUX_CTRL[6:4] = 0): unpacker, TDMA bundles, ring0 NOC
