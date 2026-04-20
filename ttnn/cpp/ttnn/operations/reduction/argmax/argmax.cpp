@@ -5,6 +5,7 @@
 #include "device/argmax_utils.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 
 #include <utility>
@@ -102,15 +103,60 @@ Tensor argmax(
         return preallocated_tensor;
     }
 
-    return prim::argmax(
-        input_tensor,
+    // Device op only supports reducing the last dim. If the user requests a different dim,
+    // permute that dim to the end, run argmax on the last dim, and (if keepdim) permute back.
+    // Mirrors the workaround in tests/ttnn/unit_tests/operations/matmul/test_argmax.py (L334-338).
+    Tensor effective_input = input_tensor;
+    std::optional<int> effective_dim = dim;
+    int norm_dim = -1;
+    bool permuted = false;
+    if (dim.has_value()) {
+        const int r = static_cast<int>(rank);
+        norm_dim = dim.value() < 0 ? dim.value() + r : dim.value();
+        if (norm_dim != r - 1) {
+            ttnn::SmallVector<int64_t> perm;
+            perm.reserve(rank);
+            for (int i = 0; i < r; ++i) {
+                if (i != norm_dim) {
+                    perm.push_back(i);
+                }
+            }
+            perm.push_back(norm_dim);
+            effective_input = ttnn::permute(input_tensor, perm, output_memory_config);
+            effective_dim = -1;
+            permuted = true;
+            TT_FATAL(
+                !optional_output_tensor.has_value(),
+                "Preallocated output tensor is not supported when argmax dim is not the last dim");
+        }
+    }
+
+    Tensor result = prim::argmax(
+        effective_input,
         tt::tt_metal::DataType::UINT32,
-        dim,
+        effective_dim,
         keepdim,
         sub_core_grids,
         use_multicore,
         output_memory_config,
         std::move(optional_output_tensor));
+
+    // With keepdim=true, the reduced dim (size 1) stays at the end; move it back to norm_dim.
+    // With keepdim=false, the reduced dim is dropped, so the output shape already matches torch.
+    if (permuted && keepdim) {
+        const int r = static_cast<int>(rank);
+        ttnn::SmallVector<int64_t> inv_perm(rank);
+        for (int i = 0; i < r; ++i) {
+            inv_perm[i] = i;
+        }
+        for (int i = r - 1; i > norm_dim; --i) {
+            inv_perm[i] = i - 1;
+        }
+        inv_perm[norm_dim] = r - 1;
+        result = ttnn::permute(result, inv_perm, output_memory_config);
+    }
+
+    return result;
 }
 
 }  // namespace ttnn

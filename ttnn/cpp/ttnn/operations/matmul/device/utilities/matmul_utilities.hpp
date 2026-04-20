@@ -74,6 +74,17 @@ bool is_input_batched(const ttnn::Shape& shape);
 ttnn::Shape compute_matmul_output_shape(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool transpose_a, bool transpose_b);
 
+/*
+ * @brief Computes the output shape of a matmul operation with bias given two input shapes
+ *
+ * Determines the output shape based on the broadcasting rules for matrix multiplication with bias:
+ *
+ * @param matmul_shape The shape of the matmul operation
+ * @param bias_shape The shape of the bias tensor
+ * @return Shape of the resulting tensor after matmul with bias
+ */
+ttnn::Shape compute_matmul_with_bias_output_shape(const ttnn::Shape& matmul_shape, const ttnn::Shape& bias_shape);
+
 using Activation = std::variant<std::string, ttnn::operations::unary::UnaryWithParam>;
 std::optional<ttnn::operations::unary::UnaryWithParam> get_fused_activation(
     const std::optional<const Activation>& activation);

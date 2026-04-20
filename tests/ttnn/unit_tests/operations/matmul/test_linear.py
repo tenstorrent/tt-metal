@@ -963,7 +963,7 @@ def test_linear_bias_cb_estimation_with_large_n_small_k(device, batch_size, seq_
     )
 
 
-def run_linear(device, a, b, bias=None, optional_output=None):
+def run_linear_bias_broadcast(device, a, b, bias=None, optional_output=None):
     a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -1011,9 +1011,9 @@ def test_linear_bias_broadcast(device, a_shape, b_shape, bias_shape):
 
     if torch_failed:
         with pytest.raises(Exception):
-            run_linear(device, a, b, bias)
+            run_linear_bias_broadcast(device, a, b, bias)
     else:
-        result = run_linear(device, a, b, bias)
+        result = run_linear_bias_broadcast(device, a, b, bias)
         assert result.shape == expected.shape
         assert_numeric_metrics(
             expected, result, pcc_threshold=0.999, check_ulp=False, check_frobenius=False, check_allclose=False
@@ -1023,7 +1023,7 @@ def test_linear_bias_broadcast(device, a_shape, b_shape, bias_shape):
 @pytest.mark.parametrize(
     "a_shape, b_shape, bias_shape, optional_shape",
     [
-        ((8, 64), (64, 4), (1, 1, 4), (1, 4, 8)),
+        ((8, 64), (64, 4), (1, 1, 4), (1, 1, 1, 8, 4)),
         ((8, 64), (64, 4), (1, 1, 4), (1, 3, 8)),  # Invalid optional output tensor
     ],
 )
@@ -1046,13 +1046,13 @@ def test_linear_bias_broadcast_with_optional_shape(device, a_shape, b_shape, bia
 
     if torch_failed:
         with pytest.raises(Exception):
-            run_linear(device, a, b, bias, optional)
+            run_linear_bias_broadcast(device, a, b, bias, optional)
     else:
         if expected.numel() != optional.numel():
             with pytest.raises(Exception):
-                run_linear(device, a, b, bias, optional)
+                run_linear_bias_broadcast(device, a, b, bias, optional)
         else:
-            result = run_linear(device, a, b, bias, optional)
+            result = run_linear_bias_broadcast(device, a, b, bias, optional)
 
             if optional_shape is not None:
                 assert result.shape == optional_shape
