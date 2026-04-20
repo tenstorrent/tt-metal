@@ -41,11 +41,23 @@ def merge_device_rows(df):
       Uses MAX duration across devices (critical path bottleneck)
 
     Args:
-        df: pandas DataFrame with profiler data
+        df: pandas DataFrame with profiler data. The DEVICE KERNEL DURATION
+            column may arrive as object dtype if Tracy wrote non-numeric
+            placeholders; it is coerced to float here so downstream NaN
+            handling works regardless.
 
     Returns:
-        DataFrame with merged rows
+        DataFrame with merged rows.
+
+    Raises:
+        pytest.fail: if any device's op sequence diverges from the others,
+            since the merged totals would otherwise silently compare
+            apples-to-oranges.
     """
+    duration_col = "DEVICE KERNEL DURATION [ns]"
+    df = df.copy()
+    df[duration_col] = pd.to_numeric(df[duration_col], errors="coerce")
+
     block_by_device = defaultdict(list)
 
     for _, row in df.iterrows():
@@ -68,10 +80,13 @@ def merge_device_rows(df):
                 if op_name is None:
                     op_name = current_op_name
                 elif op_name != current_op_name:
-                    logger.warning(f"Mismatched operations: {op_name} vs {current_op_name}")
+                    pytest.fail(
+                        f"Mismatched ops across devices at merge index: "
+                        f"device {device_id} has {current_op_name!r}, expected {op_name!r}"
+                    )
                 blocks.append((device_id, current_block))
             else:
-                logger.warning(f"Device {device_id} missing operation at this index")
+                pytest.fail(f"Device {device_id} is missing an op during merge (truncated trace?)")
 
         if not blocks:
             continue
@@ -82,18 +97,16 @@ def merge_device_rows(df):
 
         if is_collective:
             device_kernel_durations = [
-                d["DEVICE KERNEL DURATION [ns]"]
-                for _, d in blocks
-                if "DEVICE KERNEL DURATION [ns]" in d and not math.isnan(d["DEVICE KERNEL DURATION [ns]"])
+                d[duration_col] for _, d in blocks if duration_col in d and not math.isnan(d[duration_col])
             ]
             average_duration = (
                 sum(device_kernel_durations) / len(device_kernel_durations) if device_kernel_durations else float("nan")
             )
             base_block = blocks[0][1].copy()
-            base_block["DEVICE KERNEL DURATION [ns]"] = average_duration
+            base_block[duration_col] = average_duration
             merged_blocks.append(base_block)
         else:
-            max_duration_block = max(blocks, key=lambda x: x[1].get("DEVICE KERNEL DURATION [ns]", 0))
+            max_duration_block = max(blocks, key=lambda x: x[1].get(duration_col, 0))
             merged_blocks.append(max_duration_block[1])
 
     return pd.DataFrame(merged_blocks)
@@ -120,7 +133,19 @@ def run_model_device_perf_test_with_merge(
     `op_filter`, if set, restricts the measurement to rows whose OP CODE
     contains the given substring — useful when the worker pytest runs more
     than one op and only one of them is under test.
+
+    Only `num_iterations=1` is supported today. `run_device_perf` can run
+    multiple iterations and average them, but this helper rereads only the
+    latest ops CSV and rewrites the averaged metric from that single file —
+    mixing that with a multi-iteration average would produce inconsistent
+    numbers. Extending to N>1 requires merging across per-iteration CSVs.
     """
+    if num_iterations != 1:
+        pytest.fail(
+            f"run_model_device_perf_test_with_merge currently supports num_iterations=1 only "
+            f"(got {num_iterations}); per-iteration CSV merging is not implemented."
+        )
+
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
 
@@ -141,7 +166,8 @@ def run_model_device_perf_test_with_merge(
 
     if op_filter:
         df = df[df["OP CODE"].str.contains(op_filter, na=False)]
-        assert not df.empty, f"op_filter={op_filter!r} matched no rows in {filename}"
+        if df.empty:
+            pytest.fail(f"op_filter={op_filter!r} matched no rows in {filename}")
         logger.info(f"Rows after op_filter={op_filter!r}: {len(df)}")
 
     logger.info(f"Device rows before merge: {len(df)}")
