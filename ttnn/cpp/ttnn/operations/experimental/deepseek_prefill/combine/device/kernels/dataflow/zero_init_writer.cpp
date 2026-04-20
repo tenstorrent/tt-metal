@@ -5,12 +5,21 @@
 //
 // Lightweight data-movement kernel that zeroes a page range of an interleaved
 // DRAM output tensor, then signals the combine reader cores via semaphore.
-// Deployed on idle cores to speed up zero-init process by spreading out across more banks
+// Deployed on idle cores to speed up zero-init process by spreading out across more banks.
+//
+// In TILE_LAYOUT, after zero-init completes this kernel also takes over the untilized-data
+// send path (previously in reader_untilize.cpp steps 3-7): it waits for compute to push a
+// batch onto cb_untilize_id, waits for the owning sender's "send now" signal, NOC-writes
+// the untilized rows to the sender's receive buffer, and signals the sender that data has
+// landed. The loop exits when compute pushes ROUTE_INFO_SENTINEL onto cb_stop_signal_id.
 //
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/zero_init_common.hpp"
+
+// Sentinel used by compute to tell this kernel to exit its send loop.
+constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 
 void kernel_main() {
     // ===== Compile-time args =====
@@ -53,4 +62,94 @@ void kernel_main() {
     }
 
     noc_async_atomic_barrier();
+
+#if IS_TILE_LAYOUT
+    // ===== Untilized-data send path (moved from reader_untilize.cpp steps 3-7) =====
+    //
+    // Compile-time args (appended after the zero-init TensorAccessorArgs block):
+    //   +0: cb_untilize_id                        - CB into which compute pushes untilized batches
+    //   +1: cb_stop_signal_id                     - CB for compute -> this-kernel per-batch / stop signal
+    //   +2: cb_experts_tok_counter_id             - CB c_1 multicasted by sender; sender's
+    //                                               receive_buf_addr lives at the trailer
+    //   +3: experts_tok_counter_pages             - number of counter pages multicasted
+    //   +4: aligned_experts_tok_counter_page_size - aligned counter page size (L1 stride)
+    //   +5: read_batch_size                       - number of rows per untilize batch
+    constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    constexpr uint32_t cb_stop_signal_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t cb_experts_tok_counter_id =
+        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t experts_tok_counter_pages =
+        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
+    constexpr uint32_t aligned_experts_tok_counter_page_size =
+        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 4);
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 5);
+    constexpr uint32_t total_transfer_size = read_batch_size * aligned_output_page_size;
+    constexpr uint32_t counter_data_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
+
+    // Runtime args appended after the sender_sem_noc_addrs loop above:
+    //   counter_ready_semaphore_id   - sem the sender increments once after its counter multicast
+    //   sender_noc_x / sender_noc_y  - NOC coords of the owning sender core
+    //   data_ready_semaphore_id      - sender-side sem this kernel increments after each send
+    //   start_semaphore_id           - local sem the sender increments to say "send now"
+    uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t sender_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t start_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+
+    uint64_t sender_data_ready_noc_addr =
+        get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_ready_semaphore_id));
+    volatile tt_l1_ptr uint32_t* start_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(start_semaphore_id));
+
+    // Wait on the same counter_ready sem reader_untilize waits on (neither kernel resets it,
+    // so both see the single increment from the sender's multicast).  Then read the sender's
+    // receive_buf_addr out of c_1's trailer — shared L1 on this core.
+    volatile tt_l1_ptr uint32_t* counter_ready_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(counter_ready_semaphore_id));
+    noc_semaphore_wait(counter_ready_sem_ptr, 1);
+
+    uint32_t counter_cb_base = get_write_ptr(cb_experts_tok_counter_id);
+    const volatile tt_l1_ptr uint32_t* recv_buf_addrs =
+        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counter_cb_base + counter_data_total_size);
+    uint64_t sender_receive_buf_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, recv_buf_addrs[0]);
+
+    // Process untilized batches until compute pushes ROUTE_INFO_SENTINEL onto cb_stop_signal_id.
+    // A non-sentinel value means "another batch is on cb_untilize_id, send it to the owning sender".
+    while (true) {
+        cb_wait_front(cb_stop_signal_id, 1);
+        volatile tt_l1_ptr uint32_t* stop_signal_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_stop_signal_id));
+        uint32_t signal_value = stop_signal_ptr[0];
+        cb_pop_front(cb_stop_signal_id, 1);
+        if (signal_value == ROUTE_INFO_SENTINEL) {
+            break;
+        }
+
+        // 3. Wait for compute to finish untilizing this batch
+        cb_wait_front(cb_untilize_id, read_batch_size);
+
+        // 4. Wait for the sender's "send now" signal
+        noc_semaphore_wait(start_sem_ptr, 1);
+        noc_semaphore_set(start_sem_ptr, 0);
+
+        // 5. NOC-write untilized rows to the sender's receive buffer (chunked for NOC burst limit)
+        uint32_t untilize_read_ptr = get_read_ptr(cb_untilize_id);
+        uint32_t off = 0;
+        while (off < total_transfer_size) {
+            uint32_t chunk = (total_transfer_size - off > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE
+                                                                                        : (total_transfer_size - off);
+            noc_async_write(untilize_read_ptr + off, sender_receive_buf_noc_addr + off, chunk);
+            off += chunk;
+        }
+        noc_async_write_barrier();
+
+        // 6. Signal the sender that untilized data has landed
+        noc_semaphore_inc(sender_data_ready_noc_addr, 1);
+        noc_async_atomic_barrier();
+
+        // 7. Release untilize CB
+        cb_pop_front(cb_untilize_id, read_batch_size);
+    }
+#endif
 }

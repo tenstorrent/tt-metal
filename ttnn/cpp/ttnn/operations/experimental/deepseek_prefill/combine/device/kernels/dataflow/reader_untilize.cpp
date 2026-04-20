@@ -6,8 +6,7 @@
 // Reader kernel for idle cores.
 // Each idle core is permanently bound to ONE sender core (its owning sender).
 // The owning sender multicasts the expert token counts + its receive_buf_addr to this idle
-// core's group, then each idle core untilizes the tiles for its assigned expert batches and
-// writes the result directly to the owning sender's receive buffer via NOC.
+// core's group, then each idle core untilizes the tiles for its assigned expert batches.
 //
 // Expert range: each idle group handles experts [expert_start_idx, expert_end_idx) which maps
 // 1:1 to the owning sender's expert range.
@@ -16,11 +15,10 @@
 // cores in the group.  Core i (local 0-based) processes batches i, i+k_s, i+2*k_s, …
 //
 // For each assigned batch:
-//   1. Speculatively read dispatched_buffer tiles and trigger compute to untilize them.
-//   2. Wait for compute to finish (cb_wait_front on cb_untilize_id).
-//   3. Wait for the owning sender's "send now" signal (start_semaphore).
-//   4. NOC-write the untilized rows to the owning sender's receive buffer.
-//   5. Signal the sender that the data has landed (data_ready_semaphore).
+//   1. Signal compute to start untilizing this batch (via cb_signal_id).
+//   2. Read dispatched_buffer tiles into cb_dispatched_buffer_id for compute to consume.
+// The actual send of untilized data to the sender (former steps 3-7) now runs on the
+// zero_init_writer kernel on the same core, driven by compute via cb_stop_signal_id.
 //
 
 #include <cstdint>
@@ -83,46 +81,36 @@ void kernel_main() {
     constexpr uint32_t tiles_per_batch = hidden_size / tile_width;
     constexpr uint32_t expert_stride_tile =
         ((max_dispatched_tokens_per_expert + tile_height - 1) / tile_height) * (hidden_size / tile_width);
-    constexpr uint32_t total_transfer_size = read_batch_size * aligned_output_page_size;
-    // Byte offset past counter data where the sender appended receive_buf_addr
-    constexpr uint32_t counter_data_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
 
     // ===== Runtime args =====
     //   0: counter_ready_semaphore_id  - idle core waits for this before reading token counts
     //                                    (incremented by the owning sender after its multicast)
-    //   1: data_ready_semaphore_id     - idle core increments sender's copy after each write
-    //   2: sender_noc_x
-    //   3: sender_noc_y
-    //   4: start_semaphore_id          - idle core waits for sender's "send now" per batch
-    //   5: dispatched_buffer_addr
-    //   6: expert_start_idx
-    //   7: expert_end_idx
+    //   1: dispatched_buffer_addr
+    //   2: expert_start_idx
+    //   3: expert_end_idx
+    // (sender NOC coords, data_ready and start semaphores are now consumed by the
+    //  zero_init_writer kernel on the same core — they no longer belong here.)
     uint32_t rt_idx = 0;
     uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t sender_noc_y = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t start_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
     uint32_t dispatched_buffer_addr = get_arg_val<uint32_t>(rt_idx++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_idx++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_idx++);
 
-    uint64_t sender_data_ready_noc_addr =
-        get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_ready_semaphore_id));
-    volatile tt_l1_ptr uint32_t* start_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(start_semaphore_id));
-
     // ===== Step 1: Wait for the owning sender to multicast expert token counts + receive_buf_addr =====
+    // Note: don't reset counter_ready_sem — zero_init_writer on this same core also waits on it
+    // to read the sender's receive_buf_addr from c_1. Since neither kernel re-uses the sem within
+    // a single invocation, leaving it latched at >=1 is safe.
     cb_reserve_back(cb_experts_tok_counter_id, experts_tok_counter_pages);
 
     volatile tt_l1_ptr uint32_t* counter_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(counter_ready_semaphore_id));
     noc_semaphore_wait(counter_ready_sem_ptr, 1);
-    noc_semaphore_set(counter_ready_sem_ptr, 0);
 
     cb_push_back(cb_experts_tok_counter_id, experts_tok_counter_pages);
 
-    // ===== Step 2: Read per-expert token counts and the sender's receive buffer address =====
+    // ===== Step 2: Read per-expert token counts =====
+    // zero_init_writer independently reads the sender's receive_buf_addr from c_1 at offset
+    // experts_tok_counter_pages * aligned_experts_tok_counter_page_size (same L1 layout).
     cb_wait_front(cb_experts_tok_counter_id, experts_tok_counter_pages);
     uint32_t token_counter_base = get_read_ptr(cb_experts_tok_counter_id);
     const volatile tt_l1_ptr uint32_t* counter_l1_src =
@@ -133,12 +121,7 @@ void kernel_main() {
         DPRINT_COMBINE << "Expert " << e << ": tokens=" << counter_l1_src[e] << ENDL();
     }
 
-    // receive_buf_addr is packed immediately after the counter data
-    const volatile tt_l1_ptr uint32_t* recv_buf_addrs =
-        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(token_counter_base + counter_data_total_size);
-    uint64_t sender_receive_buf_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, recv_buf_addrs[0]);
-
-    // ===== Step 3: For each assigned batch: untilize then send to the owning sender =====
+    // ===== Step 3: For each assigned batch: trigger compute to untilize and read tiles =====
     const auto dispatched_buffer_addr_gen =
         TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr, aligned_dispatched_buffer_page_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
@@ -185,32 +168,8 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_dispatched_buffer_id, tiles_per_batch_per_cb);
             }
-
-            // 3. Wait for compute to finish untilizing
-            cb_wait_front(cb_untilize_id, read_batch_size);
-
-            // 4. Wait for the sender's "send now" signal
-            noc_semaphore_wait(start_sem_ptr, 1);
-            noc_semaphore_set(start_sem_ptr, 0);
-
-            // 5. NOC-write untilized rows to the sender's receive buffer (chunked for NOC burst limit)
-            uint32_t untilize_read_ptr = get_read_ptr(cb_untilize_id);
-            uint32_t off = 0;
-            while (off < total_transfer_size) {
-                uint32_t chunk = (total_transfer_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
-                                     ? (uint32_t)NOC_MAX_BURST_SIZE
-                                     : (total_transfer_size - off);
-                noc_async_write(untilize_read_ptr + off, sender_receive_buf_noc_addr + off, chunk);
-                off += chunk;
-            }
-            noc_async_write_barrier();
-
-            // 6. Signal the sender that untilized data has landed
-            noc_semaphore_inc(sender_data_ready_noc_addr, 1);
-            noc_async_atomic_barrier();
-
-            // 7. Release untilize CB
-            cb_pop_front(cb_untilize_id, read_batch_size);
+            // Steps 3-7 (wait for untilize, wait for sender's send signal, NOC-write to
+            // sender, signal sender, pop untilize CB) now run on zero_init_writer.
         }
     }
 

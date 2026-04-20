@@ -160,10 +160,10 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     uint32_t experts_per_core_range = tt::div_up(operation_attributes.experts_per_chip, num_cores);
 
     // Core layout depends on dispatched_buffer layout:
-    //   TILE_LAYOUT: sender placed at the end of its idle group so every idle core sits to the
-    //     sender's left and can write rightward on NOC0 (the +X NOC).
-    //     Cores are divided into groups, sender placed at group_size-1:
-    //     [idle0_0..idle0_{k0-1}, sender0, idle1_0..idle1_{k1-1}, sender1, ...]
+    //   TILE_LAYOUT: sender placed at the start of its idle group so every idle core sits to the
+    //     sender's right and can write leftward on NOC1 (the -X NOC, writer default).
+    //     Cores are divided into groups, sender placed at group offset 0:
+    //     [sender0, idle0_0..idle0_{k0-1}, sender1, idle1_0..idle1_{k1-1}, ...]
     //   ROW_MAJOR: first num_cores cores are senders, remaining are idle (for zero-init only).
     //     [sender0, sender1, idle0, idle1, idle2, ...]
     // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
@@ -191,14 +191,14 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     std::vector<uint32_t> idle_sender_map;
 
     if (is_tile_layout) {
-        // TILE_LAYOUT: divide into groups, sender at the end of each group
+        // TILE_LAYOUT: divide into groups, sender at the start of each group
         uint32_t base_group_size = total_row_cores / num_cores;
         uint32_t extra_groups = total_row_cores % num_cores;
 
         uint32_t pos = 0;
         for (uint32_t s = 0; s < num_cores; s++) {
             uint32_t group_size = base_group_size + (s >= num_cores - extra_groups ? 1 : 0);
-            uint32_t sender_offset = group_size - 1;
+            uint32_t sender_offset = 0;
 
             for (uint32_t j = 0; j < group_size; j++) {
                 if (j == sender_offset) {
@@ -569,6 +569,16 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                     .set_page_size(tt::CBIndex::c_3, signal_page_size);
             tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, signal_cb_config);
         }
+        // c_8 on idle cores: 1-page stop-signal CB (compute -> zero_init_writer).
+        // Compute pushes 0 per batch (meaning "a batch is ready on c_2") and ROUTE_INFO_SENTINEL
+        // when it exits its own loop, so zero_init_writer knows when to stop its send loop.
+        {
+            uint32_t stop_signal_page_size = l1_alignment;
+            tt::tt_metal::CircularBufferConfig stop_signal_cb_config =
+                tt::tt_metal::CircularBufferConfig(stop_signal_page_size, {{tt::CBIndex::c_8, tt::DataFormat::UInt8}})
+                    .set_page_size(tt::CBIndex::c_8, stop_signal_page_size);
+            tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, stop_signal_cb_config);
+        }
     }
 
     // counter_offset mirrors the constexpr calculation in reader_combine.cpp
@@ -678,6 +688,19 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         };
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(zi_compile_time_args);
 
+        // Tile-layout-only compile-time args used by the post-zero-init untilized-data send loop.
+        // In ROW_MAJOR the corresponding #if IS_TILE_LAYOUT block is compiled out, so these
+        // trailing args are ignored — still pushed unconditionally to keep the kernel object stable.
+        zi_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_2));     // cb_untilize_id
+        zi_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_8));     // cb_stop_signal_id
+        zi_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_1));     // cb_experts_tok_counter_id
+        zi_compile_time_args.push_back(detail::get_num_pages(expert_token_counts));  // experts_tok_counter_pages
+        zi_compile_time_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // counter page size
+        zi_compile_time_args.push_back(read_batch_size);
+
+        std::map<std::string, std::string> zi_defines;
+        zi_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
+
         zero_init_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/"
@@ -686,7 +709,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
-                .compile_args = zi_compile_time_args});
+                .compile_args = zi_compile_time_args,
+                .defines = zi_defines});
 
         zero_init_cores_vec = idle_row_cores;
     }
@@ -756,6 +780,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                     read_batch_size,                          // 3: read_batch_size
                     full_ct_dim,                              // 4: full_ct_dim = hidden_size / 32
                     block_ct_dim,                             // 5: block_ct_dim = largest divisor of full_ct_dim <= 8
+                    static_cast<uint32_t>(
+                        tt::CBIndex::c_8),  // 6: cb_stop_signal_id (compute -> zero_init_writer per-batch/stop)
                 }});
     }
 
@@ -783,6 +809,17 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             for (const auto& [noc_x, noc_y] : sender_noc_coords) {
                 zi_runtime_args.push_back(noc_x);
                 zi_runtime_args.push_back(noc_y);
+            }
+
+            // TILE_LAYOUT: append owning-sender info so zero_init_writer can run its send loop.
+            // In ROW_MAJOR the trailing args are ignored (kernel compiled with IS_TILE_LAYOUT=0).
+            if (is_tile_layout) {
+                uint32_t s = idle_sender_map[idle_idx];
+                zi_runtime_args.push_back(counter_ready_semaphore_id);
+                zi_runtime_args.push_back(sender_noc_coords[s].first);
+                zi_runtime_args.push_back(sender_noc_coords[s].second);
+                zi_runtime_args.push_back(data_ready_semaphore_ids[s]);
+                zi_runtime_args.push_back(start_semaphore_ids[s]);
             }
 
             tt::tt_metal::SetRuntimeArgs(program, zero_init_kernel_id, zero_init_cores_vec[idle_idx], zi_runtime_args);
@@ -883,9 +920,9 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     }
 
     // Set runtime args for idle cores (TILE_LAYOUT only — reader_untilize kernel).
-    // Each idle core is bound to its owning sender s.
-    // Layout: counter_ready_sem, data_ready_sem[s], noc_x[s], noc_y[s], start_sem[s],
-    //         dispatched_buffer_addr, expert_start, expert_end
+    // Layout: counter_ready_sem, dispatched_buffer_addr, expert_start, expert_end.
+    // Sender NOC coords and per-sender data_ready/start semaphores are now consumed by
+    // zero_init_writer on the same core (which owns the untilized-data send).
     if (is_tile_layout) {
         for (uint32_t j = 0; j < num_idle_cores; j++) {
             uint32_t s = idle_sender_map[j];
@@ -893,10 +930,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             uint32_t expert_end = std::min((s + 1) * experts_per_core_range, operation_attributes.experts_per_chip);
             std::vector<uint32_t> idle_rt_args = {
                 counter_ready_semaphore_id,
-                data_ready_semaphore_ids[s],
-                sender_noc_coords[s].first,
-                sender_noc_coords[s].second,
-                start_semaphore_ids[s],
                 dispatched_buffer.buffer()->address(),
                 expert_start,
                 expert_end,
