@@ -8,7 +8,8 @@
 // Writes two output tensors to DRAM per row:
 //   1. dL/dx — full-width gradient tiles (Wt tiles per row)
 //   2. packed_partials — 4 tiles per row containing [dw0, dw1, dw2, db]
-//      (later reduced on the host across all rows/cores to produce final dL/dw and dL/db)
+//      (later reduced on-device by the host wrapper across all rows/cores
+//      to produce final dL/dw and dL/db)
 // ============================================================================
 
 #include "api/dataflow/dataflow_api.h"

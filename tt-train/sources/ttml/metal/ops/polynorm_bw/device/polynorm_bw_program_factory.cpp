@@ -33,6 +33,8 @@ constexpr auto kOneCbIndex = tt::CBIndex::c_5;
 constexpr auto kW0CbIndex = tt::CBIndex::c_6;
 constexpr auto kW1CbIndex = tt::CBIndex::c_7;
 constexpr auto kW2CbIndex = tt::CBIndex::c_8;
+// Reader-only scratch CB used to read weight scalars before publishing constants.
+constexpr auto kWeightScalarScratchCbIndex = tt::CBIndex::c_23;
 
 // Intermediate per-row sum tiles (Float32)
 constexpr auto kSumX2CbIndex = tt::CBIndex::c_9;
@@ -174,6 +176,8 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
         create_circular_buffer(program, all_cores, kW1CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_w2 =
         create_circular_buffer(program, all_cores, kW2CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
+    [[maybe_unused]] auto cb_weight_scalar_scratch = create_circular_buffer(
+        program, all_cores, kWeightScalarScratchCbIndex, data_format, bfloat16_tile_size, kNumOneTile);
 
     // Intermediate per-row sum tiles (Float32)
     [[maybe_unused]] auto cb_sum_x2 = create_circular_buffer(

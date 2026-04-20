@@ -33,6 +33,7 @@
 #include <numeric>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <tt-metalium/distributed.hpp>
 #include <utility>
@@ -76,6 +77,9 @@ const std::vector<ModelShape>& all_models() {
 }
 
 double avg(const std::vector<double>& values) {
+    if (values.empty()) {
+        throw std::invalid_argument("avg() requires at least one sample; ensure TTML_POLYNORM_BENCH_MEASURE > 0.");
+    }
     return std::accumulate(values.begin(), values.end(), 0.0) / static_cast<double>(values.size());
 }
 
@@ -338,6 +342,9 @@ int main() {
         }
         if (const char* env_models = std::getenv("TTML_POLYNORM_BENCH_MODELS")) {
             sweep_cfg.model_filter = parse_string_csv(env_models);
+        }
+        if (sweep_cfg.num_measure == 0U) {
+            throw std::invalid_argument("TTML_POLYNORM_BENCH_MEASURE must be greater than zero.");
         }
         const auto& models = all_models();
         const tt::tt_metal::distributed::MeshShape mesh(1, 1);
