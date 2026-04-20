@@ -230,7 +230,10 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        # Only mount MLPerf on CIv1 runners; CIv2 uses LFC instead.
+        # Mounting on CIv2 triggers a spurious assertion in model_location_generator
+        # because the test detects files at the MLPerf path and refuses to use LFC.
+        - ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/dev/null:/mnt/MLPerf_unused:ro' }}
       options: >-
         --device /dev/tenstorrent
         --device /dev/ipmi0
