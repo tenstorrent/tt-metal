@@ -318,6 +318,16 @@ def _host_buffer_to_torch(buf, padded_shape: list[int], tt_dtype: ttnn.DataType)
     return raw.view(torch_dtype).reshape(padded_shape)
 
 
+def float_to_unit_range(t: ttnn.Tensor) -> ttnn.Tensor:
+    """On-device denormalization: map from [-1.0, 1.0] to [0.0, 1.0]."""
+    t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+    t = ttnn.add(t, 1.0)
+    t = ttnn.multiply(t, 0.5)
+    t = ttnn.clamp(t, min=0.0, max=1.0)
+    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+    return t
+
+
 def float_to_uint8(t: ttnn.Tensor) -> ttnn.Tensor:
     """On-device float-to-uint8: map from [-1.0, 1.0] to [0, 255]"""
     t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)

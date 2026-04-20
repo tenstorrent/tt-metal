@@ -38,6 +38,7 @@ from ...utils.tensor import (
     fast_device_to_host,
     float32_tensor,
     float_to_uint8,
+    float_to_unit_range,
     local_device_to_torch,
     typed_tensor_2dshard,
 )
@@ -1018,6 +1019,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
             if output_type == "uint8":
                 pre_fn = float_to_uint8
+            elif output_type == "np":
+                pre_fn = float_to_unit_range
             else:
                 pre_fn = None
 
