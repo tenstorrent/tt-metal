@@ -84,6 +84,11 @@ ttnn:
 shield:
   e2e:
     wh_llmbox: 45
+  demo:
+    bh_galaxy: 50
+    wh_llmbox_perf: 45
+    bh_loudbox: 45
+    bh_llmbox: 40
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
@@ -151,12 +156,12 @@ models:
     bh_p300: 10
 
   demo:
-    wh_llmbox_perf: 200
+    wh_llmbox_perf: 1045
     wh_llmbox_perf_release: 1090
     wh_galaxy: 0
     wh_galaxy_perf: 150
     wh_galaxy_release: 345
-    bh_galaxy: 30
+    bh_galaxy: 0
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
@@ -167,8 +172,8 @@ models:
     bh_p150b_civ2: 250
     bh_p150b_civ2_viommu: 50
     bh_deskbox: 250
-    bh_llmbox: 1200
-    bh_loudbox: 1200
+    bh_llmbox: 1160
+    bh_loudbox: 1155
 
     bh_p300: 800
     bh_quietbox_2: 250
