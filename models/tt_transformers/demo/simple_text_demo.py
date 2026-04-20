@@ -972,8 +972,13 @@ def test_demo_text(
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
 
     if is_ci_v2_env:
-        hf_model = os.getenv("HF_MODEL", "")
-        model_location = model_location_generator(hf_model, download_if_ci_v2=True, ci_v2_timeout_in_s=900)
+        # Use hf_dir (the *original* HF_MODEL captured at test entry) rather than
+        # re-reading os.getenv("HF_MODEL"), which may have been mutated to an
+        # absolute LFC cache path by a previous parametrized test case.  Passing
+        # an absolute path to model_location_generator causes pathlib to reset
+        # the base in internal_weka_path, making .exists() return True on the
+        # LFC cache dir and triggering a spurious MLPerf assertion.
+        model_location = model_location_generator(hf_dir, download_if_ci_v2=True, ci_v2_timeout_in_s=900)
         # update env var HF_MODEL to the model location
         os.environ["HF_MODEL"] = str(model_location)
 
