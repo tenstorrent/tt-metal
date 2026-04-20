@@ -444,7 +444,33 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
             cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
 
         std::vector<uint32_t> status_buf(1, 0);
-        detail::ReadFromDeviceL1(dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+        // Fix F5 (#42429): wrap the initial probe read in a try-catch.  On a T3K after an
+        // abrupt prior-process crash, some ERISC channels are in a state where even the probe
+        // L1 read hangs indefinitely (the Ethernet core service doesn't respond at all).
+        // In that case, UMD throws "Timeout waiting for Ethernet core service remote IO
+        // request" from read_non_mmio.  Treat a read timeout identically to the "corrupt
+        // L1 word" case: send TERMINATE best-effort and continue — configure_fabric_cores()
+        // will wipe L1 and load fresh firmware.
+        try {
+            detail::ReadFromDeviceL1(dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+        } catch (const std::exception& read_ex) {
+            log_error(
+                tt::LogMetal,
+                "terminate_stale_erisc_routers: Device {} chan={} probe read TIMED OUT ({}). "
+                "ERISC is completely unresponsive; sending TERMINATE best-effort, skipping poll. "
+                "configure_fabric_cores() will reset L1.",
+                dev->id(),
+                eth_chan_id,
+                read_ex.what());
+            try {
+                std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(term_signal));
+                detail::WriteToDeviceL1(dev, eth_logical_core, term_addr, term_buf, CoreType::ETH);
+            } catch (...) {
+                // write-side also unresponsive — best effort only, ignore
+            }
+            corrupt_count++;
+            continue;
+        }
 
         if (status_buf[0] == 0 || status_buf[0] == terminated_val) {
             continue;  // clean — nothing to do
