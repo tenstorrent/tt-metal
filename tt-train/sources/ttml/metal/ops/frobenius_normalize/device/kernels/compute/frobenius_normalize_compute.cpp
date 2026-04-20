@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 // Frobenius normalize compute kernel — all-to-origin reduction
 //
 // Phase 1:   square + accumulate all input tiles → cb_sq_acc (FP32 in DST)
-// Phase 2:   sfpu_reduce → cb_sq_partial (reader writes partial to origin's L1 using 4-byte stride) 
+// Phase 2:   sfpu_reduce → cb_sq_partial (reader writes partial to origin's L1 using 4-byte stride)
 // Phase 3:   origin only: sfpu_reduce all partials from cb_recv, sqrt + eps + recip → cb_norm
 // Phase 4:   all cores: multiply each tile by 1/norm
 //
