@@ -94,7 +94,15 @@ class RegionSpec:
 
 @dataclass(frozen=True)
 class FusionGroupSpec:
-    """Complete packing layout for an overlapped (fused) tensor group."""
+    """Complete packing layout for an overlapped (fused) tensor group.
+
+    When :attr:`per_core` is ``True``, the group is allocated with
+    :meth:`ttnn.MemoryConfig.experimental_set_per_core_allocation` so each
+    core picks its own L1 address independently of the global lockstep
+    allocator.  This lets narrow groups (e.g. an 8-core ``gate_mm`` slab)
+    live next to wide groups (e.g. a 115-core merged attention buffer)
+    without forcing the wide group to reserve L1 across all cores.
+    """
 
     kind: Literal["fusion_group"] = "fusion_group"
     name: str = ""
@@ -102,6 +110,7 @@ class FusionGroupSpec:
     sharding_strategy: ttnn.TensorMemoryLayout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
     mesh_mapper_config: MeshMapperConfig = field(default_factory=ReplicateMeshMapper)
     transform_version: int = 0  # bump when shuffle/preprocess logic changes
+    per_core: bool = False
 
 
 @dataclass(frozen=True)

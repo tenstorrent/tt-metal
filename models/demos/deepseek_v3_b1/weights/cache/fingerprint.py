@@ -63,7 +63,7 @@ def _canonical_region(region: RegionSpec) -> dict:
 
 
 def _canonical_fusion_group(target: FusionGroupSpec) -> dict:
-    return {
+    out: dict = {
         "kind": "fusion_group",
         "name": target.name,
         "regions": [_canonical_region(r) for r in target.regions],
@@ -71,6 +71,10 @@ def _canonical_fusion_group(target: FusionGroupSpec) -> dict:
         "mesh_mapper_config": _canonical_mesh_mapper(target.mesh_mapper_config),
         "transform_version": target.transform_version,
     }
+    # Only include per_core when True so legacy specs (per_core=False) keep their hash byte-identical.
+    if target.per_core:
+        out["per_core"] = True
+    return out
 
 
 def canonical(fingerprint: Fingerprint) -> dict:
