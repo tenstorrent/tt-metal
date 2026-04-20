@@ -81,7 +81,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // so that transpose dest can use srcA/B.
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_unpack_set_srcAB_dummy_valid_();
+        _llk_unpack_set_srcB_dummy_valid_();
     }
 }
 

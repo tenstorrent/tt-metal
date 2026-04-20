@@ -77,10 +77,9 @@ inline void _llk_unpack_dest_dvalid_section_done_()
 }
 
 /**
- * @brief Sets dummy SrcA+SrcB dvalid
+ * @brief Sets dummy SrcB dvalid
  */
-inline void _llk_unpack_set_srcAB_dummy_valid_()
+inline void _llk_unpack_set_srcB_dummy_valid_()
 {
-    TTI_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Set_Dvalid*/, 0, 0, 0, p_unpacr::UNP_NOP);
     TTI_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Set_Dvalid*/, 0, 0, 0, p_unpacr::UNP_NOP);
 }

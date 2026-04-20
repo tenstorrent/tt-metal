@@ -100,7 +100,7 @@ inline void _llk_math_transpose_dest_mop_config_()
                 });
             ckernel_template temp(1, 1, TT_OP_REPLAY(8, replay_buf_len - 8, 0, 0, 0, 0));
             temp.set_start_op(TT_OP_REPLAY(0, 8, 0, 0, 0, 0));
-            temp.set_end_ops(TT_OP_REPLAY(0, 8, 0, 0, 0, 0), TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCAB_VLD, 0, 0, 0, 0, 0));
+            temp.set_end_ops(TT_OP_REPLAY(0, 8, 0, 0, 0, 0), TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
             temp.program_bank0_sw_cntl(instrn_buffer);
         }
         else
@@ -125,7 +125,7 @@ inline void _llk_math_transpose_dest_mop_config_()
                 });
             // Loop 4 times to transpose all 4 faces
             ckernel_template temp(1 /* mop_outer_loop */, 4 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
-            temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCAB_VLD, 0, 0, 0, 0, 0));
+            temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
             temp.program_bank0_sw_cntl(instrn_buffer);
         }
     }
@@ -157,7 +157,7 @@ inline void _llk_math_transpose_dest_mop_config_()
             });
 
         ckernel_template temp(1 /* mop_outer_loop */, 1 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
-        temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCAB_VLD, 0, 0, 0, 0, 0));
+        temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
 }
@@ -187,11 +187,9 @@ inline void _llk_math_transpose_dest_(const std::uint32_t tile_idx)
 {
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 
-    // Wait condition SRCA_VLD is required as MOVB2A doesn't automatically wait
-    // for SrcA[MatrixUnit.SrcABank].AllowedClient == SrcClient::MatrixUnit.
     // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
     // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU, p_stall::SRCB_VLD, p_stall::SRCA_VLD);
+    TTI_STALLWAIT(p_stall::STALL_MATH, 0, p_stall::WAIT_SFPU, p_stall::SRCB_VLD);
 
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 
