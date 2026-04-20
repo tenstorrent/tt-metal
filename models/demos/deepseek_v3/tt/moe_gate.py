@@ -333,8 +333,6 @@ class MoEGate(AbstractModule):
         topk_experts_indices_list = []
         for start_index in range(0, total_batch_size + padding_shape, batch_size_per_iter):
             cur_logits = logits[:, :, start_index : start_index + batch_size_per_iter, :]
-            # token_means = ttnn.mean(cur_logits, dim=3, keepdim=True)
-            # cur_logits = ttnn.subtract(cur_logits, token_means)
             cur_logits = ttnn.reshape(cur_logits, reshaped_input_shape)  # maybe remove this
             cur_logits = ttnn.to_memory_config(cur_logits, memory_config=input_output_mem_config)
 
