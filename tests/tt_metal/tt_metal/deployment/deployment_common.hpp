@@ -14,6 +14,7 @@ struct l1_allocator {
 
 #define ALIGNMENT 64  // TODO
 
+[[maybe_unused]]
 static inline struct l1_allocator new_tensix_allocator() {
     using namespace tt::tt_metal;
 
@@ -29,6 +30,7 @@ static inline struct l1_allocator new_tensix_allocator() {
     };
 }
 
+[[maybe_unused]]
 static inline struct l1_allocator new_erisc_allocator() {
     using namespace tt::tt_metal;
 
@@ -44,6 +46,7 @@ static inline struct l1_allocator new_erisc_allocator() {
     };
 }
 
+[[maybe_unused]]
 static inline uint32_t l1_alloc(struct l1_allocator* alloc, uint32_t size) {
     size = ROUND_UP(size, ALIGNMENT);
 
@@ -55,6 +58,7 @@ static inline uint32_t l1_alloc(struct l1_allocator* alloc, uint32_t size) {
     return ret;
 }
 
+[[maybe_unused]]
 uint64_t read_l1_u64(tt::tt_metal::IDevice* const device, const CoreCoord& core, uint64_t l1_addr) {
     auto delta_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core<uint32_t>(
         device->id(), device->ethernet_core_from_logical_core(core), l1_addr, 2 * sizeof(uint32_t));
