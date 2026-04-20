@@ -1,3 +1,4 @@
+dest_acc: true
 operations:
   - src_a: "input_A"
     src_b: "input_B"
@@ -15,5 +16,6 @@ operations:
         reduce_pool: "SUM"
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi2"
+        enforce_fp32_accumulation: true
     packer: "Packer"
-    block_size: [64, 128]
+    block_size: [32, 128]

@@ -12,9 +12,7 @@ from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import ReduceGolden, get_golden_generator
-from helpers.llk_params import (
-    ReducePool,
-)
+from helpers.llk_params import ReducePool
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 
@@ -98,10 +96,13 @@ class ReduceFpu(Fpu):
         dest_acc = config.dest_acc.cpp_enum_value
         pool_type_cpp = compute_unit.reduce_pool.cpp_enum_value
         reduce_dim_cpp = compute_unit.reduce_dim.cpp_enum_value
+        enforce_fp32_accumulation = (
+            compute_unit.enforce_fp32_accumulation.cpp_enum_value
+        )
 
         return (
-            f"    // Operation {stage}: Reduce {reduce_dim_cpp} FPU\n"
-            f"    _llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, false>();\n"
+            f"// Operation {stage}: Reduce {reduce_dim_cpp} FPU\n"
+            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {enforce_fp32_accumulation}>();\n"
         )
 
     def calculate(
@@ -115,6 +116,10 @@ class ReduceFpu(Fpu):
         dest_acc = config.dest_acc.cpp_enum_value
         pool_type_cpp = compute_unit.reduce_pool.cpp_enum_value
         reduce_dim_cpp = compute_unit.reduce_dim.cpp_enum_value
+        enforce_fp32_accumulation = (
+            compute_unit.enforce_fp32_accumulation.cpp_enum_value
+        )
+        is_int_fpu_en = "false"
 
         # Create a temporary TensorShape object with Src_A tile dimensions
         tile_shape = operation.src_a.tile_shape
@@ -123,7 +128,7 @@ class ReduceFpu(Fpu):
         )
 
         return (
-            f"    _llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, false, false>(\n"
+            f"    _llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}, {enforce_fp32_accumulation}>(\n"
             f"        {block.tile_id_block}, {tensor_shape_instantiation}\n"
             f"    );\n"
         )

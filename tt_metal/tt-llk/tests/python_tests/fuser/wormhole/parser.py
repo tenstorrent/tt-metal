@@ -13,6 +13,7 @@ from helpers.llk_params import (
     BroadcastType,
     DestSync,
     EltwiseBinaryReuseDestType,
+    EnforceFP32Accumulation,
     MathFidelity,
     MathOperation,
     ReduceDimension,
@@ -137,6 +138,7 @@ class FpuMathSchema(BaseModel):
     reuse_dest: Optional[EltwiseBinaryReuseDestType] = None
     reduce_pool: Optional[ReducePool] = None
     reduce_dim: Optional[ReduceDimension] = None
+    enforce_fp32_accumulation: Optional[EnforceFP32Accumulation] = None
     unpack_transpose_within_face: Transpose = Transpose.No
     unpack_transpose_faces: Transpose = Transpose.No
     math_fidelity: MathFidelity = MathFidelity.LoFi
@@ -295,6 +297,8 @@ class FpuMathSchema(BaseModel):
             kwargs["reduce_pool"] = self.reduce_pool
         if self.math_fidelity:
             kwargs["math_fidelity"] = self.math_fidelity
+        if self.enforce_fp32_accumulation:
+            kwargs["enforce_fp32_accumulation"] = self.enforce_fp32_accumulation
 
         return ComputeNode(fpu=fpu, sfpu=None, **kwargs)
 
