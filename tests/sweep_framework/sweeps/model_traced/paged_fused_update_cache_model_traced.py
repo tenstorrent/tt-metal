@@ -279,35 +279,19 @@ def run(
 
     start_time = start_measuring_time()
 
-    # Build kwargs for paged_fused_update_cache
+    # Build kwargs for paged_fused_update_cache.
+    # Only pass kwargs that the model actually passed (shown in master trace).
+    # The master trace shows page_table and update_idxs_tensor as named tensor
+    # kwargs; batch_offset and update_idxs (list) are NOT in the master trace.
     op_kwargs = {}
-
-    # update_idxs: vector<uint32_t>
-    if (
-        update_idxs is not None
-        and update_idxs != "__ABSENT__"
-        and isinstance(update_idxs, list)
-        and len(update_idxs) > 0
-    ):
-        op_kwargs["update_idxs"] = update_idxs
-    else:
-        op_kwargs["update_idxs"] = []  # Empty vector
 
     # update_idxs_tensor: optional Tensor
     if update_idxs_tensor_ttnn is not None:
         op_kwargs["update_idxs_tensor"] = update_idxs_tensor_ttnn
 
-    # share_cache: optional<bool>
-    if share_cache is not None and share_cache != "__ABSENT__":
-        op_kwargs["share_cache"] = share_cache
-
     # page_table: optional Tensor
     if page_table_ttnn is not None:
         op_kwargs["page_table"] = page_table_ttnn
-
-    # batch_offset: uint32_t
-    if batch_offset is not None and batch_offset != "__ABSENT__":
-        op_kwargs["batch_offset"] = int(batch_offset)
 
     try:
         result = ttnn.experimental.paged_fused_update_cache(*input_tensors, **op_kwargs)

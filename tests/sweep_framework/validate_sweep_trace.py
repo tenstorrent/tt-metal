@@ -58,6 +58,54 @@ IGNORED_KEYS = frozenset(
 )
 
 
+def _parse_shard_spec_string(s: str) -> Any:
+    """Parse a ShardSpec string representation into a dict.
+
+    Handles the format produced by the new operation tracer, e.g.:
+      ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":7,"y":3}], shape=[32, 64],
+                orientation=ShardOrientation::ROW_MAJOR}
+    """
+    import re as _re
+
+    try:
+        inner = s[len("ShardSpec{") : -1] if s.endswith("}") else s[len("ShardSpec{") :]
+        result: dict[str, Any] = {}
+
+        grid_idx = inner.find("grid=")
+        if grid_idx >= 0:
+            bracket_start = inner.index("[", grid_idx)
+            depth, end = 0, bracket_start
+            for i, c in enumerate(inner[bracket_start:], bracket_start):
+                if c == "[":
+                    depth += 1
+                elif c == "]":
+                    depth -= 1
+                    if depth == 0:
+                        end = i
+                        break
+            grid_str = inner[bracket_start : end + 1]
+            opens = grid_str.count("{")
+            closes = grid_str.count("}")
+            if opens > closes:
+                grid_str = grid_str[:-1] + "}" * (opens - closes) + "]"
+            try:
+                result["grid"] = json.loads(grid_str)
+            except json.JSONDecodeError:
+                result["grid"] = grid_str
+
+        shape_match = _re.search(r"shape=\[([0-9, ]+)\]", inner)
+        if shape_match:
+            result["shape"] = [int(x.strip()) for x in shape_match.group(1).split(",")]
+
+        orient_match = _re.search(r"orientation=(?:ShardOrientation::)?(\w+)", inner)
+        if orient_match:
+            result["orientation"] = orient_match.group(1)
+
+        return result if result else s
+    except Exception:
+        return s
+
+
 def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     """Recursively normalize a config dict for comparison.
 
@@ -71,12 +119,13 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
         # be meaningfully compared with the sweep's host-side coordinate
         # lists.  Normalize them to a sentinel so they match any non-None
         # counterpart rather than producing a spurious diff.
-        if obj.get("type") in ("ttnn.Tensor",) and "tensor_placement" in obj:
+        if obj.get("type") in ("ttnn.Tensor",) and ("tensor_placement" in obj or "mesh_device" in obj):
             return "__DEVICE_TENSOR__"
         # Normalize Shape dicts: {'type': 'Shape', 'value': 'Shape([1, 1, 32, 1])'}
         # → plain list [1, 1, 32, 1] for comparison with sweep trace arrays.
         if obj.get("type") == "Shape" and "value" in obj:
             import re
+
             m = re.search(r"\[([0-9, ]+)\]", str(obj["value"]))
             if m:
                 shape_list = [int(x.strip()) for x in m.group(1).split(",")]
@@ -91,6 +140,15 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
             # sub_core_grids: None is noise
             if k == "sub_core_grids" and v is None:
                 continue
+            # shard_spec: the raw tracer serializes None as the string "None";
+            # normalize to actual None for consistent comparison.
+            if k == "shard_spec" and v == "None":
+                v = None
+            # shard_spec: the new tracer serializes ShardSpec as a string
+            # while old master traces store it as a dict. Parse the string
+            # into a dict so both formats compare equally.
+            if k == "shard_spec" and isinstance(v, str) and v.startswith("ShardSpec{"):
+                v = _parse_shard_spec_string(v)
             # Strip top-level keys with None values — they are semantically
             # equivalent to absent keys.  The V2 loader sometimes produces
             # None for keys not present in the master trace, and the master
@@ -101,6 +159,10 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
                 continue
             result[k] = normalize(v, _parent_key=k)
         return result
+    if isinstance(obj, (int, float)) and not isinstance(obj, bool):
+        if isinstance(obj, int) and abs(obj) > 2**53:
+            return float(obj)
+        return obj
     if isinstance(obj, list):
         # Normalize original_shape lists: strip leading 1s so that
         # 2D shapes like [32, 64128] and 4D shapes like [1, 1, 32, 64128]
@@ -332,7 +394,9 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
                         master_config_id=master_cid,
                         sweep_config_id=sweep_cid,
                         status="match",
-                        sweep_config_hash=sweep_config_hash if (sweep_config_hash and sweep_config_hash != source_hash) else None,
+                        sweep_config_hash=sweep_config_hash
+                        if (sweep_config_hash and sweep_config_hash != source_hash)
+                        else None,
                     )
                 )
             else:

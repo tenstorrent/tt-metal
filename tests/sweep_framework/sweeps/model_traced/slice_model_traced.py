@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 
 TIMEOUT = 300
 
@@ -67,12 +67,32 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(
-        kwargs,
-        exclude={"starts", "ends", "steps", "slice_dim", "num_devices"},
-        output_memory_config=output_memory_config,
-        extra_kwargs={"memory_config": memory_config, "dtype": dtype},
+    # Detect tensor-arg slice: the config has valid num_devices + slice_dim
+    # (arg1/arg2 are __ABSENT__ when they were tensor dicts expanded by loader)
+    _has_slice_meta = kwargs.get("num_devices") not in (None, "__ABSENT__") and kwargs.get("slice_dim") not in (
+        None,
+        "__ABSENT__",
     )
+    _tensor_arg_slice = (isinstance(arg1, dict) and isinstance(arg2, dict)) or _has_slice_meta
+
+    if _tensor_arg_slice:
+        # For tensor-arg slice, include slice_dim and num_devices (required by C++ op)
+        # and keep None values (e.g., output_tensor=None) for trace matching
+        op_kwargs = build_op_kwargs(
+            kwargs,
+            exclude={"starts", "ends", "steps"},
+            output_memory_config=output_memory_config,
+            keep_none=True,
+            extra_kwargs={"memory_config": memory_config, "dtype": dtype},
+        )
+    else:
+        # For coordinate-based slice, exclude slice_dim/num_devices (not valid kwargs)
+        op_kwargs = build_op_kwargs(
+            kwargs,
+            exclude={"starts", "ends", "steps", "slice_dim", "num_devices"},
+            output_memory_config=output_memory_config,
+            extra_kwargs={"memory_config": memory_config, "dtype": dtype},
+        )
 
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
@@ -82,9 +102,6 @@ def run(
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
-
-    # Detect multi-device tensor-arg slice (arg1/arg2 are tensor dicts, not coordinate arrays)
-    _tensor_arg_slice = isinstance(arg1, dict) and isinstance(arg2, dict)
 
     if _tensor_arg_slice:
         slice_dim = kwargs.get("slice_dim", len(shape) - 1)
@@ -96,8 +113,8 @@ def run(
         slices = [slice(s, e) for s, e in zip(slice_start, slice_end)]
         torch_output_tensor = torch_input_tensor_a[tuple(slices)]
     else:
-        _arg1 = arg1 if not isinstance(arg1, dict) else None
-        _arg2 = arg2 if not isinstance(arg2, dict) else None
+        _arg1 = arg1 if (arg1 is not None and arg1 != "__ABSENT__" and not isinstance(arg1, dict)) else None
+        _arg2 = arg2 if (arg2 is not None and arg2 != "__ABSENT__" and not isinstance(arg2, dict)) else None
         slice_start = kwargs.get("starts", None) or _arg1 or [0] * len(shape)
         slice_end = kwargs.get("ends", None) or _arg2
         slice_step = kwargs.get("steps", None) or arg3 or [1] * len(shape)
@@ -154,27 +171,32 @@ def run(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         extra = {}
-        if kwargs.get("output_tensor") is not None and isinstance(kwargs["output_tensor"], dict):
-            out_shape = kwargs["output_tensor"].get("original_shape", slice_end)
-            ot_torch = gen_func_with_cast_tt(
-                partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-            )(tuple(out_shape))
+        ot_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
+        if ot_info and ot_info.get("shape"):
+            op_kwargs.pop("output_tensor", None)
+            out_shape = tuple(ot_info["shape"])
+            ot_dtype = ot_info.get("dtype", input_a_dtype)
+            ot_layout = ot_info.get("layout", input_a_layout)
+            ot_mem = ot_info.get("memory_config", output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
+            ot_torch = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), ot_dtype)(
+                out_shape
+            )
             if is_mesh_device and input_a_tensor_placement:
                 extra["output_tensor"] = create_tensor_on_mesh(
                     ot_torch,
                     device,
-                    input_a_dtype,
-                    input_a_layout,
-                    output_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                    ot_dtype,
+                    ot_layout,
+                    ot_mem,
                     input_a_tensor_placement,
                 )
             else:
                 extra["output_tensor"] = ttnn.from_torch(
                     ot_torch,
-                    dtype=input_a_dtype,
-                    layout=input_a_layout,
+                    dtype=ot_dtype,
+                    layout=ot_layout,
                     device=device,
-                    memory_config=output_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=ot_mem,
                 )
         output_tensor = ttnn.slice(input_tensor_a, start_tensor, end_tensor, **extra, **op_kwargs)
     elif arg3 is not None:

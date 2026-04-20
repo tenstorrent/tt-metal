@@ -524,24 +524,21 @@ def run(
                     start_time = start_measuring_time()
 
                     if is_model_traced:
-                        # Build kwargs matching the reference test pattern
-                        # (test_minimal_all_gather_async.py::run_all_gather_impl).
-                        # subdevice_id is always passed; persistent_output_buffer
-                        # is created locally (not from traced JSON).
-                        # Use the persistent_buffer overload which accepts
-                        # cluster_axis as a keyword arg.  The mesh_device
-                        # overload requires positional args in a specific order
-                        # and is not needed here — the op infers the mesh from
-                        # the input tensor.
+                        # Call the op with kwargs matching how the model calls it.
+                        # The tracer strips multi_device_global_semaphore and
+                        # barrier_semaphore, so passing them as kwargs produces a
+                        # clean trace that matches the master.
                         op_kwargs = {
+                            "persistent_output_buffer": None,
+                            "dim": dim,
+                            "multi_device_global_semaphore": ccl_semaphore_handles[i],
                             "num_links": num_links,
                             "topology": topology,
-                            "subdevice_id": worker_sub_device_id,
+                            "memory_config": output_memory_config
+                            if output_memory_config is not None
+                            else ttnn.DRAM_MEMORY_CONFIG,
+                            "subdevice_id": None,
                         }
-                        if cluster_axis is not None:
-                            op_kwargs["cluster_axis"] = cluster_axis
-                        if output_memory_config is not None:
-                            op_kwargs["memory_config"] = output_memory_config
                         if barrier_semaphore_handles:
                             op_kwargs["barrier_semaphore"] = barrier_semaphore_handles[i]
                         if chunks_per_sync is not None:
@@ -550,14 +547,8 @@ def run(
                             op_kwargs["num_workers_per_link"] = num_workers_per_link
                         if num_buffers_per_channel is not None:
                             op_kwargs["num_buffers_per_channel"] = num_buffers_per_channel
-                        if use_broadcast is not None:
-                            op_kwargs["use_broadcast"] = use_broadcast
-                        persistent_buf = persistent_output_buffers[i] if persistent_output_buffers else None
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input,
-                            persistent_buf,
-                            dim,
-                            ccl_semaphore_handles[i],
                             **op_kwargs,
                         )
                     else:

@@ -94,11 +94,8 @@ def run(
 
     if value is None:
         value = 0.0
-    import math
-
-    if isinstance(value, (int, float)) and not math.isnan(value):
-        _BF16_MAX = 3.3895313892515355e38
-        value = max(-_BF16_MAX, min(_BF16_MAX, float(value)))
+    elif isinstance(value, int):
+        value = float(value)
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -118,12 +115,15 @@ def run(
     else:
         padding = [[0, 0]] * len(shape)
 
-    # PyTorch reference
+    # PyTorch reference — use clamped value for golden since torch.pad
+    # rejects values that overflow the target dtype. ttnn.pad handles them
+    # internally (clamping to dtype range).
     torch_padding = []
     for i in range(len(padding) - 1, -1, -1):
         for p in padding[i]:
             torch_padding.append(p)
-    torch_output = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=value)
+    golden_value = torch.tensor(value, dtype=torch.bfloat16).float().item()
+    torch_output = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=golden_value)
 
     if isinstance(padding, list):
         padding = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in padding)
