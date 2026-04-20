@@ -50,6 +50,15 @@ class TtSharedExpert(LightweightModule):
     """
 
     @staticmethod
+    def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
+        """Check if all shared expert weight cache files exist."""
+        for proj in ["gate_proj", "up_proj", "down_proj"]:
+            if not list(cache_path.glob(f"{cache_name_prefix}.{proj}*.tensorbin")):
+                logger.debug(f"TTNN cache missing: {cache_name_prefix}.{proj}")
+                return False
+        return True
+
+    @staticmethod
     def _convert_and_cache_weights(
         torch_weights: dict,
         emb_dim: int,
