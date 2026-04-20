@@ -353,10 +353,12 @@ jobs:
       gtest_filter: "*NIGHTLY_*"
       nightly-run: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  # SD LLK Unit Tests — preserves slow-dispatch coverage for the LLK gtest binary.
-  # The PR gate runs the same binary in fast dispatch (see llk-fd-unit-tests-* in pr-gate.yaml);
-  # this job keeps the slow-dispatch path exercised and is the only place the
-  # LLKMeshDeviceFixtureSlowDispatchOnly tests actually execute.
+  # SD LLK Unit Tests — slow-dispatch-only coverage for the LLK gtest binary.
+  # The PR gate runs the binary in fast dispatch (see llk-fd-unit-tests-* in pr-gate.yaml)
+  # and covers the bulk of the suite. This job runs ONLY the LLKMeshDeviceFixtureSlowDispatchOnly
+  # tests (the ones the PR gate skips because they need TT_METAL_SLOW_DISPATCH_MODE=1) — so
+  # we get unique slow-dispatch coverage without redundantly re-running everything the FD
+  # PR gate already validated.
   llk-sd-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
@@ -375,6 +377,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       test-group-name: llk
+      gtest_filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*'
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # TTNN Tutorials
   test-ttnn-tutorials:
