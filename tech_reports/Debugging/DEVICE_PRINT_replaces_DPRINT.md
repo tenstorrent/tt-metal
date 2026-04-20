@@ -14,24 +14,24 @@ We are deprecating the legacy **`DPRINT`** device-side debug print API in favor 
 
 The legacy `DPRINT` implementation has several limitations:
 
-- **Device memory footprint:**  
+- **Device memory footprint:**
   `DPRINT` embeds format strings in global sections that are copied to device memory, increasing risc local data memory (LDM) usage and scaling poorly as more prints are added.
 
-- **C++ stream-style syntax:**  
+- **C++ stream-style syntax:**
   `DPRINT` relies on a custom `<<` stream API and helper manipulators (`DEC()`, `HEX()`, `SETW()`, `ENDL()`, etc.), which is verbose and harder to read and maintain.
 
-- **Limited and ad-hoc type support:**  
+- **Limited and ad-hoc type support:**
   Adding new types or richer formatting is awkward and requires more custom helpers.
 
 `DEVICE_PRINT` addresses these issues:
 
-- **Host-only format strings:**  
+- **Host-only format strings:**
   `DEVICE_PRINT` stores strings in dedicated ELF sections that won't be loaded into device memory and will live only on host. This keeps device-side footprint small and bounded.
 
-- **Fmt-style format strings:**  
+- **Fmt-style format strings:**
   It uses a `fmt`-like format syntax (`"value = {}"` with `{:.3f}`, `{:#x}`, alignment, width, etc.), with compile-time checks for format/argument mismatches.
 
-- **Richer type and tooling support:**  
+- **Richer type and tooling support:**
   It adds first-class support for:
   - Enums (decoded to names via DWARF when debug info is present).
   - Tiles / tile slices via `TSLICE(...)`.
