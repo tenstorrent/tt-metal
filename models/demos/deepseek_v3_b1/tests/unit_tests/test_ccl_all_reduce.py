@@ -13,6 +13,7 @@ This test validates all-reduce on a 1D mesh (2 devices) where:
 4. Optionally, a residual tensor is added to the final result to fuse the next residual add block
 """
 
+import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -29,6 +30,36 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_f
 TEST_SENDER_CORE = ttnn.CoreCoord(0, 0)
 TEST_RECEIVER_CORE = ttnn.CoreCoord(0, 1)
 from models.perf.benchmarking_utils import BenchmarkProfiler
+
+ENV_NUM_LINKS = "CCL_ALL_REDUCE_NUM_LINKS"
+ENV_MAX_PAYLOAD_SIZE = "CCL_ALL_REDUCE_MAX_PAYLOAD_SIZE_BYTES"
+
+
+def _parse_env_int(name: str, value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+    if parsed <= 0:
+        raise ValueError(f"{name} must be > 0, got {parsed}")
+    return parsed
+
+
+def _get_env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return _parse_env_int(name, value)
+
+
+def _get_num_links_params(defaults: list[int]) -> list[int]:
+    value = os.getenv(ENV_NUM_LINKS)
+    if value is None or value.strip() == "":
+        return defaults
+    return [_parse_env_int(ENV_NUM_LINKS, value)]
+
+
+MAX_PAYLOAD_SIZE = _get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
 
 
 @dataclass(frozen=True)
@@ -176,14 +207,14 @@ def build_all_reduce_test_inputs(
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.parametrize("num_links", _get_num_links_params([2]))
 @pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": create_fabric_router_config(MAX_PAYLOAD_SIZE),
             "trace_region_size": 573440,
         }
     ],
@@ -224,7 +255,10 @@ def test_ccl_all_reduce(
         semaphore_count=num_links + 1,
     )
 
-    logger.info(f"Running CCL all-reduce: num_devices={num_devices}")
+    logger.info(
+        f"Running CCL all-reduce: num_devices={num_devices}, num_links={num_links}, "
+        f"max_payload_size_bytes={MAX_PAYLOAD_SIZE}"
+    )
     profiler = BenchmarkProfiler()
 
     logger.info("Compiling model")
