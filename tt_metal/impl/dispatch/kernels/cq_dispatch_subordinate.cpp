@@ -378,7 +378,17 @@ void kernel_main() {
     realtime_profiler_mailbox->realtime_profiler_core_noc_xy = 0;
     realtime_profiler_mailbox->realtime_profiler_mailbox_addr = 0;
     realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
-    bool rt_profiler_initialized = false;
+    // FIFO + buffer IDs must be reset here while core_noc_xy is still zero so
+    // dispatch_d cannot append yet. Deferring this reset until the first loop
+    // iteration after host enables RT races with dispatch_d, which can append
+    // program_host_id entries before dispatch_s runs — wiping the FIFO drops
+    // the first (and sometimes last) program IDs seen by the profiler core.
+    realtime_profiler_mailbox->program_id_fifo_start = 0;
+    realtime_profiler_mailbox->program_id_fifo_end = 0;
+    realtime_profiler_mailbox->kernel_start_a.id = 0;
+    realtime_profiler_mailbox->kernel_end_a.id = 0;
+    realtime_profiler_mailbox->kernel_start_b.id = 0;
+    realtime_profiler_mailbox->kernel_end_b.id = 0;
 
     cmd_ptr = cb_base;
     bool done = false;
@@ -386,15 +396,6 @@ void kernel_main() {
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
         rt_profiler_enabled = (realtime_profiler_mailbox->realtime_profiler_core_noc_xy != 0);
-        if (rt_profiler_enabled && !rt_profiler_initialized) {
-            realtime_profiler_mailbox->program_id_fifo_start = 0;
-            realtime_profiler_mailbox->program_id_fifo_end = 0;
-            realtime_profiler_mailbox->kernel_start_a.id = 0;
-            realtime_profiler_mailbox->kernel_end_a.id = 0;
-            realtime_profiler_mailbox->kernel_start_b.id = 0;
-            realtime_profiler_mailbox->kernel_end_b.id = 0;
-            rt_profiler_initialized = true;
-        }
         uint32_t popped_pid = 0;
         if (rt_profiler_enabled) {
             record_realtime_timestamp(realtime_profiler_mailbox, true);
