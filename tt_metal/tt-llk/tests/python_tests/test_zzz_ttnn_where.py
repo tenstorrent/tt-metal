@@ -9,7 +9,7 @@ from helpers.golden_generators import WhereGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathOperation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DISABLE_SRC_ZERO_FLAG,
@@ -53,20 +53,18 @@ def test_ttnn_where(
         pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
 
     input_dimensions = [32, 32]  # Single tile dimensions
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=False,
     )
 
-    src_C, tile_cnt_C, _, _ = generate_stimuli(
+    src_C, tile_cnt_C, _, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=False,
     )
 
     # Modify the condition tensor based on test case

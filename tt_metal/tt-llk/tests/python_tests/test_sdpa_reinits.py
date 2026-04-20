@@ -21,7 +21,7 @@ from helpers.llk_params import (
 )
 from helpers.pack import pack_bfp16
 from helpers.param_config import input_output_formats, parametrize
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
@@ -67,7 +67,7 @@ def test_sdpa_reinits(
 
     # Generate input stimuli
     # Note: src_b_const_value: 1.0 in YAML means src_B is constant 1.0, not random
-    src_A, tile_cnt_A, _, _ = generate_stimuli(
+    src_A, tile_cnt_A, _, _ = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,

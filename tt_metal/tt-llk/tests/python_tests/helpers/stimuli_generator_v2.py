@@ -1,57 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Declarative test stimuli generation (v2) for LLK tests.
-
-This module replaces the scattered boolean-flag API of stimuli_generator.py
-with a declarative :class:`StimuliSpec` that supports:
-
-* Multiple distributions per operand — ``"uniform"``, ``"gaussian"``,
-   ``"saw"``, ``"log_uniform"``, ``"constant"``, ``"sequential"``,
-   ``"ramp"``, ``"gaussian_linspace"``,
-   ``"log_uniform_linspace"``, ``"identity"``, ``"face_identity"``,
-   ``"custom"``, or any custom callable.
-* Arbitrary value bounds (``low`` / ``high``) per operand with no
-  hard-coded caps.
-* Per-face overrides via ``StimuliSpec.face_specs``.
-* Format-aware SFPU domain presets through
-  ``StimuliSpec.for_op(op, data_format)``, backed by a registry that maps
-  every :class:`~helpers.llk_params.MathOperation` to its valid input domain
-  and format-specific overflow threshold.
-* Independent, reproducible seed per operand via ``StimuliSpec.seed``.
-
-Quick-start
------------
->>> from helpers.stimuli_generator_v2 import StimuliSpec, generate_stimuli_v2
->>> from helpers.format_config import DataFormat
->>> from helpers.llk_params import MathOperation
->>>
->>> # Two independent operands with explicit distributions
->>> srcA, tile_cnt_A, srcB, tile_cnt_B = generate_stimuli_v2(
-...     stimuli_format_A=DataFormat.Float16_b,
-...     spec_A=StimuliSpec.uniform(low=-10.0, high=10.0, seed=42),
-...     spec_B=StimuliSpec.log_uniform(low=0.01, high=1.0, seed=7),
-... )
->>>
->>> # Format-aware preset for a specific SFPU op — returns OperandSpecs
->>> operands = StimuliSpec.for_op(MathOperation.Acosh, DataFormat.Float16_b)
->>> srcA, cnt_A, srcB, cnt_B = generate_stimuli_v2(
-...     spec_A=operands.spec_A, spec_B=operands.spec_B
-... )
->>>
->>> # Asymmetric binary op — divisor avoids zero
->>> operands = StimuliSpec.for_op(MathOperation.SfpuElwdiv, DataFormat.Float16_b)
->>> # operands.spec_A → uniform[-2, 2]   (dividend)
->>> # operands.spec_B → log_uniform[0.1, 10]  (divisor, no zero)
->>>
->>> # Custom callable distribution — receives the per-operand generator
->>> spec = StimuliSpec(
-...     distribution=lambda size, dtype, gen: torch.ones(size, dtype=dtype) * 3.14,
-...     seed=99,
-... )
-"""
-
 import math
 import warnings
 from dataclasses import dataclass
@@ -67,11 +16,6 @@ from .format_config import (
     DataFormat,
 )
 from .llk_params import MathOperation, format_dict
-from .stimuli_generator import (
-    _clamp_mx_tensors,
-    calculate_tile_and_face_counts,
-    calculate_tile_and_face_counts_w_tile_dimensions,
-)
 from .tile_constants import (
     DEFAULT_TILE_C_DIM,
     DEFAULT_TILE_R_DIM,
@@ -79,6 +23,7 @@ from .tile_constants import (
     MAX_FACE_R_DIM,
     MAX_NUM_FACES,
     get_tile_params,
+    validate_tile_dimensions,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -96,123 +41,123 @@ class StimuliSpec:
     distribution : str or callable
         How values are sampled.  Supported string values:
 
-        ``"uniform"``
-            Uniform random in ``[low, high]``.  For integer formats the bounds
+        "uniform"
+            Uniform random in [low, high].  For integer formats the bounds
             are narrowed to the tightest enclosing integers via
-            ``torch.randint(ceil(low), floor(high) + 1)``, so only integers
-            that actually lie within ``[low, high]`` are generated.
+            torch.randint(ceil(low), floor(high) + 1), so only integers
+            that actually lie within [low, high] are generated.
 
-        ``"gaussian"``
+        "gaussian"
             Normal distribution with *mean* and *std*.  For integer formats
             the result is rounded and clamped to the representable range.
 
-        ``"saw"``
+        "saw"
             Per-face sawtooth: linearly spaced values from *low* to *high*
-            (``torch.linspace``), restarting every face.  For integer
+            (torch.linspace), restarting every face.  For integer
             formats a float32 linspace is rounded and clamped.
 
-        ``"log_uniform"``
-            ``exp(Uniform(log(low), log(high)))``.  Both *low* and *high* must
+        "log_uniform"
+            exp(Uniform(log(low), log(high))).  Both *low* and *high* must
             be strictly positive.
 
-        ``"constant"``
+        "constant"
             Every element is set to *value*.  Ignores *low*, *high*, *seed*.
 
-        ``"sequential"``
-            Values ``1, 2, 3, …, size`` (mirrors the legacy
-            ``sequential=True`` flag).  Ignores *low*, *high*, *seed*.
+        "sequential"
+            Values 1, 2, 3, …, size.
+            Ignores *low*, *high*, *seed*.
 
-        ``"ramp"``
+        "ramp"
             Continuous linear sweep: deterministic, evenly spaced values
-            from *low* to *high* (``torch.linspace``) across the **full
-            tensor** (short-circuits the face loop), producing one smooth
+            from *low* to *high* (torch.linspace) across the full
+            tensor (short-circuits the face loop), producing one smooth
             ramp instead of a per-face sawtooth.  Useful for plotting
             function shapes.
 
-        ``"gaussian_linspace"``
+        "gaussian_linspace"
             Deterministic sweep through the Gaussian domain via the
             inverse CDF (percent-point function).  Produces ordered values
             concentrated around *mean* and spreading into the tails at
             *std* scale.  No randomness involved — the output is fully
             determined by *mean*, *std*, and the element count.
 
-        ``"log_uniform_linspace"``
+        "log_uniform_linspace"
             Deterministic, logarithmically spaced values from *low* to
             *high*.  Both bounds must be strictly positive.  Equivalent to
-            ``torch.logspace`` in natural-log base.
+            torch.logspace in natural-log base.
 
-        ``"identity"``
+        "identity"
             Identity matrix pattern: *value* on the diagonal, zero
-            elsewhere.  Requires 2-D ``input_dimensions``.  For
-            rectangular matrices the diagonal has ``min(rows, cols)``
+            elsewhere.  Requires 2-D input_dimensions.  For
+            rectangular matrices the diagonal has min(rows, cols)
             entries.  Bypasses the face loop (tensor-level operation).
             Ignores *low*, *high*, *seed*.
 
-        ``"face_identity"``
+        "face_identity"
             Per-face identity block: each face is treated as a
-            ``(face_r_dim, FACE_C_DIM)`` matrix with *value* on the
+            (face_r_dim, FACE_C_DIM) matrix with *value* on the
             diagonal and zero elsewhere.  The diagonal length is
-            ``min(face_r_dim, FACE_C_DIM)``.  Participates in the
-            normal face loop, so it works naturally with ``face_specs``
-            and ``masked_faces``.  Ignores *low*, *high*, *seed*.
+            min(face_r_dim, FACE_C_DIM).  Participates in the
+            normal face loop, so it works naturally with face_specs
+            and masked_faces.  Ignores *low*, *high*, *seed*.
 
-        ``"custom"``
+        "custom"
             Explicit per-face values: the elements from *values* are
             written at the start of the flattened face, and every
-            remaining element is zero.  Values are **not** repeated.
+            remaining element is zero.  Values are not repeated.
             Participates in the normal face loop, so it works naturally
-            with ``face_specs`` and ``masked_faces``.  Ignores *low*,
+            with face_specs and masked_faces.  Ignores *low*,
             *high*, *seed*, *value*.
 
         callable
-            ``fn(size: int, dtype: torch.dtype, generator: Optional[torch.Generator]) -> torch.Tensor``.
+            fn(size: int, dtype: torch.dtype, generator: Optional[torch.Generator]) -> torch.Tensor.
             The *generator* argument carries the per-operand RNG state (or
-            ``None`` when no seed is set), enabling reproducible custom
+            "None" when no seed is set), enabling reproducible custom
             distributions.  The caller is responsible for producing a 1-D
             tensor of exactly *size* elements and returning it as the
             requested *dtype*.
 
     low : float
-        Lower bound for ``"uniform"``, ``"saw"``, ``"ramp"``,
-        ``"log_uniform"``, and ``"log_uniform_linspace"``.
-        Defaults to ``0.0``.
+        Lower bound for "uniform", "saw", "ramp",
+        "log_uniform", and "log_uniform_linspace".
+        Defaults to 0.0.
     high : float
-        Upper bound for ``"uniform"``, ``"saw"``, ``"ramp"``,
-        ``"log_uniform"``, and ``"log_uniform_linspace"``.
-        Defaults to ``1.0``.
+        Upper bound for "uniform", "saw", "ramp",
+        "log_uniform", and "log_uniform_linspace".
+        Defaults to 1.0.
     value : float
-        Fill value used by ``"constant"`` (all elements), ``"identity"``
-        (diagonal elements), and ``"face_identity"`` (face diagonal
-        elements).  Defaults to ``1.0``.
+        Fill value used by "constant" (all elements), "identity"
+        (diagonal elements), and "face_identity" (face diagonal
+        elements).  Defaults to 1.0.
     values : list[float], optional
-        Explicit value list for ``"custom"``.  Written at the start of
+        Explicit value list for "custom".  Written at the start of
         the flattened face; remaining elements are zero.  For integer
         formats each value is rounded and clamped to the representable
-        range.  Must not be empty when ``distribution="custom"``.
+        range.  Must not be empty when distribution="custom".
     mean : float
-        Mean for ``"gaussian"`` and ``"gaussian_linspace"``.  Defaults to
-        ``0.0``.
+        Mean for "gaussian" and "gaussian_linspace".  Defaults to
+        0.0.
     std : float
-        Standard deviation for ``"gaussian"`` and ``"gaussian_linspace"``.
-        Defaults to ``1.0``.
+        Standard deviation for "gaussian" and "gaussian_linspace".
+        Defaults to 1.0.
     seed : int, optional
-        Seed for a per-spec ``torch.Generator``.  ``None`` uses the global
+        Seed for a per-spec torch.Generator.  "None" uses the global
         torch RNG state.  When an external generator is supplied to
-        :func:`generate_face_v2` the *seed* field is ignored so the caller
+        generate_face_v2 function the *seed* field is ignored so the caller
         controls state across faces.
     face_specs : list[StimuliSpec | None], optional
-        Per-face overrides.  ``face_specs`` itself may be ``None``
-        (no overrides at all).  Individual entries may also be ``None``,
+        Per-face overrides. face_specs itself may be "None"
+        (no overrides at all).  Individual entries may also be "None",
         meaning "use the outer/base spec for this face."  Face *i* is
-        generated with ``face_specs[i]`` when that entry is a
-        :class:`StimuliSpec`; a ``None`` entry or an index beyond the
+        generated with face_specs[i] when that entry is a
+        StimuliSpec class, a "None" entry or an index beyond the
         list length falls back to the outer spec.
     masked_faces : set[int], optional
         Set of 0-based face indices whose output should be zeroed.
         Masking is applied *after* face generation (including any
-        ``face_specs`` overrides), so it always wins.  Not compatible
-        with global short-circuit distributions (``"identity"``,
-        ``"sequential"``, linspace variants) — raises ``ValueError``
+        face_specs overrides), so it always wins.  Not compatible
+        with global short-circuit distributions ("identity",
+        "sequential", linspace variants) — raises ValueError
         if combined.
     """
 
@@ -246,13 +191,7 @@ class StimuliSpec:
 
     @classmethod
     def custom(cls, values: List[float], **kwargs) -> "StimuliSpec":
-        """Explicit values at the start of each face, zero-filled remainder.
-
-        Example
-        -------
-        >>> spec = StimuliSpec.custom(values=[2, 5, 12, 7, 1])
-        >>> # face → [2, 5, 12, 7, 1, 0, 0, ..., 0]
-        """
+        """Explicit values at the start of each face, zero-filled remainder."""
         return cls(distribution="custom", values=list(values), **kwargs)
 
     @classmethod
@@ -261,27 +200,21 @@ class StimuliSpec:
         face_values: Dict[int, List[float]],
         **kwargs,
     ) -> "StimuliSpec":
-        """Sparse per-face custom values; unspecified faces default to zeros.
+        """
+        Build a spec that writes custom values on selected faces and leaves all
+        other faces as zeros.
 
-        Builds a spec with ``distribution="constant", value=0.0`` and
-        populates ``face_specs`` so that only the faces named in
-        *face_values* receive data.
+        Args:
+            face_values: Mapping from 0-based face index to the value list for that face.
+                Each list is written at the start of the flattened face; the rest
+                of the face is zero-filled. Faces not present in the mapping are
+                entirely zeros.
+            **kwargs: Forwarded to the outer StimuliSpec (e.g. masked_faces).
 
-        Parameters
-        ----------
-        face_values : dict[int, list[float]]
-            Mapping of 0-based face index to the values for that face.
-        **kwargs
-            Forwarded to the outer :class:`StimuliSpec` (e.g.
-            ``masked_faces``).
-
-        Example
-        -------
-        >>> spec = StimuliSpec.custom_faces({
-        ...     2: [2, 5, 12, 7, 1],
-        ...     4: [8, 3],
-        ... })
-        >>> # face 0,1,3 → all zeros; face 2 → [2,5,12,7,1,0,...]; face 4 → [8,3,0,...]
+        Returns:
+            StimuliSpec with distribution="constant", value=0.0 as the base and a
+            face_specs list that overlays per-face custom(values=...) specs
+            where provided.
         """
         if not face_values:
             raise ValueError("face_values must be a non-empty dict")
@@ -308,12 +241,12 @@ class StimuliSpec:
 
     @classmethod
     def sequential(cls, **kwargs) -> "StimuliSpec":
-        """Sequential values ``1, 2, 3, …``"""
+        """Sequential values 1, 2, 3, …"""
         return cls(distribution="sequential", **kwargs)
 
     @classmethod
     def uniform(cls, low: float = 0.0, high: float = 1.0, **kwargs) -> "StimuliSpec":
-        """Uniform random in ``[low, high]``."""
+        """Uniform random in [low, high]."""
         return cls(distribution="uniform", low=low, high=high, **kwargs)
 
     @classmethod
@@ -330,9 +263,7 @@ class StimuliSpec:
     def log_uniform(
         cls, low: float = 1e-4, high: float = 1.0, **kwargs
     ) -> "StimuliSpec":
-        """
-        Log-uniform in ``[low, high]``.  Both bounds must be strictly positive.
-        """
+        """Log-uniform in [low, high].  Both bounds must be strictly positive."""
         if low <= 0 or high <= 0:
             raise ValueError(
                 f"log_uniform requires strictly positive low and high, "
@@ -349,7 +280,10 @@ class StimuliSpec:
     def gaussian_linspace(
         cls, mean: float = 0.0, std: float = 1.0, **kwargs
     ) -> "StimuliSpec":
-        """Deterministic sweep through the Gaussian domain (inverse CDF)."""
+        """
+        Deterministic sweep through a Gaussian: values spaced by inverting
+        the normal CDF (no randomness, fully determined by mean/std/size).
+        """
         return cls(distribution="gaussian_linspace", mean=mean, std=std, **kwargs)
 
     @classmethod
@@ -370,41 +304,19 @@ class StimuliSpec:
         op: MathOperation,
         data_format: DataFormat = DataFormat.Float16_b,
     ) -> "OperandSpecs":
-        """
-        Return :class:`OperandSpecs` with safe input domains for *op* and
-        *data_format*.
+        """Return OperandSpecs with safe input domains for *op* and *data_format*.
 
-        The registry maps each :class:`~helpers.llk_params.MathOperation` to
-        either a fixed :class:`OperandSpecs` (format-independent domain) or a
-        callable ``(DataFormat) -> OperandSpecs`` for operations whose safe
-        range depends on the format's overflow threshold (e.g. ``Exp``
-        overflows far sooner in Float16 than in Float16_b).
+        Args:
+            op: Target math operation.
+            data_format: Input data format; controls the numeric range and
+            precision used to choose safe per-op input domains (e.g. tighter
+            ranges for narrower MX/BFP formats).
 
-        For binary operations where the two operands have different valid
-        domains (e.g. ``SfpuElwdiv``, ``SfpuXlogy``), the returned
-        :class:`OperandSpecs` carries distinct ``spec_A`` and ``spec_B``.
+        Returns:
+            OperandSpecs with per-operand domain specs.
 
-        Parameters
-        ----------
-        op : MathOperation
-            Target math operation.
-        data_format : DataFormat
-            Input data format; drives format-specific threshold selection for
-            operations like :attr:`~helpers.llk_params.MathOperation.Exp`,
-            :attr:`~helpers.llk_params.MathOperation.Exp2`, and
-            :attr:`~helpers.llk_params.MathOperation.Square`.
-
-        Returns
-        -------
-        OperandSpecs
-
-        Raises
-        ------
-        KeyError
-            If *op* is not in the registry.  This is intentional: silently
-            falling back to a default spec can mask missing coverage when a
-            new :class:`~helpers.llk_params.MathOperation` is added without
-            a corresponding registry entry.
+        Raises:
+            KeyError: If *op* is not in the registry.
         """
         entry = _OP_DOMAIN_REGISTRY.get(op)
         if entry is None:
@@ -426,23 +338,11 @@ class StimuliSpec:
 
 @dataclass
 class OperandSpecs:
-    """
-    Per-operand input domain specifications returned by
-    :meth:`StimuliSpec.for_op`.
+    """Per-operand input domain specs returned by StimuliSpec.for_op method.
 
-    Encodes the correct input domain for *each* operand of a math operation,
-    including operations where operands must live in different domains:
-
-    * ``SfpuElwdiv`` — divisor (srcB) must avoid zero
-    * ``SfpuXlogy`` — srcA (x) requires x ≥ 0, srcB (y) requires y > 0
-
-    Parameters
-    ----------
-    spec_A : StimuliSpec
-        Specification for the first operand (srcA).
-    spec_B : StimuliSpec, optional
-        Specification for the second operand (srcB).  Defaults to a copy of
-        *spec_A* when ``None``, so unary operations need only provide one spec.
+    For binary ops where operands need different domains (e.g. divisor avoids
+    zero), spec_A and spec_B differ; unary ops need only spec_A.
+    spec_B defaults to a copy of spec_A when "None".
     """
 
     spec_A: StimuliSpec
@@ -462,17 +362,7 @@ class OperandSpecs:
 
 
 def _exp_spec(fmt: DataFormat) -> OperandSpecs:
-    """
-    Safe input range for ``exp(x)`` so the output does not overflow.
-
-    Conservative overflow thresholds per format family:
-
-    * MxFp8P    (max ≈ 448)    → exp(5)  ≈ 148   : [-5,  5]
-    * Float16   (max ≈ 65504)  → exp(10) ≈ 22026  : [-10, 10]
-    * MxFp8R    (max ≈ 57344)  → exp(10) ≈ 22026  : [-10, 10]
-    * Float16_b (max ≈ 3.4e38) → exp(80) ≪ max    : [-80, 80]
-    * Float32 / Tf32 / BFP: same as Float16_b
-    """
+    """Safe input range for exp(x) per format to avoid overflow."""
     if fmt == DataFormat.MxFp8P:
         spec = StimuliSpec(distribution="uniform", low=-5.0, high=5.0)
     elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
@@ -483,14 +373,7 @@ def _exp_spec(fmt: DataFormat) -> OperandSpecs:
 
 
 def _exp2_spec(fmt: DataFormat) -> OperandSpecs:
-    """
-    Safe input range for ``exp2(x) = 2^x``.
-
-    * MxFp8P  : 2^7  = 128   < 448       : [-7,   7]
-    * Float16 : 2^14 = 16384 < 65504     : [-14, 14]
-    * MxFp8R  : 2^14 = 16384 < 57344     : [-14, 14]
-    * Float16_b / Float32 / BFP: 2^100 ≈ 1.27e30 < 3.4e38 : [-100, 100]
-    """
+    """Safe input range for exp2(x) = 2^x per format to avoid overflow."""
     if fmt == DataFormat.MxFp8P:
         spec = StimuliSpec(distribution="uniform", low=-7.0, high=7.0)
     elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
@@ -501,14 +384,7 @@ def _exp2_spec(fmt: DataFormat) -> OperandSpecs:
 
 
 def _square_spec(fmt: DataFormat) -> OperandSpecs:
-    """
-    Safe input range for ``square(x) = x^2`` so the output does not overflow.
-
-    * MxFp8P  : sqrt(448)  ≈ 21  → [-20,  20]
-    * Float16 : sqrt(65504) ≈ 256 → [-200, 200] (conservative)
-    * MxFp8R  : sqrt(57344) ≈ 239 → [-200, 200] (conservative)
-    * Float16_b / Float32 / BFP  → [-1000, 1000] (practical limit)
-    """
+    """Safe input range for square(x) = x^2 per format to avoid overflow."""
     if fmt == DataFormat.MxFp8P:
         spec = StimuliSpec(distribution="uniform", low=-20.0, high=20.0)
     elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
@@ -732,6 +608,335 @@ _OP_DOMAIN_REGISTRY: Dict[
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Tile / face count utilities
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def calculate_tile_and_face_counts(
+    input_dimensions_A: list,
+    input_dimensions_B: list,
+    face_r_dim: int,
+    num_faces: int,
+) -> tuple[int, int, int]:
+    """
+    Calculate tile counts and faces to generate based on input dimensions and face configuration.
+    This is the ORIGINAL function that always uses 32x32 tiles.
+
+    Args:
+        input_dimensions_A: [height, width] in elements for input A
+        input_dimensions_B: [height, width] in elements for input B
+        face_r_dim: Number of rows in a face (typically 16 for full faces)
+        num_faces: Number of faces to generate for partial face case
+
+    Returns:
+        tuple: (tile_cnt_A, tile_cnt_B, faces_to_generate)
+    """
+    assert (
+        face_r_dim == MAX_FACE_R_DIM or face_r_dim == input_dimensions_A[0]
+    ), f"Invalid face_r_dim, got {face_r_dim}"
+
+    # Handle partial faces
+    if face_r_dim < MAX_FACE_R_DIM:
+        # Partial face case: generate exactly num_faces worth of data
+        tile_cnt_A, tile_cnt_B = 1, 1
+        faces_to_generate = num_faces  # Generate exactly the right number of faces
+    else:
+        # Full tile case - always use 32x32 tiles
+        tile_cnt_A = (
+            input_dimensions_A[0]
+            // DEFAULT_TILE_R_DIM
+            * input_dimensions_A[1]
+            // DEFAULT_TILE_C_DIM
+        )
+        tile_cnt_B = (
+            input_dimensions_B[0]
+            // DEFAULT_TILE_R_DIM
+            * input_dimensions_B[1]
+            // DEFAULT_TILE_C_DIM
+        )
+        faces_to_generate = MAX_NUM_FACES
+
+    return tile_cnt_A, tile_cnt_B, faces_to_generate
+
+
+def calculate_tile_and_face_counts_w_tile_dimensions(
+    input_dimensions_A: list,
+    input_dimensions_B: list,
+    face_r_dim: int,
+    num_faces: int,
+    tile_dimensions: list,
+) -> tuple[int, int, int]:
+    """
+    Calculate tile counts and faces to generate for variable tile dimensions (dense mode).
+
+    Args:
+        input_dimensions_A: [height, width] in elements for input A
+        input_dimensions_B: [height, width] in elements for input B
+        face_r_dim: Number of rows in a face (1, 2, 4, 8, or 16)
+        num_faces: Number of faces per tile (1, 2, or 4)
+        tile_dimensions: [rows, cols] for tile size
+
+    Returns:
+        tuple: (tile_cnt_A, tile_cnt_B, faces_to_generate)
+    """
+    validate_tile_dimensions(tile_dimensions)
+    tile_r_dim, tile_c_dim = tile_dimensions
+
+    # Calculate tile counts based on actual tile dimensions
+    tile_cnt_A = (input_dimensions_A[0] // tile_r_dim) * (
+        input_dimensions_A[1] // tile_c_dim
+    )
+    tile_cnt_B = (input_dimensions_B[0] // tile_r_dim) * (
+        input_dimensions_B[1] // tile_c_dim
+    )
+    # Always generate all faces to fill the tile densely
+    faces_to_generate = num_faces
+
+    return tile_cnt_A, tile_cnt_B, faces_to_generate
+
+
+def _clamp_mx_tensors(
+    srcA_tensor: torch.Tensor,
+    srcB_tensor: torch.Tensor,
+    stimuli_format_A: DataFormat,
+    stimuli_format_B: DataFormat,
+    output_format: DataFormat = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Clamp tensors for MX format compatibility.
+
+    Args:
+        srcA_tensor: Source A tensor
+        srcB_tensor: Source B tensor
+        stimuli_format_A: Data format for source A
+        stimuli_format_B: Data format for source B
+        output_format: Optional output format for range constraints
+
+    Returns:
+        tuple: (clamped_srcA_tensor, clamped_srcB_tensor)
+    """
+    # Clamp inputs if both are different MX formats (use more restrictive MxFp8P)
+    if stimuli_format_A.is_mx_format() and stimuli_format_B.is_mx_format():
+        if stimuli_format_A != stimuli_format_B:
+            srcA_tensor = torch.clamp(
+                srcA_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
+            )
+            srcB_tensor = torch.clamp(
+                srcB_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
+            )
+
+    # Clamp inputs based on output format to prevent excessive rounding errors
+    if output_format == DataFormat.MxFp8P:
+        srcA_tensor = torch.clamp(
+            srcA_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
+        )
+        srcB_tensor = torch.clamp(
+            srcB_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
+        )
+    elif output_format == DataFormat.MxFp8R:
+        srcA_tensor = torch.clamp(
+            srcA_tensor, -MXFP8_E5M2_MAX_NORMAL, MXFP8_E5M2_MAX_NORMAL
+        )
+        srcB_tensor = torch.clamp(
+            srcB_tensor, -MXFP8_E5M2_MAX_NORMAL, MXFP8_E5M2_MAX_NORMAL
+        )
+
+    return srcA_tensor, srcB_tensor
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Matmul helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _mask_tile(
+    tile: torch.Tensor,
+    num_faces: int,
+    is_matrix_B: bool,
+    face_r_dim: int = MAX_FACE_R_DIM,
+) -> torch.Tensor:
+    masked = tile.clone()
+    if num_faces == 1:
+        # Keep only f0
+        masked[:MAX_FACE_R_DIM, FACE_C_DIM:] = 0  # Zero f1
+        masked[face_r_dim:, :] = 0  # Zero f2, f3 and part of f0
+    elif num_faces == 2:
+        if is_matrix_B:
+            # matrix B (In1/SrcA): keep partial f0, f2
+            if face_r_dim < MAX_FACE_R_DIM:
+                masked[face_r_dim:MAX_FACE_R_DIM, :FACE_C_DIM] = 0  # Zero part of f0
+                masked[MAX_FACE_R_DIM + face_r_dim :, :FACE_C_DIM] = (
+                    0  # Zero part of f2
+                )
+            masked[:MAX_FACE_R_DIM, FACE_C_DIM:] = 0  # Zero f1
+            masked[MAX_FACE_R_DIM:, FACE_C_DIM:] = 0  # Zero f3
+        else:
+            # matrix A (In0/SrcB): keep f0, f1
+            masked[face_r_dim:, :] = 0  # Zero part of f0 and f1
+    return masked
+
+
+def generate_face_matmul_data(
+    num_faces: int,
+    stimuli_format: DataFormat,
+    input_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
+    is_matrix_A=True,  # True for matrix A (SrcB), False for matrix B (SrcA)
+    face_r_dim=MAX_FACE_R_DIM,
+) -> torch.Tensor:
+
+    # Validate num_faces
+    if num_faces not in [1, 2, MAX_NUM_FACES]:
+        raise ValueError(f"num_faces must be 1, 2, or {MAX_NUM_FACES}, got {num_faces}")
+
+    # Validate input_dimensions
+    rows, cols = input_dimensions
+    if rows % DEFAULT_TILE_R_DIM != 0 or cols % DEFAULT_TILE_C_DIM != 0:
+        raise ValueError(
+            f"Input dimensions must be multiples of {DEFAULT_TILE_R_DIM}, "
+            f"got {input_dimensions}"
+        )
+
+    rt, ct = rows // DEFAULT_TILE_R_DIM, cols // DEFAULT_TILE_C_DIM
+    dtype = format_dict[stimuli_format]
+
+    out = torch.rand(rt, ct, DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM, dtype=dtype)
+    mask = _mask_tile(
+        torch.ones(DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM, dtype=dtype),
+        num_faces,
+        not is_matrix_A,
+        face_r_dim,
+    )
+    out *= mask
+    out = out.permute(0, 2, 1, 3).reshape(rows, cols)
+
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# L1 view helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def convert_to_l1_view(
+    tilized_tensor: torch.Tensor,
+    input_dimensions: list,
+    tile_dimensions: list = None,
+) -> torch.Tensor:
+    """
+    Convert a tilized tensor to its L1 memory view by condensing data based on tile dimensions.
+
+    This function extracts only the data that corresponds to the specified tile dimensions
+    and places it at the beginning of each tile, with the remaining space zeroed out.
+    The full tile size (1024 elements) is preserved.
+
+    Tilized format: faces are stored sequentially [f0 (256), f1 (256), f2 (256), f3 (256)]
+    Within each face, data is stored row-major (16 rows × 16 cols).
+
+    Face layout in a 32×32 tile:
+    - f0: rows 0-15, cols 0-15  (top-left)
+    - f1: rows 0-15, cols 16-31 (top-right)
+    - f2: rows 16-31, cols 0-15 (bottom-left)
+    - f3: rows 16-31, cols 16-31 (bottom-right)
+
+    Examples:
+    - tile_dimensions=[32, 32]: full tile, no change [f0, f1, f2, f3]
+    - tile_dimensions=[16, 32]: top half [f0, f1, 0, 0]
+    - tile_dimensions=[32, 16]: left half [f0, f2, 0, 0]
+    - tile_dimensions=[16, 16]: top-left only [f0, 0, 0, 0]
+    - tile_dimensions=[8, 32]: first 8 rows [f0_rows0-7, f1_rows0-7, 0, ...]
+
+    Args:
+        tilized_tensor: Input tensor in tilized format (faces stored sequentially per tile)
+        input_dimensions: [rows, cols] of the full input matrix
+        tile_dimensions: [rows, cols] to keep per tile (default [32, 32])
+                        rows must be one of: 1, 2, 4, 8, 16, 32
+                        cols must be one of: 16, 32
+
+    Returns:
+        Tensor with condensed data at the beginning (face by face), zeros at the end
+    """
+    if tile_dimensions is None:
+        tile_dimensions = [32, 32]
+
+    tile_rows, tile_cols = tile_dimensions
+
+    valid_rows = {1, 2, 4, 8, 16, 32}
+    valid_cols = {16, 32}
+
+    if tile_rows not in valid_rows:
+        raise ValueError(
+            f"tile_dimensions[0] (rows) must be one of {sorted(valid_rows)}, got {tile_rows}"
+        )
+    if tile_cols not in valid_cols:
+        raise ValueError(
+            f"tile_dimensions[1] (cols) must be one of {sorted(valid_cols)}, got {tile_cols}"
+        )
+
+    rows, cols = input_dimensions
+    if rows % 32 != 0 or cols % 32 != 0:
+        raise ValueError(
+            f"Input dimensions must be multiples of 32, got {input_dimensions}"
+        )
+
+    # If using full tile dimensions, no conversion needed
+    if tile_rows == 32 and tile_cols == 32:
+        return tilized_tensor.flatten()
+
+    # Calculate number of tiles
+    tile_cnt = (rows // 32) * (cols // 32)
+    face_rows = 16
+    face_cols = 16
+
+    # Reshape to [num_tiles, 4, 16, 16] for easier face/row manipulation
+    # Face order in tilized format: [f0, f1, f2, f3]
+    tensor_by_tiles = tilized_tensor.flatten().view(tile_cnt, 4, face_rows, face_cols)
+
+    # Create output tensor with same shape, initialized to zeros
+    output = torch.zeros_like(tensor_by_tiles)
+
+    # Determine which faces to use and how many rows from each
+    # tile_rows <= 16: only top faces (f0, f1), take tile_rows from each
+    # tile_rows == 32: all faces, take all 16 rows from each
+    # tile_cols == 16: only left faces (f0, f2)
+    # tile_cols == 32: both left and right faces
+    use_bottom_faces = tile_rows == 32
+    use_right_faces = tile_cols == 32
+    rows_per_face = tile_rows if tile_rows <= 16 else 16
+
+    # Extract data face by face (not interleaved)
+    for tile_idx in range(tile_cnt):
+        out_flat = []
+
+        # f0: always used - extract rows_per_face rows
+        for row in range(rows_per_face):
+            out_flat.extend(tensor_by_tiles[tile_idx, 0, row, :].tolist())
+
+        # f1: used if tile_cols == 32 - extract rows_per_face rows
+        if use_right_faces:
+            for row in range(rows_per_face):
+                out_flat.extend(tensor_by_tiles[tile_idx, 1, row, :].tolist())
+
+        # f2: used if tile_rows == 32 - extract all 16 rows
+        if use_bottom_faces:
+            for row in range(16):
+                out_flat.extend(tensor_by_tiles[tile_idx, 2, row, :].tolist())
+
+        # f3: used if tile_rows == 32 and tile_cols == 32 - extract all 16 rows
+        if use_bottom_faces and use_right_faces:
+            for row in range(16):
+                out_flat.extend(tensor_by_tiles[tile_idx, 3, row, :].tolist())
+
+        # Place condensed data at the beginning of the tile
+        out_flat_tensor = torch.tensor(out_flat, dtype=tilized_tensor.dtype)
+        output_flat = output[tile_idx].flatten()
+        output_flat[: len(out_flat)] = out_flat_tensor
+        output[tile_idx] = output_flat.view(4, face_rows, face_cols)
+
+    # Flatten and return
+    return output.flatten()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Private helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -754,12 +959,15 @@ _GAUSSIAN_LINSPACE_EPS = 1e-6
 def _generate_linspace_tensor(
     spec: StimuliSpec, size: int, dtype: torch.dtype
 ) -> torch.Tensor:
-    """
-    Generate a deterministic linspace-style tensor for float formats.
+    """Generate a deterministic linspace-style tensor (ramp/gaussian_linspace/log_uniform_linspace).
 
-    Works for ``"ramp"``, ``"gaussian_linspace"``, and
-    ``"log_uniform_linspace"``.  Always computes in float32 and casts to
-    *dtype* at the end to avoid precision issues in reduced formats.
+    Args:
+        spec: Stimuli specification with distribution type and bounds.
+        size: Number of elements to generate.
+        dtype: Target torch dtype (computation uses float32, cast at end).
+
+    Returns:
+        1-D tensor of *size* elements in the requested dtype.
     """
     dist = spec.distribution
 
@@ -801,7 +1009,7 @@ def _get_dtype_for_format(stimuli_format: DataFormat) -> torch.dtype:
 
 
 def _get_integer_bounds(stimuli_format: DataFormat) -> tuple[int, int]:
-    """Return the valid integer range ``(min, max)`` inclusive for *stimuli_format*."""
+    """Return the valid integer range (min, max) inclusive for *stimuli_format*."""
     bounds: Dict[DataFormat, tuple[int, int]] = {
         DataFormat.Int8: (torch.iinfo(torch.int8).min + 1, torch.iinfo(torch.int8).max),
         DataFormat.UInt8: (0, 255),
@@ -828,40 +1036,24 @@ def _generate_integer_face(
     dtype: torch.dtype,
     generator: Optional[torch.Generator],
 ) -> torch.Tensor:
-    """
-    Generate one face of integer-format data according to *spec*.
+    """Generate one face of integer-format data according to *spec*.
 
-    User-specified ``low`` / ``high`` are **narrowed** to the set of integers
-    that lie within the closed interval ``[spec.low, spec.high]``:
+    Bounds are narrowed to integers within [spec.low, spec.high] intersected
+    with the format's representable range.  Degenerate ranges produce constant
+    tensors (with a warning if no valid integer exists).
 
-    * ``low_int  = max(ceil(spec.low),  format_min)``
-    * ``high_int = min(floor(spec.high), format_max)``
+    Args:
+        spec: Stimuli specification with distribution type and bounds.
+        stimuli_format: Target integer data format.
+        size: Number of elements per face.
+        dtype: Target torch dtype.
+        generator: Optional RNG state for reproducibility.
 
-    This ensures every generated value is an integer that satisfies
-    ``spec.low <= value <= spec.high`` **and** is representable in the target
-    format.  Distributions that produce floats (``"gaussian"``,
-    ``"log_uniform"``, ``"saw"``) are rounded and clamped to
-    ``[low_int, high_int]`` before casting.
-
-    Degenerate ranges
-    ~~~~~~~~~~~~~~~~~
-    * ``high_int == low_int`` (single valid integer, e.g. ``[2.0, 2.9]``):
-      a constant tensor filled with that integer is returned.
-    * ``high_int < low_int`` (no valid integer in the interval, e.g.
-      ``[0.1, 0.9]``): a constant tensor filled with
-      ``round((spec.low + spec.high) / 2)`` is returned and a
-      ``UserWarning`` is emitted.  This avoids crashing the test generator
-      while making the degenerate condition observable.
-
-    ``log_uniform`` for integers
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    Both ``low`` and ``high`` must be strictly positive (same requirement as
-    the float path).  The raw log-uniform samples are rounded and clamped.
-    Using ``log_uniform`` with signed integer formats is allowed as long as
-    the *spec* bounds are positive (the result is always positive).
+    Returns:
+        1-D integer tensor of *size* elements.
     """
     int_min, int_max = _get_integer_bounds(stimuli_format)
-    # Narrow to the tightest set of integers that lie *within* [spec.low, spec.high]:
+    # Narrow to the tightest set of integers that lie within [spec.low, spec.high]:
     #   ceil(low)  = smallest integer ≥ spec.low
     #   floor(high) = largest integer ≤ spec.high
     # Then clamp to the format's representable range.
@@ -943,30 +1135,16 @@ def generate_face_v2(
     face_r_dim: int = MAX_FACE_R_DIM,
     generator: Optional[torch.Generator] = None,
 ) -> torch.Tensor:
-    """
-    Generate a single face tensor of shape ``(face_r_dim * 16,)`` using *spec*.
+    """Generate a single face tensor of shape (face_r_dim * 16,) using *spec*.
 
-    Parameters
-    ----------
-    spec : StimuliSpec
-        Generation specification (distribution, bounds, seed, …).
-    stimuli_format : DataFormat
-        Target hardware format; determines the torch dtype and any
-        format-specific constraints.
-    face_r_dim : int
-        Number of rows per face (1–16).  Defaults to ``16``.
-    generator : torch.Generator, optional
-        External RNG state to use.  When supplied, ``spec.seed`` is
-        **ignored**, allowing the caller to share a single generator across
-        multiple face calls for diverse-but-reproducible output.  When
-        *generator* is ``None`` and ``spec.seed`` is set, a fresh generator
-        is seeded from ``spec.seed``, giving identical results on every
-        standalone call.
+    Args:
+        spec: Generation specification (distribution, bounds, seed, etc.).
+        stimuli_format: Target hardware data format.
+        face_r_dim: Rows per face (1-16, default 16).
+        generator: External RNG state; when supplied, spec.seed is ignored.
 
-    Returns
-    -------
-    torch.Tensor
-        1-D tensor with ``face_r_dim * 16`` elements.
+    Returns:
+        1-D tensor with face_r_dim * 16 elements.
     """
     size = face_r_dim * FACE_C_DIM
     dtype = _get_dtype_for_format(stimuli_format)
@@ -1102,32 +1280,21 @@ def _generate_source_tensor_v2(
     spec: StimuliSpec,
     input_dimensions: Optional[list] = None,
 ) -> torch.Tensor:
-    """
-    Generate a source tensor of *num_elements* using *spec*.
+    """Generate a full operand tensor of *num_elements* using *spec*.
 
-    A single ``torch.Generator`` is created once from ``spec.seed`` (when set)
-    and reused across all faces, so the RNG state advances naturally and each
-    face receives different values while remaining reproducible.
+    Iterates over faces with a shared RNG, applying face_specs overrides and
+    masked_faces zeroing.  Identity, sequential, and linspace distributions
+    short-circuit the face loop. BFP4_b tensors are post-quantized.
 
-    Per-face overrides in ``spec.face_specs`` are applied: face *i* is
-    generated with ``spec.face_specs[i]`` when that entry is a non-``None``
-    :class:`StimuliSpec`; ``None`` entries (or indices beyond the list)
-    fall back to the outer *spec*.  The shared generator is inherited so
-    random state is never reset mid-operand.
+    Args:
+        stimuli_format: Hardware data format.
+        num_elements: Total elements to generate.
+        face_r_dim: Rows per face (1-16).
+        spec: Stimuli specification.
+        input_dimensions: [rows, cols], required for identity distribution.
 
-    BFP4_b post-quantisation (``bfp4b_to_float16b``) is applied after all
-    faces are concatenated to simulate the hardware pack/unpack round-trip,
-    matching the behaviour of the original generator.
-
-    Notes
-    -----
-    The ``"identity"``, ``"sequential"`` and linspace distributions
-    (``"ramp"``, ``"gaussian_linspace"``,
-    ``"log_uniform_linspace"``) short-circuit the face loop and produce a
-    single structured / swept tensor across *num_elements*.
-
-    The ``"identity"`` distribution requires *input_dimensions* to determine
-    the 2-D shape for placing diagonal values.
+    Returns:
+        1-D tensor of *num_elements* elements.
     """
     dtype = _get_dtype_for_format(stimuli_format)
 
@@ -1225,42 +1392,40 @@ def _generate_source_tensor_v2(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Legacy-compatible defaults for omitted specs
+# Built-in defaults for omitted specs
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _v1_default_bfp8b_face(
+def _default_bfp8b_face(
     size: int, dtype: torch.dtype, gen: Optional[torch.Generator]
 ) -> torch.Tensor:
-    # gen is intentionally unused — v1 used the global RNG for BFP formats.
     integer_part = torch.randint(0, 3, (size,))
     fraction = torch.randint(0, 16, (size,)).to(dtype=torch.bfloat16) / 16.0
     return integer_part.to(dtype=torch.bfloat16) + fraction
 
 
-def _v1_default_bfp4b_face(
+def _default_bfp4b_face(
     size: int, dtype: torch.dtype, gen: Optional[torch.Generator]
 ) -> torch.Tensor:
-    # gen is intentionally unused — v1 used the global RNG for BFP formats.
     integer_part = torch.randint(0, 3, (size,))
     fraction = torch.randint(0, 8, (size,)).to(dtype=torch.bfloat16) / 8.0
     return integer_part.to(dtype=torch.bfloat16) + fraction
 
 
-def _default_legacy_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
-    """Return a :class:`StimuliSpec` matching legacy :func:`generate_stimuli` defaults.
+def _default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
+    """Return the built-in default StimuliSpec for a given data format.
 
-    Legacy defaults: ``sfpu=True``, ``negative_values=False``,
-    ``const_face=False``.
+    Defaults are chosen to give reasonable value ranges and avoid overflows
+    (e.g. positive ranges for floats, half-range for integers).
     """
     if stimuli_format == DataFormat.MxFp8R:
         return StimuliSpec.gaussian(mean=0.1, std=0.05 * MXFP8_E5M2_MAX_NORMAL)
     if stimuli_format == DataFormat.MxFp8P:
         return StimuliSpec.gaussian(mean=0.1, std=0.05 * MXFP8_E4M3_MAX_NORMAL)
     if stimuli_format == DataFormat.Bfp8_b:
-        return StimuliSpec(distribution=_v1_default_bfp8b_face)
+        return StimuliSpec(distribution=_default_bfp8b_face)
     if stimuli_format == DataFormat.Bfp4_b:
-        return StimuliSpec(distribution=_v1_default_bfp4b_face)
+        return StimuliSpec(distribution=_default_bfp4b_face)
     if stimuli_format.is_integer():
         if stimuli_format == DataFormat.UInt32:
             return StimuliSpec.uniform(low=0.0, high=float(2**32 - 2))
@@ -1287,103 +1452,34 @@ def generate_stimuli_v2(
     num_faces: int = MAX_NUM_FACES,
     output_format: Optional[DataFormat] = None,
 ) -> tuple[torch.Tensor, int, torch.Tensor, int]:
-    """
-    Generate test stimuli for two operands.
+    """Generate test stimuli for two operands.
 
-    This is the single v2 replacement for both
-    :func:`~stimuli_generator.generate_stimuli` and
-    :func:`~stimuli_generator.generate_stimuli_w_tile_dimensions`.
+    When tile_dimensions is provided, operates in dense mode with derived face layout;
+    otherwise uses the standard 32x32 tile path.
 
-    When *tile_dimensions* is supplied the function operates in **dense mode**:
-    tile counts and face layout are derived entirely from *tile_dimensions*,
-    filling every element of each tile.  When *tile_dimensions* is ``None``
-    the function uses the standard 32×32 tile path (controlled by *face_r_dim*
-    and *num_faces* for the partial-face case).
+    Args:
+        stimuli_format_A: Hardware data format for operand A.
+        input_dimensions_A: [height, width] in elements (default [32, 32]).
+        stimuli_format_B: Hardware data format for operand B.
+        input_dimensions_B: [height, width] in elements (default [32, 32]).
+        spec_A: Generation spec for operand A (default: format-aware built-in spec).
+        spec_B: Generation spec for operand B (default: format-aware built-in spec).
+        tile_dimensions: [rows, cols] tile size for dense mode (default None = standard path).
+        face_r_dim: Rows per face, 1-16 (ignored in dense mode, default 16).
+        num_faces: Faces per tile for partial-face case (ignored in dense mode, default 4).
+        output_format: Clamp outputs for mixed MX-format pairs when set.
 
-    The two operands are generated independently: ``spec_A`` controls srcA and
-    ``spec_B`` controls srcB.  Their seeds (if set) are completely independent,
-    so the operands are uncorrelated even when the same distribution is used.
-
-    Parameters
-    ----------
-    stimuli_format_A, stimuli_format_B : DataFormat
-        Hardware data format for each operand.
-    input_dimensions_A, input_dimensions_B : list of [int, int]
-        ``[height, width]`` in elements.  Defaults to ``[32, 32]``.
-    spec_A, spec_B : StimuliSpec, optional
-        Generation spec for each operand.  When omitted, uses
-        legacy-compatible defaults that match :func:`generate_stimuli`
-        with ``sfpu=True, negative_values=False, const_face=False``:
-        standard floats get uniform [0.1, 1.1], MX formats get
-        scaled gaussian + 0.1, BFP formats use their discrete
-        randint distributions, and integer formats use half-range
-        ``[0, iinfo.max // 2 - 1]``.  Pass an explicit
-        :class:`StimuliSpec` to override.
-    tile_dimensions : list of [int, int], optional
-        ``[rows, cols]`` for the tile size (e.g. ``[8, 32]``).  When provided,
-        enables dense mode: tile counts are computed from these dimensions and
-        *face_r_dim* / *num_faces* are derived automatically, ignoring the
-        values passed for those parameters.  When ``None`` (default), the
-        standard 32×32 tile path is used.
-    face_r_dim : int
-        Rows per face (1–16).  Used only when *tile_dimensions* is ``None``.
-        Defaults to ``16``.
-    num_faces : int
-        Faces per tile for the partial-face case.  Used only when
-        *tile_dimensions* is ``None``.  Defaults to ``4``.
-    output_format : DataFormat, optional
-        When set, output values are clamped to prevent overflowing the output
-        format for mixed MX-format pairs.
-
-    Returns
-    -------
-    tuple
-        ``(srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B)``
-
-    Examples
-    --------
-    >>> # Standard 32×32 tile path
-    >>> srcA, cnt_A, srcB, cnt_B = generate_stimuli_v2(
-    ...     stimuli_format_A=DataFormat.Float16_b,
-    ...     spec_A=StimuliSpec.gaussian(mean=0.0, std=1.0, seed=0),
-    ...     spec_B=StimuliSpec.uniform(low=0.01, high=2.0, seed=1),
-    ... )
-    >>>
-    >>> # Dense mode with custom tile dimensions
-    >>> srcA, cnt_A, srcB, cnt_B = generate_stimuli_v2(
-    ...     stimuli_format_A=DataFormat.Float16_b,
-    ...     input_dimensions_A=[64, 64],
-    ...     spec_A=StimuliSpec.uniform(low=-1.0, high=1.0),
-    ...     tile_dimensions=[8, 32],
-    ... )
-    >>>
-    >>> # Domain-safe preset for a specific SFPU op
-    >>> operands = StimuliSpec.for_op(MathOperation.Acosh, DataFormat.Float16_b)
-    >>> srcA, cnt_A, srcB, cnt_B = generate_stimuli_v2(
-    ...     spec_A=operands.spec_A, spec_B=operands.spec_B
-    ... )
-    >>>
-    >>> # Per-face overrides: alternating positive / negative faces
-    >>> spec = StimuliSpec(
-    ...     distribution="uniform",
-    ...     low=0.1,
-    ...     high=1.0,
-    ...     face_specs=[
-    ...         StimuliSpec.uniform(low=0.1, high=1.0),
-    ...         StimuliSpec.uniform(low=-1.0, high=-0.1),
-    ...         StimuliSpec.uniform(low=0.1, high=1.0),
-    ...         StimuliSpec.uniform(low=-1.0, high=-0.1),
-    ...     ],
-    ... )
+    Returns:
+        (srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B).
     """
     if input_dimensions_A is None:
         input_dimensions_A = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
     if input_dimensions_B is None:
         input_dimensions_B = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
     if spec_A is None:
-        spec_A = _default_legacy_spec_for_format(stimuli_format_A)
+        spec_A = _default_spec_for_format(stimuli_format_A)
     if spec_B is None:
-        spec_B = _default_legacy_spec_for_format(stimuli_format_B)
+        spec_B = _default_spec_for_format(stimuli_format_B)
 
     if tile_dimensions is not None:
         if face_r_dim != MAX_FACE_R_DIM:

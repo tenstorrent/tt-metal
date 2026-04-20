@@ -15,7 +15,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
@@ -87,7 +87,7 @@ def test_pack_dest_bank(
     formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
 ):
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -199,7 +199,7 @@ def test_pack_dest_bank_two_blocked_packs_of_4(
         pytest.skip("Wormhole-specific blocked pack regression")
 
     input_dimensions = [128, 64]
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,

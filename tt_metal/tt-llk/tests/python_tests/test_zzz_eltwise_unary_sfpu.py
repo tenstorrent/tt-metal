@@ -28,7 +28,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -391,7 +391,7 @@ def eltwise_unary_sfpu(
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,

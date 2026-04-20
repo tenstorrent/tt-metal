@@ -8,7 +8,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict, format_tile_sizes
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli_w_tile_dimensions
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     INPUT_DIMENSIONS,
@@ -57,7 +57,7 @@ def test_fast_tilize_tiny_tiles(
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(TILE_DIMENSIONS)
     num_faces = num_faces_r_dim * num_faces_c_dim
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_w_tile_dimensions(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
