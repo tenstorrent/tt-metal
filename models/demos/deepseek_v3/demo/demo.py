@@ -631,11 +631,10 @@ def run_demo(
                             f"Got {len(prompt_list)} prompt(s) for {n_entries} reference entries."
                         )
                 else:
-                    # Teacher-forcing decode consumes pre-tokenized reference prompts,
-                    # so string prompts are only used for labeling output/checkpoints.
+                    # No text prompts: use pre-tokenized reference prompts directly
+                    # and placeholder labels for output/checkpoints.
                     prompt_list = [f"[teacher_forcing_prompt_{i}]" for i in range(n_entries)]
-
-                pre_tokenized_prompts = [token_acc.get_prompt_token_ids(user_idx=i) for i in range(n_entries)]
+                    pre_tokenized_prompts = [token_acc.get_prompt_token_ids(user_idx=i) for i in range(n_entries)]
                 max_new_tokens = min(
                     max_new_tokens,
                     min(token_acc.num_gt_tokens(user_idx=i) for i in range(n_entries)),

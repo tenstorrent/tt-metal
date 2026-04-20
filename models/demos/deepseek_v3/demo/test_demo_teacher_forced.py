@@ -79,7 +79,7 @@ def entry_generated_text(entry: dict, tokenizer) -> str:
     if isinstance(generated_tokens, torch.Tensor):
         ids = generated_tokens[0].tolist() if generated_tokens.dim() == 2 else generated_tokens.tolist()
         if ids:
-            return tokenizer.decode([int(x) for x in ids], skip_special_tokens=True)
+            return tokenizer.decode([int(x) for x in ids], skip_special_tokens=False)
     return ""
 
 
@@ -205,7 +205,7 @@ def test_demo_teacher_forcing_accuracy(
     output_records: list[dict[str, str | int]] = []
     for idx, (entry, gen) in enumerate(zip(entries, generations)):
         pred_ids = gen.get("predicted_tokens", [])
-        tt_text = tokenizer.decode([int(x) for x in pred_ids], skip_special_tokens=True) if pred_ids else ""
+        tt_text = tokenizer.decode([int(x) for x in pred_ids], skip_special_tokens=False) if pred_ids else ""
         output_records.append(
             {
                 "index": idx,
@@ -277,8 +277,8 @@ def test_demo_teacher_forcing_accuracy(
         total_top5,
     )
 
-    min_expected_top1 = 0.84
-    min_expected_top5 = 0.98
+    min_expected_top1 = 0.88
+    min_expected_top5 = 0.99
     assert total_top1 >= min_expected_top1, (
         f"Aggregate top-1 accuracy {total_top1:.4f} is below minimum {min_expected_top1:.2f} "
         f"across {len(entries)} prompts / {overall_compared} tokens."
