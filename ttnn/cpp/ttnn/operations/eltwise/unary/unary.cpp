@@ -18,6 +18,11 @@ Tensor unary_impl(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     TT_FATAL(!op_chain.empty(), "Op chain cannot be empty");
+    std::cout << "-- unary_impl: op chain ( ";
+    for (const auto& u : op_chain) {
+        std::cout << enchantum::to_string(u.type()) << ' ';
+    }
+    std::cout << "): begin" << std::endl;
     DataType input_dtype = input_tensor.dtype();
     DataType output_dtype = input_dtype;
     if (op_chain.back().type() == unary::UnaryOpType::TYPECAST ||

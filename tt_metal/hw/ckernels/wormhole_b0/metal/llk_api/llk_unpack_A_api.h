@@ -66,7 +66,6 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
            << " a2d " << static_cast<int>(acc_to_dest)
            << " rd " << static_cast<int>(binary_reuse_dest)
            << " u2d " << static_cast<int>(unpack_to_dest)
-           << " T " << static_cast<int>(transpose_of_faces)
            << " sF " << static_cast<int>(unpack_src_format[operand_id])
            << " dF " << static_cast<int>(unpack_dst_format[operand_id])
            << " 0x" << HEX() << base_address << "+" << offset_address
