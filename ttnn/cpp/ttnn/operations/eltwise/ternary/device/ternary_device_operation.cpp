@@ -221,26 +221,12 @@ static MemoryConfig resolve_mem_config_actual(
     } else if (memory_config.has_value()) {
         mem_config_actual = *memory_config;
         if (mem_config_actual.is_sharded() && !mem_config_actual.shard_spec().has_value()) {
-            const auto& memory_layout = mem_config_actual.memory_layout();
-            const auto& buffer_type = mem_config_actual.buffer_type();
-            const auto& padded_out_shape = input_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
-            std::optional<ShardSpec> shard_spec_opt;
-            if (input_a.is_sharded()) {
-                shard_spec_opt =
-                    adjust_to_shape(*input_a.memory_config().shard_spec(), input_a.padded_shape(), padded_out_shape);
-                log_debug(tt::LogOp, "TernaryDeviceOperation: Inheriting shard spec from input tensor A");
-            } else if (input_b && input_b->is_sharded()) {
-                shard_spec_opt =
-                    adjust_to_shape(*input_b->memory_config().shard_spec(), input_b->padded_shape(), padded_out_shape);
-                log_debug(tt::LogOp, "TernaryDeviceOperation: Inheriting shard spec from input tensor B");
-            } else if (input_c && input_c->is_sharded()) {
-                shard_spec_opt =
-                    adjust_to_shape(*input_c->memory_config().shard_spec(), input_c->padded_shape(), padded_out_shape);
-                log_debug(tt::LogOp, "TernaryDeviceOperation: Inheriting shard spec from input tensor C");
-            } else {
-                shard_spec_opt = generate_shard_spec_all_cores(input_a, padded_out_shape, memory_layout);
-            }
-            mem_config_actual = MemoryConfig(memory_layout, buffer_type, shard_spec_opt);
+            mem_config_actual = compute_auto_shard_spec(
+                input_a,
+                input_b ? *input_b : input_a,
+                input_c ? *input_c : input_a,
+                output_shape,
+                mem_config_actual);
         } else {
             log_debug(tt::LogOp, "TernaryDeviceOperation: Using provided memory config from function argument");
         }

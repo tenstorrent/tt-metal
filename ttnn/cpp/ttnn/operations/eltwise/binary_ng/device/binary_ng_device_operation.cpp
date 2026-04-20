@@ -419,36 +419,18 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     }
 
     if (attributes.memory_config.is_sharded()) {
-        const auto& memory_layout = attributes.memory_config.memory_layout();
-        const auto& buffer_type = attributes.memory_config.buffer_type();
-        auto shard_spec_opt = attributes.memory_config.shard_spec();
-
-        // If no shard spec is provided, inherit from input tensor
-        if (!shard_spec_opt.has_value()) {
-            const auto& padded_out_shape =
-                input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
-            if (input_tensor_a.is_sharded()) {
-                // Adjust shard spec from input A to match output shape
-                const auto& padded_a_shape = input_tensor_a.padded_shape();
-
-                shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
-                    *input_tensor_a.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
-            } else if (tensor_b.has_value() && tensor_b->is_sharded()) {
-                // Adjust shard spec from input B to match output shape
-                const auto& padded_b_shape = tensor_b->padded_shape();
-                shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
-                    *tensor_b->memory_config().shard_spec(), padded_b_shape, padded_out_shape);
-            } else {
-                shard_spec_opt = utils::generate_shard_spec_all_cores(input_tensor_a, padded_out_shape, memory_layout);
-            }
-        }
+        auto resolved_config = compute_auto_shard_spec(
+            input_tensor_a,
+            tensor_b.has_value() ? *tensor_b : input_tensor_a,
+            output_shape,
+            attributes.memory_config);
 
         return TensorSpec(
             output_shape,
             TensorLayout(
                 output_dtype,
                 PageConfig(attributes.output_layout),
-                MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
+                resolved_config));
     }
 
     // If not sharded, use the memory config from input a that is interleaved

@@ -79,4 +79,75 @@ inline uint32_t get_cb_address(const CBDescriptor& desc) {
     return desc.buffer->address() + desc.address_offset;
 }
 
+/**
+ * @brief Automatically computes a ShardSpec for a sharded MemoryConfig that is missing one.
+ *
+ * This is a general-purpose utility that can be used by any operation (unary, binary, matmul, etc.)
+ * to enable simplified sharding APIs where users pass e.g. L1_HEIGHT_SHARDED_MEMORY_CONFIG without
+ * manually computing shard shapes, core grids, and orientations.
+ *
+ * The function:
+ * 1. Returns the config unchanged if it's not sharded or already has a shard_spec.
+ * 2. Reuses the input tensor's shard_spec if available.
+ * 3. Otherwise, computes an optimal shard_spec based on the tensor shape, device grid, and
+ *    memory layout (WIDTH_SHARDED, HEIGHT_SHARDED, or BLOCK_SHARDED).
+ *
+ * Shard shape computation respects:
+ * - Tile alignment (32x32)
+ * - L1 alignment constraints
+ * - Device core grid limits
+ * - Even shard preference (avoids uneven shards for better perf)
+ * - L1 memory capacity (fatals if computed shard exceeds per-core L1 size)
+ *
+ * @param input_tensor  The input tensor (must be on device with non-null device pointer;
+ *                       fatals with a descriptive message if either condition is violated)
+ * @param output_memory_config  The desired output memory config (possibly missing shard_spec)
+ * @return MemoryConfig with shard_spec filled in if needed, otherwise the original config
+ *
+ * @note BLOCK_SHARDED always uses COL_MAJOR orientation, mapping height shards to grid.x
+ *       and width shards to grid.y.
+ *
+ * Example usage:
+ * @code
+ *   // In any op's compute_output_specs():
+ *   auto resolved_config = compute_auto_shard_spec(input_tensor, args.output_memory_config);
+ *   // resolved_config now has a valid shard_spec for sharded configs
+ * @endcode
+ */
+MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryConfig& output_memory_config);
+
+/**
+ * @brief Adjusts an existing ShardSpec to match a new tensor shape.
+ *
+ * Scales shard dimensions proportionally based on the ratio of from_shape to to_shape.
+ * Used when inheriting a shard spec from an input tensor whose shape differs from the output.
+ */
+ShardSpec adjust_shard_spec_to_shape(
+    const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
+
+/**
+ * @brief Binary op overload: computes auto shard spec considering two input tensors.
+ *
+ * Priority: explicit shard_spec > inherit from input_a > inherit from input_b > generate fresh.
+ * When inheriting, adjusts the shard spec to match the broadcasted output shape.
+ */
+MemoryConfig compute_auto_shard_spec(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const ttnn::Shape& output_shape,
+    const MemoryConfig& output_memory_config);
+
+/**
+ * @brief Ternary op overload: computes auto shard spec considering three input tensors.
+ *
+ * Priority: explicit shard_spec > inherit from input with largest shard grid > generate fresh.
+ * When inheriting, adjusts the shard spec to match the output shape.
+ */
+MemoryConfig compute_auto_shard_spec(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    const ttnn::Shape& output_shape,
+    const MemoryConfig& output_memory_config);
+
 }  // namespace tt::tt_metal
