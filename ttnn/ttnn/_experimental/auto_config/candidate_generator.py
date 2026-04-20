@@ -872,4 +872,3 @@ def _build_config_from_params(
         params=params,
         math_fidelity=fidelity,
     )
-

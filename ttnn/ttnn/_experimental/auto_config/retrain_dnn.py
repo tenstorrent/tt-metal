@@ -174,8 +174,7 @@ def generate_expanded_shapes(num_shapes: int = 10000, seed: int = 42) -> List[Di
 
     # Deterministic seeded PRNG for reproducible training data — not security-sensitive
     rng = random.Random(seed)  # nosec B311
-    dim_choices = [32, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536,
-                   2048, 3072, 4096, 6144, 8192]
+    dim_choices = [32, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192]
     categories = ["decode", "prefill", "attention", "mlp", "general"]
 
     seen = set()
@@ -375,38 +374,40 @@ def train_dnn_from_results(
         if not auto_entries:
             continue
         best = min(auto_entries, key=lambda e: e["latency_us"])
-        training_data.append({
-            "features": {
-                "M": best["shape"]["M"],
-                "K": best["shape"]["K"],
-                "N": best["shape"]["N"],
-                "M_tiles": best["shape"]["M"] // 32,
-                "K_tiles": best["shape"]["K"] // 32,
-                "N_tiles": best["shape"]["N"] // 32,
-                "batch_size_a": 1,
-                "batch_size_b": 1,
-                "grid_x": 8,
-                "grid_y": 8,
-                "num_cores": 64,
-                "num_devices": 1,
-                "is_a_sharded": False,
-                "is_b_sharded": False,
-                "is_batched_b": False,
-                "is_fp32_accumulate": False,
-                "dtype_a": "BFLOAT16",
-                "dtype_b": "BFLOAT16",
-            },
-            "best_config": {
-                "config_family": best["config_family"],
-                "in0_block_w": best.get("params", {}).get("in0_block_w", 1),
-                "per_core_M": best.get("params", {}).get("per_core_M", 1),
-                "per_core_N": best.get("params", {}).get("per_core_N", 1),
-                "out_subblock_h": best.get("params", {}).get("out_subblock_h", 1),
-                "out_subblock_w": best.get("params", {}).get("out_subblock_w", 1),
-                "math_fidelity": best.get("params", {}).get("math_fidelity", "HiFi4"),
-                "mcast_in0": best.get("params", {}).get("mcast_in0", True),
-            },
-        })
+        training_data.append(
+            {
+                "features": {
+                    "M": best["shape"]["M"],
+                    "K": best["shape"]["K"],
+                    "N": best["shape"]["N"],
+                    "M_tiles": best["shape"]["M"] // 32,
+                    "K_tiles": best["shape"]["K"] // 32,
+                    "N_tiles": best["shape"]["N"] // 32,
+                    "batch_size_a": 1,
+                    "batch_size_b": 1,
+                    "grid_x": 8,
+                    "grid_y": 8,
+                    "num_cores": 64,
+                    "num_devices": 1,
+                    "is_a_sharded": False,
+                    "is_b_sharded": False,
+                    "is_batched_b": False,
+                    "is_fp32_accumulate": False,
+                    "dtype_a": "BFLOAT16",
+                    "dtype_b": "BFLOAT16",
+                },
+                "best_config": {
+                    "config_family": best["config_family"],
+                    "in0_block_w": best.get("params", {}).get("in0_block_w", 1),
+                    "per_core_M": best.get("params", {}).get("per_core_M", 1),
+                    "per_core_N": best.get("params", {}).get("per_core_N", 1),
+                    "out_subblock_h": best.get("params", {}).get("out_subblock_h", 1),
+                    "out_subblock_w": best.get("params", {}).get("out_subblock_w", 1),
+                    "math_fidelity": best.get("params", {}).get("math_fidelity", "HiFi4"),
+                    "mcast_in0": best.get("params", {}).get("mcast_in0", True),
+                },
+            }
+        )
 
     if len(training_data) < 10:
         logger.error("Only %d valid training entries — need at least 10", len(training_data))
@@ -507,8 +508,12 @@ def main():
     parser.add_argument("--warmup", type=int, default=3, help="Benchmark warmup runs")
     parser.add_argument("--runs", type=int, default=5, help="Benchmark timed runs")
     parser.add_argument("-v", "--verbose", action="store_true")
-    parser.add_argument("--num-shapes", type=int, default=106,
-                        help="Number of shapes to generate (default: 106, use 10000+ for production)")
+    parser.add_argument(
+        "--num-shapes",
+        type=int,
+        default=106,
+        help="Number of shapes to generate (default: 106, use 10000+ for production)",
+    )
 
     args = parser.parse_args()
 
@@ -518,7 +523,7 @@ def main():
     )
 
     shapes = TRAINING_SHAPES
-    if hasattr(args, 'num_shapes') and args.num_shapes > len(TRAINING_SHAPES):
+    if hasattr(args, "num_shapes") and args.num_shapes > len(TRAINING_SHAPES):
         logger.info("Generating %d expanded shapes...", args.num_shapes)
         shapes = generate_expanded_shapes(args.num_shapes)
 

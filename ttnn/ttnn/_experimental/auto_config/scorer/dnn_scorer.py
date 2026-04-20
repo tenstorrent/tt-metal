@@ -434,7 +434,13 @@ class DNNConfigGenerator:
             scheduler.step()
 
             if epoch % 20 == 0:
-                logger.info("Epoch %d/%d: loss=%.4f, lr=%.6f", epoch, epochs, total_loss / len(loader), scheduler.get_last_lr()[0])
+                logger.info(
+                    "Epoch %d/%d: loss=%.4f, lr=%.6f",
+                    epoch,
+                    epochs,
+                    total_loss / len(loader),
+                    scheduler.get_last_lr()[0],
+                )
 
         self._model = model
         self._model.eval()
