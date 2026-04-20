@@ -42,8 +42,8 @@ uint32_t get_noc_max_burst_size(const ttnn::MeshDevice& mesh_device) {
 }
 
 uint32_t compute_num_batches(const ttnn::operations::binary_ng::BinaryNgInputs& args) {
-    return args.input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B ? 1
-                                                                            : 2;  // perf tuning parameter, default  = 2
+    (void)args;
+    return 1;
 }
 
 uint32_t compute_num_tiles_per_batches(
