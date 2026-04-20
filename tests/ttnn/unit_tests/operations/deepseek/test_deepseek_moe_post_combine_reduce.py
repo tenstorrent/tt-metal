@@ -17,6 +17,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
+from models.common.utility_functions import run_for_blackhole
 
 
 NUM_TOKENS = 3200
@@ -69,6 +70,7 @@ def assert_pcc(result, expected, threshold=PCC_THRESHOLD, label=""):
 # ============================================================================
 
 
+@run_for_blackhole(reason_str="DeepSeek-V3 dimensions require 100 cores (3200 tokens / 32 per core); WH has only 72")
 def test_structured_data(device):
     """Constant-per-tile activations with sequential weights [1..8].
     This pattern is easy to verify manually and catches tile ordering bugs."""
@@ -104,6 +106,7 @@ def test_structured_data(device):
 # ============================================================================
 
 
+@run_for_blackhole(reason_str="DeepSeek-V3 dimensions require 100 cores (3200 tokens / 32 per core); WH has only 72")
 def test_random_data(device):
     """Random activations and weights, compared to PyTorch reference."""
     torch.manual_seed(42)
@@ -115,6 +118,7 @@ def test_random_data(device):
     assert_pcc(result, ref, label="random")
 
 
+@run_for_blackhole(reason_str="DeepSeek-V3 dimensions require 100 cores (3200 tokens / 32 per core); WH has only 72")
 def test_vs_old_implementation(device):
     """Fused kernel vs old implementation (to_layout + mul + sum) with random data."""
     torch.manual_seed(42)
@@ -138,6 +142,7 @@ def test_vs_old_implementation(device):
 # ============================================================================
 
 
+@run_for_blackhole(reason_str="DeepSeek-V3 dimensions require 100 cores (3200 tokens / 32 per core); WH has only 72")
 @pytest.mark.parametrize("k_active", [6, 4, 2, 1])
 def test_sparse_weights(device, k_active):
     """Fused kernel with sparse weights (k_active out of 8 experts non-zero per token)."""
@@ -158,6 +163,7 @@ def test_sparse_weights(device, k_active):
 # ============================================================================
 
 
+@run_for_blackhole(reason_str="DeepSeek-V3 dimensions require 100 cores (3200 tokens / 32 per core); WH has only 72")
 def test_output_layout(device):
     """Verify output is TILE layout with correct shape."""
     torch.manual_seed(42)
