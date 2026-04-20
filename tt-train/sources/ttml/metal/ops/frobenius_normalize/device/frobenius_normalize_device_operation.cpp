@@ -28,9 +28,8 @@ void FrobeniusNormalizeDeviceOperation::validate_on_program_cache_miss(
         enchantum::to_string(input_tensor.layout()));
 
     TT_FATAL(
-        input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
-            input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32,
-        "FrobeniusNormalize requires BFLOAT16 or FLOAT32. Got: {}",
+        input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "FrobeniusNormalize requires BFLOAT16. Got: {}",
         enchantum::to_string(input_tensor.dtype()));
 
     TT_FATAL(
@@ -55,7 +54,7 @@ spec_return_value_t FrobeniusNormalizeDeviceOperation::compute_output_specs(
     return {ttnn::TensorSpec(
         tensor_args.input.logical_shape(),
         tt::tt_metal::TensorLayout(
-            tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()))};
+            tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()))};
 }
 
 tensor_return_value_t FrobeniusNormalizeDeviceOperation::create_output_tensors(
