@@ -24,7 +24,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     StageKind,
 )
 from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock, StageMetadata
 
 
 def create_fabric_router_config(max_payload_size: int) -> Any:
@@ -298,31 +298,66 @@ class PipelineConfiguration:
     def num_stages(self) -> int:
         return len(self._stage_factories)
 
-    def build_pipeline(self, mesh_device: ttnn.MeshDevice) -> Pipeline:
-        """Create a Pipeline for this process's stage (determined by mesh_id)."""
-        my_mesh_id = mesh_device.get_system_mesh_id()
-        stage = self._stage_factories[my_mesh_id](mesh_device)
-        return Pipeline(mesh_device, stage)
+    def build_pipeline(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        my_stage_idx: int | None = None,
+        stages_metadata: dict[int, StageMetadata] | None = None,
+        pipeline_config: list | None = None,
+    ) -> Pipeline:
+        """Create a Pipeline for this process's stage.
+
+        Args:
+            mesh_device: The MeshDevice (or submesh) for this stage.
+            my_stage_idx: Which stage this process runs. Defaults to
+                ``mesh_device.get_system_mesh_id()`` for backwards compatibility.
+            stages_metadata: Per-stage rank/mesh_id routing info.
+            pipeline_config: List of PipelineConfigEntry (entry/exit coords per stage).
+                Required when stages_metadata is provided.
+        """
+        if my_stage_idx is None:
+            my_stage_idx = mesh_device.get_system_mesh_id()
+        stage = self._stage_factories[my_stage_idx](mesh_device)
+        return Pipeline(
+            mesh_device, stage, my_stage_idx, stages_metadata=stages_metadata, pipeline_config=pipeline_config
+        )
 
 
 class Pipeline:
     """Orchestrator for one pipeline stage with explicit 4-phase setup."""
 
-    def __init__(self, mesh_device: ttnn.MeshDevice, stage_kind: StageKind) -> None:
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        stage_kind: StageKind,
+        my_stage_idx: int,
+        stages_metadata: dict[int, StageMetadata] | None = None,
+        pipeline_config: list | None = None,
+    ) -> None:
         self._mesh_device = mesh_device
         self._stage_kind = stage_kind
-        self._my_mesh_id = mesh_device.get_system_mesh_id()
-        self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+        self._my_stage_idx = my_stage_idx
+        if stages_metadata is not None:
+            assert pipeline_config is not None, "pipeline_config required when stages_metadata is provided"
+            self._pipeline_config = pipeline_config
+        else:
+            self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
         self._ctx = StageContext(
             mesh_device=mesh_device,
             pipeline_config=self._pipeline_config,
-            my_mesh_id=self._my_mesh_id,
+            my_stage_idx=self._my_stage_idx,
+            stages_metadata=stages_metadata,
         )
         self._pipeline_block: PipelineBlock | None = None
 
     @property
     def my_mesh_id(self) -> int:
-        return self._my_mesh_id
+        """Backwards-compatible alias for my_stage_idx."""
+        return self._my_stage_idx
+
+    @property
+    def my_stage_idx(self) -> int:
+        return self._my_stage_idx
 
     def configure_block(self) -> None:
         """Phase 1: Create the PipelineBlock (socket wiring)."""
@@ -352,6 +387,7 @@ class Pipeline:
 
     def setup_and_run(self) -> None:
         """Run all four phases in order."""
+        self.barrier()  # Synchronize before socket creation — stage 0 may be slow due to weight loading
         logger.info("Configuring block")
         self.configure_block()
 
