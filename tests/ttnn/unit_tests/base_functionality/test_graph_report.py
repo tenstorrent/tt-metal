@@ -27,7 +27,12 @@ import graph_report
 
 # Now import ttnn for device tests
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+
+try:
+    from models.common.utility_functions import is_wormhole_b0
+except ImportError:
+    # Full tree (e.g. ttnn.device) not on PYTHONPATH in some dev environments
+    is_wormhole_b0 = None
 
 
 @pytest.fixture
@@ -62,6 +67,85 @@ def _import_to_db(report_dict, tmp_path):
     db_path = graph_report.import_report(report_path, tmp_path / "output")
     conn = sqlite3.connect(db_path)
     return conn, conn.cursor()
+
+
+class TestTensorLifetime:
+    """Tensor lifetime metadata for late-deallocation analysis (tt-metal#27868)."""
+
+    def test_compute_tensor_lifetime_records_smoke(self):
+        operations = [(1, "ttnn::relu", 0.0), (2, "ttnn::add", 0.0), (3, "ttnn::deallocate", 0.0)]
+        input_tensors = [(1, 0, 42), (2, 0, 101), (3, 0, 101)]
+        output_tensors = [(1, 0, 101)]
+        stack_traces = [
+            (
+                1,
+                '  File "producer_ctx.py", line 10, in forward\n    x\n  File "producer.py", line 2, in run\n',
+            ),
+            (
+                2,
+                '  File "consumer_ctx.py", line 3, in wrap\n    z\n  File "consumer.py", line 99, in step\n',
+            ),
+        ]
+        kept = {42, 101}
+        recs = graph_report.compute_tensor_lifetime_records(
+            operations, input_tensors, output_tensors, stack_traces, kept
+        )
+        by_id = {r["tensor_id"]: r for r in recs}
+        assert by_id[42]["producer_operation_id"] is None
+        assert by_id[42]["last_use_operation_id"] == 1
+        assert by_id[42]["last_use_source_file"] == "producer_ctx.py"
+        assert by_id[42]["last_use_source_line"] == 10
+        assert by_id[101]["producer_operation_id"] == 1
+        assert by_id[101]["last_use_operation_id"] == 2
+        assert by_id[101]["deallocate_operation_id"] == 3
+        assert by_id[101]["producer_source_file"] == "producer_ctx.py"
+        assert by_id[101]["producer_source_line"] == 10
+        assert by_id[101]["last_use_source_file"] == "consumer_ctx.py"
+        assert by_id[101]["last_use_source_line"] == 3
+
+    def test_tensor_lifetime_table_populated_on_import(self, tmp_path):
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": "[1,1,32,32]"},
+                "connections": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::relu", "inputs": "1"},
+                "connections": [],
+                "input_tensors": [1],
+            },
+            {
+                "counter": 3,
+                "node_type": "tensor",
+                "params": {"tensor_id": "101", "shape": "[1,1,32,32]"},
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::relu"},
+                "connections": [3],
+                "duration_ns": 1000,
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+        cursor.execute(
+            "SELECT tensor_id, producer_operation_id, last_use_operation_id, deallocate_operation_id "
+            "FROM tensor_lifetime ORDER BY tensor_id"
+        )
+        rows = {r[0]: r for r in cursor.fetchall()}
+        assert rows[42][1] is None
+        assert rows[42][2] == 1
+        assert rows[101][1] == 1
+        assert rows[101][2] == 1
+        conn.close()
 
 
 class TestImportGraphUnit:
@@ -2200,7 +2284,7 @@ class TestResNet50Patterns:
         conn.close()
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(is_wormhole_b0 is None or not is_wormhole_b0(), reason="Requires Wormhole B0")
 class TestLinearModelE2E:
     """
     End-to-end test: run ttnn.ones + ttnn.linear on real hardware,
@@ -2298,7 +2382,7 @@ def imagenet_label_dict():
         return ast.literal_eval(f.read())
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(is_wormhole_b0 is None or not is_wormhole_b0(), reason="Requires Wormhole B0")
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(

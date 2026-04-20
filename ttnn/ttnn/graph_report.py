@@ -10,8 +10,12 @@ No database operations happen during model execution - everything is offline.
 
 Workflow:
     1. C++ captures graph to JSON: ttnn::graph::end_graph_capture_to_file("report.json")
-    2. Later, import to SQLite: python -m ttnn.graph_report report.json ./visualizer_db/
-    3. Open ttnn-visualizer pointing to ./visualizer_db/
+    2. Optional sidecars next to the report: ``*.python_io.json`` (Python I/O), ``*.tensor_lifetime.json``
+       (producer / last-use / deallocate ops + optional source locations for #27868-style analysis).
+       Source file/line columns require Python stack traces in the capture; ``ttnn.graph.begin_graph_capture``
+       enables those for the outermost session (see :mod:`ttnn.graph`).
+    3. Later, import to SQLite: python -m ttnn.graph_report report.json ./visualizer_db/
+    4. Open ttnn-visualizer pointing to ./visualizer_db/
 
 This replaces the invasive approach where decorators.py inserted into SQLite during execution.
 
@@ -22,14 +26,19 @@ CREATE TABLE IF NOT EXISTS to avoid conflicts with comparison mode data.
 
 import json
 import math
+import re
 import sqlite3
+from collections import defaultdict
 from pathlib import Path
 from typing import Union
 
 from loguru import logger
 
 SUPPORTED_REPORT_VERSION = 1
-DATABASE_SCHEMA_VERSION = 2
+DATABASE_SCHEMA_VERSION = 3
+
+# Matches "File \"path\", line N" lines in formatted Python stack traces (see ttnn.graph._capture_python_stack_trace).
+_STACK_FILE_LINE_RE = re.compile(r'^\s*File "([^"]+)", line (\d+)', re.MULTILINE)
 
 
 def _int_param(params, key):
@@ -43,6 +52,101 @@ def _int_param(params, key):
 def _tid_int(tid):
     """Coerce a tensor ID (possibly a string) to int."""
     return int(tid) if isinstance(tid, str) else tid
+
+
+def _is_tensor_deallocate_operation(name: str) -> bool:
+    """Return True if this trace op name corresponds to freeing device storage for a tensor."""
+    if not name:
+        return False
+    return name in ("ttnn::deallocate", "Tensor::deallocate") or name.endswith("::deallocate")
+
+
+def _innermost_stack_frame(trace_text: str | None):
+    """Extract (filename, line) from the innermost frame in a formatted Python stack trace.
+
+    ``ttnn.graph._capture_python_stack_trace`` orders frames **innermost first** (closest to
+    ``record_python_operation``). Taking the **first** ``File "...", line ...`` line yields the
+    callsite nearest each op — using the **last** match incorrectly pinned every tensor to the same
+    outer frame (e.g. ``demo.py`` line that launched the model).
+    """
+    if not trace_text:
+        return None, None
+    matches = list(_STACK_FILE_LINE_RE.finditer(trace_text))
+    if not matches:
+        return None, None
+    m = matches[0]
+    return m.group(1), int(m.group(2))
+
+
+def compute_tensor_lifetime_records(
+    operations_batch: list,
+    input_tensors_batch: list,
+    output_tensors_batch: list,
+    stack_traces_batch: list,
+    tensor_ids: set,
+) -> list[dict]:
+    """
+    Derive tensor lifetime metadata for visualizer late-deallocation analysis (see tt-metal#27868).
+
+    Uses imported operation I/O only (same ordering as operations in the trace). For each tensor_id:
+    - producer_operation_id: first op that lists the tensor as an output
+    - last_use_operation_id: last op that lists the tensor as an input, **excluding**
+      tensor-deallocation ops (those only free memory but also reference the tensor as input).
+      If none, falls back to the producer op.
+    - deallocate_operation_id: first op that looks like tensor deallocate with this tensor as input
+    - producer_* / last_use_* source file and line from stack_traces when available (innermost /
+      nearest-op frame; see :func:`_innermost_stack_frame`)
+    """
+    if not tensor_ids:
+        return []
+
+    id_to_name = {row[0]: row[1] for row in operations_batch}
+    outputs_by_tid = defaultdict(list)
+    inputs_by_tid = defaultdict(list)
+    dealloc_candidate_ops = defaultdict(list)
+
+    for op_id, _idx, tid in output_tensors_batch:
+        outputs_by_tid[_tid_int(tid)].append(op_id)
+
+    for op_id, _idx, tid in input_tensors_batch:
+        tid_i = _tid_int(tid)
+        name = id_to_name.get(op_id, "")
+        if _is_tensor_deallocate_operation(name):
+            dealloc_candidate_ops[tid_i].append(op_id)
+            continue
+        # Last *computational* use excludes free/deallocate ops (they also list the tensor as input).
+        inputs_by_tid[tid_i].append(op_id)
+
+    stack_by_op = {row[0]: row[1] for row in stack_traces_batch}
+
+    records = []
+    for tid in sorted(tensor_ids):
+        tid_i = _tid_int(tid)
+        out_ops = outputs_by_tid.get(tid_i)
+        in_ops = inputs_by_tid.get(tid_i)
+        producer_op = min(out_ops) if out_ops else None
+        last_use_op = max(in_ops) if in_ops else producer_op
+        dealloc_ops = dealloc_candidate_ops.get(tid_i, [])
+        dealloc_op = min(dealloc_ops) if dealloc_ops else None
+
+        prod_trace = stack_by_op.get(producer_op) if producer_op is not None else None
+        use_trace = stack_by_op.get(last_use_op) if last_use_op is not None else None
+        pf, pl = _innermost_stack_frame(prod_trace)
+        uf, ul = _innermost_stack_frame(use_trace)
+
+        records.append(
+            {
+                "tensor_id": tid_i,
+                "producer_operation_id": producer_op,
+                "last_use_operation_id": last_use_op,
+                "deallocate_operation_id": dealloc_op,
+                "producer_source_file": pf,
+                "producer_source_line": pl,
+                "last_use_source_file": uf,
+                "last_use_source_line": ul,
+            }
+        )
+    return records
 
 
 def create_database_schema(cursor: sqlite3.Cursor) -> None:
@@ -224,6 +328,23 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             operation_id int,
             output_index int,
             tensor_id int
+        )
+    """
+    )
+
+    # Per-tensor lifetime derived during import (producer / last use / deallocate + optional Python locations).
+    # Supports TTNN Visualizer late-deallocation analysis (tt-metal#27868).
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tensor_lifetime (
+            tensor_id int UNIQUE,
+            producer_operation_id int,
+            last_use_operation_id int,
+            deallocate_operation_id int,
+            producer_source_file text,
+            producer_source_line int,
+            last_use_source_file text,
+            last_use_source_line int
         )
     """
     )
@@ -1110,6 +1231,33 @@ def import_graph(
         cursor.executemany("""INSERT INTO output_tensors VALUES (?, ?, ?)""", output_tensors_batch)
     if tensors_batch:
         cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+
+    tensor_lifetime_records = compute_tensor_lifetime_records(
+        operations_batch,
+        input_tensors_batch,
+        output_tensors_batch,
+        stack_traces_batch,
+        kept_tensor_ids,
+    )
+    if tensor_lifetime_records:
+        tl_rows = [
+            (
+                r["tensor_id"],
+                r["producer_operation_id"],
+                r["last_use_operation_id"],
+                r["deallocate_operation_id"],
+                r["producer_source_file"],
+                r["producer_source_line"],
+                r["last_use_source_file"],
+                r["last_use_source_line"],
+            )
+            for r in tensor_lifetime_records
+        ]
+        cursor.executemany(
+            """INSERT OR REPLACE INTO tensor_lifetime VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            tl_rows,
+        )
+
     if device_tensors_batch:
         cursor.executemany("""INSERT INTO device_tensors VALUES (?, ?, ?)""", device_tensors_batch)
     if buffers_batch:
@@ -1142,6 +1290,7 @@ def import_graph(
         "errors": len(errors_batch),
         "warnings": warnings,
         "graph_counter_to_op_id": graph_counter_to_op_id,
+        "tensor_lifetime": tensor_lifetime_records,
     }
 
 
@@ -1159,6 +1308,53 @@ def extract_total_duration_from_graph(graph: list) -> float:
         if node.get("node_type") == "capture_end":
             return node.get("duration_ns", 0) / 1e9
     return 0.0
+
+
+def write_tensor_lifetime_sidecar(report_path: Union[str, Path]) -> Path | None:
+    """
+    Write ``<stem>.tensor_lifetime.json`` beside the capture report using the same rules as import.
+
+    Cheap to consume from TTNN Visualizer without opening SQLite. Skips quietly if the report
+    cannot be parsed or has no graph.
+    """
+    report_path = Path(report_path)
+    if not report_path.is_file():
+        return None
+    try:
+        with open(report_path, "r") as f:
+            report = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"tensor_lifetime sidecar skipped (could not read report): {e}")
+        return None
+    if report.get("version") != SUPPORTED_REPORT_VERSION or "graph" not in report:
+        return None
+    python_io = report.get("python_io")
+    if python_io is None:
+        pio_sidecar = report_path.with_suffix(".python_io.json")
+        if pio_sidecar.exists():
+            try:
+                with open(pio_sidecar, "r") as pf:
+                    python_io = json.load(pf)
+            except (json.JSONDecodeError, OSError):
+                python_io = None
+    conn = sqlite3.connect(":memory:")
+    cursor = conn.cursor()
+    create_database_schema(cursor)
+    try:
+        stats = import_graph(
+            cursor,
+            report["graph"],
+            base_operation_id=0,
+            devices=report.get("devices"),
+            python_io=python_io,
+            per_operation_buffers=report.get("per_operation_buffers"),
+        )
+    finally:
+        conn.close()
+    out_path = report_path.with_name(report_path.stem + ".tensor_lifetime.json")
+    with open(out_path, "w") as f:
+        json.dump(stats.get("tensor_lifetime", []), f, indent=2)
+    return out_path
 
 
 def extract_operation_durations(graph: list) -> dict:
@@ -1248,9 +1444,11 @@ def import_report(
             "errors": 0,
             "stack_traces": 0,
             "svgs": 0,
+            "tensor_lifetime_records": 0,
         }
 
         for idx, rpath in enumerate(sorted(report_files)):
+            stats = {}
             with open(rpath, "r") as f:
                 report = json.load(f)
 
@@ -1319,6 +1517,11 @@ def import_report(
                 total_stats["edges"] += stats.get("edges", 0)
                 total_stats["errors"] += stats.get("errors", 0)
                 total_stats["stack_traces"] += stats.get("stack_traces", 0)
+                tl = stats.get("tensor_lifetime") or []
+                total_stats["tensor_lifetime_records"] += len(tl)
+                tl_path = rpath.with_name(rpath.stem + ".tensor_lifetime.json")
+                with open(tl_path, "w") as f:
+                    json.dump(tl, f, indent=2)
 
                 # Generate SVG if requested
                 if generate_svgs and graphs_dir:
@@ -1470,6 +1673,10 @@ def import_report(
             summary.append(f"  - {total_stats['errors']} errors captured")
         if total_stats["stack_traces"] > 0:
             summary.append(f"  - {total_stats['stack_traces']} stack traces captured")
+        if total_stats.get("tensor_lifetime_records", 0) > 0:
+            summary.append(
+                f"  - {total_stats['tensor_lifetime_records']} tensor lifetime rows (also in *.tensor_lifetime.json)"
+            )
         if total_stats.get("buffer_pages", 0) > 0:
             summary.append(f"  - {total_stats['buffer_pages']} buffer pages")
         if total_stats.get("cluster_descriptor"):

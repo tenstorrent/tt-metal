@@ -50,6 +50,9 @@ from ttnn.graph_report import (
 _python_io_data: list = []
 _python_io_recording_enabled: bool = False
 _python_stack_traces_enabled: bool = False
+# When begin_graph_capture starts the outermost session, we force stack traces on for
+# graph_report / tensor_lifetime source columns and restore this value when capture ends.
+_saved_python_stack_traces_before_outer_capture = None
 
 # Glob patterns for frames to strip from stack traces (pathlib-style).
 # Matches ttnn internals (decorators/graph), pytest, pluggy, and the pytest entry script.
@@ -108,6 +111,14 @@ def is_python_stack_trace_enabled() -> bool:
     return _python_stack_traces_enabled
 
 
+def _restore_python_stack_traces_after_outer_capture_if_saved():
+    """Restore :data:`_python_stack_traces_enabled` after the outermost capture ends."""
+    global _python_stack_traces_enabled, _saved_python_stack_traces_before_outer_capture
+    if _saved_python_stack_traces_before_outer_capture is not None:
+        _python_stack_traces_enabled = _saved_python_stack_traces_before_outer_capture
+        _saved_python_stack_traces_before_outer_capture = None
+
+
 def _capture_python_stack_trace() -> list[str]:
     """Capture the current Python call stack, filtering out ttnn internals.
 
@@ -157,16 +168,25 @@ def begin_graph_capture(run_mode=None):
 
     Automatically enables Python I/O recording so that
     ``end_graph_capture_to_file`` can embed operation arguments,
-    tensor IDs, and (if enabled) stack traces in the JSON report.
+    tensor IDs, and stack traces in the JSON report.
+
+    For the outermost capture session, Python stack traces are enabled so that
+    offline ``graph_report`` imports can fill ``tensor_lifetime`` source file/line
+    columns (see :mod:`ttnn.graph_report`). The previous stack-trace setting is
+    restored when capture ends. Extra overhead applies; use :func:`full_graph_capture`
+    only when you need buffer tracing / slow dispatch as well.
 
     When graph capture is started from C++ (e.g. ``MemoryUsageTracker``),
     this wrapper is bypassed and Python I/O recording stays disabled,
     avoiding the associated overhead.
     """
     global _python_io_data, _python_io_recording_enabled
+    global _python_stack_traces_enabled, _saved_python_stack_traces_before_outer_capture
     if not is_graph_capture_active():
         _python_io_data = []
         _python_io_recording_enabled = True
+        _saved_python_stack_traces_before_outer_capture = _python_stack_traces_enabled
+        _python_stack_traces_enabled = True
         import ttnn
 
         if ttnn.CONFIG.enable_fast_runtime_mode:
@@ -192,6 +212,7 @@ def end_graph_capture():
     result = _cpp_end_graph_capture()
     if not is_graph_capture_active():
         _python_io_recording_enabled = False
+        _restore_python_stack_traces_after_outer_capture_if_saved()
     return result
 
 
@@ -203,6 +224,7 @@ def end_graph_capture_to_file(report_path):
         _write_python_io_sidecar(report_path)
     if not is_graph_capture_active():
         _python_io_recording_enabled = False
+        _restore_python_stack_traces_after_outer_capture_if_saved()
     return json.loads(result_str)
 
 
