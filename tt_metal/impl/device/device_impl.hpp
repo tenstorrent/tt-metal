@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <unordered_set>
 
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
@@ -142,7 +143,10 @@ public:
     void init_command_queue_device_with_topology(DispatchTopology* topology);
 
     bool compile_fabric();
-    void configure_fabric();
+    // pre_dead_channels: ETH channel IDs confirmed dead by terminate_stale_erisc_routers()
+    // (probe read timed out).  configure_fabric_cores() skips assert_risc_reset_at_core()
+    // for these channels to prevent the indefinite hang observed on T3K Device 4 ch7.
+    void configure_fabric(const std::unordered_set<uint32_t>& pre_dead_channels = {});
     // Terminate fabric MUX tensix worker cores and re-launch them fresh.
     // Called during quiesce to ensure MUX channel state is reset between iterations.
     void quiesce_and_restart_fabric_workers();

@@ -7,6 +7,7 @@
 #include <atomic>
 #include <mutex>
 #include <set>
+#include <unordered_set>
 #include <utility>
 
 #include "device/device_impl.hpp"
@@ -54,7 +55,13 @@ private:
     // On timeout, logs a warning and continues — does NOT assert RISC reset (that would
     // tear down the WH ETH PHY link and break non-MMIO L1 access for the rest of the mesh).
     // Called before configure_fabric_cores() clears L1 (Fix A).
-    void terminate_stale_erisc_routers(
+    //
+    // Returns the set of ETH channel IDs whose initial probe read threw (i.e. the remote ERISC
+    // is completely unresponsive — physically dead link).  The caller passes this set to
+    // configure_fabric_cores() so it can skip assert_risc_reset_at_core() for these channels;
+    // those calls hang indefinitely on some hardware (observed: ch7 on Device 4 T3K hangs
+    // >10 min while ch0/1/6 correctly time out after 5 s) causing CI timeouts.
+    std::unordered_set<uint32_t> terminate_stale_erisc_routers(
         Device* dev, const tt_fabric::FabricBuilderContext& builder_context) const;
 
     tt::tt_fabric::ControlPlane& control_plane_;

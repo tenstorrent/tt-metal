@@ -75,7 +75,8 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_
     return nullptr;
 }
 
-bool configure_fabric_cores(tt::tt_metal::IDevice* device) {
+bool configure_fabric_cores(
+    tt::tt_metal::IDevice* device, const std::unordered_set<uint32_t>& pre_known_dead_channels) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto soc_desc = cluster.get_soc_desc(device->id());
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -109,10 +110,42 @@ bool configure_fabric_cores(tt::tt_metal::IDevice* device) {
     // that timed out during the soft reset — and can hang indefinitely (write_core has no
     // per-call timeout unlike read_non_mmio).  Skipping the L1 clear for dead channels is
     // safe: firmware won't start on them regardless of whether L1 was zeroed.
-    std::unordered_set<uint32_t> dead_channels;
+    //
+    // Seed with pre_known_dead_channels: channels whose probe L1 read in
+    // terminate_stale_erisc_routers() already timed out.  For these channels we skip
+    // assert_risc_reset_at_core() entirely rather than calling it and hoping the UMD 5 s
+    // timeout fires.  On T3K Device 4 with physically dead ETH links, channels 0/1/6
+    // correctly timeout via UMD's NON_MMIO_RW_TIMEOUT (5 s), but channel 7 hangs for
+    // >10 minutes — the UMD timeout mechanism appears to not fire after three consecutive
+    // failures on the same device (suspected lock contention or kernel blocking state
+    // accumulated from the prior calls).  Skipping the call prevents this indefinite hang.
+    std::unordered_set<uint32_t> dead_channels = pre_known_dead_channels;
+    if (!pre_known_dead_channels.empty()) {
+        all_channels_healthy = false;
+        log_warning(
+            tt::LogMetal,
+            "configure_fabric_cores: Device {} skipping assert_risc_reset_at_core for {} "
+            "pre-confirmed dead channels (probe timed out in terminate_stale_erisc_routers). "
+            "This avoids the indefinite hang observed on ch7 after ch0/1/6 exhaust UMD timeouts.",
+            device->id(),
+            pre_known_dead_channels.size());
+    }
     {
         const auto chip_id = device->id();
         for (const auto& [router_chan, _] : router_chans_and_direction) {
+            // Skip channels already confirmed dead by terminate_stale_erisc_routers().
+            // Calling assert_risc_reset_at_core() on these channels can hang indefinitely
+            // even though the UMD 5 s timeout is supposed to fire (see comment above).
+            if (dead_channels.count(router_chan)) {
+                log_debug(
+                    tt::LogMetal,
+                    "configure_fabric_cores: device {} channel {} is pre-confirmed dead — "
+                    "skipping soft reset",
+                    chip_id,
+                    router_chan);
+                continue;
+            }
+
             try {
                 // get_virtual_eth_core_from_channel returns the virtual CoreCoord needed
                 // for tt_cxy_pair, which is what assert/deassert_risc_reset_at_core expect.

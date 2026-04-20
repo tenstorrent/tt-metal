@@ -383,7 +383,7 @@ bool Device::compile_fabric() {
     return fabric_program_ != nullptr;
 }
 
-void Device::configure_fabric() {
+void Device::configure_fabric(const std::unordered_set<uint32_t>& pre_dead_channels) {
     if (fabric_program_ == nullptr) {
         return;
     }
@@ -394,7 +394,11 @@ void Device::configure_fabric() {
     // dead ethernet path and will block indefinitely — there is no safe recovery path for this
     // device.  Throw immediately to fail fast with a clear diagnostic rather than hanging for
     // 10 minutes until the CI timeout kills the process.  See #42429.
-    const bool fabric_cores_healthy = tt::tt_fabric::configure_fabric_cores(this);
+    //
+    // pre_dead_channels: channels already confirmed dead by terminate_stale_erisc_routers().
+    // Passed through so configure_fabric_cores() can skip assert_risc_reset_at_core() for them
+    // and avoid the indefinite hang observed on T3K Device 4 ch7 (#42429).
+    const bool fabric_cores_healthy = tt::tt_fabric::configure_fabric_cores(this, pre_dead_channels);
     if (!fabric_cores_healthy) {
         TT_THROW(
             "configure_fabric: Device {} has dead ETH channels (soft reset timed out). "
