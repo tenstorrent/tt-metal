@@ -144,50 +144,6 @@ jobs:
           copyToWorkers: false
           ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
 
-      - name: Debug reset environment DNS and SSH
-        working-directory: /tmp
-        timeout-minutes: 2
-        env:
-          RESET_ENVIRONMENT_NAME: ci-${{ github.run_id }}-reset-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
-        run: |
-          echo "--- Kubernetes objects for ${RESET_ENVIRONMENT_NAME} ---"
-          kubectl -n ttop-ci get pods,svc,endpoints,endpointslices | rg "${RESET_ENVIRONMENT_NAME}" || true
-
-          echo "--- SSH aliases from /ci/ttrun/hostfile ---"
-          while IFS= read -r host; do
-            [ -n "$host" ] || continue
-            echo "Host alias: $host"
-            ssh -G "$host" | awk '
-              /^hostname / { print "  HostName " $2 }
-              /^user / { print "  User " $2 }
-              /^port / { print "  Port " $2 }
-            ' || true
-          done < /ci/ttrun/hostfile
-
-          echo "--- DNS resolution for SSH aliases ---"
-          while IFS= read -r host; do
-            [ -n "$host" ] || continue
-            fqdn=$(ssh -G "$host" | awk '/^hostname / { print $2; exit }')
-            echo "Resolving $host -> ${fqdn:-<missing>}"
-            if [ -n "$fqdn" ]; then
-              getent hosts "$fqdn" || true
-            fi
-          done < /ci/ttrun/hostfile
-
-          echo "--- SSH reachability for SSH aliases ---"
-          while IFS= read -r host; do
-            [ -n "$host" ] || continue
-            echo "Checking $host"
-            ssh -o BatchMode=yes -o ConnectTimeout=5 \
-              -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-              "$host" "hostname" || true
-          done < /ci/ttrun/hostfile
-
       - name: Print hostnames
         working-directory: /tmp
         env:
