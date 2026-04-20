@@ -111,22 +111,27 @@ bool configure_fabric_cores(
     // per-call timeout unlike read_non_mmio).  Skipping the L1 clear for dead channels is
     // safe: firmware won't start on them regardless of whether L1 was zeroed.
     //
-    // Seed with pre_known_dead_channels: channels whose probe L1 read in
-    // terminate_stale_erisc_routers() already timed out.  For these channels we skip
-    // assert_risc_reset_at_core() entirely rather than calling it and hoping the UMD 5 s
-    // timeout fires.  On T3K Device 4 with physically dead ETH links, channels 0/1/6
-    // correctly timeout via UMD's NON_MMIO_RW_TIMEOUT (5 s), but channel 7 hangs for
-    // >10 minutes — the UMD timeout mechanism appears to not fire after three consecutive
-    // failures on the same device (suspected lock contention or kernel blocking state
-    // accumulated from the prior calls).  Skipping the call prevents this indefinite hang.
+    // Seed with pre_known_dead_channels: channels confirmed problematic by
+    // terminate_stale_erisc_routers() — either probe read timed out (physically dead link)
+    // OR status word was corrupt (not a valid EDMStatus value).  For these channels we skip
+    // assert_risc_reset_at_core() entirely.
+    //
+    // Why: assert_risc_reset_at_core() calls read_non_mmio first (to get current reset state).
+    // On a dead/corrupt channel, that read times out after 5 s and leaves a stuck command in
+    // the relay ETH core's 4-slot command queue (CMD_BUF_SIZE=4, wormhole/eth_interface.h).
+    // With 4 dead channels (ch0/1/6/7 on T3K Device 4), the queue fills after ch0/1/6 each
+    // contribute one stuck command.  Ch7's read_non_mmio then enters the no-timeout while(full)
+    // loop → indefinite hang.  Skipping the call for ALL pre-confirmed problematic channels
+    // (both probe-dead and corrupt) prevents this.
     std::unordered_set<uint32_t> dead_channels = pre_known_dead_channels;
     if (!pre_known_dead_channels.empty()) {
         all_channels_healthy = false;
         log_warning(
             tt::LogMetal,
             "configure_fabric_cores: Device {} skipping assert_risc_reset_at_core for {} "
-            "pre-confirmed dead channels (probe timed out in terminate_stale_erisc_routers). "
-            "This avoids the indefinite hang observed on ch7 after ch0/1/6 exhaust UMD timeouts.",
+            "pre-confirmed problematic channels (probe timed out or L1 corrupt in "
+            "terminate_stale_erisc_routers). This avoids the indefinite hang in read_non_mmio "
+            "when the 4-slot relay ETH queue fills after dead channels exhaust UMD timeouts.",
             device->id(),
             pre_known_dead_channels.size());
     }

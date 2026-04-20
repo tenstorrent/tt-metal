@@ -628,6 +628,15 @@ std::unordered_set<uint32_t> FabricFirmwareInitializer::terminate_stale_erisc_ro
             } catch (...) {
                 // write-side also unresponsive — best effort only, ignore
             }
+            // Fix #42429 (corrupt path): also add corrupt channels to probe_dead_channels so
+            // configure_fabric_cores() skips assert_risc_reset_at_core() for them.
+            // When status is garbage (not a valid EDMStatus), the ERISC firmware is in an unknown
+            // state — assert_risc_reset_at_core() calls read_non_mmio first, and if the channel is
+            // effectively dead, that read will time out and leave a stuck command in the 4-slot relay
+            // ETH queue.  With 4 dead channels (ch0/1/6/7 on T3K Device 4), the queue fills and
+            // ch7's read_non_mmio enters the no-timeout while(full) loop → indefinite hang.
+            // Treating corrupt channels the same as probe-dead channels avoids this hang.
+            probe_dead_channels.insert(eth_chan_id);
             corrupt_count++;
             continue;
         }
