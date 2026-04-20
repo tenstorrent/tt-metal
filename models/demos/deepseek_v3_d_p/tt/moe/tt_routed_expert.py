@@ -34,6 +34,17 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 
 class TtRoutedExpert(LightweightModule):
     @staticmethod
+    def check_cache_complete(cache_path: Path, cache_name_prefix: str, experts_per_chip: int) -> bool:
+        """Check if all routed expert weight cache files exist."""
+        for local_expert_idx in range(experts_per_chip):
+            for proj in ["gate", "up", "down"]:
+                pattern = f"{cache_name_prefix}.local_{local_expert_idx}_{proj}*.tensorbin"
+                if not list(cache_path.glob(pattern)):
+                    logger.debug(f"TTNN cache missing: {cache_name_prefix}.local_{local_expert_idx}_{proj}")
+                    return False
+        return True
+
+    @staticmethod
     def _convert_and_cache_expert_weights(
         torch_weights: list[dict],
         experts_per_chip: int,

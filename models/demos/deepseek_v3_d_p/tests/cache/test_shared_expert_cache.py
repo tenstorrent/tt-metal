@@ -83,6 +83,8 @@ def test_shared_expert_weights_cold_warm_cache(mesh_device, device_params):
     output1 = to_torch_concat(output1_tt)
 
     # === Path 2: Cold Cache ===
+    assert not TtSharedExpert.check_cache_complete(CACHE_DIR, "shared_expert"), "Cache should be empty before build"
+
     TtSharedExpert.build_ttnn_cache(
         torch_weights,
         emb_dim,
@@ -92,6 +94,8 @@ def test_shared_expert_weights_cold_warm_cache(mesh_device, device_params):
         CACHE_DIR,
         "shared_expert",
     )
+
+    assert TtSharedExpert.check_cache_complete(CACHE_DIR, "shared_expert"), "Cache should be complete after build"
 
     expert_cold = TtSharedExpert(
         mesh_device,

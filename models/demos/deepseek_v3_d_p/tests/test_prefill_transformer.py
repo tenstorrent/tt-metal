@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import save_norm_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
     PROMPTS_PATH,
+    check_reference_cache_exists,
     create_hf_model,
     download_infinitebench_subset,
     extract_tt_state_dict,
@@ -172,12 +173,10 @@ def test_prefill_transformer(
     # --- Cache-aware loading strategy ---
     profiler.start("cache_check")
 
-    from models.demos.deepseek_v3_d_p.utils.cache_utils import check_reference_cache_exists, check_ttnn_cache_complete
-
     # Check cache states
     experts_per_chip = 256 // (mesh_shape[0] * mesh_shape[1]) if use_pretrained else 8
     ttnn_cache_complete = (
-        check_ttnn_cache_complete(effective_cache_path, num_layers, experts_per_chip, tuple(mesh_shape))
+        TtPrefillTransformer.check_cache_complete(effective_cache_path, num_layers, experts_per_chip)
         if effective_cache_path
         else False
     )

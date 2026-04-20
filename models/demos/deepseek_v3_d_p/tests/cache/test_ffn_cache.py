@@ -82,12 +82,16 @@ def test_ffn_weights_cold_warm_cache(mesh_device, device_params):
     output1 = to_torch_concat(output1_tt)
 
     # === Path 2: Cold Cache ===
+    assert not TtFfn.check_cache_complete(CACHE_DIR, "ffn"), "Cache should be empty before build"
+
     TtFfn.build_ttnn_cache(
         torch_weights,
         mesh_device,
         CACHE_DIR,
         "ffn",
     )
+
+    assert TtFfn.check_cache_complete(CACHE_DIR, "ffn"), "Cache should be complete after build"
 
     ffn_cold = TtFfn(
         mesh_device,

@@ -91,6 +91,17 @@ class TtMoEGatePrefill(LightweightModule):
     """MoE gate module from DeepSeek-R1."""
 
     @staticmethod
+    def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
+        """Check if gate weight and bias cache files exist."""
+        if not list(cache_path.glob(f"{cache_name_prefix}.weight*.tensorbin")):
+            logger.debug(f"TTNN cache missing: {cache_name_prefix}.weight")
+            return False
+        if not list(cache_path.glob(f"{cache_name_prefix}.e_score_correction_bias*.tensorbin")):
+            logger.debug(f"TTNN cache missing: {cache_name_prefix}.e_score_correction_bias")
+            return False
+        return True
+
+    @staticmethod
     def _convert_and_cache_gate_weights(
         torch_weight: torch.Tensor,  # (n_experts, dim) - HF format
         torch_bias: torch.Tensor,  # (n_experts,)
