@@ -22,6 +22,7 @@ from helpers.llk_params import (
     ReduceDimension,
     ReducePool,
     Transpose,
+    UnpackToDest,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 
@@ -48,6 +49,7 @@ class ComputeNode:
         enforce_fp32_accumulation: EnforceFP32Accumulation = EnforceFP32Accumulation.No,
         clear_fp32_dst_acc: ClearFP32DstAcc = ClearFP32DstAcc.No,
         acc_to_dest: AccToDest = AccToDest.No,
+        unpack_to_dest: UnpackToDest = UnpackToDest.No,
     ):
         if fpu is None and sfpu is None:
             raise ValueError("Compute unit needs an fpu or sfpu unit")
@@ -69,6 +71,7 @@ class ComputeNode:
         self.enforce_fp32_accumulation = enforce_fp32_accumulation
         self.clear_fp32_dst_acc = clear_fp32_dst_acc
         self.acc_to_dest = acc_to_dest
+        self.unpack_to_dest = unpack_to_dest
 
         if (
             self.broadcast_type != BroadcastType.None_

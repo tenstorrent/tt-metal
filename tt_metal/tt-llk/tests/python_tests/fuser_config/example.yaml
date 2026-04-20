@@ -74,6 +74,7 @@ operations:
         unpack_transpose_within_face: true
         unpack_transpose_faces: true
         math_fidelity: "LoFi"
+        acc_to_dest: true
       - type: "UnarySfpu"
         operation: "Neg"
         approximation_mode: false
