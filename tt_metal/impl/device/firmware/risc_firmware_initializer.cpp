@@ -36,6 +36,7 @@
 #include "tt_align.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/blackhole_eth.hpp>
 
 namespace tt::tt_metal {
 
@@ -268,6 +269,71 @@ void RiscFirmwareInitializer::clear_dram_state(tt::ChipId device_id) {
     }
 }
 
+std::unordered_set<CoreCoord> RiscFirmwareInitializer::get_inactive_ethernet_cores_for_init(tt::ChipId device_id) {
+    auto raw = this->get_control_plane_().get_inactive_ethernet_cores(device_id);
+    if (cluster_.arch() != ARCH::BLACKHOLE) {
+        return raw;
+    }
+    const auto& soc_desc = cluster_.get_soc_desc(device_id);
+
+    // Mark broken channels: base-FW FAIL postcode or PORT_DOWN.
+    // These cores cannot reach RUN_MSG_DONE, so we'd hang on them.
+    std::unordered_set<tt_fabric::chan_id_t> broken_chans;
+    for (const auto& eth_core : raw) {
+        auto chan_it = soc_desc.logical_eth_core_to_chan_map.find(eth_core);
+        if (chan_it == soc_desc.logical_eth_core_to_chan_map.end()) {
+            continue;
+        }
+        CoreCoord virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
+            device_id, eth_core, CoreType::ETH);
+        uint32_t status[2] = {0, 0};  // [postcode, port_status]
+        cluster_.read_core(
+            status, static_cast<uint32_t>(sizeof(status)),
+            tt_cxy_pair(device_id, virt),
+            static_cast<uint64_t>(tt::umd::blackhole::BOOT_RESULTS_ADDR));
+        if (status[0] == tt::umd::blackhole::POSTCODE_ETH_INIT_FAIL ||
+            status[1] == tt::umd::blackhole::PORT_DOWN) {
+            broken_chans.insert(static_cast<tt_fabric::chan_id_t>(chan_it->second));
+        }
+    }
+
+    if (broken_chans.empty()) {
+        return raw;
+    }
+
+    // BH groups 4 ETH channels per SerDes - one bad channel poisons the whole quad.
+    std::unordered_set<tt_fabric::chan_id_t> skip_chans;
+    for (auto c : broken_chans) {
+        const tt_fabric::chan_id_t quad_base = c & ~tt_fabric::chan_id_t{0x3};
+        for (tt_fabric::chan_id_t i = 0; i < 4; ++i) {
+            skip_chans.insert(static_cast<tt_fabric::chan_id_t>(quad_base + i));
+        }
+    }
+
+    std::unordered_set<CoreCoord> filtered;
+    filtered.reserve(raw.size());
+    std::vector<tt_fabric::chan_id_t> skipped_chans;
+    for (const auto& eth_core : raw) {
+        auto chan_it = soc_desc.logical_eth_core_to_chan_map.find(eth_core);
+        auto chan = (chan_it != soc_desc.logical_eth_core_to_chan_map.end())
+                        ? static_cast<tt_fabric::chan_id_t>(chan_it->second)
+                        : static_cast<tt_fabric::chan_id_t>(-1);
+        if (skip_chans.contains(chan)) {
+            skipped_chans.push_back(chan);
+            continue;
+        }
+        filtered.insert(eth_core);
+    }
+    if (!skipped_chans.empty()) {
+        std::sort(skipped_chans.begin(), skipped_chans.end());
+        log_info(
+            tt::LogMetal,
+            "Device {}: skipping FW init on {} inactive eth cores with broken links (channels: {})",
+            device_id, skipped_chans.size(), fmt::join(skipped_chans, ","));
+    }
+    return filtered;
+}
+
 void RiscFirmwareInitializer::clear_launch_messages_on_eth_cores(tt::ChipId device_id) {
     auto clear_ethernet_core = [&](const CoreCoord& logical_eth_core, HalProgrammableCoreType programmable_core_type) {
         auto factory = hal_.get_dev_msgs_factory(programmable_core_type);
@@ -296,7 +362,7 @@ void RiscFirmwareInitializer::clear_launch_messages_on_eth_cores(tt::ChipId devi
     for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         clear_ethernet_core(eth_core, HalProgrammableCoreType::ACTIVE_ETH);
     }
-    for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_inactive_ethernet_cores_for_init(device_id)) {
         clear_ethernet_core(eth_core, HalProgrammableCoreType::IDLE_ETH);
     }
     cluster_.l1_barrier(device_id);
@@ -327,7 +393,7 @@ void RiscFirmwareInitializer::assert_tensix_workers_impl(tt::ChipId device_id) {
 }
 
 void RiscFirmwareInitializer::assert_inactive_ethernet_cores(tt::ChipId device_id) {
-    for (const auto& logical_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
+    for (const auto& logical_core : this->get_inactive_ethernet_cores_for_init(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
         cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
@@ -1191,7 +1257,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
     go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
-    for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_inactive_ethernet_cores_for_init(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
         core_info.view().absolute_logical_x() = eth_core.x;
