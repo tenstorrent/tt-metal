@@ -12,6 +12,9 @@ message EthernetMetrics {
     uint32 crc_error_count = 2;
     uint64 corrected_codeword_count = 3;
     uint64 uncorrected_codeword_count = 4;
+    uint32 txq0_resend_count = 5;
+    uint32 txq1_resend_count = 6;
+    uint32 txq2_resend_count = 7;
 }
 
 message LinkStatus {

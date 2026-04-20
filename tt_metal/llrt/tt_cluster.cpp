@@ -696,7 +696,8 @@ int Cluster::get_device_aiclk(const ChipId& chip_id) const { return this->driver
 
 uint32_t Cluster::get_device_input_power(const ChipId& chip_id) const {
     auto* telemetry = this->driver_->get_chip(chip_id)->get_tt_device()->get_arc_telemetry_reader();
-    return telemetry->read_entry(tt::umd::TelemetryTag::INPUT_POWER);
+    return telemetry->read_entry(tt::umd::TelemetryTag::TDP);
+    return this->driver_->get_chip(chip_id)->get_tt_device()->get_firmware_info_provider()->get_tdp().value_or(0);
 }
 
 double Cluster::get_device_asic_temperature(const ChipId& chip_id) const {

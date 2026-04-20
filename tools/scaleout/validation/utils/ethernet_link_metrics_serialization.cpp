@@ -34,6 +34,9 @@ std::vector<uint8_t> serialize_link_metrics_to_bytes(const std::vector<::Etherne
         proto_metrics->set_crc_error_count(link_metric.link_status.metrics.crc_error_count);
         proto_metrics->set_corrected_codeword_count(link_metric.link_status.metrics.corrected_codeword_count);
         proto_metrics->set_uncorrected_codeword_count(link_metric.link_status.metrics.uncorrected_codeword_count);
+        proto_metrics->set_txq0_resend_count(link_metric.link_status.metrics.txq0_resend_count);
+        proto_metrics->set_txq1_resend_count(link_metric.link_status.metrics.txq1_resend_count);
+        proto_metrics->set_txq2_resend_count(link_metric.link_status.metrics.txq2_resend_count);
 
         // Serialize TrafficParams
         auto* proto_traffic_params = proto_link_status->mutable_traffic_params();
@@ -87,6 +90,9 @@ std::vector<::EthernetLinkMetrics> deserialize_link_metrics_from_bytes(const std
         link_metric.link_status.metrics.crc_error_count = proto_metrics.crc_error_count();
         link_metric.link_status.metrics.corrected_codeword_count = proto_metrics.corrected_codeword_count();
         link_metric.link_status.metrics.uncorrected_codeword_count = proto_metrics.uncorrected_codeword_count();
+        link_metric.link_status.metrics.txq0_resend_count = proto_metrics.txq0_resend_count();
+        link_metric.link_status.metrics.txq1_resend_count = proto_metrics.txq1_resend_count();
+        link_metric.link_status.metrics.txq2_resend_count = proto_metrics.txq2_resend_count();
 
         // Deserialize TrafficParams
         const auto& proto_traffic_params = proto_link_status.traffic_params();

@@ -714,7 +714,12 @@ void dump_link_stats(
             for (const auto& eth_connection : eth_connections) {
                 auto src_chan = eth_connection.src_chan;
                 auto logical_coord = soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
-                auto ethernet_core = ctx.devices.at(chip_id)->ethernet_core_from_logical_core(logical_coord);
+                // ethernet_core is only needed when data_size > 0 (traffic-mode read-back).
+                // In metrics-only mode, ctx.devices is empty, so skip the lookup to avoid out_of_range.
+                CoreCoord ethernet_core{};
+                if (data_size > 0) {
+                    ethernet_core = ctx.devices.at(chip_id)->ethernet_core_from_logical_core(logical_coord);
+                }
                 const auto& port_info = port_info_map.at(asic_id).at(src_chan);
                 links.push_back(
                     {chip_id,
@@ -930,6 +935,9 @@ void log_link_metrics(
         uint32_t crc_error_count;
         uint64_t corrected_codeword_count;
         uint64_t uncorrected_codeword_count;
+        uint32_t txq0_resend_count;
+        uint32_t txq1_resend_count;
+        uint32_t txq2_resend_count;
         uint32_t num_mismatched_words;
     };
 
@@ -946,6 +954,9 @@ void log_link_metrics(
                  link.link_status.metrics.crc_error_count,
                  link.link_status.metrics.corrected_codeword_count,
                  link.link_status.metrics.uncorrected_codeword_count,
+                 link.link_status.metrics.txq0_resend_count,
+                 link.link_status.metrics.txq1_resend_count,
+                 link.link_status.metrics.txq2_resend_count,
                  link.link_status.num_mismatched_words});
         }
     } else {
@@ -983,6 +994,9 @@ void log_link_metrics(
                  link.link_status.metrics.crc_error_count,
                  link.link_status.metrics.corrected_codeword_count,
                  link.link_status.metrics.uncorrected_codeword_count,
+                 link.link_status.metrics.txq0_resend_count,
+                 link.link_status.metrics.txq1_resend_count,
+                 link.link_status.metrics.txq2_resend_count,
                  link.link_status.num_mismatched_words});
         }
     }
@@ -1013,7 +1027,8 @@ void log_link_metrics(
     std::cout << std::left << std::setw(20) << "Host" << std::setw(6) << "Tray" << std::setw(6) << "ASIC"
               << std::setw(5) << "Ch" << std::setw(9) << "Port ID" << std::setw(15) << "Port Type" << std::setw(14)
               << "Unique ID" << std::setw(12) << "Retrains" << std::setw(14) << "CRC Err" << std::setw(18)
-              << "Corrected CW" << std::setw(18) << "Uncorrected CW" << std::setw(16) << "Mismatch Words";
+              << "Corrected CW" << std::setw(18) << "Uncorrected CW" << std::setw(14) << "TXQ0 Resend" << std::setw(14)
+              << "TXQ1 Resend" << std::setw(14) << "TXQ2 Resend" << std::setw(16) << "Mismatch Words";
 
     if (!log_ethernet_metrics) {
         std::cout << std::setw(40) << "Failure Type";
@@ -1021,7 +1036,7 @@ void log_link_metrics(
 
     std::cout << std::setw(12) << "Pkt Size" << std::setw(12) << "Data Size" << std::endl;
 
-    std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << std::endl;
+    std::cout << std::string(log_ethernet_metrics ? 219 : 259, '-') << std::endl;
 
     // Table rows
     for (const auto& row : metric_rows) {
@@ -1059,6 +1074,10 @@ void log_link_metrics(
         uncorr_stream << "0x" << std::hex << row.uncorrected_codeword_count;
         std::cout << std::left << std::setw(18) << uncorr_stream.str();
 
+        // TXQ resend counts
+        std::cout << std::dec << std::setfill(' ') << std::left << std::setw(14) << row.txq0_resend_count
+                  << std::setw(14) << row.txq1_resend_count << std::setw(14) << row.txq2_resend_count;
+
         // Mismatched words
         std::cout << std::dec << std::left << std::setw(16) << row.num_mismatched_words;
 
@@ -1071,7 +1090,7 @@ void log_link_metrics(
                   << (std::to_string(row.traffic_params.data_size) + " B") << std::endl;
     }
 
-    std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << std::endl << std::endl;
+    std::cout << std::string(log_ethernet_metrics ? 219 : 259, '-') << std::endl << std::endl;
 
     // Write CSV file
     std::filesystem::path csv_path =
@@ -1085,8 +1104,8 @@ void log_link_metrics(
             csv_file << ",Failure_Type";
         }
         csv_file << ",Packet_Size_Bytes,Data_Size_Bytes,"
-                 << "Retrain_Count,CRC_Error_Count,Corrected_Codeword_Count,Uncorrected_Codeword_Count,Mismatched_Words"
-                 << std::endl;
+                 << "Retrain_Count,CRC_Error_Count,Corrected_Codeword_Count,Uncorrected_Codeword_Count,"
+                 << "TXQ0_Resend_Count,TXQ1_Resend_Count,TXQ2_Resend_Count,Mismatched_Words" << std::endl;
 
         // CSV rows
         for (const auto& row : metric_rows) {
@@ -1102,8 +1121,9 @@ void log_link_metrics(
                      << row.retrain_count << ","
                      << "0x" << std::hex << row.crc_error_count << std::dec << ","
                      << "0x" << std::hex << row.corrected_codeword_count << std::dec << ","
-                     << "0x" << std::hex << row.uncorrected_codeword_count << std::dec << ","
-                     << row.num_mismatched_words << std::endl;
+                     << "0x" << std::hex << row.uncorrected_codeword_count << std::dec << "," << row.txq0_resend_count
+                     << "," << row.txq1_resend_count << "," << row.txq2_resend_count << "," << row.num_mismatched_words
+                     << std::endl;
         }
 
         csv_file.close();

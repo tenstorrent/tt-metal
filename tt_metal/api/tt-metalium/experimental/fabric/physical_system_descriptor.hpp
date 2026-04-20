@@ -41,6 +41,9 @@ struct EthernetMetrics {
     uint32_t crc_error_count = 0;
     uint64_t corrected_codeword_count = 0;
     uint64_t uncorrected_codeword_count = 0;
+    uint32_t txq0_resend_count = 0;
+    uint32_t txq1_resend_count = 0;
+    uint32_t txq2_resend_count = 0;
 };
 
 using LocalEthernetMetrics = std::unordered_map<AsicID, std::unordered_map<uint8_t, EthernetMetrics>>;

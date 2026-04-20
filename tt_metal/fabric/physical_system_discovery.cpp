@@ -588,6 +588,11 @@ LocalEthernetMetrics query_local_ethernet_metrics(
     auto uncorr_addr =
         hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
 
+    // ETH TXQ controller MMIO registers: ETH_TXQ0_REGS_START + N * ETH_TXQ_REGS_SIZE + ETH_TXQ_RESEND_CNT
+    constexpr uint64_t txq0_resend_addr = 0xFFB90068;
+    constexpr uint64_t txq1_resend_addr = 0xFFB91068;
+    constexpr uint64_t txq2_resend_addr = 0xFFB92068;
+
     auto* cluster_desc = cluster.get_cluster_description();
     bool arch_blackhole = cluster_desc->get_arch(0) == tt::ARCH::BLACKHOLE;
     // Memory layout for 64B metrics is different on WH vs BH systems/
@@ -600,6 +605,7 @@ LocalEthernetMetrics query_local_ethernet_metrics(
             for (const auto& eth_connection : eth_connections) {
                 uint32_t retrain_count_val = 0, crc_error_val = 0, corr_val_lo = 0, corr_val_hi = 0, uncorr_val_lo = 0,
                          uncorr_val_hi = 0;
+                uint32_t txq0_resend_val = 0, txq1_resend_val = 0, txq2_resend_val = 0;
 
                 auto src_eth_chan = eth_connection.src_chan;
                 auto src_chip_id = get_chip_id_for_asic(*cluster_desc, asic);
@@ -618,6 +624,12 @@ LocalEthernetMetrics query_local_ethernet_metrics(
                     &uncorr_val_hi, src_chip_id, translated_eth_core, uncorr_addr + hi_offset, sizeof(uint32_t));
                 cluster.read_from_device(
                     &uncorr_val_lo, src_chip_id, translated_eth_core, uncorr_addr + lo_offset, sizeof(uint32_t));
+                cluster.read_from_device_reg(
+                    &txq0_resend_val, src_chip_id, translated_eth_core, txq0_resend_addr, sizeof(uint32_t));
+                cluster.read_from_device_reg(
+                    &txq1_resend_val, src_chip_id, translated_eth_core, txq1_resend_addr, sizeof(uint32_t));
+                cluster.read_from_device_reg(
+                    &txq2_resend_val, src_chip_id, translated_eth_core, txq2_resend_addr, sizeof(uint32_t));
 
                 local_ethernet_metrics[asic][src_eth_chan] = {
                     .retrain_count = retrain_count_val,
@@ -625,7 +637,10 @@ LocalEthernetMetrics query_local_ethernet_metrics(
                     .corrected_codeword_count =
                         (static_cast<uint64_t>(corr_val_hi) << 32) | static_cast<uint64_t>(corr_val_lo),
                     .uncorrected_codeword_count =
-                        (static_cast<uint64_t>(uncorr_val_hi) << 32) | static_cast<uint64_t>(uncorr_val_lo)};
+                        (static_cast<uint64_t>(uncorr_val_hi) << 32) | static_cast<uint64_t>(uncorr_val_lo),
+                    .txq0_resend_count = txq0_resend_val,
+                    .txq1_resend_count = txq1_resend_val,
+                    .txq2_resend_count = txq2_resend_val};
             }
         }
     }

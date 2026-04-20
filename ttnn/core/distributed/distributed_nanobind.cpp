@@ -250,13 +250,13 @@ void py_module(nb::module_& mod) {
         .def("is_local", &SystemMeshDescriptor::is_local)
         .def("all_local", &SystemMeshDescriptor::all_local);
 
-    nb::class_<distributed::DeviceTelemetry>(mod, "DeviceTelemetry")
-        .def_ro("chip_id", &distributed::DeviceTelemetry::chip_id)
-        .def_ro("aiclk_mhz", &distributed::DeviceTelemetry::aiclk_mhz)
-        .def_ro("input_power_w", &distributed::DeviceTelemetry::input_power_w)
-        .def_ro("asic_temperature_c", &distributed::DeviceTelemetry::asic_temperature_c)
-        .def_ro("board_temperature_c", &distributed::DeviceTelemetry::board_temperature_c)
-        .def("__repr__", [](const distributed::DeviceTelemetry& t) {
+    nb::class_<tt::tt_metal::distributed::DeviceTelemetry>(mod, "DeviceTelemetry")
+        .def_ro("chip_id", &tt::tt_metal::distributed::DeviceTelemetry::chip_id)
+        .def_ro("aiclk_mhz", &tt::tt_metal::distributed::DeviceTelemetry::aiclk_mhz)
+        .def_ro("input_power_w", &tt::tt_metal::distributed::DeviceTelemetry::input_power_w)
+        .def_ro("asic_temperature_c", &tt::tt_metal::distributed::DeviceTelemetry::asic_temperature_c)
+        .def_ro("board_temperature_c", &tt::tt_metal::distributed::DeviceTelemetry::board_temperature_c)
+        .def("__repr__", [](const tt::tt_metal::distributed::DeviceTelemetry& t) {
             return fmt::format(
                 "DeviceTelemetry(chip_id={}, aiclk_mhz={}, input_power_w={}, "
                 "asic_temperature_c={:.1f}, board_temperature_c={:.1f})",
