@@ -108,8 +108,8 @@ struct RMSNorm {
             // ================================================================
             // TRISC (Compute)
             // ================================================================
-            // Init block done only once; we don't pop, only wait once and reuse
             if constexpr (CTArgs::do_gamma) {
+                // Init block done only once; we don't pop, only wait once and reuse
                 if (args.gamma_address_override > 0) {
                     UNPACK(({ unified_kernels::override_cb_rd_ptr(CTArgs::gamma_cb, args.gamma_address_override); }));
                 } else {
@@ -145,7 +145,6 @@ struct RMSNorm {
                 rmsnorm_mul_bcast_scalar_reuse_tiles<num_tiles, true>(CTArgs::input_cb, 0, 0, 0);
             }
             {
-                // Multiply by the weight
                 cb_reserve_back(CTArgs::output_cb, num_tiles);
                 if constexpr (CTArgs::do_gamma) {
                     binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb);
