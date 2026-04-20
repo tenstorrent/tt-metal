@@ -77,7 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const std::uint32_t tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
         const std::uint32_t num_blocks     = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);
 
-        // ISSUE #988: For unpack to dest cannot init the unpacker with 1 tile per unpack, because it will keep writing to dest_idx=0
+        // ISSUE tt-llk #988: For unpack to dest cannot init the unpacker with 1 tile per unpack, because it will keep writing to dest_idx=0
         _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tiles_in_block /*num_tiles_per_unpack*/);
         for (std::uint32_t block = 0; block < num_blocks; block++)
         {
