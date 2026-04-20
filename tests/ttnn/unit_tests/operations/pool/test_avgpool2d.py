@@ -1,10 +1,9 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.pool.test_avgpool2d import run_avg_pool2d
-from models.common.utility_functions import skip_with_llk_assert
 
 
 @pytest.fixture(scope="module")
@@ -14,7 +13,6 @@ def tensor_map():
     return tensor_map
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize(
     "input_shape",  # NCHW
     (
@@ -116,7 +114,6 @@ def test_avg_pool2d_post_commit(
     )
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize(
     "input_shape, num_slices",  # NCHW
     (
@@ -126,17 +123,12 @@ def test_avg_pool2d_post_commit(
         ([2, 32, 1024, 1024], 8),
         ([1, 320, 384, 384], 6),
         ([1, 64, 96, 96], 4),
+        ([1, 64, 96, 96], 0),  # auto num_slices: exercises L1 estimation -> slice determination path
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
-    (
-        # Wide and normal reductions go to normal kernels
-        # Large reductions go to large kernels
-        # Reductions which are large and wide at the same time
-        # go to large kernels
-        (3, 3),
-    ),
+    ((3, 3),),
 )
 @pytest.mark.parametrize(
     "stride",
@@ -158,7 +150,7 @@ def test_avg_pool2d_post_commit(
 )
 @pytest.mark.parametrize(
     "count_include_pad",
-    [True],
+    [True, False],  # False exercises per-element scalar CB path in DRAM slicing L1 estimation
 )
 @pytest.mark.parametrize(
     "shard_scheme",

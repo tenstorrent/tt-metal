@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,7 @@ void kernel_main() {
 
     // Output tensor
     constexpr auto out_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(out_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(out_args, dst_addr);
 
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < N; i++) {

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -216,7 +216,7 @@ def eltwise_erfc(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.erfc(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
+    t1 = ttnn.erfc(t0, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -235,7 +235,7 @@ def eltwise_hardtanh(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.hardtanh(t0, low, high, memory_config=output_mem_config)
+    t1 = ttnn.hardtanh(t0, min_val=low, max_val=high, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -271,7 +271,7 @@ def eltwise_elu(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.elu(t0, alpha, memory_config=output_mem_config)
+    t1 = ttnn.elu(t0, alpha=alpha, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

@@ -53,6 +53,11 @@ on:
         type: boolean
         default: true
         description: "Run ops unit tests"
+      run-ttsim-integration-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TTSim integration tests"
       enable-watcher:
         required: false
         type: boolean
@@ -89,6 +94,11 @@ on:
         type: string
         default: ""
         description: "Pre-built wheel artifact name (skips build if provided)"
+      packages-artifact-name:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built packages artifact name (for ttsim tests)"
   workflow_dispatch:
     inputs:
       with-retries:
@@ -148,6 +158,11 @@ on:
         default: true
         type: boolean
         description: "Run ops unit tests"
+      run-ttsim-integration-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run TTSim integration tests"
       enable-watcher:
         required: false
         default: false
@@ -231,7 +246,7 @@ jobs:
             echo "ci-test-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
             echo "build-artifact-name=${{ inputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
             echo "wheel-artifact-name=${{ inputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
-            echo "packages-artifact-name=" >> "$GITHUB_OUTPUT"
+            echo "packages-artifact-name=${{ inputs.packages-artifact-name }}" >> "$GITHUB_OUTPUT"
           else
             echo "dev-docker-image=${{ needs.build-artifact.outputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
             echo "basic-dev-docker-image=${{ needs.build-artifact.outputs.basic-dev-docker-image }}" >> "$GITHUB_OUTPUT"
@@ -243,7 +258,7 @@ jobs:
 
   tests-to-run:
     needs: [resolve-artifacts]
-    if: ${{ always() && !cancelled() }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' }}
     runs-on: ubuntu-latest
     outputs:
       ttnn-unit-tests: ${{ steps.set-ttnn-unit-tests.outputs.should-run }}
@@ -252,6 +267,7 @@ jobs:
       run-profiler-regression: ${{ steps.set-run-profiler-regression.outputs.should-run }}
       t3000-apc-fast-tests: ${{ steps.set-t3000-apc-fast-tests.outputs.should-run }}
       ops-unit-tests: ${{ steps.set-ops-unit-tests.outputs.should-run }}
+      ttsim-integration-tests: ${{ steps.set-ttsim-integration-tests.outputs.should-run }}
     steps:
       - id: set-ttnn-unit-tests
         run: |
@@ -271,12 +287,15 @@ jobs:
       - id: set-ops-unit-tests
         run: |
           echo "should-run=${{ github.event_name == 'push' || inputs.run-ops-unit-tests }}" >> "$GITHUB_OUTPUT"
+      - id: set-ttsim-integration-tests
+        run: |
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-ttsim-integration-tests }}" >> "$GITHUB_OUTPUT"
 
   # TTNN FD Unit tests
   ttnn-unit-tests:
     needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       enabled-skus: "wh_n300_civ2"
@@ -298,7 +317,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.models-unit-tests == 'true' }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.models-unit-tests == 'true' }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -320,7 +339,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -342,7 +361,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.run-profiler-regression == 'true'}}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.run-profiler-regression == 'true'}}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     with:
@@ -357,7 +376,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
     needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
@@ -379,7 +398,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ops-unit-tests == 'true' }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ops-unit-tests == 'true' }}
     uses: ./.github/workflows/ops-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -393,8 +412,8 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   ttsim-integration-tests:
-    needs: [resolve-artifacts]
-    if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' }}
+    needs: [resolve-artifacts, tests-to-run]
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttsim-integration-tests == 'true' }}
     strategy:
       fail-fast: false
     uses: ./.github/workflows/ttsim.yaml

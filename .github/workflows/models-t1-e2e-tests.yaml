@@ -12,6 +12,9 @@ on:
           - all
           - llama3.1-8b
           - llama3.3-70b-galaxy
+          - qwen3-32b-galaxy
+          - gpt-oss-120b-high-batch-galaxy
+          - whisper
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -20,6 +23,7 @@ on:
         options:
           - all
           - "wh_n150 (N150)"
+          - "wh_n300 (N300)"
           - "wh_galaxy (Galaxy)"
       platform:
         required: false
@@ -64,7 +68,7 @@ jobs:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_galaxy"
+          ALL_SKUS="wh_n150,wh_n300,wh_galaxy"
           SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT

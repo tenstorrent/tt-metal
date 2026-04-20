@@ -1,47 +1,18 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "moe_ring_common.h"
-
-#include "api/debug/dprint_pages.h"
-
-void print_tile_rows(
-    uint32_t cb_idx,
-    uint32_t tile_idx,
-    bool untilize = false,
-    uint16_t start_row = 0,
-    uint16_t end_row = 32,
-    uint8_t start_col = 0,
-    uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DPRINT << "======" << ENDL();
-    for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
 
 namespace detail {
 inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
 }  // namespace detail
 
 void kernel_main() {
+
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -67,6 +38,8 @@ void kernel_main() {
     constexpr uint32_t buffer_size_total_tokens = get_named_compile_time_arg_val("buffer_size_total_tokens");
     constexpr uint32_t height_shard_dim = get_named_compile_time_arg_val("height_shard_dim");
     constexpr uint32_t width_shard_dim = get_named_compile_time_arg_val("width_shard_dim");
+    constexpr uint32_t matmul_combine_sync_semaphore_id =
+        get_named_compile_time_arg_val("matmul_combine_sync_semaphore_id");
 
     std::array<uint32_t, 2 * height_shard_dim * width_shard_dim> output_shard_core_map = OUTPUT_SHARD_CORE_MAP;
 
@@ -87,16 +60,16 @@ void kernel_main() {
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_s2c_in = tt::CBIndex::c_0;
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
-    constexpr auto cb_w2c_md = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
+    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_3;  // cb_r2c_w0
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_4;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_6;
+    constexpr auto cb_w2c_md = tt::CBIndex::c_7;
 
     // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_14;
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_1;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
+    constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
@@ -121,6 +94,7 @@ void kernel_main() {
     const uint32_t width_tile_base = moe_ring::COMBINE_W_OFFSET_PER_CORE_B[ring_core_id];
     constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_ring::NUM_CORES / width_shard_dim;  // 12/4 = 3
     const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
+    const auto combine_semaphore_addr = get_semaphore(matmul_combine_sync_semaphore_id);
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -171,26 +145,26 @@ void kernel_main() {
 
     // Signal to the compute core that num_tokens_per_expert has arrived.
     // We also use this CB to transfer (from the writer to compute) 2 semaphore addresses:
-    // - 0: address of semaphore used to send metadata (number of tokens per expert)
+    // - 0: address of L1 page (CB) used to send metadata (number of tokens per expert)
     // - 1: address of semaphore used to notify matmuls cores that tilized chunks have arrived
+
+    // Read per-expert token counts from CB
+    const auto num_tokens_per_expert_addr = get_read_ptr(per_expert_total_tokens_cb_id);
+    volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(num_tokens_per_expert_addr);
+
     volatile tt_l1_ptr uint32_t* cb_w2c_md_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_w2c_md));
-    cb_w2c_md_write_ptr[0] = get_semaphore(metadata_ready_semaphore_id);
+    cb_w2c_md_write_ptr[0] = num_tokens_per_expert_addr;
     cb_w2c_md_write_ptr[1] = get_semaphore(matmul_chunk_ready_semaphore_id);
     cb_reserve_back(cb_w2c_md, 2);
     cb_push_back(cb_w2c_md, 2);
 
     // Precompute NUM_CHUNKS_PER_EXPERT
-    volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
-    uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
-
-    constexpr uint32_t BITS_PER_EXPERT = 10;
-    constexpr uint32_t EXPERT_MASK = 0x3FFu;
     uint32_t NUM_TOKENS_PER_EXPERT[num_experts];
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
+        uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
         NUM_TOKENS_PER_EXPERT[expert_id] = num_tokens;
         NUM_CHUNKS_PER_EXPERT[expert_id] = detail::div_up(num_tokens, tokens_per_chunk);
     }
@@ -199,15 +173,32 @@ void kernel_main() {
     uint64_t matmul_chunk_available_semaphore_noc_addr = get_noc_addr(
         tilize_drain_core_noc_x, tilize_drain_core_noc_y, get_semaphore(matmul_chunk_available_semaphore_id));
 
+    // Signal to combine cores that chunk is available
+    auto combine_semaphore_inc = [&](const uint32_t inc = 1) {
+        for (uint32_t y = 0; y < height_shard_dim; ++y) {
+            const uint32_t idx = combine_core_x + y * width_shard_dim;
+            const uint64_t dest_sem_noc_addr = safe_get_noc_addr(
+                output_shard_core_map[2 * idx],
+                output_shard_core_map[2 * idx + 1],
+                combine_semaphore_addr,
+                /*noc_id=*/1);
+            noc_semaphore_inc</*posted=*/true>(dest_sem_noc_addr, inc, /*noc_id=*/1, vchannel);
+        };
+    };
+
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
+    bool output_buffer_idx = 0;
+    auto* combine_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(combine_semaphore_addr);
+    // both sections of the double buffer are initially free
+    uint32_t combine_semaphore_val = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         const uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         const uint32_t active_tokens = NUM_TOKENS_PER_EXPERT[expert_id];
         const uint32_t tokens_per_height_shard_chunk = active_tokens / height_shard_dim;
         const uint32_t tokens_per_height_shard_rem = active_tokens % height_shard_dim;
-        const uint32_t expert_offset_bytes = shard_offset_per_expert_bytes * expert_id;
+        const uint32_t output_buffer_offset_bytes = shard_offset_per_expert_bytes * output_buffer_idx;
 
         uint32_t dest_height_shard_start = 0;
         uint32_t shard_row_start = 0;
@@ -266,6 +257,7 @@ void kernel_main() {
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - chunk * tile_height);
 
             cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
+
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
             const uint32_t elts_per_page = source_width_tiles * tile_width;
 
@@ -279,6 +271,9 @@ void kernel_main() {
                 const uint32_t width_transfer_tiles = std::min(
                     combine_shard_width_tiles - dest_width_offset_tiles, output_width_tiles_core - width_tiles_sent);
                 const uint32_t width_transfer_bytes = width_transfer_tiles * tile_width_size_bytes;
+
+                // wait for combine to signal that the buffer segment is available
+                noc_semaphore_wait(combine_semaphore_ptr, combine_semaphore_val);
 
                 uint32_t dest_height_shard = dest_height_shard_start;
                 uint32_t shard_row = shard_row_start;
@@ -295,8 +290,8 @@ void kernel_main() {
                     noc_async_write_one_packet_set_state</*posted=*/true>(
                         dest_noc_addr_base, width_transfer_bytes, /*noc=*/1, vchannel);
 
-                    const uint32_t dest_l1_addr =
-                        output_base_l1_addr + expert_offset_bytes + dest_width_offset_bytes + shard_row_offset_bytes;
+                    const uint32_t dest_l1_addr = output_base_l1_addr + output_buffer_offset_bytes +
+                                                  dest_width_offset_bytes + shard_row_offset_bytes;
 
                     const uint32_t source_l1_addr =
                         source_base_l1_addr + (bt * source_width_tiles + width_tiles_sent) * tile_width_size_bytes;
@@ -326,13 +321,10 @@ void kernel_main() {
             noc_semaphore_inc</*posted=*/true>(
                 matmul_chunk_available_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
         }
+        combine_semaphore_inc();
+        output_buffer_idx = !output_buffer_idx;
+        combine_semaphore_val += height_shard_dim;
     }
-
-    for (uint32_t y = 0; y < height_shard_dim; ++y) {
-        uint32_t idx = combine_core_x + y * width_shard_dim;
-        uint64_t dest_sem_noc_addr =
-            get_noc_addr(output_shard_core_map[2 * idx], output_shard_core_map[2 * idx + 1], semaphore_addr);
-        noc_semaphore_inc(dest_sem_noc_addr, 1, /*noc_id=*/1, vchannel);
-    }
-    noc_async_atomic_barrier(/*noc_idx=*/1);
+    noc_semaphore_set(combine_semaphore_ptr, 0);
+    noc_async_posted_writes_flushed(/*noc=*/1);
 }

@@ -1,21 +1,23 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import json
 import os
-import unicodedata
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
 import pytest
-from loguru import logger
 
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
+from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
 MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
+PERF_MARGIN = 0.08
+FINAL_DECODE_TPS_PER_USER = "decode_t/s/u"
 
 
 @lru_cache(maxsize=1)
@@ -29,63 +31,62 @@ def get_total_model_layers(model_path: Path) -> int:
     return total_layers
 
 
-def is_allowed_unicode_letter(char: str) -> bool:
-    """True for Latin and Greek script letters per Unicode character name."""
-    if not char.isalpha():
-        return False
-    name = unicodedata.name(char, "")
-    return name.startswith("LATIN ") or name.startswith("GREEK ")
-
-
-def find_disallowed_non_ascii_letter(text: str) -> tuple[int, str] | None:
-    """Find the first disallowed non-ASCII letter in the text."""
-    for char_index, char in enumerate(text):
-        if char.isascii() or not char.isalpha() or is_allowed_unicode_letter(char):
+def _assert_no_garbage_tokens(results: dict) -> None:
+    failures = []
+    for i, generation in enumerate(results.get("generations", []), start=1):
+        garbage_count = int(generation.get("garbage_token_count", 0) or 0)
+        if garbage_count == 0:
             continue
-        return char_index, char
-    return None
+        garbage_checked = int(generation.get("garbage_tokens_checked", 0) or 0)
+        garbage_topk = generation.get("garbage_token_topk")
+        failures.append(
+            f"Generation {i}: garbage_token_count={garbage_count} over {garbage_checked} checked tokens"
+            + (f" against teacher top-{garbage_topk}" if garbage_topk is not None else "")
+        )
+        failures.extend(generation.get("garbage_token_debug", []) or [])
+
+    if failures:
+        pytest.fail("Garbage tokens detected during demo:\n" + "\n".join(failures))
 
 
-def validate_english_keyboard_output(results: dict) -> None:
-    generations = results.get("generations", [])
-    for generation_index, generation in enumerate(generations, start=1):
-        generated_text = generation.get("text")
-        if generated_text is None:
+def _is_primary_artifact_writer() -> bool:
+    for rank_env in ("TT_MESH_HOST_RANK", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
             continue
-        if not isinstance(generated_text, str):
-            raise ValueError(
-                "Generated output text must be a string or None: "
-                f"generation_index={generation_index}, got={type(generated_text).__name__}"
-            )
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
 
-        bad_char = find_disallowed_non_ascii_letter(generated_text)
-        if bad_char is None:
-            continue
 
-        bad_char_index, bad_char = bad_char
-        unicode_name = unicodedata.name(bad_char, "UNKNOWN")
-        raise ValueError(
-            "Generated output contains disallowed non-Latin letter: "
-            f"generation_index={generation_index}, char_index={bad_char_index}, "
-            f"char={bad_char!r}, codepoint=U+{ord(bad_char):04X}, unicode_name={unicode_name}. "
-            "Punctuation/symbols and Latin letters (including accents, e.g. é) are allowed; "
-            "other scripts (e.g. CJK) are not."
+def _assert_perf_targets(results: dict, perf_targets: dict[str, float]) -> None:
+    statistics = results.get("statistics", {})
+    assert statistics, "Expected demo statistics for performance assertion"
+
+    for metric_name, expected in perf_targets.items():
+        measured = statistics.get(metric_name)
+        assert measured is not None, f"Expected demo statistic {metric_name!r} for performance assertion"
+
+        measured = float(measured)
+        lower = expected * (1 - PERF_MARGIN)
+        upper = expected * (1 + PERF_MARGIN)
+        assert lower <= measured <= upper, (
+            f"{metric_name}={measured:.6f} is outside expected range "
+            f"[{lower:.6f}, {upper:.6f}] (expected {expected:.6f} +/- {PERF_MARGIN*100:.1f}%)"
         )
 
 
-def maybe_validate_english_keyboard_output(results: dict, override_num_layers: int | None) -> None:
-    total_layers = get_total_model_layers(MODEL_PATH)
-    num_layers = override_num_layers if override_num_layers is not None else total_layers
-    if num_layers < total_layers:
-        logger.info(f"Output validation is skipped as {num_layers} < {total_layers} layers.")
-        return
-
-    validate_english_keyboard_output(results)
+def _timestamped_artifact_stem(artifact_name: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{artifact_name}_{timestamp}"
 
 
 def _demo_case(
     *,
     max_prompts: int,
+    max_users_per_row: int,
     repeat_batches: int,
     max_new_tokens: int,
     override_num_layers: int | None,
@@ -95,12 +96,14 @@ def _demo_case(
     profile_decode: bool,
     stop_at_eos: bool | None,
     expect_full_length: bool,
+    perf_targets: dict[str, float] | None = None,
     case_id: str,
     marks=None,
 ):
     return pytest.param(
         {
             "max_prompts": max_prompts,
+            "max_users_per_row": max_users_per_row,
             "repeat_batches": repeat_batches,
             "max_new_tokens": max_new_tokens,
             "override_num_layers": override_num_layers,
@@ -110,6 +113,7 @@ def _demo_case(
             "profile_decode": profile_decode,
             "stop_at_eos": stop_at_eos,
             "expect_full_length": expect_full_length,
+            "perf_targets": perf_targets,
         },
         id=case_id,
         marks=marks,
@@ -117,16 +121,17 @@ def _demo_case(
 
 
 # Test matrix:
-# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
-# | id               | max_prompts | repeat_batches | max_new_tokens | override_num_layers | enable_trace | sample_on_device | artifact_name            | profile_decode | stop_at_eos | expect_full_length |
-# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
-# | tg_stress        | 56          | 2              | 128            | 5                   | False        | True             | None                     | False          | False       | True               |
-# | dual_full_demo   | 256         | 1              | 129            | None                | True         | True             | dual_demo_full_results   | False          | None        | False              |
-# | dual_stress_demo | 56          | 20             | 129            | None                | True         | True             | dual_demo_stress_results | False          | False       | True               |
-# | quad_full_demo   | 512         | 1              | 129            | None                | True         | True             | quad_demo_full_results   | False          | None        | False              |
-# | quad_stress_demo | 56          | 20             | 129            | None                | True         | True             | quad_demo_stress_results | False          | False       | True               |
-# | profile_decode   | 1           | 1              | 13             | 5                   | True         | True             | None                     | True           | False       | True               |
-# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
+# +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
+# | id               | max_prompts | max_users_per_row | repeat_batches | max_new_tokens | override_num_layers | enable_trace | sample_on_device | artifact_name            | profile_decode | stop_at_eos | expect_full_length |
+# +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
+# | tg_stress        | 56          | 32                | 2              | 128            | 5                   | False        | True             | None                     | False          | False       | True               |
+# | tg_upr8          | 32          | 8                 | 2              | 128            | 5                   | False        | True             | None                     | False          | False       | True               |
+# | dual_full_demo   | 256         | 32                | 1              | 129            | None                | True         | True             | dual_demo_full_results   | False          | None        | False              |
+# | dual_stress_demo | 56          | 32                | 20             | 129            | None                | True         | True             | dual_demo_stress_results | False          | False       | True               |
+# | quad_full_demo   | 512         | 32                | 1              | 129            | None                | True         | True             | quad_demo_full_results   | False          | None        | False              |
+# | quad_stress_demo | 56          | 32                | 20             | 129            | None                | True         | True             | quad_demo_stress_results | False          | False       | True               |
+# | profile_decode   | 1           | 32                | 1              | 13             | 5                   | True         | True             | None                     | True           | False       | True               |
+# +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
 
 
 @pytest.mark.parametrize(
@@ -135,6 +140,7 @@ def _demo_case(
     [
         _demo_case(
             max_prompts=56,
+            max_users_per_row=32,
             repeat_batches=2,
             max_new_tokens=128,
             override_num_layers=5,
@@ -148,63 +154,145 @@ def _demo_case(
             marks=pytest.mark.requires_device(["TG"]),
         ),
         _demo_case(
+            max_prompts=32,
+            max_users_per_row=8,
+            repeat_batches=2,
+            max_new_tokens=128,
+            override_num_layers=5,
+            enable_trace=False,
+            sample_on_device=True,
+            artifact_name=None,
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="tg_upr8",
+            marks=pytest.mark.requires_device(["TG"]),
+        ),
+        _demo_case(
             max_prompts=256,
+            max_users_per_row=32,
             repeat_batches=1,
             max_new_tokens=129,
             override_num_layers=None,
             enable_trace=True,
             sample_on_device=True,
-            artifact_name="dual_demo_full_results",
+            artifact_name="dual_demo_full_results_32upr",
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
-            case_id="dual_full_demo",
+            perf_targets={FINAL_DECODE_TPS_PER_USER: 0.986038678353197},
+            case_id="dual_full_demo_32upr",
+            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
+        ),
+        _demo_case(
+            max_prompts=64,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=129,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=False,
+            artifact_name="dual_demo_full_results_8upr",
+            profile_decode=False,
+            stop_at_eos=None,
+            expect_full_length=False,
+            case_id="dual_full_demo_8upr",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
         _demo_case(
             max_prompts=56,
+            max_users_per_row=32,
             repeat_batches=20,
             max_new_tokens=129,
             override_num_layers=None,
             enable_trace=True,
             sample_on_device=True,
-            artifact_name="dual_demo_stress_results",
+            artifact_name="dual_demo_stress_results_32upr",
             profile_decode=False,
             stop_at_eos=False,
             expect_full_length=True,
-            case_id="dual_stress_demo",
+            case_id="dual_stress_demo_32upr",
+            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
+        ),
+        _demo_case(
+            max_prompts=14,
+            max_users_per_row=8,
+            repeat_batches=20,
+            max_new_tokens=129,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=False,
+            artifact_name="dual_demo_stress_results_8upr",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="dual_stress_demo_8upr",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
         ),
         _demo_case(
             max_prompts=512,
+            max_users_per_row=32,
             repeat_batches=1,
             max_new_tokens=129,
             override_num_layers=None,
             enable_trace=True,
             sample_on_device=True,
-            artifact_name="quad_demo_full_results",
+            artifact_name="quad_demo_full_results_32upr",
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
-            case_id="quad_full_demo",
+            perf_targets={FINAL_DECODE_TPS_PER_USER: 1.0168109351915215},
+            case_id="quad_full_demo_32upr",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
+        ),
+        _demo_case(
+            max_prompts=128,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=129,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=False,
+            artifact_name="quad_demo_full_results_8upr",
+            profile_decode=False,
+            stop_at_eos=None,
+            expect_full_length=False,
+            case_id="quad_full_demo_8upr",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
         _demo_case(
             max_prompts=56,
+            max_users_per_row=32,
             repeat_batches=20,
             max_new_tokens=129,
             override_num_layers=None,
             enable_trace=True,
             sample_on_device=True,
-            artifact_name="quad_demo_stress_results",
+            artifact_name="quad_demo_stress_results_32upr",
             profile_decode=False,
             stop_at_eos=False,
             expect_full_length=True,
-            case_id="quad_stress_demo",
+            case_id="quad_stress_demo_32upr",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
+        ),
+        _demo_case(
+            max_prompts=14,
+            max_users_per_row=8,
+            repeat_batches=20,
+            max_new_tokens=129,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=False,
+            artifact_name="quad_demo_stress_results_8upr",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="quad_stress_demo_8upr",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
         ),
         _demo_case(
             max_prompts=1,
+            max_users_per_row=32,
             repeat_batches=1,
             max_new_tokens=13,
             override_num_layers=5,
@@ -221,7 +309,7 @@ def _demo_case(
 )
 def test_demo(case: dict, force_recalculate_weight_config: bool):
     # Path to the external JSON file containing prompts
-    json_path = "models/demos/deepseek_v3/demo/test_prompts.json"
+    json_path = "models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json"
 
     # Load prompts from JSON file
     prompts = load_prompts_from_json(json_path, max_prompts=case["max_prompts"])
@@ -233,6 +321,7 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         cache_dir=CACHE_DIR,
         random_weights=False,
         max_new_tokens=case["max_new_tokens"],
+        max_users_per_row=case["max_users_per_row"],
         repeat_batches=case["repeat_batches"],
         enable_trace=case["enable_trace"],
         sample_on_device=case["sample_on_device"],
@@ -246,7 +335,13 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         run_kwargs["stop_at_eos"] = case["stop_at_eos"]
 
     results = run_demo(**run_kwargs)
-    maybe_validate_english_keyboard_output(results, case["override_num_layers"])
+
+    requested_system_name = os.getenv("MESH_DEVICE")
+    assert requested_system_name is not None, "MESH_DEVICE must be set for demo tests"
+    mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
+    expected_generations = min(len(prompts), case["max_users_per_row"] * int(mesh_shape[0]))
+
+    assert len(results["generations"]) == expected_generations
 
     # Full-demo cases can stop early on EOS; stress/profile cases disable EOS and
     # should always produce the requested token count.
@@ -256,16 +351,17 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
     else:
         assert all(length <= case["max_new_tokens"] for length in generated_lengths)
 
-    # Save results to JSON for artifact upload (QUAD tests only)
-    if case["artifact_name"] is not None:
+    # Save artifact from host rank 0 only to avoid multi-host write races.
+    if case["artifact_name"] is not None and _is_primary_artifact_writer():
         artifact_dir = Path("generated/artifacts")
         artifact_dir.mkdir(parents=True, exist_ok=True)
-        output_file = artifact_dir / f"{case['artifact_name']}.json"
+        output_file = artifact_dir / f"{_timestamped_artifact_stem(case['artifact_name'])}.json"
 
         output_data = {
-            "prompts": prompts,
+            "prompts": prompts if prompts else [],
             "generations": [],
             "statistics": results.get("statistics", {}),
+            "model_params": results.get("model_params", {}),
         }
 
         for i, gen_result in enumerate(results["generations"]):
@@ -282,3 +378,7 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
             json.dump(output_data, f, indent=2, ensure_ascii=False)
 
         print(f"\nDemo results saved to: {output_file}")
+
+    _assert_no_garbage_tokens(results)
+    if case["perf_targets"] is not None:
+        _assert_perf_targets(results, case["perf_targets"])

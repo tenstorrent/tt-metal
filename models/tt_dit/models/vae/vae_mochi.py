@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -146,7 +146,7 @@ class ResBlock(Module):
             },
             512: {
                 8: 5,
-                4: 8,
+                4: 7,
                 2: 8,
                 1: 8,
             },

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,8 @@ from models.demos.deepseek_v3.utils.weight_config import (
     normalize_weight_config_paths,
     validate_weight_config_paths,
 )
+
+pytestmark = pytest.mark.t3k_compat
 
 
 @dataclass(frozen=True)

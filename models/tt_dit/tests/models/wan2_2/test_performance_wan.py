@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,9 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 
-from ....utils.test import line_params, ring_params
+from ....utils.test import line_params, ring_params, ring_params_8k
+
+DEVICE_PARAMS = {"trace_region_size": 120000000}
 
 # BH 4x8 linear topology is expected to be slower than ring; relax assert/CI targets by this factor.
 BH_4X8_LINEAR_EXPECTED_METRICS_SLACK = 1.10
@@ -55,9 +57,9 @@ def t2v_metrics(mesh_device, height):
         if is_blackhole():
             expected_metrics = {
                 "encoder": 0.1,
-                "denoising": 162.0,
-                "vae": 7.0,
-                "total": 168.0,
+                "denoising": 140.0,
+                "vae": 2.0,
+                "total": 142.1,
             }
         else:
             expected_metrics = {
@@ -74,6 +76,15 @@ def t2v_metrics(mesh_device, height):
             "denoising": 680.0,
             "vae": 60.0,
             "total": 760.0,
+        }
+    elif tuple(mesh_device.shape) == (4, 32):
+        assert is_blackhole(), "4x32 is only supported for blackhole"
+        assert height == 720, "4x32 is only supported for 720p"
+        expected_metrics = {
+            "encoder": 0.5,
+            "denoising": 75.0,
+            "vae": 5.0,
+            "total": 80.5,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
@@ -113,9 +124,10 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
         # WH on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params_8k, ttnn.Topology.Ring, False],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params_8k}, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2_sp0tp1",
@@ -124,6 +136,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
         "wh_4x8_sp1tp0",
         "ring_bh_4x8_sp1tp0",
         "line_bh_4x8_sp1tp0",
+        "bh_4x32sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -165,6 +178,7 @@ def test_pipeline_performance(
     """Performance test for Wan pipeline with detailed timing analysis."""
 
     benchmark_profiler = BenchmarkProfiler()
+    traced = mesh_shape == (4, 32)  # trace only for quadx32
 
     # Skip 4U.
     if galaxy_type == "4U":
@@ -214,27 +228,35 @@ def test_pipeline_performance(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
+        target_height=height,
+        target_width=width,
+        num_frames=num_frames,
     )
 
     # Warmup run (not timed)
     logger.info("Running warmup iteration...")
 
     with benchmark_profiler("run", iteration=0):
-        with torch.no_grad():
-            pipeline(
-                prompt=prompts[0],
-                image_prompt=image_prompt,
-                height=height,
-                width=width,
-                num_frames=num_frames,
-                num_inference_steps=2,  # Small number of steps to reduce test time.
-            )
+        if traced:
+            with torch.no_grad():
+                pipeline(
+                    prompt=prompts[0],
+                    image_prompt=image_prompt,
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                    num_inference_steps=2,  # Small number of steps to reduce test time.
+                    traced=traced,
+                )
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
     # Performance measurement runs
     logger.info("Running performance measurement iterations...")
     num_perf_runs = 1  # For now use 1 prompt to minimize test time.
+
+    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
 
     for i in range(num_perf_runs):
         logger.info(f"Performance run {i+1}/{num_perf_runs}...")
@@ -252,10 +274,15 @@ def test_pipeline_performance(
                     num_inference_steps=num_inference_steps,
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
+                    seed=42,
+                    traced=traced,
                 )
-
+                ttnn.synchronize_device(mesh_device)
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
         # Check output
+
+    pipeline.release_traces()
+
     if hasattr(result, "frames"):
         frames = result.frames
     else:
@@ -276,8 +303,11 @@ def test_pipeline_performance(
     frames = frames[0]
     try:
         if not is_ci_env:
-            export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
-            print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
+            if int(ttnn.distributed_context_get_rank()) == 0:
+                export_to_video(frames, f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4", fps=16)
+                print(f"✓ Saved video to: wan_output_video_{model_type}{'_traced' if traced else ''}.mp4")
+            else:
+                print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
     except AttributeError as e:
         logger.info(f"AttributeError: {e}")
 

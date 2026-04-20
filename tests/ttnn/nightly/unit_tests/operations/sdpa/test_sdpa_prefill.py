@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
+from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole, is_slow_dispatch
 
 
 def fa_rand(*shape):
@@ -769,6 +769,8 @@ def test_sdpa_chunked(
     When trace=True, device is created with trace_region_size; test captures one SDPA then replays per chunk."""
     if trace and not flexible:
         pytest.skip("Trace is not supported for legacy chunked SDPA")
+    if trace and is_slow_dispatch():
+        pytest.skip("Trace is not supported for slow dispatch")
     for _ in range(2):
         run_test_chunked_sdpa(
             device,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -99,7 +99,7 @@ void kernel_main() {
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
-    const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
+    const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address);
 
     // L1 intermediate: discover the recv CB base address (same on neighbor device due to identical program)
     uint32_t recv_buf_base = 0;
@@ -177,8 +177,9 @@ void kernel_main() {
             }
         } else {
             // W barrier: 1-hop unicast to immediate W neighbor only.
-            // neighbor_sem_noc0_x/y and barrier_sem_noc0_x/y are pre-computed
-            // using the NEIGHBOR device's worker_core_from_logical_core().
+            // neighbor_sem_noc0_x/y and barrier_sem_noc0_x/y are NOC coords of the local
+            // device's worker cores. Since NOC coords are not chip-dependent, these are
+            // valid targets on the neighbor device as well.
             if (!is_last_chip) {
                 auto pkt_hdr_barrier_sem_inc = PacketHeaderPool::allocate_header();
 

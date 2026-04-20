@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -105,6 +105,7 @@ public:
     uint32_t get_num_virtual_channels() const;
 
     uint32_t get_num_sender_channels_for_vc(uint32_t vc) const;
+    uint32_t get_num_receiver_channels_for_vc(uint32_t vc) const;
 
     std::vector<InternalSenderChannelMapping> get_all_sender_mappings() const;
 

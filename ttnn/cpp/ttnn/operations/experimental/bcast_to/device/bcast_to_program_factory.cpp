@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -187,9 +187,9 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
     // Enable fp32_dest_acc_en and unpack_to_dest_mode for 32-bit formats (Float32, Int32, UInt32)
     bool is_32bit_format = input_data_format == tt::DataFormat::Float32 || input_data_format == tt::DataFormat::Int32 ||
                            input_data_format == tt::DataFormat::UInt32;
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (is_32bit_format) {
-        unpack_to_dest_mode[(uint32_t)tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[(uint32_t)tt::CBIndex::c_0] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     auto compute_id = tt::tt_metal::CreateKernel(
         program,

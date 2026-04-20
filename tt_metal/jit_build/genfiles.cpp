@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include <circular_buffer_constants.h>
 #include "data_format.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>
@@ -16,6 +17,7 @@
 #include <iostream>
 #include <ostream>
 #include <fstream>
+#include <sstream>
 #include <ranges>
 #include <stdexcept>
 #include <string>
@@ -34,9 +36,11 @@
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "impl/kernels/kernel.hpp"
+#include "impl/kernels/kernel_source.hpp"
 
+namespace tt::tt_metal {
 enum class UnpackToDestMode : uint8_t;
+}  // namespace tt::tt_metal
 
 namespace fs = std::filesystem;
 
@@ -56,10 +60,11 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
     ttsl::unreachable();
 }
 
-// Generates TRISC prolog: #define + #include for defines_generated.h
+// Generates TRISC prolog: #define + includes for JIT-generated headers and defines_generated.h
 string build_trisc_prolog(const char* trisc_define) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
+    prolog << "#include \"kernel_bindings_generated.h\"\n";
     prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
@@ -77,6 +82,32 @@ void write_file(const string& path, const string& content) {
     }
 }
 
+void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
+    const string path = out_dir + "kernel_bindings_generated.h";
+    vector<pair<string, uint16_t>> entries;
+    settings.process_dataflow_buffer_local_accessor_handles(
+        [&entries](const string& name, uint16_t id) { entries.emplace_back(name, id); });
+    sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    ostringstream content;
+    content << "// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.\n"
+               "//\n"
+               "// SPDX-License-Identifier: Apache-2.0\n\n"
+               "// AUTO-GENERATED — do not edit.\n\n"
+               "#pragma once\n\n";
+    if (entries.empty()) {
+        content << "// No bindings for this kernel.\n";
+    } else {
+        content << "#include \"experimental/dataflow_buffer.h\"\n\n"
+                   "namespace dfb {\n";
+        for (const auto& [name, id] : entries) {
+            content << "constexpr experimental::DFBAccessor " << name << "{" << id << "};\n";
+        }
+        content << "}  // namespace dfb\n";
+    }
+    write_file(path, content.str());
+}
+
 }  // namespace
 
 void jit_build_genfiles_kernel_include(
@@ -85,10 +116,12 @@ void jit_build_genfiles_kernel_include(
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
+    write_kernel_bindings_generated_header(out_dir, settings);
     string kernel_header = out_dir + "kernel_includes.hpp";
 
     const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
-    write_file(kernel_header, kernel_src_to_include);
+    const string kernel_header_content = string("#include \"kernel_bindings_generated.h\"\n") + kernel_src_to_include;
+    write_file(kernel_header, kernel_header_content);
 }
 
 void jit_build_genfiles_triscs_src(
@@ -97,6 +130,7 @@ void jit_build_genfiles_triscs_src(
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
     const string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
+    write_kernel_bindings_generated_header(out_dir, settings);
     const string unpack_cpp = out_dir + "chlkc_unpack.cpp";
     const string math_cpp = out_dir + "chlkc_math.cpp";
     const string pack_cpp = out_dir + "chlkc_pack.cpp";
@@ -153,7 +187,15 @@ void emit_formats_array(
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    auto as_int = [](DataFormat f) { return static_cast<std::underlying_type_t<DataFormat>>(f); };
+    // Remap host-only enum values to HW values for device compilation.
+    // Int16 has a unique host value (13) to avoid colliding with UInt16 (9),
+    // but the Quasar HW expects Int16 = 9 in tensix_types.h.
+    auto as_int = [](DataFormat f) -> std::underlying_type_t<DataFormat> {
+        if (f == DataFormat::Int16) {
+            return 9;  // HW value from tensix_types.h
+        }
+        return static_cast<std::underlying_type_t<DataFormat>>(f);
+    };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
 
@@ -201,6 +243,29 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
 
     vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
         desc.buf_dataformat_arr);
+
+    // Fp8_e4m3 is always unpacked to Float16 (A-family) in source/dest registers.
+    // Without fp32_dest_acc, the dest register holds Float16 (A-family) data when
+    // the input is Fp8, so non-Fp8 output CBs need A-family pack_src to match.
+    // With fp32_dest_acc, dest holds Float32 and pack_src semantics differ, so skip.
+    // CBs that are themselves Fp8_e4m3 are already handled by get_single_pack_src_format.
+    if (!fp32_dest_acc_en &&
+        std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
+            return f == DataFormat::Fp8_e4m3;
+        })) {
+        for (size_t i = 0; i < src_formats.size(); i++) {
+            if (desc.buf_dataformat_arr[i] == DataFormat::Fp8_e4m3) {
+                continue;
+            }
+            switch (src_formats[i]) {
+                case DataFormat::Float16_b: src_formats[i] = DataFormat::Float16; break;
+                case DataFormat::Bfp8_b: src_formats[i] = DataFormat::Bfp8; break;
+                case DataFormat::Bfp4_b: src_formats[i] = DataFormat::Bfp4; break;
+                case DataFormat::Bfp2_b: src_formats[i] = DataFormat::Bfp2; break;
+                default: break;
+            }
+        }
+    }
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);
@@ -399,7 +464,13 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     out << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
     emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_cbs);
     emit_pack_tile_dims(out, desc, max_cbs);
-    out << "#endif\n\n";
+    // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
+    // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
+    // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
+    out << "#if defined(UCK_CHLKC_PACK)\n";
+    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, fmts.unpack_src);
+    out << "#endif\n";   // if pack
+    out << "#endif\n\n"; // if not math and not unpack
 
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";

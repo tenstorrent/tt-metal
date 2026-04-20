@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,22 +7,26 @@ Post-Combine Reduction Module (TTNN Implementation)
 
 This module implements the reduction operation after MoE combine using TTNN.
 It performs:
-1. Local sum over topk dimension
+1. Fused weighted sum over topk dimension (multiply + reduce in a single kernel)
 2. Reduce-scatter across chips to get TP-sharded output
 
-After MoE combine, each chip has sparse tensor [seq_len, topk, hidden_dim]
+After MoE combine, each chip has sparse tensor [seq_len, topk, emb_dim]
 where only positions for local experts have valid data.
 
-This module produces TP-sharded output [seq_len, hidden_dim / num_chips]
+This module produces TP-sharded output [seq_len, emb_dim / num_chips]
 ready for the next layer.
 """
+
+from typing import Optional
+
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 
 class TtReduceModule(LightweightModule):
-    """TTNN implementation: sum over topk + reduce_scatter."""
+    """TTNN implementation: fused weighted sum over topk + reduce_scatter."""
 
     def __init__(
         self,
@@ -38,8 +42,8 @@ class TtReduceModule(LightweightModule):
         Args:
             mesh_device: TTNN mesh device
             topk_dim: Dimension of the topk axis in TTNN tensor.
-                      NOTE: TTNN adds a batch dimension, so for logical [seq, topk, hidden],
-                      the actual tensor is [1, seq, topk, hidden] and topk is at dim=2.
+                      NOTE: TTNN adds a batch dimension, so for logical [seq, topk, emb_dim],
+                      the actual tensor is [1, seq, topk, emb_dim] and topk is at dim=2.
             cluster_axis: Mesh dimension to reduce across (0=rows, 1=columns)
             num_links: Number of ethernet links to use for collective
             topology: Ring or Linear topology for reduce_scatter
@@ -51,29 +55,56 @@ class TtReduceModule(LightweightModule):
         self.num_links = num_links
         self.topology = topology
 
-    def forward(self, combine_output: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(
+        self,
+        combine_output: ttnn.Tensor,
+        weights: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
         """
         Reduce combine output by summing topk and reduce-scattering.
 
         Args:
-            combine_output: Per-chip tensor of shape [seq_len, topk, hidden_dim]
+            combine_output: Per-chip tensor in ROW_MAJOR layout.
+                Shape: [1, dispatch_group_size, seq_len, topk, emb_dim]
+            weights: Optional gate weights.
+                Shape: [1, dispatch_group_size, seq_len, topk] or [..., topk, 1]
+                If provided, applies fused weighted sum: sum(weights * combine_output, dim=topk)
 
         Returns:
-            output: Per-chip tensor of shape [seq_len, hidden_dim / num_chips_in_axis]
+            output: Per-chip tensor of shape [seq_len, emb_dim / num_chips_in_axis]
         """
-        # 1. Sum over topk dimension (local operation on each chip)
-        # [seq_len, topk, hidden_dim] -> [seq_len, hidden_dim]
-        summed = ttnn.sum(combine_output, dim=self.topk_dim)
+        if weights is not None:
+            # Ensure weights has trailing dim=1 for broadcast: [..., topk] -> [..., topk, 1]
+            if weights.shape[-1] != 1:
+                weights = ttnn.unsqueeze(weights, dim=-1)
 
-        # 2. Reduce-scatter across chips
-        # Reduces (sums) data across chips and scatters unique portions
-        # [seq_len, hidden_dim] -> [seq_len, hidden_dim / num_chips]
-        output = ttnn.reduce_scatter(
-            summed,
-            dim=-1,
-            cluster_axis=self.cluster_axis,
-            num_links=self.num_links,
-            topology=self.topology,
-        )
+            # Add batch dimensions if needed to match combine_output rank
+            while len(weights.shape) < len(combine_output.shape):
+                weights = ttnn.unsqueeze(weights, dim=0)
+
+            # Fused weighted sum: multiply by weights and reduce over topk in a single kernel
+            # Input: ROW_MAJOR, Output: TILE_LAYOUT
+            summed = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+                combine_output,
+                weights,
+                expert_dim=self.topk_dim,
+                output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            logger.warning("TtReduceModule: weights not provided, using unweighted sum")
+            summed = ttnn.sum(combine_output, dim=self.topk_dim)
+
+        # Reduce-scatter across chips (only if multiple devices in cluster_axis)
+        # [seq_len, emb_dim] -> [seq_len, emb_dim / num_chips]
+        if self.mesh_device.shape[self.cluster_axis] > 1:
+            output = ttnn.reduce_scatter(
+                summed,
+                dim=-1,
+                cluster_axis=self.cluster_axis,
+                num_links=self.num_links,
+                topology=self.topology,
+            )
+        else:
+            output = summed
 
         return output

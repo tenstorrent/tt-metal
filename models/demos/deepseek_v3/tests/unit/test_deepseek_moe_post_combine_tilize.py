@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -9,7 +9,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 
 
-@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
+@pytest.mark.requires_device(["TG"])
 @pytest.mark.parametrize("iterations", [10])
 @pytest.mark.parametrize(
     "device_params",

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,9 +14,18 @@ constexpr uint8_t noc_mode = NOC_MODE;
 extern uint8_t noc_index;
 // noc_mode may switch dynamically while in the firmware, so we can't define it here.
 #endif
-extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
+// Use uint32_t entries when uint16_t array sizes would be unaligned (not a multiple of 4 bytes),
+// which would cause l1_to_local_mem_copy to read from misaligned L1 addresses.
+// With NUM_NOCS=1 for Quasar, odd bank counts produce non-4-byte-aligned table sizes.
+#if defined(ARCH_QUASAR) && (NUM_DRAM_BANKS % 2 != 0 || NUM_L1_BANKS % 2 != 0)
+typedef uint32_t bank_noc_xy_t;
+#else
+typedef uint16_t bank_noc_xy_t;
+#endif
+
+extern bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
-extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
+extern bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
 extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
 #ifdef ARCH_QUASAR

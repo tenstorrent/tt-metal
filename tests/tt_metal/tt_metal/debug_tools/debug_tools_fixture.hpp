@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -90,6 +90,8 @@ protected:
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, tt::llrt::RunTimeDebugClassWorker);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassWorker);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
+            tt::llrt::RunTimeDebugFeatureDprint, CoreType::DRAM, tt::llrt::RunTimeDebugClassWorker);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_mesh_coords(
             tt::llrt::RunTimeDebugFeatureDprint, {});
@@ -125,6 +127,8 @@ protected:
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, tt::llrt::RunTimeDebugClassNoneSpecified);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassNoneSpecified);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
+            tt::llrt::RunTimeDebugFeatureDprint, CoreType::DRAM, tt::llrt::RunTimeDebugClassNoneSpecified);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, false);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_mesh_coords(
             tt::llrt::RunTimeDebugFeatureDprint, {});
@@ -223,6 +227,7 @@ protected:
     bool watcher_previous_append{};
     bool watcher_previous_auto_unpause{};
     bool watcher_previous_noinline{};
+    bool watcher_previous_noc_sanitize_linked_transaction{};
     bool test_mode_previous{};
     void SetUp() override {
         // Initialize log file name once during setup
@@ -235,6 +240,8 @@ protected:
         watcher_previous_append = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_append();
         watcher_previous_auto_unpause = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_auto_unpause();
         watcher_previous_noinline = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noinline();
+        watcher_previous_noc_sanitize_linked_transaction =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noc_sanitize_linked_transaction();
         test_mode_previous = tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_interval(interval_ms);
@@ -243,10 +250,14 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_auto_unpause(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(true);
+
+        const auto detected_arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(
+            detected_arch == tt::ARCH::BLACKHOLE || detected_arch == tt::ARCH::QUASAR);
 
         // Parent class initializes devices and any necessary flags
         DebugToolsMeshFixture::SetUp();
+
         MetalContext::instance().watcher_server()->clear_log();
     }
 
@@ -260,6 +271,8 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_append(watcher_previous_append);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_auto_unpause(watcher_previous_auto_unpause);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(watcher_previous_noinline);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(
+            watcher_previous_noc_sanitize_linked_transaction);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(test_mode_previous);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
     }
@@ -311,9 +324,17 @@ public:
     }
 };
 
+// A version of MeshWatcherFixture with dump_all enabled for tile counter visibility
+class MeshWatcherDumpAllFixture : public MeshWatcherFixture {
+protected:
+    void SetUp() override {
+        MeshWatcherFixture::SetUp();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_dump_all(true);
+    }
+};
+
 class DevicePrintFixture : public DebugToolsMeshFixture {
 protected:
-    std::string dprint_file_name;
     int memfd_;
 
     void SetUp() override {
@@ -336,8 +357,14 @@ protected:
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, tt::llrt::RunTimeDebugClassWorker);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassWorker);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
+            tt::llrt::RunTimeDebugFeatureDprint, CoreType::DRAM, tt::llrt::RunTimeDebugClassWorker);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(
             tt::llrt::RunTimeDebugFeatureDprint, true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_mesh_coords(
+            tt::llrt::RunTimeDebugFeatureDprint, {});
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_chip_ids(
+            tt::llrt::RunTimeDebugFeatureDprint, {});
         // Send output to a file so the test can check after program is run.
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(
             tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
@@ -346,6 +373,8 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(false);
         tt::tt_metal::MetalContext::instance().rtoptions().set_use_device_print(true);
 
+        ExtraSetUp();
+
         // Parent class initializes devices and any necessary flags
         DebugToolsMeshFixture::SetUp();
     }
@@ -353,12 +382,20 @@ protected:
     void TearDown() override {
         // Parent class tears down devices
         DebugToolsMeshFixture::TearDown();
+        ExtraTearDown();
 
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
         tt::tt_metal::MetalContext::instance().rtoptions().set_use_device_print(false);
     }
 
+    // Override this function in child classes for additional setup commands between DPRINT setup
+    // and device creation.
+    virtual void ExtraSetUp() {}
+    virtual void ExtraTearDown() {}
+
 public:
+    std::string dprint_file_name;
+
     std::string CompileKernel(const std::string& kernel_path, stl::Span<const uint32_t> runtime_args = {}) {
         // Get the first available mesh device
         auto mesh_device = this->devices_.at(0);
@@ -419,6 +456,71 @@ public:
         // up after running a test.
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();
+    }
+
+    // A function to run a program, according to which dispatch mode is set.
+    void RunProgram(const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshWorkload& workload) {
+        // Only difference is that we need to wait for the print server to catch
+        // up after running a test.
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
+    }
+
+    void RunTestOnDevice(
+        const std::function<void(DevicePrintFixture*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        DebugToolsMeshFixture::RunTestOnDevice(run_function, mesh_device);
+        MetalContext::instance().dprint_server()->clear_log_file();
+    }
+};
+
+class DevicePrintSeparateFilesFixture : public DevicePrintFixture {
+public:
+    static constexpr std::array<std::string_view, 5> suffixes = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
+    static void check_output(std::span<const std::string> expected) {
+        const auto& enabled_processors = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(
+            tt::llrt::RunTimeDebugFeatureDprint);
+        ASSERT_EQ(expected.size(), suffixes.size());
+        for (size_t i = 0; i < suffixes.size(); i++) {
+            if (!enabled_processors.contains(HalProgrammableCoreType::TENSIX, i)) {
+                continue;
+            }
+            auto filename = fmt::format(
+                "{}generated/dprint/device-0_worker-core-0-0_{}.txt",
+                tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir(),
+                suffixes[i]);
+            EXPECT_TRUE(FilesMatchesString(filename, expected[i]));
+        }
+    }
+
+    // A function to run a program, according to which dispatch mode is set.
+    void RunProgram(const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshWorkload& workload) {
+        // Only difference is that we need to wait for the print server to catch
+        // up after running a test.
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
+    }
+
+protected:
+    bool original_one_file_per_risc_{};
+    void ExtraSetUp() override {
+        // For this test, enable one file per risc
+        original_one_file_per_risc_ = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_one_file_per_risc(
+            tt::llrt::RunTimeDebugFeatureDprint);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_one_file_per_risc(
+            tt::llrt::RunTimeDebugFeatureDprint, true);
+    }
+    void ExtraTearDown() override {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_one_file_per_risc(
+            tt::llrt::RunTimeDebugFeatureDprint, original_one_file_per_risc_);
+    }
+
+    void RunTestOnDevice(
+        const std::function<void(DevicePrintSeparateFilesFixture*, std::shared_ptr<distributed::MeshDevice>)>&
+            run_function,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        DebugToolsMeshFixture::RunTestOnDevice(run_function, mesh_device);
+        MetalContext::instance().dprint_server()->clear_log_file();
     }
 };
 

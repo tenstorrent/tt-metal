@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,7 @@ struct AllBroadcastParams {
     std::optional<uint32_t> cluster_axis;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     tt::tt_fabric::Topology topology{};
+    bool use_l1_small_for_semaphores = false;
 };
 
 }  // namespace ttnn::prim
