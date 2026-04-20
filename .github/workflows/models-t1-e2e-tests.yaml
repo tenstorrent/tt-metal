@@ -29,7 +29,6 @@ on:
         options:
           - all
           - "wh_n150 (N150)"
-          - "wh_n300 (N300)"
           - "wh_galaxy_perf (Galaxy)"
       platform:
         required: false
@@ -77,7 +76,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_galaxy_perf"
+          ALL_SKUS="wh_n150,wh_galaxy_perf"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"

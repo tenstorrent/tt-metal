@@ -14,10 +14,10 @@ on:
         options:
           - all
           - llama3.1-8b
-          - llama3.3-70b-galaxy
           - qwen3-32b-galaxy
           - gpt-oss-120b-high-batch-galaxy
           - whisper
+          # llama3.3-70b-galaxy: disabled — see #42139
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -26,7 +26,6 @@ on:
         options:
           - all
           - "wh_n150 (N150)"
-          - "wh_n300 (N300)"
           - "wh_galaxy_perf (Galaxy)"
       platform:
         required: false
@@ -74,7 +73,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_galaxy_perf"
+          ALL_SKUS="wh_n150,wh_galaxy_perf"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"

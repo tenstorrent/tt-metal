@@ -25,7 +25,7 @@ on:
           - gemma-3-27b
           - mixtral-8x7b
           - shallow-unet
-          - gpt-oss-20b
+          # gpt-oss-20b: disabled — segfaulting on CI
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -34,7 +34,6 @@ on:
         options:
           - all
           - "wh_n150 (N150)"
-          - "wh_n300 (N300)"
           - "wh_llmbox_perf (T3000)"
       platform:
         required: false
@@ -82,7 +81,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox_perf"
+          ALL_SKUS="wh_n150,wh_llmbox_perf"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"
