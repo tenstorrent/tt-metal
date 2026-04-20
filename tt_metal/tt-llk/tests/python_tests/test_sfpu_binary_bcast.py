@@ -23,7 +23,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     TemplateParameter,
 )
-from helpers.tilize_untilize import tilize, untilize
+from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
 
@@ -55,9 +55,6 @@ class INPUT_TILE_A(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t INPUT_TILE_A_VAL = {self.tile_index};"
 
-
-_FACE_R_DIM = 16
-_FACE_C_DIM = 16
 
 _BINARY_OPS = {
     MathOperation.SfpuElwadd: torch.add,
@@ -129,26 +126,8 @@ def test_sfpu_binary_bcast(
         input_dimensions_B=input_dimensions,
     )
 
-    # Debug overrides: row-major src_A = 0, src_B[:, 0] = tile_row, rest = 0.
-    # Golden operates on row-major inputs; StimuliConfig below tilizes them
-    # before sending to L1.
-    # src_A = torch.zeros(1024, dtype=src_A.dtype)
-    # src_B = torch.zeros(1024, dtype=src_B.dtype)
-    # src_B_rm = src_B.view(32, 32)
-    # # For row bcasting: set src_B's row 0 to increasing values, rest zero
-    # for c in range(32):
-    #     src_B_rm[0, c] = float(c)
-
-    # print("src_A (row-major view):")
-    # print(src_A.view(32, 32))
-    # print("src_B (row-major view, kernel does the broadcast):")
-    # print(src_B.view(32, 32))
-
     op = _BINARY_OPS[eltwise_op]
     golden_tensor = _golden_sfpu_binary_bcast(src_A, src_B, bcast_dim, op)
-
-    # print("golden_tensor (face-ordered):")
-    # print(golden_tensor.view(32, 32))
 
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -185,16 +164,6 @@ def test_sfpu_binary_bcast(
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
-
-    untlized_golden_tensor = untilize(
-        golden_tensor, stimuli_format=formats.output_format
-    )
-
-    untilized_res_tensor = untilize(res_tensor, stimuli_format=formats.output_format)
-    # print("untlized_golden_tensor:")
-    # print(untlized_golden_tensor.view(32, 32))
-    # print("untilized_res_tensor:")
-    # print(untilized_res_tensor.view(32, 32))
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

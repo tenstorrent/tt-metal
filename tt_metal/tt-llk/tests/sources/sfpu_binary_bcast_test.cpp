@@ -82,7 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_binary_sfpu_start_<DST_SYNC>(0);
 
-    _sfpu_binary_bcast_init_<SFPU_BINARY_OPERATION, BCAST_DIM>();
+    _sfpu_binary_bcast_init_<BCAST_DIM>();
 
     _calculate_sfpu_binary_bcast_full_tile_<SFPU_BINARY_OPERATION, BCAST_DIM>(INPUT_TILE_A, INPUT_TILE_B, RESULT_TILE);
 
