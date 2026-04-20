@@ -4,7 +4,11 @@
 
 #pragma once
 
+<<<<<<< HEAD
 #include "sfpu/ckernel_sfpu_binary_bcast.h"
+=======
+#include "ckernel_sfpu_binary_bcast.h"
+>>>>>>> 7595ca7f8e5 (Add blackhole implementation and api files)
 #include "llk_math_eltwise_binary_sfpu_init.h"
 
 namespace ckernel {
