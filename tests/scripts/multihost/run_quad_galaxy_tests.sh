@@ -262,23 +262,55 @@ demo_case_selector() {
     esac
 }
 
-# Helper: run a test command via tt-run using the current environment
-_run_deepseekv3_tt() {
-    # USE_TORUS_MODE=0 means OFF, so unset it for the launched process.
-    if [[ "${USE_TORUS_MODE:-}" == "0" ]]; then
-        if [[ -n "${MPI_ARGS:-}" ]]; then
-            ( unset USE_TORUS_MODE; tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" --mpi-args "$MPI_ARGS" "$@" )
-        else
-            ( unset USE_TORUS_MODE; tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" "$@" )
-        fi
-        return
+teacher_forced_pytest_args() {
+    local test_node="models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy"
+    local upr_mode
+    upr_mode="$(resolve_upr_mode)"
+
+    if [[ "${upr_mode}" == "both" ]]; then
+        echo "${test_node}"
+        return 0
     fi
 
+    # Parametrize values from test_demo_teacher_forced.py:
+    #   max_users_per_row: [8, 32]  ids=["8", "32"]
+    #   max_new_tokens:    [128, 2048, 8192]  ids=["128", "2048", "8192"]
+    #   reference_file:    [REFERENCE_FILE]
+    # Node ID format: test_demo_teacher_forcing_accuracy[{upr}-{tokens}-reference_file0]
+    local token_count
+    for token_count in 128 2048 8192; do
+        echo "${test_node}[${upr_mode}-${token_count}-reference_file0]"
+    done
+}
+
+# Helper: run a test command via tt-run using the current environment
+_run_deepseekv3_tt() {
+    local -a tt_run_args=(--tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML")
     if [[ -n "${MPI_ARGS:-}" ]]; then
-        tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" --mpi-args "$MPI_ARGS" "$@"
-    else
-        tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" "$@"
+        tt_run_args+=(--mpi-args "$MPI_ARGS")
     fi
+
+    local runtime_root="${TT_METAL_RUNTIME_ROOT:-${TT_METAL_HOME:-$(pwd -P)}}"
+    local torus_mode="${USE_TORUS_MODE-__UNSET__}"
+
+    tt_run "${tt_run_args[@]}" env \
+        _DS_MESH_DEVICE="${MESH_DEVICE:-}" \
+        _DS_USE_TORUS_MODE="${torus_mode}" \
+        _DS_RUNTIME_ROOT="${runtime_root}" \
+        bash -c '
+            if [[ -n "${_DS_MESH_DEVICE}" ]]; then
+                export MESH_DEVICE="${_DS_MESH_DEVICE}"
+            fi
+            if [[ "${_DS_USE_TORUS_MODE}" == "0" || "${_DS_USE_TORUS_MODE}" == "__UNSET__" ]]; then
+                unset USE_TORUS_MODE
+            elif [[ -n "${_DS_USE_TORUS_MODE}" ]]; then
+                export USE_TORUS_MODE="${_DS_USE_TORUS_MODE}"
+            fi
+            if [[ -n "${_DS_RUNTIME_ROOT}" ]]; then
+                export TT_METAL_RUNTIME_ROOT="${_DS_RUNTIME_ROOT}"
+            fi
+            exec "$@"
+        ' _ "$@"
 }
 
 ###############################################################################
@@ -341,8 +373,10 @@ run_dual_teacher_forced_test() {
     fail=0
     setup_dual_galaxy_env
     local timeout=$(_demo_timeout 3600)
+    local tf_args
+    tf_args="$(teacher_forced_pytest_args | paste -sd' ')"
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "set -f -o pipefail; pytest -svvv --timeout=$timeout ${tf_args} 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log" ; fail+=$?
 
     # Extract accuracy metrics from logs and save to artifact file
     if [[ -f generated/artifacts/dual_teacher_forced_output.log ]]; then
@@ -360,8 +394,10 @@ run_quad_teacher_forced_test() {
     fail=0
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 3600)
+    local tf_args
+    tf_args="$(teacher_forced_pytest_args | paste -sd' ')"
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/quad_teacher_forced_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "set -f -o pipefail; pytest -svvv --timeout=$timeout ${tf_args} 2>&1 | tee generated/artifacts/quad_teacher_forced_output.log" ; fail+=$?
 
     # Extract accuracy metrics from logs and save to artifact file
     if [[ -f generated/artifacts/quad_teacher_forced_output.log ]]; then
