@@ -130,6 +130,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/select_target_logit/select_target_logit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/select_target_logit/device/select_target_logit_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/select_target_logit/device/select_target_logit_program_factory.cpp
+    # Subtract At Target (per-token scalar subtraction at target positions for distributed cross-entropy backward)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/subtract_at_target.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_program_factory.cpp
     # CrossEntropy Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.cpp
