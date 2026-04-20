@@ -71,13 +71,6 @@ def generate_qsr_transpose_dest_combinations(
         # Float16/Float16_b in Src regs and Float32 in dest reg is unsupported for MOVB2D
         return (DestAccumulation.No,)
 
-    def get_transpose_faces_modes(dest_acc):
-        """Determine valid math_transpose_faces modes depending on dest_acc."""
-        if dest_acc == DestAccumulation.Yes:
-            return (Transpose.No, Transpose.Yes)
-        # Transpose within faces only is not supported for 16-bit dest in the transpose dest kernel.
-        return (Transpose.Yes,)
-
     def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
         """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
         # Upcasting to Float32/Int32 requires dest_acc enabled
@@ -105,6 +98,7 @@ def generate_qsr_transpose_dest_combinations(
     }
 
     dest_sync_modes = (DestSync.Half, DestSync.Full)
+    transpose_faces_modes = (Transpose.No, Transpose.Yes)
 
     combinations = []
     for fmt in formats_list:
@@ -116,7 +110,7 @@ def generate_qsr_transpose_dest_combinations(
         for dest_acc in get_dest_acc_modes(in_fmt):
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
                 for dest_sync in dest_sync_modes:
-                    for math_transpose_faces in get_transpose_faces_modes(dest_acc):
+                    for math_transpose_faces in transpose_faces_modes:
                         for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
                             combinations.append(
                                 (
