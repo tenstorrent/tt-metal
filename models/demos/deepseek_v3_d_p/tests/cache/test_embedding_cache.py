@@ -77,6 +77,8 @@ def test_embedding_weights_cold_warm_cache(mesh_device, device_params):
     output1 = to_torch_concat(output1_tt)
 
     # === Path 2: Cold Cache ===
+    assert not TtParallelEmbedding.check_cache_complete(CACHE_DIR), "Cache should be empty before build"
+
     TtParallelEmbedding.build_ttnn_cache(
         torch_weight,
         vocab_size,
@@ -84,6 +86,8 @@ def test_embedding_weights_cold_warm_cache(mesh_device, device_params):
         mesh_device,
         CACHE_DIR,
     )
+
+    assert TtParallelEmbedding.check_cache_complete(CACHE_DIR), "Cache should be complete after build"
 
     emb_cold = TtParallelEmbedding(
         mesh_device,

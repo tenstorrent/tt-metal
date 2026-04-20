@@ -141,6 +141,10 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     ttnn.synchronize_device(mesh_device)
 
     # === Path 2: Cold Cache (build + load) ===
+    assert not TtMoe.check_cache_complete(
+        CACHE_DIR, layer_idx=0, experts_per_chip=experts_per_chip
+    ), "Cache should be empty before build"
+
     logger.info(f"Building cache to {CACHE_DIR}...")
     TtMoe.build_ttnn_cache(
         gate_weights=gate_weights,
@@ -156,9 +160,9 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         layer_idx=0,
     )
 
-    cache_files = list(CACHE_DIR.glob("layer_0.*"))
-    logger.info(f"Cache files created: {len(cache_files)} files")
-    assert len(cache_files) > 0, f"No cache files found in {CACHE_DIR}"
+    assert TtMoe.check_cache_complete(
+        CACHE_DIR, layer_idx=0, experts_per_chip=experts_per_chip
+    ), "Cache should be complete after build"
 
     logger.info("Path 2: Creating TtMoe from cold cache...")
     moe_cold = TtMoe(
