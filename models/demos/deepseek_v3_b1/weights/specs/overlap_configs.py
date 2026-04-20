@@ -142,7 +142,7 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
     transform.
     """
 
-    transform_version: int = 1  # bump when shuffle/preprocess logic in this class changes
+    transform_version: int = 2  # bump when shuffle/preprocess logic in this class changes
 
     num_qnope_heads: int = 64
     num_qrope_heads: int = 64
