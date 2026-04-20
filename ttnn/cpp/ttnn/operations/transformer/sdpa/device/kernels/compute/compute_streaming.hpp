@@ -1344,7 +1344,8 @@ template <
     bool uniform_dataformat = false,
     uint32_t cb_normalized_out = 0,
     uint32_t cb_sum_out = 0,
-    uint32_t cb_sum_in = 0>
+    uint32_t cb_sum_in = 0,
+    bool lightweight_mask_enabled = false>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1452,11 +1453,13 @@ void sdpa_ring_v2(
 
             // Resolve lightweight mask params for partial tile masking
             uint32_t lw_partial_tile_idx = 0;
-            if (apply_mask && lw_mask.enabled) {
-                if (is_global_n_mask_chunk) {
-                    lw_partial_tile_idx = lw_mask.global_n_partial_tile_idx;
-                } else if (is_joint_n_mask_chunk) {
-                    lw_partial_tile_idx = lw_mask.joint_l_partial_tile_idx;
+            if constexpr (lightweight_mask_enabled) {
+                if (apply_mask) {
+                    if (is_global_n_mask_chunk) {
+                        lw_partial_tile_idx = lw_mask.global_n_partial_tile_idx;
+                    } else if (is_joint_n_mask_chunk) {
+                        lw_partial_tile_idx = lw_mask.joint_l_partial_tile_idx;
+                    }
                 }
             }
 
