@@ -142,7 +142,7 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     auto reader_origin = create_reader_kernel(program, origin_set, reader_ct_args, origin_defines, kReaderKernelPath);
     auto reader_kernel = create_reader_kernel(program, non_origin_cores, reader_ct_args, defines, kReaderKernelPath);
 
-    std::vector<uint32_t> writer_ct_args;
+    std::vector<uint32_t> writer_ct_args{block_size};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_ct_args);
 
     auto writer_kernel = create_writer_kernel(program, all_cores, writer_ct_args, defines, kWriterKernelPath);
