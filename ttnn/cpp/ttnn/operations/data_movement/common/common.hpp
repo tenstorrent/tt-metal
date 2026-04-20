@@ -23,18 +23,13 @@ ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape);
 ttnn::Shape unsqueeze_shape_to_nd(const ttnn::Shape& shape, uint32_t n);
 
 ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, uint32_t n);
+
+// Estimate NOC transfer cycles for a batch of transactions.
+// Returns {bw_cycles, latency_cycles} — BW is the steady-state transfer time,
+// latency is the per-transaction pipeline startup cost. Callers can model
+// pipelining by separating these: max(bw_terms...) + sum(latency_terms).
 std::vector<uint32_t> get_cycles_for_transaction_size(
-    uint32_t transaction_size,
-    bool is_dram,
-    bool is_local,
-    uint32_t num_transactions,
-    uint32_t num_cores,
-    int index,
-    bool is_read,
-    const std::map<uint32_t, std::array<float, 2>>& l1_local_bw,
-    const std::map<uint32_t, std::array<float, 2>>& l1_read_bw,
-    const std::map<uint32_t, std::array<float, 2>>& l1_write_bw,
-    const std::map<uint32_t, std::array<float, 2>>& dram_bw);
+    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions, tt::ARCH arch, bool is_read);
 int common_tm_bw_model(
     const Tensor& input_tensor,
     const Tensor& output_tensor,

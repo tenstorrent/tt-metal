@@ -80,10 +80,76 @@ ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uin
     return squeeze_shape_to_ND(shape, n);
 }
 
+namespace {  // anonymous namespace for internal helpers for NOC bandwidth modeling
+
 enum DatumIndex { WormholeIndex = 0, BlackholeIndex = 1 };
 
-float get_transaction_noc_bw(
-    uint32_t transaction_size, const std::map<uint32_t, std::array<float, 2>>& dict, int index) {
+// Measured NOC bandwidth maps: transaction_size -> {Wormhole GB/s, Blackhole GB/s}.
+// Used by common_tm_bw_model and CCL roofline models via get_cycles_for_transaction_size.
+std::map<uint32_t, std::array<float, 2>> noc_dram_bw = {
+    {16, {0.436, 0.387}},
+    {32, {0.868, 0.772}},
+    {64, {1.736, 1.545}},
+    {128, {3.489, 3.088}},
+    {256, {6.975, 6.176}},
+    {512, {13.889, 12.361}},
+    {1024, {27.891, 24.71}},
+    {2048, {28.411, 49.164}},
+    {4096, {28.227, 50.238}},
+    {8192, {28.537, 50.393}},
+    {16384, {27.831, 50.636}},
+    {32768, {27.758, 50.695}},
+    {65536, {28.694, 50.626}}};
+
+std::map<uint32_t, std::array<float, 2>> noc_l1_read_bw = {
+    {16, {0.868, 0.671}},
+    {32, {1.724, 1.336}},
+    {64, {3.477, 2.673}},
+    {128, {6.885, 5.354}},
+    {256, {13.794, 10.691}},
+    {512, {27.143, 21.382}},
+    {1024, {28.976, 42.771}},
+    {2048, {29.742, 47.977}},
+    {4096, {29.544, 49.34}},
+    {8192, {28.728, 49.961}},
+    {16384, {28.7, 50.287}},
+    {32768, {28.618, 50.335}},
+    {65536, {28.7, 50.403}}};
+
+std::map<uint32_t, std::array<float, 2>> noc_l1_write_bw = {
+    {16, {0.681, 0.511}},
+    {32, {1.254, 1.018}},
+    {64, {2.709, 2.036}},
+    {128, {5.417, 4.072}},
+    {256, {10.823, 8.143}},
+    {512, {21.668, 16.284}},
+    {1024, {27.837, 32.593}},
+    {2048, {27.811, 48.644}},
+    {4096, {27.811, 49.828}},
+    {8192, {27.808, 50.219}},
+    {16384, {27.808, 50.578}},
+    {32768, {27.811, 50.412}},
+    {65536, {28.808, 50.383}}};
+
+std::map<uint32_t, std::array<float, 2>> noc_l1_local_bw = {
+    {16, {0.868, 0.671}},
+    {32, {1.724, 1.337}},
+    {64, {3.477, 2.675}},
+    {128, {6.899, 5.354}},
+    {256, {13.791, 10.708}},
+    {512, {27.594, 21.413}},
+    {1024, {27.696, 42.792}},
+    {2048, {27.911, 46.455}},
+    {4096, {27.811, 48.5}},
+    {8192, {27.808, 49.639}},
+    {16384, {27.814, 50.171}},
+    {32768, {27.805, 50.123}},
+    {65536, {27.84, 50.21}}};
+
+float get_transaction_noc_bw(uint32_t transaction_size, bool is_dram, bool is_local, bool is_read, tt::ARCH arch) {
+    const auto& dict = is_dram ? noc_dram_bw : is_local ? noc_l1_local_bw : is_read ? noc_l1_read_bw : noc_l1_write_bw;
+    const int index = (arch == tt::ARCH::WORMHOLE_B0) ? WormholeIndex : BlackholeIndex;
+
     uint32_t lower_pow2 = std::pow(2, std::floor(std::log2(transaction_size)));
 
     uint32_t upper_pow2 = std::pow(2, std::ceil(std::log2(transaction_size)));
@@ -110,65 +176,45 @@ float get_transaction_noc_bw(
 }
 
 uint32_t get_effective_l1_cores(
-    uint32_t transaction_size,
-    int index,
-    bool is_write,
-    const std::map<uint32_t, std::array<float, 2>>& l1_read_bw,
-    const std::map<uint32_t, std::array<float, 2>>& l1_write_bw,
-    uint32_t num_nocs,
-    uint32_t num_cores) {
-    float max_bw = index == WormholeIndex ? 32.0f : 50.0f;
+    uint32_t transaction_size, tt::ARCH arch, bool is_write, uint32_t num_nocs, uint32_t num_cores) {
+    float max_bw = (arch == tt::ARCH::WORMHOLE_B0) ? 32.0f : 50.0f;
     auto aggregate_bw = max_bw * num_nocs;
-    float achieved_l1_bw = get_transaction_noc_bw(transaction_size, is_write ? l1_write_bw : l1_read_bw, index);
+    float achieved_l1_bw =
+        get_transaction_noc_bw(transaction_size, /*is_dram=*/false, /*is_local=*/false, /*is_read=*/!is_write, arch);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_l1_bw);
     effective_cores = std::min(effective_cores, num_cores);  // Limit to available cores
     return effective_cores;
 }
 
-uint32_t get_effective_dram_cores(
-    uint32_t transaction_size,
-    int index,
-    const std::map<uint32_t, std::array<float, 2>>& dram_bw,
-    bool single_noc,
-    uint32_t num_cores) {
+uint32_t get_effective_dram_cores(uint32_t transaction_size, tt::ARCH arch, bool single_noc, uint32_t num_cores) {
     auto aggregate_bw = single_noc == 1 ? 190 : 265;
-    float achieved_dram_bw = get_transaction_noc_bw(transaction_size, dram_bw, index);
+    float achieved_dram_bw =
+        get_transaction_noc_bw(transaction_size, /*is_dram=*/true, /*is_local=*/false, /*is_read=*/true, arch);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_dram_bw);
     effective_cores = std::min(effective_cores, num_cores);  // Limit to available cores
     return effective_cores;
 }
 
+}  // anonymous namespace
+
 std::vector<uint32_t> get_cycles_for_transaction_size(
-    uint32_t transaction_size,
-    bool is_dram,
-    bool is_local,
-    uint32_t num_transactions,
-    uint32_t /*num_cores*/,
-    int index,
-    bool is_read,
-    const std::map<uint32_t, std::array<float, 2>>& l1_local_bw,
-    const std::map<uint32_t, std::array<float, 2>>& l1_read_bw,
-    const std::map<uint32_t, std::array<float, 2>>& l1_write_bw,
-    const std::map<uint32_t, std::array<float, 2>>& dram_bw) {
-    auto transaction_type = is_local ? l1_local_bw : (is_read ? l1_read_bw : l1_write_bw);
-    if (is_dram) {
-        transaction_type = dram_bw;
-    }
+    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions, tt::ARCH arch, bool is_read) {
+    bool is_write = !is_read;
     // measured initial latency based on the transaction and device types
     uint32_t latency_cyles = 1;
-    if (transaction_type == l1_local_bw) {
-        latency_cyles = index == WormholeIndex ? 56 : 88;
-    } else if (transaction_type == l1_read_bw) {
-        latency_cyles = index == WormholeIndex ? 259 : 403;
-    } else if (transaction_type == l1_write_bw) {
-        latency_cyles = index == WormholeIndex ? 256 : 404;
-    } else if (transaction_type == dram_bw) {
-        latency_cyles = index == WormholeIndex ? 358 : 529;
+    if (is_dram) {
+        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 358 : 529;
+    } else if (is_local) {
+        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 56 : 88;
+    } else if (is_write) {
+        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 256 : 404;
+    } else {
+        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 259 : 403;
     }
 
     transaction_size = std::max(transaction_size, 16u);
-    auto transaction_bw = get_transaction_noc_bw(transaction_size, transaction_type, index);
-    float device_frequency_hz = index == WormholeIndex ? 1e9 : 1.2e9;
+    auto transaction_bw = get_transaction_noc_bw(transaction_size, is_dram, is_local, is_read, arch);
+    float device_frequency_hz = (arch == tt::ARCH::WORMHOLE_B0) ? 1e9 : 1.2e9;
     uint32_t cycles =
         std::ceil((float)(num_transactions * transaction_size * device_frequency_hz) / (float)(transaction_bw * 1e9));
     return {cycles, latency_cyles};
@@ -183,67 +229,6 @@ int common_tm_bw_model(
     bool split_op,
     bool bcast_local,
     bool concat_op) {
-    // the bw maps assigns a measured bandwidth per transaction size for each device architecture
-    std::map<uint32_t, std::array<float, 2>> dram_bw = {
-        {16, {0.436, 0.387}},
-        {32, {0.868, 0.772}},
-        {64, {1.736, 1.545}},
-        {128, {3.489, 3.088}},
-        {256, {6.975, 6.176}},
-        {512, {13.889, 12.361}},
-        {1024, {27.891, 24.71}},
-        {2048, {28.411, 49.164}},
-        {4096, {28.227, 50.238}},
-        {8192, {28.537, 50.393}},
-        {16384, {27.831, 50.636}},
-        {32768, {27.758, 50.695}},
-        {65536, {28.694, 50.626}}};
-
-    std::map<uint32_t, std::array<float, 2>> l1_read_bw = {
-        {16, {0.868, 0.671}},
-        {32, {1.724, 1.336}},
-        {64, {3.477, 2.673}},
-        {128, {6.885, 5.354}},
-        {256, {13.794, 10.691}},
-        {512, {27.143, 21.382}},
-        {1024, {28.976, 42.771}},
-        {2048, {29.742, 47.977}},
-        {4096, {29.544, 49.34}},
-        {8192, {28.728, 49.961}},
-        {16384, {28.7, 50.287}},
-        {32768, {28.618, 50.335}},
-        {65536, {28.7, 50.403}}};
-
-    std::map<uint32_t, std::array<float, 2>> l1_write_bw = {
-        {16, {0.681, 0.511}},
-        {32, {1.254, 1.018}},
-        {64, {2.709, 2.036}},
-        {128, {5.417, 4.072}},
-        {256, {10.823, 8.143}},
-        {512, {21.668, 16.284}},
-        {1024, {27.837, 32.593}},
-        {2048, {27.811, 48.644}},
-        {4096, {27.811, 49.828}},
-        {8192, {27.808, 50.219}},
-        {16384, {27.808, 50.578}},
-        {32768, {27.811, 50.412}},
-        {65536, {28.808, 50.383}}};
-
-    std::map<uint32_t, std::array<float, 2>> l1_local_bw = {
-        {16, {0.868, 0.671}},
-        {32, {1.724, 1.337}},
-        {64, {3.477, 2.675}},
-        {128, {6.899, 5.354}},
-        {256, {13.791, 10.708}},
-        {512, {27.594, 21.413}},
-        {1024, {27.696, 42.792}},
-        {2048, {27.911, 46.455}},
-        {4096, {27.811, 48.5}},
-        {8192, {27.808, 49.639}},
-        {16384, {27.814, 50.171}},
-        {32768, {27.805, 50.123}},
-        {65536, {27.84, 50.21}}};
-
     const auto& input_shape = concat_op ? output_tensor.padded_shape() : input_tensor.padded_shape();
     auto element_size_bytes = input_tensor.element_size();
     bool input_is_2d_sharded =
@@ -263,7 +248,6 @@ int common_tm_bw_model(
     uint32_t num_cores = device_rows * device_cols;
 
     uint32_t total_num_cores = num_cores;
-    uint32_t index = (arch == tt::ARCH::WORMHOLE_B0) ? WormholeIndex : BlackholeIndex;
 
     uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
@@ -324,10 +308,9 @@ int common_tm_bw_model(
     auto updated_output_transactions = num_write_transactions;
     // limit number of cores to max aggregate bw to avoid congestion
     if (input_is_dram && output_is_dram) {
-        uint32_t input_effective_cores =
-            get_effective_dram_cores(input_transaction_size, index, dram_bw, false, total_num_cores);
+        uint32_t input_effective_cores = get_effective_dram_cores(input_transaction_size, arch, false, total_num_cores);
         uint32_t output_effective_cores =
-            get_effective_dram_cores(output_transaction_size, index, dram_bw, false, total_num_cores);
+            get_effective_dram_cores(output_transaction_size, arch, false, total_num_cores);
         auto actual_read_cores = std::min(input_effective_cores, num_read_transactions);
         auto actual_write_cores = std::min(output_effective_cores, num_write_transactions);
         updated_input_transactions = std::ceil((float)num_read_transactions / (float)actual_read_cores);
@@ -338,10 +321,10 @@ int common_tm_bw_model(
         }
 
     } else if (input_is_dram) {
-        num_cores = get_effective_dram_cores(input_transaction_size, index, dram_bw, false, total_num_cores);
+        num_cores = get_effective_dram_cores(input_transaction_size, arch, false, total_num_cores);
         updated_input_transactions = std::ceil((float)num_read_transactions / (float)num_cores);
     } else if (output_is_dram) {
-        num_cores = get_effective_dram_cores(output_transaction_size, index, dram_bw, false, total_num_cores);
+        num_cores = get_effective_dram_cores(output_transaction_size, arch, false, total_num_cores);
         updated_output_transactions = std::ceil((float)num_write_transactions / (float)num_cores);
     }
     // local noc transactions for l1 sharded tensors
@@ -351,10 +334,10 @@ int common_tm_bw_model(
 
     is_local = is_local || bcast_local;
     if (!input_is_dram && !output_is_dram) {
-        uint32_t input_effective_cores = get_effective_l1_cores(
-            input_transaction_size, index, false, l1_read_bw, l1_write_bw, num_nocs, total_num_cores);
-        uint32_t output_effective_cores = get_effective_l1_cores(
-            output_transaction_size, index, true, l1_read_bw, l1_write_bw, num_nocs, total_num_cores);
+        uint32_t input_effective_cores =
+            get_effective_l1_cores(input_transaction_size, arch, false, num_nocs, total_num_cores);
+        uint32_t output_effective_cores =
+            get_effective_l1_cores(output_transaction_size, arch, true, num_nocs, total_num_cores);
         auto actual_read_cores = std::min(input_effective_cores, num_read_transactions);
         auto actual_write_cores = std::min(output_effective_cores, num_write_transactions);
         auto updated_input_transactions = std::ceil((float)num_read_transactions / (float)actual_read_cores);
@@ -364,14 +347,12 @@ int common_tm_bw_model(
             num_cores = actual_write_cores;
         }
     } else if (!input_is_dram) {
-        auto num_cores_ = get_effective_l1_cores(
-            input_transaction_size, index, false, l1_read_bw, l1_write_bw, num_nocs, total_num_cores);
+        auto num_cores_ = get_effective_l1_cores(input_transaction_size, arch, false, num_nocs, total_num_cores);
         if (updated_output_transactions < (num_read_transactions / num_cores_)) {
             num_cores = num_cores_;
         }
     } else if (!output_is_dram) {
-        auto num_cores_ = get_effective_l1_cores(
-            output_transaction_size, index, true, l1_read_bw, l1_write_bw, num_nocs, total_num_cores);
+        auto num_cores_ = get_effective_l1_cores(output_transaction_size, arch, true, num_nocs, total_num_cores);
         if (updated_input_transactions < (num_write_transactions / num_cores_)) {
             num_cores = num_cores_;
         }
@@ -387,26 +368,16 @@ int common_tm_bw_model(
                 input_is_dram,
                 false,
                 std::ceil((float)num_read_transactions / (float)num_cores),
-                num_cores,
-                index,
-                true,
-                l1_local_bw,
-                l1_read_bw,
-                l1_write_bw,
-                dram_bw);
+                arch,
+                true);
 
             auto write_cycles_not_local = get_cycles_for_transaction_size(
                 output_transaction_size,
                 output_is_dram,
                 false,
                 std::ceil((float)num_write_transactions / (float)num_cores),
-                num_cores,
-                index,
-                false,
-                l1_local_bw,
-                l1_read_bw,
-                l1_write_bw,
-                dram_bw);
+                arch,
+                false);
             total_read_cycles_not_local = read_cycles_not_local[0] + read_cycles_not_local[1];
             total_write_cycles_not_local = write_cycles_not_local[0] + write_cycles_not_local[1];
         }
@@ -419,30 +390,10 @@ int common_tm_bw_model(
     num_write_transactions = std::ceil((float)num_write_transactions / (float)num_cores);
 
     auto read_cycles = get_cycles_for_transaction_size(
-        input_transaction_size,
-        input_is_dram,
-        is_local,
-        num_read_transactions,
-        num_cores,
-        index,
-        true,
-        l1_local_bw,
-        l1_read_bw,
-        l1_write_bw,
-        dram_bw);
+        input_transaction_size, input_is_dram, is_local, num_read_transactions, arch, true);
 
     auto write_cycles = get_cycles_for_transaction_size(
-        output_transaction_size,
-        output_is_dram,
-        is_local,
-        num_write_transactions,
-        num_cores,
-        index,
-        false,
-        l1_local_bw,
-        l1_read_bw,
-        l1_write_bw,
-        dram_bw);
+        output_transaction_size, output_is_dram, is_local, num_write_transactions, arch, false);
     uint32_t total_read_cycles = read_cycles[0] + read_cycles[1];
     uint32_t total_write_cycles = write_cycles[0] + write_cycles[1];
 

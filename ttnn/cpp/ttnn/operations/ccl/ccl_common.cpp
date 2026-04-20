@@ -1904,7 +1904,7 @@ void fabric_mux_connection_rt_args(
 // Maps are indexed by packet size (bytes) -> {WH_GB_per_s, BH_GB_per_s}.
 // Convention: index 0 = Wormhole B0, index 1 = Blackhole (same as common_tm_bw_model).
 
-namespace {
+namespace {  // anonymous namespace for internal helpers for Fabric bandwidth modeling
 
 enum FabricArchIndex { WormholeIdx = 0, BlackholeIdx = 1 };
 

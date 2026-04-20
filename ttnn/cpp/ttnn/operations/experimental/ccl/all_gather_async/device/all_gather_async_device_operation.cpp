@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 #include <algorithm>
@@ -434,7 +435,31 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
 
     // Convert fabric time (ns) to device clock cycles.
     // clock_rate_ghz cycles/ns * ns = cycles
-    const int ideal_dev_clock_cycles = static_cast<int>(std::ceil(fabric_time_ns * clock_rate_ghz));
+    const int fabric_cycles = static_cast<int>(std::ceil(fabric_time_ns * clock_rate_ghz));
+
+    // --- Local data movement overhead (pipelined model) ---
+    // Read: device reads input S bytes from memory.
+    // Write: device writes output N*S bytes to memory.
+    // BW terms compete with fabric (max). Latencies are additive (pipeline fill/drain).
+    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.buffer()->page_size();
+    const uint32_t write_page_size = output_tensor.buffer()->page_size();
+
+    const int64_t output_size_bytes = static_cast<int64_t>(N) * input_size_bytes;
+    const uint32_t read_pages_per_worker =
+        tt::div_up(static_cast<uint32_t>(input_size_bytes / read_page_size), num_links);
+    const uint32_t write_pages_per_worker =
+        tt::div_up(static_cast<uint32_t>(output_size_bytes / write_page_size), num_links);
+
+    auto read_est = ttnn::operations::data_movement::get_cycles_for_transaction_size(
+        read_page_size, input_is_dram, /*is_local=*/false, read_pages_per_worker, arch, /*is_read=*/true);
+    auto write_est = ttnn::operations::data_movement::get_cycles_for_transaction_size(
+        write_page_size, output_is_dram, /*is_local=*/false, write_pages_per_worker, arch, /*is_read=*/false);
+
+    const int local_bw_cycles = static_cast<int>(std::max(read_est[0], write_est[0]));
+    const int pipeline_latency_cycles = static_cast<int>(read_est[1] + write_est[1]);
+    const int ideal_dev_clock_cycles = std::max(local_bw_cycles, fabric_cycles) + pipeline_latency_cycles;
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
