@@ -44,6 +44,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.tests.blitz_weights_tests.op import CopyToOutput
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
@@ -456,6 +457,7 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+@requires_hybrid_allocator
 def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, o_proj_dtype):
     """Verify single fused buffer: TP4+shuffle o_proj, gate_mm, norms, and q_a/q_b/kv_a.
 
@@ -501,7 +503,7 @@ def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, me
         kv_raw,
         submesh,
         o_proj_dtype=o_proj_dtype,
-        mla_proj_dtype=o_proj_dtype,
+        q_ab_dtype=o_proj_dtype,
     )
     o_proj = fused["o_proj"]
     gate_mm = fused["gate_mm"]
