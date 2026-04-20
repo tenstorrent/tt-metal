@@ -163,7 +163,7 @@ ttnn::Tensor routed_expert_ffn(
         x.dtype());
 
     if (is_wormhole) {
-        return detail::routed_expert_ffn_wh(x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output));
+        return detail::routed_expert_ffn_wh(x, gate_proj, up_proj, down_proj, compute_kernel_config, output);
     }
     return detail::routed_expert_ffn_bh(x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output));
 }
