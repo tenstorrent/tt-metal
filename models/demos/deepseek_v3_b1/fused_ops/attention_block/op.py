@@ -16,7 +16,6 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     record_cb_metadata,
 )
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args, _get_element_size_bytes, _round_up
-from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_gather.op import AllGatherConfig
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
@@ -358,8 +357,7 @@ class AttentionBlock:
         # eg. [1, 512] = 1 half 16x32 tile
         FULL_32x32_TILE = ttnn.Tile((32, 32))
         HALF_16x32_TILE = ttnn.Tile((16, 32))
-        is_16x32_tile = (input_shape[1] // FULL_32x32_TILE.tile_shape[1]) % FULL_32x32_TILE.tile_shape[0] != 0
-        interpreted_tile = HALF_16x32_TILE if is_16x32_tile else FULL_32x32_TILE
+        interpreted_tile = FULL_32x32_TILE
         tile_height, tile_width = interpreted_tile.tile_shape
 
         # Calculate single tile size in bytes (bfloat16 = 2 bytes per element)
@@ -980,9 +978,6 @@ class AttentionBlock:
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
         bcast_pkt_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # Packet buffer for CCL broadcast
-        bcast_socket_tensor_size = (
-            (num_tiles * cb_page_size + DeepseekMetadata.aligned_size_bytes()) if forward_metadata else None
-        )
         bcast_config = DeepseekMinimalBroadcast.configure(
             mesh_device=mesh_device,
             input_tensor_mesh=input_tensor_mesh,
@@ -996,7 +991,6 @@ class AttentionBlock:
             num_links=num_links_bcast,
             fabric_config=fabric_config,
             broadcast_topology_override=broadcast_topology_override,
-            tensor_size_bytes=bcast_socket_tensor_size,
         )
 
         # SDPA CB indices

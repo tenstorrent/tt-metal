@@ -78,7 +78,6 @@ class BroadcastConfig:
         num_links=1,
         fabric_config=None,
         broadcast_topology_override=None,
-        tensor_size_bytes=None,
     ):
         self.mesh_device = mesh_device
         self.input_tensor_mesh = input_tensor_mesh
@@ -124,9 +123,7 @@ class BroadcastConfig:
                 f"Shard shape {shard_spec.shape} must be tile-aligned to tile shape ({tile_height}, {tile_width})"
             )
         self.num_pages_to_read = (shard_height // tile_height) * (shard_width // tile_width)
-        self.tensor_size_bytes = (
-            tensor_size_bytes if tensor_size_bytes is not None else self.tensor0_page_size * self.num_pages_to_read
-        )
+        self.tensor_size_bytes = self.tensor0_page_size * self.num_pages_to_read
         if self.tensor_size_bytes <= 0:
             raise ValueError("tensor_size_bytes must be greater than zero")
         if self.socket is not None:
@@ -345,15 +342,6 @@ class BroadcastConfig:
 
     def _writer_named_ct_args(self, coord):
         d = self._per_device[coord]
-        print("bcast_data_cb_id", self.cb_ids["bcast_data"])
-        print("bcast_num_pages_to_read", self.num_pages_to_read)
-        print("bcast_tensor0_page_size", self.tensor0_page_size)
-        print("bcast_num_neighbors", d["num_neighbors"])
-        print("bcast_num_links", self.num_links)
-        print("bcast_is_root", 1 if d["is_root"] else 0)
-        print("bcast_chunk_size_bytes", self.chunk_size_bytes)
-        print("bcast_last_chunk_size_bytes", self.last_chunk_size_bytes)
-        print("bcast_num_chunks", self.num_chunks)
         return [
             ("bcast_data_cb_id", self.cb_ids["bcast_data"]),
             ("bcast_num_pages_to_read", self.num_pages_to_read),
@@ -499,7 +487,6 @@ class DeepseekMinimalBroadcast:
         *,
         fabric_config=None,
         broadcast_topology_override=None,
-        tensor_size_bytes=None,
     ):
         if bcast_cb_id is None:
             raise ValueError("Expected explicit `bcast_cb_id`")
@@ -525,7 +512,6 @@ class DeepseekMinimalBroadcast:
             num_links=num_links,
             fabric_config=fabric_config,
             broadcast_topology_override=broadcast_topology_override,
-            tensor_size_bytes=tensor_size_bytes,
         )
 
     @staticmethod

@@ -124,7 +124,7 @@ struct Broadcast {
                         invalidate_l1_cache();
                         noc_async_read(
                             get_noc_addr(recv.read_ptr),
-                            get_write_ptr(CTArgs::cb0_id),  //
+                            get_write_ptr(CTArgs::cb0_id),
                             args.socket_page_size,
                             1 - noc_index);
                         noc_async_read_barrier(1 - noc_index);
@@ -132,7 +132,6 @@ struct Broadcast {
                         socket_pop_pages(recv, args.socket_num_pages);
                         socket_notify_sender(recv, 1 - noc_index);
                         update_socket_config(recv);
-
                     } else {
 #endif
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
@@ -149,6 +148,7 @@ struct Broadcast {
             // ================================================================
             if constexpr (IsWorkerCore) {
                 PacketHeaderPool::reset();
+
                 std::array<tt::tt_fabric::WorkerToFabricEdmSender, CTArgs::num_connections> connections;
                 std::array<volatile PACKET_HEADER_TYPE*, CTArgs::num_connections> headers;
                 size_t arg_idx = args.per_core_rta_arg_idx_offset;
@@ -166,6 +166,7 @@ struct Broadcast {
                         connections[connection_idx].open_finish();
                     }
                 }
+
                 const uint64_t dst_noc_base = get_noc_addr(args.my_noc_x, args.my_noc_y, args.tensor_address0, 0);
                 std::array<uint64_t, CTArgs::num_links> sem_nocs;
                 std::array<volatile tt_l1_ptr uint32_t*, CTArgs::num_links> sem_ptrs;
@@ -174,6 +175,7 @@ struct Broadcast {
                         safe_get_noc_addr(args.my_noc_x, args.my_noc_y, args.sem_bank_addrs[link_idx], 0);
                     sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addrs[link_idx]);
                 }
+
                 auto send_chunk = [&](uint32_t connection_idx,
                                       uint32_t link_idx,
                                       uint32_t src_base_addr,
@@ -190,6 +192,7 @@ struct Broadcast {
                     connections[connection_idx].send_payload_flush_non_blocking_from_address(
                         reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
                 };
+
                 std::array<uint32_t, CTArgs::num_links> link_counters = {};
                 auto forward_chunks = [&](uint32_t src_base_addr, auto&& wait_for_link_chunk) {
                     uint32_t current_link = 0;
@@ -197,9 +200,11 @@ struct Broadcast {
                     for (uint32_t chunk_idx = 0; chunk_idx < CTArgs::num_chunks; chunk_idx++) {
                         link_counters[current_link]++;
                         wait_for_link_chunk(current_link, link_counters[current_link]);
+
                         const uint32_t chunk_size = (chunk_idx < CTArgs::num_chunks - 1)
                                                         ? CTArgs::chunk_size_bytes
                                                         : CTArgs::last_chunk_size_bytes;
+
                         for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
                             const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + current_link;
                             send_chunk(connection_idx, current_link, src_base_addr, chunk_idx, chunk_size);
@@ -223,11 +228,11 @@ struct Broadcast {
                 //   * leaf node (num_neighbors == 0), where forwarding loops are no-ops.
                 // In the leaf case, num_links remains configured (> 0), wait/reset semantics are still
                 // preserved for non-root nodes, and no fabric send occurs due to zero neighbors.
+
                 if constexpr (CTArgs::is_root) {
                     cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                     const uint32_t src = get_read_ptr(CTArgs::cb0_id);
-                    constexpr uint32_t tensor_size_bytes =
-                        (CTArgs::num_chunks - 1) * CTArgs::chunk_size_bytes + CTArgs::last_chunk_size_bytes;
+                    constexpr uint32_t tensor_size_bytes = CTArgs::tensor0_page_size * CTArgs::num_pages_to_read;
                     noc_async_write(src, dst_noc_base, tensor_size_bytes);
                     auto no_wait = [&](uint32_t, uint32_t) {};
                     forward_chunks(src, no_wait);
@@ -244,9 +249,11 @@ struct Broadcast {
                         }
                     }
                 }
+
                 for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
                     connections[i].close();
                 }
+
                 noc_async_full_barrier();
             }
 #elif defined(COMPILE_FOR_TRISC)

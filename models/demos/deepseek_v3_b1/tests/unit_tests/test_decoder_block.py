@@ -131,7 +131,6 @@ def create_decoder_golden_tensors(
     num_routed_experts: int = 0,
     rigged_group_ids=None,
     rigged_expert_ids=None,
-    forward_metadata: bool = False,
 ):
     """Build golden PyTorch reference tensors for decoder validation.
 
@@ -243,7 +242,6 @@ def create_decoder_golden_tensors(
         "golden_moe_down_proj_dict": golden_moe_down_proj_dict,
         "rigged_group_ids": rigged_group_ids,
         "rigged_expert_ids": rigged_expert_ids,
-        "forward_metadata": forward_metadata,
     }
 
 

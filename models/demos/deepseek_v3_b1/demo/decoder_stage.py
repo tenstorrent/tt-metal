@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, create_metadata_tensor
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert, SharedExpert
@@ -59,6 +60,7 @@ def create_decoder_block_tensors(
     is_moe: bool = True,
     validate_debug_tensors: bool = False,
     torch_input=None,
+    forward_metadata=False,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -265,10 +267,17 @@ def create_decoder_block_tensors(
                 mesh_mapper=mesh_mapper,
             )
 
+    if forward_metadata:
+        padding = DeepseekMetadata.aligned_size_bytes() // dtype_size(ttnn.bfloat16)
+        padded_shape = (1, K + padding)
+        padded_input = torch.nn.functional.pad(torch_input, (0, padding), value=0)
+    else:
+        padded_shape = shape
+        padded_input = torch_input
     # Attention input/intermediate/output mesh tensors
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}), shape, ttnn.ShardOrientation.ROW_MAJOR
+        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}), padded_shape, ttnn.ShardOrientation.ROW_MAJOR
     )
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -276,9 +285,9 @@ def create_decoder_block_tensors(
     for row in range(mesh_rows):
         for col in range(mesh_cols):
             if row == sender_row and col == sender_col:
-                device_tensors.append(torch_input)
+                device_tensors.append(padded_input)
             else:
-                device_tensors.append(torch.zeros_like(torch_input))
+                device_tensors.append(torch.zeros_like(padded_input))
 
     input_tensor_mesh = ttnn.from_torch(
         torch.cat(device_tensors, dim=0),
@@ -356,15 +365,10 @@ def create_decoder_block_tensors(
     )
 
     # Metadata / position IDs
-    pos_core_grid = ttnn.CoreRangeSet(
+    metadata_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
     )
-    pos_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_metadata_tensor = create_metadata_tensor(submesh, pos_core_grid, metadata)
+    ttnn_metadata_tensor = create_metadata_tensor(submesh, metadata_core_grid, metadata)
 
     # KV cache (ND sharded DRAM)
     program_config = FlashMLADecode.ProgramConfig(k_chunk_size=128, exp_approx_mode=False)
@@ -669,6 +673,7 @@ def create_decoder_block_tensors(
         "num_gate_proj_cores": num_gate_proj_cores,
         "per_core_down_proj_N": per_core_down_proj_N,
         "mcast_grid": mcast_grid,
+        "forward_metadata": forward_metadata,
         # Intermediate CPU tensors (for golden-reference builders)
         "torch_input": torch_input,
         "torch_kv_cache": torch_kv_cache,
@@ -904,6 +909,7 @@ class DecoderStage(StageKind):
                 weights=self._weights,
                 metadata=self._metadata,
                 num_slots=self._num_slots,
+                forward_metadata=self._forward_metadata,
             )
         else:
             d = create_decoder_block_tensors(
@@ -919,6 +925,7 @@ class DecoderStage(StageKind):
                 metadata=self._metadata,
                 num_slots=self._num_slots,
                 is_moe=False,
+                forward_metadata=self._forward_metadata,
             )
         ttnn.synchronize_device(mesh_device)
 
