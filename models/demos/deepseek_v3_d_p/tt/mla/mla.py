@@ -16,6 +16,26 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
 class ttMLA:
+    MLA_WEIGHT_NAMES = [
+        "q_a_layernorm",
+        "kv_a_layernorm",
+        "q_a_proj",
+        "q_b_proj",
+        "kv_a_proj_with_mqa",
+        "wkv_b1",
+        "wkv_b2",
+        "o_proj",
+    ]
+
+    @staticmethod
+    def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
+        """Check if all 8 MLA weight cache files exist."""
+        for name in ttMLA.MLA_WEIGHT_NAMES:
+            if not list(cache_path.glob(f"{cache_name_prefix}.{name}*.tensorbin")):
+                logger.debug(f"TTNN cache missing: {cache_name_prefix}.{name}")
+                return False
+        return True
+
     @staticmethod
     def build_ttnn_cache(
         state_dict: dict,
