@@ -33,6 +33,9 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 
 ENV_NUM_LINKS = "CCL_ALL_REDUCE_NUM_LINKS"
 ENV_MAX_PAYLOAD_SIZE = "CCL_ALL_REDUCE_MAX_PAYLOAD_SIZE_BYTES"
+ALL_REDUCE_OUTPUT_WIDTH = 2048
+ALL_REDUCE_OUTPUT_SHAPE = [1, ALL_REDUCE_OUTPUT_WIDTH]
+ALL_REDUCE_INPUT_SHARD_SHAPE = (1, ALL_REDUCE_OUTPUT_WIDTH)
 
 
 def _parse_env_int(name: str, value: str) -> int:
@@ -57,6 +60,14 @@ def _get_num_links_params(defaults: list[int]) -> list[int]:
     if value is None or value.strip() == "":
         return defaults
     return [_parse_env_int(ENV_NUM_LINKS, value)]
+
+
+def _get_intermediate_shape(input_shard_shape: tuple[int, int]) -> list[int]:
+    if input_shard_shape[0] != 1:
+        raise ValueError(f"Expected input_shard_shape height 1, got {input_shard_shape[0]}")
+    if input_shard_shape[1] % 32 != 0:
+        raise ValueError(f"Expected input_shard_shape width divisible by 32, got {input_shard_shape[1]}")
+    return [32, input_shard_shape[1] // 32]
 
 
 MAX_PAYLOAD_SIZE = _get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
@@ -152,7 +163,7 @@ def build_all_reduce_test_inputs(
         mesh_mapper=ttnn.create_mesh_mapper(mesh_device, mesh_mapper_config),
     )
 
-    intermediate_shape = [32, 224]
+    intermediate_shape = _get_intermediate_shape(input_shard_shape)
     intermediate_shard_spec = ttnn.ShardSpec(
         receiver_shard_grid,
         tuple(intermediate_shape),
@@ -198,8 +209,8 @@ def build_all_reduce_test_inputs(
     [
         (
             2,
-            [1, 7168],
-            (1, 7168),
+            ALL_REDUCE_OUTPUT_SHAPE,
+            ALL_REDUCE_INPUT_SHARD_SHAPE,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
     ],
@@ -357,8 +368,8 @@ def test_ccl_all_reduce(
     [
         (
             2,
-            [1, 7168],
-            (1, 7168),
+            ALL_REDUCE_OUTPUT_SHAPE,
+            ALL_REDUCE_INPUT_SHARD_SHAPE,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
     ],

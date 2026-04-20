@@ -34,6 +34,7 @@ CHIP_FREQ_RE = re.compile(r"CHIP_FREQ\[MHz\]:\s*(\d+(?:\.\d+)?)")
 class CCLConfig:
     title: str
     test_target: str
+    benchmark_shape: tuple[int, int]
     env_num_links: str
     env_max_payload_size: str
     top_level_zones: tuple[str, ...]
@@ -65,6 +66,7 @@ CCL_CONFIGS = {
     "all_gather": CCLConfig(
         title="CCL all-gather trace perf matrix",
         test_target=("models/demos/deepseek_v3_b1/tests/unit_tests/test_ccl_all_gather.py::" "test_ccl_all_gather"),
+        benchmark_shape=(1, 7168),
         env_num_links="CCL_ALL_GATHER_NUM_LINKS",
         env_max_payload_size="CCL_ALL_GATHER_MAX_PAYLOAD_SIZE_BYTES",
         top_level_zones=("ALLGATHER_GATHER", "ALLGATHER_TRANSPORT"),
@@ -76,6 +78,7 @@ CCL_CONFIGS = {
     "all_reduce": CCLConfig(
         title="CCL all-reduce trace perf matrix",
         test_target=("models/demos/deepseek_v3_b1/tests/unit_tests/test_ccl_all_reduce.py::" "test_ccl_all_reduce"),
+        benchmark_shape=(1, 2048),
         env_num_links="CCL_ALL_REDUCE_NUM_LINKS",
         env_max_payload_size="CCL_ALL_REDUCE_MAX_PAYLOAD_SIZE_BYTES",
         top_level_zones=("CCL_SENDER_WRITER", "CCL_RECEIVER", "CCL_COMPUTE"),
@@ -186,6 +189,10 @@ def format_markdown_table(headers: list[str], rows: list[list[str]]) -> str:
     for row in rows:
         lines.append(fmt_row(row))
     return "\n".join(lines)
+
+
+def format_shape(shape: tuple[int, int]) -> str:
+    return f"[{shape[0]}, {shape[1]}]"
 
 
 def format_float(value: float | None, decimals: int) -> str:
@@ -454,6 +461,7 @@ def render_summary(
         "",
         f"Timestamp: {timestamp}",
         f"Test target: {test_target}",
+        f"Configured benchmark shape: {format_shape(config.benchmark_shape)}",
         f"Trace id: {TRACE_ID}",
         "Source: profile_log_device.csv only (top-level zones only; no micro-profiling).",
         "Conversion: us = cycles / CHIP_FREQ[MHz], ns = cycles * 1000 / CHIP_FREQ[MHz].",
@@ -526,6 +534,7 @@ def render_details(
         "",
         f"Timestamp: {timestamp}",
         f"Test target: {test_target}",
+        f"Configured benchmark shape: {format_shape(config.benchmark_shape)}",
         f"Trace id: {TRACE_ID}",
         "Source: profile_log_device.csv only (top-level zones only; no micro-profiling).",
         "",
