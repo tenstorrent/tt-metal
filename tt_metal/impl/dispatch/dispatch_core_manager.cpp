@@ -269,6 +269,26 @@ std::optional<tt_cxy_pair> dispatch_core_manager::get_closest_available_dispatch
         }
     }
 
+    // fabric_mux_cores in the core descriptor are not part of logical_dispatch_cores (the deque that backs
+    // get_next_available_dispatch_core), but they are still reserved tensixes for fabric relay / mux.
+    // Exclude them here: otherwise get_closest_available_dispatch_core_to_pcie can pick the tensix closest
+    // to PCIe that overlaps the fabric-mux row/column (e.g. N300 nebula_x1 bottom-row layout), colliding with
+    // live fabric or dispatch and corrupting device state.
+    const std::vector<CoreCoord>& fabric_mux_reserved =
+        tt::get_logical_fabric_mux_cores(env_, device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_);
+    if (!fabric_mux_reserved.empty()) {
+        unused_cores.erase(
+            std::remove_if(
+                unused_cores.begin(),
+                unused_cores.end(),
+                [&fabric_mux_reserved](const CoreCoord& c) {
+                    return std::any_of(fabric_mux_reserved.begin(), fabric_mux_reserved.end(), [&](const CoreCoord& r) {
+                        return r.x == c.x && r.y == c.y;
+                    });
+                }),
+            unused_cores.end());
+    }
+
     if (unused_cores.empty()) {
         return std::nullopt;
     }
