@@ -7,13 +7,13 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
+import torch
+
 import ttnn
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from types import EllipsisType
-
-    import torch
 
 
 def typed_tensor(
@@ -298,21 +298,159 @@ def _to_torch_zero_copy(t: ttnn.Tensor) -> torch.Tensor:
         return ttnn.to_torch(t)
 
 
+_TTNN_TO_TORCH_DTYPE = {
+    ttnn.bfloat16: torch.bfloat16,
+    ttnn.float32: torch.float32,
+    ttnn.uint8: torch.uint8,
+    ttnn.uint16: torch.int16,
+    ttnn.int32: torch.int32,
+}
+
+
+def _host_buffer_to_torch(buf, padded_shape: list[int], tt_dtype: ttnn.DataType) -> torch.Tensor:
+    """Zero-copy conversion of a HostBuffer to a torch tensor.
+
+    Uses the DLPack protocol to get a uint8 view of the raw buffer memory,
+    then reinterprets it as the correct dtype and reshapes.
+    """
+    torch_dtype = _TTNN_TO_TORCH_DTYPE[tt_dtype]
+    raw = torch.from_dlpack(buf)
+    return raw.view(torch_dtype).reshape(padded_shape)
+
+
+def float_to_unit_range(t: ttnn.Tensor) -> ttnn.Tensor:
+    """On-device denormalization: map from [-1.0, 1.0] to [0.0, 1.0]."""
+    t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+    t = ttnn.add(t, 1.0)
+    t = ttnn.multiply(t, 0.5)
+    t = ttnn.clamp(t, min=0.0, max=1.0)
+    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+    return t
+
+
+def float_to_uint8(t: ttnn.Tensor) -> ttnn.Tensor:
+    """On-device float-to-uint8: map from [-1.0, 1.0] to [0, 255]"""
+    t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+    t = ttnn.add(t, 1.0)  # shift to [0, 2.0]
+    t = ttnn.multiply(t, 0.5 * 255.0)  # scale to [0, 1.0] then [0, 255]
+    t = ttnn.clamp(t, min=0.0, max=255.0)
+    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.typecast(t, ttnn.uint8)
+
+
+def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[int, ...]) -> int:
+    """Return the mesh axis that spans multiple hosts (0 or 1).
+
+    In a 2D mesh, one axis typically spans hosts (inter-host) while the other
+    is fully local to each host (intra-host).  Finds a local coordinate first,
+    then checks whether varying each axis stays local.
+    """
+    from ttnn._ttnn.multi_device import MeshCoordinate
+
+    # Find any coordinate that is local to this host.
+    ref_r, ref_c = 0, 0
+    for r in range(mesh_shape[0]):
+        for c in range(mesh_shape[1]):
+            if view.is_local(MeshCoordinate(r, c)):
+                ref_r, ref_c = r, c
+                break
+        else:
+            continue
+        break
+
+    # Check axis 0: vary row while keeping the local column fixed.
+    if mesh_shape[0] > 1:
+        if not all(view.is_local(MeshCoordinate(r, ref_c)) for r in range(mesh_shape[0])):
+            return 0
+    # Check axis 1: vary column while keeping the local row fixed.
+    if mesh_shape[1] > 1:
+        if not all(view.is_local(MeshCoordinate(ref_r, c)) for c in range(mesh_shape[1])):
+            return 1
+    # Both axes are fully local — shouldn't happen in a true distributed env.
+    return 0
+
+
+def _reassemble_2d(
+    mesh_coords: list,
+    shards: list[torch.Tensor],
+    shard_shape: list[int],
+    mesh_shape: tuple[int, ...],
+    concat_dims: list[int | None],
+    permute: tuple[int, ...] | None = None,
+    dtype: torch.dtype | None = None,
+) -> torch.Tensor:
+    """Reassemble per-device shards into a single tensor for a 2D mesh.
+
+    For the common case where both axes are concatenated, writes each shard
+    directly into a pre-allocated output buffer.  When *permute* and/or *dtype*
+    are given the permutation and type conversion are fused into the scatter
+    write, halving total memory traffic.
+    """
+    d0, d1 = concat_dims
+
+    if d0 is not None and d1 is not None:
+        s0, s1 = shard_shape[d0], shard_shape[d1]
+        full_shape = list(shard_shape)
+        full_shape[d0] *= mesh_shape[0]
+        full_shape[d1] *= mesh_shape[1]
+        ndim = len(full_shape)
+
+        if permute is not None:
+            out_shape = [full_shape[p] for p in permute]
+            out_dtype = dtype if dtype is not None else shards[0].dtype
+            perm_list = list(permute)
+            d0_out = perm_list.index(d0)
+            d1_out = perm_list.index(d1)
+
+            out = torch.empty(out_shape, dtype=out_dtype)
+            for coord, shard in zip(mesh_coords, shards):
+                r, c = int(coord[0]), int(coord[1])
+                slices = [slice(None)] * ndim
+                slices[d0_out] = slice(r * s0, (r + 1) * s0)
+                slices[d1_out] = slice(c * s1, (c + 1) * s1)
+                out[tuple(slices)] = shard.permute(*permute).contiguous()
+            return out
+
+        out_dtype = dtype if dtype is not None else shards[0].dtype
+        out = torch.empty(full_shape, dtype=out_dtype)
+        for coord, shard in zip(mesh_coords, shards):
+            r, c = int(coord[0]), int(coord[1])
+            slices = [slice(None)] * ndim
+            slices[d0] = slice(r * s0, (r + 1) * s0)
+            slices[d1] = slice(c * s1, (c + 1) * s1)
+            out[tuple(slices)] = shard
+        return out
+
+    if d0 is not None:
+        by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][0]))
+        return torch.cat([s for _, s in by_pos], dim=d0)
+    if d1 is not None:
+        by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][1]))
+        return torch.cat([s for _, s in by_pos], dim=d1)
+    return shards[0]
+
+
 def fast_device_to_host(
     tt_tensor: ttnn.Tensor,
     mesh_device: ttnn.MeshDevice,
     concat_dims: list[int | None],
     ccl_manager=None,
-) -> torch.Tensor:
+    root: int | None = None,
+    *,
+    pre_transfer_fn: Callable[[ttnn.Tensor], ttnn.Tensor] | None = None,
+    permute: tuple[int, ...] | None = None,
+    dtype: torch.dtype | None = None,
+) -> torch.Tensor | None:
     """Fast D2H transfer using async DMA and zero-copy to_torch.
 
     On a single-host system, this avoids the on-device all_gather by reading
     all per-device shards concurrently with async DMA, converting to PyTorch
     with zero-copy when possible, and concatenating on host.
 
-    On a multi-host (distributed) system, each host can only access its local
-    devices, so this falls back to on-device all_gather via *ccl_manager*
-    followed by a local-device read.
+    On a multi-host (distributed) system, this uses a hybrid approach: an
+    on-device all_gather for the inter-host axis only, then fast async DMA +
+    zero-copy for local shards with host-side concatenation for the intra-host
+    axis.
 
     Args:
         tt_tensor: Multi-device ttnn tensor on ``mesh_device``.
@@ -322,18 +460,19 @@ def fast_device_to_host(
             along dim 3 for mesh axis 0 and dim 4 for mesh axis 1.
         ccl_manager: Optional :class:`CCLManager` instance.  Required for
             multi-host environments where only local devices are accessible.
+        root: If set, only the host with this MPI rank performs the D2H
+            transfer and returns the assembled tensor; all other ranks return
+            ``None``.  If ``None`` (default), all ranks perform D2H.
+        pre_transfer_fn: Optional on-device transformation applied just before
+            the DMA read.  For multi-host, runs after ``mesh_partition``; for
+            single-host, runs right before ``.cpu()``.  Typical use is
+            ``float_to_uint8`` to shrink data before the PCIe transfer.
+        permute: If set, each shard is permuted before being written into the
+            output.  Fuses the permutation into the scatter write so that no
+            intermediate tensor in the original layout is ever materialised.
+        dtype: Output dtype.  When combined with ``permute``, the dtype
+            conversion is fused into the scatter write (single-pass copy).
     """
-    # Multi-host: can only access local devices, must all_gather on device first.
-    if ttnn.using_distributed_env():
-        if ccl_manager is None:
-            msg = "fast_device_to_host requires ccl_manager in a distributed " "(multi-host) environment"
-            raise ValueError(msg)
-        return ccl_manager.device_to_host(tt_tensor, concat_dims)
-
-    from concurrent.futures import ThreadPoolExecutor
-
-    import torch
-
     mesh_shape = tuple(mesh_device.shape)
 
     if len(mesh_shape) != 2:
@@ -345,76 +484,117 @@ def fast_device_to_host(
             f"concat_dims must have exactly 2 elements for a 2D mesh, got {len(concat_dims)}: {concat_dims}"
         )
 
-    # Get mesh coordinates before issuing DMA — topology is on the original
-    # device tensor and maps each shard index to its (row, col) mesh position.
-    mesh_coords = list(tt_tensor.tensor_topology().mesh_coords())
-    device_tensors = ttnn.get_device_tensors(tt_tensor)
+    # --- Multi-host: hybrid on-device collective + fast local DMA -----------
+    if ttnn.using_distributed_env():
+        if ccl_manager is None:
+            msg = "fast_device_to_host requires ccl_manager in a distributed (multi-host) environment"
+            raise ValueError(msg)
 
-    # Async DMA: issue all transfers then sync once
-    host_tensors = [dt.cpu(blocking=False) for dt in device_tensors]
+        view = mesh_device.get_view()
+        rank = int(ttnn.distributed_context_get_rank())
+
+        inter_host_axis = _get_inter_host_axis(mesh_device, view, mesh_shape)
+        intra_host_axis = 1 - inter_host_axis
+
+        # Step 1: On-device all_gather + repeat + mesh_partition.
+        # All_gather replicates the inter-host axis.  Repeat + mesh_partition
+        # then re-shard it so every local device holds *unique* data,
+        # maximising PCIe bandwidth during the DMA read.
+        gathered_tensor = tt_tensor
+        inter_dim = concat_dims[inter_host_axis]
+        if inter_dim is not None and mesh_shape[inter_host_axis] > 1:
+            gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.TILE_LAYOUT)
+            gathered_tensor = ccl_manager.all_gather(
+                gathered_tensor,
+                dim=inter_dim,
+                mesh_axis=inter_host_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
+            )
+            n_hosts = int(ttnn.distributed_context_get_size())
+            if n_hosts > 1:
+                repeat_dims = [1] * len(gathered_tensor.shape)
+                repeat_dims[inter_dim] = n_hosts
+                gathered_tensor = ttnn.repeat(gathered_tensor, repeat_dims)
+                gathered_tensor = ttnn.mesh_partition(gathered_tensor, dim=inter_dim, cluster_axis=inter_host_axis)
+            if pre_transfer_fn is not None:
+                gathered_tensor = pre_transfer_fn(gathered_tensor)
+            else:
+                gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        elif pre_transfer_fn is not None:
+            gathered_tensor = pre_transfer_fn(gathered_tensor)
+
+        # Step 2: Only root rank (if specified) does D2H.
+        if root is not None and rank != root:
+            return None
+
+        # Step 3: DMA all local shards and reassemble on host.
+        # Single .cpu() on the mesh tensor batches all local DMA reads into
+        # one C++ dispatch — the reader thread pool processes all device
+        # completion queues in parallel.
+        host_tensor = gathered_tensor.cpu(blocking=False)
+        ttnn.synchronize_device(mesh_device)
+
+        # Extract local shard buffers via get_shard (zero-copy, no MPI).
+        host_mesh_coords = list(host_tensor.tensor_topology().mesh_coords())
+        distributed_buf = host_tensor.host_buffer()
+        tt_dtype = host_tensor.dtype
+        padded_shape = list(host_tensor.padded_shape)
+        logical_shape = list(host_tensor.shape)
+        trim = tuple(slice(0, d) for d in logical_shape)
+
+        local_coords_and_bufs = []
+        for c in host_mesh_coords:
+            if not view.is_local(c):
+                continue
+            buf = distributed_buf.get_shard(c)
+            if buf is not None:
+                local_coords_and_bufs.append((c, buf))
+
+        shards = [_host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim] for _, buf in local_coords_and_bufs]
+
+        # Build local mesh shape and 0-based coordinates for _reassemble_2d.
+        local_inter_positions = sorted({int(c[inter_host_axis]) for c, _ in local_coords_and_bufs})
+        local_intra_positions = sorted({int(c[intra_host_axis]) for c, _ in local_coords_and_bufs})
+        local_mesh_shape = [0, 0]
+        local_mesh_shape[inter_host_axis] = len(local_inter_positions)
+        local_mesh_shape[intra_host_axis] = len(local_intra_positions)
+        local_mesh_shape = tuple(local_mesh_shape)
+
+        inter_remap = {pos: i for i, pos in enumerate(local_inter_positions)}
+        intra_remap = {pos: i for i, pos in enumerate(local_intra_positions)}
+        local_coords = []
+        for c, _ in local_coords_and_bufs:
+            coord = [0, 0]
+            coord[inter_host_axis] = inter_remap[int(c[inter_host_axis])]
+            coord[intra_host_axis] = intra_remap[int(c[intra_host_axis])]
+            local_coords.append(tuple(coord))
+
+        return _reassemble_2d(local_coords, shards, logical_shape, local_mesh_shape, concat_dims, permute, dtype)
+
+    # --- Single-host: async DMA on all devices + host-side concat -----------
+
+    # Grab mesh coordinates from the device tensor before DMA.
+    mesh_coords = list(tt_tensor.tensor_topology().mesh_coords())
+
+    if pre_transfer_fn is not None:
+        tt_tensor = pre_transfer_fn(tt_tensor)
+
+    # Single .cpu() on the mesh tensor batches all DMA reads into one C++
+    # dispatch — host buffers are allocated in parallel and the reader thread
+    # pool processes all completion-queue reads concurrently.
+    host_tensor = tt_tensor.cpu(blocking=False)
     ttnn.synchronize_device(mesh_device)
 
-    # Zero-copy to_torch when available, otherwise standard to_torch
-    with ThreadPoolExecutor(max_workers=len(host_tensors)) as pool:
-        shards = list(pool.map(_to_torch_zero_copy, host_tensors))
+    # Extract per-shard host tensors (single-host: just wraps each shard).
+    host_shard_tensors = ttnn.get_device_tensors(host_tensor)
 
-    # Trim physical (tile-padded) shape to logical shape — view, no copy
-    logical_shape = list(host_tensors[0].shape)
-    shards = [s[tuple(slice(0, d) for d in logical_shape)] for s in shards]
+    # Zero-copy to_torch, trimmed to logical (un-padded) shape.
+    logical_shape = list(host_shard_tensors[0].shape)
+    trim = tuple(slice(0, d) for d in logical_shape)
+    shards = [_to_torch_zero_copy(s)[trim] for s in host_shard_tensors]
 
-    # Validate that topology coordinates and device tensors are consistent.
-    n_coords, n_shards = len(mesh_coords), len(shards)
-    expected = mesh_shape[0] * mesh_shape[1]
-    if n_coords != n_shards:
-        raise ValueError(
-            f"mesh_coords length ({n_coords}) != device shards length ({n_shards}); "
-            "tensor_topology and get_device_tensors are out of sync"
-        )
-    if n_shards != expected:
-        raise ValueError(f"Expected {expected} shards for mesh shape {mesh_shape}, got {n_shards}")
-
-    # Build coord→shard mapping using explicit mesh coordinates rather than
-    # assuming get_device_tensors() returns shards in row-major order.
-    shards_by_coord = {(int(c[0]), int(c[1])): s for c, s in zip(mesh_coords, shards)}
-
-    if len(shards_by_coord) != n_shards:
-        raise ValueError(
-            f"Duplicate mesh coordinates detected: {n_shards} shards but only "
-            f"{len(shards_by_coord)} unique coordinates"
-        )
-
-    # Validate: if a mesh axis is not gathered (concat_dims[axis] is None)
-    # and has more than one device, the tensor must be replicated along that
-    # axis — otherwise we'd silently drop unique shards.
-    placements = list(tt_tensor.tensor_topology().placements())
-    for axis in range(len(concat_dims)):
-        if concat_dims[axis] is None and mesh_shape[axis] > 1:
-            if not isinstance(placements[axis], ttnn.PlacementReplicate):
-                msg = (
-                    f"concat_dims[{axis}] is None (no gather) but mesh axis {axis} "
-                    f"(size {mesh_shape[axis]}) is not replicated — this would drop shards."
-                )
-                raise ValueError(msg)
-
-    # Reassemble from 2D mesh using explicit coordinate lookup.
-    if concat_dims[0] is not None and concat_dims[1] is not None:
-        rows = []
-        for r in range(mesh_shape[0]):
-            row_shards = [shards_by_coord[(r, c)] for c in range(mesh_shape[1])]
-            rows.append(torch.cat(row_shards, dim=concat_dims[1]))
-        return torch.cat(rows, dim=concat_dims[0])
-    elif concat_dims[0] is not None:
-        return torch.cat(
-            [shards_by_coord[(r, 0)] for r in range(mesh_shape[0])],
-            dim=concat_dims[0],
-        )
-    elif concat_dims[1] is not None:
-        return torch.cat(
-            [shards_by_coord[(0, c)] for c in range(mesh_shape[1])],
-            dim=concat_dims[1],
-        )
-    else:
-        return shards[0]
+    return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype)
 
 
 def upsample(
