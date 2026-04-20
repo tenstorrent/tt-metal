@@ -1943,22 +1943,32 @@ float lookup_fabric_bw(uint32_t packet_size, const std::map<uint32_t, std::array
         return 1.0f;  // fallback to avoid division by zero
     }
 
-    auto upper = bw_map.lower_bound(packet_size);
-    if (upper == bw_map.end()) {
-        // Beyond last entry: use last
-        return std::prev(bw_map.end())->second[arch_index];
-    }
-    if (upper == bw_map.begin()) {
-        // Before first entry: use first
-        return bw_map.begin()->second[arch_index];
+    auto exact = bw_map.find(packet_size);
+    if (exact != bw_map.end()) {
+        return exact->second[arch_index];
     }
 
-    auto lower = std::prev(upper);
-    // Pick the closer entry
-    if (packet_size - lower->first <= upper->first - packet_size) {
-        return lower->second[arch_index];
+    // No exact match — use nearest but warn that the estimate may be off.
+    float result;
+    auto upper = bw_map.lower_bound(packet_size);
+    if (upper == bw_map.end()) {
+        result = std::prev(bw_map.end())->second[arch_index];
+    } else if (upper == bw_map.begin()) {
+        result = bw_map.begin()->second[arch_index];
+    } else {
+        auto lower = std::prev(upper);
+        result = (packet_size - lower->first <= upper->first - packet_size) ? lower->second[arch_index]
+                                                                            : upper->second[arch_index];
     }
-    return upper->second[arch_index];
+
+    log_warning(
+        tt::LogOp,
+        "Fabric BW roofline: no measured data for packet_size={} bytes; using nearest match ({:.2f} GB/s). "
+        "Estimate may be unreliable.",
+        packet_size,
+        result);
+
+    return result;
 }
 
 float estimate_fabric_transfer_ns(

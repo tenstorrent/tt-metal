@@ -351,30 +351,27 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
     // transfer time as ideal_compute_cycles so the constructor's max() picks
     // the true bottleneck.
     //
-    // IMPORTANT: All N devices multicast simultaneously, so fabric links are
-    // shared. The bottleneck link is the most congested one — it carries
-    // traffic from multiple senders. We model the total bytes through that
-    // bottleneck link, not just one device's contribution.
-    //
-    // Ideal algorithms by topology (conceptual, not kernel-specific):
+    // We model from the perspective of the worst-case device: the one that
+    // takes longest to receive all (N-1) slices. AllGather finishes when
+    // the last device completes.
     //
     // LINE topology:
-    //   Each device multicasts S bytes to all others. Both directions run in
-    //   parallel. The bottleneck link (near the center) carries traffic from
-    //   ceil(N/2) senders, so bottleneck_bytes = ceil(N/2) * S.
-    //   Latency = (N-1) hops for the farthest slice.
+    //   Edge devices (0 and N-1) have only ONE incoming link. All (N-1)
+    //   slices must arrive through that single link. This is the hard
+    //   bottleneck — no algorithm can avoid it.
+    //   bottleneck_bytes = (N-1) * S.  Latency = (N-1) hops.
     //
     // RING topology — pick the better of two strategies:
-    //   Option A (low latency, high BW):
-    //     Each device multicasts full slice S to its half-ring (ceil(N/2) hops).
-    //     The bottleneck link carries traffic from ceil(N/2) senders.
+    //   Option A (half-ring multicast, low latency):
+    //     Each device multicasts S in both directions, each covering half
+    //     the ring. Each device's busier incoming link receives ceil(N/2)
+    //     slices.
     //     bottleneck_bytes = ceil(N/2) * S, latency = ceil(N/2) hops.
     //
-    //   Option B (low BW, high latency):
-    //     Each device splits its slice in half and multicasts S/2 in each
-    //     direction around the full ring (N-1 hops). The bottleneck link
-    //     carries traffic from all N senders (each sending S/2 one way).
-    //     bottleneck_bytes = N * S/2, latency = (N-1) hops.
+    //   Option B (split, full-ring, lower BW):
+    //     Each device sends S/2 in each direction around the full ring.
+    //     By symmetry, each device receives (N-1)*S/2 from each direction.
+    //     bottleneck_bytes = (N-1) * S/2, latency = (N-1) hops.
     //
     //   fabric_ns = min(time_A, time_B)
     // =========================================================================
@@ -397,8 +394,9 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
     const int64_t input_size_bytes =
         static_cast<int64_t>(input_tensor.physical_volume()) * static_cast<int64_t>(input_tensor.element_size());
 
-    // --- Assumed packet size for BW map lookup (easy to edit) ---
-    const uint32_t packet_size = 4096;
+    // --- Packet size for BW map lookup ---
+    const uint32_t packet_size =
+        static_cast<uint32_t>(std::bit_floor(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes()));
 
     const uint32_t N = args.ring_size;
     const uint32_t num_links = args.num_links;
@@ -419,16 +417,17 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
             bottleneck_bytes_a, num_links, packet_size, /*is_multicast=*/true, half_N, arch);
 
         // Option B: split slice, multicast S/2 in each direction around full ring.
-        // Bottleneck link carries all N senders * S/2 bytes each.
-        const int64_t bottleneck_bytes_b = static_cast<int64_t>(N) * (input_size_bytes / 2);
+        // Bottleneck link carries N-1 senders * S/2 bytes each (source's stream
+        // doesn't traverse its own outgoing link).
+        const int64_t bottleneck_bytes_b = tt::div_up(static_cast<int64_t>(N - 1) * input_size_bytes, int64_t{2});
         const float time_b = ttnn::ccl::estimate_fabric_transfer_ns(
             bottleneck_bytes_b, num_links, packet_size, /*is_multicast=*/true, N - 1, arch);
 
         fabric_time_ns = std::min(time_a, time_b);
     } else {
-        // Line/Linear/Mesh topology: each device multicasts S to all others.
-        // Bottleneck link (near center) carries ceil(N/2) senders * S bytes.
-        const int64_t bottleneck_bytes = static_cast<int64_t>(half_N) * input_size_bytes;
+        // Line/Linear/Mesh topology: edge device has one link and must
+        // receive all (N-1) slices through it.
+        const int64_t bottleneck_bytes = static_cast<int64_t>(N - 1) * input_size_bytes;
         fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(
             bottleneck_bytes, num_links, packet_size, /*is_multicast=*/true, N - 1, arch);
     }
