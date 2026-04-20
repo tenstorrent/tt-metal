@@ -38,7 +38,7 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
 #ifdef ARCH_QUASAR
-            dfb.read_in(noc, src_dram, {.bank_id = src_bank_id, .addr = tlocal_src_addr});
+            noc.async_read<experimental::Noc::TxnIdMode::ENABLED>(src_dram, dfb, {.bank_id = src_bank_id, .addr = tlocal_src_addr}, {});
 #else
             dfb.reserve_back(ublock_size_tiles);
             noc.async_read(src_dram, dfb, ublock_size_bytes, {.bank_id = src_bank_id, .addr = tlocal_src_addr}, {});
@@ -48,7 +48,9 @@ void kernel_main() {
             tlocal_src_addr += dfb.get_stride_size();
         }
         dfb.finish();
-    } else {
+    }
+#ifndef ARCH_QUASAR
+    else {
         experimental::CircularBuffer cb(cb_id);
         uint32_t ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
 
@@ -60,4 +62,5 @@ void kernel_main() {
             src_addr += ublock_size_bytes;
         }
     }
+#endif
 }

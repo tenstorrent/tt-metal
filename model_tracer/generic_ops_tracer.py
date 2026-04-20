@@ -83,6 +83,18 @@ def get_base_dir():
 BASE_DIR = get_base_dir()
 
 
+def get_python_cmd():
+    """Return the preferred Python interpreter for tt-metal tooling."""
+    python_env_path = os.path.join(BASE_DIR, "python_env/bin/python")
+    if os.path.exists(python_env_path):
+        return python_env_path
+
+    if sys.executable:
+        return sys.executable
+    # Docker and CI jobs rely on the container's default Python.
+    return "python3"
+
+
 def _infer_board_type_from_arch(arch_str):
     """Map a tt-smi ``arch`` string (e.g. ``"wormhole_b0"``) to a board type."""
     if not arch_str:
@@ -419,12 +431,18 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
         # from argument values so they don't pollute deduplication or storage
         _sanitize_object_addresses(arguments)
 
-        return {
+        result = {
             "operation": operation_name,
             "arguments": arguments,
             "source": test_source,
             "machine_info": enhanced_machine_info,
         }
+
+        sweep_source_hash = data.get("sweep_source_hash")
+        if sweep_source_hash:
+            result["sweep_source_hash"] = sweep_source_hash
+
+        return result
     except Exception as e:
         print(f"⚠️ Error processing {json_file}: {e}")
         return None
@@ -614,6 +632,10 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
                 ],
             }
 
+            sweep_source_hash = operation.get("sweep_source_hash")
+            if sweep_source_hash:
+                config_entry["sweep_source_hash"] = sweep_source_hash
+
             master_data["operations"][op_name]["configurations"].append(config_entry)
             new_configs_added += 1
             next_config_id += 1
@@ -729,7 +751,7 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
     # Save master file
     try:
         with open(master_file_path, "w") as f:
-            json.dump(master_data, f, indent=2, default=str)
+            json.dump(master_data, f, indent=2, sort_keys=True, default=str)
     except Exception as e:
         print(f"❌ Error saving master file: {e}")
 
@@ -739,7 +761,7 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
 def detect_pytest_tests(test_path):
     """Detect if a file/path contains pytest test cases"""
     try:
-        python_cmd = os.path.join(BASE_DIR, "python_env/bin/python")
+        python_cmd = get_python_cmd()
         result = subprocess.run(
             [python_cmd, "-m", "pytest", test_path, "--collect-only", "-q"],
             cwd=BASE_DIR,
@@ -769,14 +791,8 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     if debug_mode:
         print(f"⚠️  Note: --debug flag is deprecated (live output is now always enabled)")
 
-    # Use python executable from tt-metal environment
-    # Try to find python_env, fall back to system python3 if not found (e.g., in Docker/CI)
-    python_env_path = os.path.join(BASE_DIR, "python_env/bin/python")
-    if os.path.exists(python_env_path):
-        python_cmd = python_env_path
-    else:
-        # Fallback to system python3 (used in Docker containers)
-        python_cmd = "python3"
+    # Use python executable from tt-metal environment when available.
+    python_cmd = get_python_cmd()
 
     # Create a unique subdirectory for this run based on source name and timestamp
     # This prevents conflicts with previous runs
@@ -1079,7 +1095,7 @@ def fix_memory_config_in_json(json_file):
 
         # Write back the fixed JSON
         with open(json_file, "w") as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, indent=2, sort_keys=True)
 
         print(f"✅ Fixed {fixed_count_ref[0]} shard_spec entries")
         return fixed_count_ref[0]
@@ -1120,7 +1136,7 @@ def recompute_config_hashes(json_file):
                 updated += 1
 
     with open(json_file, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump(data, f, indent=2, sort_keys=True)
 
     print(f"✅ Recomputed hashes: {updated} changed")
     return updated
@@ -1237,6 +1253,16 @@ Examples (Import existing traces):
                 print(f"Test Result: {'✅ PASSED' if result['success'] else '❌ FAILED'}")
 
         print(f"📊 Collected {len(result['trace_files'])} operation trace files")
+
+        if not args.load and not result["trace_files"]:
+            if result["success"]:
+                print("❌ Error: Test run completed but produced no operation trace files")
+            else:
+                print(
+                    f"❌ Error: Test execution failed with exit code {result['exit_code']} "
+                    "before any operation trace files were generated"
+                )
+            return 1
 
         if result["trace_files"]:
             # Load valid operations and excluded operations

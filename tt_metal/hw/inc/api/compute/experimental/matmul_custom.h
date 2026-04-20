@@ -9,7 +9,6 @@
 #include "experimental/llk_math_matmul_custom_api.h"
 #endif
 #ifdef TRISC_UNPACK
-#include "experimental/llk_unpack_AB_matmul_custom_api.h"
 #include "llk_unpack_AB_matmul_api.h"
 #endif
 #ifdef TRISC_PACK
@@ -27,6 +26,8 @@ namespace ckernel {
 /**
  * Short initialization for the no-MOP matmul block operation. Configures only the unpacker and math
  * engine, without touching hardware configuration or pack. Safe to call at any point mid-kernel.
+ * On Wormhole, the current no-MOP implementation is intentionally scoped to the SDPA full-tile,
+ * throttle-0 path.
  *
  * Return value: None
  *
@@ -90,6 +91,7 @@ ALWI void matmul_block_no_mop(
 /**
  * Lightweight no-MOP matmul reinit for steady-state loops where tile formats/dim assumptions
  * are unchanged. Reprograms unpack matmul setup and restores math addrmods without full init.
+ * On Wormhole, this reinit path is only intended for the SDPA full-tile, throttle-0 use case.
  *
  * Return value: None
  */
@@ -102,20 +104,11 @@ ALWI void mm_no_mop_reinit_short(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+#if defined(ARCH_BLACKHOLE)
     MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(transpose)));
-}
-
-// Lightweight matmul reinit after sub_exp custom: only restores ADDR_MOD_5 (MATH)
-// and UNPACK config (haloize, x_end, kt_dim) without UNPACK MOP reprogramming.
-ALWI void mm_no_mop_reinit_after_sub(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    const bool transpose = false,
-    uint32_t ct_dim = 1,
-    uint32_t rt_dim = 1,
-    uint32_t kt_dim = 1) {
-    UNPACK((llk_unpack_AB_matmul_reinit_after_sub(in0_cb_id, in1_cb_id, transpose, kt_dim)));
-    MATH((llk_math_matmul_reinit_no_mop_after_sub<MATH_FIDELITY, MM_THROTTLE>()));
+#else
+    MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+#endif
 }
 
 }  // namespace ckernel

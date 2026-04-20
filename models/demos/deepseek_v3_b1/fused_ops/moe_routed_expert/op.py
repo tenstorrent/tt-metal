@@ -29,7 +29,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 )
 
 if TYPE_CHECKING:
-    from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
+    from ttnn import OverlappedTensor
 
 # Device roles for ReduceToOneB1
 MESH_LEAF = 0
@@ -1363,14 +1363,7 @@ class MoeRoutedExpert:
                 ("gate_input_cb", gate_params["input_cb"]),
                 ("gate_bias_cb", gate_params["bias_cb"]),
                 ("gate_input_indices_cb", gate_params["indices_cb"]),
-                # Index mcast receiver args (compute cores)
-                ("index_mcast_receiver_semaphore", index_mcast_receiver_semaphore_id),
                 ("gate_proj_cb_index", gate_proj_cb_index),
-                ("index_mcast_num_pages", index_mcast_num_pages),
-                # Expert scale mcast receiver args (compute cores)
-                ("expert_scale_mcast_receiver_semaphore", expert_scale_mcast_receiver_semaphore_id),
-                ("mul_cb_scalar_src", mul_cb_scalar_src),
-                ("expert_scale_mcast_num_pages", expert_scale_mcast_num_pages),
                 # Mul reader args (setup mul_in1 buffer)
                 ("mul_cb_in1", mul_cb_in1),
                 ("mul_num_tiles", mul_num_tiles),
@@ -1387,10 +1380,6 @@ class MoeRoutedExpert:
                 ("down_proj_gather_sender_grid_end_y", down_proj_gather_params["sender_grid_end_y"]),
                 ("down_proj_gather_row_major", down_proj_gather_params["row_major"]),
                 ("down_proj_gather_receiver_data_addr", down_proj_gather_params["receiver_data_addr"]),
-                # down_proj_mcast receiver args (compute cores)
-                ("down_proj_mcast_receiver_semaphore", down_proj_mcast_params["receiver_semaphore_id"]),
-                ("down_proj_mcast_dst_cb", down_proj_mcast_params["dst_cb"]),
-                ("down_proj_mcast_dst_num_pages", down_proj_mcast_params["dst_num_pages"]),
                 # Eltwise add args (CB indices and wait tiles for setup_sharded_buffer)
                 ("add_cb_in0", add_cb_in0),
                 ("add_cb_in1", add_cb_in1),
@@ -1501,6 +1490,8 @@ class MoeRoutedExpert:
                 ("down_proj_mcast_src_cb", down_proj_mcast_params["src_cb"]),
                 ("down_proj_mcast_dst_cb", down_proj_mcast_params["dst_cb"]),
                 ("down_proj_mcast_src_num_pages", down_proj_mcast_params["src_num_pages"]),
+                # down_proj_mcast receiver args
+                ("down_proj_mcast_dst_num_pages", down_proj_mcast_params["dst_num_pages"]),
                 # ReduceToOne writer args
                 ("reduce_local_cb", reduce_local_cb),
                 ("reduce_scratch_cb", reduce_scratch_cb),

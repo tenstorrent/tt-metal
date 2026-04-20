@@ -116,8 +116,8 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/wormhole");
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/wormhole/noc");
-        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc");
-        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib");
+        includes.push_back("tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc");
+        includes.push_back("tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib");
 
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
@@ -180,6 +180,12 @@ public:
              params.processor_class == HalProcessorClassType::DM) ||
             params.core_type == HalProgrammableCoreType::IDLE_ETH) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+        }
+        // We need to disable -mtt-fix-whbhebreak for asserts using ebreak.
+        // After asserts, we don't want to continue code execution, so we don't need 8 nops after ebreak (as it will
+        // unnecessarily grow code size).
+        if (params.rtoptions.get_lightweight_kernel_asserts() || params.rtoptions.get_llk_asserts()) {
+            cflags += "-mno-tt-fix-whbhebreak ";
         }
         return cflags;
     }

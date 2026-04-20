@@ -16,7 +16,7 @@ void kernel_main() {
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
 
-    const auto source_address_generator = TensorAccessor(src_args, src_addr, page_size);
+    const auto source_address_generator = TensorAccessor(src_args, src_addr);
 
     DPRINT << "swr: args " << "\n\tsrc_addr=" << src_addr << "\n\tsrc_is_dram=" << (src_args.is_dram ? "T" : "F")
            << "\n\tnum_pages_to_read_total=" << num_pages_to_read_total

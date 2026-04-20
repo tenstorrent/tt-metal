@@ -51,11 +51,11 @@ void kernel_main() {
     constexpr auto rstd_args = TensorAccessorArgs<mean_args.next_compile_time_args_offset()>();
     constexpr auto dL_out_args = TensorAccessorArgs<rstd_args.next_compile_time_args_offset()>();
 
-    const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address, tile_bytes);
-    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
-    const auto mean_address_generator = TensorAccessor(mean_args, mean_address, tile_bytes);
-    const auto rstd_address_generator = TensorAccessor(rstd_args, rstd_address, tile_bytes);
-    const auto dL_out_address_generator = TensorAccessor(dL_out_args, dL_out_address, tile_bytes);
+    const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address);
+    const auto input_address_generator = TensorAccessor(input_args, input_address);
+    const auto mean_address_generator = TensorAccessor(mean_args, mean_address);
+    const auto rstd_address_generator = TensorAccessor(rstd_args, rstd_address);
+    const auto dL_out_address_generator = TensorAccessor(dL_out_args, dL_out_address);
 
     // Read input tensors row by row
     uint32_t end_row = start_row + num_rows_to_process;

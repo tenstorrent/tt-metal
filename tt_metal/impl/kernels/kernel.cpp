@@ -104,13 +104,15 @@ Kernel::Kernel(
     const CoreRangeSet& core_range_set,
     const std::vector<uint32_t>& compile_args,
     const std::map<std::string, std::string>& defines,
-    const std::unordered_map<std::string, uint32_t>& named_compile_args) :
+    const std::unordered_map<std::string, uint32_t>& named_compile_args,
+    const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
     core_range_set_(core_range_set),
     compile_time_args_(compile_args),
     named_compile_time_args_(named_compile_args),
+    dataflow_buffer_local_accessor_handles_(dataflow_buffer_local_accessor_handles),
 
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
@@ -232,6 +234,14 @@ void EthernetKernel::process_defines(
     callback("NOC_MODE", std::to_string(this->config_.noc_mode));
 }
 
+void DramKernel::process_defines(
+    const std::function<void(const std::string& define, const std::string& value)> callback) const {
+    Kernel::process_defines(callback);
+    callback("NOC_INDEX", std::to_string(this->config_.noc));
+    // DRAM kernels always use dedicated NOC.
+    callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
+}
+
 std::string_view DataMovementKernel::get_compiler_opt_level() const {
     return enchantum::to_string(this->config_.opt_level);
 }
@@ -248,6 +258,10 @@ std::string_view EthernetKernel::get_compiler_opt_level() const {
 
 std::string_view EthernetKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
+std::string_view DramKernel::get_compiler_opt_level() const { return enchantum::to_string(this->config_.opt_level); }
+
+std::string_view DramKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
+
 void Kernel::process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)> callback) const {
     callback(this->compile_time_args());
 }
@@ -255,6 +269,13 @@ void Kernel::process_compile_time_args(const std::function<void(const std::vecto
 void Kernel::process_named_compile_time_args(
     const std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)> callback) const {
     callback(this->named_compile_time_args());
+}
+
+void Kernel::process_dataflow_buffer_local_accessor_handles(
+    const std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)> callback) const {
+    for (const auto& [accessor_name, logical_dfb_id] : this->dataflow_buffer_local_accessor_handles_) {
+        callback(accessor_name, logical_dfb_id);
+    }
 }
 
 void Kernel::process_include_paths(const std::function<void(const std::string& path)>& callback) const {
@@ -313,6 +334,8 @@ uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }
 
 uint8_t EthernetKernel::expected_num_binaries() const { return 1; }
 
+uint8_t DramKernel::expected_num_binaries() const { return 1; }
+
 uint8_t ComputeKernel::expected_num_binaries() const {
     // Compute kernels generate binaries for all three TRISC processors
     return 3;
@@ -341,6 +364,12 @@ uint32_t EthernetKernel::get_kernel_processor_type(int index) const {
     return enchantum::to_underlying(this->config_.processor);
 }
 
+uint32_t DramKernel::get_kernel_processor_type(int index) const {
+    TT_ASSERT(index == 0, "index out of bounds");
+    // DRAM cores have a single DM0 processor.
+    return 0;
+}
+
 uint32_t ComputeKernel::get_kernel_processor_type(int index) const {
     TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
     return index;
@@ -353,6 +382,8 @@ std::string DataMovementKernel::config_hash() const {
         enchantum::to_string(this->config_.noc),
         enchantum::to_string(this->config_.noc_mode));
 }
+
+std::string DramKernel::config_hash() const { return fmt::format("dram_{}", enchantum::to_string(this->config_.noc)); }
 
 // Add "eth_" to the hash to differentiate between erisc and brisc.
 std::string EthernetKernel::config_hash() const {
@@ -405,6 +436,10 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
+    for (const auto& it : sorted_iters(this->dataflow_buffer_local_accessor_handles_)) {
+        hasher.update(it->first);
+        hasher.update(static_cast<uint64_t>(it->second));
+    }
     hasher.update(this->kernel_src_.source_);
     hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
     hasher.update(this->config_hash());
@@ -451,6 +486,7 @@ void Kernel::validate_runtime_args_size(
         case HalProgrammableCoreType::TENSIX: expected_max_rt_args = max_runtime_args; break;
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH:
+        case HalProgrammableCoreType::DRAM:
             expected_max_rt_args = MetalContext::instance().hal().get_dev_size(
                                        this->get_kernel_programmable_core_type(), HalL1MemAddrType::KERNEL_CONFIG) /
                                    sizeof(uint32_t);
@@ -651,6 +687,17 @@ void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build
         this);
 }
 
+void DramKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
+    jit_build_genfiles_kernel_include(
+        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
+    uint32_t dram_core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
+    jit_build(
+        BuildEnvManager::get_instance().get_kernel_build_state(device->build_id(), dram_core_type, dm_class_idx, 0),
+        this);
+}
+
 void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
     jit_build_genfiles_triscs_src(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
@@ -676,6 +723,7 @@ void Kernel::set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>
 void DataMovementKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
     std::vector<const ll_api::memory*> binaries;
+    auto paths = this->file_paths(*device);
 
     // TODO(pgk): move the procssor types into the build system.  or just use integer indices
     // TODO(pgk): consolidate read_binaries where possible
@@ -683,15 +731,29 @@ void DataMovementKernel::read_binaries(IDevice* device) {
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->config_.processor);
-    const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-        device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
     auto load_type =
         MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id).memory_load;
-    const ll_api::memory& binary_mem =
-        llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
+    const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[0], load_type);
     binaries.push_back(&binary_mem);
     [[maybe_unused]] uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_size);
+    this->set_binaries(
+        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
+}
+
+void DramKernel::read_binaries(IDevice* device) {
+    TT_ASSERT(this->binaries_exist_on_disk(device));
+    std::vector<const ll_api::memory*> binaries;
+    uint32_t dram_core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    constexpr auto k_DmClassIndex = enchantum::to_underlying(HalProcessorClassType::DM);
+    const JitBuildState& build_state =
+        BuildEnvManager::get_instance().get_kernel_build_state(device->build_id(), dram_core_type, k_DmClassIndex, 0);
+    auto load_type = MetalContext::instance().hal().get_jit_build_config(dram_core_type, k_DmClassIndex, 0).memory_load;
+    const ll_api::memory& binary_mem =
+        llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
+    binaries.push_back(&binary_mem);
+    log_debug(LogLoader, "DRISC=0, name={}, size={} (bytes)", this->name(), binary_mem.get_packed_size());
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
 }
@@ -700,17 +762,16 @@ void EthernetKernel::read_binaries(IDevice* device) {
     // untested
     TT_ASSERT(this->binaries_exist_on_disk(device));
     std::vector<const ll_api::memory*> binaries;
+    auto paths = this->file_paths(*device);
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     constexpr auto k_EthDmClassIndex = enchantum::to_underlying(HalProcessorClassType::DM);
     int erisc_id = enchantum::to_underlying(this->config_.processor);
-    const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-        device->build_id(), erisc_core_type, k_EthDmClassIndex, erisc_id);
     // TODO: fix when active eth supports relo
     auto load_type =
         MetalContext::instance().hal().get_jit_build_config(erisc_core_type, k_EthDmClassIndex, erisc_id).memory_load;
-    const ll_api::memory& binary_mem = llrt::get_risc_binary(
-        build_state.get_target_out_path(this->kernel_full_name_), load_type, [this](ll_api::memory& binary_mem) {
+    const ll_api::memory& binary_mem =
+        llrt::get_risc_binary(paths[0], load_type, [this](ll_api::memory& binary_mem) {
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_erisc_iram_enabled() &&
                 this->config_.eth_mode != Eth::IDLE) {
                 // text_addr and some of span's addr point to IRAM base address.
@@ -734,18 +795,16 @@ void EthernetKernel::read_binaries(IDevice* device) {
 void ComputeKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
     std::vector<const ll_api::memory*> binaries;
+    auto paths = this->file_paths(*device);
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
-        const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, compute_class_idx, trisc_id);
         auto load_type = MetalContext::instance()
                              .hal()
                              .get_jit_build_config(tensix_core_type, compute_class_idx, trisc_id)
                              .memory_load;
-        const ll_api::memory& binary_mem =
-            llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
+        const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[trisc_id], load_type);
         binaries.push_back(&binary_mem);
     }
     this->set_binaries(
@@ -788,6 +847,24 @@ bool EthernetKernel::configure(
         tt::llrt::test_load_write_read_risc_binary(
             binary_mem, device_id, ethernet_core, erisc_core_index, dm_class_idx, erisc_id);
     }
+
+    return true;
+}
+
+bool DramKernel::configure(
+    IDevice* device,
+    const CoreCoord& logical_core,
+    [[maybe_unused]] uint32_t base_address,
+    [[maybe_unused]] const uint32_t offsets[]) const {
+    const auto& hal = MetalContext::instance().hal();
+    auto device_id = device->id();
+    auto dram_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+    const ll_api::memory& binary_mem =
+        *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key())[0];
+
+    const auto dram_core_index = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
+    tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, dram_core, dram_core_index, dm_class_idx, 0);
 
     return true;
 }
@@ -878,31 +955,26 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
 void QuasarDataMovementKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
     std::vector<const ll_api::memory*> binaries;
+    auto paths = this->file_paths(*device);
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     if (config_.is_legacy_kernel) {
-        for (const DataMovementProcessor& processor : this->dm_processors_) {
+        for (std::size_t i = 0; i < this->dm_processors_.size(); ++i) {
+            const DataMovementProcessor& processor = this->dm_processors_[i];
             const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(processor);
-            const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-                device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
             auto load_type =
                 MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id)
                     .memory_load;
-            const ll_api::memory& binary_mem =
-                llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
+            const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[i], load_type);
             binaries.push_back(&binary_mem);
         }
     } else {
-        const int canonical_id =
-            static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
-        const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, canonical_id);
+        const int canonical_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
         auto load_type =
             MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, canonical_id)
                 .memory_load;
-        const ll_api::memory& binary_mem =
-            llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
+        const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[0], load_type);
         binaries.push_back(&binary_mem);
     }
     this->set_binaries(
@@ -980,19 +1052,18 @@ void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) c
 void QuasarComputeKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
     std::vector<const ll_api::memory*> binaries;
+    auto paths = this->file_paths(*device);
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    for (const QuasarComputeProcessor& processor : this->compute_processors_) {
+    for (std::size_t i = 0; i < this->compute_processors_.size(); ++i) {
+        const QuasarComputeProcessor& processor = this->compute_processors_[i];
         const int trisc_id = static_cast<std::underlying_type_t<QuasarComputeProcessor>>(processor);
-        const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, compute_class_idx, trisc_id);
         auto load_type = MetalContext::instance()
                              .hal()
                              .get_jit_build_config(tensix_core_type, compute_class_idx, trisc_id)
                              .memory_load;
-        const ll_api::memory& binary_mem =
-            llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
+        const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[i], load_type);
         binaries.push_back(&binary_mem);
     }
     this->set_binaries(

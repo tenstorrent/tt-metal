@@ -17,6 +17,10 @@ void kernel_main() {
     uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     constexpr bool use_dfbs = get_compile_time_arg_val(1) == 1;
 
+#ifdef ARCH_QUASAR
+    static_assert(use_dfbs, "DFBs need to be used for Quasar!");
+#endif
+
     if constexpr (use_dfbs) {
         unary_op_init_common(0, 1);
     } else {
@@ -47,6 +51,7 @@ void kernel_main() {
             release_dst();
         }
     } else {
+#ifndef ARCH_QUASAR
         experimental::CircularBuffer cb0(tt::CBIndex::c_0);
         experimental::CircularBuffer cb16(tt::CBIndex::c_16);
         for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
@@ -61,5 +66,6 @@ void kernel_main() {
 
             release_dst();
         }
+#endif
     }
 }

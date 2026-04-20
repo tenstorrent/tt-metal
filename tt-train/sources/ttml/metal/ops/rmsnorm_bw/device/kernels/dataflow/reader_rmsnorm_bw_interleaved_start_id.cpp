@@ -60,10 +60,10 @@ void kernel_main() {
     constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto rms_a_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto dL_out_args = TensorAccessorArgs<rms_a_args.next_compile_time_args_offset()>();
-    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
-    const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address, tile_bytes);
-    const auto rms_a_address_generator = TensorAccessor(rms_a_args, rms_a_address, tile_bytes);
-    const auto dL_out_address_generator = TensorAccessor(dL_out_args, dL_out_address, tile_bytes);
+    const auto input_address_generator = TensorAccessor(input_args, input_address);
+    const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address);
+    const auto rms_a_address_generator = TensorAccessor(rms_a_args, rms_a_address);
+    const auto dL_out_address_generator = TensorAccessor(dL_out_args, dL_out_address);
 
     // Read input tensors row by row, reading each row's data twice due to compute requirements
     uint32_t end_row = start_row + num_rows_to_process;

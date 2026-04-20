@@ -16,7 +16,7 @@ namespace ttnn {
 
 // Unified compute kernel configuration for all supported architectures.
 struct ComputeKernelConfig {
-    MathFidelity math_fidelity = MathFidelity::LoFi;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi;
     bool math_approx_mode = true;
     bool fp32_dest_acc_en = false;
     bool packer_l1_acc = false;
@@ -40,7 +40,7 @@ using BlackholeComputeKernelConfig = ComputeKernelConfig;
 DeviceComputeKernelConfig init_device_compute_kernel_config(
     tt::ARCH arch,
     const std::optional<const DeviceComputeKernelConfig>& device_kernel_config,
-    MathFidelity default_fidelity = MathFidelity::LoFi,
+    tt::tt_metal::MathFidelity default_fidelity = tt::tt_metal::MathFidelity::LoFi,
     bool default_approx_mode = true,
     bool default_fp32_acc = false,
     bool default_l1_acc = false,
@@ -53,11 +53,11 @@ void verify_numerical_configuration(
 
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 bool get_dst_full_sync_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
-MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+tt::tt_metal::MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
-std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
+std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
     tt::ARCH arch, DeviceComputeKernelConfig compute_kernel_config);
 
 uint32_t get_dest_reg_count(
