@@ -87,7 +87,7 @@ def entry_generated_text(entry: dict, tokenizer) -> str:
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("reference_file", [REFERENCE_FILE])
 @pytest.mark.parametrize("max_new_tokens", [128], ids=["128"])
-@pytest.mark.parametrize("max_users_per_row", [8], ids=["8"])
+@pytest.mark.parametrize("max_users_per_row", [8, 32], ids=["8", "32"])
 def test_demo_teacher_forcing_accuracy(
     reference_file: Path,
     max_new_tokens: int,
