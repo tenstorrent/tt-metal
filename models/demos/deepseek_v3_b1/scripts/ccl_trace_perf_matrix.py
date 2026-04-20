@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Run DeepSeek CCL trace tests under tracy for a matrix of num_links and max
 payload sizes, then summarize top-level zone durations from
