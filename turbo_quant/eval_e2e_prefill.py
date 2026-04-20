@@ -103,22 +103,27 @@ def migrate_prefill_kv_to_turbo_quant(
     print(
         f"  Migrating {len(tt_model.layers)} layers × {prompt_len} positions to TQ {dtype_label} pre-rescaled (paged={paged}) ..."
     )
+
+    # Phase 1: Read all layers' KV → CPU, deallocate old tensors.
+    # Interleaving dealloc+alloc can fragment DRAM → slower decode.
+    cpu_bufs = []
     for layer in tt_model.layers:
-        # Read BFP8 KV → CPU float32.
-        # Paged layout:  [max_num_blocks, n_kv_heads, block_size, head_dim]  (block-major)
-        # Flat layout:   [batch, n_kv_heads, max_seq, head_dim]
         k_bf16 = ttnn.typecast(layer.attention.layer_past[0], ttnn.bfloat16)
         v_bf16 = ttnn.typecast(layer.attention.layer_past[1], ttnn.bfloat16)
         k_cpu = ttnn.to_torch(k_bf16, mesh_composer=mesh_composer).float()
         v_cpu = ttnn.to_torch(v_bf16, mesh_composer=mesh_composer).float()
         ttnn.deallocate(k_bf16)
         ttnn.deallocate(v_bf16)
+        ttnn.deallocate(layer.attention.layer_past[0])
+        ttnn.deallocate(layer.attention.layer_past[1])
+        layer.attention.layer_past = None
+        cpu_bufs.append((k_cpu, v_cpu))
 
+    # Phase 2: CPU quantize all layers.
+    new_tensors = []
+    for k_cpu, v_cpu in cpu_bufs:
         orig_shape = list(k_cpu.shape)
         if paged:
-            # [max_num_blocks, n_kv_heads, block_size, head_dim]
-            #   → [n_kv_heads, max_num_blocks * block_size, head_dim]
-            #   → [1, n_kv_heads, max_seq, head_dim]
             max_num_blocks, n_kv_heads, blk, _ = orig_shape
             max_seq = max_num_blocks * blk
             k_cpu = k_cpu.permute(1, 0, 2, 3).reshape(n_kv_heads, max_seq, head_dim).unsqueeze(0)
@@ -142,7 +147,6 @@ def migrate_prefill_kv_to_turbo_quant(
         v_centroids = cpu_quantizer.codebook.centroids[v_idx.long()]
         v_rescaled = (v_centroids * v_norms).to(torch.bfloat16)
 
-        # Build flat tensor [1, n_kv_heads, max_seq, head_dim] with quantized prefix.
         n_kv_heads = k_prefix.shape[1]
         k_full = torch.zeros(1, n_kv_heads, max_seq, head_dim, dtype=torch.bfloat16)
         v_full = torch.zeros(1, n_kv_heads, max_seq, head_dim, dtype=torch.bfloat16)
@@ -150,33 +154,35 @@ def migrate_prefill_kv_to_turbo_quant(
         v_full[:, :, :prompt_len, :] = v_rescaled
 
         if paged:
-            # Reshape back to paged: [max_num_blocks, n_kv_heads, block_size, head_dim]
             k_full = (
                 k_full.squeeze(0).reshape(n_kv_heads, max_num_blocks, blk, head_dim).permute(1, 0, 2, 3).contiguous()
             )
             v_full = (
                 v_full.squeeze(0).reshape(n_kv_heads, max_num_blocks, blk, head_dim).permute(1, 0, 2, 3).contiguous()
             )
+        new_tensors.append((k_full, v_full))
+    del cpu_bufs  # free CPU memory
 
-        # Write back. Hardware handles BF16 → target dtype conversion (BFP4 etc).
-        ttnn.deallocate(layer.attention.layer_past[0])
-        ttnn.deallocate(layer.attention.layer_past[1])
-        layer.attention.layer_past[0] = ttnn.from_torch(
-            k_full,
-            dtype=cache_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
-        layer.attention.layer_past[1] = ttnn.from_torch(
-            v_full,
-            dtype=cache_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
+    # Phase 3: Allocate all new BFP4/BF16 tensors on device (contiguous DRAM).
+    for layer, (k_full, v_full) in zip(tt_model.layers, new_tensors):
+        layer.attention.layer_past = [
+            ttnn.from_torch(
+                k_full,
+                dtype=cache_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            ),
+            ttnn.from_torch(
+                v_full,
+                dtype=cache_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            ),
+        ]
 
 
 def main():
@@ -312,6 +318,16 @@ def main():
         .squeeze(2)[:, 0:1, : model_args.vocab_size]  # [32, 1, vocab]
     )
     ttnn.deallocate(tt_prefill_out)
+
+    # Free prefill device tensors explicitly — avoid leftover state affecting decode.
+    for t in [prefill_input, tt_page_table]:
+        if t is not None:
+            ttnn.deallocate(t)
+    for rot in (rot_mats_global, rot_mats_local):
+        if rot is not None:
+            for t in rot if isinstance(rot, (list, tuple)) else [rot]:
+                if t is not None:
+                    ttnn.deallocate(t)
 
     # The last prompt token sits at row (prompt_len - 1) - get_last_token within the tile.
     last_row = (prompt_len - 1) - get_last_token
