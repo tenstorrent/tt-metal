@@ -44,6 +44,14 @@ class TtDistributedRmsNorm(LightweightModule):
     """
 
     @staticmethod
+    def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
+        """Check if norm weight cache files exist."""
+        if not list(cache_path.glob(f"{cache_name_prefix}_weight*.tensorbin")):
+            logger.debug(f"TTNN cache missing: {cache_name_prefix}_weight")
+            return False
+        return True
+
+    @staticmethod
     def _convert_and_cache_weight(
         torch_weight: torch.Tensor,
         emb_dim: int,
