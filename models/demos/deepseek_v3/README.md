@@ -131,7 +131,6 @@ The `launch_multihost_galaxy` script automatically sets `DEEPSEEK_V3_HF_MODEL` a
 - `--single-layer {mlp,moe}`: When combined with `--random-weights`, request a single-layer run (`mlp` only).
 - `--token-accuracy`: Enable teacher-forcing decode and report accuracy (requires full-model mode plus tokenizer and reference file).
 - `--reference-file PATH`: Path to `.pt/.refpt` reference file (see below).
-- `--tf-prompt-len N`: Override the teacher-forcing prompt length pulled from the reference file.
 
 You should also provide one or more prompts (each in quotes as in the above example) as positional arguments, unless using `--random-weights`. In `--random-weights` mode, prompts are optional.
 
@@ -186,28 +185,24 @@ The demo logs wall-clock statistics (prefill/decode times, tokens per second, an
 
 ### Teacher Forcing Accuracy Verification
 
-You can verify accuracy under teacher forcing using a reference file with tokenized ground-truth. The expected format matches the tt_transformers demos/tests:
+You can verify accuracy under teacher forcing using a multi-prompt reference file with tokenized ground-truth.
 
-- Keys: `reference_tokens` (LongTensor [1, T]) and optional `top5_tokens` (LongTensor [T, 5]).
-- The demo splits `reference_tokens` at `T//2 + 1` into input prompt and ground-truth continuation.
+- The expected payload is `multi_prompt_v1` (or `multi_prompt_v1_lzma_v1`), with an `entries` list.
+- Each entry contains `prompt_tokens`, `generated_tokens`, `top5_tokens`, and `tf_prompt_len`.
+- In teacher-forcing mode, prompt count must match reference entry count.
 
-Generate a compatible reference file with the tt_transformers helper (use the same tokenizer/model family as your DeepSeek model to ensure token IDs match):
+Generate a compatible multi-prompt reference file with:
 
-- Hugging Face path:
-  - `python models/tt_transformers/tests/generate_reference_outputs.py --total_length 2048 --output_file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --model deepseek-ai/DeepSeek-V3`
-- Or use the HF-only variant:
-  - `python models/tt_transformers/tests/generate_reference_hf.py --total_length 2048 --output_file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --model deepseek-ai/DeepSeek-V3`
+- `python models/demos/deepseek_v3/demo/convert_api_json_to_refpt.py --input <api-results.json> --output models/demos/deepseek_v3/demo/deepseek_r1_teacher_forcing_512.refpt --model-path <local-hf-model-path> --num-entries 512 --max-new-tokens 128`
 
 Run the DeepSeek-V3 demo with teacher forcing:
 
-- `python models/demos/deepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --max-new-tokens 256`
-  - Optionally control prompt length independently with `--tf-prompt-len`, e.g.:
-  - `... --tf-prompt-len 1024 --max-new-tokens 256`
+- `python models/demos/deepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/demos/deepseek_v3/demo/deepseek_r1_teacher_forcing_512.refpt --max-new-tokens 256`
 
 Notes:
 
 - `--token-accuracy` is not compatible with `--random-weights` and requires tokenizer files in `--model-path`.
-- The demo decodes a single sequence in teacher-forcing mode. `--max-new-tokens` is capped to the number of available ground-truth tokens in the reference file.
+- The demo decodes one sequence per reference entry in teacher-forcing mode. `--max-new-tokens` is capped to the number of available ground-truth tokens per entry.
 - If `top5_tokens` is present in the reference, the demo reports both top-1 and top-5 accuracies; otherwise, only top-1.
 
 ## How to develop

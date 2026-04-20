@@ -18,13 +18,15 @@ Usage
 
 The resulting ``.refpt`` stores only the tensors the test needs (prompt token
 IDs, ground-truth generated token IDs, top-5 predictions) — no raw text — so
-it is typically 2–4 MB instead of the ~93 MB JSON.
+it is typically <100 KB (LZMA-compressed) instead of the ~93 MB JSON.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import lzma
+import struct
 from pathlib import Path
 from typing import Optional
 
@@ -85,9 +87,7 @@ def _build_entries_from_api_json(
         )
 
     if len(items) < prompt_count:
-        raise ValueError(
-            f"JSON has {len(items)} results but {prompt_count} were requested."
-        )
+        raise ValueError(f"JSON has {len(items)} results but {prompt_count} were requested.")
 
     entries: list[dict] = []
     for item in tqdm(items[:prompt_count], desc="Building entries"):
@@ -99,8 +99,7 @@ def _build_entries_from_api_json(
 
         if steps:
             generated_tokens = [
-                _api_token_to_id(tokenizer, step.get("token", ""), step.get("bytes"))
-                for step in steps[:max_new_tokens]
+                _api_token_to_id(tokenizer, step.get("token", ""), step.get("bytes")) for step in steps[:max_new_tokens]
             ]
             if not generated_text:
                 generated_text = "".join(step.get("token", "") for step in steps[:max_new_tokens])
@@ -120,11 +119,9 @@ def _build_entries_from_api_json(
         top5 = torch.zeros(total_len, 5, dtype=torch.long)
         for step_i, step in enumerate(steps[:max_new_tokens]):
             pos = len(prompt_ids) + step_i
-            top_lps = step.get("top_logprobs", [])
+            top_lps = step.get("top") or step.get("top_logprobs") or []
             for k, lp_entry in enumerate(top_lps[:5]):
-                tok_id = _api_token_to_id(
-                    tokenizer, lp_entry.get("token", ""), lp_entry.get("bytes")
-                )
+                tok_id = _api_token_to_id(tokenizer, lp_entry.get("token", ""), lp_entry.get("bytes"))
                 top5[pos, k] = tok_id
 
         ref_t = torch.cat([prompt_t, gen_t], dim=1)
@@ -142,6 +139,44 @@ def _build_entries_from_api_json(
         )
 
     return entries
+
+
+def _compress_entries_lzma(entries: list[dict]) -> tuple[bytes, list[dict], int]:
+    """
+    Pack all per-entry tensors into one LZMA-compressed blob.
+
+    Per entry layout:
+      [P int32 prompt_ids, G int32 gen_ids, G*5 int32 top5_flat]
+
+    where top5_flat stores top-5 predictions only for generated positions.
+    """
+    chunks: list[bytes] = []
+    layout: list[dict] = []
+
+    for entry in entries:
+        prompt_t = entry["prompt_tokens"]
+        gen_t = entry["generated_tokens"]
+        top5_t = entry["top5_tokens"]
+        tf_prompt_len = int(entry["tf_prompt_len"])
+
+        prompt_ids = prompt_t[0].tolist() if prompt_t.dim() == 2 else prompt_t.tolist()
+        generated_ids = gen_t[0].tolist() if gen_t.dim() == 2 else gen_t.tolist()
+        P = len(prompt_ids)
+        G = len(generated_ids)
+
+        # top5 rows for prompt positions are zeros, so only store generated rows.
+        top5_gen = top5_t[tf_prompt_len : tf_prompt_len + G]
+        top5_flat = top5_gen.reshape(-1).tolist()
+
+        chunks.append(struct.pack(f"<{P}i", *prompt_ids))
+        chunks.append(struct.pack(f"<{G}i", *generated_ids))
+        chunks.append(struct.pack(f"<{G * 5}i", *top5_flat))
+
+        layout.append({"P": P, "G": G, "tf_prompt_len": tf_prompt_len})
+
+    raw = b"".join(chunks)
+    compressed = lzma.compress(raw, preset=9 | lzma.PRESET_EXTREME)
+    return compressed, layout, len(raw)
 
 
 def main() -> None:
@@ -182,9 +217,9 @@ def main() -> None:
         max_new_tokens=args.max_new_tokens,
     )
 
-    e0 = entries[0]
+    compressed, layout, raw_bytes = _compress_entries_lzma(entries)
     payload = {
-        "format_version": "multi_prompt_v1",
+        "format_version": "multi_prompt_v1_lzma_v1",
         "num_prompts": len(entries),
         "max_new_tokens": args.max_new_tokens,
         "token_ids_meta": {
@@ -192,22 +227,18 @@ def main() -> None:
             "bos_id": getattr(tokenizer, "bos_token_id", None),
             "pad_id": getattr(tokenizer, "pad_token_id", None),
         },
-        "entries": entries,
-        "reference_tokens": e0["reference_tokens"],
-        "prompt_tokens": e0["prompt_tokens"],
-        "generated_tokens": e0["generated_tokens"],
-        "top5_tokens": e0["top5_tokens"],
-        "tf_prompt_len": e0["tf_prompt_len"],
-        "prompt": e0["prompt"],
-        "decoded_generated_text": e0["decoded_generated_text"],
+        "tensor_lzma": compressed,
+        "entry_layout": layout,
+        "tensor_raw_bytes_uncompressed": raw_bytes,
+        "tensor_lzma_bytes": len(compressed),
     }
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     torch.save(payload, out)
 
-    size_mb = out.stat().st_size / (1024 * 1024)
-    print(f"Wrote {len(entries)} entries to {out}  ({size_mb:.1f} MB)")
+    size_kb = out.stat().st_size / 1024
+    print(f"Wrote {len(entries)} entries to {out}  " f"({size_kb:.1f} KB compressed, {raw_bytes / 1024:.1f} KB raw)")
 
 
 if __name__ == "__main__":

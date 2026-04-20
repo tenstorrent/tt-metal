@@ -3,20 +3,79 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import lzma
+import struct
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
 
 
-@dataclass
-class AccuracyResult:
-    top1: float
-    top5: float
-    matches_top1: int
-    matches_top5: int
-    total: int
+def decompress_lzma_payload(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Decompress a ``multi_prompt_v1_lzma_v1`` payload into multi-prompt entries.
+
+    Reconstructed entry schema:
+      - prompt_tokens:    Tensor [1, P]
+      - generated_tokens: Tensor [1, G]
+      - top5_tokens:      Tensor [P + G, 5]
+      - tf_prompt_len:    int
+    """
+    if "tensor_lzma" not in payload or "entry_layout" not in payload:
+        raise KeyError("LZMA payload must contain 'tensor_lzma' and 'entry_layout'.")
+
+    raw = lzma.decompress(payload["tensor_lzma"])
+    expected_raw_bytes = payload.get("tensor_raw_bytes_uncompressed")
+    if isinstance(expected_raw_bytes, int) and expected_raw_bytes != len(raw):
+        raise ValueError(f"LZMA payload raw byte mismatch: metadata={expected_raw_bytes}, actual={len(raw)}")
+
+    entries: List[Dict[str, Any]] = []
+    offset = 0
+    layout = payload["entry_layout"]
+    if not isinstance(layout, list):
+        raise ValueError("LZMA payload 'entry_layout' must be a list.")
+
+    for idx, meta in enumerate(layout):
+        if not isinstance(meta, dict):
+            raise ValueError(f"entry_layout[{idx}] must be a dict, got {type(meta)}")
+        P = int(meta["P"])
+        G = int(meta["G"])
+        tf_prompt_len = int(meta.get("tf_prompt_len", P))
+        if P < 0 or G < 0:
+            raise ValueError(f"entry_layout[{idx}] has negative lengths: P={P}, G={G}")
+
+        p_bytes = P * 4
+        g_bytes = G * 4
+        t_bytes = G * 5 * 4
+        end_needed = offset + p_bytes + g_bytes + t_bytes
+        if end_needed > len(raw):
+            raise ValueError(f"LZMA payload ended early at entry {idx}: need {end_needed} bytes, have {len(raw)}")
+
+        prompt_ids = list(struct.unpack(f"<{P}i", raw[offset : offset + p_bytes]))
+        offset += p_bytes
+        generated_ids = list(struct.unpack(f"<{G}i", raw[offset : offset + g_bytes]))
+        offset += g_bytes
+        top5_flat = list(struct.unpack(f"<{G * 5}i", raw[offset : offset + t_bytes]))
+        offset += t_bytes
+
+        prompt_t = torch.tensor([prompt_ids], dtype=torch.long)
+        gen_t = torch.tensor([generated_ids], dtype=torch.long)
+        top5_full = torch.zeros(P + G, 5, dtype=torch.long)
+        top5_full[P:] = torch.tensor(top5_flat, dtype=torch.long).view(G, 5)
+
+        entries.append(
+            {
+                "prompt_tokens": prompt_t,
+                "generated_tokens": gen_t,
+                "top5_tokens": top5_full,
+                "tf_prompt_len": tf_prompt_len,
+            }
+        )
+
+    if offset != len(raw):
+        raise ValueError(f"LZMA payload has trailing bytes: consumed={offset}, total={len(raw)}")
+
+    return entries
 
 
 class TokenAccuracy:
@@ -24,15 +83,6 @@ class TokenAccuracy:
     Teacher forcing helper backed by the HF-generated reference .refpt file.
 
     Supports two payload formats:
-
-    **Single-entry (legacy)**::
-
-        {
-            "prompt_tokens":    Tensor [1, P],
-            "generated_tokens": Tensor [1, G],
-            "top5_tokens":      Tensor [L, 5],   # L = P + G
-            "tf_prompt_len":    int,
-        }
 
     **Multi-entry** (``format_version == "multi_prompt_v1"``)::
 
@@ -48,25 +98,39 @@ class TokenAccuracy:
                 },
                 ...
             ],
-            # backward-compat top-level keys copied from entries[0]
-            "prompt_tokens": ...,
+        }
+
+    **LZMA-compressed multi-entry** (``format_version == "multi_prompt_v1_lzma_v1"``)::
+
+        {
+            "format_version": "multi_prompt_v1_lzma_v1",
+            "tensor_lzma": bytes,
+            "entry_layout": [{"P": int, "G": int, "tf_prompt_len": int}, ...],
             ...
         }
 
-    All per-user methods accept a *user_idx* keyword (default ``0``) so that
-    existing single-entry callers keep working unchanged.
+    All teacher-forcing methods are per-user and accept a *user_idx* keyword
+    (default ``0``).
     """
 
-    def __init__(self, reference_file: str | Path, prompt_len: Optional[int] = None) -> None:
+    def __init__(self, reference_file: str | Path) -> None:
         self.reference_file = Path(reference_file)
         payload = torch.load(self.reference_file, weights_only=False)
 
-        # ---- Detect single vs multi-entry ----
-        raw_entries = payload.get("entries")
-        if isinstance(raw_entries, list) and raw_entries:
-            self._entries = raw_entries
+        # ---- Detect payload flavor ----
+        fmt = payload.get("format_version", "")
+        if fmt == "multi_prompt_v1_lzma_v1":
+            entries = decompress_lzma_payload(payload)
         else:
-            self._entries = [payload]
+            entries = payload.get("entries")
+
+        if not isinstance(entries, list) or not entries:
+            raise ValueError(
+                "Teacher-forcing reference must contain a non-empty multi-prompt 'entries' list. "
+                f"Got format_version={fmt!r} file={self.reference_file}"
+            )
+
+        self._entries = entries
 
         self._num_entries = len(self._entries)
 
@@ -110,31 +174,15 @@ class TokenAccuracy:
             self._top5_tokens_list.append(t5)
             self._tf_prompt_len_list.append(tfl)
 
-        # ---- Backward-compat aliases for entry 0 ----
-        e0 = self._entries[0]
-        self.prompt_tokens = e0["prompt_tokens"]
-        self.generated_tokens = e0["generated_tokens"]
-        self.top5_tokens = self._top5_tokens_list[0]
-        self.tf_prompt_len = self._tf_prompt_len_list[0]
-        self._prompt_1d = self._prompt_1d_list[0]
-        self._gt_gen_1d = self._gt_gen_1d_list[0]
-        self._reference_1d = self._reference_1d_list[0]
-
-        if prompt_len is not None and int(prompt_len) != self.tf_prompt_len:
-            raise ValueError(f"prompt_len arg ({prompt_len}) != tf_prompt_len in file ({self.tf_prompt_len})")
-
         # ---- Per-user state ----
         self._pred_tokens_list: List[List[int]] = [[] for _ in range(self._num_entries)]
         self._cursor_list: List[int] = [0] * self._num_entries
-        # Legacy alias (same list object as _pred_tokens_list[0])
-        self._pred_tokens = self._pred_tokens_list[0]
-        self._cursor = 0
 
         # ---- EOS / token metadata ----
         meta = payload.get("token_ids_meta", {}) if isinstance(payload.get("token_ids_meta", {}), dict) else {}
         self.eos_id: Optional[int] = int(meta["eos_id"]) if "eos_id" in meta and meta["eos_id"] is not None else None
 
-        # ---- TopK candidates (single-entry only) ----
+        # ---- Optional TopK candidates (entry-0 debug metadata) ----
         self.topk_candidate_k = 0
         self.topk_candidate_generated_prefix_len = 0
         self.topk_candidate_token_ids: Optional[torch.Tensor] = None
@@ -180,6 +228,14 @@ class TokenAccuracy:
     def num_entries(self) -> int:
         return self._num_entries
 
+    def _checked_user_idx(self, user_idx: int) -> int:
+        idx = int(user_idx)
+        if idx < 0 or idx >= self._num_entries:
+            raise IndexError(
+                f"user_idx={idx} is out of range for {self._num_entries} entry(ies) " f"in {self.reference_file}"
+            )
+        return idx
+
     # ---- Reset ----
 
     def reset(self) -> None:
@@ -188,27 +244,26 @@ class TokenAccuracy:
             lst.clear()
         for i in range(self._num_entries):
             self._cursor_list[i] = 0
-        self._cursor = 0
 
     # ---- Per-user accessors ----
 
     def get_prompt_token_ids(self, user_idx: int = 0) -> List[int]:
-        idx = min(user_idx, self._num_entries - 1)
+        idx = self._checked_user_idx(user_idx)
         return self._prompt_1d_list[idx].tolist()
 
     def num_gt_tokens(self, user_idx: int = 0) -> int:
-        idx = min(user_idx, self._num_entries - 1)
+        idx = self._checked_user_idx(user_idx)
         return int(self._gt_gen_1d_list[idx].numel())
 
     def num_pred_tokens(self, user_idx: int = 0) -> int:
-        idx = min(user_idx, self._num_entries - 1)
+        idx = self._checked_user_idx(user_idx)
         return len(self._pred_tokens_list[idx])
 
     def get_predicted_tokens(self, user_idx: int = 0) -> List[int]:
-        idx = min(user_idx, self._num_entries - 1)
+        idx = self._checked_user_idx(user_idx)
         return list(self._pred_tokens_list[idx])
 
-    # ---- Garbage-token helpers (single-entry / user 0 only) ----
+    # ---- Garbage-token helpers (debug view on entry 0 only) ----
 
     def _resolve_pred_tokens(self, pred_tokens: Optional[List[int]] = None) -> List[int]:
         if pred_tokens is None:
@@ -251,7 +306,7 @@ class TokenAccuracy:
             if tt_pred in candidate_ids:
                 continue
 
-            pos = self.tf_prompt_len + step
+            pos = self._tf_prompt_len_list[0] + step
             context_start = max(0, pos - context_window)
             details.append(
                 {
@@ -321,7 +376,7 @@ class TokenAccuracy:
         Record TT's predicted token for the *next* generated position of *user_idx*,
         and return the ground-truth token to force into TT decode.
         """
-        idx = min(user_idx, self._num_entries - 1)
+        idx = self._checked_user_idx(user_idx)
         gt_gen = self._gt_gen_1d_list[idx]
         cursor = self._cursor_list[idx]
 
@@ -344,7 +399,7 @@ class TokenAccuracy:
             - top-1 token = top5_tokens[pos][0]
             - top-5 tokens = top5_tokens[pos][:]
         """
-        idx = min(user_idx, self._num_entries - 1)
+        idx = self._checked_user_idx(user_idx)
         preds = self._pred_tokens_list[idx]
         gt_gen = self._gt_gen_1d_list[idx]
         t5 = self._top5_tokens_list[idx]

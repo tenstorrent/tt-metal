@@ -11,6 +11,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.demo.demo import run_demo
+from models.demos.deepseek_v3.demo.token_accuracy import decompress_lzma_payload
 from models.demos.deepseek_v3.utils.config_helpers import DEFAULT_MAX_SEQ_LEN, K_CHUNK_SIZE
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
@@ -53,6 +54,30 @@ def _desired_prompt_count(system_name: str) -> int:
     return 1
 
 
+def _entry_prompt_text(entry: dict, tokenizer) -> str:
+    prompt = entry.get("prompt")
+    if prompt:
+        return str(prompt)
+    prompt_tokens = entry.get("prompt_tokens")
+    if isinstance(prompt_tokens, torch.Tensor):
+        ids = prompt_tokens[0].tolist() if prompt_tokens.dim() == 2 else prompt_tokens.tolist()
+        if ids:
+            return tokenizer.decode([int(x) for x in ids], skip_special_tokens=False)
+    return ""
+
+
+def _entry_generated_text(entry: dict, tokenizer) -> str:
+    generated = entry.get("decoded_generated_text")
+    if generated:
+        return str(generated)
+    generated_tokens = entry.get("generated_tokens")
+    if isinstance(generated_tokens, torch.Tensor):
+        ids = generated_tokens[0].tolist() if generated_tokens.dim() == 2 else generated_tokens.tolist()
+        if ids:
+            return tokenizer.decode([int(x) for x in ids], skip_special_tokens=True)
+    return ""
+
+
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("reference_file", [REFERENCE_FILE])
 @pytest.mark.parametrize("max_new_tokens", [128], ids=["128"])
@@ -92,7 +117,11 @@ def test_demo_teacher_forcing_accuracy(
 
     payload = torch.load(reference_file, weights_only=False)
 
-    entries = payload.get("entries")
+    fmt = payload.get("format_version", "")
+    if fmt == "multi_prompt_v1_lzma_v1":
+        entries = decompress_lzma_payload(payload)
+    else:
+        entries = payload.get("entries")
     if not isinstance(entries, list) or not entries:
         pytest.fail("Reference payload must contain non-empty 'entries'.")
     if len(entries) < desired_prompt_count:
@@ -120,20 +149,22 @@ def test_demo_teacher_forcing_accuracy(
     e0 = entries[0]
     run_payload.update(
         {
-            "reference_tokens": e0.get("reference_tokens", torch.cat([e0["prompt_tokens"], e0["generated_tokens"]], dim=1)),
+            "reference_tokens": e0.get(
+                "reference_tokens", torch.cat([e0["prompt_tokens"], e0["generated_tokens"]], dim=1)
+            ),
             "prompt_tokens": e0["prompt_tokens"],
             "generated_tokens": e0["generated_tokens"],
             "top5_tokens": e0["top5_tokens"],
             "tf_prompt_len": int(e0["tf_prompt_len"]),
-            "prompt": str(e0.get("prompt", "")),
-            "decoded_generated_text": str(e0.get("decoded_generated_text", "")),
+            "prompt": _entry_prompt_text(e0, tokenizer),
+            "decoded_generated_text": _entry_generated_text(e0, tokenizer),
         }
     )
 
     run_ref_file = tmp_path / "teacher_forcing_multi_prompt.refpt"
     torch.save(run_payload, run_ref_file)
 
-    prompts = [str(entry.get("prompt", "")) for entry in entries]
+    prompts = [_entry_prompt_text(entry, tokenizer) for entry in entries]
     assert len(prompts) == num_users, (
         f"Prompt count {len(prompts)} must match run users {num_users} "
         f"({mesh_rows} rows x {max_users_per_row} users/row) for one-call validation."
@@ -155,7 +186,6 @@ def test_demo_teacher_forcing_accuracy(
         repeat_batches=1,
         token_accuracy=True,
         reference_file=run_ref_file,
-        tf_prompt_len=None,
         enable_trace=True,
         force_recalculate=force_recalculate_weight_config,
         stop_at_eos=False,
@@ -164,9 +194,9 @@ def test_demo_teacher_forcing_accuracy(
     )
 
     generations = results.get("generations", [])
-    assert len(generations) == len(entries), (
-        f"Expected {len(entries)} generations (one per prompt), got {len(generations)}"
-    )
+    assert len(generations) == len(
+        entries
+    ), f"Expected {len(entries)} generations (one per prompt), got {len(generations)}"
 
     output_records: list[dict[str, str | int]] = []
     for idx, (entry, gen) in enumerate(zip(entries, generations)):
@@ -175,9 +205,9 @@ def test_demo_teacher_forcing_accuracy(
         output_records.append(
             {
                 "index": idx,
-                "prompt": str(entry.get("prompt", "")),
+                "prompt": _entry_prompt_text(entry, tokenizer),
                 "tt_output": tt_text,
-                "gt_output": str(entry.get("decoded_generated_text", "")),
+                "gt_output": _entry_generated_text(entry, tokenizer),
             }
         )
     GENERATED_OUTPUTS_FILE.parent.mkdir(parents=True, exist_ok=True)

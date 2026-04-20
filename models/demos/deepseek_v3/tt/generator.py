@@ -1730,6 +1730,11 @@ class DeepseekGenerator(WarmupForwardMixin):
             logger.warning(f"Supports 1..{self.batch_size} prompts. Cutton off additional prompts.")
             prompts = prompts[: self.batch_size]
         num_of_prompts = len(prompts)
+        if teacher_forcing is not None and num_of_prompts != teacher_forcing.num_entries:
+            raise ValueError(
+                "Teacher forcing requires one reference entry per prompt. "
+                f"Got prompts={num_of_prompts}, reference_entries={teacher_forcing.num_entries}."
+            )
 
         logger.info("Creating model run configs...")
         profiler.start("preparing_prefill_config")
@@ -1952,8 +1957,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                         next_tokens = prefill_tokens
                         positions = lengths.clone()
                 if teacher_forcing is not None:
-                    n_tf = getattr(teacher_forcing, "num_entries", 1)
-                    for _ui in range(min(num_of_prompts, n_tf)):
+                    for _ui in range(num_of_prompts):
                         tf_idx = int(prompt_user_ids[_ui].item()) if (prompt_user_ids is not None) else _ui
                         _forced = teacher_forcing.collect_predicted_tokens(
                             int(next_tokens[tf_idx].item()), user_idx=_ui
@@ -2042,12 +2046,12 @@ class DeepseekGenerator(WarmupForwardMixin):
                         else:
                             pred_tokens = self._sample_on_host(decode_logits)
                         if teacher_forcing is not None:
-                            n_tf = getattr(teacher_forcing, "num_entries", 1)
-                            for _ui in range(min(num_of_prompts, n_tf)):
+                            for _ui in range(num_of_prompts):
+                                tf_idx = int(prompt_user_ids[_ui].item()) if (prompt_user_ids is not None) else _ui
                                 _forced = teacher_forcing.collect_predicted_tokens(
-                                    int(pred_tokens[_ui].item()), user_idx=_ui
+                                    int(pred_tokens[tf_idx].item()), user_idx=_ui
                                 )
-                                pred_tokens[_ui] = int(_forced)
+                                pred_tokens[tf_idx] = int(_forced)
                         next_tokens = pred_tokens
                         positions += 1
 

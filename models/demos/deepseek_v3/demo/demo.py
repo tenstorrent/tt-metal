@@ -256,12 +256,7 @@ def create_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--reference-file",
         type=str,
-        help="Path to reference .pt/.refpt file containing 'reference_tokens' and optional 'top5_tokens'",
-    )
-    p.add_argument(
-        "--tf-prompt-len",
-        type=int,
-        help="Teacher-forcing prompt length in tokens (from reference file). Defaults to half+1 if omitted.",
+        help="Path to multi-prompt teacher-forcing .pt/.refpt reference file",
     )
     p.add_argument(
         "--early_print_first_user",
@@ -460,7 +455,6 @@ def run_demo(
     override_num_layers: int | None = None,
     token_accuracy: bool = False,
     reference_file: str | Path | None = None,
-    tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
     generator: str = "bp",
     enable_trace: bool = True,
@@ -595,7 +589,7 @@ def run_demo(
             # Lazy import to avoid overhead when not used
             from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
 
-            token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
+            token_acc = TokenAccuracy(str(reference_file))
         if generator == "bp":
             gen = DeepseekGeneratorDP(
                 mesh_device=mesh_device,
@@ -628,26 +622,34 @@ def run_demo(
             prompt_list = [""]
         else:
             if token_acc is not None:
+                n_entries = token_acc.num_entries
                 if prompts:
                     prompt_list = prompts
+                    if len(prompt_list) != n_entries:
+                        raise SystemExit(
+                            "--token-accuracy expects one prompt per reference entry. "
+                            f"Got {len(prompt_list)} prompt(s) for {n_entries} reference entries."
+                        )
                 else:
-                    prompt_list = [""]
-                n_entries = token_acc.num_entries
-                if n_entries > 1:
-                    pre_tokenized_prompts = [
-                        token_acc.get_prompt_token_ids(user_idx=i) for i in range(len(prompt_list))
-                    ]
-                    max_new_tokens = min(
-                        max_new_tokens,
-                        min(token_acc.num_gt_tokens(user_idx=i) for i in range(min(len(prompt_list), n_entries))),
-                    )
-                else:
-                    pre_tokenized_prompts = [token_acc.get_prompt_token_ids() for _ in range(len(prompt_list))]
-                    max_new_tokens = min(max_new_tokens, token_acc.num_gt_tokens())
+                    # Teacher-forcing decode consumes pre-tokenized reference prompts,
+                    # so string prompts are only used for labeling output/checkpoints.
+                    prompt_list = [f"[teacher_forcing_prompt_{i}]" for i in range(n_entries)]
+
+                pre_tokenized_prompts = [token_acc.get_prompt_token_ids(user_idx=i) for i in range(n_entries)]
+                max_new_tokens = min(
+                    max_new_tokens,
+                    min(token_acc.num_gt_tokens(user_idx=i) for i in range(n_entries)),
+                )
             else:
                 if not prompts:
                     raise SystemExit("A prompt is required unless --random-weights is used.")
                 prompt_list = prompts
+
+        if token_acc is not None and len(prompt_list) > batch_size:
+            raise SystemExit(
+                f"--token-accuracy reference has {len(prompt_list)} prompt(s), "
+                f"but runtime capacity is {batch_size}. Reduce prompts or increase max-users-per-row."
+            )
 
         checkpoint_fh = None
         checkpoint_written: set[int] = set()
@@ -763,12 +765,16 @@ def run_demo(
             agg_top1_matches = 0
             agg_top5_matches = 0
             agg_total_tokens = 0
-            n_acc_entries = token_acc.num_entries if token_acc is not None else 0
+            if token_acc is not None and len(generations) != token_acc.num_entries:
+                raise RuntimeError(
+                    "Teacher-forcing generation count mismatch: "
+                    f"generated={len(generations)} reference_entries={token_acc.num_entries}"
+                )
             for i, generation_tokens in enumerate(generations):
                 result = {"tokens": generation_tokens, "text": None}
                 if gen.tokenizer is not None:
                     result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
-                if token_acc is not None and i < n_acc_entries:
+                if token_acc is not None:
                     acc = token_acc.compute_accuracy(user_idx=i)
                     result["accuracy_top1"] = acc.get("top1")
                     result["accuracy_top5"] = acc.get("top5")
@@ -876,7 +882,6 @@ def main() -> None:
         override_num_layers=args.override_num_layers,
         token_accuracy=bool(args.token_accuracy),
         reference_file=args.reference_file,
-        tf_prompt_len=args.tf_prompt_len,
         early_print_first_user=args.early_print_first_user,
         generator=args.generator,
         enable_trace=args.enable_trace,
