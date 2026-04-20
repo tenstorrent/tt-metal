@@ -24,3 +24,38 @@ With this, every TT module that holds weights follows the same 3-method pattern:
 
 
 Components implementing this pattern: `TtParallelEmbedding`, `TtDistributedRmsNorm`, `ttMLA`, `TtMoEGatePrefill`, `TtRoutedExpert`, `TtSharedExpert` (inherited by `TtFfn` as well). Note: the method signatures are not yet unified across modules — each component has different arguments reflecting its weight structure (single tensor, dict, list of dicts, state_dict, etc.).
+
+---
+
+## Cache Check Optimization
+
+### Problem
+The `check_cache_complete()` methods used `Path.glob()` to verify existence of `.tensorbin` files. Each glob scans the entire cache directory (~2303 files), taking ~24ms per call. With 2303 pattern checks: **2303 × 24ms = 56 seconds**.
+
+### Solution
+`utils/fast_cache_checker.py` replaces sequential glob calls with:
+1. Single `iterdir()` to build file set (~40ms)
+2. In-memory prefix/suffix matching (~0.03ms per pattern)
+
+**Result: 56s → 240ms (230× speedup)**
+
+---
+
+## Performance: tt_transformer_creation
+
+Benchmark: 61-layer transformer, 1024 seq len, 8×4 mesh (32 devices)
+
+| Scenario | tt_transformer_creation | Notes |
+|----------|------------------------|-------|
+| TTNN cache creation | ~465s | Building `.tensorbin` files to disk |
+| Cold OS page cache | ~435s | First run after reboot or `drop_caches` |
+| Warm OS page cache | ~42s | Subsequent runs (tensorbin files in RAM) |
+
+The 10× difference between cold and warm page cache is disk I/O: reading ~100GB of `.tensorbin` files from disk (~250MB/s) vs RAM.
+
+**For benchmarking**: Always run twice and report the second run (warm cache) as the representative time.
+
+To manually drop the OS page cache (requires root on host, not inside container):
+```bash
+echo 3 | sudo tee /proc/sys/vm/drop_caches
+```
