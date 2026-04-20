@@ -38,6 +38,31 @@ FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t sc
 
     cb_push_back(cb_id, 1);
 }
+
+// Second scaler page for min/max post-mul : tile is filled uniformly so mul_binary applies correctly
+template <bool half_tile = false>
+FORCE_INLINE void generate_reduce_scaler_for_minmax(const uint32_t cb_id, const uint32_t scaler) {
+    cb_reserve_back(cb_id, 1);
+    constexpr uint32_t num_zeros_reads = (half_tile ? 1024 : 2048) / MEM_ZEROS_SIZE;
+    static_assert(num_zeros_reads > 0, "num_zeros_reads must be greater than 0");
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    uint32_t write_addr = get_write_ptr(cb_id);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
+    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
+        noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);
+        write_addr += MEM_ZEROS_SIZE;
+    }
+    noc_async_read_barrier();
+    if (scaler != 0) {
+        constexpr uint32_t n = (half_tile ? 1024 : 2048) / sizeof(uint32_t);
+        for (uint32_t i = 0; i < n; ++i) {
+            ptr[i] = scaler;
+        }
+    }
+    cb_push_back(cb_id, 1);
+}
+
 template <bool needs_zeroing = true>
 FORCE_INLINE void wh_generate_reduce_scaler(const uint32_t cb_id, const uint32_t scaler) {
     // This is much faster but WILL NOT WORK IN BLACKHOLE since it assumes 32B alignment noc reads are allowed, done

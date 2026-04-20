@@ -902,3 +902,82 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy)
         assert torch.allclose(
             torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
         ), f"torch: {torch_result}, ttnn: {ttnn_result}"
+
+
+@pytest.mark.use_module_device
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (1, 1, 3, 4),
+        (1, 1, 32, 64),
+        (4, 4, 64, 32),
+        (2, 4, 16, 16),
+    ],
+)
+@pytest.mark.parametrize("op", ["max", "min"])
+@pytest.mark.parametrize("dim", [-1, -2, (-2, -1)])
+@pytest.mark.parametrize("scalar", [2.43, 2.0, -2.43, -2.0])
+def test_min_max_scalar(device, input_shape, op, dim, scalar):
+    """
+    Test torch and ttnn min/max with scalar for different tensor shapes and
+    reduction dims. Validates output values against torch reference results.
+    Covers scalar behavior for min/max reductions (issue #40498).
+    """
+    torch.manual_seed(42)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_result = getattr(torch, f"a{op}")(scalar * torch_input, dim=dim, keepdim=True)
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result = ttnn.to_torch(getattr(ttnn, op)(ttnn_input, dim=dim, scalar=scalar, keepdim=True))
+
+    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=0.999, rtol=0.01, atol=0.07)
+
+    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
+
+
+@pytest.mark.use_module_device
+@pytest.mark.parametrize("op", ["max", "min"])
+def test_min_max_scalar_width_sharded(device, op):
+    """Sharded H-reduce with scalar for width-sharded input and output"""
+    torch.manual_seed(42)
+    grid_size = (2, 2)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} core grid, device has {compute_grid_size}")
+
+    # W / num_cores must be a multiple of tile width (32) for TILE + width-shard.
+    N, C, H, W = 1, 1, 32, 128
+    dim = 2
+    scalar = -2.43
+
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.L1,
+    )
+
+    x = torch.randn((N, C, H, W), dtype=torch.bfloat16)
+    torch_result = getattr(torch, f"a{op}")(scalar * x, dim=dim, keepdim=True)
+
+    ttnn_input_interleaved = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=interleaved_mem_config
+    )
+    ttnn_input_width_sharded = ttnn.interleaved_to_sharded(
+        ttnn_input_interleaved,
+        grid_size,
+        [N * C * H, W // (grid_size[0] * grid_size[1])],
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.ShardOrientation.COL_MAJOR,
+    )
+    ttnn_output_width_sharded = getattr(ttnn, op)(
+        ttnn_input_width_sharded,
+        dim,
+        scalar=scalar,
+        keepdim=True,
+        memory_config=ttnn_input_width_sharded.memory_config(),
+    )
+    ttnn_output_interleaved = ttnn.sharded_to_interleaved(ttnn_output_width_sharded, interleaved_mem_config)
+    ttnn_result = ttnn.to_torch(ttnn_output_interleaved)
+
+    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=0.999, rtol=0.008, atol=0.032)
+    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"

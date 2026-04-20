@@ -28,6 +28,15 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     uint32_t Ht = H / tile_height;
     uint32_t HtWt = Ht * Wt;
 
+    // Min/max, scalar != 1.0: two packed tiles for scaler CB (unity for reduce_tile, user scale for post-mul)
+    bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
+    bfloat16 bfloat_one = bfloat16::truncate(1.0f);
+    const bool is_min_or_max = (operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MIN) ||
+                               (operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX);
+    const bool min_max_scaler_cb = is_min_or_max && (bfloat_scaler_value != bfloat_one);
+    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+    uint32_t packed_reduce_unity = pack_two_bfloat16_into_uint32({bfloat_one, bfloat_one});
+
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
 
@@ -100,8 +109,12 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     }
 
     uint32_t scaler_cb_index = CBIndex::c_2;
+    // CB Scaler: two pages when min/max and scalar != 1.0 - tile0 = 1.0 for reduce_tile, tile1 = user scale for
+    // post-mul
+    const uint32_t scaler_cb_pages = min_max_scaler_cb ? 2u : 1u;
     tt_metal::CircularBufferConfig cb_scaler_config =
-        tt_metal::CircularBufferConfig(1 * scaler_single_tile_size, {{scaler_cb_index, scaler_cb_data_format}})
+        tt_metal::CircularBufferConfig(
+            scaler_cb_pages * scaler_single_tile_size, {{scaler_cb_index, scaler_cb_data_format}})
             .set_page_size(scaler_cb_index, scaler_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
@@ -125,8 +138,6 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     }
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::KernelHandle reader_kernel_id;
-    bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
-    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
     if (operation_attributes.negate) {
         // The reduce_h_neg kernel pushes ntiles tiles per inner-loop iteration
@@ -180,6 +191,11 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
         std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
+        if (min_max_scaler_cb) {
+            reader_compile_time_args.push_back(packed_reduce_unity);
+            reader_compile_time_args.push_back(packed_scaler_value);
+            reader_defines["REDUCE_MINMAX_TWO_TILE_SCALER"] = "1";
+        }
         reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -187,7 +203,15 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, chunk_size, packed_scaler_value};
+        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, chunk_size};
+        std::map<std::string, std::string> reader_defines;
+        if (min_max_scaler_cb) {
+            reader_compile_time_args.push_back(packed_reduce_unity);
+            reader_compile_time_args.push_back(packed_scaler_value);
+            reader_defines["REDUCE_MINMAX_TWO_TILE_SCALER"] = "1";
+        } else {
+            reader_compile_time_args.push_back(packed_scaler_value);
+        }
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
         reader_kernel_id = tt_metal::CreateKernel(
@@ -195,7 +219,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     }
 
     tt_metal::Buffer* dst_buffer = output.buffer();
@@ -222,6 +246,9 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     }
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::H);
+    if (min_max_scaler_cb) {
+        reduce_defines["REDUCE_MINMAX_TWO_TILE_SCALER"] = "1";
+    }
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                         // Ht
         num_cols_per_core_group_1,  // Wt
