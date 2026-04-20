@@ -867,10 +867,10 @@ def codebook_lookup_rvq(
     CRITICAL: Codebook embeddings must be normalized by cluster_usage:
         embedding = embedding_sum / cluster_usage.clamp(min=epsilon)[:, None]
 
-    Architecture (matching official qwen_tts):
-    - rvq_first (semantic): 1 codebook -> sum -> output_proj (256 -> 256)
-    - rvq_rest (acoustic): 15 codebooks -> sum -> output_proj (256 -> 256)
-    - ADD the results (not concatenate!) -> [batch, codebook_dim, seq_len]
+    Architecture:
+    - rvq_first (semantic): 1 codebook -> output_proj (256 -> 512)
+    - rvq_rest (acoustic): 15 codebooks -> sum -> output_proj (256 -> 512)
+    - Add semantic + acoustic -> [batch, 512, seq_len]
 
     Args:
         token_ids: Token IDs of shape [batch, num_quantizers, seq_len]
@@ -937,10 +937,9 @@ def codebook_lookup_rvq(
         if rvq_rest_emb is not None and rvq_rest_output_proj is not None:
             rvq_rest_emb = F.conv1d(rvq_rest_emb, rvq_rest_output_proj)
 
-    # ADD rvq_first and rvq_rest (not concatenate!)
-    # Official qwen_tts: quantized = rvq_first.decode(...) + rvq_rest.decode(...)
+    # Add semantic + acoustic branches to produce 512 channels.
     if rvq_first_emb is not None and rvq_rest_emb is not None:
-        embeddings = rvq_first_emb + rvq_rest_emb  # [batch, 256, seq_len]
+        embeddings = rvq_first_emb + rvq_rest_emb  # [batch, 512, seq_len]
     elif rvq_first_emb is not None:
         embeddings = rvq_first_emb
     elif rvq_rest_emb is not None:
