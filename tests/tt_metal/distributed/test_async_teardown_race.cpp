@@ -43,6 +43,7 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_event.hpp>
@@ -1875,12 +1876,12 @@ TEST_F(AsyncTeardownFabric2DFixture, AllRealChipsInClusterBogusRejected) {
             tt::LogTest,
             "[Scenario P] chip_id={} coord=({},{}) in_cluster={}",
             chip_id,
-            coord.row,
-            coord.col,
+            coord[0],
+            coord[1],
             in_cluster);
         EXPECT_TRUE(in_cluster)
             << "[Scenario P] Real chip_id " << chip_id << " at ("
-            << coord.row << "," << coord.col << ") should be in cluster";
+            << coord[0] << "," << coord[1] << ") should be in cluster";
         chip_count++;
     }
     log_info(tt::LogTest, "[Scenario P] Verified {} real chips — all in cluster", chip_count);
