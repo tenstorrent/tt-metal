@@ -119,8 +119,36 @@ TEST_P(MatmulMulticoreFixture, MatmulMulticoreAccuracy) {
     const std::vector<float> device_c = output.to_vector<float>();
 
     // --- Validation ---
-    // Use the combination of allclose, relative Frobenius, and pcc checks,
-    // mirroring assert_numeric_metrics from tests/ttnn/utils_for_testing.py.
+    // Helper used by both the non-finite pre-check and the worst-element diagnostic below
+    // to map flat element indices back to (row, col) for easier correlation with tile
+    // positions when debugging.
+    auto row_col = [&](size_t idx) {
+        return std::make_pair(idx / static_cast<size_t>(N), idx % static_cast<size_t>(N));
+    };
+
+    // Pre-check: surface unexpected NaN/Inf cleanly before running the validation
+    // metrics below.  Mirrors models/common/utility_functions.py::_comp_nonfinite.
+    //
+    // Two complementary actions on the result, both aimed at preventing a cascade of
+    // confusing secondary failures from the metrics:
+    //   - If non-finite POSITIONS disagree, FAIL with a dedicated message.  Without
+    //     this, allclose_report would still flag these as failures (finite vs Inf is
+    //     out of tolerance), but as part of its generic "N elements failed allclose"
+    //     message rather than naming the actual symptom (a non-finite leaked).
+    //   - If at least one non-finite is present (even when positions match), skip
+    //     pcc and relative_frobenius below.  Both NaN-poison on any non-finite input
+    //     (e.g. pcc evaluates inf - inf = NaN in the mean-deviation step) and would
+    //     return NaN even when allclose_report correctly reports the result as close.
+    //     allclose_report itself runs unconditionally because it correctly treats
+    //     matching same-sign infinities as "close" per torch.allclose semantics.
+    const ttnn::test_utils::NonfiniteReport nf = ttnn::test_utils::check_nonfinite_positions(device_c, ref_c);
+    if (!nf.positions_match) {
+        const auto [r, c] = row_col(nf.first_mismatch_index);
+        FAIL() << "Non-finite values do not appear at the same positions in device output and CPU reference. "
+               << "First mismatch at flat index " << nf.first_mismatch_index << " (row=" << r << ", col=" << c
+               << "): device=" << nf.first_mismatch_actual << " ref=" << nf.first_mismatch_expected;
+    }
+
     constexpr float rtol = 0.1f;
     constexpr float atol = 0.108f;
     // Relative Frobenius catches global error magnitude that individual
@@ -128,17 +156,33 @@ TEST_P(MatmulMulticoreFixture, MatmulMulticoreAccuracy) {
     constexpr float frobenius_threshold = 0.002f;
     constexpr float pcc_threshold = 0.9999f;
     const ttnn::test_utils::AllcloseReport report = ttnn::test_utils::allclose_report(device_c, ref_c, rtol, atol);
+
+    // pcc and relative_frobenius are skipped when non-finites are present: see the
+    // pre-check comment above.
+    std::optional<float> frobenius_opt;
+    std::optional<float> pcc_opt;
     bool expected_norm_is_zero = false;
-    const float frobenius = ttnn::test_utils::relative_frobenius(device_c, ref_c, expected_norm_is_zero);
-    const float pcc = ttnn::test_utils::pcc(device_c, ref_c);
+    if (!nf.any_nonfinite) {
+        frobenius_opt = ttnn::test_utils::relative_frobenius(device_c, ref_c, expected_norm_is_zero);
+        pcc_opt = ttnn::test_utils::pcc(device_c, ref_c);
+    }
+
+    // Format a metric value for inclusion in an EXPECT_* failure message: numeric
+    // when computed, or a clear skip notice when omitted.
+    auto fmt_metric = [](const std::optional<float>& v) {
+        std::ostringstream os;
+        if (v) {
+            os << *v;
+        } else {
+            os << "(skipped: non-finite values present)";
+        }
+        return os.str();
+    };
 
     // Format a diagnostic identifying the worst elements by absolute error,
     // relative error and allclose margin.  Indexes are reported both as flat
     // offsets and 2D (row, col) coordinates to make it easy to correlate with
     // tile positions when debugging.
-    auto row_col = [&](size_t idx) {
-        return std::make_pair(idx / static_cast<size_t>(N), idx % static_cast<size_t>(N));
-    };
     auto worst_summary = [&]() {
         std::ostringstream os;
         const auto [ar, ac] = row_col(report.worst_atol_index);
@@ -156,19 +200,36 @@ TEST_P(MatmulMulticoreFixture, MatmulMulticoreAccuracy) {
     };
 
     EXPECT_EQ(report.failures, 0u) << report.failures << " element(s) failed allclose(atol=" << atol
-                                   << ", rtol=" << rtol << "). Result had pcc=" << pcc
-                                   << ", relative_frobenius=" << frobenius << ";" << worst_summary();
-    EXPECT_LE(frobenius, frobenius_threshold)
-        << (expected_norm_is_zero ? "Absolute" : "Relative") << " Frobenius norm " << frobenius << " exceeds threshold "
-        << frobenius_threshold << ". Result had pcc=" << pcc << worst_summary();
-    EXPECT_GE(pcc, pcc_threshold) << "PCC " << pcc << " below threshold " << pcc_threshold
-                                  << ". Result had relative_frobenius=" << frobenius << worst_summary();
+                                   << ", rtol=" << rtol << "). Result had pcc=" << fmt_metric(pcc_opt)
+                                   << ", relative_frobenius=" << fmt_metric(frobenius_opt) << ";" << worst_summary();
+    if (frobenius_opt) {
+        EXPECT_LE(*frobenius_opt, frobenius_threshold)
+            << (expected_norm_is_zero ? "Absolute" : "Relative") << " Frobenius norm " << *frobenius_opt
+            << " exceeds threshold " << frobenius_threshold << ". Result had pcc=" << fmt_metric(pcc_opt)
+            << worst_summary();
+    }
+    if (pcc_opt) {
+        EXPECT_GE(*pcc_opt, pcc_threshold)
+            << "PCC " << *pcc_opt << " below threshold " << pcc_threshold
+            << ". Result had relative_frobenius=" << fmt_metric(frobenius_opt) << worst_summary();
+    }
 }
 
+// Shapes:
+//   * {2048, 2048, 2048}: 64*64 = 4096 output tiles -- evenly divides any reasonable
+//     compute grid (8x8, 8x10, ...), so split_work_to_cores produces a single non-empty
+//     core_group_1 and an empty core_group_2.  Exercises the "primary" CreateKernel call.
+//   * {2080, 2048, 64}:   65*2  = 130 output tiles (2080 = 65*32 forces an odd Mt).
+//     130 = 2*5*13, so it cannot evenly divide grid sizes like 64 or 80, which forces
+//     split_work_to_cores to produce a non-empty core_group_2 and exercise the second
+//     CreateKernel call (where the same compute_kernel_config and throttle/stagger
+//     defines are forwarded to a different per-core tile count).  Keeps K=2048 so the
+//     accumulation depth -- and therefore the precision tolerances below -- match the
+//     primary shape.
 INSTANTIATE_TEST_SUITE_P(
     MatmulMulticoreTests,
     MatmulMulticoreFixture,
-    ::testing::Values(MatmulMulticoreParam{2048, 2048, 2048}),
+    ::testing::Values(MatmulMulticoreParam{2048, 2048, 2048}, MatmulMulticoreParam{2080, 2048, 64}),
     [](const testing::TestParamInfo<MatmulMulticoreParam>& info) {
         return fmt::format("M{}_K{}_N{}", info.param.M, info.param.K, info.param.N);
     });
