@@ -49,7 +49,7 @@ SEQ_LEN_100_K = 100 * 1024
     ],
     ids=["moe-gate_device"],
 )
-@pytest.mark.parametrize("num_iterations", [1000])
+@pytest.mark.parametrize("num_iterations", [100000])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
