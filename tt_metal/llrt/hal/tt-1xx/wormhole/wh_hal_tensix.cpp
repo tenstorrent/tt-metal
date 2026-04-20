@@ -34,7 +34,7 @@ HalCoreInfoType create_tensix_mem_map() {
     constexpr std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     std::vector<DeviceAddr> mem_map_bases;
-    const uint32_t default_l1_kernel_config_size = 69 * 1024;
+    const uint32_t default_l1_kernel_config_size = 96 * 1024;  // 69->96: SDPA program overflow from #41758
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_L1_BASE;
