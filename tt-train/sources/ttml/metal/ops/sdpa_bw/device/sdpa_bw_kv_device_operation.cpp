@@ -51,20 +51,8 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
         grad_output.device() == query.device() && query.device() == key.device() && key.device() == value.device(),
         "All input tensors must be on the same device");
 
-    TT_FATAL(
-        tensor_args.u_scaler.has_value() || tensor_args.attn_output.has_value(),
-        "Either u_scaler or attn_output must be provided to KV backward kernel");
-
-    if (tensor_args.u_scaler.has_value()) {
-        const auto& u_scaler = tensor_args.u_scaler.value();
-        TT_FATAL(u_scaler.device() == query.device(), "u_scaler must be on the same device as query");
-        TT_FATAL(u_scaler.layout() == tt::tt_metal::Layout::TILE, "u_scaler must have TILE layout");
-    }
-
-    if (tensor_args.attn_output.has_value()) {
-        const auto& attn_output = tensor_args.attn_output.value();
-        TT_FATAL(attn_output.device() == query.device(), "attn_output must be on the same device as query");
-    }
+    TT_FATAL(tensor_args.u_scaler.device() == query.device(), "u_scaler must be on the same device as query");
+    TT_FATAL(tensor_args.u_scaler.layout() == tt::tt_metal::Layout::TILE, "u_scaler must have TILE layout");
 
     // Extract and validate heads from tensor shapes
     const auto [qB, qH, qS, qE] = query_shape.to_array_4D();
@@ -205,8 +193,7 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_
     ttml::metal::AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
-    const std::optional<ttnn::Tensor>& u_scaler,
-    const std::optional<ttnn::Tensor>& attn_output,
+    const ttnn::Tensor& u_scaler,
     const float dropout_probability,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
     const std::optional<ttnn::Tensor>& preallocated_grad_value) {
@@ -222,7 +209,6 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_
         .value = value_tensor,
         .attn_mask = attn_mask,
         .intermediates = intermediates,
-        .attn_output = attn_output,
         .u_scaler = u_scaler,
         .preallocated_grad_key = preallocated_grad_key,
         .preallocated_grad_value = preallocated_grad_value,

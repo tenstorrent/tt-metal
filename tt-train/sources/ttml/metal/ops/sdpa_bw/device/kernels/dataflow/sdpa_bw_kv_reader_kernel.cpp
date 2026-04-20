@@ -10,25 +10,16 @@
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     const uint32_t grad_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
-#ifndef USE_PRECOMPUTED_U_SCALER
-    const uint32_t attn_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
-#endif
     const uint32_t query_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t key_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t value_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t mask_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t intermediates_addr = get_arg_val<uint32_t>(runtime_args_counter++);
-#ifdef USE_PRECOMPUTED_U_SCALER
     const uint32_t u_scaler_addr = get_arg_val<uint32_t>(runtime_args_counter++);
-#endif
     const uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    // Circular buffer indices
     constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;
-#ifndef USE_PRECOMPUTED_U_SCALER
-    constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;
-#endif
     constexpr uint32_t cb_query = tt::CBIndex::c_2;
     constexpr uint32_t cb_key = tt::CBIndex::c_3;
     constexpr uint32_t cb_value = tt::CBIndex::c_4;
@@ -37,32 +28,21 @@ void kernel_main() {
 #endif
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;
     constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_7;
-#ifdef USE_PRECOMPUTED_U_SCALER
     constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;
-#endif
 
-    // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);
     constexpr uint32_t kWt = get_compile_time_arg_val(1);
     constexpr uint32_t Ht = get_compile_time_arg_val(2);
     constexpr uint32_t q_heads = get_compile_time_arg_val(3);
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);
 
-    // TensorAccessor definitions with chained offsets
     constexpr auto grad_output_args = TensorAccessorArgs<5>();
-#ifdef USE_PRECOMPUTED_U_SCALER
     constexpr auto query_args = TensorAccessorArgs<grad_output_args.next_compile_time_args_offset()>();
-#else
-    constexpr auto attn_output_args = TensorAccessorArgs<grad_output_args.next_compile_time_args_offset()>();
-    constexpr auto query_args = TensorAccessorArgs<attn_output_args.next_compile_time_args_offset()>();
-#endif
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
     constexpr auto intermediates_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
-#ifdef USE_PRECOMPUTED_U_SCALER
     constexpr auto u_scaler_args = TensorAccessorArgs<intermediates_args.next_compile_time_args_offset()>();
-#endif
 
     constexpr uint32_t onetile = 1U;
     constexpr uint32_t num_of_interm_tiles = 1U;
@@ -70,11 +50,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_grad_output);
     const uint32_t interm_tile_bytes = get_tile_size(cb_intermediates);
 
-    // Create TensorAccessor generators
     const auto grad_output_address_generator = TensorAccessor(grad_output_args, grad_output_addr);
-#ifndef USE_PRECOMPUTED_U_SCALER
-    const auto attn_output_address_generator = TensorAccessor(attn_output_args, attn_output_addr);
-#endif
     const auto query_address_generator = TensorAccessor(query_args, query_addr);
     const auto key_address_generator = TensorAccessor(key_args, key_addr);
     const auto value_address_generator = TensorAccessor(value_args, value_addr);
@@ -83,9 +59,7 @@ void kernel_main() {
 #endif
     const auto intermediates_address_generator =
         TensorAccessor(intermediates_args, intermediates_addr, interm_tile_bytes);
-#ifdef USE_PRECOMPUTED_U_SCALER
     const auto u_scaler_address_generator = TensorAccessor(u_scaler_args, u_scaler_addr);
-#endif
 
     generate_matmul_row_reduce_tile(cb_matmul_reduce);
 
@@ -114,9 +88,7 @@ void kernel_main() {
         uint32_t intermediates_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * num_of_interm_tiles;
 
         for (uint32_t q_head_idx = 0; q_head_idx < heads_per_group; ++q_head_idx) {
-#ifdef USE_PRECOMPUTED_U_SCALER
             const uint32_t u_scaler_head_offset = (batch_idx * q_heads + first_q_head_idx + q_head_idx) * Ht;
-#endif
 
             for (uint32_t q_idx = 0; q_idx < num_q_tiles_to_read; ++q_idx) {
                 const uint32_t h = q_start_tile + q_idx;
@@ -135,17 +107,12 @@ void kernel_main() {
 
                 read_tiles_by_row(cb_grad_output, grad_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
 
-#ifdef USE_PRECOMPUTED_U_SCALER
                 read_one_tile(cb_u_scalar_row, u_scaler_address_generator, u_scaler_head_offset + h);
-#else
-                read_tiles_by_row(cb_attn_output, attn_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
-#endif
             }
             intermediates_offset += Ht * num_of_interm_tiles;
         }
     };
 
-    // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx
     for (uint32_t p = 0; p < num_rows_to_process; ++p) {
         const uint32_t global_pair_idx = start_row + p;
 
@@ -193,9 +160,7 @@ void kernel_main() {
         uint32_t intermediates_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * num_of_interm_tiles;
 
         for (uint32_t q_head_idx = 0; q_head_idx < heads_per_group; ++q_head_idx) {
-#ifdef USE_PRECOMPUTED_U_SCALER
             const uint32_t u_scaler_head_offset = (batch_idx * q_heads + first_q_head_idx + q_head_idx) * Ht;
-#endif
 
             for (uint32_t q_idx = 0; q_idx < num_q_tiles_to_read; ++q_idx) {
                 const uint32_t h = q_start_tile + q_idx;
@@ -218,11 +183,7 @@ void kernel_main() {
 
                 read_tiles_by_row(cb_grad_output, grad_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
 
-#ifdef USE_PRECOMPUTED_U_SCALER
                 read_one_tile(cb_u_scalar_row, u_scaler_address_generator, u_scaler_head_offset + h);
-#else
-                read_tiles_by_row(cb_attn_output, attn_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
-#endif
             }
             intermediates_offset += Ht * num_of_interm_tiles;
         }
