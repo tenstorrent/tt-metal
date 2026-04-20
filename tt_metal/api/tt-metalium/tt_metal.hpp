@@ -96,6 +96,7 @@ IDevice* GetActiveDevice(ChipId device_id);
  * buffer               | Yes      |
  */
 void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer);
+// Internal overload for experimental core_subset_write and dispatch paths; not a stable public surface.
 void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter);
 /**
  * Copies data from a host buffer into the specified buffer

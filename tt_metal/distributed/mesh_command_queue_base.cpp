@@ -290,6 +290,11 @@ void MeshCommandQueueBase::enqueue_write_shards(
 }
 
 void MeshCommandQueueBase::enqueue_write(
+    const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) {
+    this->enqueue_write_with_core_filter(mesh_buffer, host_buffer, blocking, nullptr);
+}
+
+void MeshCommandQueueBase::enqueue_write_with_core_filter(
     const std::shared_ptr<MeshBuffer>& mesh_buffer,
     const DistributedHostBuffer& host_buffer,
     bool blocking,

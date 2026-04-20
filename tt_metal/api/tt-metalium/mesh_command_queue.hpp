@@ -44,6 +44,20 @@ class ShardDataTransferHelper;
 }  // namespace experimental
 }  // namespace tt::tt_metal
 
+namespace tt::tt_metal {
+namespace distributed {
+class MeshCommandQueue;
+}
+namespace experimental::core_subset_write {
+void enqueue_write(
+    distributed::MeshCommandQueue& cq,
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
+    const DistributedHostBuffer& host_buffer,
+    bool blocking,
+    const CoreRangeSet& logical_core_filter);
+}
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal::distributed {
 
 class MeshEvent;
@@ -101,10 +115,7 @@ public:
     // * calling finish() on the MeshCommandQueue
     // * calling enqueue_record_event_to_host() and then waiting for the event to complete on the host.
     virtual void enqueue_write(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        const DistributedHostBuffer& host_buffer,
-        bool blocking,
-        const CoreRangeSet* logical_core_filter = nullptr) = 0;
+        const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) = 0;
     // If PinnedMemory is set on a ShardDataTransfer, the contents of the memory must not be modified until the
     // enqueue_write has completed on the device. This may be checked by any of
     // * calling lock() on the PinnedMemory

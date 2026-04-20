@@ -17,6 +17,7 @@
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -313,7 +314,8 @@ void py_module(nb::module_& mod) {
            ttnn::Tensor& device_tensor,
            const tt::tt_metal::CoreRangeSet& logical_core_filter,
            const std::optional<QueueId>& cq_id) {
-            tt::tt_metal::copy_to_device_filtered(host_tensor, device_tensor, logical_core_filter, cq_id);
+            ttnn::experimental::core_subset_write::copy_to_device_filtered(
+                host_tensor, device_tensor, logical_core_filter, cq_id);
         },
         nb::arg("host_tensor"),
         nb::arg("device_tensor"),

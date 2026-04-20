@@ -34,6 +34,7 @@
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
@@ -1268,7 +1269,8 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithCoreFilter) 
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     DistributedHostBuffer distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
     distributed_host_buffer.emplace_shard(coord, [newest]() { return HostBuffer(newest); });
-    mesh_device_->mesh_command_queue().enqueue_write(buf, distributed_host_buffer, /*blocking=*/true, &filter);
+    tt::tt_metal::experimental::core_subset_write::enqueue_write(
+        mesh_device_->mesh_command_queue(), buf, distributed_host_buffer, /*blocking=*/true, filter);
 
     std::vector<uint32_t> dst_vec;
     ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, coord);
@@ -1306,7 +1308,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteWithNullFilterIsEquivalent) {
 
     DistributedHostBuffer dhb_a = DistributedHostBuffer::create(mesh_device_->shape());
     dhb_a.emplace_shard(coord, [src_vec]() { return HostBuffer(src_vec); });
-    mesh_device_->mesh_command_queue().enqueue_write(buf_explicit, dhb_a, /*blocking=*/true, nullptr);
+    mesh_device_->mesh_command_queue().enqueue_write(buf_explicit, dhb_a, /*blocking=*/true);
 
     DistributedHostBuffer dhb_b = DistributedHostBuffer::create(mesh_device_->shape());
     dhb_b.emplace_shard(coord, [src_vec]() { return HostBuffer(src_vec); });

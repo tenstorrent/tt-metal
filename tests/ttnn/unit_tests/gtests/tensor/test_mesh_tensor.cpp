@@ -10,6 +10,7 @@
 #include <set>
 
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -22,6 +23,7 @@
 #include <ttnn/distributed/distributed_tensor.hpp>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/core_subset_write/tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
 namespace ttnn::distributed::test {
@@ -768,7 +770,7 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_WithCoreFilter_WritesOnly
     enqueue_write_tensor(cq, host_sentinel, device_tensor);
     // Filter to logical core (0,0) -- the first shard slot of the ShardSpec grid.
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    enqueue_write_tensor(cq, host_new, device_tensor, filter);
+    tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor(cq, host_new, device_tensor, filter);
 
     HostTensor result = enqueue_read_tensor(cq, device_tensor);
     for (const auto& coord : result.buffer().shard_coords()) {
@@ -800,7 +802,7 @@ TEST_F(MeshTensorDataMovementTest, EnqueueWriteTensor_FilterEmpty_Noop) {
     MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_sentinel.tensor_topology());
     enqueue_write_tensor(cq, host_sentinel, device_tensor);
     CoreRangeSet empty_filter;
-    enqueue_write_tensor(cq, host_new, device_tensor, empty_filter);
+    tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor(cq, host_new, device_tensor, empty_filter);
     cq.finish();
 
     auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
@@ -898,7 +900,8 @@ TEST_F(MeshTensorDataMovementTest, NonUniformCopyToDevice_WithCoreFilter_Respect
     // Seed all coords with sentinel so we can detect any spurious touches on non-written coords.
     enqueue_write_tensor(cq, host_sentinel_full, device_tensor);
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    non_uniform_data_movement::enqueue_write_tensor(cq, host_new_partial, device_tensor, filter);
+    tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor_non_uniform(
+        cq, host_new_partial, device_tensor, filter);
 
     HostTensor result = enqueue_read_tensor(cq, device_tensor);
     std::set<distributed::MeshCoordinate> written_set(written_coords.begin(), written_coords.end());
@@ -982,7 +985,8 @@ TEST_F(MeshTensorDataMovementTest, UniformEnqueueWriteTensor_FilteredWriteReject
     MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_tensor.tensor_topology());
     enqueue_write_tensor(cq, host_tensor, device_tensor);
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    EXPECT_ANY_THROW(enqueue_write_tensor(cq, host_tensor, device_tensor, filter));
+    EXPECT_ANY_THROW(
+        tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor(cq, host_tensor, device_tensor, filter));
 }
 
 // Verifies the copy_to_device_filtered entry point at the ttnn::Tensor level: only the logical
@@ -1005,7 +1009,7 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_WritesOnlyFilteredCores) {
     Tensor device_tensor = create_device_tensor(spec, mesh_device_.get(), host_new.tensor_topology());
     copy_to_device(host_sent, device_tensor);
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    copy_to_device_filtered(host_new, device_tensor, filter);
+    ttnn::experimental::core_subset_write::copy_to_device_filtered(host_new, device_tensor, filter);
 
     Tensor out = cpu(device_tensor);
     auto out_shards = get_device_tensors(out);
@@ -1037,7 +1041,7 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_EmptyFilter_NoChange) {
     Tensor device_tensor = create_device_tensor(spec, mesh_device_.get(), host_new.tensor_topology());
     copy_to_device(host_sent, device_tensor);
     CoreRangeSet empty_filter;
-    copy_to_device_filtered(host_new, device_tensor, empty_filter);
+    ttnn::experimental::core_subset_write::copy_to_device_filtered(host_new, device_tensor, empty_filter);
     mesh_device_->mesh_command_queue().finish();
     Tensor out = cpu(device_tensor);
     auto out_shards = get_device_tensors(out);
@@ -1058,7 +1062,7 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_ThrowsOnInterleavedLayout) {
     Tensor device_tensor = create_device_tensor(spec, mesh_device_.get(), host_a.tensor_topology());
     copy_to_device(host_a, device_tensor);
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    EXPECT_ANY_THROW(copy_to_device_filtered(host_b, device_tensor, filter));
+    EXPECT_ANY_THROW(ttnn::experimental::core_subset_write::copy_to_device_filtered(host_b, device_tensor, filter));
 }
 
 }  // namespace

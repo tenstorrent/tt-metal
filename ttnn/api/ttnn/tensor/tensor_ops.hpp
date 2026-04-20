@@ -18,7 +18,6 @@ namespace tt::tt_metal {
 class Tensor;
 class MemoryConfig;
 class TensorSpec;
-class CoreRangeSet;
 
 // Allocates a tensor on host.
 // Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device shard.
@@ -32,12 +31,6 @@ tt::tt_metal::Tensor to_device(
     std::optional<QueueId> cq_id = std::nullopt);
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
-
-void copy_to_device_filtered(
-    const Tensor& host_tensor,
-    Tensor& device_tensor,
-    const CoreRangeSet& logical_core_filter,
-    std::optional<QueueId> cq_id = std::nullopt);
 
 void copy_to_device(
     distributed::MeshCommandQueue& queue,

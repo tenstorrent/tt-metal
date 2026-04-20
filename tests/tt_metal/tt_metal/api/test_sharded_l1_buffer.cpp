@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
@@ -210,11 +211,11 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_WritesOnlyFilteredCores) 
         std::vector<uint32_t> newest(num_u32, k_new);
         tt::tt_metal::detail::WriteToBuffer(buffer, sentinel);
         CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-        tt::tt_metal::detail::WriteToBuffer(
+        tt::tt_metal::experimental::core_subset_write::WriteToBuffer(
             *buffer,
             tt::stl::Span<const uint8_t>(
                 reinterpret_cast<const uint8_t*>(newest.data()), newest.size() * sizeof(uint32_t)),
-            &filter);
+            filter);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_devices()[0]->id());
         std::vector<uint32_t> output;
         tt::tt_metal::detail::ReadFromBuffer(buffer, output);
@@ -235,11 +236,11 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_EmptyFilterIsNoop) {
         std::vector<uint32_t> newest(num_u32, 0x99999999u);
         tt::tt_metal::detail::WriteToBuffer(buffer, sentinel);
         CoreRangeSet empty_filter;
-        tt::tt_metal::detail::WriteToBuffer(
+        tt::tt_metal::experimental::core_subset_write::WriteToBuffer(
             *buffer,
             tt::stl::Span<const uint8_t>(
                 reinterpret_cast<const uint8_t*>(newest.data()), newest.size() * sizeof(uint32_t)),
-            &empty_filter);
+            empty_filter);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_devices()[0]->id());
         std::vector<uint32_t> output;
         tt::tt_metal::detail::ReadFromBuffer(buffer, output);
@@ -263,10 +264,10 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_FullFilterMatchesUnfilter
         std::vector<uint32_t> sentinel(num_u32, 0x01010101u);
         tt::tt_metal::detail::WriteToBuffer(buffer_b, sentinel);
         CoreRangeSet full_filter = test_config.shard_spec().grid();
-        tt::tt_metal::detail::WriteToBuffer(
+        tt::tt_metal::experimental::core_subset_write::WriteToBuffer(
             *buffer_b,
             tt::stl::Span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(uint32_t)),
-            &full_filter);
+            full_filter);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_devices()[0]->id());
         std::vector<uint32_t> out_a;
         std::vector<uint32_t> out_b;

@@ -64,6 +64,19 @@ private:
         bool blocking,
         const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr);
 
+    void enqueue_write_with_core_filter(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const DistributedHostBuffer& host_buffer,
+        bool blocking,
+        const tt::tt_metal::CoreRangeSet* logical_core_filter);
+
+    friend void tt::tt_metal::experimental::core_subset_write::enqueue_write(
+        MeshCommandQueue& cq,
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const DistributedHostBuffer& host_buffer,
+        bool blocking,
+        const tt::tt_metal::CoreRangeSet& logical_core_filter);
+
 public:
     MeshCommandQueueBase(
         MeshDevice* mesh_device,
@@ -89,8 +102,7 @@ public:
     void enqueue_write(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const DistributedHostBuffer& host_buffer,
-        bool blocking,
-        const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr) override;
+        bool blocking) override;
 
     // MeshBuffer Read APIs
     void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) override;

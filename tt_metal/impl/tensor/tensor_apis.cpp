@@ -116,30 +116,6 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
         host_tensor.tensor_topology());
 }
 
-void enqueue_write_tensor(
-    distributed::MeshCommandQueue& cq,
-    const HostTensor& host_tensor,
-    MeshTensor& device_tensor,
-    const CoreRangeSet& logical_core_filter) {
-    TT_FATAL(
-        is_uniform_write(host_tensor, device_tensor.device()),
-        "Incompatible shape between source host tensor and target MeshDevice. For non-uniform transfers, use the "
-        "non-uniform data movement APIs.");
-    TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
-    TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
-    TT_FATAL(
-        host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
-        "Host tensor has different page config");
-
-    const auto& mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
-
-    cq.enqueue_write(mesh_buffer, host_tensor.buffer(), /*blocking=*/false, &logical_core_filter);
-    device_tensor = MeshTensor(
-        mesh_buffer,
-        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
-        host_tensor.tensor_topology());
-}
-
 // ======================================================================================
 //                    Unit Tensor enqueue_read/write_tensor
 // ======================================================================================
@@ -311,44 +287,6 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     // DistributedHostBuffer may not cover the entire MeshDevice, must preserve coords here.
     // Coordinates here represents the shards that are local to this instance, there maybe other shards that are on
     // another host.
-    std::vector<distributed::MeshCoordinate> coords;
-    const auto& shard_coords = host_tensor.buffer().shard_coords();
-    coords.reserve(shard_coords.size());
-    std::copy(shard_coords.begin(), shard_coords.end(), std::back_inserter(coords));
-
-    device_tensor = MeshTensor(
-        mesh_buffer,
-        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
-        host_tensor.tensor_topology());
-
-    return coords;
-}
-
-std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
-    distributed::MeshCommandQueue& cq,
-    const HostTensor& host_tensor,
-    MeshTensor& device_tensor,
-    const CoreRangeSet& logical_core_filter) {
-    TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
-    TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
-    TT_FATAL(
-        host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
-        "Host tensor has different page config");
-
-    const auto& host_storage_shape = host_tensor.buffer().shape();
-    const auto& dst_device_shape = device_tensor.device().shape();
-
-    if (host_storage_shape.mesh_size() < dst_device_shape.mesh_size() &&
-        host_storage_shape == distributed::MeshShape(1, 1)) {
-        TT_FATAL(
-            false,
-            "enqueue_write_tensor with logical_core_filter does not support 1x1 host tensor replicated to a larger "
-            "mesh; use the unfiltered enqueue_write_tensor path.");
-    }
-
-    auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
-    cq.enqueue_write(mesh_buffer, host_tensor.buffer(), /*blocking=*/false, &logical_core_filter);
-
     std::vector<distributed::MeshCoordinate> coords;
     const auto& shard_coords = host_tensor.buffer().shard_coords();
     coords.reserve(shard_coords.size());

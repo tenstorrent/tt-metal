@@ -668,10 +668,6 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, con
     }
 }
 
-void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
-    WriteToBuffer(buffer, host_buffer, nullptr);
-}
-
 void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
@@ -684,6 +680,10 @@ void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, con
         } break;
         default: TT_THROW("Unsupported buffer type!");
     }
+}
+
+void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    WriteToBuffer(buffer, host_buffer, nullptr);
 }
 
 void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buffer) {
