@@ -19,6 +19,7 @@ from ttnn.experimental.moe_compute_utils import (
     prepare_w2_tensor_with_bias,
 )
 
+from tests.nightly.tg.ccl.moe.test_selective_combine_6U import device_mesh_iterator
 from tests.nightly.t3000.ccl.test_all_to_all_combine import get_batch_cluster_idxr, get_cluster_dims
 
 from models.common.utility_functions import comp_pcc
@@ -34,17 +35,6 @@ MESH_GRAPH_DESC_1x8 = (
 def is_mesh_graph_descriptor_set(expected_path):
     """Check if TT_MESH_GRAPH_DESC_PATH is set to the expected path."""
     return os.environ.get("TT_MESH_GRAPH_DESC_PATH") == expected_path
-
-
-def device_mesh_iterator(mesh_shape):
-    """Row-major (m0, m1) mesh traversal; device id = m0 * mesh_shape[1] + m1.
-
-    Defined locally so we do not import test_selective_combine_6U, which sets
-    torch.set_printoptions(threshold=inf) at import time and floods logs.
-    """
-    for m0 in range(mesh_shape[0]):
-        for m1 in range(mesh_shape[1]):
-            yield m0, m1, m0 * mesh_shape[1] + m1
 
 
 def validate_per_expert_tokens(
@@ -348,70 +338,6 @@ def _get_pcc_threshold(activation_type):
         raise TypeError("Invalid Activation type")
 
 
-# TODO: Revert/Remove tensor screen output truncation
-# Cap how many scalar values / row elements we print on mismatch (full hidden rows are huge).
-_TENSOR_LOG_ROW_ENDCAP = 8
-_TENSOR_LOG_NUM_ROW_LINES = 2
-_MASKED_MISMATCH_HEAD = 16
-_MASKED_MISMATCH_TAIL = 16
-
-
-# TODO: Revert/Remove tensor screen output truncation
-def _format_1d_float_endcaps(row: torch.Tensor, *, endcap: int = _TENSOR_LOG_ROW_ENDCAP) -> str:
-    """First and last `endcap` elements of a 1D tensor (float-friendly)."""
-    flat = row.detach().flatten().float().cpu()
-    n = flat.numel()
-    if n == 0:
-        return "[]"
-    if n <= 2 * endcap:
-        return str(flat.tolist())
-    return f"{flat[:endcap].tolist()} ... {flat[-endcap:].tolist()} (len={n})"
-
-
-def _format_2d_tensor_row_endcaps(
-    t: torch.Tensor, *, num_row_lines: int = _TENSOR_LOG_NUM_ROW_LINES, endcap: int = _TENSOR_LOG_ROW_ENDCAP
-) -> str:
-    """First `num_row_lines` and last `num_row_lines` rows; each row shows first/last `endcap` elements."""
-    t2 = t.detach().float().cpu()
-    if t2.ndim == 1:
-        return _format_1d_float_endcaps(t2, endcap=endcap)
-    if t2.ndim != 2:
-        return f"<shape {tuple(t2.shape)}; flatten preview> {_format_1d_float_endcaps(t2.flatten(), endcap=endcap)}"
-    r = t2.shape[0]
-    lines = []
-    for i in range(min(num_row_lines, r)):
-        lines.append(f"  row[{i}]: {_format_1d_float_endcaps(t2[i], endcap=endcap)}")
-    if r > 2 * num_row_lines:
-        lines.append("  ...")
-    for i in range(max(r - num_row_lines, num_row_lines), r):
-        lines.append(f"  row[{i}]: {_format_1d_float_endcaps(t2[i], endcap=endcap)}")
-    return "\n".join(lines)
-
-
-# TODO: Revert/Remove tensor screen output truncation
-def _summarize_masked_vals_refs(
-    vals: torch.Tensor, refs: torch.Tensor, mask: torch.Tensor, *, head: int, tail: int
-) -> str:
-    """Short log line for AllClose failures instead of dumping the full masked tensor."""
-    v = vals[mask].flatten().float().cpu()
-    r = refs[mask].flatten().float().cpu()
-    n = int(v.numel())
-    if n == 0:
-        return "no mismatched elements under mask"
-    diff = (vals - refs).abs()[mask].flatten().float().cpu()
-    max_abs = float(diff.max().item())
-    parts = [f"mismatch_count={n}", f"max_abs_diff(masked)={max_abs}"]
-    if n <= head + tail:
-        parts.append(f"vals={v.tolist()}")
-        parts.append(f"refs={r.tolist()}")
-    else:
-        parts.append(f"vals[:{head}]={v[:head].tolist()}")
-        parts.append(f"vals[-{tail}:]={v[-tail:].tolist()}")
-        parts.append(f"refs[:{head}]={r[:head].tolist()}")
-        parts.append(f"refs[-{tail}:]={r[-tail:].tolist()}")
-    return "; ".join(parts)
-
-
 def validate_matmul(
     layer_id,
     experts_per_device,
@@ -476,14 +402,7 @@ def validate_matmul(
 
             if pcc_val < pcc_cutoff:
                 matmul_all_passed = False
-                diff = (torch_layer_output - tt_layer_output).abs()
-                # TODO: Revert/Remove tensor screen output truncation
-                logger.warning(
-                    f"Layer {layer_id}, Device {d}, Expert {expert_id}: PCC={pcc_val:.6f} "
-                    f"(cutoff={pcc_cutoff}) max_abs_diff={diff.max().item():.4f} shape={tuple(torch_layer_output.shape)}\n"
-                    f"torch (first/last rows, row endcaps):\n{_format_2d_tensor_row_endcaps(torch_layer_output)}\n"
-                    f"tt    (first/last rows, row endcaps):\n{_format_2d_tensor_row_endcaps(tt_layer_output)}"
-                )
+                logger.warning(f"Layer {layer_id}, Device {d}, Expert {expert_id}: PCC={pcc_val:.6f}")
             else:
                 logger.info(
                     f"Layer {layer_id}, Device {d}, Expert {expert_id}: PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
@@ -531,15 +450,7 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
             logger.warning(f"Layer {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
             if not allclose_passed:
                 mask = (vals - refs).abs() > ATOL_THRESHOLD
-                # TODO: Revert/Remove tensor screen output truncation
-                logger.warning(
-                    f"AllClose mismatch summary: "
-                    f"{_summarize_masked_vals_refs(vals, refs, mask, head=_MASKED_MISMATCH_HEAD, tail=_MASKED_MISMATCH_TAIL)}"
-                )
-                logger.warning(
-                    f"Combine row-slice preview (k={k}, first/last token rows in stacked vals):\n"
-                    f"vals:\n{_format_2d_tensor_row_endcaps(vals)}\nrefs:\n{_format_2d_tensor_row_endcaps(refs)}"
-                )
+                logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
         else:
             logger.info(f"Combine, layer: {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
 
@@ -993,7 +904,6 @@ def compute_matmul_golden(
         b0 = torch_b0.sum(dim=2, keepdim=True).repeat([1, devices, 1, 1])  # (L, E, 1, N)
         torch_w0_output_ref = torch_w0_output_ref + b0
 
-    # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
     torch_w1_output_ref = torch_input_ref @ torch_w1
     if torch_b1 is not None:
         # Same reasoning as b0.
