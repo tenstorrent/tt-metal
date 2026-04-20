@@ -16,11 +16,31 @@ Usage:
 
 import argparse
 import os
+import re
 import time
 
 import numpy as np
 
 import ttnn
+
+_SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
+
+
+def _sanitize_output_dir(output_dir: str) -> str:
+    """Resolve *output_dir* to an absolute path and ensure it lives under cwd."""
+    base = os.path.abspath(os.getcwd())
+    resolved = os.path.abspath(output_dir)
+    if not resolved.startswith(base):
+        raise ValueError(
+            f"output_dir must be under the working directory ({base}), got {resolved}"
+        )
+    return resolved
+
+
+def _sanitize_filename(name: str) -> str:
+    """Strip path separators and special characters from a file name."""
+    name = os.path.basename(name)
+    return _SAFE_NAME_RE.sub("_", name)
 
 
 def save_audio(audio: np.ndarray, filename: str, sample_rate: int = 24000):
@@ -94,6 +114,7 @@ def run_e2e_tests(output_dir: str = "bark_e2e_outputs"):
     """Run all standard e2e test cases."""
     from models.demos.wormhole.bark.tt.bark_model import TtBarkModel
 
+    output_dir = _sanitize_output_dir(output_dir)
     os.makedirs(output_dir, exist_ok=True)
     device = ttnn.open_device(device_id=0)
 
@@ -110,7 +131,8 @@ def run_e2e_tests(output_dir: str = "bark_e2e_outputs"):
 
         results = []
         for name, text in test_cases:
-            output_file = os.path.join(output_dir, f"bark_{name}.wav")
+            safe_name = _sanitize_filename(f"bark_{name}.wav")
+            output_file = os.path.join(output_dir, safe_name)
             print(f"\n{'='*60}")
             print(f"Test: {name}")
             print(f"Text: {text!r}")
@@ -149,7 +171,7 @@ def run_e2e_tests(output_dir: str = "bark_e2e_outputs"):
 def main():
     parser = argparse.ArgumentParser(description="Bark Small E2E Pipeline Test")
     parser.add_argument("--text", type=str, default=None, help="Custom text (runs single test)")
-    parser.add_argument("--output", type=str, default="bark_output.wav", help="Output WAV file")
+    parser.add_argument("--output", type=str, default="bark_output.wav", help="Output WAV file (basename only)")
     parser.add_argument("--output-dir", type=str, default="bark_e2e_outputs", help="Output directory for batch tests")
     args = parser.parse_args()
 
@@ -160,8 +182,9 @@ def main():
         device = ttnn.open_device(device_id=0)
         try:
             model = TtBarkModel(device, model_name="suno/bark-small")
+            safe_output = _sanitize_filename(args.output)
             print(f"Input: {args.text!r}")
-            run_single(model, args.text, args.output)
+            run_single(model, args.text, safe_output)
         finally:
             ttnn.close_device(device)
     else:
