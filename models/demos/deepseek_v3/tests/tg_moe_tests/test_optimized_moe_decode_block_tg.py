@@ -577,12 +577,12 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
 @pytest.mark.parametrize("enable_trace", [True])
-@pytest.mark.parametrize("num_iterations", [1])
+@pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            # "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "trace_region_size": 500000,
         },
@@ -620,6 +620,7 @@ def test_optimized_moe_decode_block(
     random.seed(2003)
 
     num_devices = mesh_shape[0] * mesh_shape[1]
+    print("NUM DEVICES: ", num_devices)
     experts = experts_per_device * num_devices  # Calculate total experts from mesh shape
     num_dispatch_devices = mesh_shape[cluster_axis]
     num_replicated_devices = num_devices // num_dispatch_devices
