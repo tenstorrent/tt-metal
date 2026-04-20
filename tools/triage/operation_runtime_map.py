@@ -8,30 +8,15 @@ Usage:
     operation_runtime_map
 
 Description:
-    Data provider that builds a mapping from Inspector runtime IDs to
-    OperationInfo(name, parameters, traced), and exposes a `lookup()` that
-    resolves a dispatcher `host_assigned_id` value (as read from the launch
-    message mailbox) to the corresponding operation, accounting for the fact
-    that the mailbox value may be an `EncodePerDeviceProgramID`-encoded form
-    of the raw runtime_id.
+    Data provider that builds a mapping from Inspector runtime IDs to `OperationInfo`
+    (name, parameters, trace_id) and exposes a `lookup()` that resolves a dispatcher
+    `host_assigned_id` value (as read from the launch message mailbox) to the corresponding
+    operation, or None if no entry is found.
 
-    Encoding rules (mirrors detail::EncodePerDeviceProgramID in
+    Encoding rules (mirrored from detail::EncodePerDeviceProgramID in
     tt_metal/impl/profiler/tt_metal_profiler.cpp):
-
-    Slow dispatch (LaunchProgram path in tt_metal/tt_metal.cpp):
-        host_assigned_id is always EncodePerDeviceProgramID(runtime_id, device_id).
-
-    Fast dispatch — non-traced workloads (FDMeshCommandQueue::
-    update_launch_messages_for_device_profiler):
-        Encoded only when rtoptions().get_profiler_enabled() is true
-        (TT_METAL_DEVICE_PROFILER env var). Otherwise raw runtime_id.
-
-    Fast dispatch — traced workloads (FDMeshCommandQueue::record_end):
-        Encoded whenever the build defines TRACY_ENABLE (default for
-        build_metal.sh). No runtime gate.
-
-    Lookup tries the raw value first and falls back to the decoded form as decoded form is lower in value
-    and more likely to hit collision.
+      - Fast dispatch: mailbox host_assigned_id == raw runtime_id.
+      - Slow dispatch: mailbox host_assigned_id == EncodePerDeviceProgramID(runtime_id, device_id).
 
     This is intentionally cached with @triage_singleton so the mapping is computed once per
     triage run (per args/context) and reused by other scripts.
@@ -57,21 +42,24 @@ script_config = ScriptConfig(
 _DEVICE_ID_NUM_BITS = 10
 _DEVICE_OP_ID_NUM_BITS = 31
 
+# Matches the sentinel in rpc.capnp (kNoTraceId). Capnp has no null for primitives.
+_NO_TRACE_ID = 0xFFFFFFFF
+
 
 def _decode_base_program_id(encoded: int) -> int:
     """Extract base_program_id from an EncodePerDeviceProgramID-encoded value."""
     return (encoded & ((1 << _DEVICE_OP_ID_NUM_BITS) - 1)) >> _DEVICE_ID_NUM_BITS
 
 
-@dataclass(frozen=True)
+@dataclass
 class OperationInfo:
     name: str
     parameters: str
-    traced: bool = False
+    trace_id: int | None
 
-    @classmethod
-    def empty(cls) -> "OperationInfo":
-        return cls(name="", parameters="", traced=False)
+    @staticmethod
+    def empty() -> "OperationInfo":
+        return OperationInfo(name="", parameters="", trace_id=None)
 
 
 class OperationRuntimeMap:
@@ -83,11 +71,23 @@ class OperationRuntimeMap:
     def __len__(self) -> int:
         return len(self._map)
 
-    def lookup(self, host_assigned_id: int, dispatch_mode: str | None) -> OperationInfo:
-        if host_assigned_id in self._map:
-            return self._map[host_assigned_id]
+    def lookup(self, host_assigned_id: int, dispatch_mode: str | None) -> OperationInfo | None:
+        """Resolve host_assigned_id to its Inspector entry, or None if not found.
+
+        - Slow dispatch (HOST): decode first; the mailbox always holds the encoded form.
+        - Fast dispatch (DEV) or unknown: try raw first, then decoded as a fallback (covers
+          the FD-with-profiler case where the encoded form ends up in the mailbox too).
+        """
+        if dispatch_mode == "HOST":
+            return self._map.get(_decode_base_program_id(host_assigned_id))
+
+        entry = self._map.get(host_assigned_id)
+        if entry is not None:
+            return entry
         decoded = _decode_base_program_id(host_assigned_id)
-        return self._map.get(decoded, OperationInfo.empty())
+        if decoded != host_assigned_id:
+            return self._map.get(decoded)
+        return None
 
 
 @triage_singleton
@@ -99,12 +99,14 @@ def run(args, context) -> OperationRuntimeMap:
     try:
         runtime_entries_result = inspector_data.getMeshWorkloadRuntimeEntries()
         for entry in runtime_entries_result.runtimeEntries:
-            traced = bool(getattr(entry, "traced", False))
+            raw_trace_id = int(entry.traceId)
+            trace_id = None if raw_trace_id == _NO_TRACE_ID else raw_trace_id
             runtime_id_map[int(entry.runtimeId)] = OperationInfo(
                 name=entry.operationName,
                 parameters=entry.operationParameters,
-                traced=traced,
+                trace_id=trace_id,
             )
+
         log_check(True, f"Built runtime_id map with {len(runtime_id_map)} operation(s)")
     except Exception as e:
         log_check(False, f"Failed to build runtime_id to operation map: {e}")

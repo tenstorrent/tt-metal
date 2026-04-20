@@ -200,6 +200,8 @@ void Data::rpc_get_mesh_workload_runtime_entries(
         trace_count += bucket.size();
     }
 
+    // Sentinel matches the default in rpc.capnp (UInt32 max == "not traced"). Capnp has no native null.
+    constexpr uint32_t kNoTraceId = 0xFFFFFFFFu;
     auto all_runtime_entries = results.initRuntimeEntries(ring_count + trace_count);
     size_t out_idx = 0;
     auto fill = [&](const inspector::MeshWorkloadRuntimeEntry& re) {
@@ -208,7 +210,7 @@ void Data::rpc_get_mesh_workload_runtime_entries(
         entry.setRuntimeId(re.runtime_id);
         entry.setOperationName(std::string(re.operation_name));
         entry.setOperationParameters(stringify_tensor_specs(re.tensor_specs));
-        entry.setTraced(re.traced);
+        entry.setTraceId(re.trace_id.has_value() ? **re.trace_id : kNoTraceId);
     };
 
     for (size_t i = 0; i < ring_count; ++i) {

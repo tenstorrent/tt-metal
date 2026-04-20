@@ -375,7 +375,9 @@ void Logger::log_runtime_entry(const MeshWorkloadRuntimeEntry& entry) noexcept {
         mesh_workloads_ostream << "    runtime_id: " << entry.runtime_id << "\n";
         mesh_workloads_ostream << "    name: " << entry.operation_name << "\n";
         mesh_workloads_ostream << "    parameters: '" << stringify_tensor_specs(entry.tensor_specs) << "'\n";
-        mesh_workloads_ostream << "    traced: " << (entry.traced ? "true" : "false") << "\n";
+        if (entry.trace_id.has_value()) {
+            mesh_workloads_ostream << "    trace_id: " << **entry.trace_id << "\n";
+        }
         mesh_workloads_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
                                << "\n";
         mesh_workloads_ostream.flush();

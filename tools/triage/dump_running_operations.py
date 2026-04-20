@@ -108,7 +108,7 @@ class RunningOperationAggregation:
         host_assigned_id: int,
         operation_name: str = "",
         operation_parameters: str = "",
-        traced: bool = False,
+        trace_id: int | None = None,
         previous_host_assigned_id: int | None = None,
         previous_operation_name: str = "",
         previous_operation_parameters: str = "",
@@ -116,7 +116,7 @@ class RunningOperationAggregation:
         self.host_assigned_id = host_assigned_id
         self.operation_name = operation_name
         self.operation_parameters = operation_parameters
-        self.traced = traced
+        self.trace_id = trace_id
         self.previous_host_assigned_id = previous_host_assigned_id
         self.previous_operation_name = previous_operation_name
         self.previous_operation_parameters = previous_operation_parameters
@@ -159,8 +159,8 @@ class RunningOperationAggregation:
         # Flag replayed ops inline with the name so the triage table makes it
         # obvious which dispatches are coming from trace replay.
         display_name = self.operation_name or "N/A"
-        if self.operation_name and self.traced:
-            display_name = f"{display_name} (replayed)"
+        if self.operation_name and self.trace_id is not None:
+            display_name = f"{display_name} (trace id: {self.trace_id})"
 
         return RunningOperationSummary(
             host_assigned_id=self.host_assigned_id,
@@ -282,18 +282,22 @@ def _collect_running_operations(
             dispatch_mode = dispatcher_core_data.dispatch_mode
 
             # The mailbox host_assigned_id is raw in fast dispatch but EncodePerDeviceProgramID-encoded
-            # in slow dispatch; the map handles both via `lookup`.
-            op_info = runtime_id_to_operation.lookup(dispatcher_core_data.host_assigned_id, dispatch_mode)
+            # in slow dispatch; the map handles both via `lookup`. lookup returns None on miss.
+            op_info = (
+                runtime_id_to_operation.lookup(dispatcher_core_data.host_assigned_id, dispatch_mode)
+                or OperationInfo.empty()
+            )
 
-            # Slow dispatch overwrites a single launch slot, so the "previous" entry
-            # is stale/invalid — leave it blank.
+            # Slow dispatch overwrites a single launch slot, so the "previous" entry is stale/invalid.
             if dispatch_mode == "HOST":
                 prev_runtime_id = None
                 prev_op_info = OperationInfo.empty()
             else:
                 prev_runtime_id = dispatcher_core_data.previous_host_assigned_id
                 if prev_runtime_id not in (None, 0):
-                    prev_op_info = runtime_id_to_operation.lookup(prev_runtime_id, dispatch_mode)
+                    prev_op_info = (
+                        runtime_id_to_operation.lookup(prev_runtime_id, dispatch_mode) or OperationInfo.empty()
+                    )
                 else:
                     prev_op_info = OperationInfo.empty()
 
@@ -304,7 +308,7 @@ def _collect_running_operations(
                     dispatcher_core_data.host_assigned_id,
                     op_info.name,
                     op_info.parameters,
-                    op_info.traced,
+                    op_info.trace_id,
                     prev_runtime_id if prev_runtime_id and prev_runtime_id > 0 else None,
                     prev_op_info.name,
                     prev_op_info.parameters,

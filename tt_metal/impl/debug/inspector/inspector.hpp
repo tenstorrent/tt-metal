@@ -6,7 +6,6 @@
 
 #include <memory>
 #include <optional>
-#include <vector>
 #include <string>
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
