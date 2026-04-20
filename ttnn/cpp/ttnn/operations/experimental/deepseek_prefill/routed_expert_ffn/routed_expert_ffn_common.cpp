@@ -128,7 +128,6 @@ ttnn::Tensor routed_expert_ffn_default(
         /*program_config=*/std::nullopt,
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config,
-        /*core_grid=*/std::nullopt,
         /*output_tile=*/std::nullopt,
         /*optional_output_tensor=*/std::move(output));
 }
