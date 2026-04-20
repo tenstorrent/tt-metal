@@ -51,7 +51,7 @@ void kernel_main() {
     const uint32_t cb_recv_base = get_write_ptr(cb_recv);
 
     // Origin: zero-fill cb_recv tile before Pass 1 so it completes before any
-    // non-origin core can write it's partial
+    // non-origin core can write its partial
 #ifdef IS_ORIGIN
     {
         const uint32_t fp32_tile_bytes = get_tile_size(cb_recv);
@@ -101,7 +101,7 @@ void kernel_main() {
         cb_push_back(cb_recv, 1);
 #else
         // 4-byte NOC write of the FP32 partial to origin's cb_recv
-        // noc_inline_dw_write allows writining 4-bytes without any padding
+        // noc_inline_dw_write allows writing 4-bytes without any padding
         const uint32_t partial_val = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_l1);
         const uint64_t dst_noc = get_noc_addr(origin_phys_x, origin_phys_y, cb_recv_base + core_index * 4);
         noc_inline_dw_write(dst_noc, partial_val);
