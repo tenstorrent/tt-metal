@@ -36,6 +36,8 @@ inline void reduce_row_perform_transpose()
         constexpr std::uint32_t HI16_STAGE = 128;
         constexpr std::uint32_t LO16_STAGE = 144;
 
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+
         // Phase 1: SFPU splits fp32 face into hi16/lo16 raw at scratch rows (inline).
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 #pragma GCC unroll 4
@@ -55,8 +57,6 @@ inline void reduce_row_perform_transpose()
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 
         // Phase 2: plain MOVD2B(DEST_NORM)+TRNSPSRCB+MOVB2D(DEST_NORM) for each half.
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, HI16_STAGE);
         TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, HI16_STAGE);
