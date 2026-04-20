@@ -26,11 +26,11 @@ void kernel_main() {
         return;
     }
 
-    const auto a_tensor = TensorAccessor(src_a_args, a_addr, get_tile_size(cb_a));
-    const auto b_tensor = TensorAccessor(src_b_args, b_addr, get_tile_size(cb_b));
-
     const uint32_t a_tile_size = get_tile_size(cb_a);
     const uint32_t b_tile_size = get_tile_size(cb_b);
+
+    const auto a_tensor = TensorAccessor(src_a_args, a_addr, a_tile_size);
+    const auto b_tensor = TensorAccessor(src_b_args, b_addr, b_tile_size);
 
     uint64_t a_noc_addr = a_tensor.get_noc_addr(tile_ofs);
     uint64_t b_noc_addr = b_tensor.get_noc_addr(tile_ofs);
