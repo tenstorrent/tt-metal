@@ -117,9 +117,9 @@ resolve_deepseekv3_model() {
     local model_path="${DEEPSEEK_V3_HF_MODEL_OVERRIDE:-${DEEPSEEK_V3_HF_MODEL:-${default_model}}}"
 
     if [[ ! -d "${model_path}" ]]; then
-        echo "Error: DeepSeek V3 model directory does not exist: ${model_path}" >&2
-        echo "For local testing, pass --model-path <path> (or set DEEPSEEK_V3_HF_MODEL_OVERRIDE)." >&2
-        exit 1
+        echo "Warning: DeepSeek V3 model directory not visible from orchestrator: ${model_path}" >&2
+        echo "  This is expected in CI Docker containers; model must exist on Galaxy hosts." >&2
+        echo "  For local testing, pass --model-path <path> (or set DEEPSEEK_V3_HF_MODEL_OVERRIDE)." >&2
     fi
 
     export DEEPSEEK_V3_HF_MODEL="${model_path}"
