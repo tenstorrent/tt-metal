@@ -9,8 +9,10 @@ from fuser.fused_math import ComputeNode, ComputePipeline
 from fuser.fused_operation import FusedOperation
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    AccToDest,
     ApproximationMode,
     BroadcastType,
+    ClearFP32DstAcc,
     DestSync,
     EltwiseBinaryReuseDestType,
     EnforceFP32Accumulation,
@@ -139,6 +141,8 @@ class FpuMathSchema(BaseModel):
     reduce_pool: Optional[ReducePool] = None
     reduce_dim: Optional[ReduceDimension] = None
     enforce_fp32_accumulation: Optional[EnforceFP32Accumulation] = None
+    clear_fp32_dst_acc: Optional[ClearFP32DstAcc] = None
+    acc_to_dest: Optional[AccToDest] = None
     unpack_transpose_within_face: Transpose = Transpose.No
     unpack_transpose_faces: Transpose = Transpose.No
     math_fidelity: MathFidelity = MathFidelity.LoFi
@@ -299,6 +303,10 @@ class FpuMathSchema(BaseModel):
             kwargs["math_fidelity"] = self.math_fidelity
         if self.enforce_fp32_accumulation:
             kwargs["enforce_fp32_accumulation"] = self.enforce_fp32_accumulation
+        if self.clear_fp32_dst_acc:
+            kwargs["clear_fp32_dst_acc"] = self.clear_fp32_dst_acc
+        if self.acc_to_dest:
+            kwargs["acc_to_dest"] = self.acc_to_dest
 
         return ComputeNode(fpu=fpu, sfpu=None, **kwargs)
 

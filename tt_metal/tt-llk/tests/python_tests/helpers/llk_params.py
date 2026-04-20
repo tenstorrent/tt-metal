@@ -335,6 +335,30 @@ class EnforceFP32Accumulation(Enum):
             return "false"
 
 
+class ClearFP32DstAcc(Enum):
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
+
+
+class AccToDest(Enum):
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
+
+
 class Tilize(Enum):
     Yes = True
     No = False
