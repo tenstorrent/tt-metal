@@ -24,9 +24,26 @@ bool isFabricUnitTest() { return false; }
 namespace tt::tt_fabric {
 
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::tt_metal::IDevice* device) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Guard: if this device's physical chip is not in the fabric cluster mapping, skip
+    // fabric program compilation rather than crashing with TT_FATAL inside FabricBuilder.
+    // This can happen when hardware connectivity issues cause auto-discovery to downgrade
+    // to a smaller mesh (e.g. 2x2 instead of 2x4) that excludes some physical chips.
+    // The device will simply not participate in fabric routing for this session.
+    if (!control_plane.is_physical_chip_in_fabric_cluster(device->id())) {
+        log_warning(
+            tt::LogFabric,
+            "create_and_compile_tt_fabric_program: Physical chip {} is not in the fabric cluster "
+            "chip mapping; skipping fabric program compilation. This typically indicates hardware "
+            "connectivity issues that caused auto-discovery to select a smaller mesh topology. "
+            "The device will not participate in fabric routing.",
+            device->id());
+        return nullptr;
+    }
+
     auto fabric_program_ptr = std::make_unique<tt::tt_metal::Program>();
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto& fabric_context = control_plane.get_fabric_context();
 
     // Use FabricBuilder to coordinate the build phases
