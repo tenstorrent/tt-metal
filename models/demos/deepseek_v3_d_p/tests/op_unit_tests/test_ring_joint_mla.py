@@ -632,10 +632,10 @@ def run_ring_joint_sdpa_perf(
     submesh.load_sub_device_manager(sub_device_manager)
     submesh.set_sub_device_stall_group(sub_device_stall_group)
 
-    # 1 compile run + num_perf_runs measured runs, each needs its own semaphores/buffers
-    n_total_iters = 1 + num_perf_runs
-    logger.info(f"Perf test: creating {n_total_iters} sets of global semaphores")
-    ccl_semaphore_handles = [create_global_semaphores(submesh, ccl_sub_device_crs, 0) for _ in range(n_total_iters)]
+    # Semaphores and persistent output buffers are reused across the compile run and all measured runs
+    # (synchronize_device between iterations ensures no in-flight overlap).
+    logger.info("Perf test: creating global semaphores")
+    ccl_semaphore_handles = create_global_semaphores(submesh, ccl_sub_device_crs, 0)
 
     # Persistent output buffers
     ag_output_shape_k = (b, nhk, padded_seq_len, head_dim_k)
@@ -649,30 +649,25 @@ def run_ring_joint_sdpa_perf(
     if nhk != 1:
         persistent_k_output_shard_dims[up_axis] = 1
 
-    logger.info(f"Perf test: creating {n_total_iters} persistent output buffer pairs")
-    persistent_output_buffers = [
-        [
-            ttnn.as_tensor(
-                torch.empty(ag_output_shape_k),
-                device=submesh,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=kv_dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    submesh, mesh_shape=tuple(submesh.shape), dims=persistent_k_output_shard_dims
-                ),
-            ),
-            ttnn.as_tensor(
-                torch.empty(ag_output_shape_v),
-                device=submesh,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=kv_dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=kv_shard_dims),
-            ),
-        ]
-        for _ in range(n_total_iters)
-    ]
+    logger.info("Perf test: creating persistent output buffer pair")
+    persistent_output_buffer_k = ttnn.as_tensor(
+        torch.empty(ag_output_shape_k),
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=kv_dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            submesh, mesh_shape=tuple(submesh.shape), dims=persistent_k_output_shard_dims
+        ),
+    )
+    persistent_output_buffer_v = ttnn.as_tensor(
+        torch.empty(ag_output_shape_v),
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=kv_dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=kv_shard_dims),
+    )
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_compute_grid,
@@ -775,7 +770,7 @@ def run_ring_joint_sdpa_perf(
     )
     logger.info("Perf test: all tensors ready on device")
 
-    def run_once(iter_idx):
+    def run_once():
         ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_Q,
             tt_K,
@@ -783,14 +778,14 @@ def run_ring_joint_sdpa_perf(
             tt_joint_Q,
             tt_joint_K,
             tt_joint_V,
-            persistent_output_buffer_k=persistent_output_buffers[iter_idx][0],
-            persistent_output_buffer_v=persistent_output_buffers[iter_idx][1],
+            persistent_output_buffer_k=persistent_output_buffer_k,
+            persistent_output_buffer_v=persistent_output_buffer_v,
             joint_strategy="rear",
             logical_n=base_seq_len,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
             dim=2,
-            multi_device_global_semaphore=ccl_semaphore_handles[iter_idx],
+            multi_device_global_semaphore=ccl_semaphore_handles,
             num_links=num_links,
             cluster_axis=rp_axis,
             mesh_device=submesh,
@@ -804,7 +799,7 @@ def run_ring_joint_sdpa_perf(
 
     # Step 1: Compile run (caches kernels)
     logger.info("Perf test: compile run (1/1)")
-    run_once(0)
+    run_once()
     ttnn.synchronize_device(submesh)
     logger.info("Perf test: compile run done")
 
@@ -813,7 +808,7 @@ def run_ring_joint_sdpa_perf(
     signpost("start")
     for i in range(num_perf_runs):
         logger.info(f"Perf test: run {i + 1}/{num_perf_runs}")
-        run_once(1 + i)
+        run_once()
         ttnn.synchronize_device(submesh)
     signpost("stop")
     logger.info(f"Perf test: all {num_perf_runs} runs complete")
