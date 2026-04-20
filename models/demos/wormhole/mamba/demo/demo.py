@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import Callable, List, Optional
 
 import pytest
-from models.tt_transformers.tt.model_config import determine_device_name
 import torch
 from loguru import logger
 from tqdm import tqdm
@@ -25,6 +24,7 @@ from models.demos.wormhole.mamba.tt.preprocessing import (
     split_sequence_length,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.model_config import determine_device_name
 
 
 class TokenDisplay:

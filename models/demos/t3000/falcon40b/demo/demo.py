@@ -8,7 +8,6 @@ import time
 from functools import partial
 
 import pytest
-from models.tt_transformers.tt.model_config import determine_device_name
 import torch
 import torch.nn.functional as F
 from loguru import logger
@@ -24,6 +23,7 @@ from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.model_config import determine_device_name
 
 END_OF_TEXT = 11
 SPACE = 204

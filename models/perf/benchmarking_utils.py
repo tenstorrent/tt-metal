@@ -10,9 +10,6 @@ from typing import List
 import pytz
 from loguru import logger
 
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
-from ttnn import ttnn
-
 # Decouple dependency of model tests on infra folder unless running in CI
 IS_CI_ENV = os.getenv("CI") == "true"
 if IS_CI_ENV:
@@ -35,7 +32,8 @@ UNIFIED_DEVICE_NAME_MAP = {
     "T3K": "t3k",
     "TG": "galaxy",
 }
-            
+
+
 class BenchmarkProfiler:
     def __init__(self):
         self.start_times = dict()
@@ -167,7 +165,7 @@ class BenchmarkData:
 
             run_start_ts = profiler.get_str_start("run")
             run_end_ts = profiler.get_str_end("run")
-            
+
             device_info = None
             if device_name:
                 device_name = UNIFIED_DEVICE_NAME_MAP.get(device_name, device_name)
