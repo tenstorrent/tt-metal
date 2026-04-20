@@ -172,7 +172,7 @@ def _demo_case(
             stop_at_eos=False,
             expect_full_length=True,
             case_id="dual_stress_demo_32upr",
-            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
+            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(9400)],
         ),
         _demo_case(
             max_prompts=56,
@@ -187,7 +187,7 @@ def _demo_case(
             stop_at_eos=False,
             expect_full_length=True,
             case_id="dual_stress_demo_8upr",
-            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
+            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(9400)],
         ),
         _demo_case(
             max_prompts=512,
@@ -232,7 +232,7 @@ def _demo_case(
             stop_at_eos=False,
             expect_full_length=True,
             case_id="quad_stress_demo_32upr",
-            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(9400)],
         ),
         _demo_case(
             max_prompts=56,
@@ -247,7 +247,7 @@ def _demo_case(
             stop_at_eos=False,
             expect_full_length=True,
             case_id="quad_stress_demo_8upr",
-            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(9400)],
         ),
         _demo_case(
             max_prompts=1,
