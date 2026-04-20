@@ -1444,14 +1444,12 @@ void kernel_main() {
 
     uint32_t l1_cache[l1_cache_elements_rounded];
 
-    // On ERISC, the host never writes realtime_profiler_core_noc_xy to this core's
-    // L1 (it only writes to dispatch_s's Tensix L1). ERISC L1 is not guaranteed
-    // to be zero-initialized, so garbage in this field would bypass the RT profiler
-    // guard and cause program_id_fifo_append to busy-wait forever (nobody consumes
-    // from the ERISC-local FIFO since dispatch_s is on a separate core).
-#if defined(COMPILE_FOR_ERISC)
+    // Reset RT profiler mailbox fields on every dispatch core startup.
+    // L1 is not guaranteed to be zero-initialized, and stale values here can
+    // incorrectly enable RT profiler paths when host-side RT setup is skipped.
     realtime_profiler_mailbox->realtime_profiler_core_noc_xy = 0;
-#endif
+    realtime_profiler_mailbox->realtime_profiler_mailbox_addr = 0;
+    realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
 
     dispatch_cb_reader.init();
     cmd_ptr = dispatch_cb_base;

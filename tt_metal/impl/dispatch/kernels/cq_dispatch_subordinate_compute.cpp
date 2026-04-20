@@ -30,13 +30,16 @@ void kernel_main() {
     volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
         reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
 
-    bool rt_profiler_enabled = (realtime_profiler_mailbox->realtime_profiler_core_noc_xy != 0);
+    // Clear stale RT-profiler mailbox state left in L1 from prior runs.
+    realtime_profiler_mailbox->realtime_profiler_core_noc_xy = 0;
+    realtime_profiler_mailbox->realtime_profiler_mailbox_addr = 0;
+    realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
 
-    if (!rt_profiler_enabled) {
-        // RT profiler disabled: idle until dispatch_s signals terminate
-        while (realtime_profiler_mailbox->realtime_profiler_state != REALTIME_PROFILER_STATE_TERMINATE) {
+    // Wait until host explicitly enables RT profiler, or terminate if RT is not used.
+    while (realtime_profiler_mailbox->realtime_profiler_core_noc_xy == 0) {
+        if (realtime_profiler_mailbox->realtime_profiler_state == REALTIME_PROFILER_STATE_TERMINATE) {
+            return;
         }
-        return;
     }
 
     if (realtime_profiler_mailbox->realtime_profiler_state == REALTIME_PROFILER_STATE_TERMINATE) {

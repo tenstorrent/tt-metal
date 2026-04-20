@@ -373,22 +373,28 @@ void kernel_main() {
         }
     }
 
-    rt_profiler_enabled = (realtime_profiler_mailbox->realtime_profiler_core_noc_xy != 0);
-
-    if (rt_profiler_enabled) {
-        realtime_profiler_mailbox->program_id_fifo_start = 0;
-        realtime_profiler_mailbox->program_id_fifo_end = 0;
-        realtime_profiler_mailbox->kernel_start_a.id = 0;
-        realtime_profiler_mailbox->kernel_end_a.id = 0;
-        realtime_profiler_mailbox->kernel_start_b.id = 0;
-        realtime_profiler_mailbox->kernel_end_b.id = 0;
-    }
+    // Clear stale RT profiler state on startup; host may enable RT profiler
+    // later by writing valid mailbox coordinates.
+    realtime_profiler_mailbox->realtime_profiler_core_noc_xy = 0;
+    realtime_profiler_mailbox->realtime_profiler_mailbox_addr = 0;
+    realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+    bool rt_profiler_initialized = false;
 
     cmd_ptr = cb_base;
     bool done = false;
     uint32_t total_pages_acquired = 0;
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
+        rt_profiler_enabled = (realtime_profiler_mailbox->realtime_profiler_core_noc_xy != 0);
+        if (rt_profiler_enabled && !rt_profiler_initialized) {
+            realtime_profiler_mailbox->program_id_fifo_start = 0;
+            realtime_profiler_mailbox->program_id_fifo_end = 0;
+            realtime_profiler_mailbox->kernel_start_a.id = 0;
+            realtime_profiler_mailbox->kernel_end_a.id = 0;
+            realtime_profiler_mailbox->kernel_start_b.id = 0;
+            realtime_profiler_mailbox->kernel_end_b.id = 0;
+            rt_profiler_initialized = true;
+        }
         uint32_t popped_pid = 0;
         if (rt_profiler_enabled) {
             record_realtime_timestamp(realtime_profiler_mailbox, true);
