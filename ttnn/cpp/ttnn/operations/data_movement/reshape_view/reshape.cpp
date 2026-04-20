@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <functional>
+#include <utility>
 
 #include <tt-metalium/constants.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
@@ -29,138 +30,121 @@
 namespace ttnn::operations::data_movement {
 namespace detail {
 
-MemoryConfig recompute_shard_spec_for_output(const MemoryConfig& memory_config, const TensorSpec& output_shape) {
-    // This function recomputes the shard spec as reshape op's original input
-    // tensor is sometimes not compatible with the output shard's config
-
-    auto output_mem_config = memory_config;
-    if (memory_config.shard_spec().has_value()) {
-        const auto& input_shard_spec = memory_config.shard_spec().value();
-
-        // Update specs for output tensor
-        auto orientation = input_shard_spec.orientation;
-
-        auto alignment = output_shape.page_config().get_recommended_shard_shape_alignment(output_shape.data_type());
-        uint32_t align_h = alignment.size() >= 2 ? alignment[-2] : 1;
-        uint32_t align_w = alignment.size() >= 1 ? alignment[-1] : 1;
-        auto phys_h = output_shape.physical_shape().height();
-        auto phys_w = output_shape.physical_shape().width();
-
-        if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            // Shard grids produced by reshape are always a single rectangular CoreRange.
-            auto core_range = input_shard_spec.grid.bounding_box();
-            auto input_grid_size = core_range.grid_size();
-            bool is_rm = (orientation == ShardOrientation::ROW_MAJOR);
-
-            uint32_t max_ny = is_rm ? input_grid_size.y : input_grid_size.x;
-            uint32_t max_nx = is_rm ? input_grid_size.x : input_grid_size.y;
-
-            // Select largest valid core count per axis independently for max parallelism.
-            uint32_t ny = max_ny;
-            for (; ny > 0; ny--) {
-                if (phys_h % ny == 0 && (phys_h / ny) % align_h == 0) {
-                    break;
-                }
-            }
-            uint32_t nx = max_nx;
-            for (; nx > 0; nx--) {
-                if (phys_w % nx == 0 && (phys_w / nx) % align_w == 0) {
-                    break;
-                }
-            }
-
-            if (ny == 0 || nx == 0) {
-                log_warning(
-                    tt::LogOp,
-                    "ttnn.reshape: cannot find valid BLOCK_SHARDED grid for output "
-                    "(phys_h={}, phys_w={}, align_h={}, align_w={}); falling back to INTERLEAVED",
-                    phys_h,
-                    phys_w,
-                    align_h,
-                    align_w);
-                return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
-            }
-
-            CoreCoord new_end;
-            if (is_rm) {
-                new_end = CoreCoord{core_range.start_coord.x + nx - 1, core_range.start_coord.y + ny - 1};
-            } else {
-                new_end = CoreCoord{core_range.start_coord.x + ny - 1, core_range.start_coord.y + nx - 1};
-            }
-            CoreRange new_core_range(core_range.start_coord, new_end);
-            auto updated_spec = output_shape.block_sharded(new_core_range, orientation);
-            output_mem_config = updated_spec.memory_config();
-        } else if (memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            // Shard grids produced by reshape are always a single rectangular CoreRange.
-            auto core_range = input_shard_spec.grid.bounding_box();
-            uint32_t grid_x = core_range.grid_size().x;
-            uint32_t grid_y = core_range.grid_size().y;
-
-            // Sweep full-width rows, reducing cols until a valid rectangular grid is found.
-            uint32_t best_rows = 0, best_cols = grid_x;
-            for (uint32_t cols = grid_x; cols > 0; cols--) {
-                for (uint32_t rows = grid_y; rows > 0; rows--) {
-                    uint32_t n = rows * cols;
-                    if (phys_h % n == 0 && (phys_h / n) % align_h == 0) {
-                        best_rows = rows;
-                        best_cols = cols;
-                        goto height_found;
-                    }
-                }
-            }
-        height_found:
-            if (best_rows == 0) {
-                log_warning(
-                    tt::LogOp,
-                    "ttnn.reshape: cannot find valid HEIGHT_SHARDED grid for output (phys_h={}, align_h={}); "
-                    "falling back to INTERLEAVED",
-                    phys_h,
-                    align_h);
-                return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
-            }
-
-            CoreCoord new_end{core_range.start_coord.x + best_cols - 1, core_range.start_coord.y + best_rows - 1};
-            CoreRange new_core_range(core_range.start_coord, new_end);
-            auto updated_spec = output_shape.height_sharded(CoreRangeSet{new_core_range}, orientation);
-            output_mem_config = updated_spec.memory_config();
-        } else if (memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            // Shard grids produced by reshape are always a single rectangular CoreRange.
-            auto core_range = input_shard_spec.grid.bounding_box();
-            uint32_t grid_x = core_range.grid_size().x;
-            uint32_t grid_y = core_range.grid_size().y;
-
-            // Sweep full-height cols, reducing rows until a valid rectangular grid is found.
-            uint32_t best_cols = 0, best_rows = grid_y;
-            for (uint32_t rows = grid_y; rows > 0; rows--) {
-                for (uint32_t cols = grid_x; cols > 0; cols--) {
-                    uint32_t n = rows * cols;
-                    if (phys_w % n == 0 && (phys_w / n) % align_w == 0) {
-                        best_cols = cols;
-                        best_rows = rows;
-                        goto width_found;
-                    }
-                }
-            }
-        width_found:
-            if (best_cols == 0) {
-                log_warning(
-                    tt::LogOp,
-                    "ttnn.reshape: cannot find valid WIDTH_SHARDED grid for output (phys_w={}, align_w={}); "
-                    "falling back to INTERLEAVED",
-                    phys_w,
-                    align_w);
-                return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
-            }
-
-            CoreCoord new_end{core_range.start_coord.x + best_cols - 1, core_range.start_coord.y + best_rows - 1};
-            CoreRange new_core_range(core_range.start_coord, new_end);
-            auto updated_spec = output_shape.width_sharded(CoreRangeSet{new_core_range}, orientation);
-            output_mem_config = updated_spec.memory_config();
-        } else {
-            TT_FATAL(false, "Shard spec must be either block, height, or width sharded");
+// Largest n in [1, max_n] with dim % n == 0 and (dim / n) % align == 0, else 0.
+static uint32_t find_best_n_1d(uint32_t dim, uint32_t max_n, uint32_t align) {
+    for (uint32_t n = max_n; n > 0; n--) {
+        if (dim % n == 0 && (dim / n) % align == 0) {
+            return n;
         }
+    }
+    return 0;
+}
+
+// Largest n = rows * cols with rows <= max_rows, cols <= max_cols, dim % n == 0,
+// and (dim / n) % align == 0. Returns {rows, cols} or {0, 0} if no valid grid exists.
+static std::pair<uint32_t, uint32_t> find_best_n_2d(
+    uint32_t dim, uint32_t max_rows, uint32_t max_cols, uint32_t align) {
+    uint32_t best_n = 0, best_rows = 0, best_cols = 0;
+    for (uint32_t rows = 1; rows <= max_rows; rows++) {
+        for (uint32_t cols = 1; cols <= max_cols; cols++) {
+            uint32_t n = rows * cols;
+            if (n > best_n && dim % n == 0 && (dim / n) % align == 0) {
+                best_n = n;
+                best_rows = rows;
+                best_cols = cols;
+            }
+        }
+    }
+    return {best_rows, best_cols};
+}
+
+// Returns a sharded output MemoryConfig, or INTERLEAVED if no valid grid exists.
+// Callers must check is_sharded() before calling interleaved_to_sharded.
+MemoryConfig recompute_shard_spec_for_output(const MemoryConfig& memory_config, const TensorSpec& output_shape) {
+    auto output_mem_config = memory_config;
+    TT_FATAL(memory_config.shard_spec().has_value(), "Shard spec has no value");
+    const auto& input_shard_spec = memory_config.shard_spec().value();
+    auto orientation = input_shard_spec.orientation;
+
+    auto alignment = output_shape.page_config().get_recommended_shard_shape_alignment(output_shape.data_type());
+    uint32_t align_h = alignment.size() >= 2 ? alignment[-2] : 1;
+    uint32_t align_w = alignment.size() >= 1 ? alignment[-1] : 1;
+    auto phys_h = output_shape.physical_shape().height();
+    auto phys_w = output_shape.physical_shape().width();
+
+    // Reject non-rectangular grids; bounding_box() would silently include extra cores.
+    // TODO: search for a rectangular sub-grid inside the input before falling back.
+    auto input_bbox = input_shard_spec.grid.bounding_box();
+    if (input_bbox.size() != input_shard_spec.grid.num_cores()) {
+        log_warning(
+            tt::LogOp,
+            "ttnn.reshape: input shard grid is non-rectangular "
+            "(bbox cores={}, grid cores={}); falling back to INTERLEAVED",
+            input_bbox.size(),
+            input_shard_spec.grid.num_cores());
+        return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
+    }
+
+    const auto start = input_bbox.start_coord;
+    const uint32_t grid_x = input_bbox.grid_size().x;
+    const uint32_t grid_y = input_bbox.grid_size().y;
+    const auto layout = memory_config.memory_layout();
+
+    if (layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        bool is_rm = (orientation == ShardOrientation::ROW_MAJOR);
+        uint32_t max_ny = is_rm ? grid_y : grid_x;
+        uint32_t max_nx = is_rm ? grid_x : grid_y;
+        uint32_t ny = find_best_n_1d(phys_h, max_ny, align_h);
+        uint32_t nx = find_best_n_1d(phys_w, max_nx, align_w);
+
+        // Unreachable when phys dims are aligned (n=1 always valid); kept as a safety net.
+        if (ny == 0 || nx == 0) {
+            log_warning(
+                tt::LogOp,
+                "ttnn.reshape: cannot find valid BLOCK_SHARDED grid for output "
+                "(phys_h={}, phys_w={}, align_h={}, align_w={}); falling back to INTERLEAVED",
+                phys_h,
+                phys_w,
+                align_h,
+                align_w);
+            return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
+        }
+
+        CoreCoord new_end =
+            is_rm ? CoreCoord{start.x + nx - 1, start.y + ny - 1} : CoreCoord{start.x + ny - 1, start.y + nx - 1};
+        output_mem_config = output_shape.block_sharded(CoreRange{start, new_end}, orientation).memory_config();
+    } else if (layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        // 1D sharding uses a 2D CoreRange; only num_cores = rows * cols matters.
+        auto [best_rows, best_cols] = find_best_n_2d(phys_h, grid_y, grid_x, align_h);
+        if (best_rows == 0) {
+            log_warning(
+                tt::LogOp,
+                "ttnn.reshape: cannot find valid HEIGHT_SHARDED grid for output "
+                "(phys_h={}, align_h={}); falling back to INTERLEAVED",
+                phys_h,
+                align_h);
+            return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
+        }
+        CoreCoord new_end{start.x + best_cols - 1, start.y + best_rows - 1};
+        output_mem_config =
+            output_shape.height_sharded(CoreRangeSet{CoreRange{start, new_end}}, orientation).memory_config();
+    } else if (layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        auto [best_rows, best_cols] = find_best_n_2d(phys_w, grid_y, grid_x, align_w);
+        if (best_cols == 0) {
+            log_warning(
+                tt::LogOp,
+                "ttnn.reshape: cannot find valid WIDTH_SHARDED grid for output "
+                "(phys_w={}, align_w={}); falling back to INTERLEAVED",
+                phys_w,
+                align_w);
+            return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
+        }
+        CoreCoord new_end{start.x + best_cols - 1, start.y + best_rows - 1};
+        output_mem_config =
+            output_shape.width_sharded(CoreRangeSet{CoreRange{start, new_end}}, orientation).memory_config();
     } else {
-        TT_FATAL(false, "Shard spec has no value");
+        TT_FATAL(
+            false, "Unsupported memory layout {}: expected BLOCK_SHARDED, HEIGHT_SHARDED, or WIDTH_SHARDED", layout);
     }
     return output_mem_config;
 }
@@ -340,7 +324,8 @@ ttnn::Tensor reshape_tiled(
         memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
 
-        // BFLOAT8_B: keep the interleaved typecast round-trip (typecast kernels expect interleaved).
+        // BFLOAT8_B: typecast kernels require interleaved inputs, so keep both typecasts
+        // on interleaved tensors and only convert to sharded at the very end.
         if (tensor.dtype() == DataType::BFLOAT8_B) {
             if (tensor.memory_config().is_sharded()) {
                 MemoryConfig working_input_memory_config{
@@ -361,6 +346,7 @@ ttnn::Tensor reshape_tiled(
                 working_output_memory_config,
                 recreate_mapping_tensor,
                 sub_core_grid);
+            output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
             if (memory_config.is_sharded()) {
                 auto output_mem_config =
                     detail::recompute_shard_spec_for_output(memory_config, output_tensor_3d.tensor_spec());
@@ -368,7 +354,6 @@ ttnn::Tensor reshape_tiled(
                     output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, output_mem_config, std::nullopt);
                 }
             }
-            output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
             return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
         }
 
@@ -386,6 +371,13 @@ ttnn::Tensor reshape_tiled(
                     requested_shape_3d,
                     requested_padded_shape_3d));
             target_output_mem_config = detail::recompute_shard_spec_for_output(memory_config, interleaved_output_spec);
+        }
+
+        // Defensive: if recompute fell back to INTERLEAVED while input is sharded,
+        // convert the input first so prim::reshape_view gets matching layouts.
+        if (tensor3d.memory_config().is_sharded() && !target_output_mem_config.is_sharded()) {
+            MemoryConfig interleaved_input{TensorMemoryLayout::INTERLEAVED, tensor3d.memory_config().buffer_type()};
+            tensor3d = ttnn::sharded_to_interleaved(tensor3d, interleaved_input, std::nullopt);
         }
 
         auto output_tensor_3d = ttnn::prim::reshape_view(
