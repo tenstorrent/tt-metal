@@ -5,6 +5,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
 from models.tt_transformers.tt.model import Transformer
 
@@ -45,9 +46,18 @@ class TtGemmaModel(Transformer):
         Run only the vision tower and return host patch embeddings for image token positions.
         """
         vision_output = self.compute_vision_token(pixel_values)
-        comp_vision_output = ttnn.to_torch(
-            vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-        )[: vision_output.shape[0], :]
+        if is_blackhole():
+            # BH: vision hidden dim is tensor-parallel sharded; match embd readout (dim=-1) for multi-chip (e.g. P150x4).
+            comp_vision_output = ttnn.to_torch(
+                vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+            )
+            comp_vision_output = comp_vision_output[: int(vision_output.shape[0])]
+            if comp_vision_output.shape[-1] > self.args.dim:
+                comp_vision_output = comp_vision_output[..., : self.args.dim]
+        else:
+            comp_vision_output = ttnn.to_torch(
+                vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            )[: vision_output.shape[0], :]
         return comp_vision_output.squeeze(0)
 
     def _fuse_vision_into_text_embeddings(self, pt_tokens, tokens_embd, image_features: torch.Tensor):
