@@ -1661,26 +1661,15 @@ class MLA1D(AbstractModule):
             is_decode_mode=False,
         )
 
-        # Preallocate output tensor for flash_mla_prefill
-        attn_out_shape = (1, num_heads_local, seq_len, kv_lora_rank)
-        attn_out = ttnn.allocate_tensor_on_device(
-            shape=attn_out_shape,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_device=device,
-            memory_config=cfg["flash_mla"].get("memory_config", ttnn.DRAM_MEMORY_CONFIG),
-        )
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
 
-        flash_mla_out = ttnn.transformer.flash_mla_prefill(
+        attn_out = ttnn.transformer.flash_mla_prefill(
             tt_q,
             tt_kvpe_fp16,
             **cfg["flash_mla"],
         )  # [1, num_heads_local, seq_len, kv_lora_rank]
-        ttnn.copy(flash_mla_out, attn_out)
-        ttnn.deallocate(flash_mla_out)
         ttnn.deallocate(tt_q)
         ttnn.deallocate(tt_kvpe_fp16)
 
