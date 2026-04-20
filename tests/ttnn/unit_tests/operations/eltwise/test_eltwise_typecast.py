@@ -602,6 +602,34 @@ def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
     assert torch.equal(npu_result, expected)
 
 
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [120, 104],           # width=104, not divisible by 32 (WAN 480p per-device shard)
+        [81, 120, 104],
+        [3, 81, 120, 104],
+        [1, 3, 81, 120, 104],
+        [10, 40],             # width=40, not divisible by 32
+        [5, 8],               # width=8, less than one tile row
+    ],
+)
+def test_typecast_rm_non_aligned_width(shape, device):
+    """ROW_MAJOR bfloat16→uint8 typecast with width not divisible by 32."""
+    torch.manual_seed(42)
+    torch_input = (torch.rand(shape) * 200).to(torch.bfloat16)
+    expected = torch_input.to(torch.uint8)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    result = ttnn.to_torch(ttnn.typecast(input_tensor, ttnn.uint8))
+    assert torch.equal(result, expected), f"mismatch for shape {shape}"
+
+
 def test_typecast_rm_chunked_program_cache(device):
     """Regression: program cache hit on ROW_MAJOR typecast must not hang when num_rows % num_cores != 0."""
     torch.manual_seed(0)

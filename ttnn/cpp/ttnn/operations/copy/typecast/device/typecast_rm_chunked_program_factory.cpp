@@ -17,10 +17,14 @@ using namespace tt::constants;
 
 namespace {
 struct ChunkSizeConfig {
-    uint32_t input_full_chunk_size_bytes;
-    uint32_t output_full_chunk_size_bytes;
-    uint32_t input_partial_chunk_size_bytes;
-    uint32_t output_partial_chunk_size_bytes;
+    uint32_t input_full_chunk_size_bytes;          // actual bytes read from DRAM per full chunk
+    uint32_t output_full_chunk_size_bytes;         // actual bytes written to DRAM per full chunk
+    uint32_t input_partial_chunk_size_bytes;       // actual bytes read from DRAM for partial chunk
+    uint32_t output_partial_chunk_size_bytes;      // actual bytes written to DRAM for partial chunk
+    uint32_t padded_input_full_chunk_size_bytes;   // CB page size (rounded up to 32-element boundary)
+    uint32_t padded_output_full_chunk_size_bytes;  // CB page size (rounded up to 32-element boundary)
+    uint32_t padded_input_partial_chunk_size_bytes;
+    uint32_t padded_output_partial_chunk_size_bytes;
     uint32_t full_chunks_per_row;
     uint32_t partial_chunks_per_row;
 };
@@ -30,9 +34,15 @@ ChunkSizeConfig calculate_chunk_config(
     constexpr uint32_t max_elements_per_chunk = 1024;
     const uint32_t elements_per_full_chunk = std::min(max_elements_per_chunk, row_width_elements);
 
-    // Calculate chunk sizes in bytes (logical size, not including padding)
+    // Actual chunk sizes in bytes (for DRAM reads/writes)
     const uint32_t input_full_chunk_size_bytes = elements_per_full_chunk * input_element_size;
     const uint32_t output_full_chunk_size_bytes = elements_per_full_chunk * output_element_size;
+
+    // CB page sizes: round up to next multiple of 32 elements so the unpacker always
+    // sees complete 32-element tile rows and never reads across a CB page boundary.
+    const uint32_t padded_full_elements = tt::align(elements_per_full_chunk, 32u);
+    const uint32_t padded_input_full_chunk_size_bytes = padded_full_elements * input_element_size;
+    const uint32_t padded_output_full_chunk_size_bytes = padded_full_elements * output_element_size;
 
     // Calculate how many chunks per row
     const uint32_t full_chunks_per_row = row_width_elements / elements_per_full_chunk;
@@ -40,12 +50,19 @@ ChunkSizeConfig calculate_chunk_config(
     const uint32_t partial_chunks_per_row = (remainder > 0) ? 1 : 0;
     const uint32_t input_partial_chunk_size_bytes = remainder * input_element_size;
     const uint32_t output_partial_chunk_size_bytes = remainder * output_element_size;
+    const uint32_t padded_partial_elements = remainder > 0 ? tt::align(remainder, 32u) : 0u;
+    const uint32_t padded_input_partial_chunk_size_bytes = padded_partial_elements * input_element_size;
+    const uint32_t padded_output_partial_chunk_size_bytes = padded_partial_elements * output_element_size;
 
     return ChunkSizeConfig{
         .input_full_chunk_size_bytes = input_full_chunk_size_bytes,
         .output_full_chunk_size_bytes = output_full_chunk_size_bytes,
         .input_partial_chunk_size_bytes = input_partial_chunk_size_bytes,
         .output_partial_chunk_size_bytes = output_partial_chunk_size_bytes,
+        .padded_input_full_chunk_size_bytes = padded_input_full_chunk_size_bytes,
+        .padded_output_full_chunk_size_bytes = padded_output_full_chunk_size_bytes,
+        .padded_input_partial_chunk_size_bytes = padded_input_partial_chunk_size_bytes,
+        .padded_output_partial_chunk_size_bytes = padded_output_partial_chunk_size_bytes,
         .full_chunks_per_row = full_chunks_per_row,
         .partial_chunks_per_row = partial_chunks_per_row,
     };
@@ -89,6 +106,10 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
     const uint32_t output_full_chunk_size_bytes = chunk_config.output_full_chunk_size_bytes;
     const uint32_t input_partial_chunk_size_bytes = chunk_config.input_partial_chunk_size_bytes;
     const uint32_t output_partial_chunk_size_bytes = chunk_config.output_partial_chunk_size_bytes;
+    const uint32_t padded_input_full_chunk_size_bytes = chunk_config.padded_input_full_chunk_size_bytes;
+    const uint32_t padded_output_full_chunk_size_bytes = chunk_config.padded_output_full_chunk_size_bytes;
+    const uint32_t padded_input_partial_chunk_size_bytes = chunk_config.padded_input_partial_chunk_size_bytes;
+    const uint32_t padded_output_partial_chunk_size_bytes = chunk_config.padded_output_partial_chunk_size_bytes;
     const uint32_t full_chunks_per_row = chunk_config.full_chunks_per_row;
     const uint32_t partial_chunks_per_row = chunk_config.partial_chunks_per_row;
 
@@ -105,34 +126,41 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
 
     tt::tt_metal::CircularBufferConfig cb_input_config =
         tt::tt_metal::CircularBufferConfig(
-            num_input_pages * input_full_chunk_size_bytes, {{input_cb_index, cb_data_format_input}})
-            .set_page_size(input_cb_index, input_full_chunk_size_bytes);
+            num_input_pages * padded_input_full_chunk_size_bytes, {{input_cb_index, cb_data_format_input}})
+            .set_page_size(input_cb_index, padded_input_full_chunk_size_bytes);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_input_config);
 
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
-            num_output_pages * output_full_chunk_size_bytes, {{output_cb_index, cb_data_format_output}})
-            .set_page_size(output_cb_index, output_full_chunk_size_bytes);
+            num_output_pages * padded_output_full_chunk_size_bytes, {{output_cb_index, cb_data_format_output}})
+            .set_page_size(output_cb_index, padded_output_full_chunk_size_bytes);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     // Create compile-time args for unified kernels (handle both full and partial chunks)
+    // Indices 0-5 are CB/chunk config; 6-7 are actual DRAM read/write sizes (may differ from
+    // padded CB page sizes when row_width is not a multiple of 32 elements).
+    // TensorAccessorArgs start at index 8.
     std::vector<uint32_t> reader_compile_time_args = {
-        input_cb_index,                  // cb_id_in
-        input_full_chunk_size_bytes,     // full_chunk_size_bytes
-        full_chunks_per_row,             // full_chunks_per_row
-        input_partial_chunk_size_bytes,  // partial_chunk_size_bytes
-        partial_chunks_per_row,          // partial_chunks_per_row (0 or 1)
-        src_buffer->page_size()          // row_page_size_bytes
+        input_cb_index,                          // 0: cb_id_in
+        padded_input_full_chunk_size_bytes,      // 1: full_chunk_size_bytes (CB page, 32-element aligned)
+        full_chunks_per_row,                     // 2: full_chunks_per_row
+        padded_input_partial_chunk_size_bytes,   // 3: partial_chunk_size_bytes (CB page, 32-element aligned)
+        partial_chunks_per_row,                  // 4: partial_chunks_per_row (0 or 1)
+        src_buffer->page_size(),                 // 5: row_page_size_bytes (for TensorAccessor)
+        input_full_chunk_size_bytes,             // 6: actual_full_chunk_size_bytes (DRAM read size)
+        input_partial_chunk_size_bytes,          // 7: actual_partial_chunk_size_bytes (DRAM read size)
     };
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
-        output_cb_index,                  // cb_id_out
-        output_full_chunk_size_bytes,     // full_chunk_size_bytes
-        full_chunks_per_row,              // full_chunks_per_row
-        output_partial_chunk_size_bytes,  // partial_chunk_size_bytes
-        partial_chunks_per_row,           // partial_chunks_per_row (0 or 1)
-        dst_buffer->page_size()           // row_page_size_bytes
+        output_cb_index,                          // 0: cb_id_out
+        padded_output_full_chunk_size_bytes,      // 1: full_chunk_size_bytes (CB page, 32-element aligned)
+        full_chunks_per_row,                      // 2: full_chunks_per_row
+        padded_output_partial_chunk_size_bytes,   // 3: partial_chunk_size_bytes (CB page, 32-element aligned)
+        partial_chunks_per_row,                   // 4: partial_chunks_per_row (0 or 1)
+        dst_buffer->page_size(),                  // 5: row_page_size_bytes (for TensorAccessor)
+        output_full_chunk_size_bytes,             // 6: actual_full_chunk_size_bytes (DRAM write size)
+        output_partial_chunk_size_bytes,          // 7: actual_partial_chunk_size_bytes (DRAM write size)
     };
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
