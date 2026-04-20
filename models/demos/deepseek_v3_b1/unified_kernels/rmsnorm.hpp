@@ -63,7 +63,8 @@ struct RMSNorm {
         bool RsqrtFastApprox,
         uint32_t InputCb,
         uint32_t GammaCb,
-        uint32_t OutputCb>
+        uint32_t OutputCb,
+        bool DoGamma = true>
     struct ComputeCTArgs {
         static constexpr bool fp32_acc = FP32Acc;
         static constexpr uint32_t num_tiles = NumTiles;
@@ -71,6 +72,7 @@ struct RMSNorm {
         static constexpr uint32_t input_cb = InputCb;
         static constexpr uint32_t gamma_cb = GammaCb;
         static constexpr uint32_t output_cb = OutputCb;
+        static constexpr bool do_gamma = DoGamma;
     };
 
     // ========================================================================
@@ -106,11 +108,13 @@ struct RMSNorm {
             // ================================================================
             // TRISC (Compute)
             // ================================================================
-            // Init block done only once; we don't pop, only wait once and reuse
-            if (args.gamma_address_override > 0) {
-                UNPACK(({ unified_kernels::override_cb_rd_ptr(CTArgs::gamma_cb, args.gamma_address_override); }));
-            } else {
-                cb_wait_front(CTArgs::gamma_cb, CTArgs::num_tiles);
+            if constexpr (CTArgs::do_gamma) {
+                // Init block done only once; we don't pop, only wait once and reuse
+                if (args.gamma_address_override > 0) {
+                    UNPACK(({ unified_kernels::override_cb_rd_ptr(CTArgs::gamma_cb, args.gamma_address_override); }));
+                } else {
+                    cb_wait_front(CTArgs::gamma_cb, CTArgs::num_tiles);
+                }
             }
 
             compute_rmsnorm(args);
@@ -141,11 +145,14 @@ struct RMSNorm {
                 rmsnorm_mul_bcast_scalar_reuse_tiles<num_tiles, true>(CTArgs::input_cb, 0, 0, 0);
             }
             {
-                // Multiply by the weight
                 cb_reserve_back(CTArgs::output_cb, num_tiles);
-                binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb);
-                for (uint32_t i = 0; i < num_tiles; i++) {
-                    binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb, i, i);
+                if constexpr (CTArgs::do_gamma) {
+                    // Multiply by the weight
+                    binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb);
+                    for (uint32_t i = 0; i < num_tiles; i++) {
+                        binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                            CTArgs::gamma_cb, i, i);
+                    }
                 }
 
                 tile_regs_commit();
