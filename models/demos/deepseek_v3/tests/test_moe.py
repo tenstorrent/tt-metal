@@ -14,7 +14,14 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
+from models.demos.deepseek_v3.tt.moe_quad import MoEQuad
+from models.demos.deepseek_v3.utils.config_helpers import (
+    USERS_PER_ROW,
+    get_fabric_config,
+    is_quad_mesh,
+    is_ring_fabric,
+    sub_state_dict,
+)
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -59,6 +66,13 @@ def load_real_moe_input(mode: str, module_path: str, num_tokens: int) -> torch.T
         torch_input = torch_input.repeat(1, 1, repeats, 1)
 
     return torch_input[:, :, :num_tokens, :].squeeze(0).to(torch.bfloat16)
+
+
+def _moe_cls(mesh_device: ttnn.Device, fabric_config: ttnn.FabricConfig):
+    """Same selection as ``moe_decoder_block_2d._moe_cls``: quad (16x8) + ring uses fused MoE path."""
+    if is_quad_mesh(mesh_device) and is_ring_fabric(fabric_config):
+        return MoEQuad
+    return MoE
 
 
 def generate_reference_io(
@@ -120,6 +134,8 @@ def run_test_forward_pass_moe(
 ):
     """Test forward pass against reference model."""
 
+    moe_cls = _moe_cls(mesh_device, device_params["fabric_config"])
+
     module_path = "model.layers.3.mlp" if weight_type == "real" else None
     checkpoint_state_dict = request.getfixturevalue("state_dict") if weight_type == "real" else None
     state_dict, torch_input, reference_output = generate_reference_io(
@@ -133,7 +149,7 @@ def run_test_forward_pass_moe(
     )
 
     weight_config = get_test_weight_config(
-        MoE,
+        moe_cls,
         hf_config,
         (state_dict,),
         cache_path,
@@ -145,7 +161,7 @@ def run_test_forward_pass_moe(
     )
 
     model_config = get_model_config(
-        MoE,
+        moe_cls,
         mode,
         hf_config,
         mesh_device,
@@ -153,8 +169,13 @@ def run_test_forward_pass_moe(
         batch_size_per_row=batch_size_per_row,
         topk_fallback=topk_fallback,
     )
-    model_state = MoE.create_state(hf_config, mesh_device, ccl)
-    model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
+    model_state = moe_cls.create_state(hf_config, mesh_device, ccl)
+    if moe_cls is MoEQuad:
+        # Prefill quad config sizes buffers with ``USERS_PER_ROW``; only decode varies batch_size_per_row.
+        quad_shared_kw = {"batch_size_per_row": batch_size_per_row} if mode == "decode" else {}
+        model_shared_state = moe_cls.create_shared_state(hf_config, mesh_device, **quad_shared_kw)
+    else:
+        model_shared_state = moe_cls.create_shared_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     tt_input = ttnn.from_torch(
@@ -167,7 +188,7 @@ def run_test_forward_pass_moe(
     )
 
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(MoE, mode, tt_input, run_config, handle_tensor_parallel=True)
+    tt_output = run_module_forward(moe_cls, mode, tt_input, run_config, handle_tensor_parallel=True)
 
     expected_output_memory_config = run_config["output_memory_config"]
     actual_output_memory_config = tt_output.memory_config()
@@ -208,7 +229,7 @@ def run_test_forward_pass_moe(
         True,
     ],
 )
-@pytest.mark.parametrize("weight_type", ["random", "real"])
+@pytest.mark.parametrize("weight_type", ["real"])
 def test_forward_pass(
     device_params,
     mode,

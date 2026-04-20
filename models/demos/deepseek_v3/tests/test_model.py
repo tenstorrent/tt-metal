@@ -490,7 +490,7 @@ def run_test_forward_pass_dpmodel(
         configured_row_width,
     )
     model_state = RowBatchedModel.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)
-    model_shared_state = RowBatchedModel.create_shared_state(hf_config_short, mesh_device)
+    model_shared_state = RowBatchedModel.create_shared_state(hf_config_short, mesh_device, configured_row_width)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     logger.info("Setting up model inputs")

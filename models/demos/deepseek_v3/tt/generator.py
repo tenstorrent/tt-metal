@@ -465,7 +465,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         logger.info("Creating model shared states...")
         self._dump_meminfo("Before creating model shared states...")
         self.model_shared_state = RowBatchedModel.create_shared_state(
-            hf_config=self.hf_config, mesh_device=self.mesh_device
+            hf_config=self.hf_config,
+            mesh_device=self.mesh_device,
+            batch_size_per_row=self.batch_size_per_row,
         )
         self._dump_meminfo("After creating model shared states...")
 

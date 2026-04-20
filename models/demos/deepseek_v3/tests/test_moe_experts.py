@@ -20,7 +20,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
     even_int_div,
     get_fabric_config,
-    is_quad_mesh,
+    is_quad_mesh_env,
     is_ring_fabric,
     sub_state_dict,
 )
@@ -76,7 +76,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 
 
 @pytest.mark.skipif(
-    (is_ring_fabric(get_fabric_config()) and is_quad_mesh()),
+    (is_ring_fabric(get_fabric_config()) and is_quad_mesh_env()),
     reason=f"Optimized quad ring MoE implementation embeds expert matmuls inside fused CCL ops",
 )
 @pytest.mark.parametrize(

@@ -258,11 +258,17 @@ class MTP2D(AbstractModule):
 
     @classmethod
     def create_shared_state(
-        cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, fabric_config: ttnn.FabricConfig
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelState:
         logger.info("Creating MTP shared state...")
         decoder_block_start = perf_counter()
-        decoder_block_shared_state = MoEDecoderBlock2D.create_shared_state(hf_config, mesh_device, fabric_config)
+        decoder_block_shared_state = MoEDecoderBlock2D.create_shared_state(
+            hf_config, mesh_device, fabric_config, batch_size_per_row
+        )
         logger.info(f"Created MTP decoder block shared state in {perf_counter() - decoder_block_start:.2f}s")
         return {
             "decoder_block": decoder_block_shared_state,

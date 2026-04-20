@@ -28,11 +28,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     RepeatConfig,
     SelectiveReduceCombineConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import (
-    OPTIMIZED_MOE_BLOCK_USERS_PER_ROW,
-    USERS_PER_ROW,
-    is_ring_fabric,
-)
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, is_ring_fabric
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -95,12 +91,16 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        *,
+        batch_size_per_row: int | None = None,
     ) -> ModelState:
         """Create shared model state containing tensors that are constant across all instances.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
+            batch_size_per_row: Decode users-per-row used to size preallocated dispatch buffers; defaults to
+                ``USERS_PER_ROW`` when omitted (must be >= the batch used in ``decode_model_config``).
         Returns:
             ModelState containing shared tensors
         """
@@ -135,7 +135,8 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         }
 
         # TODO: #41009 — preallocated tensors for all_to_all_dispatch_metadata
-        batch = OPTIMIZED_MOE_BLOCK_USERS_PER_ROW * mesh_device.shape[0]
+        rows_per_block = USERS_PER_ROW if batch_size_per_row is None else batch_size_per_row
+        batch = rows_per_block * mesh_device.shape[0]
         preallocated_all_to_all_dispatch_metadata_tensors = (
             AllToAllDispatchMetadataConfig.create_preallocated_dispatch_output_tensors(
                 mesh_device,
@@ -258,7 +259,7 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
                     mesh_device=MeshDeviceStub(mesh_device.shape),
                     dim=-1,  # Last dimension
                     # memory_config=ttnn.create_sharded_memory_config(  # Bad PCC
-                    #     shape=(USERS_PER_ROW, HIDDEN_SIZE),
+                    #     shape=(batch_size_per_row, HIDDEN_SIZE),
                     #     core_grid=ttnn.CoreGrid(y=7, x=8),
                     #     strategy=ttnn.ShardStrategy.WIDTH,
                     # ),
@@ -304,7 +305,7 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
                 ),
             }
 
-        batch = OPTIMIZED_MOE_BLOCK_USERS_PER_ROW * mesh_device.shape[0]
+        batch = batch_size_per_row * mesh_device.shape[0]
         seq_len = 1
 
         # TODO: #41009
@@ -319,10 +320,10 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         config[
             "quad_ring_all_to_all_dispatch_metadata_sharded_memory_config"
         ] = AllToAllDispatchMetadataConfig.get_metadata_sharded_memory_config(
-            OPTIMIZED_MOE_BLOCK_USERS_PER_ROW, hf_config.num_experts_per_tok
+            batch_size_per_row, hf_config.num_experts_per_tok
         )
         config["quad_ring_moreh_full"] = MorehFullConfig(
-            shape=[hf_config.num_experts_per_tok, OPTIMIZED_MOE_BLOCK_USERS_PER_ROW, hf_config.hidden_size],
+            shape=[hf_config.num_experts_per_tok, batch_size_per_row, hf_config.hidden_size],
             fill_value=0,
             device=mesh_device,
             dtype=ttnn.bfloat16,
@@ -351,7 +352,7 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         )
 
         # TODO: temporary until optimized ops support prefill shapes or prefill reads decode weights
-        config["moe_chunk_size"] = OPTIMIZED_MOE_BLOCK_USERS_PER_ROW
+        config["moe_chunk_size"] = batch_size_per_row
 
         return config
 
@@ -776,6 +777,7 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, handle_tensor_parallel: bool = False) -> ttnn.Tensor:
         # Handle all_gather if tensor parallel is enabled
+        num_tokens_per_row = x.shape[-2]
         if handle_tensor_parallel:
             x = cls._fwd_all_gather(x, cfg)
 
@@ -787,7 +789,7 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
             ccl = cfg["ccl"]
             tp_size = cfg["mesh_device"].shape[1]
 
-            if is_ring_fabric(cfg["fabric_config"]) and tp_size == 8:
+            if is_ring_fabric(cfg["fabric_config"]) and tp_size == 8 and num_tokens_per_row == ttnn.TILE_SIZE:
                 output = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                     output,
                     dim=0,

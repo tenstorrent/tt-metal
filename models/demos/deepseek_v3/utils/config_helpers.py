@@ -33,13 +33,13 @@ def is_ring_fabric(fabric_config: ttnn.FabricConfig) -> bool:
     return fabric_config == ttnn.FabricConfig.FABRIC_1D_RING
 
 
-def is_quad_mesh() -> bool:
-    """Check whether the given mesh device has a QUAD configuration (16x8)"""
+def is_quad_mesh_env() -> bool:
+    """True when ``MESH_DEVICE`` requests a QUAD run (before a mesh device exists)."""
     return os.getenv("MESH_DEVICE") == "QUAD"
 
 
 def is_quad_mesh(mesh_device: ttnn.MeshDevice) -> bool:
-    """Check whether the given mesh device has a QUAD configuration (16x8)"""
+    """Check whether the mesh device has a QUAD configuration (16x8)."""
     return mesh_device.shape[0] == 16 and mesh_device.shape[1] == 8
 
 

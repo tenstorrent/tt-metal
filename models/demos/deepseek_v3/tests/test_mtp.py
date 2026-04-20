@@ -27,11 +27,7 @@ from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.mtp import MTP2D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-<<<<<<< HEAD
 from models.demos.deepseek_v3.utils.config_helpers import DEFAULT_MAX_SEQ_LEN, USERS_PER_ROW, even_int_div
-=======
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, get_fabric_config
->>>>>>> ea9eeb3452 (MoE optimizations for DeepSeek V3 quad ring config)
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 from models.demos.deepseek_v3.utils.weight_config import _try_load_cached_config, get_weight_config
@@ -569,6 +565,7 @@ class _MtpModuleRunner:
             hf_config=self.hf_config,
             mesh_device=self.mesh_device,
             fabric_config=self.fabric_config,
+            batch_size_per_row=self.batch_size_per_row,
         )
         self.model_decode_cfg = MTP2D.decode_model_config(
             hf_config=self.hf_config,

@@ -121,11 +121,16 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelState:
         moe_cls = _moe_cls(fabric_config=fabric_config, mesh_device=mesh_device)
+        if moe_cls is MoEQuad:
+            moe_shared = moe_cls.create_shared_state(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
+        else:
+            moe_shared = moe_cls.create_shared_state(hf_config, mesh_device)
         return {
             "shared_expert": {},
-            "moe": moe_cls.create_shared_state(hf_config, mesh_device),
+            "moe": moe_shared,
         }
 
     @classmethod
@@ -155,7 +160,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         # Run both MoE and SharedExpert with the same gathered input
         moe_cls = _moe_cls(
             fabric_config=cfg["moe"]["fabric_config"],
-            num_dispatch_devices=cfg["moe"]["num_dispatch_devices"],
+            mesh_device=cfg["moe"]["mesh_device"],
         )
         mlp_out = moe_cls.forward_prefill(x_gathered, cfg["moe"])
         # SharedExpert now always expects collective ops to be handled by caller
@@ -209,7 +214,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         # Run both MoE and SharedExpert with the same gathered input
         moe_cls = _moe_cls(
             fabric_config=cfg["moe"]["fabric_config"],
-            num_dispatch_devices=cfg["moe"]["num_dispatch_devices"],
+            mesh_device=cfg["moe"]["mesh_device"],
         )
         mlp_out = moe_cls.forward_decode(x_gathered, cfg["moe"])
         # SharedExpert now always expects collective ops to be handled by caller
