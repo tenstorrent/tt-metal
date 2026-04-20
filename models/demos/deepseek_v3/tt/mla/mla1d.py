@@ -1834,12 +1834,27 @@ class MLA1D(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        cos_dim = rope_tensors["cos_matrix"].shape[3]
+        sin_dim = rope_tensors["sin_matrix"].shape[3]
+
         for chunk_start in range(0, seq_len, chunk_size):
             chunk_end = min(chunk_start + chunk_size, seq_len)
             chunk_seq_len = chunk_end - chunk_start
 
             # Slice input chunk
             x_chunk = ttnn.slice(x, [0, 0, chunk_start, 0], [1, batch_size, chunk_end, dim])
+
+            # Slice rope matrices to this sub-chunk's absolute position range
+            # [chunk_start, chunk_end) so RoPE encodes the correct positions.
+            rope_chunk = {
+                "cos_matrix": ttnn.slice(
+                    rope_tensors["cos_matrix"], [0, 0, chunk_start, 0], [1, 1, chunk_end, cos_dim]
+                ),
+                "sin_matrix": ttnn.slice(
+                    rope_tensors["sin_matrix"], [0, 0, chunk_start, 0], [1, 1, chunk_end, sin_dim]
+                ),
+                "trans_matrix": rope_tensors["trans_matrix"],
+            }
 
             # Fused Linear + AR: wq_kv_a (wq_a + wkv_a)
             tt_q_chunk, tt_kv_nope_chunk, tt_kv_rope_chunk = cls._fwd_prefill_wq_kv_a(
@@ -1858,8 +1873,8 @@ class MLA1D(AbstractModule):
             # KV RoPE
             tt_kv_rope_chunk = ttnn.experimental.rotary_embedding_llama(
                 tt_kv_rope_chunk,
-                rope_tensors["cos_matrix"],
-                rope_tensors["sin_matrix"],
+                rope_chunk["cos_matrix"],
+                rope_chunk["sin_matrix"],
                 rope_tensors["trans_matrix"],
                 is_decode_mode=False,
             )
@@ -1930,7 +1945,7 @@ class MLA1D(AbstractModule):
                     tt_q_user,
                     tt_kvpe_user,
                     cfg,
-                    rope_tensors,
+                    rope_chunk,
                     ccl,
                     chunk_seq_len,
                     dim,
@@ -1954,6 +1969,8 @@ class MLA1D(AbstractModule):
                 ttnn.deallocate(batch_out)
             ttnn.deallocate(tt_q_chunk)
             ttnn.deallocate(tt_kvpe_fp16_chunk)
+            ttnn.deallocate(rope_chunk["cos_matrix"])
+            ttnn.deallocate(rope_chunk["sin_matrix"])
 
         return out
 
