@@ -425,6 +425,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 [1, 1, token_end, cfg["num_experts_per_tok"]],
             )
             topk_weights_chunk_rm = ttnn.to_layout(topk_weights_chunk, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(topk_weights_chunk)
             topk_weights_chunk_rm = ttnn.repeat(topk_weights_chunk_rm, **cfg["topk_weights_repeat"])
             topk_weights_chunk_rm = ttnn.permute(topk_weights_chunk_rm, (3, 1, 2, 0))
             topk_weights_chunk = ttnn.to_layout(topk_weights_chunk_rm, ttnn.TILE_LAYOUT)
