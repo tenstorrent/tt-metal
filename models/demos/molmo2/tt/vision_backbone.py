@@ -36,7 +36,8 @@ DEFAULT_PATCHES_PER_FRAME = (378 // 14) ** 2  # 729
 # Align with MAX_VIT_FRAMES_FOR_POOL: 32 frames (23328 tokens) is too small for multi-minute video traces.
 DEFAULT_VISION_TRACE_MAX_FRAMES = MAX_VIT_FRAMES_FOR_POOL
 DEFAULT_VISION_TRACE_MAX_N_OUT = 256  # covers 81 (video) and 169 (multi-crop) layouts
-DEFAULT_VISION_TRACE_MAX_K_POOL = 16
+# Must be >= largest k_pool = pool_h * pool_w used at runtime (e.g. HF ``--k-pool 24`` → 4×6).
+DEFAULT_VISION_TRACE_MAX_K_POOL = 32
 
 
 def _masked_mean_query_hf(

@@ -16,6 +16,7 @@ video overrides: ``num_frames``, ``max_fps``, ``fps``, ``sampling_fps`` (see
 Converts HF outputs to tensors expected by our TTNN model.
 """
 
+import math
 from typing import Optional
 
 import numpy as np
@@ -41,6 +42,25 @@ def get_tokenizer():
     if _tokenizer is None:
         _tokenizer = AutoTokenizer.from_pretrained("allenai/Molmo2-8B", trust_remote_code=True)
     return _tokenizer
+
+
+def pooling_size_from_k_pool(k_pool: int) -> list[int]:
+    """
+    Map total pooling width ``k_pool = pool_h * pool_w`` to HF ``pooling_size`` ``[pool_h, pool_w]``.
+
+    Uses a square grid when ``k_pool`` is a perfect square; otherwise the factorization with
+    factors closest to ``sqrt(k_pool)`` (e.g. 6 -> ``[2, 3]``).
+    """
+    if k_pool < 1:
+        raise ValueError(f"k_pool must be >= 1, got {k_pool}")
+    r = int(math.isqrt(k_pool))
+    if r * r == k_pool:
+        return [r, r]
+    for h in range(r, 0, -1):
+        if k_pool % h == 0:
+            w = k_pool // h
+            return [h, w] if h <= w else [w, h]
+    raise ValueError(f"Cannot factor k_pool={k_pool} into pooling_size")
 
 
 def apply_chat_template(prompt: str) -> str:
@@ -132,7 +152,12 @@ def preprocess_text(text: str, apply_template: bool = True) -> dict:
     return out
 
 
-def preprocess_image(image_path: str, prompt: str, apply_template: bool = True) -> dict:
+def preprocess_image(
+    image_path: str,
+    prompt: str,
+    apply_template: bool = True,
+    pooling_size: Optional[list[int]] = None,
+) -> dict:
     """
     Preprocess image + text using HF processor.
 
@@ -140,6 +165,7 @@ def preprocess_image(image_path: str, prompt: str, apply_template: bool = True) 
         image_path: Path to image file
         prompt: Text prompt (should contain <|image|>)
         apply_template: Whether to apply chat template (default True)
+        pooling_size: Optional ``[pool_h, pool_w]`` for the vision adapter (default: HF ``[2, 2]``).
 
     Returns:
         Dict with:
@@ -162,7 +188,10 @@ def preprocess_image(image_path: str, prompt: str, apply_template: bool = True) 
     # Apply chat template if requested
     text = apply_chat_template(prompt) if apply_template else prompt
 
-    result = processor(text=text, images=image, return_tensors="np")
+    call_kwargs = dict(text=text, images=image, return_tensors="np")
+    if pooling_size is not None:
+        call_kwargs["pooling_size"] = list(pooling_size)
+    result = processor(**call_kwargs)
 
     # Convert pixel_values from HF patch format to image format
     pixel_values = hf_patches_to_images(result["pixel_values"])
@@ -205,6 +234,7 @@ def preprocess_video(
     max_fps: Optional[float] = None,
     fps: Optional[float] = None,
     sampling_fps: Optional[float] = None,
+    pooling_size: Optional[list[int]] = None,
 ) -> dict:
     """
     Preprocess video + text using HF processor.
@@ -218,6 +248,7 @@ def preprocess_video(
             (HF processor default from config, typically 2.0).
         fps: Optional container / target frame rate hint (HF ``fps``; semantics match HF video processor).
         sampling_fps: Optional sampling rate override (HF ``sampling_fps``).
+        pooling_size: Optional ``[pool_h, pool_w]`` for the vision adapter (default: HF ``[3, 3]`` for video).
 
     Returns:
         Dict with:
@@ -249,6 +280,8 @@ def preprocess_video(
         call_kwargs["fps"] = fps
     if sampling_fps is not None:
         call_kwargs["sampling_fps"] = sampling_fps
+    if pooling_size is not None:
+        call_kwargs["pooling_size"] = list(pooling_size)
 
     result = processor(**call_kwargs)
 

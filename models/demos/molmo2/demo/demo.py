@@ -61,7 +61,7 @@ class PenaltyArgs:
 
 
 # Import HF processor wrapper (uses correct configs from HuggingFace)
-from models.demos.molmo2.tt.hf_processor import preprocess_image, preprocess_video
+from models.demos.molmo2.tt.hf_processor import pooling_size_from_k_pool, preprocess_image, preprocess_video
 from models.demos.molmo2.tt.prefill_attention_mask import build_molmo2_prefill_attention_bias
 
 # Import shared utilities from tt module
@@ -3821,6 +3821,7 @@ def run_video_demo(
     native_video_fps: bool = False,
     video_fps: Optional[float] = None,
     video_sampling_fps: Optional[float] = None,
+    pooling_size: Optional[list[int]] = None,
     use_trace: bool = False,
     use_decode_trace: bool = False,
     use_vision_trace: bool = False,
@@ -3849,6 +3850,7 @@ def run_video_demo(
         native_video_fps: If True, do not pass ``max_fps`` so HF uses its processor default.
         video_fps: Optional ``fps`` kwarg for HF video processor (container / rate hint).
         video_sampling_fps: Optional ``sampling_fps`` for HF video processor.
+        pooling_size: Optional ``[pool_h, pool_w]`` for vision pooling (default: HF video ``[3, 3]``).
         use_trace: Whether to use tracing for prefill
         use_decode_trace: Whether to use tracing for decode
         use_vision_trace: Whether to use tracing for vision backbone
@@ -3876,6 +3878,7 @@ def run_video_demo(
         max_fps=eff_max_fps,
         fps=video_fps,
         sampling_fps=video_sampling_fps,
+        pooling_size=pooling_size,
     )
     video_extraction_ms = (time.perf_counter() - video_extraction_start) * 1000
     n_frames = video_inputs["n_frames"]
@@ -4003,6 +4006,7 @@ def run_demo(
     device_id: int = 0,
     num_layers: Optional[int] = None,
     max_seq_len: int = 2048,
+    pooling_size: Optional[list[int]] = None,
     use_trace: bool = False,
     use_decode_trace: bool = False,
     use_vision_trace: bool = False,
@@ -4023,6 +4027,7 @@ def run_demo(
         device_id: TTNN device ID
         num_layers: Number of text layers (default: 36)
         max_seq_len: Maximum sequence length for KV cache (default: 2048 for image)
+        pooling_size: Optional ``[pool_h, pool_w]`` for vision pooling when using images (default: HF ``[2, 2]``).
         use_trace: Whether to use tracing for text prefill
         use_decode_trace: Whether to use tracing for decode
         use_vision_trace: Whether to use tracing for vision backbone
@@ -4070,7 +4075,7 @@ def run_demo(
     else:
         # Image: preprocess with HF processor
         logger.info(f"Preprocessing image: {image_path}")
-        image_inputs = preprocess_image(image_path, prompt)
+        image_inputs = preprocess_image(image_path, prompt, pooling_size=pooling_size)
         logger.info(f"Image preprocessed: {image_inputs['n_crops']} crops, k_pool={image_inputs['k_pool']}")
 
     # Load weights
@@ -4181,6 +4186,7 @@ def run_batched_demo(
     device_id: int = 0,
     num_layers: Optional[int] = None,
     max_seq_len: int = 4096,
+    pooling_size: Optional[list[int]] = None,
     use_trace: bool = False,
     use_decode_trace: bool = False,
     use_vision_trace: bool = False,
@@ -4197,6 +4203,7 @@ def run_batched_demo(
         device_id: TTNN device ID
         num_layers: Number of text layers (default: 36)
         max_seq_len: Maximum sequence length for KV cache
+        pooling_size: Optional ``[pool_h, pool_w]`` for vision pooling (default: HF ``[2, 2]`` for images).
         use_trace: Whether to use tracing for prefill
         use_decode_trace: Whether to use tracing for decode
         use_vision_trace: Whether to use tracing for vision backbone
@@ -4248,7 +4255,7 @@ def run_batched_demo(
             prompt = f"{IMAGE_PROMPT} {prompt}"
         prompts.append(prompt)
         # Use HF processor for correct preprocessing
-        image_inputs = preprocess_image(image_path, prompt)
+        image_inputs = preprocess_image(image_path, prompt, pooling_size=pooling_size)
         image_inputs_list.append(image_inputs)
         logger.info(
             f"  Prompt {i}: image={Path(image_path).name}, k_pool={image_inputs['k_pool']}, prompt={prompt[:50]}..."
@@ -4472,6 +4479,16 @@ def main():
         help=">1.0 down-weights repeated tokens (HF greedy uses 1.0). Values like 1.1 can garble short multiple-choice answers.",
     )
     parser.add_argument(
+        "--k-pool",
+        type=int,
+        default=None,
+        metavar="K",
+        help=(
+            "Vision pooling k_pool = pool_h * pool_w (e.g. 4 → 2×2, 9 → 3×3, 24 → 4×6; non-square k picks factors near √k). "
+            "Passed to the HF processor; omit for defaults (images: 4, video: 9)."
+        ),
+    )
+    parser.add_argument(
         "--use-async-ccl",
         action="store_true",
         default=False,
@@ -4479,6 +4496,8 @@ def main():
     )
 
     args = parser.parse_args()
+
+    pooling_size = pooling_size_from_k_pool(args.k_pool) if args.k_pool is not None else None
 
     # Decode trace: ON by default for all modes (throughput).
     # Use --no-use-decode-trace for debug when trace logits look wrong.
@@ -4503,6 +4522,7 @@ def main():
             device_id=args.device,
             num_layers=args.num_layers,
             max_seq_len=max_seq_len,
+            pooling_size=pooling_size,
             use_trace=trace_prefill_image_text,
             use_decode_trace=decode_trace_image_text,
             use_vision_trace=trace_vision_image_text,
@@ -4553,6 +4573,7 @@ def main():
             native_video_fps=args.native_video_fps,
             video_fps=args.video_fps,
             video_sampling_fps=args.video_sampling_fps,
+            pooling_size=pooling_size,
             use_trace=trace_prefill_video,
             use_decode_trace=use_decode_trace_video,
             use_vision_trace=trace_vision_video,
@@ -4588,6 +4609,7 @@ def main():
             device_id=args.device,
             num_layers=args.num_layers,
             max_seq_len=max_seq_len,
+            pooling_size=pooling_size,
             use_trace=trace_prefill_image_text,
             use_decode_trace=decode_trace_image_text,
             use_vision_trace=trace_vision_image_text,
