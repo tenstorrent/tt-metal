@@ -12,6 +12,7 @@ import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -24,6 +25,7 @@ def cleanup_cache():
         shutil.rmtree(CACHE_DIR)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     yield
+    report_and_clear()
 
 
 @pytest.mark.parametrize(
@@ -144,6 +146,7 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
     output1 = to_torch_concat(output1_tt)
 
     # === Path 2: Cold Cache ===
+    init_checker(CACHE_DIR)
     assert not ttMLA.check_cache_complete(CACHE_DIR, f"layer_{layer_idx}.mla"), "Cache should be empty before build"
 
     profiler.clear()
@@ -160,6 +163,7 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
     )
     profiler.end("build_cache")
 
+    init_checker(CACHE_DIR)
     assert ttMLA.check_cache_complete(CACHE_DIR, f"layer_{layer_idx}.mla"), "Cache should be complete after build"
 
     profiler.start("cold_load")

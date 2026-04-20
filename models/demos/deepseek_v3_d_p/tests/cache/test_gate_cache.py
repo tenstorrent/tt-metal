@@ -12,6 +12,7 @@ import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, create_gate_weights, get_sp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -25,7 +26,7 @@ def cleanup_cache():
         shutil.rmtree(CACHE_DIR)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     yield
-    # Keep cache for debugging if test fails
+    report_and_clear()
 
 
 def create_gate_input(config, mesh_device):
@@ -112,6 +113,7 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     output1 = to_torch_gate(scores1)
 
     # === Path 2: Cold Cache (build + load) ===
+    init_checker(CACHE_DIR)
     assert not TtMoEGatePrefill.check_cache_complete(CACHE_DIR, "gate"), "Cache should be empty before build"
 
     # Build cache
@@ -133,6 +135,7 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         raise
     profiler.end("build_cache")
 
+    init_checker(CACHE_DIR)
     assert TtMoEGatePrefill.check_cache_complete(CACHE_DIR, "gate"), "Cache should be complete after build"
 
     # Load from cold cache

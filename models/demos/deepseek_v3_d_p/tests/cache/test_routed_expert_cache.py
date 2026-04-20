@@ -17,6 +17,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_ep_mesh_mapper,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CACHE_DIR = Path("/tmp/DS_PREFILL_routed_expert")
@@ -28,6 +29,7 @@ def cleanup_cache():
         shutil.rmtree(CACHE_DIR)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     yield
+    report_and_clear()
 
 
 @pytest.mark.parametrize(
@@ -130,6 +132,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     output1 = to_torch_expert(output1_tt)
 
     # === Path 2: Cold Cache ===
+    init_checker(CACHE_DIR)
     assert not TtRoutedExpert.check_cache_complete(
         CACHE_DIR, "routed_expert", experts_per_chip
     ), "Cache should be empty before build"
@@ -147,6 +150,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     )
     profiler.end("build_cache")
 
+    init_checker(CACHE_DIR)
     assert TtRoutedExpert.check_cache_complete(
         CACHE_DIR, "routed_expert", experts_per_chip
     ), "Cache should be complete after build"

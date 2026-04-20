@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CACHE_DIR = Path("/tmp/DS_PREFILL_moe")
@@ -32,6 +33,7 @@ def cleanup_cache():
         shutil.rmtree(CACHE_DIR)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     yield
+    report_and_clear()
 
 
 @pytest.mark.parametrize(
@@ -142,6 +144,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     ttnn.synchronize_device(mesh_device)
 
     # === Path 2: Cold Cache (build + load) ===
+    init_checker(CACHE_DIR)
     assert not TtMoe.check_cache_complete(
         CACHE_DIR, layer_idx=0, experts_per_chip=experts_per_chip
     ), "Cache should be empty before build"
@@ -164,6 +167,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     )
     profiler.end("build_cache")
 
+    init_checker(CACHE_DIR)
     assert TtMoe.check_cache_complete(
         CACHE_DIR, layer_idx=0, experts_per_chip=experts_per_chip
     ), "Cache should be complete after build"

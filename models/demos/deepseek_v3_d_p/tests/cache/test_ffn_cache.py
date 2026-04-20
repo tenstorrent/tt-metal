@@ -11,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CACHE_DIR = Path("/tmp/DS_PREFILL_ffn")
@@ -22,6 +23,7 @@ def cleanup_cache():
         shutil.rmtree(CACHE_DIR)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     yield
+    report_and_clear()
 
 
 @pytest.mark.parametrize(
@@ -84,6 +86,7 @@ def test_ffn_weights_cold_warm_cache(mesh_device, device_params):
     output1 = to_torch_concat(output1_tt)
 
     # === Path 2: Cold Cache ===
+    init_checker(CACHE_DIR)
     assert not TtFfn.check_cache_complete(CACHE_DIR, "ffn"), "Cache should be empty before build"
 
     profiler.clear()
@@ -96,6 +99,7 @@ def test_ffn_weights_cold_warm_cache(mesh_device, device_params):
     )
     profiler.end("build_cache")
 
+    init_checker(CACHE_DIR)
     assert TtFfn.check_cache_complete(CACHE_DIR, "ffn"), "Cache should be complete after build"
 
     profiler.start("cold_load")
