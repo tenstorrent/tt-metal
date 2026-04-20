@@ -202,7 +202,19 @@ def write_text_sync(path: Path, text: str) -> None:
         os.fsync(handle.fileno())
 
 
-def run_tracy_pytest(test_target: str, env: dict[str, str]) -> None:
+def get_repo_root() -> Path:
+    tt_metal_home = os.environ.get("TT_METAL_HOME")
+    if not tt_metal_home:
+        raise RuntimeError("TT_METAL_HOME must be set")
+
+    repo_root = Path(tt_metal_home).expanduser().resolve()
+    if not repo_root.is_dir():
+        raise RuntimeError(f"TT_METAL_HOME does not point to a directory: {repo_root}")
+
+    return repo_root
+
+
+def run_tracy_pytest(test_target: str, env: dict[str, str], repo_root: Path) -> None:
     cmd = [
         sys.executable,
         "-m",
@@ -215,7 +227,7 @@ def run_tracy_pytest(test_target: str, env: dict[str, str]) -> None:
         "-svv",
         test_target,
     ]
-    subprocess.run(cmd, env=env, check=True)
+    subprocess.run(cmd, env=env, cwd=repo_root, check=True)
 
 
 def is_header_row(row: list[str]) -> bool:
@@ -627,7 +639,7 @@ def main() -> int:
     if not max_payload_sizes:
         raise RuntimeError("max payload sizes list is empty")
 
-    repo_root = Path(__file__).resolve().parent
+    repo_root = get_repo_root()
     report_root = repo_root / "generated" / "profiler" / "reports"
     output_dir = Path(args.output_dir)
     if not output_dir.is_absolute():
@@ -649,14 +661,19 @@ def main() -> int:
             before = set(list_profile_logs(report_root))
             run_start = time.time()
 
-            run_tracy_pytest(test_target, env)
+            run_tracy_pytest(test_target, env, repo_root)
 
             after = list_profile_logs(report_root)
             new_logs = [path for path in after if path not in before]
             if not new_logs:
                 new_logs = [path for path in after if path.stat().st_mtime >= run_start - 1.0]
             if not new_logs:
-                raise RuntimeError("No new profile_log_device.csv found after the test run")
+                if not report_root.exists():
+                    raise RuntimeError(
+                        "Profiler report directory was not created after the first run: "
+                        f"{report_root}. Check TT_METAL_HOME and profiler output setup."
+                    )
+                raise RuntimeError("No new profile_log_device.csv found after the test run under " f"{report_root}")
 
             profile_log = max(new_logs, key=lambda path: path.stat().st_mtime)
             profile_log_rel = to_repo_relative(profile_log, repo_root)
