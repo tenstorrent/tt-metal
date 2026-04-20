@@ -72,16 +72,20 @@ def prepare_add_inputs(
             return MXFP8_E4M3_MAX_NORMAL
         raise ValueError(f"mx_elem_max: not an MX format: {df}")
 
-    # For add, |a| + |b| must fit in the output format; each operand must fit in input format.
+    # Safety factor applied to format maxima when clamping add operands.
+    # Ensures |a| + |b| stays within representable range with headroom for
+    # rounding/quantization (two operands each capped at 45% of max -> sum <= 90% of max).
+    ADD_RANGE_SAFETY_FACTOR = 0.45
+
     if output_format.is_mx_format():
-        cap_from_output = mx_elem_max(output_format) * 0.45
+        cap_from_output = mx_elem_max(output_format) * ADD_RANGE_SAFETY_FACTOR
     else:
-        cap_from_output = output_finfo.max * 0.45
+        cap_from_output = output_finfo.max * ADD_RANGE_SAFETY_FACTOR
 
     if input_format.is_mx_format():
-        cap_from_input = mx_elem_max(input_format) * 0.45
+        cap_from_input = mx_elem_max(input_format) * ADD_RANGE_SAFETY_FACTOR
     else:
-        cap_from_input = input_finfo.max * 0.45
+        cap_from_input = input_finfo.max * ADD_RANGE_SAFETY_FACTOR
 
     max_safe_value = min(cap_from_output, cap_from_input)
 
