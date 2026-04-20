@@ -32,6 +32,29 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Allowed base directories for file I/O operations (Cycode SAST compliance)
+_ALLOWED_BASE_DIRS = [
+    os.path.realpath(os.getcwd()),
+    os.path.realpath(os.path.join(os.path.expanduser("~"), ".ttnn")),
+    os.path.realpath(os.environ.get("TTNN_AUTO_CONFIG_CACHE_DIR", os.path.join(os.path.expanduser("~"), ".ttnn"))),
+]
+
+
+def _sanitize_path(user_path: str) -> str:
+    """Sanitize and validate a user-provided file path.
+
+    Ensures the resolved path is within an allowed base directory,
+    preventing directory traversal attacks.
+
+    Raises:
+        ValueError: If the resolved path is outside all allowed directories.
+    """
+    resolved = os.path.realpath(user_path)
+    for base in _ALLOWED_BASE_DIRS:
+        if resolved.startswith(base + os.sep) or resolved == base:
+            return resolved
+    raise ValueError(f"Path '{resolved}' is outside allowed directories. " f"Allowed: {_ALLOWED_BASE_DIRS}")
+
 
 # Representative shapes for sweep mode — 100+ shapes covering all asymmetric
 # M/K/N families (per @sankarmanoj-tt's feedback for DNN training diversity)
@@ -309,9 +332,10 @@ def run_benchmark(
 
     # Save results
     if output_file:
-        output_file = os.path.realpath(output_file)  # Sanitize path
+        # Path validated against allowed base directories (Cycode SAST compliant)
+        output_file = _sanitize_path(output_file)
         os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-        with open(output_file, "w") as f:  # nosec B108
+        with open(output_file, "w") as f:
             json.dump(results, f, indent=2, default=str)
         logger.info(f"Benchmark results saved to {output_file}")
 
@@ -379,8 +403,9 @@ def main():
 
     # Load shapes
     if args.shapes:
-        shapes_path = os.path.realpath(args.shapes)  # Sanitize path
-        with open(shapes_path, "r") as f:  # nosec B108
+        # Path validated against allowed base directories (Cycode SAST compliant)
+        shapes_path = _sanitize_path(args.shapes)
+        with open(shapes_path, "r") as f:
             shapes = json.load(f)
     elif args.sweep:
         shapes = DEFAULT_SWEEP_SHAPES

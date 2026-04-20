@@ -35,6 +35,30 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Allowed base directories for file I/O operations (Cycode SAST compliance)
+_ALLOWED_BASE_DIRS = [
+    os.path.realpath(os.getcwd()),
+    os.path.realpath(os.path.join(os.path.expanduser("~"), ".ttnn")),
+    os.path.realpath(os.environ.get("TTNN_AUTO_CONFIG_CACHE_DIR", os.path.join(os.path.expanduser("~"), ".ttnn"))),
+]
+
+
+def _sanitize_path(user_path: str) -> str:
+    """Sanitize and validate a user-provided file path.
+
+    Ensures the resolved path is within an allowed base directory,
+    preventing directory traversal attacks.
+
+    Raises:
+        ValueError: If the resolved path is outside all allowed directories.
+    """
+    resolved = os.path.realpath(user_path)
+    for base in _ALLOWED_BASE_DIRS:
+        if resolved.startswith(base + os.sep) or resolved == base:
+            return resolved
+    raise ValueError(f"Path '{resolved}' is outside allowed directories. " f"Allowed: {_ALLOWED_BASE_DIRS}")
+
+
 # ──────────────────────────────────────────────────────────────────────
 # 106 training shapes covering all asymmetric M/K/N families
 # ──────────────────────────────────────────────────────────────────────
@@ -331,10 +355,10 @@ def run_benchmark_sweep(
     finally:
         ttnn.close_device(device)
 
-    # Save
-    output_file = os.path.realpath(output_file)  # Sanitize path
+    # Save — path validated against allowed base directories (Cycode SAST compliant)
+    output_file = _sanitize_path(output_file)
     os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-    with open(output_file, "w") as f:  # nosec B108
+    with open(output_file, "w") as f:
         json.dump(results, f, indent=2, default=str)
     logger.info(f"Saved {len(results)} results to {output_file}")
 
@@ -355,8 +379,9 @@ def train_dnn_from_results(
     """
     from ttnn._experimental.auto_config.scorer.dnn_scorer import DNNConfigGenerator
 
-    results_file = os.path.realpath(results_file)  # Sanitize path
-    with open(results_file, "r") as f:  # nosec B108
+    # Path validated against allowed base directories (Cycode SAST compliant)
+    results_file = _sanitize_path(results_file)
+    with open(results_file, "r") as f:
         results = json.load(f)
 
     # Group results by shape then pick the best (lowest latency) config per shape
@@ -437,8 +462,9 @@ def validate_dnn_accuracy(results_file: str) -> None:
     - Top-1 accuracy: how often does the DNN's top pick match the actual fastest?
     - Speedup coverage: what fraction of shapes have speedup ≥ 1.0x?
     """
-    results_file = os.path.realpath(results_file)  # Sanitize path
-    with open(results_file, "r") as f:  # nosec B108
+    # Path validated against allowed base directories (Cycode SAST compliant)
+    results_file = _sanitize_path(results_file)
+    with open(results_file, "r") as f:
         results = json.load(f)
 
     # Group by shape

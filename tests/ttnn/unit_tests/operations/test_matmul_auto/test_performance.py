@@ -149,14 +149,15 @@ class TestMatmulAutoPerformance:
         else:
             pytest.skip("Selected config not standard matmul backend")
 
-        # Measure 5 random valid alternatives
-        import random
-
-        # Deterministic seed for reproducible test sampling — not security-sensitive
-        random.seed(42)  # nosec B311
-        alternatives = random.sample(  # nosec B311
-            [c for c in valid_candidates if c is not selected], min(5, len(valid_candidates) - 1)
-        )
+        # Select up to 5 evenly-spaced alternatives for deterministic comparison
+        # (avoids PRNG — Cycode SAST compliant)
+        all_alts = [c for c in valid_candidates if c is not selected]
+        max_alts = min(5, len(all_alts))
+        if max_alts > 0 and len(all_alts) > max_alts:
+            step = len(all_alts) // max_alts
+            alternatives = [all_alts[i * step] for i in range(max_alts)]
+        else:
+            alternatives = all_alts[:max_alts]
 
         wins = 0
         for alt in alternatives:
@@ -269,12 +270,14 @@ class TestSelectedIsLocalOptimum:
         if not alternatives:
             pytest.skip("No alternative configs to compare against")
 
-        # Test a subset of alternatives (up to 5)
-        import random
-
-        # Deterministic seed for reproducible test sampling — not security-sensitive
-        random.seed(42)  # nosec B311
-        test_alts = random.sample(alternatives, min(5, len(alternatives)))  # nosec B311
+        # Select up to 5 evenly-spaced alternatives for deterministic comparison
+        # (avoids PRNG — Cycode SAST compliant)
+        max_alts = min(5, len(alternatives))
+        if max_alts > 0 and len(alternatives) > max_alts:
+            step = len(alternatives) // max_alts
+            test_alts = [alternatives[i * step] for i in range(max_alts)]
+        else:
+            test_alts = alternatives[:max_alts]
 
         worse_or_equal = 0
         total_tested = 0
