@@ -138,7 +138,16 @@ Groups items that run concurrently on disjoint core subsets. Requires at least
 # Standalone: independent ops merged into one dispatch
 tt_q, tt_kv = Parallel(q=q_rms, kv=kv_rms).run()
 
-# Branching tree: stem runs first, then two branches in parallel
+# Branching tree (positional): stem runs first, then two branches in parallel.
+# For persistent mode, hold your own refs to the descriptors to call update().
+a_out, b_out = Sequential(
+    stem_op,
+    Parallel(branch_a, branch_b),
+).run()
+
+# Branching tree (named): same behavior, but the container hoists descriptors
+# as attributes, so persistent-mode access goes through the container:
+# `fused.stem.update(...)` / `fused.a.update(...)`.
 a_out, b_out = Sequential(
     stem=stem_op,
     branches=Parallel(a=branch_a, b=branch_b),
