@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_eltwise_binary_ng ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Binary::NG ALIAS ttnn_op_eltwise_binary_ng)
 
@@ -28,9 +30,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/binary_ng_device_operation.cpp
-        device/binary_ng_program_factory.cpp
-        device/binary_ng_utils.cpp
+        ${TTNN_OP_ELTWISE_BINARY_NG_SRCS}
 )
 
 target_include_directories(ttnn_op_eltwise_binary_ng PRIVATE ${FixmeOpIncDirs})

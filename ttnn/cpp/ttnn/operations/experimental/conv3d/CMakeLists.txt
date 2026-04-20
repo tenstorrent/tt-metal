@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_conv3d ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Conv3d ALIAS ttnn_op_experimental_conv3d)
 
@@ -25,10 +27,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        conv3d.cpp
-        prepare_conv3d_weights.cpp
-        device/conv3d_device_operation.cpp
-        device/conv3d_program_factory.cpp
+        ${TTNN_OP_EXPERIMENTAL_CONV3D_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_conv3d PRIVATE ${FixmeOpIncDirs})

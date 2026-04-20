@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_randn ${LIB_TYPE})
 add_library(TTNN::Ops::Randn ALIAS ttnn_op_randn)
 
@@ -19,15 +21,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES randn.hpp
+        FILES ${TTNN_OP_RANDN_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        randn.cpp
-        device/randn_device_operation.cpp
-        device/randn_program_factory.cpp
+        ${TTNN_OP_RANDN_SRCS}
 )
 
 target_include_directories(ttnn_op_randn PRIVATE ${FixmeOpIncDirs})

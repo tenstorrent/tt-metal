@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_test ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Test ALIAS ttnn_op_experimental_test)
 
@@ -24,7 +26,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        hang_device/hang_device_operation.cpp
+        ${TTNN_OP_EXPERIMENTAL_TEST_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_test PRIVATE ${FixmeOpIncDirs})

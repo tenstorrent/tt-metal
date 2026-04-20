@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_eltwise_unary_ng ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::UnaryNG ALIAS ttnn_op_eltwise_unary_ng)
 
@@ -24,11 +26,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${unary_ng_kernels}
     PRIVATE
-        device/unary_ng_device_operation.cpp
-        device/unary_ng_program_factory.cpp
-        common/unary_ng_utils.cpp
-        common/unary_ng_op_utils.cpp
-        unary_ng.cpp
+        ${TTNN_OP_ELTWISE_UNARY_NG_SRCS}
 )
 
 target_include_directories(ttnn_op_eltwise_unary_ng PRIVATE ${FixmeOpIncDirs})
