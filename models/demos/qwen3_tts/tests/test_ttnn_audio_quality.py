@@ -27,16 +27,17 @@ import torch
 # ---------------------------------------------------------------------------
 
 # REF_AUDIO = "/tmp/jim_audio.wav"
-REF_AUDIO = "/tmp/ttnn_tts_output.wav"
-REF_TEXT = "Good morning, I'm doing fine."
+REF_AUDIO = "/home/ubuntu/tt-ign/tt-metal/models/demos/qwen3_tts/demo/jim_reference.wav"
+REF_TEXT = "Jason, can you put up the high level overview slides"
 # Text must be long enough that text_lens > codec_lens (~49 for 4s ref at 12Hz).
 # The combined ref_text + target_text tokenizes to ~58 tokens (> 49), ensuring
 # proper trailing_text_hidden conditioning during generation.
 TARGET_TEXT = (
-    "Welcome to Tenstorrent, the leading company in building hardware accelerators "
-    "for artificial intelligence and machine learning workloads. Our chips deliver "
-    "exceptional performance for deep learning inference and training at scale. "
-    "We are transforming the future of computing with innovative silicon designs."
+    "Jason, can you put up the high level overview slides"
+    #  "Welcome to Tenstorrent, the leading company in building hardware accelerators "
+    # "for artificial intelligence and machine learning workloads. Our chips deliver "
+    # "exceptional performance for deep learning inference and training at scale. "
+    # "We are transforming the future of computing with innovative silicon designs."
 )
 OUTPUT_TRACE = "/tmp/quality_trace.wav"
 OUTPUT_CPU = "/tmp/quality_cpu.wav"
