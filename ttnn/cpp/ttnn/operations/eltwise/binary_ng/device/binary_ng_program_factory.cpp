@@ -332,12 +332,14 @@ bool is_llk_bcast(
         }
         if (all_match(DataType::FLOAT32) || all_match(DataType::INT32) || all_match(DataType::UINT32) ||
             all_match(DataType::UINT16)) {
-            tt::ARCH arch = tt::tt_metal::hal::get_arch();
-            // tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py::test_binary_implicit_broadcast
-            // tests/ttnn/unit_tests/operations/eltwise/test_pow.py::test_binary_ng_pow[dtype=float32-input_a=[1, 128,
-            // 96]-input_b=[1, 128, 1]]
-            // ttsim blackhole ERROR: UnsupportedFunctionality: tensix_execute_zeroacc: clear
-            // 32b 16 rows: clear_zero_flags=1 dst=1 row=0 dst_row_valid not already set
+            [[maybe_unused]] tt::ARCH arch = tt::tt_metal::hal::get_arch();
+            //  tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py::test_binary_implicit_broadcast
+            //  tests/ttnn/unit_tests/operations/eltwise/test_pow.py::test_binary_ng_pow[dtype=float32-input_a=[1, 128,
+            //  96]-input_b=[1, 128, 1]]
+            //  ttsim blackhole ERROR: UnsupportedFunctionality: tensix_execute_zeroacc: clear
+            //  32b 16 rows: clear_zero_flags=1 dst=1 row=0 dst_row_valid not already set
+            // ttsim wormhole ERROR: UndefinedBehavior: tensix_execute_unpacr: unpack_to_dst=0 in_data_format=0
+            // out_data_format=0
             if (arch == tt::ARCH::WORMHOLE_B0) {
                 return true;
             }
@@ -781,9 +783,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 // tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py::test_binary_w_typecast[layout=Layout.TILE-out_dtype=bfloat16-in_dtype=DataType.FLOAT32-ttnn_fn=ge-input_shapes=(torch.Size([5,
                 // 1, 64, 1]), torch.Size([1, 3, 1, 128]))]
                 // device hang
-                // tt-sim ERROR: UnsupportedFunctionality:
+                // tt-sim blackhole ERROR: UnsupportedFunctionality:
                 // tensix_execute_zeroacc: clear 32b 16 rows: clear_zero_flags=1 dst=0 row=1 dst_row_valid not already
                 // set
+                // tt-sim wormhole ERROR: UndefinedBehavior: tensix_execute_unpacr: unpack_to_dst=0 in_data_format=0
+                // out_data_format=0
                 use_llk_bcast = false;
             }
         }
