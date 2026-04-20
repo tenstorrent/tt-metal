@@ -605,12 +605,12 @@ def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
 @pytest.mark.parametrize(
     "shape",
     [
-        [120, 104],           # width=104, not divisible by 32 (WAN 480p per-device shard)
+        [120, 104],  # width=104, not divisible by 32 (WAN 480p per-device shard)
         [81, 120, 104],
         [3, 81, 120, 104],
         [1, 3, 81, 120, 104],
-        [10, 40],             # width=40, not divisible by 32
-        [5, 8],               # width=8, less than one tile row
+        [10, 40],  # width=40, not divisible by 32
+        [5, 8],  # width=8, less than one tile row
     ],
 )
 def test_typecast_rm_non_aligned_width(shape, device):
