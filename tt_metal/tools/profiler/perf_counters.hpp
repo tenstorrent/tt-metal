@@ -16,6 +16,7 @@ enum PerfCounterType : uint16_t {
     // TDMA_UNPACK Group (11 req + 11 grant = 22 counters)
     MATH_SRC_DATA_READY,        // Req 0: math instrn valid & src_data_ready
     DATA_HAZARD_STALLS_MOVD2A,  // Req 1: math instrn not stalled by D2A
+    FIDELITY_PHASE_STALLS,      // Req 2: RTL-dead on both WH and BH (fidelity_phases_ongoing = 1'b0). Reserved slot.
     MATH_INSTRN_STARTED,
     MATH_INSTRN_AVAILABLE,
     SRCB_WRITE_AVAILABLE,
@@ -89,7 +90,8 @@ enum PerfCounterType : uint16_t {
     WAITING_FOR_SFPU_IDLE_0,
     WAITING_FOR_SFPU_IDLE_1,
     WAITING_FOR_SFPU_IDLE_2,
-    THREAD_INSTRUCTIONS_0,  // Deprecated: sel 24-26 are stall cycles, not instruction counts. Kept for enum compatibility.
+    THREAD_INSTRUCTIONS_0,  // Deprecated: sel 24-26 are stall cycles, not instruction counts. Kept for enum
+                            // compatibility.
     THREAD_INSTRUCTIONS_1,  // Deprecated: see THREAD_STALLS_0/1/2 for the actual counters at these sels.
     THREAD_INSTRUCTIONS_2,  // Deprecated: no RTL counter exists for per-thread total instruction counts.
     // L1 Bank 0 (MUX_CTRL bit 4 = 0, monitors L1 ports 0-7)
@@ -159,7 +161,9 @@ enum PerfCounterType : uint16_t {
     PACK_INSTRN_ISSUED_0,
     PACK_INSTRN_ISSUED_1,
     PACK_INSTRN_ISSUED_2,
-    // TDMA_UNPACK grant counters: write/port info
+    // TDMA_UNPACK grant counters: detailed write/HF info
+    INSTRN_2_HF_CYCLES,           // RTL-dead on both archs (gated by hf_cycles==2'b01). Reserved slot.
+    INSTRN_1_HF_CYCLE,            // RTL-dead on both archs (gated by hf_cycles==2'b00 & rden). Reserved slot.
     SRCB_WRITE_ACTUAL,            // srcB writes not blocked by overwrite (grant 259)
     SRCA_WRITE_NOT_BLOCKED_OVR,   // srcA writes not blocked by overwrite (grant 260)
     SRCA_WRITE_ACTUAL,            // srcA writes not blocked by port (grant 261)
@@ -168,6 +172,7 @@ enum PerfCounterType : uint16_t {
     SRCB_WRITE_THREAD0,           // srcB writes from thread 0 (grant 264)
     SRCA_WRITE_THREAD1,           // srcA writes from thread 1 (grant 265)
     SRCB_WRITE_THREAD1,           // srcB writes from thread 1 (grant 266)
+    MATH_INSTRN_NOT_BLOCKED_SRC,  // RTL-dead on both archs (gated by hf_cycles==2'b11). Reserved slot.
     // TDMA_PACK additional req counters (WH only: PACK_COUNT=4)
     PACKER_DEST_READ_1,  // Dest accumulator register 1 read request (req 12)
     PACKER_DEST_READ_2,  // Dest accumulator register 2 read request (req 13)
@@ -176,12 +181,14 @@ enum PerfCounterType : uint16_t {
     PACKER_BUSY_1,       // Packer engine 1 busy (req 16)
     PACKER_BUSY_2,       // Packer engine 2 busy (req 17)
     // TDMA_PACK grant counters: dest read grants and scoreboard stalls
-    DEST_READ_GRANTED_0,           // Dest register 0 read granted (grant 267)
-    DEST_READ_GRANTED_1,           // Dest register 1 read granted (grant 268)
-    DEST_READ_GRANTED_2,           // Dest register 2 read granted (grant 269)
-    DEST_READ_GRANTED_3,           // Dest register 3 read granted (grant 270)
+    DEST_READ_GRANTED_0,            // Dest register 0 read granted (grant 267)
+    DEST_READ_GRANTED_1,            // Dest register 1 read granted (grant 268)
+    DEST_READ_GRANTED_2,            // Dest register 2 read granted (grant 269)
+    DEST_READ_GRANTED_3,            // Dest register 3 read granted (grant 270)
     MATH_NOT_STALLED_DEST_WR_PORT,  // Math not stalled by dest write port (grant 271)
     // Note: AVAILABLE_MATH (existing, counter_sel 272) = math not stalled by scoreboard (grant 272)
+    PACK_BANK6_GRANT,  // RTL-dead on both archs (tied to 2'b00[1]). Reserved slot.
+    PACK_BANK7_GRANT,  // RTL-dead on both archs (tied to 2'b00[0]). Reserved slot.
     // L1 Bank 4 (BH only, MUX_CTRL[6:4] = 4, monitors misc ports 32-39)
     L1_4_MISC_PORT_0,  // Port 32: misc interface 0
     L1_4_MISC_PORT_1,  // Port 33: misc interface 1
@@ -241,15 +248,33 @@ enum PerfCounterType : uint16_t {
     STALL_GRANT_SRCB_CLEAR,
     STALL_GRANT_SRCA_VALID,
     STALL_GRANT_SRCB_VALID,
-    STALL_GRANT_THCON_0, STALL_GRANT_THCON_1, STALL_GRANT_THCON_2,
-    STALL_GRANT_UNPACK_0, STALL_GRANT_UNPACK_1, STALL_GRANT_UNPACK_2,
-    STALL_GRANT_PACK_0, STALL_GRANT_PACK_1, STALL_GRANT_PACK_2,
-    STALL_GRANT_MATH_0, STALL_GRANT_MATH_1, STALL_GRANT_MATH_2,
-    STALL_GRANT_SEM_ZERO_0, STALL_GRANT_SEM_ZERO_1, STALL_GRANT_SEM_ZERO_2,
-    STALL_GRANT_SEM_MAX_0, STALL_GRANT_SEM_MAX_1, STALL_GRANT_SEM_MAX_2,
-    STALL_GRANT_MOVE_0, STALL_GRANT_MOVE_1, STALL_GRANT_MOVE_2,
-    STALL_GRANT_MMIO_0, STALL_GRANT_MMIO_1, STALL_GRANT_MMIO_2,
-    STALL_GRANT_SFPU_0, STALL_GRANT_SFPU_1, STALL_GRANT_SFPU_2,
+    STALL_GRANT_THCON_0,
+    STALL_GRANT_THCON_1,
+    STALL_GRANT_THCON_2,
+    STALL_GRANT_UNPACK_0,
+    STALL_GRANT_UNPACK_1,
+    STALL_GRANT_UNPACK_2,
+    STALL_GRANT_PACK_0,
+    STALL_GRANT_PACK_1,
+    STALL_GRANT_PACK_2,
+    STALL_GRANT_MATH_0,
+    STALL_GRANT_MATH_1,
+    STALL_GRANT_MATH_2,
+    STALL_GRANT_SEM_ZERO_0,
+    STALL_GRANT_SEM_ZERO_1,
+    STALL_GRANT_SEM_ZERO_2,
+    STALL_GRANT_SEM_MAX_0,
+    STALL_GRANT_SEM_MAX_1,
+    STALL_GRANT_SEM_MAX_2,
+    STALL_GRANT_MOVE_0,
+    STALL_GRANT_MOVE_1,
+    STALL_GRANT_MOVE_2,
+    STALL_GRANT_MMIO_0,
+    STALL_GRANT_MMIO_1,
+    STALL_GRANT_MMIO_2,
+    STALL_GRANT_SFPU_0,
+    STALL_GRANT_SFPU_1,
+    STALL_GRANT_SFPU_2,
     // Max enum value must fit in 8 bits (PerfCounter.counter_type is uint32_t:8).
     // Do not add values beyond 255.
 };
