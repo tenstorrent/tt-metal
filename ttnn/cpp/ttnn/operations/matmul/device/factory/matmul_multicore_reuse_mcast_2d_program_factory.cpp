@@ -1718,17 +1718,6 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
     tt_metal::Buffer* out_buffer = output.buffer();
     TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    if (B > 1 && out_buffer->buffer_layout() == tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
-        TT_FATAL(
-            false,
-            "Matmul with block-sharded output and fuse_batch=False is not supported when batch > 1 (batch={}). "
-            "Each core's output shard can only hold one batch worth of tiles, but the kernel would attempt to write "
-            "all {} batches into the same shard, causing a hang. Use fuse_batch=True to distribute batches across "
-            "the grid rows.",
-            B,
-            B);
-    }
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Sub-device start core
     ////////////////////////////////////////////////////////////////////////////
