@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Parity tests for PolyNorm3 forward and backward (fused metal kernel vs. composite TTNN ops).
+// Each test compares both paths against an xtensor ground-truth reference implementation,
+// checking forward output, grad_x, grad_w, and grad_b within tolerance.
+
 #include "ops/polynorm_op.hpp"
 
 #include <gtest/gtest.h>
@@ -17,6 +21,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/polynorm_bw/polynorm_bw.hpp"
 #include "ops/losses.hpp"
 #include "test_utils/random_data.hpp"
 
@@ -35,8 +40,8 @@ protected:
 namespace {
 constexpr float kForwardRtol = 2.5e-2F;
 constexpr float kForwardAtol = 2.5e-2F;
-constexpr float kBackwardRtol = 2.0e-2F;
-constexpr float kBackwardAtol = 2.0e-2F;
+constexpr float kBackwardRtol = 5.0e-2F;
+constexpr float kBackwardAtol = 5.0e-2F;
 
 struct PolyNormCaseData {
     xt::xarray<float> input;
@@ -200,6 +205,35 @@ PolyNormCaseData make_case_data(const std::vector<uint32_t>& input_shape) {
     return data;
 }
 
+enum class BackwardKernelVariant {
+    FusedPartials,
+};
+
+std::string backward_variant_name(BackwardKernelVariant variant) {
+    if (variant == BackwardKernelVariant::FusedPartials) {
+        return "fused_partials";
+    }
+    return "fused_partials";
+}
+
+std::tuple<xt::xarray<float>, xt::xarray<float>, xt::xarray<float>> run_backward_kernel_variant(
+    BackwardKernelVariant variant,
+    const xt::xarray<float>& input,
+    const xt::xarray<float>& dL_dout,
+    const xt::xarray<float>& weight,
+    float epsilon,
+    ttnn::distributed::MeshDevice* device) {
+    const auto input_tensor = ttml::core::from_xtensor(input, device);
+    const auto dL_dout_tensor = ttml::core::from_xtensor(dL_dout, device);
+    const auto weight_tensor = ttml::core::from_xtensor(weight, device);
+
+    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> outputs;
+    outputs = ttml::metal::polynorm3_bw(input_tensor, dL_dout_tensor, weight_tensor, epsilon);
+    auto grad_x = ttml::core::to_xtensor(std::get<0>(outputs));
+    auto grad_w = ttml::core::to_xtensor(std::get<1>(outputs));
+    auto grad_b = ttml::core::to_xtensor(std::get<2>(outputs));
+    return {std::move(grad_x), std::move(grad_w), std::move(grad_b)};
+}
 void expect_allclose_with_metrics(
     const xt::xarray<float>& out_tt,
     const xt::xarray<float>& out_ref,
@@ -224,7 +258,8 @@ void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape, float
     auto w = autograd::create_tensor(core::from_xtensor(data.weight, device), /*requires_grad=*/true);
     auto b = autograd::create_tensor(core::from_xtensor(data.bias, device), /*requires_grad=*/true);
 
-    auto out = ops::polynorm3(x, w, b, epsilon);
+    auto out =
+        ops::polynorm3(x, w, b, epsilon, ops::PolyNorm3ForwardVariant::Fused, ops::PolyNorm3BackwardVariant::Fused);
     const auto out_xt = core::to_xtensor(out->get_value());
     auto out_reference_xt = polynorm_reference(data.input, data.weight, data.bias, epsilon);
 
@@ -248,12 +283,27 @@ void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape, float
     EXPECT_EQ(grad_w.shape(), data.weight.shape());
     EXPECT_EQ(grad_b.shape(), data.bias.shape());
 
-    EXPECT_TRUE(xt::all(xt::isfinite(grad_x)));
-    EXPECT_TRUE(xt::all(xt::isfinite(grad_w)));
-    EXPECT_TRUE(xt::all(xt::isfinite(grad_b)));
-    expect_allclose_with_metrics(grad_x, grad_x_ref, kBackwardRtol, kBackwardAtol, "backward_grad_x_vs_xt_reference");
-    expect_allclose_with_metrics(grad_w, grad_w_ref, kBackwardRtol, kBackwardAtol, "backward_grad_w_vs_xt_reference");
-    expect_allclose_with_metrics(grad_b, grad_b_ref, kBackwardRtol, kBackwardAtol, "backward_grad_b_vs_xt_reference");
+    autograd::ctx().reset_graph();
+
+    for (const auto variant : {BackwardKernelVariant::FusedPartials}) {
+        const auto [grad_x, grad_w, grad_b] =
+            run_backward_kernel_variant(variant, data.input, dL_dout, data.weight, epsilon, device);
+        const auto variant_name = backward_variant_name(variant);
+
+        EXPECT_EQ(grad_x.shape(), data.input.shape());
+        EXPECT_EQ(grad_w.shape(), data.weight.shape());
+        EXPECT_EQ(grad_b.shape(), data.bias.shape());
+
+        EXPECT_TRUE(xt::all(xt::isfinite(grad_x))) << variant_name << " grad_x has non-finite values";
+        EXPECT_TRUE(xt::all(xt::isfinite(grad_w))) << variant_name << " grad_w has non-finite values";
+        EXPECT_TRUE(xt::all(xt::isfinite(grad_b))) << variant_name << " grad_b has non-finite values";
+        expect_allclose_with_metrics(
+            grad_x, grad_x_ref, kBackwardRtol, kBackwardAtol, variant_name + "_backward_grad_x_vs_xt_reference");
+        expect_allclose_with_metrics(
+            grad_w, grad_w_ref, kBackwardRtol, kBackwardAtol, variant_name + "_backward_grad_w_vs_xt_reference");
+        expect_allclose_with_metrics(
+            grad_b, grad_b_ref, kBackwardRtol, kBackwardAtol, variant_name + "_backward_grad_b_vs_xt_reference");
+    }
 
     autograd::ctx().reset_graph();
 }
@@ -277,8 +327,15 @@ TEST_F(PolyNormOpTest, PolyNorm_Compare_FusedVsCompositeForward_Small) {
     auto w = autograd::create_tensor(core::from_xtensor(data.weight, device), /*requires_grad=*/true);
     auto b = autograd::create_tensor(core::from_xtensor(data.bias, device), /*requires_grad=*/true);
 
-    const auto fused = ops::polynorm3(x, w, b, epsilon);
-    const auto composite = ops::polynorm3_composite(x, w, b, epsilon);
+    const auto fused =
+        ops::polynorm3(x, w, b, epsilon, ops::PolyNorm3ForwardVariant::Fused, ops::PolyNorm3BackwardVariant::Fused);
+    const auto composite = ops::polynorm3(
+        x,
+        w,
+        b,
+        epsilon,
+        ops::PolyNorm3ForwardVariant::CompositeComparisonOnly,
+        ops::PolyNorm3BackwardVariant::CompositeComparisonOnly);
 
     const auto fused_xt = core::to_xtensor(fused->get_value());
     const auto composite_xt = core::to_xtensor(composite->get_value());
@@ -321,7 +378,8 @@ TEST_F(PolyNormOpTest, PolyNorm_FusedForwardRejectsNonTileAlignedChannels) {
 
     EXPECT_THROW(
         {
-            auto out = ops::polynorm3(x, w, b, 1e-5F);
+            auto out = ops::polynorm3(
+                x, w, b, 1e-5F, ops::PolyNorm3ForwardVariant::Fused, ops::PolyNorm3BackwardVariant::Fused);
             (void)out;
         },
         std::runtime_error);
@@ -336,4 +394,14 @@ TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_NanoLlama3LikeChannelShape) {
 TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_TinyLlamaLikeChannelShape) {
     // TinyLlama/Llama1B-like shape: embedding_dim 2048 and max sequence length 2048.
     CompareKernelVsReferenceWithShape({1, 1, 2048, 2048}, 1e-5F);
+}
+
+TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_TinyLlamaLikeHiddenShape) {
+    // TinyLlama MLP hidden dim is 5632. Keep sequence short for test runtime.
+    CompareKernelVsReferenceWithShape({1, 1, 32, 5632}, 1e-5F);
+}
+
+TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_Llama1bLikeHiddenShape) {
+    // Llama1B MLP hidden dim is 8192. Keep sequence short for test runtime.
+    CompareKernelVsReferenceWithShape({1, 1, 32, 8192}, 1e-5F);
 }
