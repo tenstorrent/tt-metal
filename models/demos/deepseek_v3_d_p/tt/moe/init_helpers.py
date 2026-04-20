@@ -367,6 +367,7 @@ def compute_constants(
     # total number of tokens in group times x distribution ratio (8/256 == 2/64)
     balanced_load = (dispatch_group_size * seq_len_per_chip) * num_experts_per_tok // num_routed_experts
     max_dispatched_tokens_per_expert = int(balanced_load * capacity_factor)
+    logger.info(f"Capacity factor : {capacity_factor}")
     return experts_per_chip, metadata_len, max_dispatched_tokens_per_expert
 
 
