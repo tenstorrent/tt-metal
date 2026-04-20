@@ -13,8 +13,6 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/tt_cluster.hpp"
 
-#include <cstdlib>
-
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
 // TODO: delete this once tt_fabric_api.h fully support low latency feature
@@ -70,20 +68,23 @@ void configure_fabric_cores(tt::tt_metal::IDevice* device) {
     const auto& router_config = builder_context.get_fabric_router_config();
     std::vector<uint32_t> router_zero_buf(router_config.router_buffer_clear_size_words, 0);
 
-    // Fix #42429: After a cancelled CI run (or SIGKILL), BRISC on ERISC cores may remain halted
-    // from a prior process's teardown.  When BRISC is halted, L1 firmware writes below have no
-    // effect because the core never executes the new firmware.  Detect this condition and perform
-    // a BRISC-only soft reset (assert + deassert) to restart the core into base firmware.
+    // Fix #42429: After a cancelled CI run, SIGKILL, or normal AllGather CCL teardown, the
+    // ERISC BRISC may be halted.  When an ERISC fabric router self-terminates (writes
+    // EDMStatus::TERMINATED to its sync address and halts BRISC), subsequent L1 firmware
+    // writes in this function have no effect because BRISC never executes the new code.
+    // This causes the Phase 5 health check in quiesce_and_restart_fabric_workers() to fail
+    // with TERMINATED ≠ READY_FOR_TRAFFIC on the second (post-AllGather) quiesce cycle.
     //
-    // Safety: resetting only ERISC0/BRISC keeps the subordinate ERISC (NCRISC) running, which
-    // maintains the ETH PHY link.  The reset window is brief (PCIe round-trip, microseconds)
-    // and mirrors the pattern used in risc_firmware_initializer.cpp reset_cores().
+    // Fix: perform a BRISC-only soft reset (assert + deassert) before writing L1 to ensure
+    // BRISC is live when the new fabric firmware is loaded.
     //
-    // Guarded by env var so it can be disabled if unexpected side effects appear.
-    static const bool enable_erisc_soft_reset =
-        std::getenv("TT_METAL_ENABLE_FABRIC_ERISC_SOFT_RESET") != nullptr;
-
-    if (enable_erisc_soft_reset) {
+    // Safety: resetting only ERISC0/BRISC keeps the subordinate ERISC (NCRISC) running,
+    // which maintains the ETH PHY link.  The reset window is brief (PCIe round-trip,
+    // microseconds) and mirrors the pattern used in risc_firmware_initializer.cpp
+    // reset_cores().  Base UMD firmware does not touch fabric-specific state addresses
+    // (edm_status_address, termination_signal_address), so there is no race with the
+    // L1 clear below.
+    {
         const auto chip_id = device->id();
         for (const auto& [router_chan, _] : router_chans_and_direction) {
             try {
