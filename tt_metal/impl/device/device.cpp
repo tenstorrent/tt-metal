@@ -389,30 +389,27 @@ void Device::configure_fabric() {
     }
 
     // Returns false if any channel had a timed-out soft reset (remote chip unreachable).
-    // In that case the dead channels will also hang on read-barrier operations, so we skip
-    // l1_barrier below to avoid a 10-minute freeze.  See #42429.
+    // When channels are dead, ALL subsequent L1 writes to the device (WriteRuntimeArgsToDevice,
+    // ConfigureDeviceWithProgram, write_launch_msg_to_core, l1_barrier) route through the same
+    // dead ethernet path and will block indefinitely — there is no safe recovery path for this
+    // device.  Throw immediately to fail fast with a clear diagnostic rather than hanging for
+    // 10 minutes until the CI timeout kills the process.  See #42429.
     const bool fabric_cores_healthy = tt::tt_fabric::configure_fabric_cores(this);
+    if (!fabric_cores_healthy) {
+        TT_THROW(
+            "configure_fabric: Device {} has dead ETH channels (soft reset timed out). "
+            "Cannot write fabric firmware — all L1 writes would hang on the dead ethernet path. "
+            "Hardware requires a reset to recover.",
+            this->id_);
+    }
 
     fabric_program_->impl().finalize_offsets(this);
 
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
 
-    // Note: the l1_barrier below is needed to be sure writes to cores that
-    // don't get the GO mailbox have all landed.
-    // Skip for degraded devices (some ETH channels timed out in configure_fabric_cores):
-    // l1_barrier reads back from every ETH core to confirm writes landed, and those reads
-    // will hang indefinitely on dead channels — same root cause as the timed-out soft resets.
     MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
-    if (fabric_cores_healthy) {
-        env_impl.get_cluster().l1_barrier(this->id());
-    } else {
-        log_warning(
-            tt::LogMetal,
-            "configure_fabric: Skipping l1_barrier for Device {} — some ETH channels had "
-            "soft reset failures (dead remote chip?). Fabric may not start on those channels.",
-            this->id_);
-    }
+    env_impl.get_cluster().l1_barrier(this->id());
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->impl().logical_cores();
     const auto& hal = env_impl.get_hal();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
