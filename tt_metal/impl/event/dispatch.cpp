@@ -142,9 +142,11 @@ void issue_record_event_commands(
         // counts to DISPATCH_D continuously in its cb_acquire_pages_dispatch_s() loop.  An
         // explicit DISPATCH_S WAIT here is unnecessary — DISPATCH_D's own WAIT_STREAM will
         // block until DISPATCH_S has forwarded the required count.  Inserting a DISPATCH_S
-        // WAIT would cause a hard timeout whenever workers are slow (the tight spin loop in
-        // process_dispatch_s_wait_cmd does not call update_worker_completion_count_on_dispatch_d,
-        // so other streams stall, and the 5-second CI watchdog fires).
+        // WAIT would be redundant: process_dispatch_s_wait_cmd now calls
+        // update_worker_completion_count_on_dispatch_d() inside its wait loop, so other
+        // streams do not stall.  However, the DISPATCH_S WAIT is still omitted here because
+        // DISPATCH_D's WAIT already provides the required ordering guarantee, so the extra
+        // round-trip to DISPATCH_S adds latency with no correctness benefit.
 
         if (i == num_worker_counters - 1) {
             command_sequence.add_dispatch_wait_with_prefetch_stall(

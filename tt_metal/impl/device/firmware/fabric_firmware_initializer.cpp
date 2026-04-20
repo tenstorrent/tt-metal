@@ -649,7 +649,24 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
         uint32_t spin_counter = 0;
         bool terminated_ok = false;
         while (true) {
-            detail::ReadFromDeviceL1(dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+            // Wrapped in try/catch: on non-MMIO devices, ReadFromDeviceL1 can throw
+            // "Timeout waiting for Ethernet core service" if the tunnel is disrupted
+            // during the 100ms window.  Without this guard, a single throw escapes the
+            // loop and aborts cleanup for ALL remaining channels on this device.
+            // On exception, treat as "not yet terminated" and continue the timeout poll.
+            try {
+                detail::ReadFromDeviceL1(
+                    dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+            } catch (const std::exception& read_ex) {
+                log_warning(
+                    tt::LogMetal,
+                    "terminate_stale_erisc_routers: Device {} chan={} poll read threw: {} — "
+                    "treating as not-terminated, continuing timeout",
+                    dev->id(),
+                    eth_chan_id,
+                    read_ex.what());
+                // Fall through to timeout check rather than breaking out.
+            }
             if (status_buf[0] == terminated_val) {
                 terminated_ok = true;
                 break;

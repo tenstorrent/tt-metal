@@ -311,11 +311,11 @@ void DispatchKernelInitializer::rescue_stuck_dispatch_cores(IDevice* device) con
     // This is the correct set to rescue: get_registered_termination_cores() only returns
     // RelayMux (ROUTING) cores and would be a complete no-op for dispatch_s.
     const auto dispatch_core_infos = dispatch_topology_->get_logical_dispatch_cores_for_rescue(device->id());
+    std::vector<uint32_t> val{rescue_count};  // value never changes; allocate once outside the loop
     for (const auto& [logical_core, core_type] : dispatch_core_infos) {
         for (uint32_t i = 0; i < num_streams; i++) {
             uint32_t stream_id = mem_map.get_dispatch_stream_index(i);
             uint32_t reg_addr = overlay_start + (stream_id * stream_reg_space) + (buf_size_reg_idx << 2);
-            std::vector<uint32_t> val{rescue_count};
             try {
                 detail::WriteToDeviceL1(device, logical_core, reg_addr, val, core_type);
             } catch (const std::exception& e) {
