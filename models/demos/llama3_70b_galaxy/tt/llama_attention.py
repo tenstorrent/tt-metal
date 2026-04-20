@@ -825,7 +825,12 @@ class TtLlamaAttention(LightweightModule):
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(attn_output_1QSD)
+        # In the prefix-cached path, attn_output_1QSD is a reshape/view of the
+        # persistent ATTN_REPLICATE all-gather buffer. Deallocating it here also
+        # deallocates the cached buffer, so later layers/warmup iterations see a
+        # Tensor object that exists but is no longer allocated.
+        if not use_chunked_sdpa:
+            ttnn.deallocate(attn_output_1QSD)
 
         if ring_distributed_sdpa:
             # Split the attention output into two chunks along the sequence dimension for ring all-gather

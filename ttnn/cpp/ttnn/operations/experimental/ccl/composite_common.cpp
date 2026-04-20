@@ -70,7 +70,8 @@ ttnn::Tensor composite_reduce_scatter(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    bool use_l1_small_for_semaphores) {
     bool is_row_major = input_tensor.layout() == ttnn::Layout::ROW_MAJOR;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -148,7 +149,8 @@ ttnn::Tensor composite_reduce_scatter(
                                                       chunks_per_sync,
                                                       num_workers_per_link,
                                                       num_buffers_per_channel,
-                                                      compute_kernel_config)
+                                                      compute_kernel_config,
+                                                      use_l1_small_for_semaphores)
                                                       .at(1);  // first is the intermediate tensor
     // remove the padding we previously inserted
     ttnn::Tensor rs_output_tensor;
@@ -321,7 +323,8 @@ ttnn::Tensor composite_all_gather(
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    bool use_l1_small_for_semaphores) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -361,7 +364,13 @@ ttnn::Tensor composite_all_gather(
     }
 
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::prim::all_broadcast(
-        input_tensor, cluster_axis, subdevice_id, input_tensor.memory_config(), num_links, ttnn::ccl::Topology::Linear);
+        input_tensor,
+        cluster_axis,
+        subdevice_id,
+        input_tensor.memory_config(),
+        num_links,
+        ttnn::ccl::Topology::Linear,
+        use_l1_small_for_semaphores);
 
     // Do the gather itself
     ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
@@ -384,12 +393,13 @@ std::vector<ttnn::Tensor> composite_all_gather(
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    bool use_l1_small_for_semaphores) {
     std::vector<ttnn::Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (const auto& input_tensor : input_tensors) {
-        output_tensors.push_back(
-            composite_all_gather(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis));
+        output_tensors.push_back(composite_all_gather(
+            input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis, use_l1_small_for_semaphores));
     }
     return output_tensors;
 }
@@ -400,7 +410,8 @@ ttnn::Tensor composite_all_to_all(
     int32_t out_dim,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_l1_small_for_semaphores) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -455,7 +466,8 @@ ttnn::Tensor composite_all_to_all(
         subdevice_id,
         interim_memory_config,
         num_links,
-        ttnn::ccl::Topology::Linear);
+        ttnn::ccl::Topology::Linear,
+        use_l1_small_for_semaphores);
     input_tensor.deallocate();
 
     // Step 2: Slice out the index range each device cares about, along out_dim

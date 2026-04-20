@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+//
 #pragma once
 
 #include <cstdint>
@@ -106,7 +107,8 @@ inline void _llk_math_matmul_di_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_di
  * Input 0 dim = [rt_dim, 1]
  * Input 1 dim = [1, ct_dim]
  * Output is a matrix block of dimension [rt_dim, ct_dim]
- * ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
+ * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
+ * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in Float16b, ct_dim * rt_dim <= 8 tiles in Float32
  * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when math is Float32 format
  * @param ct_dim: number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: number of tiles in the row dimension for a matrix multiply
@@ -163,7 +165,8 @@ inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_di
  * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when math is Float32 format
  * @param ct_dim: number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: number of tiles in the row dimension for a matrix multiply
- * ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
+ * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
+ * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in Float16b, ct_dim * rt_dim <= 8 tiles in Float32
  */
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_X2>
 inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_dim)
@@ -259,7 +262,8 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
  * Input 0 dim = [rt_dim, 1]
  * Input 1 dim = [1, ct_dim]
  * Output is a matrix block of dimension [rt_dim, ct_dim]
- * ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
+ * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
+ * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in Float16b, ct_dim * rt_dim <= 8 tiles in Float32
  * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when math is Float32 format
  * @tparam EN_DI: Enable direct indexing matrix multiplication
  * @tparam EN_X2: Enable matrix multiplication with MXFP_2X mode, double the performance
@@ -281,8 +285,6 @@ inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
         _llk_math_matmul_mop_config_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
     }
 
-    // Matmul Block, reset the dest addr to 0 for fused kernels
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(0);
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
 
@@ -291,7 +293,8 @@ inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
  * Input 0 = 1 tile -> SrcB reg
  * Input 1 = 1 tile -> SrcA reg
  * Output = 1 tile -> Dst reg at specified dst_index
- * @param dst_index: tile index in destination register, values = [0-8] for Float16b, values = [0-4] for Float32
+ * @param dst_index: tile index in destination register, for DstSync::SyncHalf: values = [0-7] for Float16b, values = [0-3] for Float32,
+ * for DstSync::SyncFull: values = [0-15] for Float16b, values = [0-7] for Float32
  */
 inline void _llk_math_matmul_tile_(const std::uint32_t dst_index)
 {
@@ -312,10 +315,14 @@ inline void _llk_math_matmul_tile_(const std::uint32_t dst_index)
  * Be Aware: this function does not iterate over kt_dim, must iterate over kt_dim externally to this function
  * @param ct_dim: number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: number of tiles in the row dimension for a matrix multiply
- * ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
+ * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
+ * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in Float16b, ct_dim * rt_dim <= 8 tiles in Float32
  */
 inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
+    // Matmul Block, reset the dest addr to 0 for fused kernels
+    _set_dst_write_addr_<DstTileShape::Tile32x32>(0);
+
     const bool reuse_a          = ct_dim >= rt_dim;
     const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; // reuse-dim
@@ -340,15 +347,14 @@ inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
             }
         }
 
-        // There are only 2 scenarios when rt_dim > ct_dim, and ct_dim = 2:
-        //  rt_dim = 4, ct_dim = 2
-        //  rt_dim = 3, ct_dim = 2
-        //  These are the only scenarios where the matmul block dest tile indices are not equal to 0,1,2,3..7
-        //  The above scenarios have dest tile indices = 0,2,4,1,3,5 or 0,2,4,6,1,3,5,7
-        //  Below offsets by 1 tile, for the sequence above to start from 1
-        if (!reuse_a && ct_dim == 2)
+        //  When rt_dim > ct_dim, the matmul block dest tile indices are not equal to 0,1,2,3..7
+        //  Instead they have a ct_dim stride, for instance:
+        //  If rt_dim = 4, ct_dim = 2, dest tile indices = 0,2,4,6,  1,3,5,7
+        //  If rt_dim = 4, ct_dim = 3, dest tile indices = 0,3,6,9,  1,4,7,10,  2,5,8,11
+        //  Below offsets by 1 tile * (t+1), for every subsequence above to start from the next dest_idx
+        if (!reuse_a && ct_dim >= 2)
         {
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 64, p_setrwc::SET_D);
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 64 * (t + 1), p_setrwc::SET_D);
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::C_TO_CR_MODE, 0, p_setrwc::SET_D);
         }
     }

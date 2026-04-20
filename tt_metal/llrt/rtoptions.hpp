@@ -345,6 +345,13 @@ class RunTimeOptions {
     // Use new DEVICE_PRINT system instead of legacy DPRINT
     bool use_device_print = false;
 
+    // Enable hybrid lockstep + per-core L1 allocator mode
+    bool allocator_mode_hybrid = false;
+
+    // Disable shared memory tracking for tt-smi
+    bool shm_tracking_disabled = false;
+    bool shm_verbose = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -427,6 +434,11 @@ public:
     void set_llk_asserts(bool enabled) { enable_llk_asserts = enabled; }
 
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
+
+    bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
+
+    bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
+    bool get_shm_verbose() const { return shm_verbose; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.

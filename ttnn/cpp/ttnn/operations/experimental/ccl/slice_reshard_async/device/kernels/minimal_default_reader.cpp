@@ -55,7 +55,7 @@ void kernel_main() {
 
     constexpr auto src_args = TensorAccessorArgs<5>();
     uint32_t read_size = stick_size;
-    const auto src_accessor = TensorAccessor(src_args, input_tensor_address, stick_size);
+    const auto src_accessor = TensorAccessor(src_args, input_tensor_address);
 
     if (!is_last_chip) {
         // Read the "end" of each slice into the CB to write to the neighbor

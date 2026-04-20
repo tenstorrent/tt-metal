@@ -79,7 +79,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (unpack_to_dest)
     {
-        _llk_unpack_dest_dvalid_section_done_();
+        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
     }
 }
 
@@ -117,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_math_eltwise_unary_datacopy_(params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_tile*/, i);
         }
-        _llk_math_set_dvalid_<p_cleardvalid::FPU>();
+        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 }
 

@@ -30,7 +30,8 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    bool use_l1_small_for_semaphores) {
     // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call all-gather on cluster_axis=1, then
     // all-gather on cluster_axis=0
     if (cluster_axis == std::nullopt) {
@@ -55,7 +56,8 @@ ttnn::Tensor all_gather(
                     chunks_per_sync,
                     num_workers_per_link,
                     num_buffers_per_channel,
-                    sub_core_grid);
+                    sub_core_grid,
+                    use_l1_small_for_semaphores);
             }
             return tensor;
         }
@@ -70,7 +72,7 @@ ttnn::Tensor all_gather(
     if (composite_common::use_composite_all_gather(input_tensor, dim)) {
         TT_FATAL(!sub_core_grid.has_value(), "Composite OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
-            input_tensor, dim, num_links_, memory_config_, subdevice_id, cluster_axis);
+            input_tensor, dim, num_links_, memory_config_, subdevice_id, cluster_axis, use_l1_small_for_semaphores);
     }
     return ttnn::prim::all_gather(
         input_tensor,
@@ -84,7 +86,8 @@ ttnn::Tensor all_gather(
         chunks_per_sync,
         num_workers_per_link,
         num_buffers_per_channel,
-        sub_core_grid);
+        sub_core_grid,
+        use_l1_small_for_semaphores);
 }
 
 }  // namespace ttnn
