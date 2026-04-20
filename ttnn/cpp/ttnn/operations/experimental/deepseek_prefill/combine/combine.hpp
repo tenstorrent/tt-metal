@@ -24,7 +24,8 @@ ttnn::Tensor combine(
     std::optional<uint32_t> cluster_axis = 0,
     std::optional<uint32_t> num_links = 1,
     std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear,
-    bool init_zeros = true);
+    bool init_zeros = true,
+    bool use_l1_small_for_semaphores = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine
 
