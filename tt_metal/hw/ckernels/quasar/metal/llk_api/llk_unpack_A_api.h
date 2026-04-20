@@ -37,27 +37,21 @@ template <
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
-inline void llk_unpack_A_init(
-    const std::uint32_t transpose_of_faces = 0,
-    const std::uint32_t operand = 0) {
+inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces = 0, const std::uint32_t operand = 0) {
     (void)acc_to_dest;
 
     if constexpr (BType == BroadcastType::NONE) {
         if (transpose_of_faces != 0) {
             if constexpr (unpack_to_dest) {
-                llk_unpack_unary_operand_init<p_unpacr::UNP_A, true, DST_ACCUM_MODE, binary_reuse_dest>(
-                    operand, 1);
+                llk_unpack_unary_operand_init<p_unpacr::UNP_A, true, DST_ACCUM_MODE, binary_reuse_dest>(operand, 1);
             } else {
-                llk_unpack_unary_operand_init<p_unpacr::UNP_B, true, DST_ACCUM_MODE, binary_reuse_dest>(
-                    operand, 1);
+                llk_unpack_unary_operand_init<p_unpacr::UNP_B, true, DST_ACCUM_MODE, binary_reuse_dest>(operand, 1);
             }
         } else {
             if constexpr (unpack_to_dest) {
-                llk_unpack_unary_operand_init<p_unpacr::UNP_A, false, DST_ACCUM_MODE, binary_reuse_dest>(
-                    operand, 1);
+                llk_unpack_unary_operand_init<p_unpacr::UNP_A, false, DST_ACCUM_MODE, binary_reuse_dest>(operand, 1);
             } else {
-                llk_unpack_unary_operand_init<p_unpacr::UNP_B, false, DST_ACCUM_MODE, binary_reuse_dest>(
-                    operand, 1);
+                llk_unpack_unary_operand_init<p_unpacr::UNP_B, false, DST_ACCUM_MODE, binary_reuse_dest>(operand, 1);
             }
         }
     } else {

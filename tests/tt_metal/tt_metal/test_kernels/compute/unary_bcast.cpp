@@ -4,7 +4,8 @@
 
 #include <cstdint>
 // Host `defines` (e.g. BCAST_DIM) are emitted into defines_generated.h by the JIT; chlkc prolog includes it
-// before this file on some paths. Pull it here when missing so template args see the macro (-I.. is the kernel out dir).
+// before this file on some paths. Pull it here when missing so template args see the macro (-I.. is the kernel out
+// dir).
 #ifndef BCAST_DIM
 #include "defines_generated.h"
 #endif

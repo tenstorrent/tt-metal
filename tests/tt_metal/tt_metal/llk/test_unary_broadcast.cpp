@@ -167,11 +167,7 @@ bool check_is_close(
     std::string_view result_label) {
     if (T_out == tt::DataFormat::Float16_b) {
         if (packed_golden.size() != device_res.size()) {
-            TT_THROW(
-                "{} mismatch: size golden={} device={}",
-                result_label,
-                packed_golden.size(),
-                device_res.size());
+            TT_THROW("{} mismatch: size golden={} device={}", result_label, packed_golden.size(), device_res.size());
         }
         auto gold_bf16 = unpack_vector<bfloat16, uint32_t>(packed_golden);
         auto res_bf16 = unpack_vector<bfloat16, uint32_t>(device_res);
@@ -192,11 +188,7 @@ bool check_is_close(
         auto gold_refloat = unpack_bfp8_tiles_into_float_vec(packed_golden, true, false);
         auto res_refloat = unpack_bfp8_tiles_into_float_vec(device_res, true, false);
         if (gold_refloat.size() != res_refloat.size()) {
-            TT_THROW(
-                "{} mismatch: size golden={} device={}",
-                result_label,
-                gold_refloat.size(),
-                res_refloat.size());
+            TT_THROW("{} mismatch: size golden={} device={}", result_label, gold_refloat.size(), res_refloat.size());
         }
         for (size_t i = 0; i < gold_refloat.size(); i++) {
             if (std::fabs(gold_refloat[i] - res_refloat[i]) > atol) {
@@ -379,9 +371,7 @@ void run_single_core_unary_broadcast(
             "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast.cpp",
             core,
             tt_metal::experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = 1,
-                .compile_args = {num_blocks, block_size},
-                .defines = defines});
+                .num_threads_per_cluster = 1, .compile_args = {num_blocks, block_size}, .defines = defines});
 
         tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
             program_, src_dfb, reader_kernel, compute_kernel);
@@ -443,9 +433,11 @@ TEST_F(MeshDeviceFixture, TensixComputeUnaryBroadcastQuasarDfb) {
     if (this->arch_ != tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Unary broadcast DFB test requires Quasar";
     }
-    constexpr BroadcastDim k_quasar_dims[] = {
-        BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR};
-    constexpr struct { tt::DataFormat in_t; tt::DataFormat out_t; } k_formats[] = {
+    constexpr BroadcastDim k_quasar_dims[] = {BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR};
+    constexpr struct {
+        tt::DataFormat in_t;
+        tt::DataFormat out_t;
+    } k_formats[] = {
         {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b},
         {tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b},
     };

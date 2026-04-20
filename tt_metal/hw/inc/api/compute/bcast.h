@@ -65,11 +65,9 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
 
     UNPACK((llk_unpack_hw_configure(icb)));
     if (enable_unpack_to_dest_u) {
-        UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(
-            false, icb)));
+        UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(false, icb)));
     } else {
-        UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(
-            false, icb)));
+        UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(false, icb)));
     }
 #endif
 
@@ -134,9 +132,11 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
                                          (dst_format_m == static_cast<std::uint32_t>(DataFormat::Int32));
 
     if (enable_unpack_to_dest_m) {
-        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type, true>(dst_tile_index, icb)));
+        MATH((
+            llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type, true>(dst_tile_index, icb)));
     } else {
-        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type, false>(dst_tile_index, icb)));
+        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type, false>(
+            dst_tile_index, icb)));
     }
 #endif
 #endif
@@ -504,10 +504,8 @@ ALWI void mul_tiles_bcast(
  */
 ALWI void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init_with_operands<
-          EltwiseBinaryType::ELWADD,
-          BroadcastType::ROW,
-          MathFidelity::LoFi>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init_with_operands<EltwiseBinaryType::ELWADD, BroadcastType::ROW, MathFidelity::LoFi>(
+        icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 }
 
@@ -517,10 +515,8 @@ ALWI void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
  */
 ALWI void add_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init_with_operands<
-          EltwiseBinaryType::ELWADD,
-          BroadcastType::COL,
-          MathFidelity::LoFi>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init_with_operands<EltwiseBinaryType::ELWADD, BroadcastType::COL, MathFidelity::LoFi>(
+        icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
 }
@@ -545,10 +541,8 @@ ALWI void add_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32_t cal
  */
 ALWI void mul_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init_with_operands<
-          EltwiseBinaryType::ELWMUL,
-          BroadcastType::SCALAR,
-          MATH_FIDELITY>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init_with_operands<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(
+        icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
 }
@@ -572,10 +566,8 @@ ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  */
 ALWI void mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init_with_operands<
-          EltwiseBinaryType::ELWMUL,
-          BroadcastType::COL,
-          MATH_FIDELITY>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init_with_operands<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
+        icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
 }
@@ -585,10 +577,8 @@ ALWI void mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
  */
 ALWI void mul_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init_with_operands<
-          EltwiseBinaryType::ELWMUL,
-          BroadcastType::ROW,
-          MATH_FIDELITY>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init_with_operands<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, MATH_FIDELITY>(
+        icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 }
@@ -599,10 +589,8 @@ ALWI void mul_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
  */
 ALWI void sub_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init_with_operands<
-          EltwiseBinaryType::ELWSUB,
-          BroadcastType::COL,
-          MathFidelity::LoFi>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init_with_operands<EltwiseBinaryType::ELWSUB, BroadcastType::COL, MathFidelity::LoFi>(
+        icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
 }

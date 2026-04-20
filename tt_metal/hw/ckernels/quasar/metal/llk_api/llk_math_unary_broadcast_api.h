@@ -46,6 +46,5 @@ inline void llk_math_eltwise_unary_broadcast_init(const std::uint32_t operand) {
 template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_broadcast(const std::uint32_t dst_index, const std::uint32_t operand) {
     const TileShape tile_shape = llk_math_eltwise_unary_broadcast_tile_shape(operand);
-    _llk_math_eltwise_unary_broadcast_<BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(
-        dst_index, tile_shape);
+    _llk_math_eltwise_unary_broadcast_<BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(dst_index, tile_shape);
 }
