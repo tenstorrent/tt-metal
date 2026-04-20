@@ -2297,9 +2297,13 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
         // Send a host timestamp to trigger device response.
-        // Place the host-side Tracy marker RIGHT BEFORE the PCIe write so it lands
-        // ~2µs before the device captures its wall clock (H2D PCIe latency). If we
-        // placed it after the socket read we'd be ~80µs off due to D2H latency.
+        // Same anchor convention as trigger_realtime_profiler_sync_check: capture
+        // host TSC, emit Tracy message, then PCIe write; after the device response
+        // call CalibrateDevice before PushSyncCheckMarker. Without CalibrateDevice,
+        // the device zone is placed using only the coarse regression from
+        // run_realtime_profiler_sync while the host message uses the message
+        // timestamp — extrapolation skew can exceed the sync-accuracy test's ±10µs.
+        int64_t sync_check_host_anchor = TracyGetCpuTime();
         uint32_t host_time_id = 0x5C5C5C5C;  // recognizable pattern
         std::vector<uint32_t> host_time_data = {host_time_id};
         TracyMessageL("SYNC_CHECK");
@@ -2336,6 +2340,8 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             dev_state.socket->read(sync_page.data(), 1);
             uint64_t device_time = (static_cast<uint64_t>(sync_page[0]) << 32) | sync_page[1];
 
+            realtime_profiler_tracy_handler_->CalibrateDevice(
+                dev_state.chip_id, sync_check_host_anchor, device_time, dev_state.sync_frequency);
             realtime_profiler_tracy_handler_->PushSyncCheckMarker(
                 dev_state.chip_id, device_time, dev_state.sync_frequency);
 
