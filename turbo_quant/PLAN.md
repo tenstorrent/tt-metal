@@ -75,17 +75,25 @@ Rigorous token accuracy on the 1024-token reference corpus
 (`models/tt_transformers/tests/reference_outputs/Llama-3.1-8B-Instruct.refpt`)
 reveals BFP4 cache itself is lossy — **TurboQuant doesn't mitigate it**.
 
-| Mode | Top-1 | Top-5 | Latency |
-|------|-------|-------|---------|
-| Baseline BFP8 | **96.7%** | 99.8% | 14.1 ms |
-| Baseline BFP4 (no TQ) | 71.3% | 90.1% | 14.1 ms |
-| TQ 3-bit + BFP4 cache | 72.5% | 88.2% | 18.9 ms |
-| TQ 4-bit + BFP4 cache | 74.3% | 89.1% | 20.1 ms |
+| Mode | Top-1 | Top-5 | KV memory | Latency |
+|------|-------|-------|-----------|---------|
+| **Baseline BFP8** | **96.7%** | 99.8% | 1× | 14.1 ms |
+| TQ 3-bit + BFP8 cache | 89.1% | 100% | **1× (same!)** | 18.9 ms |
+| Baseline BFP4 (no TQ) | 71.3% | 90.1% | 0.5× | 14.1 ms |
+| TQ 3-bit + BFP4 cache | 72.5% | 88.2% | 0.5× | 18.9 ms |
+| TQ 4-bit + BFP4 cache | 74.3% | 89.1% | 0.5× | 20.1 ms |
 
 **TQ + BFP4 (72.5%) ≈ BFP4 alone (71.3%).** The BFP4 shared-exponent compression
 (32-element blocks share 1 exponent) dominates the error — moving from 3-bit to
 4-bit TQ barely helps (72.5% → 74.3%). TurboQuant's rotation + centroid approach
 is being wasted when the storage format is BFP4.
+
+**TQ + BFP8 is strictly worse than baseline BFP8:**
+- Same memory (1 byte/elem, no savings)
+- +4.8 ms latency overhead (+34%)
+- -7.6% top-1 accuracy (96.7% → 89.1%)
+
+No production use case where TQ + BFP8 wins.
 
 **Qualitative vs Quantitative:** Our 31-prompt test showed factually correct
 outputs for all TQ configs, matching the 82-88% top-5 numbers. Top-1 matches
@@ -98,6 +106,17 @@ there's a significant gap.
 - TQ's design assumes high-precision storage (e.g. BF16); BFP4 breaks that assumption
 - To recover accuracy, either use higher-precision cache (BFP8 or BF16) or accept
   the quality/memory tradeoff
+
+**Recommendation for production KV compression:**
+1. **Baseline BFP8** (96.7%, 1 byte/elem) — current production, best accuracy
+2. **BFP4 cache alone** (71.3%, 0.5 byte/elem) — accept accuracy hit for 2× memory
+   savings. **Skip TQ** — it adds latency with no accuracy benefit.
+3. **TQ on any format** — not worth adopting. No config improves on the above.
+
+The original TurboQuant paper design assumed BF16 or higher-precision storage —
+on that substrate TQ's rotation+quantization makes sense. On Wormhole's BFP4/BFP8
+shared-exponent formats, the storage format's precision loss dominates TQ's
+contribution.
 
 ### T3K Max Batch at Long Context (2026-04-20)
 
