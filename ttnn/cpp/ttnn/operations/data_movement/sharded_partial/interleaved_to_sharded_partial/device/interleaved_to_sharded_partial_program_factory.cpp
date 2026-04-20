@@ -104,6 +104,13 @@ InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToSharded
     uint32_t out_cb_index = input_cb_index;
     uint32_t num_input_units = num_units_per_shard;
     uint32_t output_page_size = tt::align(output_unit_size, dst_buffer->alignment());
+    // Partial factory always uses full-shard CB sizing (no L1-budget chunking).
+    // The public partial API hardcodes BufferType::L1 in interleaved_to_sharded_partial.cpp,
+    // so no caller reaches a staging-CB path here — adding chunking would add an
+    // untested code path. If a DRAM-sharded partial use case appears, route it
+    // through the main factory instead (which uses compute_staging_cb_chunk and is
+    // exercised by test_matmul_dram_sharded_reshard.py).
+    uint32_t chunk_height_tiles = num_units_per_shard_height;
     if (convert_df) {
         out_cb_index = tt::CBIndex::c_16;
         uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
@@ -139,7 +146,7 @@ InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToSharded
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id;
     if (input.layout() == Layout::TILE) {
-        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, all_cores.num_cores()};
+        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, all_cores.num_cores(), chunk_height_tiles};
         tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -173,6 +180,9 @@ InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToSharded
                 "writer_unary_sharded_stick_layout_start_id.cpp");
         }
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
+        if (input.layout() == Layout::TILE) {
+            writer_compile_time_args.push_back(chunk_height_tiles);
+        }
     } else {
         writer_kernel = std::string(
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp");

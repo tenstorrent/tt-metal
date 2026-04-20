@@ -51,6 +51,12 @@ Tensor interleaved_to_sharded_partial(
         grid);
 
     tt::tt_metal::ShardSpec shard_spec(grid_set, shard_shape, shard_orientation);
+    // The public partial API is L1-destination only. The partial factory's
+    // DRAM-dst kernel-selection branches exist for structural parity with the
+    // main interleaved_to_sharded factory but are not reachable from here, so
+    // the partial factory intentionally skips the L1-budget chunking path — see
+    // compute_staging_cb_chunk in sharded_common.hpp. If a DRAM-sharded partial
+    // use case appears, route it through the main factory instead.
     tt::tt_metal::MemoryConfig sharded_mem_config = tt::tt_metal::MemoryConfig{shard_scheme, BufferType::L1};
     return ttnn::prim::interleaved_to_sharded_partial(
         input_tensor,

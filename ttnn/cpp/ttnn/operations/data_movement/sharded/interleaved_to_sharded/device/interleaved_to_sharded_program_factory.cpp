@@ -111,11 +111,31 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t scratch_cb_index = tt::CBIndex::c_1;
     uint32_t out_cb_index = input_cb_index;
-    uint32_t num_input_units = num_units_per_shard;
     uint32_t output_page_size = tt::align(output_unit_size, dst_buffer->alignment());
+    uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
+    uint32_t dram_alignment = hal::get_dram_alignment();
+    uint32_t l1_alignment = hal::get_l1_alignment();
+    uint32_t num_trids = 4;
+    bool has_scratch_cb =
+        (src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned;
+    uint32_t scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
+    uint32_t scratch_cb_bytes = has_scratch_cb ? num_trids * scratch_cb_page_size : 0;
+
+    auto [chunk_height_tiles, num_input_units] = operations::data_movement::detail::compute_staging_cb_chunk(
+        input,
+        dst_is_dram,
+        input.layout() == Layout::TILE,
+        shard_strategy == TensorMemoryLayout::WIDTH_SHARDED,
+        convert_df,
+        input_page_size,
+        output_page_size,
+        scratch_cb_bytes,
+        num_units_per_shard_height,
+        num_units_per_shard_width,
+        num_units_per_shard);
+
     if (convert_df) {
         out_cb_index = tt::CBIndex::c_16;
-        uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
         tt::tt_metal::CircularBufferConfig input_cb_out_config =
             tt::tt_metal::CircularBufferConfig(
                 num_input_units * input_page_size, {{input_cb_index, input_cb_data_format}})
@@ -129,26 +149,18 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
         output_cb_out_config = output_cb_out_config.set_globally_allocated_address(*output.buffer());
     }
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
-    uint32_t dram_alignment = hal::get_dram_alignment();
-    uint32_t l1_alignment = hal::get_l1_alignment();
-    uint32_t num_trids = 4;
-    if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned) {
-        uint32_t scratch_cb_page_size;
-        // scratchpad going to be used to align DRAM (64B) to L1 (16B)
-
-        // This is done to mitigate the alignment issues.
-        // See issue #34414.
-        scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
-
+    if (has_scratch_cb) {
+        // Scratchpad used to align DRAM (64B) to L1 (16B). See issue #34414.
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
-            tt::tt_metal::CircularBufferConfig(num_trids * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
+            tt::tt_metal::CircularBufferConfig(scratch_cb_bytes, {{scratch_cb_index, input_cb_data_format}})
                 .set_page_size(scratch_cb_index, scratch_cb_page_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_out_config);
     }
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id;
     if (input.layout() == Layout::TILE) {
-        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, all_cores.num_cores()};
+        // chunk_height_tiles is compile-time arg 2; TensorAccessorArgs starts at 3.
+        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, all_cores.num_cores(), chunk_height_tiles};
         tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -182,6 +194,11 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
                 "writer_unary_sharded_stick_layout_start_id.cpp");
         }
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
+        if (input.layout() == Layout::TILE) {
+            // Appended after the 7 ShardedInfo args so the writer reads it at
+            // get_compile_time_arg_val(8) without disturbing the sharding arg order.
+            writer_compile_time_args.push_back(chunk_height_tiles);
+        }
     } else {
         writer_kernel = std::string(
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp");
