@@ -10,14 +10,11 @@ void kernel_main() {
     const uint32_t start_row_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
-    constexpr uint32_t full_chunk_size_bytes = get_compile_time_arg_val(1);      // CB page (padded to 32-elem boundary)
-    constexpr uint32_t full_chunks_per_row = get_compile_time_arg_val(2);
-    constexpr uint32_t partial_chunk_size_bytes = get_compile_time_arg_val(3);   // CB page (padded to 32-elem boundary)
-    constexpr uint32_t partial_chunks_per_row = get_compile_time_arg_val(4);     // 0 or 1
-    // index 5: row_page_size_bytes consumed by TensorAccessorArgs
-    constexpr uint32_t actual_full_chunk_size_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t actual_partial_chunk_size_bytes = get_compile_time_arg_val(7);
-    constexpr auto src_args = TensorAccessorArgs<8>();
+    constexpr uint32_t full_chunks_per_row = get_compile_time_arg_val(1);
+    constexpr uint32_t partial_chunks_per_row = get_compile_time_arg_val(2);  // 0 or 1
+    constexpr uint32_t full_chunk_size_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t partial_chunk_size_bytes = get_compile_time_arg_val(4);
+    constexpr auto src_args = TensorAccessorArgs<5>();
 
     constexpr uint32_t onepage = 1;
 
@@ -31,20 +28,11 @@ void kernel_main() {
             cb_reserve_back(cb_id_in, onepage);
             const uint32_t l1_write_addr = get_write_ptr(cb_id_in);
 
-            const uint32_t byte_offset = chunk_idx * actual_full_chunk_size_bytes;
+            const uint32_t byte_offset = chunk_idx * full_chunk_size_bytes;
             const uint64_t chunk_noc_addr = s.get_noc_addr(row_id, byte_offset);
-            noc_async_read(chunk_noc_addr, l1_write_addr, actual_full_chunk_size_bytes);
+            noc_async_read(chunk_noc_addr, l1_write_addr, full_chunk_size_bytes);
 
             noc_async_read_barrier();
-            // Zero-fill any padding bytes so the unpacker sees complete 32-element tile rows
-            // within the CB page and never reads across a page boundary.
-            if constexpr (full_chunk_size_bytes > actual_full_chunk_size_bytes) {
-                volatile uint8_t* pad =
-                    reinterpret_cast<volatile uint8_t*>(l1_write_addr + actual_full_chunk_size_bytes);
-                for (uint32_t i = 0; i < full_chunk_size_bytes - actual_full_chunk_size_bytes; ++i) {
-                    pad[i] = 0;
-                }
-            }
             cb_push_back(cb_id_in, onepage);
         }
 
@@ -53,18 +41,11 @@ void kernel_main() {
             cb_reserve_back(cb_id_in, onepage);
             const uint32_t l1_write_addr = get_write_ptr(cb_id_in);
 
-            const uint32_t byte_offset = full_chunks_per_row * actual_full_chunk_size_bytes;
+            const uint32_t byte_offset = full_chunks_per_row * full_chunk_size_bytes;
             const uint64_t chunk_noc_addr = s.get_noc_addr(row_id, byte_offset);
-            noc_async_read(chunk_noc_addr, l1_write_addr, actual_partial_chunk_size_bytes);
+            noc_async_read(chunk_noc_addr, l1_write_addr, partial_chunk_size_bytes);
 
             noc_async_read_barrier();
-            if constexpr (partial_chunk_size_bytes > actual_partial_chunk_size_bytes) {
-                volatile uint8_t* pad =
-                    reinterpret_cast<volatile uint8_t*>(l1_write_addr + actual_partial_chunk_size_bytes);
-                for (uint32_t i = 0; i < partial_chunk_size_bytes - actual_partial_chunk_size_bytes; ++i) {
-                    pad[i] = 0;
-                }
-            }
             cb_push_back(cb_id_in, onepage);
         }
     }
