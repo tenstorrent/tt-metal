@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
@@ -39,6 +40,7 @@ def run_mla_inference(
     is_balanced,
     topology,
     tt_kvpe_cache,
+    num_loops=1,
 ):
     """
     Utility function to run MLA inference without host comparison.
@@ -54,6 +56,8 @@ def run_mla_inference(
         is_balanced: Whether to use balanced chunk ordering
         topology: Topology (Linear or Ring)
         tt_kvpe_cache: Initialized KVPE cache on device
+        num_loops: Number of forward-pass iterations to execute for perf measurement.
+            When > 1, an extra warmup run precedes `num_loops` signposted measured runs.
 
     Returns:
         Tuple of (tt_output, hidden_states, chunk_order, shard_dims)
@@ -106,13 +110,31 @@ def run_mla_inference(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    tt_output = mla_tt.forward(
-        hidden_states=tt_hidden_states,
-        rope_tensors=rope_tensors,
-        kvpe_cache=tt_kvpe_cache,
-    )
 
-    ttnn.synchronize_device(mesh_device)
+    def _forward():
+        return mla_tt.forward(
+            hidden_states=tt_hidden_states,
+            rope_tensors=rope_tensors,
+            kvpe_cache=tt_kvpe_cache,
+        )
+
+    if num_loops > 1:
+        # Warmup / compile run (kernels cached).
+        logger.info("Perf: warmup forward pass")
+        _ = _forward()
+        ttnn.synchronize_device(mesh_device)
+
+        logger.info(f"Perf: running {num_loops} measured forward passes with tracy signposts")
+        signpost("start")
+        for i in range(num_loops):
+            logger.info(f"Perf: forward pass {i + 1}/{num_loops}")
+            tt_output = _forward()
+            ttnn.synchronize_device(mesh_device)
+        signpost("stop")
+    else:
+        tt_output = _forward()
+        ttnn.synchronize_device(mesh_device)
+
     ttnn.distributed_context_barrier()
 
     return tt_output, hidden_states, chunk_order, shard_dims
@@ -145,6 +167,7 @@ def run_mla_inference(
 @pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
+@pytest.mark.parametrize("num_loops", [1, 5, 10, 20], ids=["loops1", "loops5", "loops10", "loops20"])
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
 def test_mla(
     use_pretrained,
@@ -154,6 +177,7 @@ def test_mla(
     skip_host_comparison,
     scale_down_sl,
     is_balanced,
+    num_loops,
     is_ci_env,
     is_ci_v2_env,
     device_params,
@@ -243,6 +267,7 @@ def test_mla(
         is_balanced=is_balanced,
         topology=topology,
         tt_kvpe_cache=tt_kvpe_cache,
+        num_loops=num_loops,
     )
 
     batch_size = 1
