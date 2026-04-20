@@ -139,6 +139,7 @@ sfpi_inline void _compute_welfords_row_()
     // 1. Calculate α = x_{N+1} - mean_{N}
     // LREG6 = -1 * LREG4 + input_lreg
     TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG4, input_lreg, ckernel::p_sfpu::LREG6, 0);
+    TTI_SFPNOP;  // SFPMAD has 2-cycle latency; next cycle cannot read from LREG6
 
     // 2. Calculate α * β + mean_{N}
     // LREG6 = LREG6 * LREG7 + LREG4
@@ -157,6 +158,7 @@ sfpi_inline void _compute_welfords_row_()
     // 2. Calculate β = x_{N+1} - mean_{N+1}
     // input_lreg = -1 * LREG6 + input_lreg
     TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG6, input_lreg, input_lreg, 0);
+    TTI_SFPNOP;  // SFPMAD has 2-cycle latency; next cycle cannot read from input_lreg
 
     // 3. Calculate m2_{N+1} = α * β + m2_{N}
     // LREG5 = LREG4 * input_lreg + LREG5
@@ -170,7 +172,7 @@ sfpi_inline void _compute_welfords_row_()
  * @brief The number of instructions required to calculate the running mean and m2 for a single
  * row of 32 columns. If _compute_welfords_row_ is modified, this value must be updated.
  */
-constexpr std::uint32_t WELFORD_INSTR_PER_ROW = 6;
+constexpr std::uint32_t WELFORD_INSTR_PER_ROW = 8;
 
 /**
  * @brief Programs the replay buffer for the Welford's algorithm.
