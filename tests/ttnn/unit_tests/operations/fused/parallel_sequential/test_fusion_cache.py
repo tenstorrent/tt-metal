@@ -744,7 +744,6 @@ class TestProgramKeyCacheLRU:
 
     def test_put_evicts_oldest_beyond_max(self):
         cache = OrderedDict()
-        orig_max = _PROGRAM_KEY_CACHE_MAX
         with mock.patch("models.experimental.ops.descriptors.op_descriptor._PROGRAM_KEY_CACHE_MAX", 3):
             _program_key_cache_put(cache, "a", 1)
             _program_key_cache_put(cache, "b", 2)
