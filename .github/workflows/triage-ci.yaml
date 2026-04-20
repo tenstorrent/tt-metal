@@ -40,12 +40,9 @@ jobs:
   assign-owners:
     uses: tenstorrent/tt-auto-triage/.github/workflows/triage-ci.yaml@ebanerjee/triage-assign-owners
     with:
-      create-issues: false
       assign-owners: true
-      slack-notify: false
       issue-repo: ebanerjeeTT/issue_dump
       target-repo: tenstorrent/tt-metal
-      slack-channel-id: C0APK6215B5
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.AUTO_TRIAGE_TOKEN }}
