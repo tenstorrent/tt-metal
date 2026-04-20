@@ -116,14 +116,14 @@ jobs:
           MODELS_FILTER: ${{ inputs.models-filter }}
         run: |
           mkdir -p model_tracer/traced_operations
-          FILTER_ARGS=""
+          FILTER_ARGS=()
           if [[ -n "$MODELS_FILTER" ]]; then
-            FILTER_ARGS="--models-filter $MODELS_FILTER"
+            FILTER_ARGS=(--models-filter "$MODELS_FILTER")
           fi
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
             "$MANIFEST_PATH" \
             model_tracer/traced_operations/ttnn_operations_master.json \
-            $FILTER_ARGS
+            "${FILTER_ARGS[@]}"
 
       - name: Reconstruct master JSON from pinned trace
         if: ${{ inputs.pinned-trace-id != '' }}
