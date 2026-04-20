@@ -79,6 +79,31 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int devic
     // Initialize if we're the creator
     if (is_creator_) {
         initialize_region();
+    } else if (region_->version != DEVICE_MEMORY_REGION_VERSION) {
+        const uint32_t existing_refcount = region_->reference_count.load(std::memory_order_acquire);
+        if (existing_refcount == 0) {
+            log_info(
+                tt::LogMetal,
+                "SHM version mismatch for asic_id=0x{:x} (found v{}, expected v{}), reinitializing stale region",
+                asic_id_,
+                region_->version,
+                DEVICE_MEMORY_REGION_VERSION);
+            initialize_region();
+        } else {
+            log_warning(
+                tt::LogMetal,
+                "SHM version mismatch for asic_id=0x{:x} (found v{}, expected v{}) with {} attached process(es); "
+                "disabling SHM tracking for this provider",
+                asic_id_,
+                region_->version,
+                DEVICE_MEMORY_REGION_VERSION,
+                existing_refcount);
+            munmap(region_, sizeof(DeviceMemoryRegion));
+            region_ = nullptr;
+            close(shm_fd_);
+            shm_fd_ = -1;
+            return;
+        }
     }
 
     // Increment reference count (this process is now attached)

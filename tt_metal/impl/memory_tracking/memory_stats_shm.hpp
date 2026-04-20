@@ -29,7 +29,8 @@ constexpr uint32_t CHIP_STATS_UNUSED = UINT32_MAX;
 // Readers should check this version to ensure compatibility with the SHM layout.
 // v2: asic_id now stores UMD chip_unique_id directly (matches SHM filename)
 //     chip_stats sentinel is CHIP_STATS_UNUSED (UINT32_MAX), not 0
-constexpr uint32_t DEVICE_MEMORY_REGION_VERSION = 2;
+// v3: last_update_timestamp, ChipStats::chip_id and ChipStats::is_remote are atomic
+constexpr uint32_t DEVICE_MEMORY_REGION_VERSION = 3;
 
 // Shared memory region layout for per-device memory statistics
 // This structure is mapped into shared memory at /dev/shm/tt_device_*_memory
