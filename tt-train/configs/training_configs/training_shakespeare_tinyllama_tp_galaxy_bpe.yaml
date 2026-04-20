@@ -5,9 +5,11 @@ training_config:
   batch_size: 1
   gradient_accumulation_steps: 1
   num_epochs: 1
-  max_steps: 5000
+  max_steps: 100
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
+  tokenizer_type: bpe
+  data_path: "../data/tokenized_shakespeare_gpt2.yaml"
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama.yaml"
   optimizer:
     type: AdamW
