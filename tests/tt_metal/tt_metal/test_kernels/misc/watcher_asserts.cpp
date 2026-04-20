@@ -58,14 +58,13 @@ void kernel_main() {
     }
 #else
 #if defined(COMPILE_FOR_TRISC)
-    // Signal TRISC completion via subordinate_sync map using hw_thread_idx
-    uint32_t hw_idx = internal_::get_hw_thread_idx();
 #if defined(ARCH_QUASAR)
+    uint32_t hw_idx = internal_::get_hw_thread_idx();
     volatile tt_l1_ptr uint8_t* const trisc_run =
         &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->subordinate_sync.map[hw_idx];
 #else
-    volatile tt_l1_ptr uint8_t* const trisc_run =
-        &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.map[hw_idx];
+    volatile tt_l1_ptr uint8_t * const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))
+        ->subordinate_sync.map[COMPILE_FOR_TRISC + 1];  // first entry is for NCRISC
 #endif
     *trisc_run = RUN_SYNC_MSG_DONE;
 #endif

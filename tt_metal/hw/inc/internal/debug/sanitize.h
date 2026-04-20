@@ -262,6 +262,7 @@ inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
 //  - this isn't racy between riscvs so long as each gets their own noc_index as is the case on WH/BH
 //  - for Quasar, multiple DMs share one NOC and may race to report errors; a static lock in the
 //    DM firmware's shared .bss is atomically claimed (amoswap) so only the first writer proceeds.
+//    A static suffices since TRISCs never reach this code, avoiding a mailbox struct size increase.
 //    Metadata is written to the cached L1 alias of the mailbox, then flushed to make it visible to host.
 void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     uint8_t noc_id,

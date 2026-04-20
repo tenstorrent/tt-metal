@@ -30,7 +30,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
     {
         v->line_num = line_num;
         v->which = internal_::get_hw_thread_idx();
-        if (assert_type == DebugAssertHwFault) {  // only vslid on Quasar
+        if (assert_type == DebugAssertHwFault) {  // only valid on Quasar
             uint64_t mcause;
             uint64_t mtval;
             uint64_t mepc;
