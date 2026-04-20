@@ -406,9 +406,17 @@ class MLP(AbstractModule):
         K_tiles = ttnn.core.divup(per_device_in_features, ttnn.TILE_SIZE)
         per_core_N_tiles = ttnn.core.divup(per_device_out_features, ttnn.TILE_SIZE * core_grid_size.x)
 
+        # not to OOM on L1 for seq_len>=16k
+        tile_bytes = 2 * ttnn.TILE_SIZE * ttnn.TILE_SIZE  # BF16
+        max_l1 = ttnn.get_max_worker_l1_unreserved_size()
+        kernel_overhead = 30 * 1024  # emprical threshold = 25kB + 5kB safety margin
+        out_cb_bytes = per_core_M_tiles * per_core_N_tiles * tile_bytes
+        available_tiles = (max_l1 - kernel_overhead - out_cb_bytes) // tile_bytes
+        max_in0_block_w = max(1, available_tiles // (2 * (per_core_M_tiles + per_core_N_tiles)))
+
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=core_grid_size,
-            in0_block_w=find_largest_divisor(K_tiles),
+            in0_block_w=find_largest_divisor(K_tiles, min(8, max_in0_block_w)),
             out_subblock_h=1,
             out_subblock_w=find_largest_divisor(
                 per_core_N_tiles,
