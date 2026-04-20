@@ -74,8 +74,11 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(31);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(32);
 
-    // TensorAccessorArgs for all 4 tensors (starting at index 33)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<33>();
+    // Batch configuration (index 33)
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(33);
+
+    // TensorAccessorArgs for all 4 tensors (starting at index 34)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<34>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
@@ -160,8 +163,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* experts_tok_counter_l1 =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr) + offset;
 
-    // Set up scratch buffers for batched reads
-    constexpr uint32_t read_batch_size = 8;
+    // Reserve scratch space once — these CBs are not used as FIFOs. Each batch
+    // overwrites the same region at offsets [0, batch_count) without push/pop.
+    // DRAM reads are batched to saturate DRAM bandwidth, while the scratch-to-writer-CB
+    // copies below are done one page at a time — this avoids CB FIFO pointer wrapping
+    // and measured faster in practice.
     cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
