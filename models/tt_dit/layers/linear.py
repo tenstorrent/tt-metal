@@ -79,12 +79,9 @@ class Linear(Module):
 def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
     # ttnn.gelu is the same, but avoiding for potential issues (see ttnn.layernorm)
-    # fast_and_approximate_mode=True for erf: BF16 MaxULP unchanged (=1) but
-    # BF16 output bytes are ~1% closer to the pre-#41850 polynomial kernel that
-    # CLIP encoder_2 PCC gate was calibrated against (see PR #42540 analysis).
     sqrt_2 = math.sqrt(2.0)
     x_div_sqrt2 = ttnn.multiply(x, 1.0 / sqrt_2)
-    erf_x = ttnn.erf(x_div_sqrt2, fast_and_approximate_mode=True)
+    erf_x = ttnn.erf(x_div_sqrt2)
     one_plus_erf = ttnn.add(erf_x, 1.0)
     x_times_bracket = ttnn.multiply(x, one_plus_erf)
     return ttnn.multiply(x_times_bracket, 0.5)
