@@ -22,9 +22,8 @@ from models.common.llama_models import (
     ChatPrediction,
     CompletionPrediction,
 )
-
+from models.common.model_capabilities import ModelCapabilitiesMixin
 from models.common.sampling import SamplingParams, format_sampling_params
-from models.common.max_tokens_policy import MaxTokensAllUsersMixin
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
 
@@ -127,7 +126,7 @@ def _pad_or_create_page_table(table, target_blocks: int):
     return torch.ones(1, target_blocks, dtype=torch.int32) * -1
 
 
-class Generator(MaxTokensAllUsersMixin, WarmupForwardMixin):
+class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.

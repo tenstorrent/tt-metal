@@ -225,6 +225,7 @@ class QwenForCausalLM(Generator):
         *args,
         **kwargs,
     ) -> int:
+        """Returns config-specific total token budget across all users."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
@@ -234,7 +235,6 @@ class QwenForCausalLM(Generator):
             and is_wormhole
         ):
             return 65_536
-
         return super().get_max_tokens_all_users(
             model_name=model_name,
             num_devices=num_devices,

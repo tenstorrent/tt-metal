@@ -5,7 +5,9 @@
 MAX_TOKENS_ALL_USERS = 131_072
 
 
-class MaxTokensAllUsersMixin:
+class ModelCapabilitiesMixin:
+    """Defines interface for hardware- or model-specific configurations."""
+
     @classmethod
     def get_max_tokens_all_users(cls, *args, **kwargs) -> int:
         """Returns the default total token budget across all users."""

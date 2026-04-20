@@ -133,6 +133,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         *args,
         **kwargs,
     ) -> int:
+        """Returns config-specific total token budget across all users."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         if "Qwen2.5-VL-72B" in model_name and devices_per_dp_cache == 8 and is_wormhole_b0():
             return 65_536

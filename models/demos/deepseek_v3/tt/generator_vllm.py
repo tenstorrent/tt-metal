@@ -55,6 +55,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         *args,
         **kwargs,
     ) -> int:
+        """Returns config-specific total token budget across all users."""
         if "DeepSeek-R1-0528" in model_name and is_wormhole_b0():
             return 32_768
         return super().get_max_tokens_all_users(

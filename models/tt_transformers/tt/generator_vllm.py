@@ -253,7 +253,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         *args,
         **kwargs,
     ) -> int:
-        """Returns model/device-specific `max_tokens_all_users` when needed."""
+        """Returns config-specific total token budget across all users."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
@@ -368,7 +368,7 @@ class LlamaForCausalLM(Generator):
         *args,
         **kwargs,
     ) -> int:
-        """Returns model/device-specific `max_tokens_all_users` when needed."""
+        """Returns config-specific total token budget across all users."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
@@ -448,7 +448,7 @@ class QwenForCausalLM(Generator):
         *args,
         **kwargs,
     ) -> int:
-        """Returns model/device-specific `max_tokens_all_users` when needed."""
+        """Returns config-specific total token budget across all users."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
@@ -515,7 +515,7 @@ class MistralForCausalLM(Generator):
         *args,
         **kwargs,
     ) -> int:
-        """Returns model/device-specific `max_tokens_all_users` when needed."""
+        """Returns config-specific total token budget across all users."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
@@ -587,7 +587,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         *args,
         **kwargs,
     ) -> int:
-        """Returns model/device-specific `max_tokens_all_users` when needed."""
+        """Returns config-specific total token budget across all users."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
