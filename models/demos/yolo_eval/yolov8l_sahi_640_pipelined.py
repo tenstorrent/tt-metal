@@ -33,6 +33,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+from torchvision.ops import batched_nms as _tv_batched_nms
 from torchvision.ops import nms as _tv_nms
 
 from models.demos.yolo_eval.yolov8l_native_vs_sahi_demo import (
@@ -41,15 +42,8 @@ from models.demos.yolo_eval.yolov8l_native_vs_sahi_demo import (
     _coco_names_dict,
     _load_coco_names,
     draw_hud,
-    scale_to_width,
 )
-from models.demos.yolo_eval.yolov8l_sahi_pipelined import (
-    TileGrid,
-    TileSpec,
-    _draw_scaled_preds,
-    _ScaledPred,
-    torch_merge_tiles,
-)
+from models.demos.yolo_eval.yolov8l_sahi_pipelined import TileGrid, TileSpec
 
 _TILE_SIZE_640 = 640
 _CONF_FLOOR_640 = 0.50
@@ -57,6 +51,38 @@ _PAD_VALUE = 114  # YOLOv8 letterbox grey
 
 
 _INV_255 = torch.tensor(1.0 / 255.0, dtype=torch.bfloat16)
+
+
+def _load_fused_tile_ext():
+    """JIT-compile the C++ fused tile conversion extension (cached after first build)."""
+    from torch.utils.cpp_extension import load
+
+    _dir = os.path.dirname(os.path.abspath(__file__))
+    return load(
+        name="fused_tile_convert",
+        sources=[os.path.join(_dir, "fused_tile_convert.cpp")],
+        extra_cflags=["-O3", "-march=native", "-fopenmp", "-ffast-math"],
+        extra_ldflags=["-fopenmp"],
+        verbose=False,
+    )
+
+
+def _build_tile_specs(grid: TileGrid) -> torch.Tensor:
+    """Build (n_tiles, 6) int32 tile_specs tensor from TileGrid for the C++ kernel.
+
+    Only includes actual tiles — the C++ kernel zero-fills device slots beyond
+    this count (when N > n_tiles).
+    """
+    n = len(grid.tiles)
+    specs = torch.zeros((n, 6), dtype=torch.int32)
+    for i, ts in enumerate(grid.tiles):
+        specs[i, 0] = ts.row_start
+        specs[i, 1] = ts.col_start
+        specs[i, 2] = ts.src_h
+        specs[i, 3] = ts.src_w
+        specs[i, 4] = int(ts.needs_pad)
+        specs[i, 5] = _PAD_VALUE
+    return specs
 
 
 def _fused_slice_and_preprocess(
@@ -80,6 +106,12 @@ def _fused_slice_and_preprocess(
     Threading: each tile is independent; numpy releases the GIL during the
     array slice assignments, so ``ThreadPoolExecutor`` gives real parallelism.
 
+    When ``bf16_buf`` is provided (and not ``return_uint8``), the bf16
+    conversion is **fused** into each tile thread: immediately after slicing,
+    the thread converts its tile to bf16/255 in-place.  This keeps tile data
+    hot in L2/L3 (~2.4 MB per tile) instead of streaming the full 24-tile
+    tensor through main memory in a serial second pass.
+
     When ``uint8_buf`` is provided, reuses the pre-allocated numpy array
     instead of allocating a new one each frame (~2ms savings).
 
@@ -90,7 +122,12 @@ def _fused_slice_and_preprocess(
     H, W = grid.tile_h, grid.tile_w
     n_tiles = len(grid.tiles)
 
-    # --- Step 1: Threaded fused slice (BGR->RGB + HWC->CHW in one step) ---
+    # Fuse bf16 conversion into per-tile threads when possible.
+    # Each thread converts its own tile right after slicing, keeping
+    # data in L2/L3.  Eliminates the serial bf16 pass (~5ms savings).
+    _fuse_bf16 = bf16_buf is not None and not return_uint8
+
+    # --- Threaded fused slice (BGR->RGB + HWC->CHW + optional bf16) ---
     t0 = time.perf_counter()
     out = uint8_buf if uint8_buf is not None else np.empty((N, 3, H, W), dtype=np.uint8)
     shifts: list[tuple[int, int]] = [(0, 0)] * N
@@ -98,6 +135,8 @@ def _fused_slice_and_preprocess(
     def _slice_tile(i: int) -> tuple[int, int]:
         if i >= n_tiles:
             out[i] = 0
+            if _fuse_bf16:
+                bf16_buf[i].zero_()
             return (0, 0)
         ts = grid.tiles[i]
         if ts.needs_pad:
@@ -110,6 +149,10 @@ def _fused_slice_and_preprocess(
         out[i, 0, : ts.src_h, : ts.src_w] = src[:, :, 2]  # R
         out[i, 1, : ts.src_h, : ts.src_w] = src[:, :, 1]  # G
         out[i, 2, : ts.src_h, : ts.src_w] = src[:, :, 0]  # B
+        # Fused bf16 conversion — tile data is hot in L2/L3
+        if _fuse_bf16:
+            bf16_buf[i].copy_(torch.from_numpy(out[i]))
+            bf16_buf[i].mul_(_INV_255)
         return (ts.col_start, ts.row_start)
 
     if pool is not None:
@@ -119,19 +162,21 @@ def _fused_slice_and_preprocess(
             shifts = list(_pool.map(_slice_tile, range(N)))
     t_slice = (time.perf_counter() - t0) * 1000
 
-    # --- Step 2: Contiguous uint8 -> bfloat16 / 255 ---
+    # --- bf16 conversion (skipped when fused above) ---
     t0 = time.perf_counter()
     if return_uint8:
-        # Skip bf16 conversion — caller handles it (e.g., overlap with D2H)
         tensor = torch.from_numpy(out)
         t_preprocess = 0.0
+    elif _fuse_bf16:
+        tensor = bf16_buf
+        t_preprocess = 0.0  # included in t_slice
     elif bf16_buf is not None:
         bf16_buf.copy_(torch.from_numpy(out))
         bf16_buf.mul_(_INV_255)
         tensor = bf16_buf
+        t_preprocess = (time.perf_counter() - t0) * 1000
     else:
         tensor = torch.from_numpy(out).to(torch.bfloat16).div_(255.0)
-    if not return_uint8:
         t_preprocess = (time.perf_counter() - t0) * 1000
 
     return tensor, shifts, {"slice_ms": t_slice, "preprocess_ms": t_preprocess}
@@ -251,22 +296,30 @@ def _prep_process_worker(
     """
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-    # Limit OpenMP threads for torch ops (copy_, mul_).  The default on a
-    # 64-core system would spin up 64 threads for the 30 MB bf16 conversion —
-    # massive overhead.  4 threads keeps the data in L2/L3 and avoids
-    # cross-CCD traffic that inflates compose in the main process.
-    torch.set_num_threads(4)
+    torch.set_num_threads(1)
 
     src = FrameSource(video_path)
     ring_idx = 0
     prep_frame_idx = 0  # for double-buffer alternation
 
-    # Pre-allocate: reuse across frames to avoid per-frame allocation overhead
-    N = max(grid.n_tiles, total_devices)
-    uint8_buf = np.empty((N, 3, grid.tile_h, grid.tile_w), dtype=np.uint8)
-    # 4 threads instead of 8 — reduces memory bandwidth contention with
-    # compose in the main process (8 threads inflates compose from 5ms to 12ms).
+    # C++ fused per-range kernel: 8 Python threads, each processes 3 tiles
+    # with a single C++ call (avoids 24x pybind11 overhead).
+    _fused_ext = _load_fused_tile_ext()
+    tile_specs = _build_tile_specs(grid)
     slice_pool = ThreadPoolExecutor(max_workers=8)
+    read_pool = ThreadPoolExecutor(max_workers=1)
+
+    # Read-ahead: pre-read the first frame, then overlap subsequent reads
+    # with scale+sp processing.  cv2.VideoCapture.read() releases the GIL
+    # during H.264 decode, so real parallelism with sp (also GIL-free).
+    def _read_next():
+        ok, f = src.read()
+        if not ok:
+            src.reset()
+            ok, f = src.read()
+        return ok, f
+
+    pending_read = read_pool.submit(_read_next)  # pre-read frame 0
 
     try:
         while not stop_event.is_set():
@@ -279,43 +332,56 @@ def _prep_process_worker(
 
             t_prep_start = time.perf_counter()
 
-            # Read one frame
+            # Collect pre-read frame (usually instant — was decoded during
+            # previous frame's processing + go_event wait).
             t0 = time.perf_counter()
-            ok, frame = src.read()
-            if not ok:
-                src.reset()
-                ok, frame = src.read()
+            ok, frame = pending_read.result()
             t_read = (time.perf_counter() - t0) * 1000
 
             if not ok:
                 shm_timings[6] = -1.0
                 ready_event.set()
+                pending_read = read_pool.submit(_read_next)
                 continue
 
-            # Fused slice + BGR→RGB + HWC→CHW + bf16/255 conversion.
-            # Writes normalized bf16 directly into double-buffered shm.
+            # Start pre-reading NEXT frame — overlaps with sp + post-ready work.
+            # cv2.VideoCapture.read() releases GIL during H.264 decode.
+            pending_read = read_pool.submit(_read_next)
+
+            # C++ fused tile ranges via ThreadPoolExecutor.
             shm_tensor = shm_tensor_bufs[prep_frame_idx % 2]
+            frame_tensor = torch.from_numpy(frame)
+            N = max(grid.n_tiles, total_devices)
+            chunk = (N + 7) // 8
+
+            def _cpp_range(thread_id):
+                start = thread_id * chunk
+                end = min(start + chunk, N)
+                if start < end:
+                    _fused_ext.fused_convert_tile_range(
+                        frame_tensor,
+                        shm_tensor,
+                        tile_specs,
+                        start,
+                        end,
+                        True,
+                    )
+
             t0 = time.perf_counter()
-            tensor, shifts, sp_timings = _fused_slice_and_preprocess(
-                frame,
-                grid,
-                total_devices,
-                uint8_buf=uint8_buf,
-                bf16_buf=shm_tensor,
-                pool=slice_pool,
-            )
+            list(slice_pool.map(_cpp_range, range(8)))
             t_sp = (time.perf_counter() - t0) * 1000
+            sp_timings = {"slice_ms": t_sp, "preprocess_ms": 0.0}
             prep_frame_idx += 1
-            for i, (sx, sy) in enumerate(shifts[:tiles_per_frame]):
-                shm_shifts[i, 0] = sx
-                shm_shifts[i, 1] = sy
+            for i, ts in enumerate(grid.tiles[:tiles_per_frame]):
+                shm_shifts[i, 0] = ts.col_start
+                shm_shifts[i, 1] = ts.row_start
 
-            # Pre-compute ring slot (actual write deferred after ready signal)
+            # Signal ready as soon as bf16 tensor is written.
+            # Scale + ring write happen AFTER ready, overlapping with main's
+            # host_prep + h2d (not the bandwidth-sensitive d2h window).
             slot = ring_idx % ring_size
+            ring_idx += 1
 
-            # Signal ready NOW — tensor is in shm, main can proceed.
-            # Scale + ring write happen below, overlapping with main's
-            # host_prep + h2d (safe: no PCIe transfers during that phase).
             shm_timings[0] = 1.0
             shm_timings[1] = t_read
             shm_timings[2] = sp_timings["slice_ms"]
@@ -326,12 +392,14 @@ def _prep_process_worker(
             shm_timings[7] = float(slot)
             ready_event.set()
 
-            # Deferred: scale frame and write to ring buffer.  Runs during
-            # the next iteration's host_prep + h2d (~7 ms), well before the
-            # postprocess worker reads ring[slot] (~50 ms later).
-            scaled = scale_to_width(frame, display_width) if display_width > 0 else frame.copy()
+            # Deferred scale + ring write: happen AFTER ready, overlapping with
+            # main's host_prep + h2d.  Read-ahead ensures read doesn't block.
+            if display_width > 0 and frame.shape[1] != display_width:
+                target_h = int(round(frame.shape[0] * display_width / frame.shape[1]))
+                scaled = cv2.resize(frame, (display_width, target_h), interpolation=cv2.INTER_LINEAR)
+            else:
+                scaled = frame.copy() if display_width > 0 else frame
             shm_ring[slot].copy_(torch.from_numpy(scaled))
-            ring_idx += 1
 
     except Exception:
         import traceback
@@ -346,61 +414,154 @@ def _prep_process_worker(
 # ---------------------------------------------------------------------------
 
 
-def _parallel_tile_nms(
+def _fused_nms_merge(
     preds_batch: torch.Tensor,
     conf: float,
     iou: float,
+    shifts: list[tuple[int, int]],
+    n_valid: int,
+    merge_iou: float = 0.5,
+    class_agnostic: bool = False,
+    scale_x: float = 1.0,
+    scale_y: float = 1.0,
     max_det: int = 300,
     pool: ThreadPoolExecutor | None = None,
-) -> list[dict]:
-    """Same contract as ``_tile_nms`` but runs per-tile NMS on threads.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Fused per-tile NMS + cross-tile merge. Returns numpy arrays directly.
 
-    The vectorized prep (transpose, xywh→xyxy, amax) is done once on the
-    full batch.  Per-tile masking + torchvision.nms runs in a thread pool.
-    PyTorch ops release the GIL, so threads give real parallelism.
+    Combines _parallel_tile_nms + torch_merge_tiles + scaling into one pass.
+    Eliminates per-tile dict allocations, clone+shift loops, and .item() overhead.
+
+    Returns (boxes_np [K,4], scores_np [K], cls_ids_np [K]) in display coordinates.
     """
     bs = preds_batch.shape[0]
+    _empty = (np.empty((0, 4), dtype=np.float32), np.empty(0, dtype=np.float32), np.empty(0, dtype=np.int32))
 
-    # --- Vectorized prep (shared across threads) ---
+    # --- Fully vectorized prep across ALL tiles at once ---
     preds = preds_batch.transpose(-1, -2)  # [B, N, 84]
     xy = preds[..., :2]
     half_wh = preds[..., 2:4] / 2
-    box_xyxy = torch.cat([xy - half_wh, xy + half_wh], dim=-1)
+    box_xyxy = torch.cat([xy - half_wh, xy + half_wh], dim=-1)  # [B, N, 4]
     cls_scores = preds[..., 4:]  # [B, N, 80]
     max_cls = cls_scores.amax(dim=-1)  # [B, N]
 
-    def _process_tile(xi: int) -> dict:
-        mask = max_cls[xi] > conf
-        boxes = box_xyxy[xi][mask]
-        scores = cls_scores[xi][mask]
+    # Batch-wide conf mask + gather (single nonzero call for all tiles)
+    mask = max_cls > conf  # [B, N]
+    tile_idx, anchor_idx = torch.nonzero(mask, as_tuple=True)
 
-        if boxes.shape[0] == 0:
-            e = boxes[:, :4].float()
-            return {"boxes": {"xyxy": e, "conf": e[:, 0], "cls": e[:, 0]}}
+    if tile_idx.numel() == 0:
+        return _empty
 
-        conf_val, cls_id = scores.max(1, keepdim=True)
-        x = torch.cat([boxes, conf_val, cls_id.float()], dim=1)
-        x = x[conf_val.view(-1) > conf]
+    # Gather all passing detections at once
+    all_boxes = box_xyxy[tile_idx, anchor_idx]  # [M, 4]
+    all_cls_scores = cls_scores[tile_idx, anchor_idx]  # [M, 80]
+    all_conf, all_cls_id = all_cls_scores.max(dim=1)  # [M], [M]
 
-        if x.shape[0] == 0:
-            x = x.float()
-            return {"boxes": {"xyxy": x[:, :4], "conf": x[:, 4], "cls": x[:, 5]}}
+    # Second conf filter (on max class score)
+    pass2 = all_conf > conf
+    tile_idx = tile_idx[pass2]
+    all_boxes = all_boxes[pass2].float()
+    all_conf = all_conf[pass2].float()
+    all_cls_id = all_cls_id[pass2]
 
-        # Convert to float32 only for the few remaining detections —
-        # torchvision NMS requires float32.
-        x = x.float()
-        c = x[:, 5:6] * 7680
-        i = _tv_nms(x[:, :4] + c, x[:, 4], iou)
-        i = i[:max_det]
-        det = x[i]
-        return {"boxes": {"xyxy": det[:, :4], "conf": det[:, 4], "cls": det[:, 5]}}
+    # Pre-compute NMS input: offset boxes by class for multi-class NMS
+    nms_boxes = all_boxes + all_cls_id.float().unsqueeze(1) * 7680
 
+    # Sort by tile_idx for contiguous per-tile slicing
+    sort_idx = tile_idx.argsort()
+    tile_idx = tile_idx[sort_idx]
+    all_boxes = all_boxes[sort_idx]
+    all_conf = all_conf[sort_idx]
+    all_cls_id = all_cls_id[sort_idx]
+    nms_boxes = nms_boxes[sort_idx]
+
+    # Find start/end for each tile
+    tile_counts = torch.bincount(tile_idx, minlength=bs)
+    tile_ends = tile_counts.cumsum(0)
+    tile_starts = tile_ends - tile_counts
+
+    # Per-tile NMS — returns global index offsets, not dicts
+    def _nms_tile_idx(xi: int) -> torch.Tensor:
+        s, e = int(tile_starts[xi]), int(tile_ends[xi])
+        if s == e:
+            return torch.empty(0, dtype=torch.long)
+        keep = _tv_nms(nms_boxes[s:e], all_conf[s:e], iou)[:max_det]
+        return keep + s  # global indices into sorted arrays
+
+    _prev_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
     if pool is not None:
-        results = list(pool.map(_process_tile, range(bs)))
+        kept_lists = list(pool.map(_nms_tile_idx, range(n_valid)))
     else:
-        results = [_process_tile(i) for i in range(bs)]
+        kept_lists = [_nms_tile_idx(i) for i in range(n_valid)]
+    torch.set_num_threads(_prev_threads)
 
-    return results
+    # Gather all kept detections (single cat, not 24 separate cats)
+    non_empty = [k for k in kept_lists if k.numel() > 0]
+    if not non_empty:
+        return _empty
+
+    kept = torch.cat(non_empty)
+    boxes = all_boxes[kept]  # [K, 4]
+    confs = all_conf[kept]  # [K]
+    cls_ids = all_cls_id[kept]  # [K]
+    kept_tiles = tile_idx[kept]  # [K]
+
+    # Vectorized shift: apply tile offsets to all boxes at once
+    shifts_t = torch.tensor(shifts[:n_valid], dtype=torch.float32)  # [n_valid, 2]
+    shift_xy = shifts_t[kept_tiles]  # [K, 2]
+    boxes[:, 0] += shift_xy[:, 0]
+    boxes[:, 2] += shift_xy[:, 0]
+    boxes[:, 1] += shift_xy[:, 1]
+    boxes[:, 3] += shift_xy[:, 1]
+
+    # Cross-tile merge NMS
+    if class_agnostic:
+        cross_keep = _tv_nms(boxes, confs, merge_iou)
+    else:
+        cross_keep = _tv_batched_nms(boxes, confs, cls_ids.int(), merge_iou)
+
+    # Apply scale and convert to numpy in one shot (no .item() per detection)
+    boxes = boxes[cross_keep]
+    boxes[:, 0] *= scale_x
+    boxes[:, 2] *= scale_x
+    boxes[:, 1] *= scale_y
+    boxes[:, 3] *= scale_y
+
+    return boxes.numpy(), confs[cross_keep].numpy(), cls_ids[cross_keep].int().numpy()
+
+
+def _draw_boxes_np(
+    img: np.ndarray,
+    boxes: np.ndarray,
+    scores: np.ndarray,
+    cls_ids: np.ndarray,
+    names_dict: dict,
+) -> None:
+    """Draw detection boxes directly from numpy arrays. No Python object overhead."""
+    n = len(boxes)
+    if n == 0:
+        return
+    h, w = img.shape[:2]
+    max_w = w * 0.25
+    max_h = h * 0.25
+    # Vectorized nan/inf filter (single numpy call vs per-element math.isfinite)
+    valid = np.isfinite(boxes).all(axis=1) & (np.abs(boxes).max(axis=1) < 10000)
+    for i in range(n):
+        if not valid[i]:
+            continue
+        x1 = max(0, min(int(boxes[i, 0]), w - 1))
+        y1 = max(0, min(int(boxes[i, 1]), h - 1))
+        x2 = max(0, min(int(boxes[i, 2]), w - 1))
+        y2 = max(0, min(int(boxes[i, 3]), h - 1))
+        if x2 <= x1 or y2 <= y1:
+            continue
+        if (x2 - x1) > max_w or (y2 - y1) > max_h:
+            continue
+        cid = int(cls_ids[i])
+        label = f"{names_dict.get(cid, str(cid))} {scores[i]:.2f}"
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(img, label, (x1, max(0, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +597,7 @@ def _postprocess_worker_shm(
         os.nice(19)  # Lowest priority so D2H DMA gets scheduler preference
     except OSError:
         pass
-    torch.set_num_threads(2)
+    torch.set_num_threads(4)  # 4 physical cores for BG; per-tile uses OMP=1
     cv2.setNumThreads(2)  # Limit OpenCV threads to avoid oversubscription
 
     TAG = "[bg-640]"
@@ -487,12 +648,11 @@ def _postprocess_worker_shm(
             # for 4 more frames (~133ms at 30 FPS), well after BG finishes.
             canvas = shm_ring[ring_slot].numpy()
 
-            # Debug raw model output stats (very infrequent — bf16 min/max
-            # takes ~95ms with 2 threads on 24×84×8400 elements).
-            if fc % 300 == 0:
+            # Debug raw model output stats (~95ms — only at startup)
+            if fc == 0:
                 raw = preds_torch  # [24, 84, 8400]
-                bbox_raw = raw[:, :4, :]  # cx, cy, w, h
-                cls_raw = raw[:, 4:, :]  # class logits
+                bbox_raw = raw[:, :4, :]
+                cls_raw = raw[:, 4:, :]
                 print(
                     f"{TAG} raw output frame {fc}: "
                     f"bbox min={bbox_raw.min():.2f} max={bbox_raw.max():.2f} "
@@ -501,54 +661,40 @@ def _postprocess_worker_shm(
                     flush=True,
                 )
 
-            # Per-tile NMS (24 tiles, parallel)
+            # Fused NMS + cross-tile merge + scale (returns numpy arrays)
             t0 = time.perf_counter()
-            results_list = _parallel_tile_nms(preds_torch, conf, iou, pool=nms_pool)
-            t_nms = time.perf_counter() - t0
-
-            # Cross-tile merge (handles overlap deduplication)
-            t0 = time.perf_counter()
-            merged_preds = torch_merge_tiles(
-                results_list,
-                shifts,
-                tpf,
-                names_dict,
-                conf=conf,
+            boxes_np, scores_np, cls_np = _fused_nms_merge(
+                preds_torch,
+                conf,
+                iou,
+                shifts=shifts,
+                n_valid=tpf,
                 merge_iou=merge_iou,
                 class_agnostic=merge_class_agnostic,
+                scale_x=scale_x,
+                scale_y=scale_y,
+                pool=nms_pool,
             )
-            t_merge = time.perf_counter() - t0
-
-            # Scale box coords to display resolution
-            scaled = [
-                _ScaledPred(
-                    minx=float(p.minx) * scale_x,
-                    miny=float(p.miny) * scale_y,
-                    maxx=float(p.maxx) * scale_x,
-                    maxy=float(p.maxy) * scale_y,
-                    score=float(p.score),
-                    cat_name=p.cat_name,
-                )
-                for p in merged_preds
-            ]
+            t_nms = time.perf_counter() - t0
+            t_merge = 0.0  # merged into nms
 
             # Debug: log detection stats every 5 frames
-            if fc % 5 == 0 and scaled:
-                scores = [p.score for p in scaled]
-                widths = [p.maxx - p.minx for p in scaled]
-                heights = [p.maxy - p.miny for p in scaled]
+            n_dets = len(boxes_np)
+            if fc % 5 == 0 and n_dets > 0:
+                widths = boxes_np[:, 2] - boxes_np[:, 0]
+                heights = boxes_np[:, 3] - boxes_np[:, 1]
                 print(
-                    f"{TAG} frame {fc}: {len(scaled)} dets, "
-                    f"scores=[{min(scores):.2f},{max(scores):.2f}], "
-                    f"widths=[{min(widths):.0f},{max(widths):.0f}], "
-                    f"heights=[{min(heights):.0f},{max(heights):.0f}]",
+                    f"{TAG} frame {fc}: {n_dets} dets, "
+                    f"scores=[{scores_np.min():.2f},{scores_np.max():.2f}], "
+                    f"widths=[{widths.min():.0f},{widths.max():.0f}], "
+                    f"heights=[{heights.min():.0f},{heights.max():.0f}]",
                     flush=True,
                 )
             elif fc % 5 == 0:
                 print(f"{TAG} frame {fc}: 0 detections", flush=True)
 
             t0 = time.perf_counter()
-            _draw_scaled_preds(canvas, scaled)
+            _draw_boxes_np(canvas, boxes_np, scores_np, cls_np, names_dict)
             t_draw = time.perf_counter() - t0
 
             # Multi-worker encode: 3 threads overlap cv2.imencode (~28ms each)
@@ -751,7 +897,8 @@ def run_sahi_640_pipelined(args):
     # --- Shared memory: prediction ring (avoids pickling 67 MB per frame) --
     PRED_RING = 2
     # Physical shape: tile-aligned padding of [84, 8400] → [96, 8416].
-    # batch_to_torch(physical=True) copies full physical buffers contiguously.
+    # batch_to_torch(physical=True) copies full physical buffers contiguously
+    # (24 large memcpy calls vs 2016 strided = 4.4ms vs 7.8ms).
     # BG process slices to [:, :84, :8400] for logical data (free view).
     _phys_pred_h = ((84 + 31) // 32) * 32  # 96
     _phys_pred_w = ((8400 + 31) // 32) * 32  # 8416
@@ -797,8 +944,9 @@ def run_sahi_640_pipelined(args):
     # --- Shared memory: prep process buffers --------------------------------
     # Double-buffered bfloat16 shared memory — prep writes normalized bf16
     # into buffer[prep_frame_idx % 2], main reads buffer[main_frame_idx % 2].
-    # The bf16 shm backing produces cache-friendly host tensors that keep
-    # compose at ~5ms (vs ~17ms with heap-allocated bf16 tensors).
+    # bf16 conversion runs in the prep process to keep the main process's
+    # L3 cache clean for PCIe DMA (h2d reads from_torch's host buffer,
+    # which is hot in L3 only when no other large writes have polluted it).
     _shm_buf0 = torch.zeros(total_devices, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.bfloat16).share_memory_()
     _shm_buf1 = torch.zeros(total_devices, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.bfloat16).share_memory_()
     shm_tensor_bufs = [_shm_buf0, _shm_buf1]  # indexed by frame parity
@@ -868,7 +1016,7 @@ def run_sahi_640_pipelined(args):
     # prep_frame_idx in the prep process).
     main_frame_idx = 0
 
-    # Thread pool for overlapping compose with submit (1 worker)
+    # Thread pool for overlapping compose with prep_wait (1 worker)
     _submit_executor = ThreadPoolExecutor(max_workers=1)
 
     # Metadata tracking for pipelined frames
@@ -881,6 +1029,7 @@ def run_sahi_640_pipelined(args):
     t_enqueue_sum = t_batch_total_sum = 0.0
     t_prep_read_sum = t_prep_sp_sum = t_prep_total_sum = 0.0
     t_staging_wait_sum = t_pcie_d2h_sum = t_compose_sum = 0.0
+    t_wait_op_sum = t_h2d_sum = t_wait_h2d_sum = t_stg_copy_sum = t_reshard_sum = 0.0
     try:
         # --- Request first frame from prep ---------------------------------
         go_event.set()
@@ -919,10 +1068,18 @@ def run_sahi_640_pipelined(args):
         else:
             _prep_pending = False
 
+        # Deferred compose: compose(N-1) runs in a thread and overlaps with
+        # the next iteration's prep_wait.  We join before submit to ensure
+        # shm_preds is written before BG reads it.
+        _compose_future = None
+        _compose_enqueue_item = None
+
         while not stop:
             t_batch_start = time.perf_counter()
 
             # --- Wait for next frame from prep ---
+            # Compose(N-1) thread runs during this wait (GIL released by
+            # Event.wait and batch_to_torch's C++ code).
             t0 = time.perf_counter()
             if _prep_pending:
                 while not ready_event.wait(timeout=0.5):
@@ -934,10 +1091,7 @@ def run_sahi_640_pipelined(args):
                 _next_valid = False
             t_prep_wait = (time.perf_counter() - t0) * 1000
 
-            if not _next_valid and not is_image:
-                break
-
-            # Read next frame metadata from shared memory
+            # --- Read metadata from shm FIRST, then release prep early ---
             if _next_valid:
                 next_shifts = [
                     (int(shm_shifts[i, 0].item()), int(shm_shifts[i, 1].item())) for i in range(tiles_per_frame)
@@ -951,48 +1105,76 @@ def run_sahi_640_pipelined(args):
             else:
                 _prep_timings = None
 
-            # --- Signal prep BEFORE submit — gives prep the full submit+pcie+compose
-            # window to finish.
-            if not is_image:
-                go_event.set()
-                _prep_pending = True
-            else:
-                _prep_pending = False
+            if not _next_valid and not is_image:
+                # Drain compose before exiting
+                if _compose_future is not None:
+                    _compose_future.result()
+                    try:
+                        q_post.put_nowait(_compose_enqueue_item)
+                    except Exception:
+                        pass
+                    _compose_future = None
+                break
 
             result_meta = prev_meta  # metadata for get_result's return value
             t_convert = 0.0
 
-            # --- Submit next frame ---
+            # --- Submit next frame (bf16 already in shm from prep) ---
+            # compose(N-1) thread runs concurrently during h2d (GIL released
+            # by batch_to_torch C++ code).  Must join before d2h writes to
+            # host_staging.
             t0_submit = time.perf_counter()
             if _next_valid:
                 runner.submit(shm_tensor_bufs[main_frame_idx % 2])
                 main_frame_idx += 1
-                t_host_prep = runner.last_timing.get("host_prep_ms", 0)
+                _lt = runner.last_timing
+                t_host_prep = _lt.get("host_prep_ms", 0)
+                t_wait_op = _lt.get("wait_op_ms", 0)
+                t_h2d = _lt.get("h2d_ms", 0)
+                t_wait_h2d = _lt.get("wait_h2d_ms", 0)
+                t_stg_copy = _lt.get("staging_ms", 0)
+                t_reshard = _lt.get("reshard_ms", 0)
                 prev_meta = (next_shifts[:tiles_per_frame], next_ring_slot)
             else:
-                t_host_prep = 0
+                t_host_prep = t_wait_op = t_h2d = t_wait_h2d = t_stg_copy = t_reshard = 0
             t_submit = (time.perf_counter() - t0_submit) * 1000
 
-            # --- PCIe D2H (GIL released during C++ DMA) ---
+            # Signal prep AFTER submit — avoids prep's C++ kernel memory
+            # traffic overlapping with h2d PCIe DMA.  Prep gets the
+            # compose_join + d2h + compose + next_prep_wait window (~10ms).
+            # NOTE: go_after_compose_join was tested (v13) and is 2.6 FPS worse
+            # because prep_wait increases by more than pcie_d2h decreases.
+            if not is_image:
+                go_event.set()
+                _prep_pending = True
+
+            # --- Join compose AFTER submit (ran during h2d, should be done) ---
+            # Must complete before d2h writes to host_staging.
+            _dropped = False
+            if _compose_future is not None:
+                _compose_future.result()
+                t_compose = runner._compose_timing
+                try:
+                    q_post.put_nowait(_compose_enqueue_item)
+                except Exception:
+                    _dropped = True
+                _compose_future = None
+            else:
+                t_compose = 0.0
+
+            # --- PCIe D2H ---
             t0_d2h = time.perf_counter()
             has_result = runner.pcie_d2h()
             t_staging_wait = runner.last_timing.get("staging_wait_ms", 0)
             t_pcie_d2h = runner.last_timing.get("pcie_d2h_ms", 0)
 
-            # --- Compose: physical batch_to_torch (24 contiguous memcpy, ~2.7ms) ---
+            # --- Launch compose(N-1): reads host_staging written by d2h ---
             if has_result:
                 pred_slot = pred_write_idx % PRED_RING
-                runner.compose(dest=shm_preds[pred_slot])
-            t_compose = runner._compose_timing
-            t_d2h_wall = (time.perf_counter() - t0_d2h) * 1000
-
-            # --- Enqueue result to BG ---
-            t0 = time.perf_counter()
-            _dropped = False
-            if has_result:
+                _compose_future = _submit_executor.submit(runner.compose, dest=shm_preds[pred_slot])
                 r_shifts, r_ring_slot = result_meta
                 pred_write_idx += 1
-                item = (
+                _compose_enqueue_item = (
                     pred_slot,
                     r_ring_slot,
                     r_shifts,
@@ -1000,11 +1182,7 @@ def run_sahi_640_pipelined(args):
                     scale_x,
                     scale_y,
                 )
-                try:
-                    q_post.put_nowait(item)
-                except Exception:
-                    _dropped = True
-            t_enqueue = (time.perf_counter() - t0) * 1000
+            t_enqueue = 0.0
             t_d2h = t_staging_wait + t_pcie_d2h + t_compose
 
             dt_batch = time.perf_counter() - t_batch_start
@@ -1022,6 +1200,11 @@ def run_sahi_640_pipelined(args):
             t_pcie_d2h_sum += t_pcie_d2h
             t_compose_sum += t_compose
             t_enqueue_sum += t_enqueue
+            t_wait_op_sum += t_wait_op
+            t_h2d_sum += t_h2d
+            t_wait_h2d_sum += t_wait_h2d
+            t_stg_copy_sum += t_stg_copy
+            t_reshard_sum += t_reshard
             t_batch_total_sum += dt_batch
             if _prep_timings:
                 t_prep_read_sum += _prep_timings["read_ms"]
@@ -1033,11 +1216,9 @@ def run_sahi_640_pipelined(args):
                 fps = 1.0 / max(dt_batch, 1e-9)
                 print(
                     f"{TAG} Batch 1: {dt_batch * 1000:.1f}ms ({fps:.1f} FPS)  |  "
-                    f"convert={t_convert:.1f}  "
-                    f"host_prep={t_host_prep:.1f}  "
-                    f"submit={t_submit:.1f}  "
+                    f"bf16={t_convert:.1f}  host_prep={t_host_prep:.1f}  "
+                    f"submit={t_submit:.1f}(wait_op={t_wait_op:.1f}+h2d={t_h2d:.1f}+wait_h2d={t_wait_h2d:.1f}+stg={t_stg_copy:.1f}+reshard={t_reshard:.1f})  "
                     f"d2h={t_d2h:.1f}(wait={t_staging_wait:.1f}+pcie={t_pcie_d2h:.1f}+compose={t_compose:.1f})  "
-                    f"enqueue={t_enqueue:.1f}  "
                     f"prep_wait={t_prep_wait:.1f}  "
                     f"prep(proc)={_pt.get('total_ms', 0):.1f}"
                     f"[read={_pt.get('read_ms', 0):.1f} "
@@ -1055,11 +1236,9 @@ def run_sahi_640_pipelined(args):
                     f"[read={t_prep_read_sum / n:.1f} "
                     f"sp={t_prep_sp_sum / n:.1f}]  "
                     f"prep_wait={t_prep_wait_sum / n:.1f}  "
-                    f"convert={t_convert_sum / n:.1f}  "
-                    f"host_prep={t_host_prep_sum / n:.1f}  "
-                    f"submit={t_queue_sum / n:.1f}  "
+                    f"bf16={t_convert_sum / n:.1f}  host_prep={t_host_prep_sum / n:.1f}  "
+                    f"submit={t_queue_sum / n:.1f}(wait_op={t_wait_op_sum / n:.1f}+h2d={t_h2d_sum / n:.1f}+wait_h2d={t_wait_h2d_sum / n:.1f}+stg={t_stg_copy_sum / n:.1f}+reshard={t_reshard_sum / n:.1f})  "
                     f"d2h={t_d2h_sum / n:.1f}(wait={t_staging_wait_sum / n:.1f}+pcie={t_pcie_d2h_sum / n:.1f}+compose={t_compose_sum / n:.1f})  "
-                    f"enqueue={t_enqueue_sum / n:.1f}  "
                     f"drops={drop_count}  (ms)",
                     flush=True,
                 )
@@ -1068,6 +1247,15 @@ def run_sahi_640_pipelined(args):
                 t_enqueue_sum = t_batch_total_sum = 0.0
                 t_prep_read_sum = t_prep_sp_sum = t_prep_total_sum = 0.0
                 t_staging_wait_sum = t_pcie_d2h_sum = t_compose_sum = 0.0
+                t_wait_op_sum = t_h2d_sum = t_wait_h2d_sum = t_stg_copy_sum = t_reshard_sum = 0.0
+
+        # Drain any pending compose before flush
+        if _compose_future is not None:
+            try:
+                _compose_future.result()
+                q_post.put(_compose_enqueue_item, timeout=2)
+            except Exception:
+                pass
 
         # Flush: read last frame's output from device
         if batch_count > 0 and not stop:
@@ -1085,6 +1273,9 @@ def run_sahi_640_pipelined(args):
             except Exception:
                 pass
 
+        # --- Shutdown compose executor ---
+        _submit_executor.shutdown(wait=False)
+
         # Image mode: wait for bg to finish
         if is_image:
             while not stop and bg_proc.is_alive():
@@ -1097,9 +1288,6 @@ def run_sahi_640_pipelined(args):
             f"\n{TAG} Shutting down... ({batch_count} frames processed)",
             flush=True,
         )
-
-        # --- Shutdown compose executor ---
-        _submit_executor.shutdown(wait=False)
 
         # --- Shutdown prep ---
         stop_event.set()

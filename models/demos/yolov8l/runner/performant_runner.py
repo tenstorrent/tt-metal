@@ -109,6 +109,8 @@ class YOLOv8lPerformantRunner:
         # tile-alignment padding).  batch_to_torch(physical=True) copies the full
         # physical buffer contiguously (24 large memcpy calls instead of 2016
         # strided ones).  Callers slice [:, :log_h, :log_w] to get logical data.
+        # NOTE: physical=False was tested and is 2x slower (7.8ms vs 4.4ms)
+        # due to the 2016 strided copy overhead.
         n_devices = len(ttnn.get_device_tensors(self.host_staging))
         _padded = self.dram_staging.padded_shape
         _logical = self.dram_staging.shape
@@ -215,20 +217,25 @@ class YOLOv8lPerformantRunner:
         t0 = time.perf_counter()
         # Queue H2D on CQ1
         ttnn.wait_for_event(1, self.op_event)
+        t1 = time.perf_counter()
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
+        t2 = time.perf_counter()
         self.write_event = ttnn.record_event(self.device, 1)
 
         # CQ0: wait for H2D, then copy prev output → staging, then compute
         ttnn.wait_for_event(0, self.write_event)
+        t3 = time.perf_counter()
 
         # Copy previous output to staging (safe: staging not read by CQ1 yet)
         if self._pipeline_frame > 0:
             ttnn.wait_for_event(0, self.read_done_event)  # prev D2H released staging
             ttnn.copy(self.runner_infra.output_tensor[0], self.dram_staging)
             self.staging_ready_event = ttnn.record_event(self.device, 0)
+        t4 = time.perf_counter()
 
         # Reshard input + start trace (all on CQ0, after reshard-to-staging)
         self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        t5 = time.perf_counter()
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
 
@@ -237,6 +244,11 @@ class YOLOv8lPerformantRunner:
         self.last_timing = {
             "host_prep_ms": self._last_host_prep_ms,
             "queue_ms": t_queue,
+            "wait_op_ms": (t1 - t0) * 1000,
+            "h2d_ms": (t2 - t1) * 1000,
+            "wait_h2d_ms": (t3 - t2) * 1000,
+            "staging_ms": (t4 - t3) * 1000,
+            "reshard_ms": (t5 - t4) * 1000,
         }
 
     def submit(self, torch_input_tensor):
