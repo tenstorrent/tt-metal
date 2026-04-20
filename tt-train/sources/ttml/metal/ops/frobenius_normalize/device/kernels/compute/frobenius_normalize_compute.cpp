@@ -125,8 +125,8 @@ void kernel_main() {
             binop_with_scalar_tile_init();
             add_unary_tile(0, eps_u32);
 
-            recip_tile_init();
-            recip_tile(0);
+            recip_tile_init<false>();
+            recip_tile<false>(0);
 
             tile_regs_commit();
             pack_and_push(0, cb_norm);
