@@ -48,12 +48,19 @@ from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
 
 Q_AB_KV_A_SPEC = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 O_PROJ_GATE_MM_NORMS_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
-MERGED_TP4_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.tp4_merged_fusion_group_spec()
 KV_B12_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 GATE_UP_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
 from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
 from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
+from models.demos.deepseek_v3_b1.weights.transforms.tp4_attention import (
+    build_gate_mm_tp4_spec,
+    build_merged_main_tp4_spec,
+    pack_o_proj_weights_tp4_shuffled,
+)
+
+MERGED_TP4_MAIN_SPEC = build_merged_main_tp4_spec()
+MERGED_TP4_GATE_SPEC = build_gate_mm_tp4_spec()
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     _tp_factors,
     mlp_routed_dense_stacked_torch_for_cache,
@@ -718,24 +725,22 @@ def prepare_attention_weights(
     kv_b1_proj = kv_views["kv_b1_proj"]
     kv_b2_proj = kv_views["kv_b2_proj"]
 
-    # -- mla_tp == 2: merged buffer (o_proj + gate_mm + norms + q_ab + kv_a) --
+    # -- mla_tp == 2: merged layout, two independent per-core fusion artefacts --
+    # Main artefact (o_proj + norms + q_ab + kv_a) and standalone gate_mm live
+    # in separate FusionGroupSpecs so the narrow gate_mm slab isn't forced to
+    # participate in the main buffer's 115-core lockstep reservation.
     if mla_tp == 2:
         q_ab_keys = (q_a_key, q_b_key, kv_a_key)
 
-        def _preprocess_merged(t: dict[str, torch.Tensor], *, include_gate: bool) -> dict[str, torch.Tensor]:
+        def _preprocess_merged_main(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
             o_proj = t[o_proj_key].T.contiguous()
-            o_proj = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.pack_o_proj_weights_tp4_shuffled(o_proj)
-            if include_gate:
-                gate_mm = t[gate_key].T.contiguous()
-            else:
-                gate_mm = torch.zeros(D.HIDDEN_SIZE, D.GATE_NUM_INDICES, dtype=torch.bfloat16, device=o_proj.device)
+            o_proj = pack_o_proj_weights_tp4_shuffled(o_proj)
             q_a = t[q_a_key].T.contiguous()
             q_b = deinterleave_q_b_proj(t[q_b_key])
             kv_a = t[kv_a_key].T.contiguous()
             q_ab_kv_a = preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
             return {
                 "o_proj": o_proj,
-                "gate_mm": gate_mm,
                 "attn_norm": t[attn_norm_key].unsqueeze(0),
                 "q_norm": t[q_norm_key].unsqueeze(0),
                 "kv_norm": t[kv_norm_key].unsqueeze(0),
@@ -743,21 +748,38 @@ def prepare_attention_weights(
                 **q_ab_kv_a,
             }
 
+        main_src = (o_proj_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key) + q_ab_keys
+        main_fp = cache_config.context.fingerprint(
+            source=SourceTensorSelection(names=main_src),
+            target=MERGED_TP4_MAIN_SPEC,
+        )
+        main_views = cache_config.cache.get_or_create(
+            main_fp,
+            device,
+            preprocess=_preprocess_merged_main,
+            raw_tensors=lambda: {k: state_dict[k] for k in main_src},
+        )
+        if not isinstance(main_views, dict):
+            raise TypeError("expected dict[str, OverlappedTensor] for merged main cache entry")
+
         if is_moe:
             gate_key = _key(layer_idx, "mlp.gate.weight")
-            merged_src = (o_proj_key, gate_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key) + q_ab_keys
-            merged_fp = cache_config.context.fingerprint(
-                source=SourceTensorSelection(names=merged_src),
-                target=MERGED_TP4_SPEC,
+
+            def _preprocess_gate_mm(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+                return {"gate_mm": t[gate_key].T.contiguous()}
+
+            gate_fp = cache_config.context.fingerprint(
+                source=SourceTensorSelection(names=(gate_key,)),
+                target=MERGED_TP4_GATE_SPEC,
             )
-            merged_views = cache_config.cache.get_or_create(
-                merged_fp,
+            gate_views = cache_config.cache.get_or_create(
+                gate_fp,
                 device,
-                preprocess=lambda t: _preprocess_merged(t, include_gate=True),
-                raw_tensors=lambda: {k: state_dict[k] for k in merged_src},
+                preprocess=_preprocess_gate_mm,
+                raw_tensors=lambda: {gate_key: state_dict[gate_key]},
             )
-            if not isinstance(merged_views, dict):
-                raise TypeError("expected dict[str, OverlappedTensor] for merged cache entry")
+            if not isinstance(gate_views, dict):
+                raise TypeError("expected dict[str, OverlappedTensor] for gate_mm cache entry")
 
             _bias_key = _key(layer_idx, "mlp.gate.e_score_correction_bias")
             target = _gate_bias_target(layer_idx)
@@ -780,34 +802,22 @@ def prepare_attention_weights(
                 time.perf_counter() - t0,
             )
             return AttentionWeights(
-                q_a_proj=merged_views["q_a_proj"],
-                q_b_proj=merged_views["q_b_proj"],
-                kv_a_proj=merged_views["kv_a_proj"],
-                o_proj=merged_views["o_proj"],
-                gate_mm=merged_views["gate_mm"],
-                attn_norm=merged_views["attn_norm"],
-                q_norm=merged_views["q_norm"],
-                kv_norm=merged_views["kv_norm"],
-                ffn_norm=merged_views["ffn_norm"],
+                q_a_proj=main_views["q_a_proj"],
+                q_b_proj=main_views["q_b_proj"],
+                kv_a_proj=main_views["kv_a_proj"],
+                o_proj=main_views["o_proj"],
+                gate_mm=gate_views["gate_mm"],
+                attn_norm=main_views["attn_norm"],
+                q_norm=main_views["q_norm"],
+                kv_norm=main_views["kv_norm"],
+                ffn_norm=main_views["ffn_norm"],
                 kv_b1_proj=kv_b1_proj,
                 kv_b2_proj=kv_b2_proj,
                 gate_bias=gate_bias_tt,
             )
 
-        # Dense merged path
-        merged_src_dense = (o_proj_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key) + q_ab_keys
-        merged_fp_dense = cache_config.context.fingerprint(
-            source=SourceTensorSelection(names=merged_src_dense),
-            target=MERGED_TP4_SPEC,
-        )
-        merged_views = cache_config.cache.get_or_create(
-            merged_fp_dense,
-            device,
-            preprocess=lambda t: _preprocess_merged(t, include_gate=False),
-            raw_tensors=lambda: {k: state_dict[k] for k in merged_src_dense},
-        )
-        if not isinstance(merged_views, dict):
-            raise TypeError("expected dict[str, OverlappedTensor] for merged cache entry")
+        # Dense merged path: no gate_mm at all.
+        merged_views = main_views
 
         logger.debug(
             "Attention fusion groups (dense, merged) for layer {} in {:.3f}s",

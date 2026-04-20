@@ -483,7 +483,7 @@ class TensorCache:
             elapsed,
             artifact_id[:12],
         )
-        return self._load_fused(paths, device, meta={"views": views_dict_from_overlapped(views)})
+        return self._load_fused(paths, device)
 
 
 class EphemeralTensorCache:

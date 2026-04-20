@@ -715,6 +715,43 @@ class TestFusionGroupFingerprint:
         assert compute_artifact_id(fp1) != compute_artifact_id(fp2)
 
 
+class TestFusionGroupPerCore:
+    """:class:`FusionGroupSpec.per_core` authoring + fingerprint invariants."""
+
+    def _single_region(self, name: str) -> RegionSpec:
+        crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        st = OverlappedTensorSpec(name=name, core_range_set=crs, raw_tensor_shape=(64, 32), dtype=ttnn.bfloat16)
+        return RegionSpec(core_range_set=crs, subtensors=(st,))
+
+    def test_default_per_core_is_false(self):
+        region = self._single_region("w0")
+        spec = FusionGroupSpec(name="legacy", regions=(region,))
+        assert spec.per_core is False
+
+    def test_canonical_omits_per_core_when_false(self):
+        """Default-per_core specs must not include 'per_core' in canonical form so legacy hashes stay stable."""
+        region = self._single_region("w0")
+        spec = FusionGroupSpec(name="legacy", regions=(region,))
+        fp = _make_fingerprint(target=spec)
+        c = canonical(fp)
+        assert "per_core" not in c["target"]
+
+    def test_canonical_includes_per_core_when_true(self):
+        region = self._single_region("w0")
+        spec = FusionGroupSpec(name="pc", regions=(region,), per_core=True)
+        fp = _make_fingerprint(target=spec)
+        c = canonical(fp)
+        assert c["target"]["per_core"] is True
+
+    def test_fingerprint_sensitivity_per_core(self):
+        region = self._single_region("w0")
+        spec_off = FusionGroupSpec(name="g", regions=(region,), per_core=False)
+        spec_on = FusionGroupSpec(name="g", regions=(region,), per_core=True)
+        assert compute_artifact_id(_make_fingerprint(target=spec_off)) != compute_artifact_id(
+            _make_fingerprint(target=spec_on)
+        )
+
+
 class TestCreateOverlappedTensorUnittestToy:
     def test_toy_produces_views(self, device):
         a = torch.randn(32, 32, dtype=torch.bfloat16)
