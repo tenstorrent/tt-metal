@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import (
     SyntheticWeightProvider,
     WeightProvider,
 )
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import StageMetadata
 from models.demos.deepseek_v3_b1.model import (
     TOKEN_ID_BYTES,
     DecodeResult,
@@ -91,7 +92,19 @@ class ModelPipeline:
             raise RuntimeError(f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes")
 
         logger.info("Building pipeline")
-        self.pipeline = config.build_pipeline(self.mesh_device)
+        # Propagate an identical, explicit pipeline_config and stages_metadata
+        # to every rank. Without this, each rank independently calls
+        # generate_blitz_decode_pipeline() and the submesh-aware code paths
+        # added in #42002 can produce inconsistent entry/exit MeshCoordinates
+        # across ranks, causing the inter-mesh MeshSocket handshake in
+        # _CombinedPipelineBlock.__init__'s h2d_host_io to time out.
+        pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+        stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
+        self.pipeline = config.build_pipeline(
+            self.mesh_device,
+            stages_metadata=stages_metadata,
+            pipeline_config=pipeline_config,
+        )
 
         logger.info("Setting up and running pipeline")
         self.pipeline.setup_and_run()
