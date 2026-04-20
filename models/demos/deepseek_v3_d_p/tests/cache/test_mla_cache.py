@@ -142,6 +142,8 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
     output1 = to_torch_concat(output1_tt)
 
     # === Path 2: Cold Cache ===
+    assert not ttMLA.check_cache_complete(CACHE_DIR, f"layer_{layer_idx}.mla"), "Cache should be empty before build"
+
     ttMLA.build_ttnn_cache(
         state_dict,
         CACHE_DIR,
@@ -152,6 +154,8 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
         sp_axis,
         tp_axis,
     )
+
+    assert ttMLA.check_cache_complete(CACHE_DIR, f"layer_{layer_idx}.mla"), "Cache should be complete after build"
 
     mla_cold = ttMLA(
         config,
