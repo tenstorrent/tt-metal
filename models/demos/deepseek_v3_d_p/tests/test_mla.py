@@ -132,8 +132,8 @@ def run_mla_inference(
             logger.info(f"Perf: forward pass {i + 1}/{num_loops}")
             tt_output = _forward()
             logger.info(f"Sync call started for forward pass {i + 1}/{num_loops}")
-            ttnn.synchronize_device(mesh_device)
-            ttnn.distributed_context_barrier()
+            # ttnn.synchronize_device(mesh_device)
+            # ttnn.distributed_context_barrier()
         signpost("stop")
     else:
         tt_output = _forward()
@@ -173,7 +173,7 @@ def run_mla_inference(
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.parametrize(
-    "num_loops", [1, 5, 10, 20, 1000, 100000], ids=["loops1", "loops5", "loops10", "loops20", "loops10K", "loops100K"]
+    "num_loops", [1, 5, 10, 20, 1000, 100000], ids=["loops1", "loops5", "loops10", "loops20", "loops1K", "loops100K"]
 )
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
 def test_mla(
