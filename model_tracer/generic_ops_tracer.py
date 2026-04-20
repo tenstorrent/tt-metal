@@ -824,6 +824,13 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     env = os.environ.copy()
     env["TTNN_OPERATION_TRACE_DIR"] = trace_dir
 
+    # Disable pytest-timeout during tracing.  Model tracing can legitimately
+    # take longer than the default pytest timeout (300 s) because it records
+    # every op invocation.  The GitHub Actions step-level timeout-minutes
+    # already guards against genuine hangs, so per-test timeouts are
+    # redundant and cause trace data loss.
+    env["PYTEST_TIMEOUT"] = "0"
+
     # Disable fast runtime mode to enable operation tracing
     # Fast mode skips the tracing decorator for performance
     env["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": false}'
