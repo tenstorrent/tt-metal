@@ -101,7 +101,7 @@ WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::
                 "on the output memory config or the input tensor",
                 mem_layout);
         };
-        auto [grid, orientation] = get_grid_and_orientation();
+        const auto& [grid, orientation] = get_grid_and_orientation();
 
         // For width/height/block sharding modes, the output shard shape is fully determined
         // by the output physical shape and the core grid. Just delegate to the
