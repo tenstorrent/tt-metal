@@ -51,39 +51,6 @@ using namespace ccl;
 using ttnn::experimental::ccl::append_fabric_mux_connection_ct_args;
 using ttnn::experimental::ccl::append_fabric_mux_connection_rt_args;
 
-// Forward declaration with default arg so call sites can omit the last param.
-StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_program_artifacts(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor,
-    const Tensor& intermediate_tensor,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    Tensor& output_tensor,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
-    std::optional<experimental::ccl::StridedReduceScatterFusedOpSignaler>& mm_fused_op_signaler,
-    std::optional<uint32_t> num_workers_per_direction_opt,
-    std::optional<uint32_t> num_buffers_per_channel,
-    CoreCoord core_grid_offset,
-    std::optional<uint32_t> mm_cores_y,
-    uint32_t mm_block_ht,
-    uint32_t mm_block_wt,
-    std::optional<uint32_t> mm_N_full_block_wt,
-    std::optional<uint32_t> chunk_width_in_mm_blocks,
-    std::optional<float> fused_ternary_scalar = std::nullopt,
-    const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
-    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,
-    std::optional<tt::tt_metal::MathFidelity> reduce_math_fidelity = std::nullopt);
-
 /**
  * Strided Ring Reduce-Scatter
  *
@@ -241,8 +208,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> chunk_width_in_mm_blocks,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
-    const std::optional<const Tensor>& addcmul_input_tensor2,
-    std::optional<tt::tt_metal::MathFidelity> reduce_math_fidelity) {
+    const std::optional<const Tensor>& addcmul_input_tensor2) {
     auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
@@ -619,9 +585,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
 
     // Reduce kernel
     auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
-    if (reduce_math_fidelity.has_value()) {
-        sender_reduce_kernel_config.math_fidelity = reduce_math_fidelity.value();
-    }
     sender_reduce_kernel_config.compile_args = {
         input_cb_index,                  // [0]  input_cb_id
         intermediate_cb_index,           // [1]  intermediate_cb

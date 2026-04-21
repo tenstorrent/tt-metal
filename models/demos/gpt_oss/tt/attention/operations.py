@@ -156,16 +156,15 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
     traffic on the other half — MM signals RS via on-chip semaphore per output
     block so RS starts forwarding as soon as the first block lands in DRAM.
 
-    Dtypes match the non-fused baseline:
-      - activation cast to bf8_b before MM (DRAM-bandwidth saver, matches baseline)
+    Dtypes (end-to-end bf8_b through the TP allreduce):
+      - activation cast to bf8_b before MM (DRAM-bandwidth saver)
       - weight is bf8_b (as loaded, row-parallel sharded on K across TP=8)
-      - MM math: LoFi (same as `ttnn.matmul` default)
-      - fused-op output defaults to input dtype (bf8_b); we cast back to bf16
-        afterwards so downstream AllGather / residual-add / LayerNorm see the
-        same bf16 signature as the baseline path.
+      - MM math: LoFi (same as `ttnn.matmul` default, via compute_kernel_config)
+      - fused-op output inherits input dtype → bf8_b
+      - downstream all-gather + padding-slice operate on bf8_b
 
     Returns the reduce-scattered tensor of shape
-    [1, 1, S, padded_hidden_total / TP] in bf16.
+    [1, 1, S, padded_hidden_total / TP] in bf8_b.
 
     Only valid for prefill (TP > 1); the decoder path uses a different pattern.
     """
@@ -231,13 +230,7 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
 
     tensor.deallocate(True)
     mm_out.deallocate(True)
-
-    # The fused op inherits output dtype from the input (bf8_b). Non-fused
-    # path produced bf16 via explicit `ttnn.matmul(..., dtype=bf16)`. Cast up
-    # so downstream AllGather / add / LayerNorm see bf16, same as baseline.
-    rs_out_bf16 = ttnn.typecast(rs_out, ttnn.bfloat16)
-    rs_out.deallocate(True)
-    return rs_out_bf16
+    return rs_out
 
 
 def apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size: int):
