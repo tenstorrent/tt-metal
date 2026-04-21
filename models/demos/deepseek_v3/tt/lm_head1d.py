@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -118,8 +118,6 @@ class LMHead1D(AbstractModule):
                 f"one tile in N); got N_tiles=0 from n_per_device={n_per_device}, tile_size={tile_size}."
             )
 
-        # 1D multicast: broadcast small decode activation to all cores,
-        # each core computes a slice of the output columns (N dimension).
         grid_size = mesh_device.compute_with_storage_grid_size()
         num_cores = grid_size.x * grid_size.y
         per_core_N = math.ceil(N_tiles / num_cores)
@@ -149,6 +147,7 @@ class LMHead1D(AbstractModule):
             mcast_in0=True,
         )
 
+        # Construct the config
         return {
             "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
