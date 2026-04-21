@@ -66,13 +66,33 @@ def _make_index(device, *, dtype=ttnn.uint32, shape=(NUM_EXPERTS,), memory_confi
     )
 
 
-def _run(global_tensor, local_tensor, start, counts, global_expert_id=GLOBAL_EXPERT_ID):
+def _make_identity_idx_table(device, length=NUM_EXPERTS):
+    """Build a 1D UINT32 DRAM-interleaved tensor `[0, 1, ..., length-1]`.
+
+    Using an identity table preserves the old `global_expert_id` test semantics under
+    the new API: local_expert_id=i -> table[i] = i (= old global_expert_id).
+    """
+    torch_tensor = torch.arange(length, dtype=torch.int32)
+    return ttnn.from_torch(
+        torch_tensor,
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _run(global_tensor, local_tensor, start, counts, global_expert_id=GLOBAL_EXPERT_ID, idx_table=None):
+    device = global_tensor.device()
+    if idx_table is None:
+        idx_table = _make_identity_idx_table(device)
     return ttnn.experimental.deepseek_prefill.insert(
         global_tensor,
         local_tensor,
         start,
         counts,
-        global_expert_id=global_expert_id,
+        idx_table,
+        local_expert_id=global_expert_id,
     )
 
 

@@ -114,30 +114,30 @@ def run_torch_routed_experts(
             {"fabric_config": ttnn.FabricConfig.DISABLED},
             id="single-1",
         ),
-        # pytest.param(
-        #     (4, 1),
-        #     {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-        #     marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-        #     id="linear-4",
-        # ),
-        # pytest.param(
-        #     (8, 1),
-        #     {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-        #     marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-        #     id="linear-8",
-        # ),
-        # pytest.param(
-        #     (4, 2),
-        #     {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-        #     marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-        #     id="mesh-4x2",
-        # ),
-        # pytest.param(
-        #     (2, 4),
-        #     {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-        #     marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
-        #     id="mesh-2x4",
-        # ),
+        pytest.param(
+            (4, 1),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
+            id="linear-4",
+        ),
+        pytest.param(
+            (8, 1),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="linear-8",
+        ),
+        pytest.param(
+            (4, 2),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="mesh-4x2",
+        ),
+        pytest.param(
+            (2, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
+            id="mesh-2x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -336,6 +336,10 @@ def test_ttnn_routed_expert(
         device=mesh_device,
         dtype=ttnn.uint32,
     )
+    # Per-device shape is (1, 1, experts_per_chip); drop the two leading singleton
+    # dims so each device holds a 1D (experts_per_chip,) lookup vector.
+    global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+    global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
     # Create TtRoutedExpert
     # When torch_weights=None, uses _create_random_weight for fast device-side DRAM allocation

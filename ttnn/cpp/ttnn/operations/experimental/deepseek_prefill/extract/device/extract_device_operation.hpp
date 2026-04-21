@@ -36,7 +36,8 @@ ttnn::Tensor prefill_extract(
     const ttnn::Tensor& global_tensor,
     const ttnn::Tensor& start,
     const ttnn::Tensor& counts,
-    uint32_t global_expert_id,
+    const ttnn::Tensor& global_expert_idx_table,
+    uint32_t local_expert_id,
     uint32_t max_dispatched_tokens_per_expert);
 
 }  // namespace ttnn::prim

@@ -480,7 +480,8 @@ class TtRoutedExpert(LightweightModule):
                 dispatched_buffer,
                 expert_region_offsets,
                 expert_token_counts,
-                global_expert_id=local_expert,
+                self.global_expert_idx_table,
+                local_expert_id=local_expert,
                 max_dispatched_tokens_per_expert=self.max_tokens,
             )
             logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
@@ -502,7 +503,8 @@ class TtRoutedExpert(LightweightModule):
                 output,
                 expert_region_offsets,
                 expert_token_counts,
-                global_expert_id=local_expert,
+                self.global_expert_idx_table,
+                local_expert_id=local_expert,
             )
 
         # Shape: (experts_per_chip, max_tokens, emb_dim)

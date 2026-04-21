@@ -24,6 +24,7 @@ InsertProgramFactory::cached_program_t InsertProgramFactory::create(
     const auto& local_tensor = tensor_args.local_tensor;
     const auto& start = tensor_args.start;
     const auto& counts = tensor_args.counts;
+    const auto& global_expert_idx_table = tensor_args.global_expert_idx_table;
     // tensor_return_value is the same handle as global_tensor (see
     // create_output_tensors). We still use its buffer address in runtime args
     // via the framework — here we go directly through global_tensor because
@@ -52,12 +53,14 @@ InsertProgramFactory::cached_program_t InsertProgramFactory::create(
     auto* local_buffer = local_tensor.buffer();
     auto* start_buffer = start.buffer();
     auto* counts_buffer = counts.buffer();
+    auto* global_expert_idx_table_buffer = global_expert_idx_table.buffer();
 
     const tt::DataFormat tile_data_format = tt::tt_metal::datatype_to_dataformat_converter(global_tensor.dtype());
     const uint32_t single_tile_size = tt::tile_size(tile_data_format);
 
     const uint32_t start_page_size = start_buffer->aligned_page_size();
     const uint32_t counts_page_size = counts_buffer->aligned_page_size();
+    const uint32_t global_expert_idx_table_page_size = global_expert_idx_table_buffer->aligned_page_size();
     const tt::DataFormat idx_data_format = tt::tt_metal::datatype_to_dataformat_converter(start.dtype());
 
     // Multi-core implementation: every tensix core in the device's compute
@@ -80,6 +83,8 @@ InsertProgramFactory::cached_program_t InsertProgramFactory::create(
     constexpr uint32_t cb_counts_scratch_reader = tt::CBIndex::c_1;
     constexpr uint32_t cb_start_scratch_writer = tt::CBIndex::c_2;
     constexpr uint32_t cb_counts_scratch_writer = tt::CBIndex::c_3;
+    constexpr uint32_t cb_global_expert_idx_scratch_reader = tt::CBIndex::c_4;
+    constexpr uint32_t cb_global_expert_idx_scratch_writer = tt::CBIndex::c_5;
 
     // Deep tile pipeline — same rationale as in extract: decouple reader from
     // writer jitter. Each tile is ~1 KB for bfp8_b so 32 slots is ~32 KB of L1.
@@ -104,24 +109,42 @@ InsertProgramFactory::cached_program_t InsertProgramFactory::create(
             .set_page_size(cb_counts_scratch_writer, counts_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_counts_writer_config);
 
-    // Reader compile-time args: CB ids, scalars, then TensorAccessorArgs for local/counts.
+    // Per-core scratch for the global_expert_idx_table (one page each for reader / writer).
+    tt::tt_metal::CircularBufferConfig cb_global_expert_idx_reader_config =
+        tt::tt_metal::CircularBufferConfig(
+            global_expert_idx_table_page_size, {{cb_global_expert_idx_scratch_reader, idx_data_format}})
+            .set_page_size(cb_global_expert_idx_scratch_reader, global_expert_idx_table_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_global_expert_idx_reader_config);
+
+    tt::tt_metal::CircularBufferConfig cb_global_expert_idx_writer_config =
+        tt::tt_metal::CircularBufferConfig(
+            global_expert_idx_table_page_size, {{cb_global_expert_idx_scratch_writer, idx_data_format}})
+            .set_page_size(cb_global_expert_idx_scratch_writer, global_expert_idx_table_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_global_expert_idx_writer_config);
+
+    // Reader compile-time args: CB ids, scalars, then TensorAccessorArgs for
+    // local/counts/global_expert_idx_table.
     std::vector<uint32_t> reader_compile_time_args = {
         cb_tile,
         cb_counts_scratch_reader,
-        operation_attributes.global_expert_id,
+        cb_global_expert_idx_scratch_reader,
+        operation_attributes.local_expert_id,
         tiles_per_row,
         local_num_tiles,
         num_cores,
     };
     tt::tt_metal::TensorAccessorArgs(local_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(global_expert_idx_table_buffer).append_to(reader_compile_time_args);
 
-    // Writer compile-time args: CB ids, scalars, then TensorAccessorArgs for global/start/counts.
+    // Writer compile-time args: CB ids, scalars, then TensorAccessorArgs for
+    // global/start/counts/global_expert_idx_table.
     std::vector<uint32_t> writer_compile_time_args = {
         cb_tile,
         cb_start_scratch_writer,
         cb_counts_scratch_writer,
-        operation_attributes.global_expert_id,
+        cb_global_expert_idx_scratch_writer,
+        operation_attributes.local_expert_id,
         tiles_per_row,
         global_num_tiles,
         num_cores,
@@ -129,6 +152,7 @@ InsertProgramFactory::cached_program_t InsertProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(global_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(global_expert_idx_table_buffer).append_to(writer_compile_time_args);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -147,12 +171,19 @@ InsertProgramFactory::cached_program_t InsertProgramFactory::create(
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         const auto& core = cores[core_id];
         tt::tt_metal::SetRuntimeArgs(
-            program, reader_kernel_id, core, {local_buffer->address(), counts_buffer->address(), core_id});
+            program,
+            reader_kernel_id,
+            core,
+            {local_buffer->address(), counts_buffer->address(), global_expert_idx_table_buffer->address(), core_id});
         tt::tt_metal::SetRuntimeArgs(
             program,
             writer_kernel_id,
             core,
-            {global_buffer->address(), start_buffer->address(), counts_buffer->address(), core_id});
+            {global_buffer->address(),
+             start_buffer->address(),
+             counts_buffer->address(),
+             global_expert_idx_table_buffer->address(),
+             core_id});
     }
 
     return cached_program_t{
@@ -174,16 +205,19 @@ void InsertProgramFactory::override_runtime_arguments(
     const uint32_t local_addr = tensor_args.local_tensor.buffer()->address();
     const uint32_t start_addr = tensor_args.start.buffer()->address();
     const uint32_t counts_addr = tensor_args.counts.buffer()->address();
+    const uint32_t global_expert_idx_table_addr = tensor_args.global_expert_idx_table.buffer()->address();
 
     for (const auto& core : cores) {
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
         reader_args[0] = local_addr;
         reader_args[1] = counts_addr;
+        reader_args[2] = global_expert_idx_table_addr;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
         writer_args[0] = global_addr;
         writer_args[1] = start_addr;
         writer_args[2] = counts_addr;
+        writer_args[3] = global_expert_idx_table_addr;
     }
 }
 
