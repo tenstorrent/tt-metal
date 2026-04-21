@@ -102,6 +102,77 @@ uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const
     return (mesh_coordinate[0] * mesh_view.num_cols()) + mesh_coordinate[1];
 }
 
+std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors_in_range(
+    const ttnn::distributed::MeshCoordinateRange& range,
+    const ttnn::distributed::MeshCoordinate& mesh_coordinate,
+    const tt::tt_fabric::Topology topology,
+    const std::optional<uint32_t> axis) {
+    enum Direction : std::size_t { East = 0, West = 1, North = 2, South = 3 };
+
+    TT_FATAL(
+        range.contains(mesh_coordinate),
+        "get_neighbors_in_range: coord {} is not inside range [{}, {}]",
+        mesh_coordinate,
+        range.start_coord(),
+        range.end_coord());
+
+    const auto boundary_mode = detail::get_boundary_mode(topology);
+    const bool wrap_around_connection = detail::has_wrap_around(topology);
+    const auto range_shape = range.shape();
+    const auto& start = range.start_coord();
+
+    // Translate the global coordinate into the range's local frame.
+    tt::stl::SmallVector<uint32_t> local_vals(mesh_coordinate.dims());
+    for (size_t d = 0; d < mesh_coordinate.dims(); ++d) {
+        local_vals[d] = mesh_coordinate[d] - start[d];
+    }
+    ttnn::MeshCoordinate local_coord(local_vals);
+
+    std::vector<ttnn::MeshCoordinate> neighbors;
+    std::array<bool, 4> directions = {false, false, false, false};
+
+    auto process_axis = [&](int32_t axis_val) {
+        auto add_neighbor = [&](Direction dir, int32_t offset) {
+            auto local_neighbor = local_coord.get_neighbor(range_shape, offset, axis_val, boundary_mode);
+            if (!local_neighbor.has_value()) {
+                directions[dir] = false;
+                return;
+            }
+            // Translate back to global coords.
+            tt::stl::SmallVector<uint32_t> global_vals(local_neighbor->dims());
+            for (size_t d = 0; d < local_neighbor->dims(); ++d) {
+                global_vals[d] = (*local_neighbor)[d] + start[d];
+            }
+            neighbors.emplace_back(global_vals);
+            directions[dir] = true;
+        };
+
+        if (axis_val == 1) {
+            add_neighbor(Direction::East, 1);
+            add_neighbor(Direction::West, -1);
+        } else {
+            add_neighbor(Direction::North, -1);
+            add_neighbor(Direction::South, 1);
+        }
+    };
+
+    if (axis.has_value()) {
+        process_axis(axis.value());
+    } else {
+        process_axis(1);
+        process_axis(0);
+    }
+
+    TT_FATAL(
+        !neighbors.empty(), "No neighbors found in subgroup range [{}, {}]", range.start_coord(), range.end_coord());
+    TT_FATAL(!(axis.has_value() && neighbors.size() > 2), "Along a single axis, there can only be 2 neighbors");
+    if (!axis.has_value()) {
+        TT_FATAL(!(wrap_around_connection && neighbors.size() != 4), "Ring/Torus topology must have 4 neighbors");
+    }
+
+    return {neighbors, directions};
+}
+
 // TODO: once #27196 is fixed we can remove the is_mesh_mmio_capable check
 size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<size_t> cluster_axis) {
     auto mesh_range = tt::tt_metal::distributed::MeshCoordinateRange(mesh_device.shape());

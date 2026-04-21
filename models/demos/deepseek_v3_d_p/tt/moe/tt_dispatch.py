@@ -66,6 +66,7 @@ class TtDispatchModule(LightweightModule):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         fp8_output: bool = False,
         subdevice_id=None,
+        num_dispatch_subgroups: int = 1,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -87,6 +88,7 @@ class TtDispatchModule(LightweightModule):
             num_links: Number of fabric links for remote token writes.
             topology: Fabric topology for remote token writes.
             fp8_output: Output dtype for the dispatched buffer.
+            num_dispatch_subgroups: Number of dispatch subgroups partitioning cluster_axis (1 = whole mesh).
         """
         if fp8_output and "blackhole" not in ttnn.get_arch_name():
             raise ValueError("fp8_output requires Blackhole hardware")
@@ -104,6 +106,7 @@ class TtDispatchModule(LightweightModule):
         self.topology = topology
         self.fp8_output = fp8_output
         self.subdevice_id = subdevice_id
+        self.num_dispatch_subgroups = num_dispatch_subgroups
 
     @staticmethod
     def shard_expert_offsets(
@@ -267,6 +270,7 @@ class TtDispatchModule(LightweightModule):
             topology=self.topology,
             use_fp8_dispatch=self.fp8_output,
             subdevice_id=self.subdevice_id,
+            num_dispatch_subgroups=self.num_dispatch_subgroups,
         )
 
         if tt_dispatched_buffer.dtype == ttnn.uint8:
