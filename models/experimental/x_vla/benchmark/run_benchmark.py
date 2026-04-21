@@ -166,14 +166,25 @@ def load_policy_torch_cpu(weights: Path):
 def load_policy_ttnn(weights: Path):
     """Load X-VLA with the TT-NN backend.
 
-    On the very first iteration (no tt-nn impl yet) this falls back to
-    torch CPU and prints a banner so the human can see the harness is
-    waiting on the porting work — but the metric extraction stays valid.
-    """
-    try:
-        from models.experimental.x_vla.tt.policy import load_policy_ttnn as _load  # type: ignore
+    Imports `tt/policy.py` by file path (sibling of this benchmark dir) so
+    the dispatch is immune to the editable-install of `tt-metal` elsewhere
+    on the system overshadowing the `models.experimental.x_vla` namespace.
 
-        return _load(weights)
+    On the very first iteration (no tt/policy.py yet) this falls back to
+    torch CPU and prints a banner so the metric extraction stays valid.
+    """
+    import importlib.util
+
+    policy_file = _HERE.parent / "tt" / "policy.py"
+    if not policy_file.exists():
+        print(f"[bench] no TT-NN backend yet (missing {policy_file}); falling back to torch_cpu.", flush=True)
+        return load_policy_torch_cpu(weights)
+
+    try:
+        spec = importlib.util.spec_from_file_location("xvla_tt_policy", str(policy_file))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.load_policy_ttnn(weights)
     except (ImportError, AttributeError) as e:
         print(f"[bench] no TT-NN backend yet ({e}); falling back to torch_cpu.", flush=True)
         return load_policy_torch_cpu(weights)
