@@ -18,6 +18,7 @@ on:
         options:
           - N150
           - N300
+          - N300-civ1
           - P100a
           - P150b
           - n300-llmbox
@@ -186,6 +187,9 @@ jobs:
               CI_VERSION="civ1"
               ;;
           esac
+          # Normalise runner label for runs-on (strip -civ1 suffix)
+          RUNNER_NORMALIZED="${RUNNER%-civ1}"
+          echo "runner_normalized=$RUNNER_NORMALIZED" >> $GITHUB_OUTPUT
           echo "arch=$ARCH" >> $GITHUB_OUTPUT
           echo "platform=Ubuntu 22.04" >> $GITHUB_OUTPUT
           echo "ci_version=$CI_VERSION" >> $GITHUB_OUTPUT
@@ -242,7 +246,8 @@ jobs:
     timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
+        (inputs.runner-label == 'N300-civ1') && fromJSON('["N300", "in-service", "cloud-virtual-machine"]')
+        || (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     steps:
