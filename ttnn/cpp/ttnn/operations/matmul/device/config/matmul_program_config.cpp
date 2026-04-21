@@ -605,9 +605,6 @@ MatmulProgramConfig get_matmul_program_config(
     using namespace tt;
     TT_FATAL(input_tensor_a.is_sharded(), "Input tensor A must be sharded");
     bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
-    // TODO: allow overwriting of grid size by user_core_coord after allowing
-    // support of arbitrary compute grid and more generic sharded output tensor
-    // creation
     auto grid_size = input_tensor_a.shard_spec().value().grid.bounding_box().grid_size();
 
     const auto& a_shape_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);

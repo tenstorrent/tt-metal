@@ -12,6 +12,12 @@ namespace ttnn::operations::matmul {
 // TODO: Uplift this to support fused activation and bias
 // TODO: Uplift this to support bcast batch for in1; currently, only allows B=1
 // for in1 iff B=1 for in0 (ie. single core)
+// Note on allowed_worker_cores: when input A is sharded, the factories derive
+// the compute core layout from this field's bounding box. It must therefore
+// match the input's shard grid — using a different set of cores will produce
+// incorrect results. Auto-selected configs always set this from the shard spec.
+// For unsharded inputs, nullopt uses the full device compute grid.
+
 struct MatmulMultiCoreReuseProgramConfig {
     std::size_t in0_block_w{};
     std::size_t out_subblock_h{};
