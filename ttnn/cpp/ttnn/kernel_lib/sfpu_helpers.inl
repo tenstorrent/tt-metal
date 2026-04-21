@@ -421,7 +421,7 @@ template <Dst Slot> ALWI void RandTile<Slot>::init() const {}
 template <Dst Slot> ALWI void RandTile<Slot>::call(uint32_t d0) const { rand_tile(d0, from, scale); }
 
 // =============================================================================
-// Op Method Definitions — Binary SFPU (7 ops)
+// Op Method Definitions — Binary SFPU (9 ops)
 // =============================================================================
 
 template <Dst In0, Dst In1, Dst Out>
@@ -458,6 +458,16 @@ template <Dst In0, Dst In1, Dst Out>
 ALWI void SfpuEq<In0, In1, Out>::init() const { eq_binary_tile_init(); }
 template <Dst In0, Dst In1, Dst Out>
 ALWI void SfpuEq<In0, In1, Out>::call(uint32_t a, uint32_t b, uint32_t c) const { eq_binary_tile(a, b, c); }
+
+template <Dst In0, Dst In1, Dst Out>
+ALWI void SfpuMax<In0, In1, Out>::init() const { binary_max_tile_init(); }
+template <Dst In0, Dst In1, Dst Out>
+ALWI void SfpuMax<In0, In1, Out>::call(uint32_t a, uint32_t b, uint32_t c) const { binary_max_tile(a, b, c); }
+
+template <Dst In0, Dst In1, Dst Out>
+ALWI void SfpuMin<In0, In1, Out>::init() const { binary_min_tile_init(); }
+template <Dst In0, Dst In1, Dst Out>
+ALWI void SfpuMin<In0, In1, Out>::call(uint32_t a, uint32_t b, uint32_t c) const { binary_min_tile(a, b, c); }
 
 // =============================================================================
 // Op Method Definitions — Ternary SFPU (4 ops)
