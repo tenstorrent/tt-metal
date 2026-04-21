@@ -21,7 +21,7 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 // CONVENTION: define names as `constexpr const char*` constants, e.g.:
 //   constexpr const char* INPUT_DFB = "input_dfb";
 //   DataflowBufferSpec{.unique_id = INPUT_DFB, ...};
-// This way, cross-reference validity is checked at compile time.
+// Reusing a single constant helps catch typos and errors at compile time.
 using DFBSpecName = std::string;
 
 enum class DFBAccessPattern { STRIDED, BLOCKED, CONTIGUOUS };

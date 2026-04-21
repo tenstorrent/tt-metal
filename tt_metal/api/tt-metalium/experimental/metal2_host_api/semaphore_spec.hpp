@@ -19,7 +19,7 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 // CONVENTION: define names as `constexpr const char*` constants, e.g.:
 //   constexpr const char* DONE_FLAG = "done_flag";
 //   SemaphoreSpec{.unique_id = DONE_FLAG, ...};
-// This way, cross-reference validity is checked at compile time.
+// Reusing a single constant helps catch typos and errors at compile time.
 using SemaphoreSpecName = std::string;
 
 struct SemaphoreSpec {

@@ -59,7 +59,7 @@ struct DataMovementConfiguration {
 // CONVENTION: define names as `constexpr const char*` constants, e.g.:
 //   constexpr const char* READER_KERNEL = "reader";
 //   KernelSpec{.unique_id = READER_KERNEL, ...};
-// This way, cross-reference validity is checked at compile time.
+// Reusing a single constant helps catch typos and errors at compile time.
 using KernelSpecName = std::string;
 
 struct KernelSpec {
@@ -87,7 +87,7 @@ struct KernelSpec {
     // This is currently unsupported, and an open question if we ever want to support it.
     using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node, num_threads}
     using ThreadNodeMap = std::vector<NodeSpecificThreadCount>;
-    std::optional<ThreadNodeMap> thread_node_map = std::nullopt;
+    std::optional<ThreadNodeMap> node_specific_thread_counts = std::nullopt;
 
     // Kernel type (methods)
     bool is_dm_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config_spec); }
