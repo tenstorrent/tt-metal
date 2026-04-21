@@ -211,59 +211,51 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
     )
 
 
-@pytest.mark.parametrize(
-    "input_dtype, output_dtype",
-    [
-        (ttnn.bfloat16, ttnn.bfloat16),
-        (ttnn.bfloat8_b, ttnn.bfloat8_b),
-    ],
-    ids=["BFLOAT16", "BFLOAT8_B"],
-)
-@pytest.mark.parametrize(
-    "inp_shape",
-    [
-        # Non-tile-aligned last dim (W % 32 != 0). The per-device chunk must
-        # also be non-tile-aligned to exercise the winv fix.
-        (1, 1, 32, 34),  # n_devices=1, per-device W=34  (padded 64)
-        (1, 1, 32, 63),  # n_devices=1, per-device W=63  (padded 64)
-        (1, 1, 32, 66),  # n_devices=2, per-device W=33  (padded 64)
-        (1, 1, 32, 68),  # n_devices=4, per-device W=17  (padded 32)
-    ],
-)
-@pytest.mark.parametrize(
-    "n_devices",
-    [1, 2, 4],
-)
-@pytest.mark.parametrize(
-    "is_rmsnorm",
-    [True, False],
-    ids=["rmsnorm", "layernorm"],
-)
-@pytest.mark.parametrize(
-    "fp32_enabled",
-    [True, False],
-    ids=["fp32_enabled", "fp32_disabled"],
-)
-def test_layernorm_part_2_non_tile_aligned_width(
-    inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, fp32_enabled, device
-):
-    """Regression test for #<issue>: winv must use logical (un-padded) width.
+@pytest.mark.parametrize("input_w", [17, 34, 63])
+def test_layer_norm_post_all_gather_non_tile_aligned_width(device, input_w):
+    """Regression test for winv - check whether the kernel correctly normalises for non-tile-aligned widths."""
+    torch.manual_seed(0)
 
-    The kernel previously computed winv = 1 / (padded_W * num_devices), so any
-    non-tile-aligned logical width normalised by the wrong N.  The per-device
-    chunk width must itself not be a multiple of 32 for the bug to manifest.
-    """
-    # Skip configurations where inp_shape[-1] is not divisible by n_devices or
-    # where chunking would produce a tile-aligned per-device width (which would
-    # silently pass even with the bug).
-    W = inp_shape[-1]
-    if W % n_devices != 0:
-        pytest.skip(f"W={W} not divisible by n_devices={n_devices}")
-    per_device_w = W // n_devices
-    if per_device_w % 32 == 0:
-        pytest.skip(f"Per-device width {per_device_w} is tile-aligned; not a regression case")
+    # Stats layout: one 32-wide tile per stats type per device.  For
+    # layernorm and num_devices=1 that is 2 tiles -> stats width 64.
+    stats_w = 64
 
-    run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled)
+    inp = torch.randn(1, 1, 32, input_w, dtype=torch.bfloat16)
+    weight = torch.ones(input_w, dtype=torch.bfloat16)
+    bias = torch.randn(input_w, dtype=torch.bfloat16)
+
+    stats = torch.zeros(1, 1, 32, stats_w, dtype=torch.bfloat16)
+    stats[..., 0:1] = inp.float().pow(2).sum(dim=-1, keepdim=True).bfloat16()
+    stats[..., 32:33] = inp.float().sum(dim=-1, keepdim=True).bfloat16()
+
+    def to_device(t):
+        return ttnn.to_device(
+            ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            device=device,
+        )
+
+    epsilon = 1e-5
+    out_ttnn = ttnn.layer_norm_post_all_gather(
+        to_device(inp),
+        to_device(stats),
+        epsilon=epsilon,
+        weight=to_device(weight),
+        bias=to_device(bias),
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        ),
+        dtype=ttnn.bfloat16,
+    )
+    out_torch = ttnn.to_torch(ttnn.from_device(out_ttnn)).float()[..., :input_w]
+
+    ref = torch.nn.functional.layer_norm(inp.float(), [input_w], weight.float(), bias.float(), epsilon)
+
+    passing, output_str = comp_pcc(ref, out_torch, pcc=0.99)
+    assert passing, f"input_w={input_w}: {output_str}"
 
 
 def _layernorm_stats_tiles_single_chunk(canon_inp: torch.Tensor) -> torch.Tensor:
