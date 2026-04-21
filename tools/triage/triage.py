@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--triage-summary-path=<path>]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -23,6 +23,7 @@ Options:
                                      Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
     --disable-colors                 Disable colored output. [default: False]
     --disable-progress               Disable progress bars. [default: False]
+    --disable-elf-cache              Re-parse ELF files on every access instead of caching. [default: False]
     --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
 
 Description:
@@ -993,6 +994,13 @@ def main():
             utils.INFO(f"Triage summary written to {triage_summary_path}")
         except Exception as e:
             utils.WARN(f"Failed to write triage summary: {e}")
+
+    try:
+        from elfs_cache import run as get_elfs_cache
+
+        get_elfs_cache(args, context).log_stats()
+    except Exception as e:
+        utils.WARN(f"Failed to log elfs_cache stats: {e}")
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)
