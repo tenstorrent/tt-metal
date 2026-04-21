@@ -27,10 +27,10 @@ class BinaryMulTest(OpTestBase):
                 self.activations,
                 self.inputs[0],
             )
-            print("mul")
-        return ttnn.cos(
-            self.activations,
-        )
+        #    print("mul")
+        # return ttnn.cos(
+        #     self.activations,
+        # )
 
 
 @pytest.mark.timeout(0)
