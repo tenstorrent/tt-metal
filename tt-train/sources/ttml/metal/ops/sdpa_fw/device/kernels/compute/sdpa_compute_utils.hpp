@@ -42,7 +42,28 @@ void calculate_recip_first_column() {
 }
 
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_<false>(calculate_recip_first_column, idst, (int)VectorMode::C);
+    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column, idst, (int)VectorMode::C);
+}
+
+// First-column exp with fused scale: exp(scale * x) on column 0 only.
+// Uses _ckernel_sfpu_exp_accurate_ — the same function behind exp_tile<false, true>,
+// so accuracy is identical to the full-tile version. Stride-2 access skips column 1.
+// Combined with VectorMode::C (2 faces instead of 4), this gives 4× fewer SFPU iterations
+// compared to exp_tile<false, true>(idx, VectorMode::RC).
+template <uint16_t scale_bf16>
+void calculate_exponential_first_column() {
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+        sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::vFloat result = ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true, DST_ACCUM_MODE>(val, scale_bf16);
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg += 2;
+    }
+}
+
+template <uint16_t scale_bf16>
+void exp_tile_first_column(uint32_t idst) {
+    _llk_math_eltwise_unary_sfpu_params_(calculate_exponential_first_column<scale_bf16>, idst, (int)VectorMode::C);
 }
 #endif
 
@@ -215,10 +236,11 @@ void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, 
         /* tile_idx */ 0,
         /* dst_reg_idx */ exp_max_diff_dst_idx);
 
-    // Fused scale+exp: exp(scale * (prev_max - cur_max)).
+    // First-column fused scale+exp: exp(scale * (prev_max - cur_max)).
+    // Both max values are column vectors, so the result is a column vector —
+    // only column 0 has data. Process 4× fewer SFPU iterations than full-tile exp.
     constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
-    exp_tile_init</* approx */ false, scaler_fp32>();
-    exp_tile</* approx */ false, /* scale_en */ true>(exp_max_diff_dst_idx, (int)VectorMode::RC, scaler_bf16);
+    MATH((exp_tile_first_column<scaler_bf16>(exp_max_diff_dst_idx)));
     tile_regs_commit();
 
     tile_regs_wait();
