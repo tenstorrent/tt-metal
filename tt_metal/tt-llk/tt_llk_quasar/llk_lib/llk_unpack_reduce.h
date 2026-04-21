@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
+#include "llk_defs.h"
 #include "llk_unpack_common.h"
 #include "tensor_shape.h"
 using namespace ckernel;
@@ -23,28 +24,45 @@ using namespace ckernel;
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @param num_tiles: number of tiles to unpack at a time for SrcA, SrcB will only have first face unpacked
  */
-template <ReduceDim REDUCE_DIMENSION>
+template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION>
 inline void _llk_unpack_reduce_mop_config_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape& tensor_shape, const std::uint32_t num_tiles)
 {
     const std::uint32_t MOP_OUTER_LOOP = num_tiles;
     const std::uint32_t MOP_INNER_LOOP = tensor_shape.total_num_faces();
 
-    std::uint32_t unpack_srcA_face = TT_OP_UNPACR0_FACE_INC(0, 1 /*Src face Idx*/, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
-    std::uint32_t unpack_srcB_face = TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+    std::uint32_t unpack_srcA_face;
+    std::uint32_t unpack_srcB_face;
 
-    ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_srcA_face);
-
-    if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)
+    if (tensor_shape.total_num_faces() == NUM_FACES)
     {
-        // Need to zero out srcA first, because math will do some copying over to SrcA later
-        constexpr static std::uint32_t unpack_zero_srcA =
-            TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC_ZERO);
-        temp.set_loop_instr(unpack_zero_srcA, unpack_srcA_face);
+        unpack_srcA_face = TT_OP_UNPACR0_FACE_INC(0, 1 /*Src face Idx*/, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
+        unpack_srcB_face = TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+    }
+    else
+    {
+        unpack_srcA_face = TT_OP_UNPACR0_TILE_INC(0, 1 /*Src tile Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/);
+        unpack_srcB_face = TT_OP_UNPACR1_TILE_INC(0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
     }
 
-    temp.set_start_op(unpack_srcB_face);
-    temp.program_bank0_sw_cntl(instrn_buffer);
+    const bool needs_srca_clear = (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR) || (tensor_shape.face_r_dim < FACE_R_DIM);
+
+    if (needs_srca_clear)
+    {
+        constexpr std::uint32_t clr_mode = (POOL_TYPE == PoolType::MAX) ? p_unpacr::UNP_CLRSRC_NEGINF : p_unpacr::UNP_CLRSRC_ZERO;
+        const std::uint32_t unpack_zero_srcA =
+            TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, 0 /* UNP_CLR_SRC */);
+
+        ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_zero_srcA, unpack_srcA_face);
+        temp.set_start_op(unpack_srcB_face);
+        temp.program_bank0_sw_cntl(instrn_buffer);
+    }
+    else
+    {
+        ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_srcA_face);
+        temp.set_start_op(unpack_srcB_face);
+        temp.program_bank0_sw_cntl(instrn_buffer);
+    }
 }
 
 /**
@@ -59,13 +77,13 @@ inline void _llk_unpack_reduce_mop_config_(
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @param num_tiles: number of tiles to unpack at a time for SrcA, SrcB will only have first face unpacked
  */
-template <ReduceDim REDUCE_DIMENSION>
+template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION>
 inline void _llk_unpack_reduce_init_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape& tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW));
-    _llk_unpack_reduce_mop_config_<REDUCE_DIMENSION>(buf_desc_id_0, buf_desc_id_1, tensor_shape, num_tiles);
+    _llk_unpack_reduce_mop_config_<POOL_TYPE, REDUCE_DIMENSION>(buf_desc_id_0, buf_desc_id_1, tensor_shape, num_tiles);
 }
 
 /**
@@ -74,7 +92,7 @@ inline void _llk_unpack_reduce_init_(
  * start_l1_tile_idx_0 -> UNPACKER0 -> SRCA
  * start_l1_tile_idx_1 -> UNPACKER1 -> SRCB
  */
-inline void _llk_unpack_reduce_(const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)
+inline void _llk_unpack_reduce_(const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1, const TensorShape& tensor_shape)
 {
     // RT: for the best performance, setting counters should be placed in a REPLAY buffer
     // in the mop_config, but for back compatibility with APIs, the counter functions must
@@ -82,8 +100,18 @@ inline void _llk_unpack_reduce_(const std::uint32_t start_l1_tile_idx_0, const s
 
     // Reset Dest counters for Unpacker0/1 to 0
     // Set Source counter to L1 base + offset
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, start_l1_tile_idx_0);
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, start_l1_tile_idx_1);
+
+    if (tensor_shape.total_num_faces() == NUM_FACES)
+    {
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, start_l1_tile_idx_0);
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, start_l1_tile_idx_1);
+    }
+    else
+    {
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, start_l1_tile_idx_0 * tensor_shape.total_num_faces());
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, start_l1_tile_idx_1 * tensor_shape.total_num_faces());
+    }
+
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);
 
