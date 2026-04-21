@@ -883,7 +883,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         std::vector<uint32_t> worker_phy_x = std::vector<uint32_t>(num_cores_x);
         for (int i = 0; i < num_cores_x; ++i) {
             auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(i, 0));
-            worker_phy_x.push_back(core_phy.x);
+            worker_phy_x.at(i) = core_phy.x;
         }
         // Get optimal placement of worker cores interfacing with DRAM Controllers in physical coordinate space
         auto physical_worker_cores = get_optimal_dram_to_physical_worker_assignment(
