@@ -52,6 +52,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "l1_small_size": 2048,
             },
             1,
             ttnn.Topology.Linear,
@@ -63,6 +64,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "l1_small_size": 2048,
             },
             1,
             ttnn.Topology.Linear,
@@ -74,6 +76,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "l1_small_size": 2048,
             },
             1,
             ttnn.Topology.Linear,
