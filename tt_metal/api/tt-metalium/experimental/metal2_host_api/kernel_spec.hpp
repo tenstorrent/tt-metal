@@ -93,8 +93,8 @@ struct KernelSpec {
     // Optional per-node thread count specification (overrides global num_threads)
     // This is currently unsupported, and an open question if we ever want to support it.
     using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node, num_threads}
-    using ThreadNodeMap = std::vector<NodeSpecificThreadCount>;
-    std::optional<ThreadNodeMap> node_specific_thread_counts = std::nullopt;
+    using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
+    std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
 
     // Kernel type (methods)
     bool is_dm_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config_spec); }
