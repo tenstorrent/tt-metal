@@ -1,7 +1,5 @@
 cmake_minimum_required(VERSION 3.24...4.2)
 
-# BrAIn Was Here 🧠
-
 # Forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
@@ -292,10 +290,10 @@ endif()
 
 include(helper_functions)
 add_subdirectory(tt_stl)
+
 add_subdirectory(tools)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
-
 if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
 endif()

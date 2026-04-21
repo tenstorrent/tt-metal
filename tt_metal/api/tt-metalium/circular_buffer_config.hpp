@@ -87,6 +87,8 @@ public:
 
     uint32_t address_offset() const;
 
+    void set_address_offset(uint32_t offset);
+
     const Buffer* shadow_global_buffer{nullptr};
 
     class Builder {

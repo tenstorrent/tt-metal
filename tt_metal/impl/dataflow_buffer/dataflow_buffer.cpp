@@ -426,11 +426,15 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
             rc.config.base_addr[tc] = base;
             rc.config.limit[tc] =
                 rc.config.base_addr[tc] + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
-            if ((this->config.cap == dfb::AccessPattern::STRIDED ||
-                 (this->config.cap == dfb::AccessPattern::BLOCKED && this->config.num_producers > 1)) &&
-                tc < rc.config.num_tcs_to_rr) {
+            // In strided case each consumer maps to a different producer region, so advance base per consumer.
+            if (this->config.cap == dfb::AccessPattern::STRIDED && tc < rc.config.num_tcs_to_rr) {
                 base += base_step;
             }
+        }
+        // In blocked case all consumers share the producer address regions as they see every producer's data.
+        if (this->config.cap == dfb::AccessPattern::BLOCKED && this->config.num_producers > 1 &&
+            tc < num_consumer_tcs) {
+            base += base_step;
         }
     }
 

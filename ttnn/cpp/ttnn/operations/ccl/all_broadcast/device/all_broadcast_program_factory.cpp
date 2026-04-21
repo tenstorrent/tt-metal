@@ -34,8 +34,12 @@ AllBroadcastProgramFactory::cached_mesh_workload_t AllBroadcastProgramFactory::c
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
-    auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    auto sem_buffer_type = operation_attributes.use_l1_small_for_semaphores ? tt::tt_metal::BufferType::L1_SMALL
+                                                                            : tt::tt_metal::BufferType::L1;
+    auto init_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
+    auto final_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
@@ -106,12 +110,11 @@ AllBroadcastProgramFactory::cached_program_t AllBroadcastProgramFactory::create_
     uint32_t row_size = input_tensor.logical_shape()[-1] * input_tensor.element_size();
     uint32_t page_size = input_tensor.buffer()->aligned_page_size();
 
-    uint32_t num_rows = input_tensor.logical_shape().size() > 2
-                            ? input_tensor.logical_shape()[-2] * input_tensor.logical_shape()[-3]
-                            : input_tensor.logical_shape()[-2];
-    if (input_tensor.logical_shape().size() == 4) {
-        num_rows *= input_tensor.logical_shape()[0];
-    }
+    uint32_t num_rows = std::accumulate(
+        input_tensor.logical_shape().cbegin(),
+        input_tensor.logical_shape().cend() - 1,
+        1u,
+        std::multiplies<uint32_t>());
 
     // L1 Scratch CB Creation
     DataType dtype = input_tensor.dtype();

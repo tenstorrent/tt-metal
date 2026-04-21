@@ -52,53 +52,53 @@ inline std::string get_core_descriptor_file(
     }
     core_desc_dir += "tt_metal/core_descriptors/";
 
-    bool use_small_core_desc_yaml = false; // override to a different core descriptor for small RTL sims
     if (env.get_rtoptions().get_simulator_enabled()) {
         auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
             env.get_rtoptions().get_simulator_path());
         tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc);
-        if (grid_size.y <= 2 || grid_size.x <= 2) {  // these SOC descriptors declare a 2x2 grid
-            use_small_core_desc_yaml = true;
+        if (grid_size.y <= 2 || grid_size.x <= 2) {  // small simulation grids (any dimension <= 2)
+            switch (arch) {
+                default:
+                    throw std::runtime_error(
+                        "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
+                case tt::ARCH::WORMHOLE_B0: return core_desc_dir + "wormhole_b0_versim_1x1_arch.yaml";
+                case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
+                case tt::ARCH::QUASAR:
+                    // Small Quasar sims: x_size=1 -> 1x3, x_size=2 -> 2x3
+                    if (grid_size.x >= 2) {
+                        return core_desc_dir + "quasar_simulation_2x3_arch.yaml";
+                    }
+                    return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
+            };
         }
     }
-    if (use_small_core_desc_yaml) {
-        switch (arch) {
-            default:
-                throw std::runtime_error(
-                    "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
-            case tt::ARCH::WORMHOLE_B0: return core_desc_dir + "wormhole_b0_versim_1x1_arch.yaml";
-            case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
-            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
-        };
-    } else {
-        // Check if fabric tensix is enabled based on fabric tensix config
-        tt_fabric::FabricTensixConfig fabric_tensix_config = env.get_fabric_tensix_config();
-        bool use_fabric_tensix = (fabric_tensix_config != tt_fabric::FabricTensixConfig::DISABLED);
+    // Check if fabric tensix is enabled based on fabric tensix config
+    tt_fabric::FabricTensixConfig fabric_tensix_config = env.get_fabric_tensix_config();
+    bool use_fabric_tensix = (fabric_tensix_config != tt_fabric::FabricTensixConfig::DISABLED);
 
-        auto core_type = get_core_type_from_config(dispatch_core_config);
-        switch (arch) {
-            default:
-                throw std::runtime_error(
-                    "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
-            case tt::ARCH::WORMHOLE_B0:
-                if (core_type == CoreType::ETH) {
-                    return core_desc_dir + "wormhole_b0_80_arch_eth_dispatch.yaml";
-                } else if (use_fabric_tensix) {
-                    return core_desc_dir + "wormhole_b0_80_arch_fabric_mux.yaml";
-                } else {
-                    return core_desc_dir + "wormhole_b0_80_arch.yaml";
-                }
-            case tt::ARCH::BLACKHOLE:
-                if (core_type == CoreType::ETH) {
-                    return core_desc_dir + "blackhole_140_arch_eth_dispatch.yaml";
-                } else if (use_fabric_tensix) {
-                    return core_desc_dir + "blackhole_140_arch_fabric_mux.yaml";
-                } else {
-                    return core_desc_dir + "blackhole_140_arch.yaml";
-                }
-            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_8x4_arch.yaml";
-        };
-    }
+    auto core_type = get_core_type_from_config(dispatch_core_config);
+    switch (arch) {
+        default:
+            throw std::runtime_error(
+                "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
+        case tt::ARCH::WORMHOLE_B0:
+            if (core_type == CoreType::ETH) {
+                return core_desc_dir + "wormhole_b0_80_arch_eth_dispatch.yaml";
+            } else if (use_fabric_tensix) {
+                return core_desc_dir + "wormhole_b0_80_arch_fabric_mux.yaml";
+            } else {
+                return core_desc_dir + "wormhole_b0_80_arch.yaml";
+            }
+        case tt::ARCH::BLACKHOLE:
+            if (core_type == CoreType::ETH) {
+                return core_desc_dir + "blackhole_140_arch_eth_dispatch.yaml";
+            } else if (use_fabric_tensix) {
+                return core_desc_dir + "blackhole_140_arch_fabric_mux.yaml";
+            } else {
+                return core_desc_dir + "blackhole_140_arch.yaml";
+            }
+        case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_8x4_arch.yaml";
+    };
     return "";
 }
 
@@ -237,7 +237,7 @@ const core_descriptor_t& get_core_descriptor_config(
     CoreCoord grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     // For mock devices, control plane doesn't exist, use empty set
     std::unordered_set<CoreCoord> logical_active_eth_cores;
-    if (env.get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+    if (!env.get_cluster().is_mock_or_emulated()) {
         logical_active_eth_cores = env.get_control_plane().get_active_ethernet_cores(device_id);
     }
 

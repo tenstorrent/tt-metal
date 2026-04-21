@@ -17,6 +17,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
+#include "api/compute/experimental/pack_block.h"
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
@@ -154,7 +155,7 @@ struct DRAMStreamingMatmul {
             // Contract: for a given projection (gate/up/down), all expert weight tensors must
             // be packed contiguously in DRAM starting at in1_tensor_addr (base of expert 0).
             // expert_offset_bytes = expert_idx * expert_size_bytes; see Python
-            // MoERoutedExpertWeights.validate_contiguous_dram / load_moe_routed_experts.
+            // MoERoutedExpertWeights.validate_contiguous_dram / routed expert load order in weights/prepare.py.
             uint32_t expert_offset_bytes = 0;
             if constexpr (CTArgs::enable_indexing) {
                 // Wait for index tensor to be ready
@@ -276,6 +277,8 @@ struct DRAMStreamingMatmul {
 
             if constexpr (CTArgs::fuse_silu) {
                 PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+            } else {
+                pack_block_contiguous_init(CTArgs::cb_out);
             }
 
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
@@ -355,9 +358,7 @@ struct DRAMStreamingMatmul {
                     tile_regs_commit();
                     tile_regs_wait();
 
-                    for (uint32_t w = 0; w < CTArgs::subblock_w; w++) {
-                        pack_tile(w, CTArgs::cb_out, w);
-                    }
+                    pack_block_contiguous(0, CTArgs::cb_out, CTArgs::subblock_w);
                     tile_regs_release();
                 }
 

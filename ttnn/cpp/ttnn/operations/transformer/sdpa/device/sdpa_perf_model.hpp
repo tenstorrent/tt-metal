@@ -32,7 +32,7 @@ int compute_sdpa_ideal_cycles(
     uint32_t DH,
     uint32_t DV,
     bool is_causal,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     int num_cores);
 
 }  // namespace ttnn::operations::transformer::sdpa

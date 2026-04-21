@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <iomanip>
 #include <string>
@@ -20,7 +21,10 @@
 #include "fmt/base.h"
 #include "hostdevcommon/dprint_common.h"
 #include "hostdevcommon/kernel_structs.h"
+#include "hostdev/device_print_structures.h"
 #include "tt_backend_api_types.hpp"
+
+#include "llrt/tt_elffile.hpp"
 
 #include "dwarf.h"
 #include "libdwarf.h"
@@ -484,7 +488,89 @@ std::string DPrintParser::flush() { return get_completed_line(); }
 
 std::map<std::string, std::weak_ptr<DevicePrintParser>> DevicePrintParser::parser_cache;
 
-DevicePrintParser::DevicePrintParser(const std::string& elf_path) : elf_path(elf_path) {
+template <uint8_t PointerSize>
+class DevicePrintParserImpl : public DevicePrintParser {
+public:
+    using pointer_t = std::conditional_t<PointerSize == 4, uint32_t, uint64_t>;
+    using DevicePrintStringInfo = std::conditional_t<
+        PointerSize == 4,
+        device_print_detail::structures::DevicePrintStringInfo32,
+        device_print_detail::structures::DevicePrintStringInfo64>;
+
+    explicit DevicePrintParserImpl(const std::string& elf_path);
+
+    std::string_view format_message(
+        uint32_t info_id, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer) override;
+
+    const std::string& get_elf_path() const override { return elf_path; }
+
+private:
+    struct EnumInfo {
+        std::string type_name;
+        std::vector<std::pair<int64_t, std::string>> enumerators;
+    };
+
+    struct FormatPlaceholderInfo {
+        uint32_t arg_id{};
+        char type_id{};
+        std::string_view format_spec;
+        std::string fmt_format;
+        // Enum-specific fields (only used when type_id == '/')
+        std::string_view enum_type_name;
+        char enum_base_type_id{};
+        bool enum_is_flag{};
+        bool enum_use_full_name{};
+        const EnumInfo* enum_info{};
+    };
+
+    struct ParsedStringInfo {
+        std::string format_string;
+        std::string file;
+        uint32_t line{};
+        std::vector<std::string> plain_text_parts;
+        std::vector<FormatPlaceholderInfo> placeholders;
+        std::vector<char> argument_types;
+        std::size_t arguments_size{};
+    };
+
+    ParsedStringInfo* get_string_info(uint32_t info_id);
+
+    std::size_t get_argument_size_from_type_id(char type_id) const;
+
+    void read_arguments_from_payload(
+        std::span<char> argument_types,
+        std::span<const std::byte> payload_bytes,
+        std::vector<ArgumentValue>& arguments) const;
+
+    ArgumentValue read_argument_from_payload(
+        char type_id, std::span<const std::byte> payload_bytes, std::size_t& offset) const;
+
+    static std::pair<std::vector<std::string>, std::vector<FormatPlaceholderInfo>> parse_format_string(
+        std::string_view format_str);
+
+    static std::optional<FormatPlaceholderInfo> parse_placeholder(std::string_view format_str, std::size_t& pos);
+
+    std::string_view format_message(
+        ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer);
+
+    const EnumInfo* get_enum_info(std::string_view type_name);
+    void load_enum_info_from_dwarf();
+
+    std::string elf_path;
+    ll_api::ElfFile elf_file;
+    std::span<std::byte> format_strings_info_bytes;
+    uint64_t format_strings_info_address{};
+    std::span<std::byte> format_strings_bytes;
+    uint64_t format_strings_address{};
+    DevicePrintStringInfo* string_info_ptr{};
+    size_t string_info_size{};
+    std::vector<ParsedStringInfo> parsed_string_info;
+    std::map<std::string, EnumInfo, std::less<>> enum_info_cache_;
+    bool enum_info_loaded_{};
+};
+
+template <uint8_t PointerSize>
+DevicePrintParserImpl<PointerSize>::DevicePrintParserImpl(const std::string& elf_path) : elf_path(elf_path) {
     try {
         elf_file.ReadImage(elf_path);
         format_strings_info_bytes =
@@ -501,10 +587,23 @@ DevicePrintParser::DevicePrintParser(const std::string& elf_path) : elf_path(elf
 
 struct DevicePrintParserDeleter {
     void operator()(DevicePrintParser* parser) const {
-        DevicePrintParser::parser_cache.erase(parser->elf_path);
+        DevicePrintParser::parser_cache.erase(parser->get_elf_path());
         delete parser;
     }
 };
+
+static uint8_t read_elf_pointer_size(const std::string& path) {
+    std::ifstream elf_stream(path, std::ios::binary);
+    uint8_t ei_class = 0;
+    if (elf_stream.seekg(4) && elf_stream.read(reinterpret_cast<char*>(&ei_class), 1)) {
+        switch (ei_class) {
+            case 1: return 4;  // 32-bit ELF
+            case 2: return 8;  // 64-bit ELF
+            default: TT_THROW("Unknown ELF class {} in file {}", ei_class, path);
+        }
+    }
+    TT_THROW("Failed to read ELF class from file {}", path);
+}
 
 std::shared_ptr<DevicePrintParser> DevicePrintParser::get_parser_for_elf(const std::string& elf_path) {
     auto cached_parser_it = parser_cache.find(elf_path);
@@ -513,12 +612,21 @@ std::shared_ptr<DevicePrintParser> DevicePrintParser::get_parser_for_elf(const s
             return cached_parser;
         }
     }
-    std::shared_ptr<DevicePrintParser> new_parser(new DevicePrintParser(elf_path), DevicePrintParserDeleter());
+    uint8_t ptr_size = read_elf_pointer_size(elf_path);
+    std::shared_ptr<DevicePrintParser> new_parser;
+    if (ptr_size == 8) {
+        new_parser =
+            std::shared_ptr<DevicePrintParser>(new DevicePrintParserImpl<8>(elf_path), DevicePrintParserDeleter());
+    } else {
+        new_parser =
+            std::shared_ptr<DevicePrintParser>(new DevicePrintParserImpl<4>(elf_path), DevicePrintParserDeleter());
+    }
     parser_cache[elf_path] = new_parser;
     return new_parser;
 }
 
-std::string_view DevicePrintParser::format_message(
+template <uint8_t PointerSize>
+std::string_view DevicePrintParserImpl<PointerSize>::format_message(
     uint32_t info_id, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer) {
     auto* string_info = get_string_info(info_id);
     if (string_info == nullptr) {
@@ -527,18 +635,22 @@ std::string_view DevicePrintParser::format_message(
     return format_message(*string_info, payload_bytes, buffer);
 }
 
-DevicePrintParser::ParsedStringInfo* DevicePrintParser::get_string_info(uint32_t info_id) {
+template <uint8_t PointerSize>
+typename DevicePrintParserImpl<PointerSize>::ParsedStringInfo* DevicePrintParserImpl<PointerSize>::get_string_info(
+    uint32_t info_id) {
     if (info_id >= string_info_size) {
         return nullptr;
     }
     auto& parsed_info = parsed_string_info[info_id];
     if (parsed_info.format_string.empty()) {
         // This entry has not been parsed yet, so parse it now and cache the result.
-        const DevicePrintStringInfo& info = string_info_ptr[info_id];
-        if (info.format_string_ptr >= format_strings_address &&
-            info.format_string_ptr < format_strings_address + format_strings_bytes.size()) {
-            const char* format_string = reinterpret_cast<const char*>(
-                format_strings_bytes.data() + (info.format_string_ptr - format_strings_address));
+        uint64_t info_format_ptr = string_info_ptr[info_id].format_string_ptr;
+        uint64_t info_file = string_info_ptr[info_id].file;
+        uint64_t info_line = string_info_ptr[info_id].line;
+        if (info_format_ptr >= format_strings_address &&
+            info_format_ptr < format_strings_address + format_strings_bytes.size()) {
+            const char* format_string =
+                reinterpret_cast<const char*>(format_strings_bytes.data() + (info_format_ptr - format_strings_address));
             parsed_info.format_string = format_string;
             std::tie(parsed_info.plain_text_parts, parsed_info.placeholders) = parse_format_string(format_string);
             if (!parsed_info.placeholders.empty()) {
@@ -560,12 +672,12 @@ DevicePrintParser::ParsedStringInfo* DevicePrintParser::get_string_info(uint32_t
                 }
             }
         }
-        if (info.file >= format_strings_address && info.file < format_strings_address + format_strings_bytes.size()) {
+        if (info_file >= format_strings_address && info_file < format_strings_address + format_strings_bytes.size()) {
             const char* file =
-                reinterpret_cast<const char*>(format_strings_bytes.data() + (info.file - format_strings_address));
+                reinterpret_cast<const char*>(format_strings_bytes.data() + (info_file - format_strings_address));
             parsed_info.file = file;
         }
-        parsed_info.line = info.line;
+        parsed_info.line = static_cast<uint32_t>(info_line);
     }
     return &parsed_info;
 }
@@ -582,15 +694,19 @@ T read_value_from_payload(std::span<const std::byte> payload_bytes, std::size_t&
     return value;
 }
 
-std::size_t DevicePrintParser::get_argument_size_from_type_id(char type_id) {
+template <uint8_t PointerSize>
+std::size_t DevicePrintParserImpl<PointerSize>::get_argument_size_from_type_id(char type_id) const {
     static std::byte empty_bytes[32];
     std::size_t offset = 0;
     read_argument_from_payload(type_id, std::span<const std::byte>(empty_bytes), offset);
     return offset;
 }
 
-void DevicePrintParser::read_arguments_from_payload(
-    std::span<char> argument_types, std::span<const std::byte> payload_bytes, std::vector<ArgumentValue>& arguments) {
+template <uint8_t PointerSize>
+void DevicePrintParserImpl<PointerSize>::read_arguments_from_payload(
+    std::span<char> argument_types,
+    std::span<const std::byte> payload_bytes,
+    std::vector<ArgumentValue>& arguments) const {
     std::size_t payload_offset = 0;
 
     arguments.clear();
@@ -600,8 +716,9 @@ void DevicePrintParser::read_arguments_from_payload(
     }
 }
 
-std::pair<std::vector<std::string>, std::vector<DevicePrintParser::FormatPlaceholderInfo>>
-DevicePrintParser::parse_format_string(std::string_view format_str) {
+template <uint8_t PointerSize>
+std::pair<std::vector<std::string>, std::vector<typename DevicePrintParserImpl<PointerSize>::FormatPlaceholderInfo>>
+DevicePrintParserImpl<PointerSize>::parse_format_string(std::string_view format_str) {
     std::vector<std::string> plain_text_parts;
     std::vector<FormatPlaceholderInfo> placeholders;
     fmt::memory_buffer current_text;
@@ -637,8 +754,9 @@ DevicePrintParser::parse_format_string(std::string_view format_str) {
     return {std::move(plain_text_parts), std::move(placeholders)};
 }
 
-std::optional<DevicePrintParser::FormatPlaceholderInfo> DevicePrintParser::parse_placeholder(
-    std::string_view format_str, std::size_t& pos) {
+template <uint8_t PointerSize>
+std::optional<typename DevicePrintParserImpl<PointerSize>::FormatPlaceholderInfo>
+DevicePrintParserImpl<PointerSize>::parse_placeholder(std::string_view format_str, std::size_t& pos) {
     if (pos >= format_str.size() || format_str[pos] != '{') {
         return std::nullopt;
     }
@@ -764,7 +882,8 @@ std::optional<DevicePrintParser::FormatPlaceholderInfo> DevicePrintParser::parse
     return info;
 }
 
-std::string_view DevicePrintParser::format_message(
+template <uint8_t PointerSize>
+std::string_view DevicePrintParserImpl<PointerSize>::format_message(
     ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer) {
     // Iterate over format_str and replace {} with format of payload values.
     buffer.buffer.clear();
@@ -1168,6 +1287,30 @@ std::string_view DevicePrintParser::format_message(
                     arg);
                 break;
             }
+            case 's':  // string pointer — resolve from .device_print_strings if possible, else hex
+            {
+                auto& arg = buffer.argument_values[placeholder.arg_id];
+                uint64_t str_addr = std::get<pointer_t>(arg);
+                if (str_addr >= format_strings_address &&
+                    str_addr < format_strings_address + format_strings_bytes.size()) {
+                    const char* str_ptr = reinterpret_cast<const char*>(
+                        format_strings_bytes.data() + (str_addr - format_strings_address));
+                    fmt::format_to(
+                        std::back_inserter(buffer.buffer),
+                        fmt::runtime(placeholder.fmt_format),
+                        std::string_view(str_ptr));
+                } else {
+                    fmt::format_to(std::back_inserter(buffer.buffer), "0x{:x}", str_addr);
+                }
+                break;
+            }
+            case 'p':  // generic pointer — print as hex address
+            {
+                auto& arg = buffer.argument_values[placeholder.arg_id];
+                uint64_t ptr_val = std::get<pointer_t>(arg);
+                fmt::format_to(std::back_inserter(buffer.buffer), "0x{:x}", ptr_val);
+                break;
+            }
             default: TT_THROW("Unsupported type_id in format placeholder (format_message): {}", placeholder.type_id);
         }
     }
@@ -1176,8 +1319,9 @@ std::string_view DevicePrintParser::format_message(
     return std::string_view(buffer.buffer.data(), buffer.buffer.size());
 }
 
-DevicePrintParser::ArgumentValue DevicePrintParser::read_argument_from_payload(
-    char type_id, std::span<const std::byte> payload_bytes, std::size_t& offset) {
+template <uint8_t PointerSize>
+DevicePrintParser::ArgumentValue DevicePrintParserImpl<PointerSize>::read_argument_from_payload(
+    char type_id, std::span<const std::byte> payload_bytes, std::size_t& offset) const {
     switch (type_id) {
         case 'b':  // int8_t
             return read_value_from_payload<int8_t>(payload_bytes, offset);
@@ -1245,11 +1389,16 @@ DevicePrintParser::ArgumentValue DevicePrintParser::read_argument_from_payload(
             }
             return arr;
         }
+        case 's':  // string pointer (resolved from ELF section if possible, else hex)
+        case 'p':  // generic pointer
+            return read_value_from_payload<pointer_t>(payload_bytes, offset);
         default: TT_THROW("Unsupported type_id in format placeholder (read_argument_from_payload): {}", type_id);
     }
 }
 
-const DevicePrintParser::EnumInfo* DevicePrintParser::get_enum_info(std::string_view type_name) {
+template <uint8_t PointerSize>
+const typename DevicePrintParserImpl<PointerSize>::EnumInfo* DevicePrintParserImpl<PointerSize>::get_enum_info(
+    std::string_view type_name) {
     if (!enum_info_loaded_) {
         load_enum_info_from_dwarf();
         enum_info_loaded_ = true;
@@ -1261,7 +1410,8 @@ const DevicePrintParser::EnumInfo* DevicePrintParser::get_enum_info(std::string_
     return nullptr;
 }
 
-void DevicePrintParser::load_enum_info_from_dwarf() {
+template <uint8_t PointerSize>
+void DevicePrintParserImpl<PointerSize>::load_enum_info_from_dwarf() {
     Dwarf_Debug dbg = nullptr;
     Dwarf_Error err = nullptr;
 

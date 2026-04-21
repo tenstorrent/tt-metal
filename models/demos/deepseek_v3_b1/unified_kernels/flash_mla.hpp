@@ -272,9 +272,8 @@ struct FlashMLADecode {
             }
 
             const uint32_t k_chunk_tiles = args.Sk_chunk_t * args.DHt;
-            const uint32_t k_tile_bytes = get_tile_size(args.cb_k_in);
 
-            const auto k_reader = TensorAccessor(k_tensor_args, args.k_addr, k_tile_bytes);
+            const auto k_reader = TensorAccessor(k_tensor_args, args.k_addr);
 
             const uint32_t num_chunks_per_batch = args.St / args.Sk_chunk_t;
 
@@ -673,7 +672,7 @@ struct FlashMLADecode {
             reconfig_data_format<false, true>(cb_k_in, cb_q_in);
             pack_reconfig_data_format<true>(cb_out_o);
             PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
-            PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, true, scale_fp32, true));
+            PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, scale_fp32, true));
 
             uint32_t cur_pos = args.local_cur_pos;
             auto [k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(
@@ -781,7 +780,7 @@ struct FlashMLADecode {
 
             if (do_reduce && num_cores_to_wait > 0) {
                 reconfig_data_format_srca<false, true>(cb_ms_in);
-                exp_tile_init<exp_approx_mode, false, scale_fp32>();
+                exp_tile_init<exp_approx_mode, scale_fp32>();
                 for (uint32_t i = 0; i < num_cores_to_wait - 1; i++) {
                     sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(
                         cb_ms_in, cb_interm_ms, cb_interm_ms, cb_out_in, cb_interm_out, cb_interm_out);

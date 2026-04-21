@@ -3,14 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "depend.hpp"
+#include "build_cache_telemetry.hpp"
 #include "common/stable_hash.hpp"
+#include "tt_stl/fmt.hpp"
 
+#include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <istream>
 #include <iterator>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <unordered_map>
 #include <tt-logger/tt-logger.hpp>
+
+#include "common/filesystem_utils.hpp"
 
 namespace tt::jit_build {
 
@@ -63,16 +74,115 @@ namespace {
 
 uint64_t hash_file_content(std::istream& file) {
     tt::FNV1a hasher;
-    hasher.update(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    char buf[65536];
+    for (;;) {
+        file.read(buf, sizeof(buf));
+        std::streamsize bytes_read = file.gcount();
+        if (bytes_read <= 0) {
+            break;
+        }
+        hasher.update(buf, buf + bytes_read);
+    }
     return hasher.digest();
 }
+
+struct PathHash {
+    size_t operator()(const std::filesystem::path& p) const {
+        return std::hash<std::filesystem::path::string_type>{}(p.native());
+    }
+};
+
+class FileHashCache {
+public:
+    static FileHashCache& instance() {
+        static FileHashCache cache;
+        return cache;
+    }
+
+    std::pair<uint64_t, bool> get_or_compute(const std::filesystem::path& path) {
+        std::shared_ptr<Entry> entry;
+        {
+            std::lock_guard<std::mutex> lock(map_mutex_);
+            auto [it, inserted] = cache_.try_emplace(path);
+            if (inserted) {
+                it->second = std::make_shared<Entry>();
+            }
+            entry = it->second;
+        }
+
+        auto metadata = get_metadata(path);
+        if (!metadata.has_value()) {
+            return {0, false};
+        }
+
+        std::lock_guard<std::mutex> entry_lock(entry->mutex);
+        if (entry->ready && entry->metadata == metadata) {
+            return {entry->hash, entry->valid};
+        }
+
+        std::ifstream dep_file;
+        std::error_code open_ec;
+        const bool dep_file_opened = tt::filesystem::safe_open(dep_file, path, std::ios::binary, open_ec);
+
+        if (!dep_file_opened) {
+            return {0, false};
+        }
+        uint64_t hash = hash_file_content(dep_file);
+        if (dep_file.fail() && !dep_file.eof()) {
+            return {0, false};
+        }
+
+        entry->hash = hash;
+        entry->valid = true;
+        entry->metadata = metadata;
+        entry->ready = true;
+        return {entry->hash, entry->valid};
+    }
+
+    void clear() {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        cache_.clear();
+    }
+
+private:
+    struct Metadata {
+        std::filesystem::file_time_type mtime;
+        std::uintmax_t size;
+
+        bool operator==(const Metadata& other) const = default;
+    };
+
+    struct Entry {
+        std::mutex mutex;
+        bool ready{false};
+        uint64_t hash{0};
+        bool valid{false};
+        std::optional<Metadata> metadata;
+    };
+
+    static std::optional<Metadata> get_metadata(const std::filesystem::path& path) {
+        std::error_code ec;
+        auto size = tt::filesystem::safe_file_size(path);
+        if (!size.has_value()) {
+            return std::nullopt;
+        }
+        auto mtime = tt::filesystem::safe_last_write_time(path);
+        if (!mtime.has_value()) {
+            return std::nullopt;
+        }
+        return Metadata{mtime.value(), size.value()};
+    }
+
+    std::mutex map_mutex_;
+    std::unordered_map<std::filesystem::path, std::shared_ptr<Entry>, PathHash> cache_;
+};
 
 }  // namespace
 
 void write_dependency_hashes(
     const ParsedDependencies& dependencies,
-    const std::string& out_dir,
-    const std::string& obj,
+    const std::filesystem::path& out_dir,
+    const std::filesystem::path& obj,
     std::ostream& hash_file) {
     auto iter = dependencies.find(obj);
     if (iter == dependencies.end()) {
@@ -88,9 +198,8 @@ void write_dependency_hashes(
         if (dep_path.is_relative()) {
             dep_path = out_dir / dep_path;
         }
-        std::ifstream dep_file(dep_path, std::ios::binary);
-        auto hash = hash_file_content(dep_file);
-        if (dep_file.fail() && !dep_file.eof()) {
+        auto [hash, valid] = FileHashCache::instance().get_or_compute(dep_path);
+        if (!valid) {
             log_warning(tt::LogBuildKernels, "Cannot cache JIT build because {} cannot be read.", dep);
             hash_file.setstate(std::ios::badbit);
             return;
@@ -101,21 +210,27 @@ void write_dependency_hashes(
     }
 }
 
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path) {
+void write_dependency_hashes(
+    const std::filesystem::path& out_dir, const std::filesystem::path& obj, const std::filesystem::path& hash_path) {
     std::filesystem::path obj_path = obj;
     if (obj_path.is_relative()) {
         obj_path = out_dir / obj_path;
     }
     std::filesystem::path dep_path = obj_path;
     dep_path.replace_extension(".d");
-    std::ofstream hash_file(hash_path);
-    if (!hash_file.is_open()) {
+
+    std::ofstream hash_file;
+    std::error_code open_ec;
+    const bool hash_file_opened = tt::filesystem::safe_open(hash_file, hash_path, open_ec);
+    if (!hash_file_opened) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for writing.", hash_path);
         return;
     }
-    std::ifstream dep_file(dep_path);
-    if (!dep_file.is_open()) {
-        log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for reading.", dep_path.string());
+
+    std::ifstream dep_file;
+    const bool dep_file_opened = tt::filesystem::safe_open(dep_file, dep_path, open_ec);
+    if (!dep_file_opened) {
+        log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for reading.", dep_path);
         hash_file.setstate(std::ios::badbit);
     } else {
         auto dependencies = parse_dependency_file(dep_file);
@@ -124,7 +239,7 @@ void write_dependency_hashes(const std::string& out_dir, const std::string& obj,
     hash_file.close();
     if (hash_file.fail()) {
         // Don't leave incomplete hash file
-        std::filesystem::remove(hash_path);
+        tt::filesystem::safe_remove(hash_path);
     }
 }
 
@@ -138,13 +253,16 @@ bool dependencies_up_to_date(std::istream& hash_file) {
             log_warning(tt::LogBuildKernels, "Cannot use JIT build cache because dependency hash file is malformed.");
             return false;
         }
-        std::ifstream dep_file(dep, std::ios::binary);
-        if (!dep_file.is_open()) {
+        auto [dep_hash, valid] = FileHashCache::instance().get_or_compute(dep);
+        if (!valid) {
             // It is a valid case that a dependency file no longer exists, for example a header file is no longer used.
-            log_debug(tt::LogBuildKernels, "Need to JIT build because file {} no longer exists.", dep.string());
+            if (!tt::filesystem::safe_exists(dep).value_or(false)) {
+                log_debug(tt::LogBuildKernels, "Need to JIT build because file {} no longer exists.", dep.string());
+            } else {
+                log_debug(tt::LogBuildKernels, "Need to JIT build because file {} cannot be read.", dep.string());
+            }
             return false;
         }
-        auto dep_hash = hash_file_content(dep_file);
         if (dep_hash != recorded_hash) {
             log_debug(
                 tt::LogBuildKernels,
@@ -164,14 +282,29 @@ bool dependencies_up_to_date(std::istream& hash_file) {
     return count > 0;
 }
 
-bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj) {
-    std::filesystem::path hash_path = std::filesystem::path(out_dir) / (obj + ".dephash");
-    std::ifstream hash_file(hash_path);
-    if (!hash_file.is_open()) {
+bool dependencies_up_to_date(const std::filesystem::path& out_dir, const std::filesystem::path& obj) {
+    auto t0 = std::chrono::steady_clock::now();
+    std::filesystem::path hash_path = out_dir / obj;
+    hash_path += ".dephash";
+
+    std::ifstream hash_file;
+    std::error_code open_ec;
+    const bool hash_file_is_open = tt::filesystem::safe_open(hash_file, hash_path, open_ec);
+
+    if (!hash_file_is_open) {
         log_debug(tt::LogBuildKernels, "Dependency hash file {} does not exist.", hash_path.string());
         return false;
     }
-    return dependencies_up_to_date(hash_file);
+
+    auto up_to_date = dependencies_up_to_date(hash_file);
+
+    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    static auto& tok = tt::tt_metal::BuildCacheTelemetry::inst().register_metric("dependencies_up_to_date");
+    tok.record(elapsed_ms);
+
+    return up_to_date;
 }
+
+void clear_file_hash_cache() { FileHashCache::instance().clear(); }
 
 }  // namespace tt::jit_build

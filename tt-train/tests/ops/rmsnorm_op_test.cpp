@@ -11,10 +11,10 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
-#include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
+#include "test_utils/random_data.hpp"
 
 class RMSNormOpTest : public ::testing::Test {
 protected:
@@ -323,15 +323,11 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
 
     // Generate random input data
     std::array<uint32_t, 4> gamma_shape = {1, 1, 1, shape[3]};
-    xt::xarray<float> x_data = xt::empty<float>(shape);
     auto rng = autograd::ctx().get_generator();
     uint32_t seed1 = rng();
-    core::parallel_generate<float>(x_data, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, seed1);
-
-    xt::xarray<float> gamma_data = xt::empty<float>(gamma_shape);
+    xt::xarray<float> x_data = ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed1);
     uint32_t seed2 = rng();
-    core::parallel_generate<float>(
-        gamma_data, []() { return std::uniform_real_distribution<float>(0.0F, 1.0F); }, seed2);
+    xt::xarray<float> gamma_data = ttml::test_utils::make_uniform_xarray<float>(gamma_shape, 0.0F, 1.0F, seed2);
 
     // Test forward pass - kernel vs composite
     auto x_kernel = autograd::create_tensor(core::from_xtensor(x_data, device), /* requires_grad */ true);

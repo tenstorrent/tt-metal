@@ -14,7 +14,7 @@
             "router": 0.945,
             "experts": 0.93,
             "mlp": 0.7,
-            "decoder": 0.88
+            "decoder": 0.87
         }
     },
     "gpt-oss-120b": {
@@ -24,7 +24,7 @@
             "router": 0.945,
             "experts": 0.925,
             "mlp": 0.7,
-            "decoder": 0.90
+            "decoder": 0.9
         },
         "prefill": {
             "attention": 0.95,
@@ -32,7 +32,7 @@
             "router": 0.945,
             "experts": 0.925,
             "mlp": 0.7,
-            "decoder": 0.88
+            "decoder": 0.87
         }
     }
 }

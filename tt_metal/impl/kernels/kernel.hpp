@@ -5,7 +5,9 @@
 #pragma once
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <cstdint>
 #include <string>
+#include <unordered_map>
 
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
@@ -63,12 +65,36 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const EthernetConfig& config);
 
+struct DramConfig {
+    NOC noc = NOC::NOC_0;
+    std::vector<uint32_t> compile_args;
+    std::map<std::string, std::string> defines;
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
+};
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config);
+
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config);
+
+// Metal 2.0: local DFB accessor names -> logical DFB ids
+using DataflowBufferLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t>;
+
 class Kernel : public JitBuildSettings {
 public:
     using Config = std::variant<
         DataMovementConfig,
         EthernetConfig,
         ComputeConfig,
+        DramConfig,
         experimental::quasar::QuasarDataMovementConfig,
         experimental::quasar::QuasarComputeConfig>;
 
@@ -118,6 +144,8 @@ public:
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
+    void process_dataflow_buffer_local_accessor_handles(
+        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     void validate_runtime_args_size(
@@ -168,7 +196,8 @@ protected:
         const CoreRangeSet& core_range_set,
         const std::vector<uint32_t>& compile_args,
         const std::map<std::string, std::string>& defines,
-        const std::unordered_map<std::string, uint32_t>& named_compile_args);
+        const std::unordered_map<std::string, uint32_t>& named_compile_args,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {});
 
     HalProgrammableCoreType programmable_core_type_;
     HalProcessorClassType processor_class_;
@@ -179,6 +208,7 @@ protected:
     CoreRangeSet core_range_set_;
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
+    const DataflowBufferLocalAccessorHandleMap dataflow_buffer_local_accessor_handles_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
@@ -206,7 +236,11 @@ private:
 
 class DataMovementKernel : public Kernel {
 public:
-    DataMovementKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const DataMovementConfig& config) :
+    DataMovementKernel(
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const DataMovementConfig& config,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -214,7 +248,8 @@ public:
             cr_set,
             config.compile_args,
             config.defines,
-            config.named_compile_args),
+            config.named_compile_args,
+            dataflow_buffer_local_accessor_handles),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
@@ -284,9 +319,51 @@ private:
     std::string config_hash() const override;
 };
 
+class DramKernel : public Kernel {
+public:
+    DramKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const DramConfig& config) :
+        Kernel(
+            HalProgrammableCoreType::DRAM,
+            HalProcessorClassType::DM,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines,
+            config.named_compile_args),
+        config_(config) {}
+
+    ~DramKernel() override = default;
+
+    uint32_t get_kernel_processor_type(int index) const override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
+
+    bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+
+    Config config() const override { return this->config_; }
+
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
+    const DramConfig config_;
+
+    uint8_t expected_num_binaries() const override;
+
+    std::string config_hash() const override;
+};
+
 class ComputeKernel : public Kernel {
 public:
-    ComputeKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const ComputeConfig& config) :
+    ComputeKernel(
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const ComputeConfig& config,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -294,7 +371,8 @@ public:
             cr_set,
             config.compile_args,
             config.defines,
-            config.named_compile_args),
+            config.named_compile_args,
+            dataflow_buffer_local_accessor_handles),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
@@ -356,7 +434,8 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
-        const std::set<DataMovementProcessor>& dm_processors) :
+        const std::set<DataMovementProcessor>& dm_processors,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -364,7 +443,8 @@ public:
             cr_set,
             config.compile_args,
             config.defines,
-            config.named_compile_args),
+            config.named_compile_args,
+            dataflow_buffer_local_accessor_handles),
         config_(config),
         dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
@@ -412,7 +492,8 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarComputeConfig& config,
-        const std::set<QuasarComputeProcessor>& compute_processors) :
+        const std::set<QuasarComputeProcessor>& compute_processors,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -420,7 +501,8 @@ public:
             cr_set,
             config.compile_args,
             config.defines,
-            config.named_compile_args),
+            config.named_compile_args,
+            dataflow_buffer_local_accessor_handles),
         config_(config),
         compute_processors_(compute_processors.begin(), compute_processors.end()) {
         TT_FATAL(

@@ -33,6 +33,8 @@ enum class KernelName {
     ReaderRmScalarOpNg,
     WriterRmNoBcastNg,
     ComputeRowBcastNg,
+    ComputeColBcastNg,
+    ComputeScalarBcastNg,
     ComputeRowColBcastNg,
 };
 
@@ -84,6 +86,7 @@ struct OpConfig {
         HYPOT,
         WHERE,
         EQ,
+        NE,
     };
 
     template <class EnumT>

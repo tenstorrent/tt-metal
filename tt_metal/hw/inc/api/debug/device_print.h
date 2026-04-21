@@ -29,6 +29,21 @@
 // Start of the .device_print_strings_info section, which represents list of DevicePrintStringInfo structures.
 extern char __device_print_strings_info_start[];
 
+// Wrapper for compile-time strings stored in the .device_print_strings ELF section.
+// The host-side parser can resolve the pointer back to the string content via the ELF.
+struct ct_string {
+    const char* ptr;
+};
+
+// Stores a string literal in the .device_print_strings ELF section and returns a ct_string
+// that DEVICE_PRINT can serialize. The host parser resolves the address to read the string.
+#define CTSTR(literal)                                                                                              \
+    ([]() -> ct_string {                                                                                            \
+        static const char allocated_ct_string[] __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = \
+            literal;                                                                                                \
+        return ct_string{allocated_ct_string};                                                                      \
+    }())
+
 struct bf4_t {
     union {
         struct {
@@ -809,6 +824,22 @@ struct device_print_type<const char*> {
     }
 };
 
+// Compile-time strings (CTSTR) — serialized as pointer, same type char 's' as const char*.
+// The host parser distinguishes by checking if the address falls within .device_print_strings.
+template <>
+struct device_print_type<ct_string> {
+    static constexpr device_print_type_info value = {'s', sizeof(const char*)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, ct_string argument) {
+        if constexpr (sizeof(const char*) == 4) {
+            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
+                reinterpret_cast<uint32_t>(argument.ptr);
+        } else if constexpr (sizeof(const char*) == 8) {
+            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
+                reinterpret_cast<uint64_t>(argument.ptr);
+        }
+    }
+};
+
 // Array types (treat as strings)
 template <std::size_t N>
 struct device_print_type<char[N]> {
@@ -1073,7 +1104,6 @@ constexpr auto update_format_string(const char (&format)[N]) {
 
     helpers::static_string<result_len> result;
 
-    constexpr auto type_infos = get_types_info<Args...>();
     constexpr auto arg_reorder = get_arg_reorder<Args...>();
 
     std::size_t type_index = 0;
@@ -1097,7 +1127,14 @@ constexpr auto update_format_string(const char (&format)[N]) {
             result.push_back('{');
 
             // Output the index (updated with reordered index)
-            result.push_back_uint32(arg_reorder[arg_index]);
+            auto reordered_index = arg_reorder[arg_index];
+            for (size_t j = 0; j < arg_reorder.size(); j++) {
+                if (arg_reorder[j] == arg_index) {
+                    reordered_index = j;
+                    break;
+                }
+            }
+            result.push_back_uint32(reordered_index);
 
             // Add comma and type character (enum types emit extended type info)
             result.push_back(',');
@@ -1402,6 +1439,9 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
         // as it will be the same state as at the beginning when buffer is empty. So in order to distinguish real
         // empty state and wrap around state, we will wait for reader to progress from start.
         if (read_position == 0) {
+            // Mark that we are in stall waiting for reader
+            device_print_buffer->aux.wpos = write_position | DEVICE_PRINT_WRITE_STALL_FLAG;
+
             // Reader is at the beginning, we need to wait for it to move before we can safely wrap around.
             WAYPOINT("DPW");
             while (read_position == 0) {
@@ -1416,12 +1456,27 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
 
                 // Read new read position for next check
                 read_position = device_print_buffer->aux.rpos;
+
+                // Check if read position is suggesting buffer clear
+                if (read_position == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+                    // Reader is suggesting buffer clear, we can reset buffer state to empty to avoid waiting for reader
+                    // to move.
+                    device_print_buffer->aux.wpos = 0;
+                    device_print_buffer->aux.rpos = 0;
+                    return 0;
+                }
             }
             WAYPOINT("DPD");
+
+            // Clear stall state, we can continue with normal flow now.
+            device_print_buffer->aux.wpos = write_position;
         }
 
-        // Check if we should wair for reader to consume until end of the buffer before we can wrap around.
+        // Check if we should wait for reader to consume until end of the buffer before we can wrap around.
         if (write_position < read_position) {
+            // Mark that we are in stall waiting for reader
+            device_print_buffer->aux.wpos = write_position | DEVICE_PRINT_WRITE_STALL_FLAG;
+
             WAYPOINT("DPW");
             while (write_position < read_position) {
                 invalidate_l1_cache();
@@ -1435,8 +1490,20 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
 
                 // Read new read position for next check
                 read_position = device_print_buffer->aux.rpos;
+
+                // Check if read position is suggesting buffer clear
+                if (read_position == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+                    // Reader is suggesting buffer clear, we can reset buffer state to empty to avoid waiting for reader
+                    // to move.
+                    device_print_buffer->aux.wpos = 0;
+                    device_print_buffer->aux.rpos = 0;
+                    return 0;
+                }
             }
             WAYPOINT("DPD");
+
+            // Clear stall state, we can continue with normal flow now.
+            device_print_buffer->aux.wpos = write_position;
         }
 
         // There is not enough space for our message until end of buffer.
@@ -1463,6 +1530,8 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
     if (write_position < read_position) {
         // Wrapped around, check if there is enough space between wpos and rpos
         WAYPOINT("DPW");
+        // Mark that we are in stall waiting for reader
+        device_print_buffer->aux.wpos = write_position | DEVICE_PRINT_WRITE_STALL_FLAG;
         while (write_position < read_position && write_position + message_size >= read_position) {
             invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
@@ -1475,8 +1544,20 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
 
             // Read new read position for next check
             read_position = device_print_buffer->aux.rpos;
+
+            // Check if read position is suggesting buffer clear
+            if (read_position == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+                // Reader is suggesting buffer clear, we can reset buffer state to empty to avoid waiting for reader to
+                // move.
+                device_print_buffer->aux.wpos = 0;
+                device_print_buffer->aux.rpos = 0;
+                return 0;
+            }
         }
         WAYPOINT("DPD");
+
+        // Clear stall state, we can continue with normal flow now.
+        device_print_buffer->aux.wpos = write_position;
     }
     return write_position;
 }

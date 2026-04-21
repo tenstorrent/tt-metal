@@ -10,26 +10,12 @@ on:
         type: choice
         options:
           - all
-          - falcon7b
-          - falcon40b
-          - llama3-small
-          - llama3.2-11b
-          - llama3.2-11b-vision
-          - n300 mesh llama3.2-11b-vision
-          - llama3.2-90b-vision
-          # - llama3.1-70b
-          - llama3.2-90b
-          - mistral
-          - mixtral
           - grok
-          - unet shallow
-          - qwen25_vl
-          - qwen3_vl
-          - gemma3-small
           - dits
           - deepseek
-          - gpt-oss
           - tttv2 modules
+          - mistral-small-3.1-24b-vision
+          - qwen3_vl
       platform:
         required: false
         type: choice
