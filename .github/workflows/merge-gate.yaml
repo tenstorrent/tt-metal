@@ -101,9 +101,19 @@ jobs:
       tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
       build-workflows-changed: ${{ steps.find-changes.outputs.build-workflows-changed }}
+      llk-wormhole-changed: ${{ steps.find-changes.outputs.llk-wormhole-changed }}
+      llk-blackhole-changed: ${{ steps.find-changes.outputs.llk-blackhole-changed }}
+      llk-common-changed: ${{ steps.find-changes.outputs.llk-common-changed }}
+      llk-unit-tests-changed: ${{ steps.find-changes.outputs.llk-unit-tests-changed }}
     steps:
+      # Use the in-tree action (same as pr-gate.yaml) so the llk-* outputs above are
+      # available; the previously-pinned @v0.63.0 predates the llk-unit-tests-changed flag.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: .github
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+        uses: ./.github/actions/find-changed-files
 
   build:
     if: ${{ github.ref_name == 'main' ||
@@ -402,6 +412,114 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       timeout: 11
 
+  # LLK Fast Dispatch Unit Tests — split by arch so wormhole-only / blackhole-only
+  # changes do not schedule the other arch. Sharded across runners to keep wall time
+  # within the merge-gate 15-minute budget: 4 shards on N150, 2 shards on p150b.
+  # The LLK unit-test binary is dispatch-agnostic (see LLK* fixtures in
+  # tests/tt_metal/tt_metal/llk/llk_device_fixture.hpp); nightly still runs it under
+  # slow dispatch.
+  llk-fd-unit-tests-wormhole:
+    needs: [ build, find-changes ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'pull_request' &&
+        (github.ref_name == 'main' ||
+         needs.find-changes.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changes.outputs.llk-common-changed == 'true' ||
+         needs.find-changes.outputs.llk-unit-tests-changed == 'true')
+      }}
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: wormhole_b0
+      runner-label: N150
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      test-group-name: llk
+      enable-llk-asserts: true
+      gtest-shard-total: 4
+      gtest-shard-index: ${{ matrix.shard }}
+
+  llk-fd-unit-tests-blackhole:
+    needs: [ build, find-changes ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'pull_request' &&
+        (github.ref_name == 'main' ||
+         needs.find-changes.outputs.llk-blackhole-changed == 'true' ||
+         needs.find-changes.outputs.llk-common-changed == 'true' ||
+         needs.find-changes.outputs.llk-unit-tests-changed == 'true')
+      }}
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: blackhole
+      # Reuse the p150b pool shared by the other LLK jobs to bound contention.
+      runner-label: p150b
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      test-group-name: llk
+      enable-llk-asserts: true
+      gtest-shard-total: 2
+      gtest-shard-index: ${{ matrix.shard }}
+
+  # LLK Slow Dispatch Unit Tests — runs ONLY the LLK tests that the FD jobs above skip:
+  # the LLKMeshDeviceFixtureSlowDispatchOnly.* set (FD-incompatible test bodies) plus all
+  # Quasar-* tests (which arch-skip on N150/p150b today, but are wired in so they'll run
+  # automatically once Quasar runners exist in the merge-gate pool). Together with the FD
+  # jobs above this gives the merge gate full LLK coverage.
+  llk-sd-unit-tests-wormhole:
+    needs: [ build, find-changes ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'pull_request' &&
+        (github.ref_name == 'main' ||
+         needs.find-changes.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changes.outputs.llk-common-changed == 'true' ||
+         needs.find-changes.outputs.llk-unit-tests-changed == 'true')
+      }}
+    secrets: inherit
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    with:
+      arch: wormhole_b0
+      runner-label: N150
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      test-group-name: llk
+      gtest_filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+      enable-llk-asserts: true
+
+  llk-sd-unit-tests-blackhole:
+    needs: [ build, find-changes ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'pull_request' &&
+        (github.ref_name == 'main' ||
+         needs.find-changes.outputs.llk-blackhole-changed == 'true' ||
+         needs.find-changes.outputs.llk-common-changed == 'true' ||
+         needs.find-changes.outputs.llk-unit-tests-changed == 'true')
+      }}
+    secrets: inherit
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    with:
+      arch: blackhole
+      runner-label: p150b
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      test-group-name: llk
+      gtest_filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+      enable-llk-asserts: true
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -415,14 +533,14 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, docker-images, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests]
+    needs: [static-checks, docker-images, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, llk-fd-unit-tests-wormhole, llk-fd-unit-tests-blackhole, llk-sd-unit-tests-wormhole, llk-sd-unit-tests-blackhole]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, code-analysis, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, llk-fd-unit-tests-wormhole, llk-fd-unit-tests-blackhole, llk-sd-unit-tests-wormhole, llk-sd-unit-tests-blackhole"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
