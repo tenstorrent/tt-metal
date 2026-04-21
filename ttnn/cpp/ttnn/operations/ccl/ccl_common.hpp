@@ -788,24 +788,40 @@ void fabric_mux_connection_rt_args(
 // ==================== Fabric Perf Model Helpers ====================
 // Used by CCL op roofline performance models to estimate fabric transfer time.
 
-// Look up measured fabric bandwidth (GB/s) for a given packet size from a
-// bandwidth map indexed by {packet_size -> [WH, BH]}. Returns the bandwidth
-// for the nearest entry. Same interpolation pattern as common_tm_bw_model.
-float lookup_fabric_bw(uint32_t packet_size, const std::map<uint32_t, std::array<float, 2>>& bw_map, int arch_index);
+// Communication pattern for fabric BW lookup.
+// Each value maps to a specific set of microbenchmark test results in
+// tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.
+enum class FabricWriteType : uint8_t {
+    Unicast,             // NeighborExchangeUnicast test data
+    MulticastLinear,     // LinearMulticast + CustomMaxPacketSizeLinear test data
+    MulticastFullRing,   // FullRingMulticast test data
+    MulticastHalfRing,   // HalfRingMulticast test data
+    MulticastMesh,       // MeshMulticast + CustomMaxPacketSizeMesh test data
+};
 
-// Estimate fabric transfer time (nanoseconds) for a data movement across links.
-//   data_bytes:   total bytes that must traverse the bottleneck link
-//   num_links:    number of parallel ethernet links
-//   packet_size:  packet size for bandwidth map lookup
-//   is_multicast: true -> use multicast BW map, false -> use unicast BW map
-//   num_hops:     number of fabric hops (for latency)
-//   arch:         device architecture (WORMHOLE_B0 or BLACKHOLE)
+// NOC write operation type.  Determines which BW column to look up.
+enum class FabricNocWriteType : uint8_t {
+    UnicastWrite = 0,    // NOC_UNICAST_WRITE          (highest BW)
+    ScatterWrite = 1,    // NOC_UNICAST_SCATTER_WRITE
+    FusedAtomicInc = 2,  // NOC_FUSED_UNICAST_ATOMIC_INC (~50 % lower BW)
+};
+
+// Estimate fabric transfer time (nanoseconds).
+//   data_bytes:    total bytes that must traverse the bottleneck link
+//   num_links:     number of parallel ethernet links
+//   packet_size:   packet size for bandwidth map lookup
+//   write_type:    communication pattern (selects BW table)
+//   noc_type:      NOC operation type (selects BW column within table)
+//   num_hops:      number of fabric hops (for latency)
+//
+// Cluster type and fabric topology are queried internally.
+// Logs warnings whenever exact measured data is unavailable and estimation is used.
 float estimate_fabric_transfer_ns(
     int64_t data_bytes,
     uint32_t num_links,
     uint32_t packet_size,
-    bool is_multicast,
-    uint32_t num_hops,
-    tt::ARCH arch);
+    FabricWriteType write_type,
+    FabricNocWriteType noc_type,
+    uint32_t num_hops);
 
 }  // namespace ttnn::ccl

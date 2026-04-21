@@ -400,7 +400,7 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
 
     const uint32_t N = args.ring_size;
     const uint32_t num_links = args.num_links;
-    const uint32_t half_N = (N + 1) / 2;  // ceil(N/2)
+    const uint32_t half_N = tt::div_up(N, 2u);
 
     float fabric_time_ns = 0.0f;
 
@@ -414,22 +414,35 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
         // Bottleneck link carries ceil(N/2) senders * S bytes each.
         const int64_t bottleneck_bytes_a = static_cast<int64_t>(half_N) * input_size_bytes;
         const float time_a = ttnn::ccl::estimate_fabric_transfer_ns(
-            bottleneck_bytes_a, num_links, packet_size, /*is_multicast=*/true, half_N, arch);
+            bottleneck_bytes_a,
+            num_links,
+            packet_size,
+            ttnn::ccl::FabricWriteType::MulticastHalfRing,
+            ttnn::ccl::FabricNocWriteType::UnicastWrite,
+            half_N);
 
         // Option B: split slice, multicast S/2 in each direction around full ring.
         // Bottleneck link carries N-1 senders * S/2 bytes each (source's stream
         // doesn't traverse its own outgoing link).
         const int64_t bottleneck_bytes_b = tt::div_up(static_cast<int64_t>(N - 1) * input_size_bytes, int64_t{2});
         const float time_b = ttnn::ccl::estimate_fabric_transfer_ns(
-            bottleneck_bytes_b, num_links, packet_size, /*is_multicast=*/true, N - 1, arch);
+            bottleneck_bytes_b,
+            num_links,
+            packet_size,
+            ttnn::ccl::FabricWriteType::MulticastFullRing,
+            ttnn::ccl::FabricNocWriteType::UnicastWrite,
+            N - 1);
 
         fabric_time_ns = std::min(time_a, time_b);
     } else {
         // Line/Linear/Mesh topology: edge device has one link and must
         // receive all (N-1) slices through it.
+        const auto write_type = (args.topology == tt::tt_fabric::Topology::Mesh)
+                                    ? ttnn::ccl::FabricWriteType::MulticastMesh
+                                    : ttnn::ccl::FabricWriteType::MulticastLinear;
         const int64_t bottleneck_bytes = static_cast<int64_t>(N - 1) * input_size_bytes;
         fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(
-            bottleneck_bytes, num_links, packet_size, /*is_multicast=*/true, N - 1, arch);
+            bottleneck_bytes, num_links, packet_size, write_type, ttnn::ccl::FabricNocWriteType::UnicastWrite, N - 1);
     }
 
     // Convert fabric time (ns) to device clock cycles.
