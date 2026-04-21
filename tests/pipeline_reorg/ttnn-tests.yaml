@@ -19,7 +19,7 @@
     bh_p150b_civ2:
       timeout: 60
   team: ttnn
-  owner_id: U084B1CES7M # Borys Bradel
+  owner_id: U05ACKAJTHS # Naif Tarafdar
   merge_gate: false
   ttsim: true
 
