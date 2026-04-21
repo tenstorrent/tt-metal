@@ -4,7 +4,7 @@ This directory holds **Aisle D** hostnames (`bh-glx-d…`) for the Blitz-style d
 
 ## What to fill in `runme.sh`
 
-`runme.sh` runs **`example_disaggregated_prefill_decode_cross_context`** with **65** mock ranks: **1** prefill process (sub-context 0, **FABRIC_1D**) and **64** decode stages (sub-context 1, **FABRIC_2D**). Cross-sub-context KV goes **only** from prefill rank **0** to decode rank **0** (see source: **`tests/tt_metal/distributed/example_disaggregated_prefill_decode_cross_context.cpp`**).
+`runme.sh` runs **`example_disaggregated_prefill_decode_cross_context`** with **65** mock ranks: **1** prefill process (sub-context 0, **FABRIC_1D**) and **64** decode stages (sub-context 1, **FABRIC_2D**). Cross-sub-context KV goes **only** from prefill rank **0** to decode rank **0** (see source: **`tt_metal/programming_examples/distributed/5_disaggregated_prefill_decode_cross_context/example_disaggregated_prefill_decode_cross_context.cpp`**).
 
 Config:
 
