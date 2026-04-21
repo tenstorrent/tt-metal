@@ -59,7 +59,6 @@ class Yolov11Conv2D:
         is_dfl=False,
         config_override=None,
         deallocate_activation=False,
-        slice_config=ttnn.Conv2dL1FullSliceConfig,
     ):
         self.is_detect = is_detect
         self.activation = activation
@@ -74,7 +73,6 @@ class Yolov11Conv2D:
         self.groups = conv.groups
         self.reshard = reshard
         self.deallocate_activation = deallocate_activation
-        self.slice_config = slice_config
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -162,7 +160,6 @@ class Yolov11Conv2D:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
-            slice_config=self.slice_config,
         )
         hw = output_height * output_width
         if x.shape[2] != hw:
@@ -257,7 +254,6 @@ class TtnnConv:
         activation="",
         deallocate_activation=False,
         shard_layout=None,
-        slice_config=None,
     ):
         self.enable_act = enable_act
         if self.enable_act:
@@ -271,7 +267,6 @@ class TtnnConv:
             activation=activation,
             deallocate_activation=deallocate_activation,
             shard_layout=shard_layout,
-            slice_config=slice_config,
         )
 
     def __call__(self, device, x):

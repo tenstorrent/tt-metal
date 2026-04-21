@@ -27,17 +27,12 @@ class TtnnYoloV11:
             parameters.conv_args[0],
             parameters.model[0],
             deallocate_activation=True,
-            shard_layout=None,
-            # Keep at least 2 slices for stem conv; num_slices=1 overflows L1 CB allocation at 1280.
-            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=2),
-            # slice_config=ttnn.Conv2dL1FullSliceConfig(),
         )
         self.conv2 = TtnnConv(
             device,
             parameters.conv_args[1],
             parameters.model[1],
             deallocate_activation=True,
-            shard_layout=None,
         )
         self.c3k2_1 = TtnnC3k2(device, parameters.conv_args[2], parameters.model[2], is_bk_enabled=False)
         self.conv3 = TtnnConv(device, parameters.conv_args[3], parameters.model[3], deallocate_activation=True)
@@ -53,7 +48,7 @@ class TtnnYoloV11:
             device, parameters.conv_args[13], parameters.model[13], is_bk_enabled=False, reshard=True
         )
         self.c3k2_6 = TtnnC3k2(
-            device, parameters.conv_args[16], parameters.model[16], is_bk_enabled=False, reshard=True, cv1_slice_count=8
+            device, parameters.conv_args[16], parameters.model[16], is_bk_enabled=False, reshard=True
         )
         self.conv7 = TtnnConv(device, parameters.conv_args[17], parameters.model[17], deallocate_activation=True)
         self.c3k2_7 = TtnnC3k2(
