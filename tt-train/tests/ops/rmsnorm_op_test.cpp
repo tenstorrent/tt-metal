@@ -7,7 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <cassert>
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"

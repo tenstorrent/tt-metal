@@ -7,7 +7,7 @@
 #include <map>
 #include <vector>
 
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 
 namespace tt::llrt {
 

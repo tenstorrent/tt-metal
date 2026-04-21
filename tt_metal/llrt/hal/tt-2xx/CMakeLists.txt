@@ -39,7 +39,7 @@ target_link_libraries(
     PRIVATE
         fmt::fmt-header-only
         hw
-        umd::tt-umd
+        umd::tt-umd-workload
         TT::STL
         tt-logger::tt-logger
 )

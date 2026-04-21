@@ -4,7 +4,7 @@
 
 #include "tt_metal/distributed/pcie_core_writer.hpp"
 
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal::distributed {

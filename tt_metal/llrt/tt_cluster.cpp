@@ -33,9 +33,9 @@
 #include "tt_metal/llrt/tlb_config.hpp"
 #include "tunnels_from_mmio_device.hpp"
 #include "tt-umd/utils/semver.hpp"
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/cluster_descriptor.hpp>
-#include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd-workload/simulation/simulation_chip.hpp>
 #include <tt-umd/pcie/pci_device.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>

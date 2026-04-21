@@ -12,7 +12,7 @@
 #include "tracy/Tracy.hpp"
 #include <tt-umd/pcie/pci_device.hpp>
 #include <tt-umd/soc_descriptor.hpp>
-#include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd-workload/simulation/simulation_chip.hpp>
 
 namespace tt::tt_metal {
 

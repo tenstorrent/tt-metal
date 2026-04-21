@@ -51,7 +51,7 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-umd/types/xy_pair.hpp>
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"

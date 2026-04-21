@@ -24,7 +24,7 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
-#include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd-workload/simulation/simulation_chip.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-umd/types/xy_pair.hpp>

@@ -68,7 +68,7 @@ target_link_libraries(
     PRIVATE
         TT::ScaleoutTools
         Metalium::Metal::LLRT
-        umd::tt-umd
+        umd::tt-umd-workload
         metal_common_libs
         enchantum::enchantum
         fmt::fmt-header-only

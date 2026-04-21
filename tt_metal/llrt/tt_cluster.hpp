@@ -23,7 +23,7 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/driver_atomics.hpp>
 #include <tt-umd/cluster_descriptor.hpp>
 #include <tt-umd/types/core_coordinates.hpp>

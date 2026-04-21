@@ -6,7 +6,7 @@
 
 #include <tt-umd/driver_atomics.hpp>
 #include <tt-umd/cluster_descriptor.hpp>
-#include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd-workload/simulation/simulation_chip.hpp>
 #include "impl/context/metal_context.hpp"
 
 #include <string>
