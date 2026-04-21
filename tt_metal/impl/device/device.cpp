@@ -461,7 +461,9 @@ void Device::configure_fabric(const std::unordered_set<uint32_t>& pre_dead_chann
             if (core_type == CoreType::ETH && !all_dead_channels.empty()) {
                 // Get the ETH channel for this logical core and skip if it is dead.
                 try {
-                    auto eth_chan = soc_desc_for_dead.get_eth_channel_for_core(logical_core, CoordSystem::LOGICAL);
+                    auto eth_chan = soc_desc_for_dead.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
                     if (all_dead_channels.count(eth_chan)) {
                         log_debug(
                             tt::LogMetal,
