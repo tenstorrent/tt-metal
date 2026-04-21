@@ -19,7 +19,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MulConfig,
     OpConfigBase,
     ReduceScatterAsyncMinimalConfig,
-    SavedWeight,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
@@ -99,7 +98,7 @@ class MLP(AbstractModule):
         torch_metaweight_tensor: torch.Tensor,
         mesh_device: ttnn.Device,
         is_w2: bool,
-    ) -> SavedWeight:
+    ) -> ttnn.Tensor:
         """
         Convert a normal (non-quantized) weight tensor to a format suitable for TTNN.
 
