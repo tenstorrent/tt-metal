@@ -357,13 +357,6 @@ class WanCausalConv3d(Module):
             # concat on T
             x_BTHWC = ttnn.concat([cache_x_BTHWC, x_BTHWC], dim=1)
             t_front_padding -= cache_x_BTHWC.shape[1]
-        if t_front_padding > 0:
-            # Padding only works on the lowest 3 dims. reshape input.
-            B, T, H, W, C = x_BTHWC.shape
-            x_BTNC = ttnn.reshape(x_BTHWC, (B, T, H * W, C))
-            x_BTNC = ttnn.pad(x_BTNC, [(0, 0), (t_front_padding, 0), (0, 0), (0, 0)], value=0.0)
-            x_BTHWC = ttnn.reshape(x_BTNC, (B, T + t_front_padding, H, W, C))
-
         # Halo exchange (height and/or width padding)
         # Masking (zero rows at/beyond logical_h) is fused into neighbor_pad via logical_h parameter,
         # eliminating a separate mul-mask op. The local-copy kernel writes MEM_ZEROS_BASE for masked rows
@@ -372,6 +365,16 @@ class WanCausalConv3d(Module):
         # and never sends those rows via H fabric; phase-2 W exchange reads from the already-zeroed output.
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+
+        # T-front causal zero padding: fuse into neighbor_pad when h_pad_needed (avoids a
+        # separate reshape+pad+reshape and an intermediate tensor allocation).
+        # Fall back to standalone ttnn.pad when there is no H halo exchange to piggyback on.
+        fuse_t_front_pad = t_front_padding > 0 and h_pad_needed
+        if t_front_padding > 0 and not fuse_t_front_pad:
+            B, T, H, W, C = x_BTHWC.shape
+            x_BTNC = ttnn.reshape(x_BTHWC, (B, T, H * W, C))
+            x_BTNC = ttnn.pad(x_BTNC, [(0, 0), (t_front_padding, 0), (0, 0), (0, 0)], value=0.0)
+            x_BTHWC = ttnn.reshape(x_BTNC, (B, T + t_front_padding, H, W, C))
 
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
@@ -410,6 +413,7 @@ class WanCausalConv3d(Module):
                 neighbor_sems=neighbor_sems,
                 num_links=links,
                 logical_h=fused_logical_h,
+                t_front_pad=t_front_padding if fuse_t_front_pad else 0,
             )
 
         x_BTHWC = ttnn.experimental.conv3d(

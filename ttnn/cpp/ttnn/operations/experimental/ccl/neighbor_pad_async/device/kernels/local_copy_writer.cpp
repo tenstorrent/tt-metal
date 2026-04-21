@@ -36,17 +36,30 @@ void kernel_main() {
 
     // Masking args: zero interior rows where global_h_index >= logical_h
     // CRTA[26] = logical_h (0 = masking disabled), CRTA[27] = device_h_offset
+    // CRTA[28] = t_front_pad_stick_offset (0 = no T-front pad)
     const uint32_t logical_h = get_common_arg_val<uint32_t>(26);
     const uint32_t device_h_offset = get_common_arg_val<uint32_t>(27);
+    const uint32_t t_front_pad_stick_offset = get_common_arg_val<uint32_t>(28);
     const bool do_masking = (logical_h > 0);
 
     // Per-core runtime args (only work distribution — truly unique per core)
     uint32_t arg_idx = 0;
     const uint32_t total_rows_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t rows_count = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t zero_fill_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t zero_fill_count = get_arg_val<uint32_t>(arg_idx++);
 
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
 
+    // Phase A: zero-fill this core's slice of the T-front output region.
+    // Covers all H positions (interior + H-halo) at T < t_front_pad.
+    for (uint32_t s = 0; s < zero_fill_count; ++s) {
+        uint64_t dst_noc_addr = get_noc_addr(zero_fill_start + s, dst_accessor);
+        noc_async_write((uint32_t)MEM_ZEROS_BASE, dst_noc_addr, stick_size);
+        noc_async_write_barrier();
+    }
+
+    // Phase B: copy input sticks (from CB) to output at T-offset t_front_pad_stick_offset.
     for (uint32_t s = 0; s < rows_count; s++) {
         const uint32_t linear_row = total_rows_start + s;  // [0 .. outer_dim_size*input_halo_dim_size)
         const uint32_t outer_idx = linear_row / input_halo_dim_size;
@@ -54,7 +67,8 @@ void kernel_main() {
         const uint32_t outer_dim_offset = outer_idx * (num_sticks_per_halo_dim * output_halo_dim_size);
         const bool masked = do_masking && (device_h_offset + t >= logical_h);
 
-        uint32_t dst_stick_id = (t + padding_left) * num_sticks_per_halo_dim + stick_start_id + outer_dim_offset;
+        uint32_t dst_stick_id =
+            (t + padding_left) * num_sticks_per_halo_dim + stick_start_id + outer_dim_offset + t_front_pad_stick_offset;
         for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
             cb_wait_front(cb_output_id, 1);
             uint32_t l1_read_addr = get_read_ptr(cb_output_id);
@@ -69,9 +83,8 @@ void kernel_main() {
     noc_async_write_barrier();
 
     // Signal Phase 2 W fabric reader cores that Phase 1 writes are complete.
-    // Guard with rows_count > 0: cores with no work assigned (skipped during work distribution)
-    // must not signal, since barrier_count only counts active cores.
-    if (rows_count > 0) {
+    // Guard covers cores doing only Phase A (zero-fill) work, which are still counted in barrier_count.
+    if (rows_count > 0 || zero_fill_count > 0) {
         for (uint32_t t = 0; t < num_phase2_signal_targets; t++) {
             uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[t], signal_noc_y[t], phase2_barrier_sem);
             noc_semaphore_inc(sem_noc_addr, 1);

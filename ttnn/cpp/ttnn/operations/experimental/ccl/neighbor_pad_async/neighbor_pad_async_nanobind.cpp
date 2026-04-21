@@ -58,7 +58,8 @@ void bind_neighbor_pad_async(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear),
         nb::arg("persistent_output_buffer") = nb::none(),
-        nb::arg("logical_h") = 0);
+        nb::arg("logical_h") = 0,
+        nb::arg("t_front_pad") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

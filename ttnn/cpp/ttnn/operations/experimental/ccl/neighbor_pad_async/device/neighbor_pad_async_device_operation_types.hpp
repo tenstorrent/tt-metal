@@ -37,6 +37,7 @@ struct NeighborPadAsyncParams {
     uint32_t pad2_num_links = 0;
     bool using_persistent_buffers = false;
     uint32_t logical_h = 0;  // 0 = no masking; >0 zeros interior rows at global index >= logical_h
+    uint32_t t_front_pad = 0;  // 0 = no T-front padding; >0 prepends zero T-frames to output (B=1 only)
 
     // Constructor required because GlobalSemaphore is not default constructible
     NeighborPadAsyncParams(
@@ -58,7 +59,8 @@ struct NeighborPadAsyncParams {
         std::optional<uint32_t> pad2_cluster_axis = std::nullopt,
         uint32_t pad2_num_links = 0,
         bool using_persistent_buffers = false,
-        uint32_t logical_h = 0) :
+        uint32_t logical_h = 0,
+        uint32_t t_front_pad = 0) :
         dim(dim),
         padding_left(padding_left),
         padding_right(padding_right),
@@ -77,7 +79,8 @@ struct NeighborPadAsyncParams {
         pad2_cluster_axis(pad2_cluster_axis),
         pad2_num_links(pad2_num_links),
         using_persistent_buffers(using_persistent_buffers),
-        logical_h(logical_h) {}
+        logical_h(logical_h),
+        t_front_pad(t_front_pad) {}
 
     auto attributes() const {
         using ttsl::reflection::Attribute;
@@ -100,6 +103,7 @@ struct NeighborPadAsyncParams {
         attrs.emplace_back("pad2_cluster_axis", pad2_cluster_axis);
         attrs.emplace_back("pad2_num_links", pad2_num_links);
         attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
+        attrs.emplace_back("t_front_pad", t_front_pad);
         return attrs;
     }
 };

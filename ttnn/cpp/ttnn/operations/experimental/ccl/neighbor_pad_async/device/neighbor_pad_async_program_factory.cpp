@@ -236,6 +236,10 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         writer_stick_start_id = operation_attributes.pad2_left;
     }
 
+    const uint32_t t_front_pad = operation_attributes.t_front_pad;
+    // Offset (in sticks) added to all output write addresses so input data lands at T>=t_front_pad
+    const uint32_t t_front_pad_stick_offset = t_front_pad * output_halo_dim_size * output_num_sticks_per_halo_dim;
+
     // Get worker cores
     constexpr uint32_t MAX_PAD2_NUM_LINKS = 4;  // kernel arrays sized for pad2_num_links * 2 = 8 targets
 
@@ -381,8 +385,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         w_fabric_core_range =
             CoreRangeSet(CoreRange({num_h_fabric_cores, 0}, {num_h_fabric_cores + num_w_fabric_cores - 1, 0}));
 
-        // Phase 2 processes all rows of the H-padded output tensor
-        w_outer_dim_size = outer_dim_size * output_halo_dim_size;
+        // Phase 2 processes all rows of the H-padded output tensor, including any T-front zero rows
+        w_outer_dim_size = (outer_dim_size + t_front_pad) * output_halo_dim_size;
 
         // CB and recv buffer on W fabric cores
         CreateCircularBuffer(program, w_fabric_core_range, cb_sender_config);
@@ -503,8 +507,9 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
 
             // Writer runtime args (addresses in CRTAs, not here)
             std::vector<uint32_t> writer_rt_args = {
-                (operation_attributes.dim > 0) ? writer_link_offset_start_id * output_halo_dim_size
-                                               : outer_dim_size - 1,                  // outer_dim_offset_start_id
+                (operation_attributes.dim > 0)
+                    ? writer_link_offset_start_id * output_halo_dim_size + t_front_pad_stick_offset
+                    : outer_dim_size - 1,  // outer_dim_offset_start_id
                 h_writer_stick_start,                                                 // stick_start_id
                 input_halo_dim_size,                                                  // input_halo_dim_size
                 output_halo_dim_size,                                                 // output_halo_dim_size
@@ -650,6 +655,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 (operation_attributes.logical_h > 0) ? (device_index * input_halo_dim_size) : 0u;
             local_writer_crta.push_back(operation_attributes.logical_h);  // CRTA[26]
             local_writer_crta.push_back(mask_device_h_offset);            // CRTA[27]
+            local_writer_crta.push_back(t_front_pad_stick_offset);        // CRTA[28]
             SetCommonRuntimeArgs(program, local_writer_kernel_id, local_writer_crta);
 
             // Distribute work evenly across local-copy cores and set per-core runtime args
@@ -660,21 +666,32 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             const uint32_t base = (num_local_cores == 0) ? 0 : (total_units / num_local_cores);
             const uint32_t rem = (num_local_cores == 0) ? 0 : (total_units % num_local_cores);
 
+            // Phase A: distribute T-front zero-fill sticks across local cores
+            const uint32_t a_base = (num_local_cores > 0) ? (t_front_pad_stick_offset / num_local_cores) : 0;
+            const uint32_t a_rem = (num_local_cores > 0) ? (t_front_pad_stick_offset % num_local_cores) : 0;
+            uint32_t a_offset = 0;
+
             uint32_t unit_offset = 0;
             for (uint32_t i = 0; i < num_local_cores; ++i) {
                 const uint32_t units_for_core = base + (i < rem ? 1u : 0u);
-                if (units_for_core == 0) {
+                const uint32_t a_count = a_base + (i < a_rem ? 1u : 0u);
+                if (units_for_core == 0 && a_count == 0) {
                     continue;
                 }
 
                 const CoreCoord& logical_core = local_cores[i];
                 local_copy_core_coords.push_back(logical_core);
 
-                // Per-core unique args: only work distribution (shape/config/targets all in CRTAs)
+                // Per-core unique args: work distribution for Phase B (copy) and Phase A (zero-fill)
                 SetRuntimeArgs(program, local_reader_kernel_id, {logical_core}, {unit_offset, units_for_core});
-                SetRuntimeArgs(program, local_writer_kernel_id, {logical_core}, {unit_offset, units_for_core});
+                SetRuntimeArgs(
+                    program,
+                    local_writer_kernel_id,
+                    {logical_core},
+                    {unit_offset, units_for_core, a_offset, a_count});
 
                 unit_offset += units_for_core;
+                a_offset += a_count;
             }
         }
     }
