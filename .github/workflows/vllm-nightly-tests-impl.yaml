@@ -628,6 +628,16 @@ jobs:
         run: |
           cat output/vllm_result_structured.json
 
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: ppetrovicTT/tt-github-actions/.github/actions/ai_job_summary@ppetrovic/ai-summary
+        with:
+          config-path: docker-job/.github/ai-summary/vllm-nightly.yaml
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
+
       - name: Set artifact prefix
         if: ${{ !cancelled() }}
         id: set-artifact-prefix
@@ -645,3 +655,20 @@ jobs:
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  ai-run-summary:
+    name: "AI Run Summary"
+    needs: vllm-tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: summary
+        uses: ppetrovicTT/tt-github-actions/.github/actions/ai_run_summary@ppetrovic/ai-summary
+        with:
+          config-path: .github/ai-summary/vllm-nightly.yaml
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+      - name: Show report
+        if: always() && steps.summary.outputs.report-file != ''
+        run: cat "${{ steps.summary.outputs.report-file }}"

@@ -1,0 +1,17 @@
+# AI summary workflow config for tt-metal vLLM nightly.
+# Analysis defaults (categories, patterns, model) come from the bundled
+# analysis.yaml in ppetrovicTT/tt-github-actions (tenstorrent/tt-github-actions after merge).
+#
+# Path note: log_dirs are resolved relative to the composite action's CWD
+# ($GITHUB_WORKSPACE). The nightly checks out the repo at docker-job/ and
+# writes logs to /work/output (= $GITHUB_WORKSPACE/docker-job/output).
+# If CWD turns out to be /work (not $GITHUB_WORKSPACE), drop the docker-job/ prefix.
+
+job_summary:
+  log_dirs:
+    - docker-job/output
+  output_dir: docker-job/output/ai_summaries
+
+run_summary:
+  summary_dir: ai_job_summaries
+  output_dir: ai_run_summaries
