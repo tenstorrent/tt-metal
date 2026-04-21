@@ -28,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     initialize_test_inputs,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 
 # from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
@@ -52,7 +53,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-                "l1_small_size": 2048,
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             1,
             ttnn.Topology.Linear,
@@ -64,7 +65,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-                "l1_small_size": 2048,
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             1,
             ttnn.Topology.Linear,
@@ -76,7 +77,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-                "l1_small_size": 2048,
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             1,
             ttnn.Topology.Linear,

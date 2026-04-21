@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_tp_mesh_composer,
     initialize_test_inputs,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -41,13 +42,13 @@ from tests.ttnn.utils_for_testing import comp_pcc
     [
         pytest.param(
             (4, 1),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
             id="linear-4",
         ),
         pytest.param(
             (4, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="mesh-4x2",
         ),

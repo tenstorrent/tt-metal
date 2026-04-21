@@ -19,6 +19,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     extract_mesh_config,
     get_max_payload_size,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 
 
 def torch_offset_cumsum(histograms: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -55,6 +56,7 @@ def torch_offset_cumsum(histograms: torch.Tensor) -> tuple[torch.Tensor, torch.T
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             1,
             ttnn.Topology.Linear,
@@ -66,6 +68,7 @@ def torch_offset_cumsum(histograms: torch.Tensor) -> tuple[torch.Tensor, torch.T
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             1,
             ttnn.Topology.Linear,
@@ -77,6 +80,7 @@ def torch_offset_cumsum(histograms: torch.Tensor) -> tuple[torch.Tensor, torch.T
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             1,
             ttnn.Topology.Linear,
@@ -88,6 +92,7 @@ def torch_offset_cumsum(histograms: torch.Tensor) -> tuple[torch.Tensor, torch.T
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             1,
             ttnn.Topology.Linear,
