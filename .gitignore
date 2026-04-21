@@ -159,3 +159,8 @@ models/experimental/petr/resources/*.pth
 
 .claude
 .cursor/.DS_store
+
+# X-VLA experiment artifacts
+models/experimental/x_vla/weights/
+models/experimental/x_vla/reference/
+
