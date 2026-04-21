@@ -167,7 +167,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         cross_attn_cache_per_batch_size,
     ) = init_conditional_generation_tt_model(hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper)
 
-    # Create WhisperGenerator instance with persistent trace support
+    # Encoder (Transformer) stack can use capture/replay traces; decoder has separate traces.
     generator = WhisperGenerator(
         config=config,
         mesh_device=mesh_device,
@@ -182,6 +182,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         kv_cache_per_batch_size=kv_cache_per_batch_size,
         cross_attn_cache_per_batch_size=cross_attn_cache_per_batch_size,
         max_batch_size=batch_size_per_device,
+        enable_encoder_trace=True,
     )
 
     def _model_pipeline(
@@ -591,7 +592,7 @@ def run_demo_whisper_for_translation_dataset(
             english_translation = english_map[sample["id"]]
             reference_sentences.append(english_translation)
 
-            logger.info(f"Sample {i + j + 1}: {generation_params.language} text: {source_text}")
+            logger.info(f"Sample {i + j + 1}: {language} text: {source_text}")
             logger.info(f"Sample {i + j + 1}: English reference: {english_translation}")
 
         # Perform model inference with optional streaming
