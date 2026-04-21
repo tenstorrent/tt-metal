@@ -311,7 +311,7 @@ def run_bge_benchmark(
     num_requests: int,
     model_location_generator,
     *,
-    warmup_iters: int = 1,
+    warmup_iters: int = 3,
 ):
     resolved_model_name = _resolve_model_name(model_name, model_location_generator)
     padded_isl = get_padded_sequence_length(isl)

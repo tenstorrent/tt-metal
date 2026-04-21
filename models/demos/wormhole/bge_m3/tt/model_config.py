@@ -224,11 +224,12 @@ class ModelArgs:
 
 
 def get_padded_sequence_length(seq_len: int) -> int:
-    # Attention accepts 128-wide tiles for short sequences, but the long-sequence
-    # output projection path requires 1024 alignment and the QKV path requires
-    # 2048 alignment once those kernels are used.
+    # Attention requires seq_len % 32 (tile height); for seq_len > 128 it must be % 128
+    # (see ``BgeM3Attention.forward``). Padding **≤128** to 32-token steps avoids forcing
+    # e.g. 32→128 (4× wasted device work) while keeping alignment; above 128, keep 128-wide steps.
+    # Long-sequence paths: 1024 / 2048 alignment for large kernels.
     if seq_len <= 1024:
-        pad_multiple = 128
+        pad_multiple = 32 if seq_len <= 128 else 128
     elif seq_len <= 2048:
         pad_multiple = 1024
     else:
