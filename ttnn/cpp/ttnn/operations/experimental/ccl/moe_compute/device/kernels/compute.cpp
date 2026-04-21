@@ -167,6 +167,9 @@ void kernel_main() {
         pack_tile(dst0, cb_c2c_ones_tile);
         tile_regs_release();
         cb_push_back(cb_c2c_ones_tile, 1);
+        // Synchronize: UNPACK must wait for PACK to finish writing before the first
+        // matmul_block read. The tile is never popped so one cb_wait_front suffices.
+        cb_wait_front(cb_c2c_ones_tile, 1);
     }
 
     // Pack is always configured to Float16_b

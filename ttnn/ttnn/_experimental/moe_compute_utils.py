@@ -24,7 +24,6 @@ Constants defined here must stay in sync with
 - ``NUM_W0_W1_TILES_H = 224`` (tiles) -> 7168 elements for the reference hidden size
 - ``NUM_W2_TILES_H = 64`` (tiles) -> 2048 elements
 - ``W0_W1_TILES_PER_TXN = 14``
-- ``W0_W1_TXNS_PER_BLOCK = 2``
 - ``W2_TILES_PER_TXN = 14``
 - ``W2_TXNS_PER_BLOCK = 2``
 - ``W2_BLOCKS_PER_EXPERT = 50``
@@ -478,7 +477,7 @@ def prepare_w0_w1_tensor_with_bias(
     Converts true PyTorch bias format (L, E, N) to kernel tile format (L, E, 32, N) with
     only the first row populated, then concatenates to weights along K dimension.
 
-    The kernel reads W0/W1 in blocks of (W0_W1_TILES_PER_TXN * W0_W1_TXNS_PER_BLOCK) tiles.
+    The kernel reads W0/W1 in blocks of (W0_W1_TILES_PER_TXN * 2) tiles.
     With bias, K goes from K/32 tiles to (K/32 + 1) tiles. If (K/32 + 1) is not divisible by
     TILES_PER_TXN, the kernel reads extra padding tiles. The weight tensor must contain those
     padding tiles (zeros) so the DRAM reads don't overrun the expert boundary.
@@ -503,21 +502,14 @@ def prepare_w0_w1_tensor_with_bias(
     """
     import torch
 
-    # These constants must match moe_ring_common.h — they determine the DRAM read block alignment.
+    # This constant must match moe_ring_common.h — it determines the DRAM read block alignment.
     W0_W1_TILES_PER_TXN = 14
-    W0_W1_TXNS_PER_BLOCK = 2
 
     K_tiles = K // ttnn.TILE_SIZE  # 224
     K_tiles_with_bias = K_tiles + 1  # 225
-    # Pad to transaction boundary: ceil(225 / 14) * 14 * 2 gives the total tiles per elt-tile pair.
-    # The height per column = ceil(K_tiles_with_bias / W0_W1_TILES_PER_TXN) * W0_W1_TILES_PER_TXN
+    # Pad K to a transaction boundary so dm0 reads complete blocks.
+    # K_padded (in tiles) = ceil(K_tiles_with_bias / W0_W1_TILES_PER_TXN) * W0_W1_TILES_PER_TXN
     # = ceil(225/14) * 14 = 17 * 14 = 238.
-    # But each "block" is 2 txns (W0_W1_TXNS_PER_BLOCK). The block-pair count per 2-elt-tile is
-    # 4 * ceil(K_tiles_with_bias / TILES_PER_TXN) / TXNS_PER_BLOCK. Each elt-tile-pair processes
-    # 2 columns (1 W0 + 1 W1), so per-W0 height = (blocks_per_two_elt_tile / 2) * tiles_per_block / 4.
-    # Simpler: the DRAM bytes consumed per expert = blocks_per_expert * 2 * bytes_per_txn.
-    # We need to compute the required K_padded such that L*E*3*K_padded elements fills this.
-    # K_padded (in tiles) = ceil(K_tiles_with_bias / TILES_PER_TXN) * TILES_PER_TXN
     K_tiles_padded = math.ceil(K_tiles_with_bias / W0_W1_TILES_PER_TXN) * W0_W1_TILES_PER_TXN  # 238
     K_padded = K_tiles_padded * ttnn.TILE_SIZE  # 7616
 
