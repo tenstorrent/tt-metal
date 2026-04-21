@@ -72,9 +72,9 @@ inline void reduce_row_perform_transpose()
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
         TTI_MOVA2D(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0);
+        TTI_MOVA2D(p_mov::DEST_NORM, 4, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 4);
         TTI_MOVA2D(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
-        TTI_MOVA2D(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0);
-        TTI_MOVA2D(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
+        TTI_MOVA2D(p_mov::DEST_NORM, 12, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 12);
 
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
         TTI_TRNSPSRCB;
@@ -83,9 +83,9 @@ inline void reduce_row_perform_transpose()
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0);
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, 4, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 4);
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0);
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, 12, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 12);
 
         _llk_math_dbg_feature_enable_(); // dst_32bit_addr_en = 0
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
