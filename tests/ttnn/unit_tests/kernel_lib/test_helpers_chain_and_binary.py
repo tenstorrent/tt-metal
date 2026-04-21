@@ -28,6 +28,7 @@ from models.common.utility_functions import comp_pcc, skip_for_blackhole
 
 KERNEL_ROOT = "ttnn/cpp/ttnn/kernel_lib/tests/chain_and_binary"
 READER_KERNEL = f"{KERNEL_ROOT}/dataflow_kernels/reader_n_input.cpp"
+READER_2_STREAM_1_PERSISTENT = f"{KERNEL_ROOT}/dataflow_kernels/reader_2_stream_1_persistent.cpp"
 WRITER_KERNEL = f"{KERNEL_ROOT}/dataflow_kernels/writer_1_output.cpp"
 
 IN_CB_0 = 0
@@ -168,6 +169,102 @@ def _build_and_run(
     logger.info(f"{Path(compute_kernel_path).name} num_tiles={num_tiles}: {info}")
     assert passing, f"PCC mismatch: {info}"
 
+
+def _build_and_run_2_stream_1_persistent(
+    device,
+    num_tiles,
+    compute_kernel_path,
+    stream_a,
+    stream_b,
+    persistent,
+    expected_output,
+):
+    """
+    Variant where inputs 0/1 stream at num_tiles rate and input 2 is a single
+    persistent tile pushed once by the reader. Matches the lifecycle expected
+    by compute kernels that treat the third input as a persistent operand
+    (e.g. DestReuseMul with a scale CB under WaitNoPop).
+    """
+    shape = list(expected_output.shape)
+    output_tensor = _alloc_output(shape, device)
+
+    core = ttnn.CoreCoord(0, 0)
+    core_range = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+
+    cbs = [
+        _cb_descriptor(IN_CB_0, core_range),
+        _cb_descriptor(IN_CB_1, core_range),
+        _cb_descriptor(IN_CB_2, core_range),
+        _cb_descriptor(OUT_CB, core_range),
+    ]
+
+    reader_ct_args = []
+    for t in (stream_a, stream_b, persistent):
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+
+    reader_rt = ttnn.RuntimeArgs()
+    reader_rt[core.x][core.y] = [
+        stream_a.buffer_address(),
+        stream_b.buffer_address(),
+        persistent.buffer_address(),
+        num_tiles,
+        0,
+    ]
+
+    reader_kernel = ttnn.KernelDescriptor(
+        kernel_source=READER_2_STREAM_1_PERSISTENT,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_range,
+        compile_time_args=reader_ct_args,
+        runtime_args=reader_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    writer_ct_args = [OUT_CB]
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_rt = ttnn.RuntimeArgs()
+    writer_rt[core.x][core.y] = [output_tensor.buffer_address(), num_tiles, 0]
+    writer_kernel = ttnn.KernelDescriptor(
+        kernel_source=WRITER_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_range,
+        compile_time_args=writer_ct_args,
+        runtime_args=writer_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=compute_kernel_path,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_range,
+        compile_time_args=[num_tiles],
+        runtime_args=[],
+        defines=[],
+        config=ttnn.ComputeConfigDescriptor(),
+    )
+
+    program = ttnn.ProgramDescriptor(
+        kernels=[reader_kernel, writer_kernel, compute_kernel],
+        semaphores=[],
+        cbs=cbs,
+    )
+
+    result = ttnn.generic_op([stream_a, stream_b, persistent, output_tensor], program)
+    got = ttnn.to_torch(result)
+
+    passing, info = comp_pcc(expected_output.float(), got.float(), pcc=0.9999)
+    logger.info(f"{Path(compute_kernel_path).name} num_tiles={num_tiles}: {info}")
+    assert passing, f"PCC mismatch: {info}"
+
+    allclose = torch.allclose(got.float(), expected_output.float(), rtol=5e-2, atol=1e-1)
+    if not allclose:
+        diff = (got.float() - expected_output.float()).abs()
+        logger.error(
+            f"{Path(compute_kernel_path).name} num_tiles={num_tiles} allclose FAILED: "
+            f"max_abs_err={diff.max().item():.4g}, mean_abs_err={diff.mean().item():.4g}"
+        )
+    assert allclose, "allclose mismatch beyond bf16 tolerance"
+
     # 2) allclose — per-element numeric check bounded to bf16 tolerance.
     # bf16 has 7-bit mantissa (~0.78% relative precision per op). After 2–3
     # compounded ops on values in [-3, 3] range, products can land near ~10,
@@ -242,16 +339,14 @@ def test_binary_dest_reuse_mul(device, num_tiles):
     b = torch.randn(shape, dtype=torch.bfloat16)
 
     # cb_scale is a persistent single tile reused across all output tiles.
-    # The reader reads page_id=t for every input CB, so the scale tensor must
-    # have at least num_tiles pages — replicate a single scale tile that many
-    # times. DestReuseMul's WaitNoPop policy reads CB[0] each iteration; the
-    # extra pages sit unused in L1 and are discarded at kernel exit.
+    # Use the 2-stream + 1-persistent reader so cb_scale is pushed ONCE
+    # (not per-tile) — otherwise the reader's per-tile reserve_back blocks
+    # once cb_scale's CB fills, since DestReuseMul's WaitNoPop never pops it.
     scale_tile = torch.randn((1, 1, 32, 32), dtype=torch.bfloat16)
-    scale_full = scale_tile.repeat(1, 1, 1, num_tiles)  # [1, 1, 32, 32*num_tiles]
 
     a_tensor, _ = _make_tensor(shape, device, data=a)
     b_tensor, _ = _make_tensor(shape, device, data=b)
-    scale_tensor, _ = _make_tensor(shape, device, data=scale_full)
+    scale_tensor, _ = _make_tensor((1, 1, 32, 32), device, data=scale_tile)
 
     # Output tile n = (a_tile_n - b_tile_n) * scale_tile (element-wise per 32x32).
     expected = torch.zeros_like(a)
@@ -260,11 +355,50 @@ def test_binary_dest_reuse_mul(device, num_tiles):
         b_t = b[..., t * 32 : (t + 1) * 32]
         expected[..., t * 32 : (t + 1) * 32] = (a_t - b_t) * scale_tile
 
-    _build_and_run(
+    _build_and_run_2_stream_1_persistent(
         device,
         num_tiles,
         f"{KERNEL_ROOT}/compute_kernels/compute_binary_dest_reuse.cpp",
-        [a_tensor, b_tensor, scale_tensor],
+        a_tensor,
+        b_tensor,
+        scale_tensor,
+        expected,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic: raw-LLK mirror of test_binary_dest_reuse_mul (experiment D).
+# Uses sub_tiles + binary_dest_reuse_tiles directly — no compute_kernel_lib.
+# If this passes at num_tiles=8+, the helper's orchestration is the bug.
+# If this also hangs, the LLK sequence itself is broken (helper is innocent).
+# ---------------------------------------------------------------------------
+@skip_for_blackhole("Not tested on Blackhole")
+@pytest.mark.parametrize("num_tiles", [1, 8])
+def test_raw_dest_reuse_mul(device, num_tiles):
+    """Raw LLK mirror of test_binary_dest_reuse_mul. Diagnostic only."""
+    shape = [1, 1, 32, 32 * num_tiles]
+    a = torch.randn(shape, dtype=torch.bfloat16)
+    b = torch.randn(shape, dtype=torch.bfloat16)
+
+    scale_tile = torch.randn((1, 1, 32, 32), dtype=torch.bfloat16)
+
+    a_tensor, _ = _make_tensor(shape, device, data=a)
+    b_tensor, _ = _make_tensor(shape, device, data=b)
+    scale_tensor, _ = _make_tensor((1, 1, 32, 32), device, data=scale_tile)
+
+    expected = torch.zeros_like(a)
+    for t in range(num_tiles):
+        a_t = a[..., t * 32 : (t + 1) * 32]
+        b_t = b[..., t * 32 : (t + 1) * 32]
+        expected[..., t * 32 : (t + 1) * 32] = (a_t - b_t) * scale_tile
+
+    _build_and_run_2_stream_1_persistent(
+        device,
+        num_tiles,
+        f"{KERNEL_ROOT}/compute_kernels/compute_raw_dest_reuse.cpp",
+        a_tensor,
+        b_tensor,
+        scale_tensor,
         expected,
     )
 
