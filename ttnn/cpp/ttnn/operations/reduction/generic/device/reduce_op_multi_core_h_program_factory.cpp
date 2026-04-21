@@ -149,6 +149,9 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index, scaler_bits};
         std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
+        // Pass DEST config so reader can compute DEST_AUTO_LIMIT
+        reader_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+        reader_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
         reader_defines.insert(reduce_defines.begin(), reduce_defines.end());
         reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -196,10 +199,15 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
+    // For width-sharding, num_cols_per_core_group_1 == NC * shard_Wt. Expose (shard_Wt, NC)
+    // to the compute kernel so its (nc, wt_chunk, ht, wt_in_chunk) iteration matches the
+    // reader's per-batch tile layout.
+    uint32_t compute_Wt = use_width_sharding ? (num_cols_per_core_group_1 / NC) : num_cols_per_core_group_1;
+    uint32_t compute_NC = use_width_sharding ? NC : 1;
     std::vector<uint32_t> compute_kernel_args_group_1 = {
-        Ht,                         // Ht
-        num_cols_per_core_group_1,  // Wt
-        1,                          // NC
+        Ht,          // Ht
+        compute_Wt,  // Wt
+        compute_NC,  // NC
     };
 
     const std::string compute_kernel =
@@ -218,10 +226,12 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             .defines = reduce_defines});
 
     if (!core_group_2.ranges().empty()) {
+        uint32_t compute_Wt_group_2 = use_width_sharding ? (num_cols_per_core_group_2 / NC) : num_cols_per_core_group_2;
+        uint32_t compute_NC_group_2 = use_width_sharding ? NC : 1;
         std::vector<uint32_t> compute_kernel_args_group_2 = {
-            Ht,                         // Ht
-            num_cols_per_core_group_2,  // Wt
-            1,                          // NC
+            Ht,                  // Ht
+            compute_Wt_group_2,  // Wt
+            compute_NC_group_2,  // NC
         };
 
         tt_metal::CreateKernel(

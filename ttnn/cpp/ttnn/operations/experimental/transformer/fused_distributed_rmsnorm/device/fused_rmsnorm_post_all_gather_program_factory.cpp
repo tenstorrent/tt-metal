@@ -19,39 +19,10 @@
 
 namespace ttnn::experimental::prim {
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-
-inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_FATAL(
-        sizeof float_num == sizeof uint32_data,
-        "Float size ({}) must equal uint32 size ({})",
-        sizeof float_num,
-        sizeof uint32_data);
-
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
-
-    // store lower 16 as 16-bit uint
-    return (uint16_t)uint32_data;
-}
-
-inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
 FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGatherProgramFactory::create(
     const FusedRmsnormPostAllGatherParams& operation_attributes,
     const FusedRmsnormPostAllGatherInputs& tensor_args,
     Tensor& output_tensor) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
     using namespace tt::constants;
     using namespace tt::tt_metal;
 
