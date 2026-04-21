@@ -201,7 +201,8 @@ void kernel_main() {
                 use_padded_mask,
                 is_chunked,
                 scale_fp32,
-                sliding_window_size>(
+                sliding_window_size,
+                use_lightweight_causal_mask>(
                 Skt,
                 qk_in0_block_w,
                 qk_subblock_w,
@@ -238,7 +239,8 @@ void kernel_main() {
                 cb_sum_A,
                 cb_sum_B,
                 cb_exp_max_diff,
-                cb_out);
+                cb_out,
+                lw_mask);
 #else
             for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
                 for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
