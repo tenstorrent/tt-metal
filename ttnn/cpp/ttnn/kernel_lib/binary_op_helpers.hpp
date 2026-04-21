@@ -338,40 +338,73 @@ ALWI void square(uint32_t icb, uint32_t ocb, BinaryInputBlockShape shape, PostOp
 /**
  * @brief PostOp: fused in-place binary op using DEST register as one operand.
  *
- * Uses binary_dest_reuse_tiles: loads DEST[Slot + dst_idx] into one SRC register
- * (SRCA when ReuseType=DEST_TO_SRCA, SRCB when ReuseType=DEST_TO_SRCB), unpacks
- * CB[0] into the other SRC register, executes OpType, writes back to DEST[Slot + dst_idx].
+ * Uses binary_dest_reuse_tiles. Operand routing is controlled by ReuseType:
+ *   DEST_TO_SRCA: DEST[Slot + dst_idx] -> SRCA, CB[cb_tile_idx] -> SRCB, result = op(DEST, CB)
+ *   DEST_TO_SRCB: CB[cb_tile_idx] -> SRCA, DEST[Slot + dst_idx] -> SRCB, result = op(CB, DEST)
+ * Result is written back to DEST[Slot + dst_idx].
+ * ReuseType matters for non-commutative ops (ELWSUB); irrelevant for ELWMUL / ELWADD.
  *
- * CB[0] is always tile index 0 — the caller is responsible for waiting on the CB
- * upfront (e.g. WaitUpfrontNoPop or manual cb_wait_front before binary_op).
+ * CB lifecycle is controlled by Policy (same semantics as Load's LoadPolicy):
+ *   WaitAndPop:  cb_wait_front(CB, cb_tile_idx + 1) + cb_pop_front(CB, 1) each invocation
+ *   WaitNoPop:   cb_wait_front(CB, cb_tile_idx + 1) only (persistent tile, reused)
+ *   NoWaitNoPop: neither (caller owns CB lifecycle externally)
  *
- * Typical use: batch_norm normalisation stage 2 — (x - mean) *= rsqrt(var + eps)
- *   sub(cb_input, cb_mean, cb_out, shape,
- *       DestReuseOp<cb_rsqrt, EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>{});
- *   // or using the alias:
+ * Optional data-format reconfig for the CB side, controlled by Reconfig:
+ *   false: no reconfig (CB format matches binary_op's icb_a/icb_b setup)
+ *   true:  reconfig the SRC that receives CB — srcb when DEST_TO_SRCA, srca when DEST_TO_SRCB
+ *
+ * Typical uses:
+ *   // batch_norm stage 2: (x - mean) *= rsqrt(var + eps).
+ *   // cb_rsqrt waited upfront in the outer scope, reused across iterations.
  *   sub(cb_input, cb_mean, cb_out, shape, DestReuseMul<cb_rsqrt>{});
+ *
+ *   // Non-commutative: compute (cb_mean - x) by swapping operand routing.
+ *   sub(cb_x, cb_dummy, cb_out, shape,
+ *       DestReuseOp<cb_mean, EltwiseBinaryType::ELWSUB,
+ *                   EltwiseBinaryReuseDestType::DEST_TO_SRCB>{});
+ *
+ *   // Stream the scale CB one tile per iteration.
+ *   mul(cb_a, cb_b, cb_out, shape,
+ *       DestReuseOp<cb_scale, EltwiseBinaryType::ELWMUL,
+ *                   EltwiseBinaryReuseDestType::DEST_TO_SRCA,
+ *                   Dst::D0, LoadPolicy::WaitAndPop>{});
+ *
+ *   // Read tile 3 of a pre-waited CB instead of tile 0.
+ *   auto post = DestReuseMul<cb_scale, Dst::D0, LoadPolicy::NoWaitNoPop>{};
+ *   post.cb_tile_idx = 3;
+ *   mul(cb_a, cb_b, cb_out, shape, post);
  *
  * Sets needs_parent_reinit = true — binary_op re-calls binary_init before each
  * tile's exec to restore the unpack pipeline after this PostOp reconfigures it.
  *
- * @tparam CB        Compile-time CB index for the second operand.
+ * @tparam CB        CB index for the second operand.
  * @tparam OpType    Binary op to apply (default: ELWMUL).
  * @tparam ReuseType Which SRC gets DEST (default: DEST_TO_SRCA).
  * @tparam Slot      DEST slot holding the first operand (default: D0).
+ * @tparam Policy    CB wait/pop lifecycle (default: WaitNoPop — safe for persistent tile).
+ * @tparam Reconfig  Reconfig the CB-side SRC data format (default: false).
  */
 template <
     uint32_t CB,
     EltwiseBinaryType OpType = EltwiseBinaryType::ELWMUL,
     EltwiseBinaryReuseDestType ReuseType = EltwiseBinaryReuseDestType::DEST_TO_SRCA,
-    Dst Slot = Dst::D0>
+    Dst Slot = Dst::D0,
+    LoadPolicy Policy = LoadPolicy::WaitNoPop,
+    bool Reconfig = false>
 struct DestReuseOp {
     static constexpr bool needs_parent_reinit = true;
+    static constexpr bool do_wait = load_does_wait(Policy);
+    static constexpr bool do_pop = load_does_pop(Policy);
+
+    uint32_t cb_tile_idx = 0;
+
     ALWI void operator()(uint32_t dst_idx) const;
 };
 
 /** @brief Alias: DestReuseOp specialised to ELWMUL + DEST_TO_SRCA. */
-template <uint32_t CB, Dst Slot = Dst::D0>
-using DestReuseMul = DestReuseOp<CB, EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA, Slot>;
+template <uint32_t CB, Dst Slot = Dst::D0, LoadPolicy Policy = LoadPolicy::WaitNoPop, bool Reconfig = false>
+using DestReuseMul =
+    DestReuseOp<CB, EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA, Slot, Policy, Reconfig>;
 
 }  // namespace compute_kernel_lib
 

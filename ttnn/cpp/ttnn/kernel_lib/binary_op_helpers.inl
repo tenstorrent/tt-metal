@@ -205,13 +205,33 @@ inline constexpr bool post_op_needs_reinit_v =
 // DestReuseOp PostOp Implementation
 // =============================================================================
 
-template <uint32_t CB, EltwiseBinaryType OpType, EltwiseBinaryReuseDestType ReuseType, Dst Slot>
-ALWI void DestReuseOp<CB, OpType, ReuseType, Slot>::operator()(uint32_t dst_idx) const {
+template <
+    uint32_t CB,
+    EltwiseBinaryType OpType,
+    EltwiseBinaryReuseDestType ReuseType,
+    Dst Slot,
+    LoadPolicy Policy,
+    bool Reconfig>
+ALWI void DestReuseOp<CB, OpType, ReuseType, Slot, Policy, Reconfig>::operator()(uint32_t dst_idx) const {
+    if constexpr (do_wait) {
+        // Wait for enough tiles to cover cb_tile_idx (minimum 1 tile for index 0).
+        cb_wait_front(CB, cb_tile_idx + 1);
+    }
+    if constexpr (Reconfig) {
+        // DEST_TO_SRCA: CB feeds SRCB, so reconfig srcb. Inverse for DEST_TO_SRCB.
+        if constexpr (ReuseType == EltwiseBinaryReuseDestType::DEST_TO_SRCA) {
+            reconfig_data_format_srcb(CB);
+        } else {
+            reconfig_data_format_srca(CB);
+        }
+    }
     binary_dest_reuse_tiles_init<OpType, ReuseType>(CB);
-    // CB tile index is always 0: the caller pre-waits the CB upfront (persistent tile).
     // DEST slot is Slot + dst_idx to handle both per-tile (dst_idx=0) and
     // per-chunk (dst_idx=k) policies correctly.
-    binary_dest_reuse_tiles<OpType, ReuseType>(CB, 0, static_cast<uint32_t>(Slot) + dst_idx);
+    binary_dest_reuse_tiles<OpType, ReuseType>(CB, cb_tile_idx, static_cast<uint32_t>(Slot) + dst_idx);
+    if constexpr (do_pop) {
+        cb_pop_front(CB, 1);
+    }
 }
 
 // =============================================================================
