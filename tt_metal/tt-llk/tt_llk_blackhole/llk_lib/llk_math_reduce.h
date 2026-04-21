@@ -29,16 +29,13 @@ inline void reduce_row_perform_transpose()
 {
     if (enforce_fp32_accumulation)
     {
-        // BH Issue #449 W/A: SFPU-staged 2-pass transpose (v3: no Phase 3).
-        // Phase 1: SFPU splits fp32 into hi16/lo16 at scratch rows 128/144 (inline, ADDR_MOD_0).
-        // Phase 2: MOVD2B reads scratch, TRNSPSRCB, MOVB2D writes transposed data DIRECTLY to
-        //   fp32 DEST face rows (hi16 at physical rows 0-7,16-23; lo16 at rows 8-15,24-31).
-        //   SETRWC resets DstRWC=0 so MOVB2D dst offsets target face base. No Phase 3 SFPU.
+        // BH Issue #449 W/A: SFPU-staged 2-pass transpose.
+        // ADDR_MOD_7 (dest.incr=2) and Phase 3 replay body programmed once in init.
+        // Phase 1: inline (ADDR_MOD_0, no DstRWC advance so Phase 3 replay starts at 0).
+        // Phase 3: replay×8 from slot 0 (recorded in init).
         constexpr std::uint32_t HI16_STAGE = 128;
         constexpr std::uint32_t LO16_STAGE = 144;
 
-        // Fp32_enabled=0 before Phase 1: MOVD2B will read raw Dst16b (no ShuffleBF16).
-        // SFPLOAD INT32 uses explicit mode so is unaffected by Fp32_enabled.
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
 
         // Phase 1: SFPU splits fp32 face into hi16/lo16 raw at scratch rows (inline).
@@ -59,30 +56,34 @@ inline void reduce_row_perform_transpose()
         }
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 
-        // Phase 2: MOVD2B(scratch)+TRNSPSRCB+MOVB2D directly to fp32 DEST face rows.
-        // DstRWC reset to 0: MOVB2D dst offsets target physical face rows at base address.
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-        // Transpose hi16: scratch rows 128-143 → fp32 DEST hi16 rows (physical 0-7, 16-23).
+        // Phase 2: plain MOVD2B(DEST_NORM)+TRNSPSRCB+MOVB2D(DEST_NORM) for each half.
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, HI16_STAGE);
         TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, HI16_STAGE);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 16);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 20);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE + 4);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE + 8);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE + 12);
 
-        // Transpose lo16: scratch rows 144-159 → fp32 DEST lo16 rows (physical 8-15, 24-31).
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
         TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 24);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 28);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 4);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 8);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 12);
 
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
-        // DstRWC = 0 (from SETRWC above). No Phase 3 SFPU recombination needed.
+
+        // Phase 3: replay from slot 0 (body recorded once in _llk_math_reduce_init_).
+        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+#pragma GCC unroll 8
+        for (std::uint32_t i = 0; i < 8; i++)
+        {
+            lltt::replay(0, 3);
+        }
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     }
     else
     {
@@ -333,7 +334,24 @@ inline void _llk_math_reduce_init_()
     if constexpr (enforce_fp32_accumulation)
     {
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
-        // No per-call replay setup: Phase 3 eliminated; MOVB2D writes directly to fp32 DEST.
+
+        // ADDR_MOD_7: dest.incr=2 for Phase 3 replay advancing SFPU DstRWC by 2 per iter.
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 2},
+        }
+            .set(ADDR_MOD_7);
+
+        // Record Phase 3 recombine body once; reduce_row_perform_transpose replays it x8.
+        // LO16_STAGE=144, HI16_STAGE=128: load lo16 then hi16 (HI16_ONLY preserves lo16),
+        // store as INT32. ADDR_MOD_7 on STORE advances SFPU DstRWC +2 per replay iter.
+        constexpr std::uint32_t HI16_STAGE = 128;
+        constexpr std::uint32_t LO16_STAGE = 144;
+        lltt::record<lltt::NoExec>(0, 3);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_0, LO16_STAGE);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, HI16_STAGE);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
