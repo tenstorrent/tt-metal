@@ -131,9 +131,12 @@ class TTNNTransformerBlockStack(nn.Module):
         ttnn.deallocate(qkv)
         # split_query_key_value_and_split_heads already returns K pre-transposed
         # to shape [B, H, head_dim, S], so q @ k directly gives attention scores.
+        # Scaling Q before the matmul instead of the scores after is
+        # mathematically identical but saves one full-size elementwise kernel
+        # (S*S tensor -> S*head_dim tensor, reshuffled roles).
+        q = ttnn.multiply(q, head_dim_inv_sqrt)
         scores = ttnn.matmul(q, k)
         ttnn.deallocate(q); ttnn.deallocate(k)
-        scores = ttnn.multiply(scores, head_dim_inv_sqrt)
         probs = ttnn.softmax(scores, dim=-1)
         ttnn.deallocate(scores)
         attn_out = ttnn.matmul(probs, v)
