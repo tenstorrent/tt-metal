@@ -72,11 +72,58 @@ def _install_ttnn_mlp(model, device):
     Mlp._tt_patched = True
 
 
+def _install_ttnn_attention_qkv(model, device):
+    """Route only `self.qkv(x)` through ttnn. proj stays on CPU for precision."""
+    import ttnn
+    import torch.nn.functional as F
+    from vggt.layers.attention import Attention  # type: ignore
+
+    for m in model.modules():
+        if isinstance(m, Attention) and not getattr(m, "_tt_attn_ready", False):
+            w = m.qkv.weight.detach().t().contiguous().to(torch.bfloat16)
+            b = m.qkv.bias.detach().reshape(1, 1, -1).to(torch.bfloat16) if m.qkv.bias is not None else None
+            m._tt_qkv_w = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            m._tt_qkv_b = (
+                ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                if b is not None else None
+            )
+            m._tt_device = device
+            m._tt_attn_ready = True
+
+    if getattr(Attention, "_tt_patched", False):
+        return
+
+    def ttnn_attn_forward(self, x: torch.Tensor, pos=None) -> torch.Tensor:
+        if not getattr(self, "_tt_attn_ready", False):
+            return self._orig_forward(x, pos=pos)
+        B, N, C = x.shape
+        x_bf16 = x.to(torch.bfloat16) if x.dtype != torch.bfloat16 else x
+        tt_in = ttnn.from_torch(
+            x_bf16, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self._tt_device
+        )
+        tt_qkv = ttnn.linear(tt_in, self._tt_qkv_w, bias=self._tt_qkv_b)
+        qkv = ttnn.to_torch(tt_qkv).to(x.dtype)
+        qkv = qkv.reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+        q, k = self.q_norm(q), self.k_norm(k)
+        if self.rope is not None:
+            q = self.rope(q, pos)
+            k = self.rope(k, pos)
+        x = F.scaled_dot_product_attention(q, k, v, dropout_p=0.0)
+        x = x.transpose(1, 2).reshape(B, N, C)
+        return self.proj(x)
+
+    Attention._orig_forward = Attention.forward
+    Attention.forward = ttnn_attn_forward
+    Attention._tt_patched = True
+
+
 def _ensure_installed(device):
     if _INSTALL_DONE.get(id(device)):
         return
     model = _get_model()
     _install_ttnn_mlp(model, device)
+    _install_ttnn_attention_qkv(model, device)
     _INSTALL_DONE[id(device)] = True
 
 
