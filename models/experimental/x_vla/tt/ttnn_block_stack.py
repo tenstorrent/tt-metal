@@ -70,12 +70,18 @@ class TTNNTransformerBlockStack(nn.Module):
             return _to_tile_tensor(ttnn, t, dev)
 
         def bfp8(t):
-            # Per-block 8-bit exponent-sharing float — half the bytes of bf16.
-            # Fine for over-parameterized transformer MLP weights (GPT-3-class
-            # accuracy studies show <0.5% drop).
             return ttnn.from_torch(
                 t.to(torch.bfloat16).contiguous(),
                 dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev,
+            )
+
+        def bfp4(t):
+            # 4-bit block-float: 8x the byte reduction vs bf16. Risks PCC
+            # hit on attention scores or tight manifolds; only safe on the
+            # over-parameterized MLP matrices.
+            return ttnn.from_torch(
+                t.to(torch.bfloat16).contiguous(),
+                dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev,
             )
 
         # LayerNorm 1
@@ -93,9 +99,9 @@ class TTNNTransformerBlockStack(nn.Module):
         # their DRAM footprint (for 24 layers: 24 * 2 * 1024*4096 * 2B =
         # 384MB -> 192MB), and matmul FLOPs are typically memory-bound on
         # this shape/batch so it should translate to throughput.
-        fc1_w = bfp8(blk.mlp.fc1.weight.detach().t().contiguous())
+        fc1_w = bfp4(blk.mlp.fc1.weight.detach().t().contiguous())
         fc1_b = bf16(blk.mlp.fc1.bias.detach())
-        fc2_w = bfp8(blk.mlp.fc2.weight.detach().t().contiguous())
+        fc2_w = bfp4(blk.mlp.fc2.weight.detach().t().contiguous())
         fc2_b = bf16(blk.mlp.fc2.bias.detach())
 
         return dict(
