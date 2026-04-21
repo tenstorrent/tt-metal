@@ -18,11 +18,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            binary.hpp
-            binary_composite.hpp
-            common/binary_op_types.hpp
-            common/binary_op_utils.hpp
+        FILES binary.hpp binary_composite.hpp common/binary_op_types.hpp common/binary_op_utils.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
