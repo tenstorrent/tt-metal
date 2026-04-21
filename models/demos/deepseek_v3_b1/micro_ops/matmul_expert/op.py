@@ -849,8 +849,19 @@ def _assemble_dram_results(
     fmt_sem_1,
     partial_sem_addr,
     pipeline_sem_addr,
+    partial_sem,
+    pipeline_sem,
 ):
-    """Phase 3: assemble per-device result tuples."""
+    """Phase 3: assemble per-device result tuples.
+
+    Note: we pack partial_sem and pipeline_sem OBJECTS (not just their addrs) into
+    every per-device tuple so they stay alive as long as the op's metadata does.
+    If we only carried the integer addrs, the sem objects would be GC'd at the
+    end of create_dram_expert_tensors_multi_device, their L1 would be freed, and
+    subsequent per-core allocations (e.g. SRAM fmt tensors on overlap cores) would
+    get placed at the same L1 offsets — silently clobbering the addresses that
+    kernel CT args still point at.
+    """
     result = {}
     for row in range(mesh_shape[0]):
         for col in range(mesh_shape[1]):
@@ -870,6 +881,8 @@ def _assemble_dram_results(
                 fmt_sem_1,
                 partial_sem_addr,
                 pipeline_sem_addr,
+                partial_sem,
+                pipeline_sem,
             )
     logger.info("  All device metadata created")
     return result
@@ -1049,6 +1062,8 @@ def create_dram_expert_tensors_multi_device(
         fmt_sem_1,
         partial_sem_addr,
         pipeline_sem_addr,
+        partial_sem,
+        pipeline_sem,
     )
 
 
@@ -1205,7 +1220,9 @@ class ExpertKernel:
                         for i in range(len(sram_cores_list))
                     ]
 
-                # DRAM for this device.
+                # DRAM for this device. _partial_sem / _pipeline_sem are carried
+                # only to keep the sem L1 allocations alive for the op's lifetime —
+                # their integer addresses are what the kernel actually uses.
                 (
                     in1_backing,
                     dram_meta_tensors_dev,
@@ -1220,6 +1237,8 @@ class ExpertKernel:
                     _fmt_sem_1,
                     partial_sem_addr,
                     pipeline_sem_addr,
+                    _partial_sem,
+                    _pipeline_sem,
                 ) = dram_meta_tensors[coord]
                 # Per-core active flags — each core runs only the path it belongs to.
                 all_cores_dev = ttnn.corerange_to_cores(a_dev.memory_config().shard_spec.grid)

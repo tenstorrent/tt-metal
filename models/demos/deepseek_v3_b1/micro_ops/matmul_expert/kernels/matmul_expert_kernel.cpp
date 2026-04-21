@@ -153,4 +153,9 @@ void kernel_main() {
     deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<DRAMArgs, dram_active> dram_mm;
     sram_mm();
     dram_mm();
+
+    // Add barrier here to prevent watcher assert
+#if defined(COMPILE_FOR_NCRISC)
+    noc_async_atomic_barrier();
+#endif
 }
