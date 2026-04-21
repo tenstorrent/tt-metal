@@ -109,7 +109,12 @@ class DinoV2Large(nn.Module):
         self.blocks = nn.ModuleList(
             [_Block(EMBED_DIM, NUM_HEADS, MLP_RATIO) for _ in range(NUM_LAYERS)]
         )
-        self.norm = nn.LayerNorm(EMBED_DIM, eps=1e-6)
+        # NOTE: per-block LayerNorms use eps=1e-6 (canonical Block default), but
+        # the FINAL norm uses eps=1e-5 (PyTorch nn.LayerNorm default, which the
+        # canonical DinoVisionTransformer relies on). Mismatching this turns
+        # tiny pre-norm differences into ~0.16 post-norm differences for the
+        # earliest captured intermediates and breaks DPT-side metric depth.
+        self.norm = nn.LayerNorm(EMBED_DIM, eps=1e-5)
 
     def _interpolate_pos_embed(self, H: int, W: int) -> torch.Tensor:
         if H * W == self.num_patches:
@@ -135,8 +140,11 @@ class DinoV2Large(nn.Module):
         for idx, blk in enumerate(self.blocks):
             x = blk(x)
             if idx in OUT_LAYERS:
-                outs.append(x)
-        # No final norm on intermediates (DPT consumes raw block outputs)
+                # Canonical DinoV2.get_intermediate_layers applies the final
+                # LayerNorm to every captured intermediate before handing them
+                # to the head — this affects the magnitudes the DPT projects
+                # see, and is essential for matching DA3-Metric outputs.
+                outs.append(self.norm(x))
         return outs
 
 
@@ -165,13 +173,24 @@ class _FeatureFusion(nn.Module):
         self.resConfUnit2 = _ResConvUnit(features)
         self.out_conv = nn.Conv2d(features, features, kernel_size=1, bias=True)
 
-    def forward(self, x: torch.Tensor, skip: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        skip: torch.Tensor | None = None,
+        size: tuple[int, int] | None = None,
+    ) -> torch.Tensor:
+        # Canonical DPT FeatureFusionBlock order:
+        #   1) merge top branch with skip (no spatial alignment — caller guarantees match)
+        #   2) resConfUnit2 on the fused feature
+        #   3) upsample to `size` (next stage's resolution) or scale_factor=2 if not given
+        #   4) 1x1 out_conv
         if skip is not None:
-            if x.shape[-2:] != skip.shape[-2:]:
-                x = F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=True)
             x = x + self.resConfUnit1(skip)
         x = self.resConfUnit2(x)
-        x = F.interpolate(x, scale_factor=2, mode="bilinear", align_corners=True)
+        if size is not None:
+            x = F.interpolate(x, size=size, mode="bilinear", align_corners=True)
+        else:
+            x = F.interpolate(x, scale_factor=2, mode="bilinear", align_corners=True)
         return self.out_conv(x)
 
 
@@ -235,15 +254,16 @@ class DPTHead(nn.Module):
             x = self.resize_layers[i](x)
             feats.append(x)
 
-        # bottom-up DPT fusion
+        # bottom-up DPT fusion. Each refinenet upsamples to the SHAPE of the
+        # next stage's adapter (rn[k-1]) — canonical _fuse pattern. The deepest
+        # refinenet4 takes only the deepest features (no skip).
         layer_rns = [self.scratch.layer1_rn, self.scratch.layer2_rn, self.scratch.layer3_rn, self.scratch.layer4_rn]
         rn = [layer_rns[i](feats[i]) for i in range(4)]
 
-        # refinenet4 has no skip
-        path = self.scratch.refinenet4(rn[3])
-        path = self.scratch.refinenet3(path, rn[2])
-        path = self.scratch.refinenet2(path, rn[1])
-        path = self.scratch.refinenet1(path, rn[0])
+        path = self.scratch.refinenet4(rn[3], size=rn[2].shape[-2:])
+        path = self.scratch.refinenet3(path, rn[2], size=rn[1].shape[-2:])
+        path = self.scratch.refinenet2(path, rn[1], size=rn[0].shape[-2:])
+        path = self.scratch.refinenet1(path, rn[0])  # default scale_factor=2
 
         path = self.scratch.output_conv1(path)
         path = F.interpolate(path, size=(H, W), mode="bilinear", align_corners=True)

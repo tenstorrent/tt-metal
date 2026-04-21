@@ -179,9 +179,10 @@ def _cpu_head_channels_last(head, intermediates, img_hw):
     layer_rns = [head.scratch.layer1_rn, head.scratch.layer2_rn,
                  head.scratch.layer3_rn, head.scratch.layer4_rn]
     rn = [layer_rns[i](feats[i]) for i in range(4)]
-    path = head.scratch.refinenet4(rn[3])
-    path = head.scratch.refinenet3(path, rn[2])
-    path = head.scratch.refinenet2(path, rn[1])
+    # Match canonical _fuse: each refinenet upsamples to the next stage's shape.
+    path = head.scratch.refinenet4(rn[3], size=rn[2].shape[-2:])
+    path = head.scratch.refinenet3(path, rn[2], size=rn[1].shape[-2:])
+    path = head.scratch.refinenet2(path, rn[1], size=rn[0].shape[-2:])
     path = head.scratch.refinenet1(path, rn[0])
     path = head.scratch.output_conv1(path)
     path = F.interpolate(path, size=(H, W), mode="bilinear", align_corners=True)
@@ -225,11 +226,20 @@ def _setup(pixel_values: torch.Tensor):
     seq_len = (img_size // PATCH_SIZE) ** 2 + 1  # +1 for cls token
     padded = _next_tile(seq_len)
     attention_mask = _build_attention_mask(seq_len, padded, device)
+    # Final-norm weights from canonical DinoV2 (eps=1e-5). Applied to each of
+    # the 4 captured intermediates before they leave the chip — matches the
+    # `[self.norm(out) for out in outputs]` step in canonical
+    # `get_intermediate_layers`. Without it, raw block outputs feed the head
+    # at the wrong magnitude and depth metrics diverge from canonical.
+    final_norm_w = _to_dev(cpu_model.backbone.norm.weight.unsqueeze(0), device)
+    final_norm_b = _to_dev(cpu_model.backbone.norm.bias.unsqueeze(0), device)
     _state.update(
         cpu_model=cpu_model,
         device=device,
         blocks=blocks,
         attention_mask=attention_mask,
+        final_norm_w=final_norm_w,
+        final_norm_b=final_norm_b,
     )
 
 
@@ -261,14 +271,22 @@ def run(pixel_values: torch.Tensor):
 
         # Save the ttnn handles for the intermediate stages without syncing,
         # so chip can pipeline all 24 blocks back-to-back. We sync them once
-        # at the end via a single batched download loop.
+        # at the end via a single batched download loop. Each capture is
+        # passed through the canonical final LayerNorm (eps=1e-5) before clone
+        # — DPT expects post-norm intermediates, raw block outputs break the
+        # depth-metric scaling.
+        final_norm_w = _state["final_norm_w"]
+        final_norm_b = _state["final_norm_b"]
         intermediate_handles: List = []
         out_layer_set = set(OUT_LAYERS)
         for i, p in enumerate(blocks):
             x_tt = _ttnn_block(x_tt, p, attention_mask)
             if i in out_layer_set:
-                # Clone so the next block can reassign x_tt without freeing this.
-                intermediate_handles.append(ttnn.clone(x_tt))
+                normed = ttnn.layer_norm(
+                    x_tt, weight=final_norm_w, bias=final_norm_b,
+                    epsilon=1e-5, memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                intermediate_handles.append(normed)
 
         intermediates_cpu: List[torch.Tensor] = [
             ttnn.to_torch(h)[..., :N, :] for h in intermediate_handles
