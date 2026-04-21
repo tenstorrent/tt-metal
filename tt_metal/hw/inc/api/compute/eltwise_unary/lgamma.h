@@ -7,6 +7,8 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_sfpu_lgamma.h"
+#include "llk_math_eltwise_ternary_sfpu_macros.h"
+#include "ckernel_sfpu_lgamma.h"
 #endif
 
 namespace ckernel {
@@ -92,12 +94,21 @@ ALWI void lgamma_stirling_float_tile_init() {
 
 // clang-format on
 ALWI void lgamma_adjusted_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t idst3) {
-    MATH((llk_math_eltwise_ternary_sfpu_lgamma_adjusted<APPROX, DST_ACCUM_MODE>(idst0, idst1, idst2, idst3)));
+    MATH((SFPU_TERNARY_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_lgamma_adjusted,
+        (APPROX, DST_ACCUM_MODE),
+        RC,
+        idst0,
+        idst1,
+        idst2,
+        idst3)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lgamma_adjusted_tile_init() { MATH((llk_math_eltwise_ternary_sfpu_lgamma_adjusted_init<DST_ACCUM_MODE>())); }
+ALWI void lgamma_adjusted_tile_init() { MATH((SFPU_TERNARY_INIT(lgamma))); }
 
 }  // namespace ckernel

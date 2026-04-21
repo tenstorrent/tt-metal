@@ -6,9 +6,7 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
-#include "llk_math_eltwise_ternary_sfpu_params.h"
-#include "llk_math_eltwise_binary_sfpu_init.h"
-#include "llk_math_eltwise_binary_sfpu_params.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "ckernel_sfpu_lgamma.h"
 
 namespace ckernel {
@@ -24,37 +22,19 @@ inline void llk_math_eltwise_unary_sfpu_lgamma_stirling(uint32_t dst_index, int 
         ckernel::sfpu::calculate_lgamma_stirling<APPROXIMATE, is_fp32_dest_acc_en>, dst_index, vector_mode);
 }
 
-template <bool is_fp32_dest_acc_en>
-inline void llk_math_eltwise_ternary_sfpu_lgamma_adjusted_init() {
-    _llk_math_eltwise_ternary_sfpu_init_<SfpuType::lgamma>();
-}
-
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
-inline void llk_math_eltwise_ternary_sfpu_lgamma_adjusted(
-    uint32_t dst_index0,
-    uint32_t dst_index1,
-    uint32_t dst_index2,
-    uint32_t dst_index3,
-    int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_ternary_sfpu_params_(
-        ckernel::sfpu::calculate_lgamma_adjusted<APPROXIMATE, is_fp32_dest_acc_en>,
-        dst_index0,
-        dst_index1,
-        dst_index2,
-        dst_index3,
-        vector_mode);
-}
-
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_binary_sfpu_lgamma_stirling_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::lgamma>(sfpu::lgamma_stirling_init<APPROXIMATE, is_fp32_dest_acc_en>);
+    SFPU_BINARY_INIT_CB(lgamma, sfpu::lgamma_stirling_init, (APPROXIMATE, is_fp32_dest_acc_en));
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_binary_sfpu_lgamma_stirling(
     uint32_t dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_(
-        sfpu::calculate_lgamma_stirling_fp32<APPROXIMATE, is_fp32_dest_acc_en>,
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_lgamma_stirling_fp32,
+        (APPROXIMATE, is_fp32_dest_acc_en),
         dst_index0,
         dst_index1,
         odst,
