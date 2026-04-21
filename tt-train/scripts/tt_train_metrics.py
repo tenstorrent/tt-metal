@@ -110,6 +110,10 @@ class TtTrainMetricsData(BaseModel):
         default=None,
         description="Iteration time at the 99th percentile (ms).",
     )
+    mfu: Optional[float] = Field(
+        default=None,
+        description="Model flops utilization.",
+    )
 
     model_config = {"from_attributes": True, "protected_namespaces": ()}
 

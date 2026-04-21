@@ -36,7 +36,7 @@ def bytes_to_mb(bytes_val: float) -> float:
 def extract_number_of_parameters(content: str, start_pos: int) -> Optional[int]:
     """Extract number of parameters from logs before the memory summary"""
     # Search forward from a reasonable position before start
-    search_start = max(0, start_pos - 500)
+    search_start = max(0, start_pos - 1000)
     text_before = content[search_start:start_pos]
     text_before = text_before.replace(",", "")
     match = re.search(r"Total parameters:\s*(\d+)", text_before)
@@ -92,7 +92,7 @@ def find_memory_summaries(
         num_params = extract_number_of_parameters(content, match.start())
 
         # Try to find a section name (e.g., "tinyllama (memory_efficient)")
-        name_search_start = max(0, match.start() - 500)
+        name_search_start = max(0, match.start() - 1000)
         text_before = content[name_search_start : match.start()]
 
         # Look for the last non-empty line that's not all #'s
@@ -100,7 +100,7 @@ def find_memory_summaries(
         section_name = "Unknown"
         for line in reversed(lines):
             line = line.strip()
-            if line and not line.startswith("#") and "Number of parameters" not in line:
+            if line and not line.startswith("#") and "Total parameters" not in line:
                 section_name = line
                 break
 

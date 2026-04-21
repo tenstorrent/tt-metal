@@ -10,92 +10,104 @@
 
 models:
 # CPP Models
-  - name: "NanoGPT Shakespeare"
-    filename: "nanogpt"
-    binary: "${TT_METAL_RUNTIME_ROOT}/build/tt-train/sources/examples/nano_gpt/nano_gpt"
-    args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml"
-      - "--track_memory"
+  # - name: "NanoGPT Shakespeare"
+  #   filename: "nanogpt"
+  #   binary: "${TT_METAL_RUNTIME_ROOT}/build/tt-train/sources/examples/nano_gpt/nano_gpt"
+  #   args:
+  #     - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml"
+  #     - "--track_memory"
 
-  - name: "NanoLlama3 Shakespeare"
-    filename: "nanollama"
-    binary: "${TT_METAL_RUNTIME_ROOT}/build/tt-train/sources/examples/nano_gpt/nano_gpt"
-    args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3.yaml"
-      - "--track_memory"
+  # - name: "NanoLlama3 Shakespeare"
+  #   filename: "nanollama"
+  #   binary: "${TT_METAL_RUNTIME_ROOT}/build/tt-train/sources/examples/nano_gpt/nano_gpt"
+  #   args:
+  #     - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3.yaml"
+  #     - "--track_memory"
 
 # Python Models
 # NanoGPT Models
-  - name: "NanoGPT Shakespeare"
-    filename: "nanogpt_shakespeare_python"
+  # - name: "NanoGPT Shakespeare"
+  #   filename: "nanogpt_shakespeare_python"
+  #   binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+  #   args:
+  #     - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt_char.yaml"
+  #     - "--track_memory"
+
+#   - name: "NanoGPT Shakespeare DDP N300"
+#     filename: "nanogpt_shakespeare_python_ddp_n300"
+#     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+#     args:
+#       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt_ddp_n300.yaml"
+#       - "--track_memory"
+
+#   - name: "NanoGPT Shakespeare BPE"
+#     filename: "nanogpt_shakespeare_python_bpe"
+#     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+#     args:
+#       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt_bpe.yaml"
+#       - "--track_memory"
+
+#   - name: "NanoGPT Shakespeare Memory EFF"
+#     filename: "nanogpt_shakespeare_python_memory_eff"
+#     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+#     args:
+#       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt_memory_eff.yaml"
+#       - "--track_memory"
+
+
+# # NanoLlama3 Models
+#   - name: "NanoLlama3 Shakespeare"
+#     filename: "nanollama_shakespeare_python"
+#     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+#     args:
+#       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3.yaml"
+#       - "--track_memory"
+
+#   - name: "NanoLlama3 Shakespeare No Op"
+#     filename: "nanollama_shakespeare_python_no_op"
+#     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+#     args:
+#       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3_no_op.yaml"
+#       - "--track_memory"
+
+# # TinyLlama3
+#   - name: "TinyLlama Shakespeare"
+#     filename: "tinyllama_shakespeare"
+#     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+#     args:
+#       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml"
+#       - "--track_memory"
+
+#   - name: "TinyLlama Shakespeare Muon"
+#     filename: "tinyllama_shakespeare_muon"
+#     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+#     args:
+#       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama_muon.yaml"
+#       - "--track_memory"
+
+#   - name: "Llama 3 Shakespeare Tensor Parallel"
+#     filename: "llama3_shakespeare_tensor_parallel"
+#     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+#     args:
+#       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_llama3_tensor_parallel.yaml"
+#       - "--track_memory"
+
+# # Linear Regression
+#   - name: "Linear Regression"
+#     filename: "linear_regression"
+#     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/linear_regression/linear_regression.py"
+#     args:
+#       - "--track_memory"
+#       - "--verbose"
+
+# Qwen
+  - name: "Qwen 3 0.6B Shakespeare"
+    filename: "qwen3_0.6b_shakespeare"
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml"
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_qwen3_06b.yaml"
       - "--track_memory"
-
-  - name: "NanoGPT Shakespeare DDP N300"
-    filename: "nanogpt_shakespeare_python_ddp_n300"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
-    args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt_ddp_n300.yaml"
-      - "--track_memory"
-
-  - name: "NanoGPT Shakespeare BPE"
-    filename: "nanogpt_shakespeare_python_bpe"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
-    args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt_bpe.yaml"
-      - "--track_memory"
-
-  - name: "NanoGPT Shakespeare Memory EFF"
-    filename: "nanogpt_shakespeare_python_memory_eff"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
-    args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt_memory_eff.yaml"
-      - "--track_memory"
-
-
-# NanoLlama3 Models
-  - name: "NanoLlama3 Shakespeare"
-    filename: "nanollama_shakespeare_python"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
-    args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3.yaml"
-      - "--track_memory"
-
-  - name: "NanoLlama3 Shakespeare No Op"
-    filename: "nanollama_shakespeare_python_no_op"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
-    args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3_no_op.yaml"
-      - "--track_memory"
-
-# TinyLlama3
-  - name: "TinyLlama Shakespeare"
-    filename: "tinyllama_shakespeare"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
-    args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml"
-      - "--track_memory"
-
-  - name: "TinyLlama Shakespeare Muon"
-    filename: "tinyllama_shakespeare_muon"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
-    args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama_muon.yaml"
-      - "--track_memory"
-
-  - name: "Llama 3 Shakespeare Tensor Parallel"
-    filename: "llama3_shakespeare_tensor_parallel"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
-    args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_llama3_tensor_parallel.yaml"
-      - "--track_memory"
-
-# Linear Regression
-  - name: "Linear Regression"
-    filename: "linear_regression"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/linear_regression/linear_regression.py"
-    args:
-      - "--track_memory"
-      - "--verbose"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "Qwen/Qwen3-0.6B"
+      output_file: "data/tokenized_shakespeare_qwen3"
