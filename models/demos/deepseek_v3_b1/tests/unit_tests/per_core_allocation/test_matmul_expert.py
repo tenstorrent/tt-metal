@@ -1091,6 +1091,7 @@ def _run_standard(
     fmt_distribution="random",
     fmt_ratios=None,
     k_parallel_per_bank=1,
+    num_loop_iters=1,
 ):
     """Standard path: WIDTH_SHARDED SRAM, per-expert output slices on compute_core_grid."""
     cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
@@ -1282,6 +1283,7 @@ def _run_standard(
         sram_output_tensor=sram_out_tensor,
         dram_fuse_silu=dram_fuse_silu,
         tp_expert=tp_expert,
+        num_loop_iters=num_loop_iters,
     )
     if active_sram:
         _validate_sram_output(
@@ -1334,6 +1336,7 @@ def _run_accum(
     tp_expert=True,
     fmt_distribution="random",
     fmt_ratios=None,
+    num_loop_iters=1,
 ):
     """Accumulation path: WIDTH_SHARDED SRAM, expert outputs summed in-place."""
     cores_per_dram_bank = n_parallel_per_bank
@@ -1488,6 +1491,7 @@ def _run_accum(
         sram_k_per_core=Kt,
         sram_output_tensor=sram_out_tensor,
         tp_expert=tp_expert,
+        num_loop_iters=num_loop_iters,
     )
     if active_sram:
         _validate_sram_output_accum(
@@ -1532,6 +1536,7 @@ def _run_slice_k(
     sram_n_parallel,
     pcc_threshold,
     dram_fuse_silu,
+    num_loop_iters=1,
     tp_expert=True,
     fmt_distribution="random",
     fmt_ratios=None,
@@ -1699,6 +1704,7 @@ def _run_slice_k(
         sram_output_tensor=sram_out_tensor,
         dram_fuse_silu=dram_fuse_silu,
         tp_expert=tp_expert,
+        num_loop_iters=num_loop_iters,
     )
     if active_sram:
         _validate_sram_output_slice_k(
@@ -1757,6 +1763,7 @@ def _run_hybrid_expert_multi_device(
     fmt_distribution="random",
     fmt_ratios=None,
     k_parallel_per_bank=1,
+    num_loop_iters=1,
 ):
     """Dispatcher: delegate to the appropriate variant.
 
@@ -1797,6 +1804,7 @@ def _run_hybrid_expert_multi_device(
             fmt_distribution,
             fmt_ratios,
             k_parallel_per_bank=k_parallel_per_bank,
+            num_loop_iters=num_loop_iters,
         )
     elif accum_experts:
         _run_accum(
@@ -1819,6 +1827,7 @@ def _run_hybrid_expert_multi_device(
             tp_expert,
             fmt_distribution,
             fmt_ratios,
+            num_loop_iters=num_loop_iters,
         )
     else:
         _run_standard(
@@ -1843,6 +1852,7 @@ def _run_hybrid_expert_multi_device(
             fmt_distribution,
             fmt_ratios,
             k_parallel_per_bank=k_parallel_per_bank,
+            num_loop_iters=num_loop_iters,
         )
 
 
@@ -2559,6 +2569,7 @@ def test_benchmark_gate_proj(device, formats_per_device, fmt_ratios):
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
         fmt_ratios=fmt_ratios,
+        num_loop_iters=100,
     )
 
 
@@ -2588,6 +2599,7 @@ def test_benchmark_up_proj(device, formats_per_device, fmt_ratios):
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
         fmt_ratios=fmt_ratios,
+        num_loop_iters=100,
     )
 
 
@@ -2618,4 +2630,5 @@ def test_benchmark_down_proj(device, formats_per_device, fmt_ratios):
         k_parallel_per_bank=1,
         fmt_distribution="uniform",
         fmt_ratios=fmt_ratios,
+        num_loop_iters=100,
     )

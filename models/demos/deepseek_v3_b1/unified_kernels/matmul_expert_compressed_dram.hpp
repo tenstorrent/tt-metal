@@ -228,7 +228,22 @@ struct MatmulExpertCompressedDRAM {
 
     struct WriterCTArgs {};
 
-    template <typename CTArgs, bool IsActiveCore, bool pop_in0 = true, bool pop_index = true>
+    // ResetCBIn1 + CBIn1ResetAddr: when looping or chaining Ops that share cb_in1's
+    // L1 region, pass the CB's compile-time L1 base so the triple-buffer wrap window
+    // stays anchored at a known address regardless of the runtime wr_ptr. Mirrors
+    // DRAMStreamingMatmul's pattern. Defaults preserve the single-invocation behavior.
+    template <
+        typename CTArgs,
+        bool IsActiveCore,
+        bool pop_in0 = true,
+        bool pop_index = true,
+        bool ResetCBIn1 = false,
+        uint32_t CBIn1ResetAddr = 0,
+        // pop_out: when true, the Op drains its own residual cb_out pushes at the
+        // end (cb_wait_front + cb_pop_front). Used for looping / chaining so the
+        // next iteration's cb_reserve_back has free space. Default false preserves
+        // single-invocation behavior where downstream consumes cb_out.
+        bool pop_out = false>
     class Op {
     public:
         void operator()() {
@@ -277,9 +292,20 @@ struct MatmulExpertCompressedDRAM {
             // the inner loop keeps TRISC within 1 block of NCRISC at all times.
             // Assumes num_iterations >= 2 so fmt signaling lands inside the inner loop.
             cb_reserve_back(CTArgs::cb_in1, tiles_per_block * (extra_blocks_in_flight + 1));
-            uint32_t cb_in1_base = get_write_ptr(CTArgs::cb_in1);
+            // l1_write_addr_in1 MUST start at the CB's current wr_ptr so writes
+            // stay coherent with the CB's internal tracking (cb_push_back advances
+            // wr_ptr by push_count * page_size regardless of where we wrote). When
+            // looping, wr_ptr drifts across iters and we need a stable wrap
+            // boundary anchor — ResetCBIn1 + CBIn1ResetAddr give us that, mirroring
+            // DRAMStreamingMatmul's pattern.
+            uint32_t l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
+            uint32_t cb_in1_base;
+            if constexpr (ResetCBIn1) {
+                cb_in1_base = CBIn1ResetAddr;
+            } else {
+                cb_in1_base = l1_write_addr_in1;
+            }
             uint32_t cb_in1_end = cb_in1_base + CTArgs::cb_in1_size_bytes;
-            uint32_t l1_write_addr_in1 = cb_in1_base;
             uint32_t num_free_blocks_in_buffer = num_buffers;
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
@@ -448,6 +474,14 @@ struct MatmulExpertCompressedDRAM {
                         uint64_t sem_noc =
                             get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, CTArgs::partial_sem_addr);
                         noc_semaphore_inc(sem_noc, 1);
+
+                        // Pop out from the ncrisc side because it needs to perform wait front. Ptherwise there is a
+                        // race for unpacker pop vs ncrisc wait.
+                        if constexpr (pop_out) {
+                            constexpr uint32_t max_push = num_active_experts * CTArgs::per_core_n;
+                            cb_wait_front(CTArgs::cb_out, max_push);
+                            cb_pop_front(CTArgs::cb_out, max_push);
+                        }
                     }
                 }
             }
@@ -487,8 +521,9 @@ struct MatmulExpertCompressedDRAM {
                 cb_wait_front(CTArgs::cb_in0, num_tiles_k);
             }
 
-            uint32_t in0_base = 0;
-            UNPACK(({ in0_base = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in0) + act_k_slice_byte_offset; }));
+            uint32_t in0_base = 0, in0_cb_base = 0;
+            UNPACK(({ in0_cb_base = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in0); }));
+            UNPACK(({ in0_base = in0_cb_base + act_k_slice_byte_offset; }));
 
             if constexpr (CTArgs::accum_experts) {
                 uint32_t num_dram_experts = 0;
@@ -576,6 +611,15 @@ struct MatmulExpertCompressedDRAM {
                 }
 
                 PACK((llk_pack_reconfig_l1_acc(0)));
+
+                // pop_out: drain the final accumulated per_core_n that was
+                // pushed above. Skip if no DRAM experts pushed anything.
+                if constexpr (pop_out) {
+                    if (num_dram_experts > 0) {
+                        cb_wait_front(CTArgs::cb_out, CTArgs::per_core_n);
+                        cb_pop_front(CTArgs::cb_out, CTArgs::per_core_n);
+                    }
+                }
             } else if constexpr (CTArgs::inner_dim_reduction) {
                 // K-split path: accumulate ALL experts into dst (one tile per expert since
                 // num_subblocks_n==1), then pack once at the end. Reducer waits for sender's
@@ -634,75 +678,103 @@ struct MatmulExpertCompressedDRAM {
                 }
 
                 // dst_base is now num_active_dram_experts * subblock_n (total packed tiles).
-                uint32_t total_tiles = dst_base;
+                const uint32_t total_tiles = dst_base;
 
                 tile_regs_commit();
-
                 cb_reserve_back(CTArgs::cb_out, total_tiles);
                 tile_regs_wait();
 
-                // Reducer: wait for sender's NOC write then pack-with-L1-acc to sum
-                // sender_partial + reducer_partial in L1 as a RAW sum (no silu yet).
-                if constexpr (CTArgs::is_reducer) {
-                    constexpr uint32_t num_senders = CTArgs::k_parallel_per_bank - 1;
-                    PACK(({
-                        volatile tt_l1_ptr uint32_t* partial_sem_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::partial_sem_addr);
-                        while (*partial_sem_ptr < num_senders) {
-                        }
-                    }));
-                    PACK((llk_pack_reconfig_l1_acc(1)));
-                }
+                // Skip pack / silu / sem-reset when zero DRAM experts: no real
+                // data in dst, reducer would deadlock on partial_sem (sender
+                // didn't inc it), silu would operate on stale L1. tile_regs_release
+                // still fires in the else branch to close out the acquire above.
+                if (total_tiles > 0) {
+                    // Reducer: wait for sender's NOC write then pack-with-L1-acc
+                    // to sum sender_partial + reducer_partial in L1 as a RAW sum.
+                    if constexpr (CTArgs::is_reducer) {
+                        constexpr uint32_t num_senders = CTArgs::k_parallel_per_bank - 1;
+                        PACK(({
+                            volatile tt_l1_ptr uint32_t* partial_sem_ptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::partial_sem_addr);
+                            while (*partial_sem_ptr < num_senders) {
+                            }
+                        }));
+                        PACK((llk_pack_reconfig_l1_acc(1)));
+                    }
 
-                for (uint32_t t = 0; t < total_tiles; t++) {
-                    pack_tile(t, CTArgs::cb_out);
-                }
-                tile_regs_release();
+                    for (uint32_t t = 0; t < total_tiles; t++) {
+                        pack_tile(t, CTArgs::cb_out);
+                    }
+                    tile_regs_release();
 
-                if constexpr (CTArgs::is_reducer) {
-                    PACK((llk_pack_reconfig_l1_acc(0)));
-                }
+                    if constexpr (CTArgs::is_reducer) {
+                        PACK((llk_pack_reconfig_l1_acc(0)));
+                    }
 
-                // Post-reduction silu fast-path (reducer only). cb_out_silu is a view of
-                // cb_out's L1 with tile shape [silu_tile_h, tile_w] — op.py pads silu_tile_h
-                // up to the next valid face_r_dim {2,4,8,16}, so one copy_tile + silu +
-                // pack_tile covers all expert outputs (padded slots are garbage but out_tensor
-                // is assumed sized for the padded count by the caller).
-                if constexpr (CTArgs::fuse_silu && CTArgs::is_reducer) {
-                    // 2 faces × (silu_tile_h * 16 elems) / 32 lanes = silu_tile_h/2 iterations/face.
-                    constexpr uint32_t silu_iterations = CTArgs::silu_tile_h / 2;
+                    // Post-reduction silu fast-path (reducer only). cb_out_silu is a view of
+                    // cb_out's L1 with tile shape [silu_tile_h, tile_w] — op.py pads
+                    // silu_tile_h up to the next valid face_r_dim {2,4,8,16}, so one
+                    // copy_tile + silu + pack_tile covers all expert outputs.
+                    if constexpr (CTArgs::fuse_silu && CTArgs::is_reducer) {
+                        // 2 faces × (silu_tile_h * 16 elems) / 32 lanes = silu_tile_h/2 iters/face.
+                        constexpr uint32_t silu_iterations = CTArgs::silu_tile_h / 2;
 
-                    reconfig_data_format_srca<false, true>(CTArgs::cb_out_silu, CTArgs::cb_out_silu);
-                    pack_reconfig_data_format<true>(CTArgs::cb_out_silu);
-                    copy_tile_to_dst_init_short(CTArgs::cb_out_silu);
+                        reconfig_data_format_srca<false, true>(CTArgs::cb_out_silu, CTArgs::cb_out_silu);
+                        pack_reconfig_data_format<true>(CTArgs::cb_out_silu);
+                        copy_tile_to_dst_init_short(CTArgs::cb_out_silu);
 
-                    tile_regs_acquire();
-                    copy_tile(CTArgs::cb_out_silu, 0, 0);
-                    tile_regs_commit();
+                        tile_regs_acquire();
+                        copy_tile(CTArgs::cb_out_silu, 0, 0);
+                        tile_regs_commit();
 
-                    TTI_SEMWAIT(
-                        p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                        semaphore::t6_sem(semaphore::MATH_PACK),
-                        p_stall::STALL_ON_ZERO);
-                    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-                    PACK((llk_math_eltwise_unary_sfpu_silu<true, false, silu_iterations>(0, (int)VectorMode::R)));
-                    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                        TTI_SEMWAIT(
+                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                            semaphore::t6_sem(semaphore::MATH_PACK),
+                            p_stall::STALL_ON_ZERO);
+                        PACK(TT_SETC16(
+                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+                        PACK((llk_math_eltwise_unary_sfpu_silu<true, false, silu_iterations>(0, (int)VectorMode::R)));
+                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
-                    pack_tile(0, CTArgs::cb_out_silu, 0);
+                        pack_tile(0, CTArgs::cb_out_silu, 0);
+                        tile_regs_release();
+                        cb_push_back(CTArgs::cb_out_silu, 1);
+                        cb_wait_front(CTArgs::cb_out_silu, 1);
+                        cb_pop_front(CTArgs::cb_out_silu, 1);
+                    }
+
+                    cb_push_back(CTArgs::cb_out, total_tiles);
+
+                    // Reset partial_sem on the reducer for the next program run.
+                    // UNPACK has the reliable L1 atomic path; PACK-side plain stores are buggy.
+                    if constexpr (CTArgs::is_reducer) {
+                        constexpr uint32_t num_senders = CTArgs::k_parallel_per_bank - 1;
+                        UNPACK(unified_kernels::sem_atomic_dec(CTArgs::partial_sem_addr, num_senders));
+                    }
+                } else {
                     tile_regs_release();
                 }
 
-                cb_push_back(CTArgs::cb_out, total_tiles);
-
-                // Reset partial_sem on the reducer for the next program run.
-                // UNPACK has the reliable L1 atomic path; PACK-side plain stores are buggy.
+                // Pad total pushes to num_active_experts * per_core_n (here
+                // per_core_n == subblock_n since K-split requires num_subblocks_n == 1)
+                // so CB push count is deterministic across invocations.
+                constexpr uint32_t max_push = num_active_experts * CTArgs::per_core_n;
+                const uint32_t padding = max_push - total_tiles;
+                if (padding > 0) {
+                    cb_reserve_back(CTArgs::cb_out, padding);
+                    cb_push_back(CTArgs::cb_out, padding);
+                }
+                // Do not pop here for sender becuase that is handled on ncrisc side to avoid race.
                 if constexpr (CTArgs::is_reducer) {
-                    constexpr uint32_t num_senders = CTArgs::k_parallel_per_bank - 1;
-                    cb_wait_front(CTArgs::cb_out, total_tiles);
-                    UNPACK(unified_kernels::sem_atomic_dec(CTArgs::partial_sem_addr, num_senders));
+                    if constexpr (pop_out) {
+                        constexpr uint32_t max_push = num_active_experts * CTArgs::per_core_n;
+                        cb_wait_front(CTArgs::cb_out, max_push);
+                        cb_pop_front(CTArgs::cb_out, max_push);
+                    }
                 }
             } else {
                 uint32_t fmt_slot = 0;
+                uint32_t num_dram_pushed = 0;
 
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                     uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
@@ -777,9 +849,32 @@ struct MatmulExpertCompressedDRAM {
                     UNPACK((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_0)));
                     MATH((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_1)));
                     fmt_slot ^= 1;
+                    num_dram_pushed++;
+                }
+
+                // Pad total pushes to num_active_experts * per_core_n so the CB
+                // push count is deterministic across invocations (independent of
+                // runtime SRAM/DRAM split). The dummy slots carry no real data
+                // and are sized to fill the output tensor's per-expert slots.
+                const uint32_t padding = (num_active_experts - num_dram_pushed) * CTArgs::per_core_n;
+                if (padding > 0) {
+                    cb_reserve_back(CTArgs::cb_out, padding);
+                    cb_push_back(CTArgs::cb_out, padding);
+                }
+
+                if constexpr (pop_out) {
+                    constexpr uint32_t max_push = num_active_experts * CTArgs::per_core_n;
+                    cb_wait_front(CTArgs::cb_out, max_push);
+                    cb_pop_front(CTArgs::cb_out, max_push);
                 }
             }
 
+            // Restore cb_in0's UNPACK rd_ptr to its original shard-start value
+            // before cb_pop_front. The compute loop overrides rd_ptr to per-expert /
+            // per-subblock positions, and cb_pop_front advances from whatever
+            // override is in place — leaving it unset would make the next
+            // invocation's get_cb_rd_ptr return a stale mid-compute position.
+            UNPACK(({ unified_kernels::override_cb_rd_ptr(CTArgs::cb_in0, in0_cb_base); }));
             compressed_custom_mm_block_uninit<false>();
 
             if constexpr (pop_in0) {

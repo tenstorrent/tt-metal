@@ -100,7 +100,13 @@ struct MatmulExpertCompressedSRAM {
 
     struct WriterCTArgs {};
 
-    template <typename CTArgs, bool IsActiveCore, bool pop_in0 = true, bool pop_in1 = true, bool pop_index = true>
+    template <
+        typename CTArgs,
+        bool IsActiveCore,
+        bool pop_in0 = true,
+        bool pop_in1 = true,
+        bool pop_index = true,
+        bool pop_out = false>
     class Op {
     public:
         void operator()() {
@@ -199,12 +205,18 @@ struct MatmulExpertCompressedSRAM {
                     }
                     tile_regs_release();
                     cb_push_back(cb_out, out_w);
+
+                    if constexpr (pop_out) {
+                        cb_wait_front(cb_out, out_w);
+                        cb_pop_front(cb_out, out_w);
+                    }
                 }
             } else {
                 if constexpr (k_offset > 0) {
                     UNPACK(({ unified_kernels::override_cb_rd_ptr(cb_in0, in0_base + k_offset * in0_page_size); }));
                 }
 
+                uint32_t num_sram_experts_pushed = 0;
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                     uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
                     if (!(is_sram_expert(raw_idx))) {
@@ -229,6 +241,21 @@ struct MatmulExpertCompressedSRAM {
                     }
                     tile_regs_release();
                     cb_push_back(cb_out, out_w);
+                    num_sram_experts_pushed++;
+                }
+
+                // Pad total pushes to num_active_experts * out_w so CB push count
+                // is deterministic across invocations (independent of SRAM/DRAM split).
+                const uint32_t padding = (num_active_experts - num_sram_experts_pushed) * out_w;
+                if (padding > 0) {
+                    cb_reserve_back(cb_out, padding);
+                    cb_push_back(cb_out, padding);
+                }
+
+                if constexpr (pop_out) {
+                    constexpr uint32_t max_push = num_active_experts * out_w;
+                    cb_wait_front(cb_out, max_push);
+                    cb_pop_front(cb_out, max_push);
                 }
             }
 

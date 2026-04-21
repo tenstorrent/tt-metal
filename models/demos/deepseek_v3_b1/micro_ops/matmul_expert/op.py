@@ -329,6 +329,7 @@ def _build_program_for_device(
     fmt_sem_addr_1: int = 0,
     partial_sem_addr: int = 0,
     pipeline_sem_addr: int = 0,
+    num_loop_iters: int = 1,
 ) -> ttnn.ProgramDescriptor:
     """Build a ProgramDescriptor for one device — handles SRAM-only, DRAM-only, and hybrid.
 
@@ -378,6 +379,7 @@ def _build_program_for_device(
         raw_silu_tile_h = num_active_experts * dram_per_core_n * tile_h
         silu_tile_h = _pad_to_face_r_dim(raw_silu_tile_h)
         silu_tile = ttnn.Tile([silu_tile_h, tile_w])
+        print(f"silu_tile_h={silu_tile_h}, tile_w={tile_w}")
         silu_tile_bytes = silu_tile.get_tile_size(out_tensor.dtype)
         cb_out_silu_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out_silu, out_tensor)
         cb_out_silu_desc.format_descriptors[0].tile = ttnn.TileDescriptor(silu_tile)
@@ -492,6 +494,13 @@ def _build_program_for_device(
         ("index_offset", index_offset),
         ("cb_out_silu", cb_out_silu),
         ("silu_tile_h", silu_tile_h),
+        # Looping support: num_loop_iters=1 keeps existing single-invocation
+        # behavior. cb_in1_dram_buf_addr anchors cb_in1_dram's triple-buffer wrap
+        # window at a compile-time L1 base; only used by the Op when num_loop_iters>1
+        # (or when chaining Ops that share cb_in1_dram). When num_loop_iters>1 the
+        # Ops also drain their own cb_out pushes via a pop_out template flag.
+        ("num_loop_iters", num_loop_iters),
+        ("cb_in1_dram_buf_addr", in1_backing_tensor.buffer_address()),
     ]
 
     # Per-core descriptors.
@@ -1137,6 +1146,7 @@ class ExpertKernel:
         dram_fuse_silu: bool = False,
         tp_expert: bool = True,
         subblock_n: int = 1,
+        num_loop_iters: int = 1,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -1280,6 +1290,7 @@ class ExpertKernel:
                     fmt_sem_addr_1=fmt_sem_addr_1,
                     partial_sem_addr=partial_sem_addr,
                     pipeline_sem_addr=pipeline_sem_addr,
+                    num_loop_iters=num_loop_iters,
                 )
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
 
