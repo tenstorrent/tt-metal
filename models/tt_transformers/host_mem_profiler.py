@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from loguru import logger
 from memory_profiler import memory_usage
 
 PYTEST_EXTRA_ARGS = ["-v", "-s"]
@@ -45,7 +46,7 @@ def plot_results(name, elapsed, mib, out_dir):
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, "memory_profile_comparison.png"), dpi=150)
     plt.close(fig)
-    print(f"Saved → memory_profile_comparison.png in {out_dir}")
+    logger.info(f"Saved at {os.path.join(out_dir, 'memory_profile_comparison.png')}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -66,9 +67,7 @@ if __name__ == "__main__":
         "test": args.test,
     }
 
-    print(f"\n{'='*60}")
-    print(f"Profiling: {model['name']}")
-    print(f"{'='*60}")
+    logger.info(f"\n{'='*60}\nProfiling: {model['name']}\n{'='*60}")
 
     mem_ts, _ = memory_usage(
         (make_runner(model), [], {}),
@@ -83,8 +82,8 @@ if __name__ == "__main__":
     t0 = ts[0]
     elapsed = [t - t0 for t in ts]
 
-    print(f"  Peak:     {max(mib):.1f} MiB")
-    print(f"  Baseline: {min(mib):.1f} MiB")
+    logger.info(f"  Peak:     {max(mib):.1f} MiB")
+    logger.info(f"  Baseline: {min(mib):.1f} MiB")
 
     safe_name = args.name.replace("/", "_").replace(" ", "_")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
