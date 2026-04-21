@@ -53,7 +53,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "e2e_t${{ inputs.tier }}"
+            "e2e"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
