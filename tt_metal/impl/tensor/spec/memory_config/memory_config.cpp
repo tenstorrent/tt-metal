@@ -3,6 +3,7 @@
 
 #include <cstdint>
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
@@ -13,6 +14,22 @@ namespace tt::tt_metal {
 MemoryConfig::MemoryConfig(
     TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) :
     memory_layout_(memory_layout), buffer_type_(buffer_type), shard_spec_(std::move(shard_spec)) {}
+
+MemoryConfig MemoryConfig::with_shard_spec(std::optional<ShardSpec> shard_spec) const {
+    // with_shard_spec preserves memory_layout_ but swaps in a new (legacy 2D) shard_spec.
+    // That's valid for a same-layout update (e.g. HEIGHT_SHARDED -> HEIGHT_SHARDED with a
+    // different shard shape), but not for transitioning FROM ND_SHARDED: the resulting
+    // MemoryConfig would have memory_layout_ == ND_SHARDED yet shard_spec_ != nullopt
+    //(a legacy shard_spec_ populated), which is internally inconsistent. MemoryConfig
+    // doesn't have enough context (tensor padded shape) to infer the correct downgrade
+    // target (HEIGHT/WIDTH/BLOCK_SHARDED), so callers must construct a new MemoryConfig
+    // directly with the intended layout.
+    TT_FATAL(
+        memory_layout_ != TensorMemoryLayout::ND_SHARDED,
+        "MemoryConfig::with_shard_spec cannot be used to transition from ND_SHARDED; "
+        "construct a MemoryConfig directly with the target memory_layout and shard_spec instead.");
+    return MemoryConfig(memory_layout_, buffer_type_, std::move(shard_spec));
+}
 
 MemoryConfig::MemoryConfig(BufferType buffer_type, std::optional<NdShardSpec> nd_shard_spec) :
     memory_layout_(nd_shard_spec.has_value() ? TensorMemoryLayout::ND_SHARDED : TensorMemoryLayout::INTERLEAVED),

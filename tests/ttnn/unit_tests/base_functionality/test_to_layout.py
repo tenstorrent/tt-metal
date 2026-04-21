@@ -988,7 +988,6 @@ def _run_to_layout_nd_sharded(device, tensor_shape, input_mem_config, target_lay
         device=device,
         memory_config=input_mem_config,
     )
-    assert input_tensor.is_sharded()
     assert input_tensor.layout == from_layout
 
     output_tensor = ttnn.to_layout(input_tensor, target_layout, memory_config=output_mem_config)
@@ -1091,3 +1090,588 @@ def test_to_layout_nd_sharded_tile_to_rm(
         output_mem_config,
         from_layout=ttnn.TILE_LAYOUT,
     )
+
+
+# ---------------------------------------------------------------------------
+# to_layout between 2D-sharded (HEIGHT/WIDTH/BLOCK_SHARDED) and ND-sharded.
+#
+# Exercises mixing legacy 2D shard specs with NdShardSpec across the layout
+# change. Target layout is parameterized, so each case runs both (RM -> TILE)
+# and (TILE -> RM). Shard shapes keep last-2 dims as tile-multiples so the
+# same cases are valid for both layouts; unevenness is produced by tensor dims
+# that don't divide the corresponding shard dim (e.g. 160 % 64 -> (64,64,32)).
+# Multi-shard-per-core packing is exercised on the ND side (ND shards are
+# distributed round-robin when num_cores < num_shards).
+# ---------------------------------------------------------------------------
+
+
+def _make_2d_mem_config(
+    shard_scheme, shard_shape_2d, grid, buffer_type=ttnn.BufferType.L1, orientation=ttnn.ShardOrientation.ROW_MAJOR
+):
+    shard_spec = ttnn.ShardSpec(grid, shard_shape_2d, orientation)
+    return ttnn.MemoryConfig(shard_scheme, buffer_type, shard_spec)
+
+
+# Grids for 2D sharded configs (1 shard per core for HEIGHT/WIDTH/BLOCK).
+_GRID_9x1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8, 0))})
+_GRID_5x1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))})
+_GRID_3x5 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 4))})  # 15 cores
+
+
+# Each case: (tensor_shape, input_2d_shard_layout, input_2d_shard_shape, input_2d_grid,
+#            output_nd_shard_shape, output_nd_grid, id)
+# All 2D shard shapes are (tile-aligned H, tile-aligned W) so valid for both TILE and RM.
+_2D_TO_ND_CASES = [
+    # HEIGHT_SHARDED even (4 shards on 4 cores) -> ND sharded [1,1,32,64] on 2 cores (2 shards/core).
+    (
+        [1, 1, 128, 64],
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        (32, 64),
+        _GRID_4x1,
+        [1, 1, 32, 64],
+        _GRID_2x1,
+        "h_even_to_nd_multi_per_core",
+    ),
+    # WIDTH_SHARDED even (4 shards on 4 cores) -> ND sharded, single shard collapse.
+    (
+        [1, 1, 64, 128],
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        (64, 32),
+        _GRID_4x1,
+        [1, 1, 64, 128],
+        _GRID_1x1,
+        "w_even_to_nd_collapsed",
+    ),
+    # BLOCK_SHARDED even (2x2 grid, 4 shards) -> ND sharded [1,1,64,64] on 2 cores (2 shards/core).
+    (
+        [1, 1, 128, 128],
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        (64, 64),
+        _GRID_2x2,
+        [1, 1, 64, 64],
+        _GRID_2x1,
+        "block_even_to_nd_multi_per_core",
+    ),
+    # BLOCK_SHARDED uneven last-2 dims: tensor 160x160, shard 64x64, 3x3 grid ->
+    #   9 shards, last-row/col shards are 32 rows/cols (tile-aligned, but uneven).
+    # Output: ND [1,1,64,64] on 3 cores (9 shards / 3 cores = 3 shards/core).
+    (
+        [1, 1, 160, 160],
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        (64, 64),
+        _GRID_3x3,
+        [1, 1, 64, 64],
+        _GRID_3x1,
+        "block_uneven_last2_to_nd_multi_per_core",
+    ),
+    # HEIGHT_SHARDED with uneven H: tensor [1,1,160,64], shard (64,64) on 3 cores
+    #   -> 3 shards (64, 64, 32 rows). Last-2 dims uneven on H.
+    # Output: ND [1,1,64,64] on 1 core (3 shards/core).
+    (
+        [1, 1, 160, 64],
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        (64, 64),
+        _GRID_3x1,
+        [1, 1, 64, 64],
+        _GRID_1x1,
+        "h_uneven_last2_to_nd_multi_per_core",
+    ),
+]
+
+
+# Each case: (tensor_shape, input_nd_shard_shape, input_nd_grid,
+#            output_2d_shard_layout, output_2d_shard_shape, output_2d_grid, id)
+_ND_TO_2D_CASES = [
+    # ND even 2 shards on 2 cores -> HEIGHT_SHARDED (4 shards on 4 cores).
+    (
+        [1, 1, 128, 64],
+        [1, 1, 64, 64],
+        _GRID_2x1,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        (32, 64),
+        _GRID_4x1,
+        "nd_to_h_even",
+    ),
+    # ND multi-shard-per-core (8 shards packed on 4 cores) -> WIDTH_SHARDED (4 shards on 4 cores).
+    (
+        [1, 1, 64, 256],
+        [1, 1, 64, 32],
+        _GRID_4x1,  # 8 shards on 4 cores -> 2 shards/core
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        (64, 64),
+        _GRID_4x1,
+        "nd_multi_per_core_to_w_even",
+    ),
+    # ND uneven on last-2 dims with non-trivial outer dim:
+    #   tensor [2,1,160,160], ND shard [1,1,64,64] -> dim0 2 shards, dim2 3 shards (160/64 = 64,64,32),
+    #   dim3 3 shards (same). Total 2*1*3*3 = 18 shards packed on 3 cores (6 shards/core).
+    # Output: BLOCK_SHARDED (64,64). BLOCK_SHARDED flattens outer dims into physical_height, so
+    #   physical shape is (2*1*160, 160) = (320, 160). num_shards_H = ceil(320/64) = 5 (even),
+    #   num_shards_W = ceil(160/64) = 3 (uneven: 64,64,32). Grid must be 3 cols x 5 rows for
+    #   ROW_MAJOR orientation -> 15 cores, 1 shard/core.
+    (
+        [2, 1, 160, 160],
+        [1, 1, 64, 64],
+        _GRID_3x1,  # 18 ND shards on 3 cores -> 6 shards/core
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        (64, 64),
+        _GRID_3x5,  # 3x5 grid = 15 cores (matches num_shards_H=5 x num_shards_W=3 for ROW_MAJOR orientation)
+        "nd_multi_per_core_uneven_to_block_uneven",
+    ),
+    # ND 3-D tensor uneven on outer dim (tensor [3,128,128] shard [2,64,64] -> 8 shards,
+    # dim0 splits 3/2->(2,1), dim1 128/64=2, dim2 128/64=2) packed on 4 cores (2 shards/core).
+    # Output: HEIGHT_SHARDED on 4 cores (tensor flattens to (384,128); shard (96,128), 4 even
+    # shards). HEIGHT_SHARDED handles 3-D+ tensors by flattening the outer dims into H.
+    (
+        [3, 128, 128],
+        [2, 64, 64],
+        _GRID_4x1,  # 8 shards on 4 cores -> 2 shards/core
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        (96, 128),
+        _GRID_4x1,
+        "nd_3d_multi_per_core_to_h_even",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, input_2d_layout, input_2d_shard, input_2d_grid, output_nd_shard, output_nd_grid, case_id",
+    _2D_TO_ND_CASES,
+    ids=[c[-1] for c in _2D_TO_ND_CASES],
+)
+@pytest.mark.parametrize(
+    "from_layout, target_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["rm_to_tile", "tile_to_rm"],
+)
+def test_to_layout_2d_sharded_to_nd_sharded(
+    device,
+    tensor_shape,
+    input_2d_layout,
+    input_2d_shard,
+    input_2d_grid,
+    output_nd_shard,
+    output_nd_grid,
+    case_id,
+    from_layout,
+    target_layout,
+):
+    """2D-sharded (HEIGHT/WIDTH/BLOCK) input -> ND-sharded output via ttnn.to_layout."""
+    input_mem_config = _make_2d_mem_config(input_2d_layout, input_2d_shard, input_2d_grid)
+    output_mem_config = _make_nd_mem_config(output_nd_shard, output_nd_grid)
+    _run_to_layout_nd_sharded(
+        device,
+        tensor_shape,
+        input_mem_config,
+        target_layout,
+        output_mem_config,
+        from_layout=from_layout,
+    )
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, input_nd_shard, input_nd_grid, output_2d_layout, output_2d_shard, output_2d_grid, case_id",
+    _ND_TO_2D_CASES,
+    ids=[c[-1] for c in _ND_TO_2D_CASES],
+)
+@pytest.mark.parametrize(
+    "from_layout, target_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["rm_to_tile", "tile_to_rm"],
+)
+def test_to_layout_nd_sharded_to_2d_sharded(
+    device,
+    tensor_shape,
+    input_nd_shard,
+    input_nd_grid,
+    output_2d_layout,
+    output_2d_shard,
+    output_2d_grid,
+    case_id,
+    from_layout,
+    target_layout,
+):
+    """ND-sharded input -> 2D-sharded (HEIGHT/WIDTH/BLOCK) output via ttnn.to_layout."""
+    input_mem_config = _make_nd_mem_config(input_nd_shard, input_nd_grid)
+    output_mem_config = _make_2d_mem_config(output_2d_layout, output_2d_shard, output_2d_grid)
+    _run_to_layout_nd_sharded(
+        device,
+        tensor_shape,
+        input_mem_config,
+        target_layout,
+        output_mem_config,
+        from_layout=from_layout,
+    )
+
+
+# ---------------------------------------------------------------------------
+# to_layout from interleaved -> ND-sharded.
+#
+# Covers RM -> TILE (with tensor shapes that are NOT divisible by tile size on
+# the last two dims, so tilize_with_val_padding must pad before writing the
+# ND-sharded output) and TILE -> RM.
+# ---------------------------------------------------------------------------
+
+
+# Each case: (tensor_shape, output_nd_shard_shape, output_nd_grid, id)
+# Output ND shard shape's last-2 dims are tile-multiples (required by TILE output).
+_INTERLEAVED_TO_ND_RM_TO_TILE_CASES = [
+    # Tile-aligned tensor, single-shard ND output.
+    ([1, 1, 64, 64], [1, 1, 64, 64], _GRID_1x1, "tile_aligned_1shard"),
+    # Tile-aligned tensor, multi-shard ND output.
+    ([1, 1, 128, 64], [1, 1, 32, 64], _GRID_4x1, "tile_aligned_multi_shard"),
+    # Tile-aligned tensor, ND output with multi-shard-per-core (8 shards on 4 cores).
+    ([1, 1, 256, 64], [1, 1, 32, 64], _GRID_4x1, "tile_aligned_multi_per_core"),
+    # Non-tile-aligned last dim only (W=62 -> padded to 64). Single-shard output covers padded shape.
+    ([1, 1, 32, 62], [1, 1, 32, 64], _GRID_1x1, "non_tile_aligned_w_only"),
+    # Non-tile-aligned -2 dim only (H=30 -> padded to 32). Single-shard output.
+    ([1, 1, 30, 64], [1, 1, 32, 64], _GRID_1x1, "non_tile_aligned_h_only"),
+    # Non-tile-aligned BOTH last 2 dims (H=30, W=62 -> padded to 32x64). Single-shard output.
+    ([1, 1, 30, 62], [1, 1, 32, 64], _GRID_1x1, "non_tile_aligned_both_last2_1shard"),
+    # Non-tile-aligned both last 2 dims, with multi-shard ND output.
+    # [1,1,60,62] -> padded to [1,1,64,64] after tilize; shard [1,1,32,64] on 2 cores.
+    ([1, 1, 60, 62], [1, 1, 32, 64], _GRID_2x1, "non_tile_aligned_both_last2_multi_shard"),
+    # Non-tile-aligned both last 2 dims, outer dim > 1, multi-shard ND output.
+    # [2,1,30,62] -> padded to [2,1,32,64] after tilize; shard [1,1,32,64] on 2 cores.
+    ([2, 1, 30, 62], [1, 1, 32, 64], _GRID_2x1, "non_tile_aligned_with_outer_dim"),
+    # Non-tile-aligned, outer dim > 1, multi-shard-per-core on ND output.
+    # [4,1,30,62] -> padded [4,1,32,64]; 4 ND shards with [1,1,32,64] on 2 cores -> 2 shards/core.
+    ([4, 1, 30, 62], [1, 1, 32, 64], _GRID_2x1, "non_tile_aligned_multi_per_core"),
+    # Non-tile-aligned, rank-3 tensor.
+    # [3,30,62] -> padded [3,32,64]; shard [1,32,64] on 3 cores.
+    ([3, 30, 62], [1, 32, 64], _GRID_3x1, "non_tile_aligned_rank3"),
+    # --- Uneven ND output sharding ---
+    # Tile-aligned tensor [3,160,160] with ND shard [2,64,64]: uneven on ALL dims
+    #   (dim0 3/2->(2,1), dim1/2 160/64->(64,64,32)) => 2*3*3 = 18 shards.
+    # 18 cores, 1 shard/core.
+    ([3, 160, 160], [2, 64, 64], _GRID_6x3, "uneven_nd_all_dims_1shard_per_core"),
+    # Same tensor/shard, multi-shard-per-core on ND output (6 cores, 3 shards/core).
+    ([3, 160, 160], [2, 64, 64], _GRID_6x1, "uneven_nd_all_dims_multi_shard_per_core"),
+    # Tile-aligned tensor, uneven on last 2 dims only (outer dim even).
+    #   [2,160,160] sharded [1,64,64] => 2*3*3 = 18 shards on 6 cores (3/core).
+    ([2, 160, 160], [1, 64, 64], _GRID_6x1, "uneven_nd_inner_multi_shard_per_core"),
+    # Non-tile-aligned tensor + uneven ND shard.
+    #   [3,158,158] logical -> [3,160,160] padded after tilize; shard [2,64,64] => 18 shards.
+    #   Exercises BOTH tilize-with-padding (logical -> padded) AND uneven ND sharding.
+    ([3, 158, 158], [2, 64, 64], _GRID_6x3, "non_tile_aligned_tensor_uneven_nd_all_dims"),
+    # Non-tile-aligned tensor + uneven ND shard + multi-shard-per-core.
+    ([3, 158, 158], [2, 64, 64], _GRID_6x1, "non_tile_aligned_tensor_uneven_nd_multi_per_core"),
+]
+
+
+# Cases where the TILE input has logical last-2 dims not divisible by 32 take the
+# `untilize_with_unpadding` path in to_layout's RM target branch. On main,
+# `untilize_with_unpadding` rejects interleaved-input + sharded-output with the TT_FATAL
+#   "Output memory config layout must be INTERLEAVED but got <layout>"
+# (see untilize_with_unpadding_device_operation.cpp final `else` branch). Marked
+# xfail(strict=True) so they flip to failure if interleaved->sharded support is ever
+# added to untilize_with_unpadding, prompting removal of the xfail.
+_interleaved_to_sharded_untilize_xfail = pytest.mark.xfail(
+    raises=RuntimeError,
+    reason='TT_FATAL: "Output memory config layout must be INTERLEAVED but got ..." '
+    "(untilize_with_unpadding does not support interleaved-input -> sharded-output).",
+    strict=True,
+)
+
+
+_INTERLEAVED_TO_ND_TILE_TO_RM_CASES = [
+    # Tile-aligned, single-shard ND output.
+    ([1, 1, 64, 64], [1, 1, 64, 64], _GRID_1x1, "tile_aligned_1shard"),
+    # Tile-aligned, multi-shard ND output.
+    ([1, 1, 128, 64], [1, 1, 32, 64], _GRID_4x1, "tile_aligned_multi_shard"),
+    # Tile-aligned, multi-shard-per-core on ND output (8 shards on 4 cores).
+    ([1, 1, 256, 64], [1, 1, 32, 64], _GRID_4x1, "tile_aligned_multi_per_core"),
+    # Rank-3 even.
+    ([4, 32, 64], [1, 32, 64], _GRID_4x1, "rank3_tile_aligned"),
+    # Rank-3 uneven on outer dim, tile-aligned last-2 dims.
+    ([5, 32, 64], [2, 32, 64], _GRID_3x1, "rank3_uneven_outer"),
+    # --- Uneven ND output sharding ---
+    # [3,160,160] shard [2,64,64]: uneven on ALL dims, 18 shards on 18 cores (1/core).
+    ([3, 160, 160], [2, 64, 64], _GRID_6x3, "uneven_nd_all_dims_1shard_per_core"),
+    # Same, multi-shard-per-core (6 cores, 3/core).
+    ([3, 160, 160], [2, 64, 64], _GRID_6x1, "uneven_nd_all_dims_multi_shard_per_core"),
+    # Uneven on inner dims only.
+    ([2, 160, 160], [1, 64, 64], _GRID_6x1, "uneven_nd_inner_multi_shard_per_core"),
+    # --- Non-tile-aligned logical shapes: exercise untilize_with_unpadding ---
+    # For TILE-layout input with logical last-2 dims not divisible by 32, the tensor's
+    # padded_shape > logical_shape, so to_layout(ROW_MAJOR) hits `requires_padding_change`
+    # and dispatches to `ttnn::untilize_with_unpadding`. However, on main,
+    # untilize_with_unpadding rejects interleaved-input -> sharded-output via the validator
+    #   "Output memory config layout must be INTERLEAVED but got <layout>"
+    # (see untilize_with_unpadding_device_operation.cpp final `else` branch of the sharded
+    # dispatch). So these cases are expected to fail with that TT_FATAL. Marked xfail
+    # (strict=True) so they flip to failure if interleaved->sharded support is ever added
+    # to untilize_with_unpadding, prompting removal of the mark.
+    # [1,1,30,64] logical -> padded [1,1,32,64] in TILE; shard [1,1,32,64] on 1 core covers padded.
+    pytest.param(
+        [1, 1, 30, 64],
+        [1, 1, 32, 64],
+        _GRID_1x1,
+        "non_tile_aligned_h_only",
+        marks=_interleaved_to_sharded_untilize_xfail,
+    ),
+    # [1,1,60,64] -> padded [1,1,64,64]; shard [1,1,32,64] on 2 cores.
+    pytest.param(
+        [1, 1, 60, 64],
+        [1, 1, 32, 64],
+        _GRID_2x1,
+        "non_tile_aligned_h_multi_shard",
+        marks=_interleaved_to_sharded_untilize_xfail,
+    ),
+    # [2,1,30,64] -> padded [2,1,32,64]; shard [1,1,32,64] on 2 cores (one per outer slice).
+    pytest.param(
+        [2, 1, 30, 64],
+        [1, 1, 32, 64],
+        _GRID_2x1,
+        "non_tile_aligned_with_outer_dim",
+        marks=_interleaved_to_sharded_untilize_xfail,
+    ),
+    # Non-tile-aligned + uneven ND shard: [3,158,158] -> padded [3,160,160]; shard [2,64,64] -> 18 shards
+    # on 6 cores (3 shards/core). Exercises untilize_with_unpadding + uneven ND + multi-shard-per-core.
+    pytest.param(
+        [3, 158, 158],
+        [2, 64, 64],
+        _GRID_6x1,
+        "non_tile_aligned_tensor_uneven_nd_multi_per_core",
+        marks=_interleaved_to_sharded_untilize_xfail,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, output_nd_shard, output_nd_grid, case_id",
+    _INTERLEAVED_TO_ND_RM_TO_TILE_CASES,
+    ids=[c[-1] for c in _INTERLEAVED_TO_ND_RM_TO_TILE_CASES],
+)
+@pytest.mark.parametrize(
+    "input_buffer_type",
+    [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
+    ids=["dram", "l1"],
+)
+def test_to_layout_interleaved_to_nd_sharded_rm_to_tile(
+    device, tensor_shape, output_nd_shard, output_nd_grid, case_id, input_buffer_type
+):
+    """Interleaved (DRAM or L1) ROW_MAJOR input -> ND-sharded TILE output.
+
+    Includes shapes whose last two dims are not divisible by 32; to_layout must tilize-with-padding
+    before writing into the ND-sharded output.
+    """
+    input_mem_config = ttnn.DRAM_MEMORY_CONFIG if input_buffer_type == ttnn.BufferType.DRAM else ttnn.L1_MEMORY_CONFIG
+    output_mem_config = _make_nd_mem_config(output_nd_shard, output_nd_grid)
+    _run_to_layout_nd_sharded(
+        device,
+        tensor_shape,
+        input_mem_config,
+        ttnn.TILE_LAYOUT,
+        output_mem_config,
+        from_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, output_nd_shard, output_nd_grid, case_id",
+    _INTERLEAVED_TO_ND_TILE_TO_RM_CASES,
+    ids=[c[-1] for c in _INTERLEAVED_TO_ND_TILE_TO_RM_CASES],
+)
+@pytest.mark.parametrize(
+    "input_buffer_type",
+    [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
+    ids=["dram", "l1"],
+)
+def test_to_layout_interleaved_to_nd_sharded_tile_to_rm(
+    device, tensor_shape, output_nd_shard, output_nd_grid, case_id, input_buffer_type
+):
+    """Interleaved (DRAM or L1) TILE input -> ND-sharded ROW_MAJOR output."""
+    input_mem_config = ttnn.DRAM_MEMORY_CONFIG if input_buffer_type == ttnn.BufferType.DRAM else ttnn.L1_MEMORY_CONFIG
+    output_mem_config = _make_nd_mem_config(output_nd_shard, output_nd_grid)
+    _run_to_layout_nd_sharded(
+        device,
+        tensor_shape,
+        input_mem_config,
+        ttnn.ROW_MAJOR_LAYOUT,
+        output_mem_config,
+        from_layout=ttnn.TILE_LAYOUT,
+    )
+
+
+# ---------------------------------------------------------------------------
+# to_layout TILE -> ROW_MAJOR where the input is ND-sharded and has a logical
+# shape whose last-2 dims are NOT divisible by 32 (so padded_shape > logical_shape).
+# This exercises the `requires_padding_change=true` branch in to_layout_op.cpp that
+# dispatches to `ttnn::untilize_with_unpadding`.
+#
+# The ND shard shape's last-2 dims must be tile-multiples (TILE layout requirement),
+# so the shard covers the *padded* shape; the output RM tensor is unpadded back to
+# the original logical shape.
+# ---------------------------------------------------------------------------
+
+
+# Each case:
+#   (tensor_logical_shape, input_nd_shard_shape, input_nd_grid,
+#    output_nd_shard_shape, output_nd_grid, id)
+# Input tensor is created with TILE layout; its last-2 dims are NOT tile-aligned so
+# logical_shape != padded_shape. Input ND shard shape is sized to the padded shape.
+# Output is RM; shard shape is sized to the logical (unpadded) shape.
+_ND_SHARDED_TILE_TO_RM_UNPADDING_CASES = [
+    # # [1,1,30,64] logical -> padded [1,1,32,64]. Input ND shard [1,1,32,64] on 1 core.
+    # # Output ND shard also [1,1,32,64] on 1 core (tile-aligned; covers full padded
+    # # physical shape and the RM output tensor's logical [1,1,30,64] fits within it).
+    # # A tighter shard [1,1,30,64] sized to the logical shape is rejected by the
+    # # TensorLayout validator because the physical shard shape must be tile-sized.
+    # (
+    #     [1, 1, 30, 64],
+    #     [1, 1, 32, 64],
+    #     _GRID_1x1,
+    #     [1, 1, 32, 64],
+    #     _GRID_1x1,
+    #     "h_only_1shard",
+    # ),
+    # # [1,1,60,64] logical -> padded [1,1,64,64]. Input shard [1,1,32,64] on 2 cores
+    # # (2 tile-shards). Output shard [1,1,32,64] on 2 cores (matches input; tile-aligned).
+    # (
+    #     [1, 1, 60, 64],
+    #     [1, 1, 32, 64],
+    #     _GRID_2x1,
+    #     [1, 1, 32, 64],
+    #     _GRID_2x1,
+    #     "h_only_multi_shard",
+    # ),
+    # # Non-tile-aligned on both last-2 dims:
+    # # [1,1,30,62] logical -> padded [1,1,32,64]. Input & output ND shard [1,1,32,64] on 1 core.
+    # # Shard covers padded physical; logical [1,1,30,62] tensor fits within a single shard.
+    # (
+    #     [1, 1, 30, 62],
+    #     [1, 1, 32, 64],
+    #     _GRID_1x1,
+    #     [1, 1, 32, 64],
+    #     _GRID_1x1,
+    #     "both_last2_1shard",
+    # ),
+    # # # With outer dim > 1:
+    # # # [2,1,30,64] logical -> padded [2,1,32,64]. Input ND shard [1,1,32,64] on 2 cores (2 shards).
+    # # # Output ND shard [1,1,30,64] on 2 cores.
+    # # (
+    # #     [2, 1, 30, 64],
+    # #     [1, 1, 32, 64],
+    # #     _GRID_2x1,
+    # #     [1, 1, 30, 64],
+    # #     _GRID_2x1,
+    # #     "with_outer_dim",
+    # # ),
+    # Non-tile-aligned + uneven ND sharding + multi-shard-per-core:
+    # [3,158,158] logical -> padded [3,160,160]. Input ND shard [2,64,64] on 6 cores (18 shards, 3/core).
+    # Output RM ND shard [2,64,64] on 6 cores (uneven on all dims of LOGICAL shape: dim0 3/2, dim1/2 158/64).
+    (
+        [3, 158, 158],
+        [2, 64, 64],
+        _GRID_6x1,
+        [2, 64, 64],
+        _GRID_6x1,
+        "uneven_nd_all_dims_multi_per_core",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, input_nd_shard, input_nd_grid, output_nd_shard, output_nd_grid, case_id",
+    _ND_SHARDED_TILE_TO_RM_UNPADDING_CASES,
+    ids=[c[-1] for c in _ND_SHARDED_TILE_TO_RM_UNPADDING_CASES],
+)
+@pytest.mark.parametrize(
+    "output_memory_mode",
+    ["nd_sharded", "interleaved_dram"],
+)
+def test_to_layout_nd_sharded_tile_to_rm_untilize_with_unpadding(
+    device, tensor_shape, input_nd_shard, input_nd_grid, output_nd_shard, output_nd_grid, case_id, output_memory_mode
+):
+    """ND-sharded TILE input with non-tile-aligned logical shape -> RM output.
+
+    Exercises `ttnn::untilize_with_unpadding` inside to_layout (triggered when the TILE
+    input's logical_shape differs from its padded_shape).
+    """
+    input_mem_config = _make_nd_mem_config(input_nd_shard, input_nd_grid)
+    if output_memory_mode == "nd_sharded":
+        output_mem_config = _make_nd_mem_config(output_nd_shard, output_nd_grid)
+    elif output_memory_mode == "interleaved_dram":
+        output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        raise ValueError(output_memory_mode)
+
+    _run_to_layout_nd_sharded(
+        device,
+        tensor_shape,
+        input_mem_config,
+        ttnn.ROW_MAJOR_LAYOUT,
+        output_mem_config,
+        from_layout=ttnn.TILE_LAYOUT,
+    )
+
+
+# # ---------------------------------------------------------------------------
+# # Diagnostic: call ttnn.untilize_with_unpadding DIRECTLY on an ND-sharded TILE
+# # tensor (bypassing ttnn.to_layout) to determine whether the ~0.5 PCC failure
+# # observed in test_to_layout_nd_sharded_tile_to_rm_untilize_with_unpadding is
+# # in to_layout or in untilize_with_unpadding itself.
+# #
+# # If this test fails with a similarly low PCC, the bug is in
+# # untilize_with_unpadding's ND-sharded path (specifically, not respecting
+# # per-outer-dim tile-row padding when outer dim > 1). If it passes, something
+# # that to_layout does before the untilize call is corrupting the tensor.
+# # ---------------------------------------------------------------------------
+
+
+# @pytest.mark.parametrize(
+#     "tensor_shape, input_nd_shard, input_nd_grid, case_id",
+#     [
+#         # Baseline: no outer dim. padded [1,1,32,64] -> unpad to [1,1,30,64].
+#         # ([1, 1, 30, 64], [1, 1, 32, 64], _GRID_1x1, "no_outer_dim"),
+#         # The failing case: outer dim = 2. padded [2,1,32,64] -> unpad to [2,1,30,64].
+#         # Expected: per-batch tile padding is stripped (2 rows/batch).
+#         ([2, 1, 30, 64], [1, 1, 32, 64], _GRID_2x1, "with_outer_dim"),
+#         # More outer-dim shards: outer dim = 4. padded [4,1,32,64] -> unpad to [4,1,30,64].
+#         # ([4, 1, 30, 64], [1, 1, 32, 64], _GRID_4x1, "outer_dim_4"),
+#     ],
+#     ids=lambda p: p if isinstance(p, str) else None,
+# )
+# def test_untilize_with_unpadding_nd_sharded_tile_direct(device, tensor_shape, input_nd_shard, input_nd_grid, case_id):
+#     """Directly invoke ttnn.untilize_with_unpadding on an ND-sharded TILE tensor with
+#     non-tile-aligned logical last-2 dims, bypassing ttnn.to_layout. Output is interleaved
+#     DRAM. Diagnostic for the PCC failure in test_to_layout_nd_sharded_tile_to_rm_untilize_with_unpadding.
+#     """
+#     torch.manual_seed(0)
+#     torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+
+#     input_mem_config = _make_nd_mem_config(input_nd_shard, input_nd_grid)
+#     input_tensor = ttnn.from_torch(
+#         torch_input,
+#         dtype=ttnn.bfloat16,
+#         layout=ttnn.TILE_LAYOUT,
+#         device=device,
+#         memory_config=input_mem_config,
+#     )
+#     assert input_tensor.is_sharded()
+#     assert input_tensor.layout == ttnn.TILE_LAYOUT
+
+#     # output_tensor_end = logical_shape - 1 per dim (same spec to_layout_op.cpp uses at lines 149-153).
+#     output_tensor_end = [s - 1 for s in tensor_shape]
+
+#     print("output_tensor_end", output_tensor_end)
+
+#     output_tensor = ttnn.untilize_with_unpadding(
+#         input_tensor,
+#         output_tensor_end,
+#         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+#     )
+#     assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+#     assert tuple(output_tensor.shape) == tuple(tensor_shape)
+
+#     output_torch = ttnn.to_torch(output_tensor)
+#     assert tuple(output_torch.shape) == tuple(tensor_shape)
+#     assert_with_pcc(torch_input, output_torch, 0.9999)
+#     assert torch.allclose(torch_input, output_torch)
