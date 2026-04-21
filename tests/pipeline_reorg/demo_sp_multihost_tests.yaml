@@ -64,6 +64,28 @@
 # BH SP4 Multihost Pipeline Tests (4 connected SP1 = 16 galaxies)
 # ============================================================================
 
+- name: "Physical Discovery Test (SP4)"
+  cmd: |
+    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
+      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
+  skus:
+    bh_sp4:
+      timeout: 15
+  owner_id: U08RL15T4N8
+  team: scaleout
+  sp_config: sp4
+
+- name: "System Health Check (SP4)"
+  cmd: |
+    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
+      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health
+  skus:
+    bh_sp4:
+      timeout: 15
+  owner_id: U08RL15T4N8
+  team: scaleout
+  sp_config: sp4
+
 - name: "Pipeline Test (DeepSeek V3 B1 Superpod)"
   cmd: |
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
