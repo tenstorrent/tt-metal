@@ -12,6 +12,8 @@ Workflow:
     1. C++ captures graph to JSON: ttnn::graph::end_graph_capture_to_file("report.json")
     2. Optional sidecars next to the report: ``*.python_io.json`` (Python I/O), ``*.tensor_lifetime.json``
        (producer / last-use / deallocate ops + optional source locations for #27868-style analysis).
+       Tables ``tensor_consumers`` / ``tensor_producers`` mirror ``input_tensors`` / ``output_tensors``
+       as tensor-centric consumer and producer lists.
        Source file/line columns require Python stack traces in the capture; ``ttnn.graph.begin_graph_capture``
        enables those for the outermost session (see :mod:`ttnn.graph`).
     3. Later, import to SQLite: python -m ttnn.graph_report report.json ./visualizer_db/
@@ -349,6 +351,30 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             producer_source_line int,
             last_use_source_file text,
             last_use_source_line int
+        )
+    """
+    )
+
+    # Tensor-centric view of consumers: each op that lists the tensor as an input (same data as input_tensors).
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tensor_consumers (
+            tensor_id int,
+            operation_id int,
+            input_index int,
+            UNIQUE(tensor_id, operation_id, input_index)
+        )
+    """
+    )
+
+    # Tensor-centric view of producers: each op that lists the tensor as an output (same data as output_tensors).
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tensor_producers (
+            tensor_id int,
+            operation_id int,
+            output_index int,
+            UNIQUE(tensor_id, operation_id, output_index)
         )
     """
     )
@@ -1231,8 +1257,18 @@ def import_graph(
         cursor.executemany("""INSERT INTO operation_arguments VALUES (?, ?, ?)""", operation_arguments_batch)
     if input_tensors_batch:
         cursor.executemany("""INSERT INTO input_tensors VALUES (?, ?, ?)""", input_tensors_batch)
+        tensor_consumers_batch = [(tid_int, op_id, idx) for op_id, idx, tid_int in input_tensors_batch]
+        cursor.executemany(
+            """INSERT OR IGNORE INTO tensor_consumers VALUES (?, ?, ?)""",
+            tensor_consumers_batch,
+        )
     if output_tensors_batch:
         cursor.executemany("""INSERT INTO output_tensors VALUES (?, ?, ?)""", output_tensors_batch)
+        tensor_producers_batch = [(tid_int, op_id, idx) for op_id, idx, tid_int in output_tensors_batch]
+        cursor.executemany(
+            """INSERT OR IGNORE INTO tensor_producers VALUES (?, ?, ?)""",
+            tensor_producers_batch,
+        )
     if tensors_batch:
         cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
 
@@ -1295,6 +1331,8 @@ def import_graph(
         "warnings": warnings,
         "graph_counter_to_op_id": graph_counter_to_op_id,
         "tensor_lifetime": tensor_lifetime_records,
+        "tensor_consumers": len(input_tensors_batch) if input_tensors_batch else 0,
+        "tensor_producers": len(output_tensors_batch) if output_tensors_batch else 0,
     }
 
 
@@ -1449,6 +1487,8 @@ def import_report(
             "stack_traces": 0,
             "svgs": 0,
             "tensor_lifetime_records": 0,
+            "tensor_consumer_rows": 0,
+            "tensor_producer_rows": 0,
         }
 
         for idx, rpath in enumerate(sorted(report_files)):
@@ -1523,6 +1563,12 @@ def import_report(
                 total_stats["stack_traces"] += stats.get("stack_traces", 0)
                 tl = stats.get("tensor_lifetime") or []
                 total_stats["tensor_lifetime_records"] += len(tl)
+                total_stats["tensor_consumer_rows"] = total_stats.get("tensor_consumer_rows", 0) + stats.get(
+                    "tensor_consumers", 0
+                )
+                total_stats["tensor_producer_rows"] = total_stats.get("tensor_producer_rows", 0) + stats.get(
+                    "tensor_producers", 0
+                )
                 tl_path = rpath.with_name(rpath.stem + ".tensor_lifetime.json")
                 with open(tl_path, "w") as f:
                     json.dump(tl, f, indent=2)
@@ -1681,6 +1727,10 @@ def import_report(
             summary.append(
                 f"  - {total_stats['tensor_lifetime_records']} tensor lifetime rows (also in *.tensor_lifetime.json)"
             )
+        if total_stats.get("tensor_consumer_rows", 0) > 0:
+            summary.append(f"  - {total_stats['tensor_consumer_rows']} tensor_consumers rows")
+        if total_stats.get("tensor_producer_rows", 0) > 0:
+            summary.append(f"  - {total_stats['tensor_producer_rows']} tensor_producers rows")
         if total_stats.get("buffer_pages", 0) > 0:
             summary.append(f"  - {total_stats['buffer_pages']} buffer pages")
         if total_stats.get("cluster_descriptor"):

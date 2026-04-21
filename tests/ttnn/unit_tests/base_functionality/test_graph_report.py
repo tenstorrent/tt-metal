@@ -160,6 +160,88 @@ class TestTensorLifetime:
         assert rows[101][2] == 1
         conn.close()
 
+    def test_tensor_consumers_mirror_input_tensors(self, tmp_path):
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": "[1,1,32,32]"},
+                "connections": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::relu", "inputs": "1"},
+                "connections": [],
+                "input_tensors": [1],
+            },
+            {
+                "counter": 3,
+                "node_type": "tensor",
+                "params": {"tensor_id": "101", "shape": "[1,1,32,32]"},
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::relu"},
+                "connections": [3],
+                "duration_ns": 1000,
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+        cursor.execute("SELECT operation_id, input_index, tensor_id FROM input_tensors ORDER BY tensor_id")
+        inp = cursor.fetchall()
+        cursor.execute("SELECT tensor_id, operation_id, input_index FROM tensor_consumers ORDER BY tensor_id")
+        tc = cursor.fetchall()
+        assert len(tc) == len(inp)
+        assert {(r[2], r[0], r[1]) for r in inp} == {(r[0], r[1], r[2]) for r in tc}
+        conn.close()
+
+    def test_tensor_producers_mirror_output_tensors(self, tmp_path):
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": "[1,1,32,32]"},
+                "connections": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::relu", "inputs": "1"},
+                "connections": [],
+                "input_tensors": [1],
+            },
+            {
+                "counter": 3,
+                "node_type": "tensor",
+                "params": {"tensor_id": "101", "shape": "[1,1,32,32]"},
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::relu"},
+                "connections": [3],
+                "duration_ns": 1000,
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+        cursor.execute("SELECT operation_id, output_index, tensor_id FROM output_tensors ORDER BY tensor_id")
+        out = cursor.fetchall()
+        cursor.execute("SELECT tensor_id, operation_id, output_index FROM tensor_producers ORDER BY tensor_id")
+        tp = cursor.fetchall()
+        assert len(tp) == len(out)
+        assert {(r[2], r[0], r[1]) for r in out} == {(r[0], r[1], r[2]) for r in tp}
+        conn.close()
+
 
 class TestImportGraphUnit:
     """Pure unit tests for import_graph function - no device required."""
