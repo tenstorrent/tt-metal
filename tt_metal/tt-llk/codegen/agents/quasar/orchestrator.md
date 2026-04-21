@@ -6,11 +6,22 @@ Read-only git commands are allowed (`git rev-parse`, `git log`, `git status`, `g
 
 ---
 
-When a user asks to **"generate {kernel} for {target_arch}"**, follow this workflow using the **Agent tool** to spawn subagents. Each agent runs in its own context, keeping the main conversation clean.
+## Pipeline Overview
 
-The system is designed to work across architectures. Agents must **discover** architectural patterns from authoritative sources — not rely on hardcoded knowledge.
+When a user asks to **"generate {kernel} for {target_arch}"**, run this pipeline:
 
-**Agent playbooks are co-located in this directory** (`codegen/agents/quasar/`). All `llk-*.md` files referenced below live here.
+```
+analyzer  →  [ writer → tester → refiner ] × up to 3 cycles  →  optimizer  →  format  →  report
+```
+
+- **analyzer** (`llk-analyzer.md`) — one-shot. Produces `codegen/artifacts/{op}_analysis.md` covering arch research, target-pattern survey, instruction mapping, solution approach, and format applicability.
+- **writer** (`llk-kernel-writer.md`) — transcribes the analysis into a kernel file and compile-checks.
+- **tester** (`llk-tester.md`) — writes/extends tests and runs them, with an **internal 10-attempt** compile+test fix loop. Returns `PASS` or `STUCK`.
+- **refiner** (`llk-analysis-refiner.md`) — invoked only when the writer fails compile or the tester returns `STUCK`. Archives the failed attempt, rewrites the analysis in place, returns `REFINED` or `ESCALATE`.
+- **Loop cap: 3 writer-tester cycles**. Cycles 1 and 2 can hand off to the refiner; cycle 3 cannot (the refiner itself caps at v2 = 2 refinements = 3 total cycles). If cycle 3 still fails, the run is reported `failed`.
+- **optimizer** and **format** only run on success.
+
+Agent playbooks live in `codegen/agents/quasar/`. The system discovers architectural patterns from authoritative sources — not hardcoded knowledge.
 
 ---
 
@@ -23,7 +34,7 @@ The top-level routing (`codegen/CLAUDE.md`) creates an isolated worktree and pas
 - **WORKTREE_DIR** — absolute path to the isolated git worktree (e.g., `/tmp/codegen_worktree_generate-gelu-quasar`)
 - **WORKTREE_BRANCH** — the branch name (e.g., `ai-code-gen/generate-gelu-quasar-v1`)
 
-**CRITICAL: All code writes and file modifications MUST happen inside `$WORKTREE_DIR/tt_metal/tt-llk`.** The worktree has `codegen/` populated with symlinks to the source branch (read-only: `agents/`, `scripts/`, `references/`, `config/`, `CLAUDE.md`) plus a real per-worktree `codegen/artifacts/` directory for this run's outputs. Anything you or a subagent writes outside the worktree leaks into the source branch.
+**CRITICAL: All code writes and file modifications MUST happen inside `$WORKTREE_DIR/tt_metal/tt-llk`.** The worktree has `codegen/` populated with symlinks to the source branch (read-only: `agents/`, `scripts/`, `references/`, `config/`, `CLAUDE.md`, `skills/`) plus a real per-worktree `codegen/artifacts/` directory for this run's outputs. Anything you or a subagent writes outside the worktree leaks into the source branch.
 
 Before any other work, enter the worktree:
 
@@ -32,18 +43,6 @@ cd "$WORKTREE_DIR/tt_metal/tt-llk"
 ```
 
 Every `cd`, file path, and subagent prompt below assumes this as the starting CWD. Each agent you spawn MUST also operate inside the worktree — pass `WORKTREE_DIR` in every agent prompt and tell them to `cd` there before doing anything.
-
----
-
-## CRITICAL: Incremental Phase-Based Generation
-
-**Kernels MUST be generated incrementally, one sub-kernel at a time.**
-
-Most kernel files contain multiple sub-kernels (e.g., a basic variant, a dual-input variant, an optimized variant). Each sub-kernel is a group of related functions (init, main, uninit, mop_config) that form a logical unit.
-
-**The rule**: Write one sub-kernel → compile → test → only proceed to the next sub-kernel when the current one passes. Never write the entire file at once.
-
-**Why**: A single wrong architectural assumption in a monolithic write poisons 400+ lines with no working baseline. Incremental phases give test feedback early, keep blast radius small, and give agents a working foundation to build on.
 
 ---
 
@@ -80,25 +79,28 @@ Every step transition in this orchestrator MUST update `$LOG_DIR/run.json` via
 `codegen/scripts/run_json_writer.py`. The Activity Monitor tab on the dashboard
 reads this file while the run is in progress (status: "running") and relies on
 `current_step`, `current_step_started`, `current_step_message`, `steps_completed`,
-and `step_history` staying current. The fields and writing cadence are specified
-by `/proj_sw/user_dev/llk_code_gen/dashboard/GEN_MONITOR_FIELDS.md` and
+`step_history`, and `per_phase` staying current. The fields and writing cadence
+are specified by
+`/proj_sw/user_dev/llk_code_gen/dashboard/GEN_MONITOR_FIELDS.md` and
 `/proj_sw/user_dev/llk_code_gen/dashboard/RUN_JSON_SPEC.md`.
 
 **Rules (do NOT skip any):**
 
-1. Call `run_json_writer.py init` once, immediately after creating `$LOG_DIR` (below).
-2. Call `run_json_writer.py advance` at every pipeline step boundary (see per-step
-   instructions further down). Use the default pipeline step IDs:
-   `arch_lookup → analyzer → planner → writer → fix_compile → test_writer →
-   tester → fix_tests → optimizer → prettifier`. Reusing the same ID across phases
-   is required and expected — the dashboard renders retries correctly when the same
-   step appears multiple times in `step_history`.
-3. Call `run_json_writer.py phase-start / phase-test / phase-end` at the start, during
-   simulator execution, and at the end of every phase in Step 3.
-4. Call `run_json_writer.py failure` whenever a failure is recorded (same content as
-   the `FAILURES` bash list — write both).
-5. Call `run_json_writer.py finalize` at the very end of Step 10 to flip `status` to
-   its terminal value (`success`, `compiled`, or `failed`) and close the last
+1. Call `run_json_writer.py init` once, immediately after creating `$LOG_DIR`
+   (Step 0a below). Pass the `pipeline_steps` JSON so the dashboard knows the
+   canonical step set: `analyzer → writer → tester → refiner → optimizer → format`.
+2. Call `run_json_writer.py advance` at every pipeline step boundary.
+   **Reusing the same step ID across cycles is required and expected** — the
+   dashboard renders retries correctly when the same step appears multiple times
+   in `step_history`. The writer and tester will appear once per cycle
+   (up to 3 times each); the refiner appears at most twice.
+3. Call `run_json_writer.py phase-start / phase-test / phase-end` at the start,
+   during tester execution, and at the end of every writer-tester cycle. Each
+   cycle is represented as one phase in `per_phase[]` (phase 1 = cycle 1, …).
+4. Call `run_json_writer.py failure` whenever a failure is recorded (same
+   content as the `FAILURES` bash list — write both).
+5. Call `run_json_writer.py finalize` at the very end of Step 5 to flip `status`
+   to its terminal value (`success`, `compiled`, or `failed`) and close the last
    `step_history` entry. **Never leave a run in status="running"**; even on early
    exit, run `finalize --status failed --final-result ...` before returning.
 
@@ -111,6 +113,15 @@ Right after `mkdir -p $LOG_DIR/instructions`, write the initial run.json so the
 dashboard immediately picks up this run as "running":
 
 ```bash
+export PIPELINE_STEPS_JSON='[
+  {"id":"analyzer","name":"Analyze","desc":"Research arch + analyze reference, produce solution approach"},
+  {"id":"writer","name":"Write","desc":"Scaffold + fill kernel, compile-check"},
+  {"id":"tester","name":"Test","desc":"Write/extend tests, run, internal 10-attempt fix loop"},
+  {"id":"refiner","name":"Refine","desc":"Rewrite analysis after writer/tester failure (max 2 refinements)"},
+  {"id":"optimizer","name":"Optimize","desc":"Replay-buffer optimization (success only)"},
+  {"id":"format","name":"Format","desc":"Run pre-commit formatters on generated files"}
+]'
+
 python codegen/scripts/run_json_writer.py init \
     --log-dir "$LOG_DIR" \
     --run-id "$RUN_ID" \
@@ -121,80 +132,139 @@ python codegen/scripts/run_json_writer.py init \
     --reference-file "tt_llk_{ref_arch}/{kernel_path}" \
     --generated-file "tt_llk_{target_arch}/{kernel_path}" \
     --start-time "$START_TIME" \
-    --first-step "arch_lookup" \
-    --first-message "Researching {target_arch} {kernel_type} architecture for {op}" \
+    --first-step "analyzer" \
+    --first-message "Analyzing {ref_arch} reference and producing solution approach for {op}" \
     --prompt "$PROMPT" \
     --batch-id "${CODEGEN_BATCH_ID:-}" \
     --model "$MODEL" \
     --run-type "$RUN_TYPE" \
-    --git-commit "$GIT_COMMIT"
+    --git-commit "$GIT_COMMIT" \
+    --phases-total 1 \
+    --pipeline-steps "$PIPELINE_STEPS_JSON"
+
+# Persist key vars for refresh_cost.sh across Bash tool-call shells.
+# Each Bash tool call runs in a fresh shell — exported vars from prior calls
+# are gone. refresh_cost.sh sources this file as a fallback so cost tracking
+# works regardless of which shell block calls it.
+cat > /tmp/codegen_run_state.sh << _STATE_EOF
+export START_TIME="${START_TIME}"
+export LOG_DIR="${LOG_DIR}"
+export MODEL="${MODEL}"
+_STATE_EOF
 ```
 
-Note: `--phases-total` is unknown at this point — patch it later with the `metric`
-subcommand after Step 2 (analyzer) reports the phase plan.
+Note: `--phases-total` starts at `1` (we always run at least one writer-tester
+cycle). It is bumped to 2 / 3 via the `metric` subcommand each time the refiner
+enables another cycle.
 
-
-Track these variables throughout the run for metrics. **All of them must be
-`export`'d** because the `finalize` step (Step 10) reads them from a Python
-subprocess via `os.environ[...]`:
+Track these variables throughout the run. **All of them must be
+`export`'d** because the `finalize` step reads them from a Python subprocess via
+`os.environ[...]`:
 
 ```bash
 export PROMPT="Generate {kernel} for {arch}"       # the original user prompt verbatim
 export BATCH_ID="${CODEGEN_BATCH_ID:-}"             # empty string if not a batch run
-export MODEL="${CODEGEN_MODEL:-opus}"               # opus | sonnet | haiku
+export MODEL="${CODEGEN_MODEL:-sonnet}"               # opus | sonnet | haiku
 export RUN_TYPE="$([ -n "$BATCH_ID" ] && echo ci || echo manual)"
-export COMPILATION_ATTEMPTS=0                       # increment each compiler.py invocation
-export DEBUG_CYCLES=0                               # increment each debugger invocation
-export PHASES_TOTAL=0                               # set after analyzer (Step 2)
-export PHASES_COMPLETED=0                           # increment as phases pass
-export TESTS_TOTAL=0                                # set after regression (Step 4)
+
+export CYCLE=1                                      # current writer-tester cycle (1..3)
+export MAX_CYCLES=3                                 # hard cap
+export REFINEMENT_COUNT=0                           # how many times the refiner ran
+
+export COMPILATION_ATTEMPTS=0                       # every compile across writer + tester's internal loop
+export DEBUG_CYCLES=0                               # refinement iterations (== REFINEMENT_COUNT at end)
+export PHASES_TOTAL=1                               # cycles attempted; bumped to 2/3 as refinements happen
+export PHASES_COMPLETED=0                           # 1 if a cycle passed, else 0
+export TESTS_TOTAL=0                                # total test variants run in the successful cycle
 export TESTS_PASSED=0
 export LINES_GENERATED=0
-export TESTS_GENERATED=false                        # true if test-writer was spawned
+export TESTS_GENERATED=false                        # true if the tester created new test files
 export OPTIMIZED=false                              # true if optimizer applied a change
 export OPTIMIZATION_TYPE=none                       # replay | none
 export FORMATS_TESTED_JSON='[]'
 export FORMATS_EXCLUDED_JSON='{}'
 export AGENTS_JSON='[]'
-export TOKENS_JSON='{"input":0,"output":0,"cache_read":0,"total":0,"cost_usd":0}'
+export TOKENS_JSON='{"input":0,"output":0,"cache_read":0,"cache_creation":0,"total":0,"cost_usd":0}'
 export OBSTACLE=                                    # set if the run is blocked
 ```
 
-You still need to track two list-valued items in shell (they are too awkward
-to maintain as exported strings):
-- `PER_PHASE=[]` — build up per-phase results as phases complete
+Two list-valued items stay in shell (too awkward as exported strings):
+- `PER_PHASE=[]` — build up per-cycle results as each cycle ends
 - `FAILURES=[]` — append every failure encountered during the run (see below)
 
 **Failure tracking**: Whenever an agent fails, a compilation fails, a test fails, or an infrastructure error occurs, append an entry to `FAILURES`:
 ```json
 {
-  "step": "compile_phase_1|test_phase_2|analyzer|tester|infra",
-  "agent": "writer|debugger|tester|analyzer|planner|arch_lookup",
-  "type": "compile_error|test_failure|agent_error|infra_error",
+  "step": "writer_cycle_1 | tester_cycle_2 | refiner_v1 | analyzer | optimizer | format",
+  "agent": "writer | tester | refiner | analyzer | optimizer",
+  "type": "compile_error | test_failure | agent_error | infra_error",
   "message": "First meaningful line of the error (stderr, traceback, or test output)",
   "resolved": true
 }
 ```
-- `step`: Which pipeline step failed (e.g., `"compile_phase_1"`, `"test_phase_2"`, `"analyzer"`, `"final_regression"`)
-- `agent`: Which agent was running when the failure occurred
-- `type`: Category — `"compile_error"` (compiler stderr), `"test_failure"` (pytest/simulator), `"agent_error"` (agent stuck/crashed), `"infra_error"` (simulator timeout, env issue)
+- `step`: Which pipeline step failed, suffixed with the cycle or refinement number when relevant.
+- `agent`: Which agent was running when the failure occurred.
+- `type`: Category — `"compile_error"` (compiler stderr), `"test_failure"` (pytest/simulator), `"agent_error"` (agent stuck/crashed), `"infra_error"` (simulator timeout, env issue).
 - `message`: The actual error — first meaningful line of compiler stderr, pytest failure, or agent error. Keep it concise but specific enough to diagnose.
-- `resolved`: `true` if the issue was fixed during the run, `false` if it blocked completion
+- `resolved`: `true` if the issue was fixed during the run (e.g., cycle 1 failed but cycle 2 passed), `false` if it blocked completion.
 
 Copy the agent playbooks used (snapshot for reproducibility):
 ```bash
-cp codegen/agents/quasar/llk-analyzer.md $LOG_DIR/instructions/
-cp codegen/agents/quasar/llk-planner.md $LOG_DIR/instructions/
-cp codegen/agents/quasar/llk-kernel-writer.md $LOG_DIR/instructions/
-cp codegen/agents/quasar/llk-debugger.md $LOG_DIR/instructions/
-cp codegen/agents/quasar/llk-phase-tester.md $LOG_DIR/instructions/
-cp codegen/agents/quasar/llk-regression-tester.md $LOG_DIR/instructions/
-cp codegen/agents/quasar/llk-test-writer.md $LOG_DIR/instructions/
-cp codegen/agents/quasar/llk-optimizer.md $LOG_DIR/instructions/
-# prettifier disabled — skip copy
+cp codegen/agents/quasar/llk-analyzer.md         $LOG_DIR/instructions/
+cp codegen/agents/quasar/llk-kernel-writer.md    $LOG_DIR/instructions/
+cp codegen/agents/quasar/llk-tester.md           $LOG_DIR/instructions/
+cp codegen/agents/quasar/llk-analysis-refiner.md $LOG_DIR/instructions/
+cp codegen/agents/quasar/llk-optimizer.md        $LOG_DIR/instructions/
 ```
 
 Pass `LOG_DIR` to every agent prompt so they can self-log their reasoning.
+
+### Step 0a.1: Live cost tracking — MANDATORY
+
+Claude Code writes every assistant turn to `~/.claude/projects/<cwd-mapped>/<sessionId>.jsonl`
+and every sub-agent (Agent tool) turn under `.../<sessionId>/subagents/*.jsonl`. Each
+`type: assistant` entry carries `message.usage` (`input_tokens`, `output_tokens`,
+`cache_read_input_tokens`, `cache_creation_input_tokens`) and `message.model`.
+`codegen/scripts/session_cost.py` aggregates these across the main jsonl + all
+subagent jsonls, filters to entries with `timestamp >= $START_TIME`, applies
+per-model Anthropic pricing, and atomically patches `$LOG_DIR/run.json` — both
+the `tokens` object and the top-level `cost_usd` field — so the dashboard
+reflects cumulative spend in real time.
+
+For batch runs (`claude -p ... --output-format json > cli_output.json`) the
+batch runner later drops `cli_output.json` into `$LOG_DIR` and the dashboard
+backfills the authoritative cumulative total from there — that supersedes
+anything `session_cost.py` wrote.
+
+**Accuracy note.** `cost_usd` in `run.json` is an estimate, same quality as
+the `/cost` slash command — both multiply token counts by a local pricing
+table. Anthropic itself says `/cost` "may differ from your actual bill; for
+authoritative billing see the Usage page in the Claude Console." Expect
+`session_cost.py` and `/cost` to agree within a few percent as long as
+`PRICING` in `session_cost.py` tracks current list prices. For billing-grade
+numbers use the Claude Console, or — for batch runs — `cli_output.json`'s
+`total_cost_usd`, which is the CLI-summed per-request cost and the closest
+non-Console equivalent. If Anthropic publishes a price change, update the
+`PRICING` table at the top of `codegen/scripts/session_cost.py`.
+
+Call `bash codegen/scripts/refresh_cost.sh` at every natural boundary below.
+The script is a thin wrapper around `session_cost.py` that reads `START_TIME`,
+`LOG_DIR`, and (optionally) `MODEL` from the environment. **Use the script, not
+a bash function**: `Bash` tool calls do not share shell state, so an
+in-shell `refresh_cost()` defined in one call is undefined in every subsequent
+call and silently no-ops — this caused historical runs to land in `run.json`
+with `cost_usd: null`. The script form survives across tool calls because it
+lives on disk.
+
+Call it after:
+- the analyzer returns (Step 1),
+- every `phase-end` in the writer-tester loop (Step 2),
+- the optimizer returns (Step 3),
+- the format step (Step 4),
+- the final `run_json_writer.py finalize` call (Step 5b).
+
+Each call takes <1s and reads the jsonl append-only, so it's safe to interleave
+with Claude Code writing new turns.
 
 ---
 
@@ -215,689 +285,493 @@ Determine:
 
 ---
 
-## Workflow: Spawn Agents Sequentially
+## Step 1: Analyzer
 
-### Step 1: Research Target Architecture
+Spawn the analyzer. This agent produces the single authoritative analysis document used by every downstream agent; it covers arch research, target-pattern survey, instruction discovery, semantic→instruction mapping, solution approach, format applicability, and complexity/phases.
 
-**This step is mandatory.** Before analyzing any code, gather architecture knowledge from authoritative sources.
-
-Spawn an agent:
 ```
 Agent tool:
   subagent_type: "general-purpose"
-  description: "Research {target_arch} architecture for {op} kernel"
-  prompt: |
-    Read and follow codegen/agents/quasar/llk-arch-lookup.md for the full page index and process.
-
-    Research the {target_arch} architecture to understand what's needed for implementing
-    a {kernel_type} kernel ({op}).
-
-    ## What to fetch from Confluence (use the page index in llk-arch-lookup.md):
-
-    For SFPU kernels, you MUST fetch these pages (in order of priority):
-    1. Quasar/Trinity SFPU Micro-Architecture Spec (page 1256423592) — THE key reference
-    2. Tensix SFPU Instruction Set Architecture (page 1170505767) — per-instruction details
-    3. srcS registers (page 141000706) — SFPU reads from here
-    4. Dest register (page 195493892) — SFPU writes here
-    5. Tensix Formats (page 237174853) — MANDATORY: comprehensive format reference
-    6. Dest storage formats (page 80674824) — format layout in Dest register
-    7. SrcA/B storage formats (page 83230723) — format layout in source registers
-    8. Search ISA child pages (under page 1613201604) for specific instructions the kernel uses
-
-    For math kernels, fetch: FPU MAS (881197063), data flow (57933869), srcA/srcB/Dest pages,
-    PLUS format pages: Tensix Formats (237174853), Neo FPU Supported Formats (1124335662),
-    Neo FPU Different-Input-Format Combos (1127908233), Dest/SrcAB storage formats.
-    For pack/unpack, search Confluence for relevant pages + fetch register file pages +
-    format pages: Tensix Formats (237174853), Implied Formats (547258441), storage format pages.
-
-    Also query DeepWiki (repo: tenstorrent/tt-isa-documentation) for Blackhole comparison.
-    Cross-check instructions exist in: tt_llk_{target_arch}/instructions/assembly.yaml
-
-    ## Output
-    Write a thorough architecture brief to: codegen/artifacts/{op}_arch_research.md
-    Include:
-    - SFPU execution model (lanes, slices, rows, how instructions execute)
-    - Register file layouts (SrcS, Dest, GPRs, LREGs) with sizes and access patterns
-    - Per-instruction details for every instruction the kernel needs
-    - Data format support and conversion rules
-    - **Format support matrix** — MANDATORY: start from the FULL set of Quasar-supported
-      formats from QUASAR_DATA_FORMAT_ENUM_VALUES in tests/python_tests/helpers/format_config.py
-      (Float32, Tf32, Float16, Float16_b, MxFp8R, MxFp8P, Int32, Int8, UInt8, UInt16, Int16).
-      For each format, determine if the SFPU can load/store it and if the kernel's operation
-      is semantically valid. Do NOT limit to what the Blackhole reference supports — Quasar
-      has formats Blackhole lacks (Int16, MxFp8R, MxFp8P, Tf32). Include format-specific
-      constraints (e.g., dest_acc requirements, MX unpacking behavior)
-    - Pipeline constraints, instruction ordering, LOADMACRO rules
-    - Blackhole differences (if relevant for porting)
-    - Source reference for each fact (page ID and section)
-
-    Be thorough — downstream agents depend on this research being complete.
-
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
-    LOG_DIR: {LOG_DIR}
-```
-
-Wait for completion. **Verify** that `codegen/artifacts/{op}_arch_research.md` exists.
-
-**LIVE LOG — transition to `analyzer`:**
-```bash
-python codegen/scripts/run_json_writer.py advance \
-    --log-dir "$LOG_DIR" \
-    --new-step "analyzer" \
-    --new-message "Analyzing {ref_arch} reference and extracting phase plan" \
-    --prev-result "success" \
-    --prev-message "Architecture research complete — brief at codegen/artifacts/{op}_arch_research.md" \
-    --agent "arch_lookup"
-```
-
-If the arch-lookup agent failed to produce the research brief, use
-`--prev-result compile_error` and also record a failure entry via
-`run_json_writer.py failure ...` before aborting.
-
-### Step 2: Analyze Reference Implementation
-
-Spawn an agent:
-```
-Agent tool:
-  subagent_type: "general-purpose"
-  description: "Analyze {op} kernel"
+  description: "Analyze {op} for {target_arch}"
   prompt: |
     Read and follow codegen/agents/quasar/llk-analyzer.md to analyze the "{op}" kernel.
+    Flow: generation (new kernel).
+    Kernel: {op}
     Kernel type: {kernel_type}
     Reference architecture: {ref_arch}
     Target architecture: {target_arch}
     Reference path: tt_llk_{ref_arch}/{kernel_path}
-    Architecture research: codegen/artifacts/{op}_arch_research.md
     Output your analysis to: codegen/artifacts/{op}_analysis.md
 
-    CRITICAL: Before reading the reference, you MUST read the target integration points:
-    1. Test harness: Find and read tests/sources/*{op}*.cpp (look for #ifdef ARCH_{TARGET_UPPER})
-    2. Parent file: Read the target file that #includes this kernel
-    3. Closest existing target kernel: Read the most similar existing target kernel of this type line-by-line
-    Document the target-expected API (function signatures, template params, target-only features, reference-only features to drop).
+    The analyzer is the ONLY arch-research step in this pipeline — there is no
+    separate arch-lookup agent. You own discovering target instructions,
+    register layouts, and format constraints. Follow the
+    codegen/skills/llk-arch-lookup/SKILL.md page index for Confluence fetches.
 
-    CRITICAL: You MUST identify sub-kernel phases in your analysis. See the
-    "Sub-Kernel Phases" section in llk-analyzer.md for the required output format.
-
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this
+    prompt resolve inside the worktree, not the source branch. Never write outside it.
     LOG_DIR: {LOG_DIR}
 ```
 
-Wait for completion. Agent returns summary of analysis **including the phase plan**.
+Wait for completion. **Verify** that `codegen/artifacts/{op}_analysis.md` exists and contains: Problem Statement, Target Pattern Survey, Available Instructions, Semantic→Instruction Mapping, Solution Approach (with §6a signatures and §6b pseudocode), Format Applicability, Complexity & Phases. If missing, record a failure and finalize as `failed`.
 
-**Verify**: Check that `codegen/artifacts/{op}_analysis.md` exists and contains: kernel_type, functions list, dependencies, complexity classification, and sub-kernel phases. If missing, **stop and report the error to the user**.
-
-### Step 2b: Extract Phase Plan
-
-From the analyzer's output, extract the ordered list of phases. Each phase has:
-- **Phase name** (a short label for the sub-kernel group)
-- **Functions** (the functions belonging to this phase)
-- **Test file(s)** (which test file validates this phase, if any)
-- **Dependencies** (any prior phases that must pass first)
-
-If the analysis identifies only a single sub-kernel (e.g., simple SFPU ops), there is one phase and the workflow is identical to a single-pass generation.
-
-**LIVE LOG — record phase count now that it is known:**
+On analyzer failure:
 ```bash
-python codegen/scripts/run_json_writer.py metric \
+python codegen/scripts/run_json_writer.py failure \
     --log-dir "$LOG_DIR" \
-    --patch-json "{\"phases_total\": ${PHASES_TOTAL}}"
-```
-(where `$PHASES_TOTAL` is the number of phases extracted above).
+    --step "analyzer" \
+    --agent "analyzer" \
+    --type "agent_error" \
+    --message "${ANALYZER_ERROR_LINE}" \
+    --resolved "false"
 
-### Step 3: Loop Over Phases
-
-For each phase **in order**, run Steps 3a–3e. Only proceed to the next phase when the current phase passes tests (or has no applicable test).
-
-**LIVE LOG — mark this phase as started (once, at the top of the phase body, before Step 3a):**
-```bash
-python codegen/scripts/run_json_writer.py phase-start \
+python codegen/scripts/run_json_writer.py finalize \
     --log-dir "$LOG_DIR" \
-    --phase "${N}" \
-    --name "{phase_name}"
+    --status "failed" \
+    --final-result "compile_error" \
+    --final-message "Analyzer failed to produce {op}_analysis.md"
 ```
 
-**LIVE LOG — transition to `planner` for this phase:**
-```bash
-python codegen/scripts/run_json_writer.py advance \
-    --log-dir "$LOG_DIR" \
-    --new-step "planner" \
-    --new-message "Planning phase ${N} ({phase_name}) — designing sub-kernel spec" \
-    --prev-result "success" \
-    --prev-message "Analysis complete — ${PHASES_TOTAL} phase(s) identified" \
-    --agent "planner"
-```
-(After the first phase, `--prev-message` should instead reference "phase ${N-1} tests passed".)
-
-#### Step 3a: Plan Phase
-
-Spawn an agent:
-```
-Agent tool:
-  subagent_type: "general-purpose"
-  description: "Plan {op} phase {N}"
-  prompt: |
-    Read and follow codegen/agents/quasar/llk-planner.md to plan the "{op}" kernel.
-    Kernel type: {kernel_type}
-    Target architecture: {target_arch}
-    Analysis: codegen/artifacts/{op}_analysis.md
-    Architecture research: codegen/artifacts/{op}_arch_research.md
-    Output your spec to: codegen/artifacts/{op}_phase{N}_spec.md
-
-    IMPORTANT - INCREMENTAL PHASE:
-    You are planning ONLY phase {N}: "{phase_name}"
-    Functions to plan: {phase_functions}
-    Previously completed phases: {list of completed phase names, or "none"}
-
-    Plan ONLY the functions listed above. Do not plan functions from other phases.
-    If prior phases exist, their functions are already written and tested — your
-    phase must be compatible with them but do not redesign them.
-
-    CRITICAL: Design from target patterns, not reference patterns. The analysis contains
-    target-expected API from the test harness and parent file — template params and
-    function signatures MUST match those, not the reference.
-    Verify init/uninit symmetry: uninit must restore what init changes.
-
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
-    LOG_DIR: {LOG_DIR}
-```
-
-Wait for completion. **Verify** that `codegen/artifacts/{op}_phase{N}_spec.md` exists.
-
-**LIVE LOG — transition to `writer` for this phase:**
+**LIVE LOG — analyzer passed, advance to writer (cycle 1), start phase 1:**
 ```bash
 python codegen/scripts/run_json_writer.py advance \
     --log-dir "$LOG_DIR" \
     --new-step "writer" \
-    --new-message "Writing phase ${N} ({phase_name}) — generating kernel code" \
+    --new-message "Cycle 1 — writing kernel from analysis" \
     --prev-result "success" \
-    --prev-message "Phase ${N} spec at codegen/artifacts/{op}_phase${N}_spec.md" \
+    --prev-message "Analysis complete — codegen/artifacts/{op}_analysis.md" \
     --agent "writer"
+
+python codegen/scripts/run_json_writer.py phase-start \
+    --log-dir "$LOG_DIR" \
+    --phase 1 \
+    --name "cycle 1 (fresh analysis)"
+
+bash codegen/scripts/refresh_cost.sh   # capture analyzer spend in run.json
 ```
 
-#### Step 3b: Generate Phase Code
+---
 
-Spawn an agent:
+## Step 2: Writer → Tester → Refiner Loop (max 3 cycles)
+
+Run this block for `CYCLE ∈ {1, 2, 3}`. Break out the moment the tester returns `PASS`. If the tester returns `STUCK` in cycle 3, finalize the run as `failed` — cycle 3 does NOT hand off to the refiner.
+
+```
+while CYCLE <= MAX_CYCLES:
+    # Step 2a: Writer
+    result = run_writer()
+    if result == PASSED:
+        # Step 2b: Tester
+        result = run_tester()
+        if result == PASS:
+            phase_end(CYCLE, "passed")
+            break                                   # -> Step 3 (optimizer)
+        # tester STUCK
+        phase_end(CYCLE, "failed")
+        if CYCLE == MAX_CYCLES:
+            finalize("failed", "test_failure")
+            return
+        # Step 2c: Refiner (only cycles 1 and 2)
+        run_refiner()                               # REFINED or ESCALATE
+        if escalated:
+            finalize("failed", "test_failure")
+            return
+    else:
+        # writer compile FAILED
+        phase_end(CYCLE, "failed")
+        if CYCLE == MAX_CYCLES:
+            finalize("failed", "compile_error")
+            return
+        run_refiner()
+        if escalated:
+            finalize("failed", "compile_error")
+            return
+
+    CYCLE += 1
+    phase_start(CYCLE, "cycle CYCLE (after refinement v{CYCLE-1})")
+```
+
+The three sub-steps follow.
+
+### Step 2a: Writer
+
+Per-cycle counters:
+```bash
+export PHASE_COMPILES=0
+export PHASE_TEST_DETAILS=""
+export PHASE_COMPILE_ERRORS_JSON='[]'
+```
+
+Spawn the writer:
 ```
 Agent tool:
   subagent_type: "general-purpose"
-  description: "Generate {op} phase {N}"
+  description: "Write {op} (cycle ${CYCLE})"
   prompt: |
     Read and follow codegen/agents/quasar/llk-kernel-writer.md to generate the "{op}" kernel.
     Kernel type: {kernel_type}
     Target architecture: {target_arch}
-    Spec: codegen/artifacts/{op}_phase{N}_spec.md
+    Analysis: codegen/artifacts/{op}_analysis.md
     Output to: tt_llk_{target_arch}/{kernel_path}
-    Run compilation check after writing.
 
-    IMPORTANT - INCREMENTAL PHASE:
-    You are implementing ONLY phase {N}: "{phase_name}"
-    Functions to write: {phase_functions}
-    Previously completed phases: {list of completed phase names, or "none"}
+    You are running inside cycle ${CYCLE} of a max-3 writer-tester loop. If your
+    compile check fails, report FAILED and return — do NOT iterate internally.
+    The orchestrator will route the failure to the refiner, which will update
+    the analysis in place before the next cycle retries.
 
-    If prior phases exist, READ the current file first. Their functions are already
-    written and tested — APPEND your new functions after them. Do NOT modify
-    previously written functions.
+    If a prior refinement occurred (cycle > 1), the analysis at
+    codegen/artifacts/{op}_analysis.md has been rewritten in place and a
+    "Refinement History" section at the top lists what changed. Follow the
+    refined analysis; do not reintroduce approaches from the prior failed
+    attempt (archived under codegen/artifacts/{op}_failed_attempt_v*/).
 
-    If this is phase 1, create the file with includes/headers and write your functions.
-
-    CRITICAL: Before writing code, verify EVERY function signature against:
-    1. The target test harness (tests/sources/*{op}*.cpp, #ifdef ARCH_{TARGET_UPPER} branch)
-    2. The target parent file (tt_llk_{target_arch}/llk_lib/llk_{type}.h)
-    3. The closest existing target kernel of this type
-    If the spec conflicts with target sources, target sources WIN.
-    Do NOT port reference features that the target test/parent don't reference.
-
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this
+    prompt resolve inside the worktree, not the source branch. Never write outside it.
     LOG_DIR: {LOG_DIR}
 ```
 
-Wait for completion. Agent returns compilation result (PASSED or FAILED).
+Wait for completion. The writer returns `PASSED` / `FAILED` on its final compile check.
 
-**Metrics**: Increment `COMPILATION_ATTEMPTS` by 1 (the writer always runs one compile check).
+**Metrics**: Increment `COMPILATION_ATTEMPTS` and `PHASE_COMPILES` by the number of compiles the writer ran (typically 2: scaffold + final). Append any compile-error messages to `PHASE_COMPILE_ERRORS_JSON`.
 
-#### Step 3c: Debug Phase (if needed)
+**If writer reports PASSED**: go to Step 2b.
 
-If Step 3b reports compilation failure, **first** log the failure and advance
-the live step before spawning the debugger:
-
+**If writer reports FAILED** (compile broken):
 ```bash
 python codegen/scripts/run_json_writer.py failure \
     --log-dir "$LOG_DIR" \
-    --step "compile_phase_${N}" \
+    --step "writer_cycle_${CYCLE}" \
     --agent "writer" \
     --type "compile_error" \
     --message "${FIRST_COMPILE_ERROR_LINE}" \
     --resolved "false"
 
-python codegen/scripts/run_json_writer.py advance \
+python codegen/scripts/run_json_writer.py phase-end \
     --log-dir "$LOG_DIR" \
-    --new-step "fix_compile" \
-    --new-message "Fixing compile error in phase ${N} ({phase_name}) — attempt 1" \
-    --prev-result "compile_error" \
-    --prev-message "Phase ${N} writer output failed to compile — ${FIRST_COMPILE_ERROR_LINE}" \
-    --agent "debugger"
+    --phase "${CYCLE}" \
+    --test-result "failed" \
+    --compilation-attempts "${PHASE_COMPILES}" \
+    --debug-cycles 0 \
+    --test-details "writer compile failed: ${FIRST_COMPILE_ERROR_LINE}" \
+    --compile-errors-json "${PHASE_COMPILE_ERRORS_JSON}"
+
+bash codegen/scripts/refresh_cost.sh
 ```
 
-Spawn debugger:
-```
-Agent tool:
-  subagent_type: "general-purpose"
-  description: "Debug {op} phase {N}"
-  prompt: |
-    Read and follow codegen/agents/quasar/llk-debugger.md to fix compilation errors.
-    Kernel: {op}
-    Kernel type: {kernel_type}
-    Target architecture: {target_arch}
-    Kernel path: tt_llk_{target_arch}/{kernel_path}
-    Architecture research: codegen/artifacts/{op}_arch_research.md
-    Max 5 fix attempts. Report when compilation passes or if stuck.
+If `CYCLE == MAX_CYCLES` (3): jump to Step 5 with `status=failed`, `final-result=compile_error`.
+Otherwise: go to Step 2c (refiner).
 
-    IMPORTANT - INCREMENTAL PHASE:
-    You are debugging ONLY phase {N}: "{phase_name}"
-    Functions in this phase: {phase_functions}
-    Do NOT modify functions from previously completed phases — they are tested and working.
+### Step 2b: Tester
 
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
-    LOG_DIR: {LOG_DIR}
-```
-
-**Metrics**: Increment `COMPILATION_ATTEMPTS` by the number of compile attempts the debugger made (up to 5). Increment `debug_cycles` by 1.
-
-**If debugger reports STUCK** after 5 attempts: **stop and report to the user** with the blocking error details. Do NOT proceed to the next phase.
-
-Before aborting in the STUCK case, you MUST finalize run.json so the run does
-not stay in `status="running"` forever:
-```bash
-python codegen/scripts/run_json_writer.py finalize \
-    --log-dir "$LOG_DIR" \
-    --status "failed" \
-    --final-result "compile_error" \
-    --final-message "Debugger stuck after 5 attempts on phase ${N} ({phase_name})"
-```
-
-**LIVE LOG — compile passed, close out fix_compile:**
-(Only run this block if Step 3c actually ran. Skip if the writer compiled on first try.)
-```bash
-python codegen/scripts/run_json_writer.py message \
-    --log-dir "$LOG_DIR" \
-    --message "Phase ${N} compile fixed — checking whether tests need to be created"
-```
-
-#### Step 3d: Create Tests (if needed)
-
-After compilation passes, check if a test exists for this kernel:
-```bash
-ls tests/python_tests/{target_arch}/test_{op}_{target_arch}.py 2>/dev/null
-ls tests/python_tests/{target_arch}/test_sfpu_*{op}*_{target_arch}.py 2>/dev/null
-```
-
-If a test file exists, skip to Step 3e.
-
-If NO test exists, **first** advance the live step, then spawn the test-writer:
-```bash
-python codegen/scripts/run_json_writer.py advance \
-    --log-dir "$LOG_DIR" \
-    --new-step "test_writer" \
-    --new-message "Creating test suite for {op} phase ${N} ({phase_name})" \
-    --prev-result "success" \
-    --prev-message "Phase ${N} compiles — no existing test found, generating one" \
-    --agent "test_writer"
-```
-
-If NO test exists, spawn the test-writer agent:
-```
-Agent tool:
-  subagent_type: "general-purpose"
-  description: "Create tests for {op}"
-  prompt: |
-    Read and follow codegen/agents/quasar/llk-test-writer.md to create functional tests.
-    Kernel: {op}
-    Kernel type: {kernel_type}
-    Target architecture: {target_arch}
-    Kernel path: tt_llk_{target_arch}/{kernel_path}
-
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
-    LOG_DIR: {LOG_DIR}
-```
-
-Wait for completion. The agent will create:
-- `tests/sources/{target_arch}/sfpu_{op}_{target_arch}_test.cpp`
-- `tests/python_tests/{target_arch}/test_{op}_{target_arch}.py`
-- Any required infrastructure changes (SfpuType enum entries, etc.)
-
-If the agent reports BLOCKED, record `test_result: "skipped"` for this phase and continue.
-
-#### Step 3e: Test Phase
-
-**LIVE LOG — transition to `tester` for this phase:**
+**LIVE LOG — advance to tester:**
 ```bash
 python codegen/scripts/run_json_writer.py advance \
     --log-dir "$LOG_DIR" \
     --new-step "tester" \
-    --new-message "Running functional tests for phase ${N} ({phase_name}) on simulator" \
+    --new-message "Cycle ${CYCLE} — writing/running tests (internal 10-attempt loop)" \
     --prev-result "success" \
-    --prev-message "Tests ready for phase ${N}" \
+    --prev-message "Cycle ${CYCLE} writer compiled" \
     --agent "tester"
 
 python codegen/scripts/run_json_writer.py phase-test \
     --log-dir "$LOG_DIR" \
-    --phase "${N}" \
+    --phase "${CYCLE}" \
     --state "running"
 ```
 
-After compilation passes (and tests exist), spawn the tester:
+Spawn the tester:
 ```
 Agent tool:
   subagent_type: "general-purpose"
-  description: "Test {op} phase {N}"
+  description: "Test {op} (cycle ${CYCLE})"
   prompt: |
-    Read and follow codegen/agents/quasar/llk-phase-tester.md to test the "{op}" kernel.
+    Read and follow codegen/agents/quasar/llk-tester.md to validate the "{op}" kernel.
     Kernel: {op}
     Kernel type: {kernel_type}
-    CHIP_ARCH: {target_arch}
-    Architecture: {target_arch}
+    Target architecture: {target_arch}
+    Kernel path: tt_llk_{target_arch}/{kernel_path}
+    Flow: new-kernel
+    Spec: codegen/artifacts/{op}_analysis.md
 
-    IMPORTANT - INCREMENTAL PHASE:
-    This is phase {N}: "{phase_name}"
-    Functions in this phase: {phase_functions}
-    Previously completed phases: {list of completed phase names, or "none"}
+    You own the full test-and-fix loop with a hard cap of 10 test runs. Each
+    run = compile-producer + simulator-consumer. Diagnose and fix between runs.
+    On attempt 10's failure, return STUCK — the orchestrator will route to the
+    refiner.
 
-    You MUST CREATE a phase-specific test (C++ source + Python test) that exercises
-    ONLY the functions from this phase. Do NOT use existing tests — they expect the
-    complete kernel.
-
-    After your phase test passes, also re-run phase tests from previous phases to
-    confirm no regressions.
-
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O.
     LOG_DIR: {LOG_DIR}
 ```
 
-Wait for test results. If PASSED, mark this phase complete and continue to the next phase.
+Wait for the tester to return `PASS` or `STUCK`.
 
-**LIVE LOG — phase passed:**
+**Metrics from the tester's report** (the agent reports attempts used, variants, formats tested, test files created):
+- `COMPILATION_ATTEMPTS += tester_compile_count`
+- `PHASE_COMPILES += tester_compile_count`
+- `PHASE_DEBUGS = tester_attempts_used` (the tester's 10-attempt loop is effectively the per-cycle debug count)
+- `TESTS_TOTAL = variants_reported`
+- `TESTS_PASSED = variants_passed_on_final_run`
+- `TESTS_GENERATED = true` (set once, stays true)
+- `FORMATS_TESTED_JSON` — set from the tester's report
+- `FORMATS_EXCLUDED_JSON` — set from the tester's report
+
+**If tester reports PASS**:
 ```bash
 python codegen/scripts/run_json_writer.py phase-end \
     --log-dir "$LOG_DIR" \
-    --phase "${N}" \
+    --phase "${CYCLE}" \
     --test-result "passed" \
     --compilation-attempts "${PHASE_COMPILES}" \
     --debug-cycles "${PHASE_DEBUGS}" \
-    --test-details "${PHASE_TEST_DETAILS}" \
+    --test-details "${TESTS_PASSED}/${TESTS_TOTAL} variants passed" \
     --compile-errors-json "${PHASE_COMPILE_ERRORS_JSON}"
+
+bash codegen/scripts/refresh_cost.sh
 ```
-(`$PHASE_COMPILE_ERRORS_JSON` must be a JSON array — use `'[]'` if there were no compile errors.)
+`PHASES_COMPLETED=1`. Break out of the cycle loop → Step 3 (optimizer).
 
-If FAILED, **first** advance to fix_tests and flip the per-phase state to "fixing",
-then spawn the debugger:
-
+**If tester reports STUCK**:
 ```bash
 python codegen/scripts/run_json_writer.py failure \
     --log-dir "$LOG_DIR" \
-    --step "test_phase_${N}" \
+    --step "tester_cycle_${CYCLE}" \
     --agent "tester" \
     --type "test_failure" \
-    --message "${FIRST_TEST_FAILURE_LINE}" \
+    --message "${TESTER_LAST_FAILURE_LINE}" \
     --resolved "false"
 
-python codegen/scripts/run_json_writer.py advance \
+python codegen/scripts/run_json_writer.py phase-end \
     --log-dir "$LOG_DIR" \
-    --new-step "fix_tests" \
-    --new-message "Debugging phase ${N} test failures — attempt 1" \
-    --prev-result "test_failure" \
-    --prev-message "Phase ${N} tests failed — ${FIRST_TEST_FAILURE_LINE}" \
-    --agent "debugger"
+    --phase "${CYCLE}" \
+    --test-result "failed" \
+    --compilation-attempts "${PHASE_COMPILES}" \
+    --debug-cycles "${PHASE_DEBUGS}" \
+    --test-details "tester STUCK after 10 attempts: ${TESTER_LAST_FAILURE_LINE}" \
+    --compile-errors-json "${PHASE_COMPILE_ERRORS_JSON}"
 
-python codegen/scripts/run_json_writer.py phase-test \
-    --log-dir "$LOG_DIR" \
-    --phase "${N}" \
-    --state "fixing"
+bash codegen/scripts/refresh_cost.sh
 ```
 
-If FAILED, spawn the debugger again but this time with test failure details instead of compilation errors:
+If `CYCLE == MAX_CYCLES` (3): jump to Step 5 with `status=failed`, `final-result=test_failure`.
+Otherwise: go to Step 2c (refiner).
+
+### Step 2c: Refiner (only for CYCLE ∈ {1, 2})
+
+**LIVE LOG — advance to refiner:**
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "refiner" \
+    --new-message "Cycle ${CYCLE} failed — refining analysis (v${CYCLE})" \
+    --prev-result "${PREV_RESULT}" \
+    --prev-message "Cycle ${CYCLE} failed: ${FAILURE_SUMMARY}" \
+    --agent "refiner"
+```
+(`PREV_RESULT` is `compile_error` if the writer failed, `test_failure` if the tester failed.)
+
+Collect inputs for the refiner. The test files the tester used must be passed verbatim so the refiner can archive them:
+```bash
+TEST_FILES=""
+for candidate in \
+    "tests/sources/{target_arch}/sfpu_{op}_{target_arch}_test.cpp" \
+    "tests/sources/{target_arch}/{op}_{target_arch}_test.cpp" \
+    "tests/python_tests/{target_arch}/test_{op}_{target_arch}.py" \
+    "tests/python_tests/{target_arch}/test_sfpu_{op}_{target_arch}.py"; do
+    [ -f "$candidate" ] && TEST_FILES="$TEST_FILES $candidate"
+done
+```
+
+Spawn the refiner:
 ```
 Agent tool:
   subagent_type: "general-purpose"
-  description: "Fix {op} test failure phase {N}"
+  description: "Refine {op} analysis (v${CYCLE})"
   prompt: |
-    Read and follow codegen/agents/quasar/llk-debugger.md to fix RUNTIME/TEST failures.
+    Read and follow codegen/agents/quasar/llk-analysis-refiner.md to refine the "{op}" analysis.
     Kernel: {op}
     Kernel type: {kernel_type}
     Target architecture: {target_arch}
     Kernel path: tt_llk_{target_arch}/{kernel_path}
-    Architecture research: codegen/artifacts/{op}_arch_research.md
+    Original analysis: codegen/artifacts/{op}_analysis.md
+    Tester log: {LOG_DIR}/agent_tester.md
+    Writer log: {LOG_DIR}/agent_writer.md
+    Test files: ${TEST_FILES}
+    Previous failure: ${FAILURE_SUMMARY}
 
-    THIS IS A TEST FAILURE, NOT A COMPILATION ERROR.
-    Follow the "Runtime/Functional Debugging" section in llk-debugger.md.
+    You are refinement iteration v${CYCLE}. Your own doc caps you at v2.
+    Archive the failed attempt, identify the structural error in the analysis,
+    rewrite the impeached sections in place, and return REFINED or ESCALATE.
 
-    Test failure details:
-    {paste the test output/error from the tester agent}
-
-    IMPORTANT - INCREMENTAL PHASE:
-    You are debugging ONLY phase {N}: "{phase_name}"
-    Functions in this phase: {phase_functions}
-    Do NOT modify functions from previously completed phases.
-
-    After fixing, recompile to ensure compilation still passes:
-      cd codegen && source ../tests/.venv/bin/activate
-      CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
-          -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
-
-    Max 5 fix attempts.
-
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O.
     LOG_DIR: {LOG_DIR}
 ```
-After the debugger fixes the code, return to Step 3e (test) to verify.
-Max 2 debug→test cycles per phase before escalating to the user.
 
-**LIVE LOG — after each debugger cycle, before re-testing:**
+Wait for the refiner to return `REFINED` or `ESCALATE`.
+
+**Metrics**:
+- `REFINEMENT_COUNT += 1`
+- `DEBUG_CYCLES = REFINEMENT_COUNT`
+- `PHASES_TOTAL = CYCLE + 1` (we now know another cycle will run)
+
+Patch `phases_total` so the dashboard shows the correct total:
 ```bash
+python codegen/scripts/run_json_writer.py metric \
+    --log-dir "$LOG_DIR" \
+    --patch-json "{\"phases_total\": ${PHASES_TOTAL}, \"debug_cycles\": ${DEBUG_CYCLES}}"
+```
+
+**If refiner reports ESCALATE**:
+```bash
+python codegen/scripts/run_json_writer.py failure \
+    --log-dir "$LOG_DIR" \
+    --step "refiner_v${CYCLE}" \
+    --agent "refiner" \
+    --type "agent_error" \
+    --message "refiner escalated: ${REFINER_REASON}" \
+    --resolved "false"
+```
+Jump to Step 5 with `status=failed`, `final-result=${PREV_RESULT}`.
+
+**If refiner reports REFINED**:
+```bash
+CYCLE=$((CYCLE + 1))
+
 python codegen/scripts/run_json_writer.py advance \
     --log-dir "$LOG_DIR" \
-    --new-step "tester" \
-    --new-message "Re-running phase ${N} tests after fix attempt ${CYCLE}" \
+    --new-step "writer" \
+    --new-message "Cycle ${CYCLE} — writing kernel from refined analysis" \
     --prev-result "success" \
-    --prev-message "Debugger applied fix for phase ${N}" \
-    --agent "tester"
+    --prev-message "Refinement v$((CYCLE - 1)) complete — analysis rewritten in place" \
+    --agent "writer"
 
-python codegen/scripts/run_json_writer.py phase-test \
+python codegen/scripts/run_json_writer.py phase-start \
     --log-dir "$LOG_DIR" \
-    --phase "${N}" \
-    --state "running"
+    --phase "${CYCLE}" \
+    --name "cycle ${CYCLE} (after refinement v$((CYCLE - 1)))"
 ```
 
-If the phase is escalated/abandoned after 2 cycles, finalize the per-phase entry
-as failed before stopping the run:
-```bash
-python codegen/scripts/run_json_writer.py phase-end \
-    --log-dir "$LOG_DIR" \
-    --phase "${N}" \
-    --test-result "failed" \
-    --test-details "${PHASE_TEST_DETAILS}" \
-    --compilation-attempts "${PHASE_COMPILES}" \
-    --debug-cycles "${PHASE_DEBUGS}" \
-    --compile-errors-json "${PHASE_COMPILE_ERRORS_JSON}"
-```
+Loop back to Step 2a.
 
-**Metrics**: When a phase completes (pass or fail), record its per-phase result:
-```
-{
-  "phase": {N},
-  "name": "{phase_name}",
-  "compilation_attempts": {N},  // compile attempts for THIS phase only
-  "debug_cycles": {N},          // debug rounds for THIS phase only
-  "test_result": "passed|failed|skipped",
-  "compile_errors": [            // ALL compilation errors, in order
-    {"attempt": 1, "error": "first error message (first line of stderr)"},
-    {"attempt": 2, "error": "second error message after first fix"}
-  ]
-}
-```
-`compile_errors` must capture **every** failed compilation attempt's error message (first meaningful line of compiler stderr). Empty array `[]` if the phase compiled clean on the first try. This history is critical for understanding debug loops and recurring error patterns.
+---
 
-Append to the `PER_PHASE` list.
+## Step 3: Optimizer (success path only)
 
-#### Step 3f: Cleanup Phase Tests
+Only run after a cycle returned `PASS`. Skip if the tester never passed.
 
-After **all phases pass**, delete the temporary phase test files:
-```bash
-rm -f tests/sources/{op}_phase*_test.cpp
-rm -f tests/python_tests/test_{op}_phase*.py
-```
+### Step 3a: Check whether optimization is applicable
 
-### Step 4: Final Regression
-
-**LIVE LOG — transition to `tester` for the final whole-kernel regression:**
-```bash
-python codegen/scripts/run_json_writer.py advance \
-    --log-dir "$LOG_DIR" \
-    --new-step "tester" \
-    --new-message "Running final regression — end-to-end {op} tests on the complete kernel" \
-    --prev-result "success" \
-    --prev-message "All ${PHASES_TOTAL} phases passed; phase tests cleaned up" \
-    --agent "tester"
-```
-
-After all phases complete and phase tests are cleaned up, run the existing repo tests that exercise this kernel to confirm the complete kernel works end-to-end:
+Only SFPU kernels whose Blackhole reference uses replay buffers are candidates:
 
 ```bash
-# Step A: Compile producer (parallel, no simulator, no flock)
-source ../tests/.venv/bin/activate
-cd ../tests/python_tests/quasar
-CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{op}_quasar.py
-
-# Step B: Simulator consumer (flock-wrapped, no -n)
-flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
-  STALE=$(lsof -ti :5556 2>/dev/null || true)
-  [ -n "$STALE" ] && echo "Killing stale port 5556 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
-  pkill -9 -f "tt-exalens.*--port=5556" 2>/dev/null || true
-  sleep 1
-  source ../tests/.venv/bin/activate
-  cd ../tests/python_tests/quasar
-  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_{op}_quasar.py
-'
+REPLAY_USES=$(grep -c "replay\|load_replay_buf" "tt_llk_{ref_arch}/{kernel_path}" || echo 0)
 ```
 
-If no existing test covers this kernel, report NOT_AVAILABLE and move to Step 10.
-If tests FAIL, return to the debug→test loop (Step 3c/3e) for the failing phase.
+If `REPLAY_USES == 0` or the kernel is not SFPU: set `OPTIMIZED=false`, `OPTIMIZATION_TYPE=none`, and skip to Step 4 (format). Do **not** advance to the optimizer step — the run stays on `tester` until format/finalize.
 
-### Step 5: Optimize (SFPU kernels only)
+### Step 3b: Run the optimizer
 
-**LIVE LOG — transition to `optimizer` (only if the optimizer will actually be
-spawned — i.e. the Blackhole reference uses replay buffers). Skip this advance
-if the optimizer step is skipped; the run will stay on `tester` and finalize
-from there.**
+Snapshot the pre-optimization kernel (for comparison / rollback reporting):
+```bash
+cp "tt_llk_{target_arch}/{kernel_path}" "$LOG_DIR/pre_opt_$(basename tt_llk_{target_arch}/{kernel_path})"
+```
+
+**LIVE LOG — advance to optimizer:**
 ```bash
 python codegen/scripts/run_json_writer.py advance \
     --log-dir "$LOG_DIR" \
     --new-step "optimizer" \
     --new-message "Applying replay-buffer optimization to {op}" \
     --prev-result "success" \
-    --prev-message "Final regression passed — entering optimization step" \
+    --prev-message "Cycle ${CYCLE} passed — entering optimization" \
     --agent "optimizer"
 ```
 
-After the final regression passes, check if the Blackhole reference uses replay buffers:
-
-```bash
-grep -c "replay\|load_replay_buf" tt_llk_blackhole/{kernel_path}
-```
-
-If the count is > 0, first snapshot the pre-optimization kernel for comparison:
-```bash
-cp tt_llk_{target_arch}/{kernel_path} {LOG_DIR}/pre_opt_$(basename tt_llk_{target_arch}/{kernel_path})
-```
-
-Then spawn the optimizer agent:
+Spawn the optimizer:
 ```
 Agent tool:
   subagent_type: "general-purpose"
-  description: "Optimize {op} kernel"
+  description: "Optimize {op}"
   prompt: |
     Read and follow codegen/agents/quasar/llk-optimizer.md to optimize the "{op}" kernel.
     Kernel path: tt_llk_{target_arch}/{kernel_path}
     Reference path: tt_llk_{ref_arch}/{kernel_path}
-    Architecture research: codegen/artifacts/{op}_arch_research.md
+    Analysis: codegen/artifacts/{op}_analysis.md
     Kernel type: {kernel_type}
     Target architecture: {target_arch}
 
-    The kernel already compiles and passes all tests. Your job is to optimize
-    it with replay buffers without breaking correctness.
+    The kernel already compiles and passes all tests. Optimize with replay
+    buffers without breaking correctness. If optimization fails, revert to the
+    pre-optimization version.
 
-    If optimization fails, revert to the pre-optimization version.
-
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this prompt resolve inside the worktree, not the source branch. Never write outside it.
+    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O.
     LOG_DIR: {LOG_DIR}
 ```
 
-Wait for completion. The optimizer will either:
-- Return an optimized kernel (compile + test verified) → set `"optimized": true`
-- Revert to the original (optimization failed) → set `"optimized": false`
-
-If the Blackhole reference does NOT use replay buffers, skip this step and set `"optimized": false`.
-
-**Metrics**: Record in the run JSON:
-- `"optimized": true/false` — whether optimization was applied
-- `"optimization_type": "replay|none"` — what was optimized
-
-### Steps 6–9: Prettifier (DISABLED)
-
-The prettifier step is currently disabled. Set `"prettified": false` in the run metrics.
-
-### Step 9b: Format Generated Code
-
-Run the repo's pre-commit formatters on all generated files so they match the style enforced by CI. This step is **not optional** — generated code must pass pre-commit checks before reporting completion.
+Wait for completion. The optimizer either:
+- Applied a change (compile + tests re-verified) → `OPTIMIZED=true`, `OPTIMIZATION_TYPE=replay`
+- Reverted → `OPTIMIZED=false`, `OPTIMIZATION_TYPE=none`
 
 ```bash
-source tests/.venv/bin/activate
+bash codegen/scripts/refresh_cost.sh   # capture optimizer spend
+```
 
-# Collect all generated files
+---
+
+## Step 4: Format Generated Code
+
+Run the repo's pre-commit formatters on all generated files so they match CI.
+**Not optional** — generated code must pass pre-commit checks before reporting completion.
+
+**LIVE LOG — advance to format:**
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "format" \
+    --new-message "Running pre-commit formatters on generated files" \
+    --prev-result "success" \
+    --prev-message "Optimization complete (optimized=${OPTIMIZED})" \
+    --agent "format"
+```
+
+```bash
+source tests/.venv/bin/activate 2>/dev/null || true
+
 FILES="tt_llk_{target_arch}/{kernel_path}"
-
-# Add test files if they were generated
-[ -f "tests/sources/{target_arch}/sfpu_{op}_{target_arch}_test.cpp" ] && FILES="$FILES tests/sources/{target_arch}/sfpu_{op}_{target_arch}_test.cpp"
-[ -f "tests/sources/{target_arch}/{op}_{target_arch}_test.cpp" ] && FILES="$FILES tests/sources/{target_arch}/{op}_{target_arch}_test.cpp"
-[ -f "tests/python_tests/{target_arch}/test_{op}_{target_arch}.py" ] && FILES="$FILES tests/python_tests/{target_arch}/test_{op}_{target_arch}.py"
+[ -f "tests/sources/{target_arch}/sfpu_{op}_{target_arch}_test.cpp" ]  && FILES="$FILES tests/sources/{target_arch}/sfpu_{op}_{target_arch}_test.cpp"
+[ -f "tests/sources/{target_arch}/{op}_{target_arch}_test.cpp" ]       && FILES="$FILES tests/sources/{target_arch}/{op}_{target_arch}_test.cpp"
+[ -f "tests/python_tests/{target_arch}/test_{op}_{target_arch}.py" ]   && FILES="$FILES tests/python_tests/{target_arch}/test_{op}_{target_arch}.py"
 [ -f "tests/python_tests/{target_arch}/test_sfpu_{op}_{target_arch}.py" ] && FILES="$FILES tests/python_tests/{target_arch}/test_sfpu_{op}_{target_arch}.py"
 
-# Run pre-commit on the generated files (auto-fixes in place)
+# Run pre-commit twice — some hooks need a second pass (e.g. trailing-whitespace after clang-format)
 pre-commit run --files $FILES || true
-# Run a second pass — some hooks (e.g., trailing-whitespace after clang-format) may need a re-run
 pre-commit run --files $FILES || true
+
+bash codegen/scripts/refresh_cost.sh   # capture format spend
 ```
 
-After formatting, **verify compilation still passes**:
-```bash
-cd codegen
-source ../tests/.venv/bin/activate
-CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
-    -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
-```
+Verify compilation still passes after formatting. If the formatter broke the
+build (rare — usually a clang-format line-break edge case), inspect the diff
+and manually fix. Do NOT revert the formatting. If a manual fix is required,
+record a failure with `step=format`, `type=compile_error`.
 
-If compilation fails after formatting (rare — usually a clang-format line-break issue), inspect the diff and manually fix. Do NOT revert the formatting.
+Set `FORMATTED=true` in the finalize patch.
 
-**Metrics**: Set `"formatted": true` in the run JSON. If formatting broke compilation and required a manual fix, record a failure entry with `"step": "format"`, `"type": "compile_error"`.
+---
 
-### Step 10: Report Completion and Log Metrics
+## Step 5: Finalize and Report
 
-After all agents complete:
+### 5a: Gather final metrics
 
-1. **Record end time**:
 ```bash
 export END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-```
-
-2. **Count lines generated**:
-```bash
 export LINES_GENERATED=$(wc -l < tt_llk_{target_arch}/{kernel_path})
 ```
 
-3. **Finalize the live `run.json`** — this is mandatory. Choose `--status`
-   from `success | compiled | failed | skipped` using the rules below, and
-   `--final-result` from `success | compile_error | test_failure` matching
-   the outcome of the last step.
+Determine the terminal status:
+- `success` — cycle passed AND `TESTS_PASSED == TESTS_TOTAL` AND `TESTS_TOTAL > 0`
+- `compiled` — writer compiled but tests failed, were skipped, or unavailable
+- `failed` — never compiled, or all 3 cycles exhausted, or refiner escalated
+
+### 5b: Finalize run.json
 
 ```bash
 python codegen/scripts/run_json_writer.py finalize \
@@ -905,7 +779,7 @@ python codegen/scripts/run_json_writer.py finalize \
     --end-time "$END_TIME" \
     --status "$STATUS" \
     --final-result "$FINAL_RESULT" \
-    --final-message "Run complete — {op} on {target_arch}" \
+    --final-message "Run complete — {op} on {target_arch} (${CYCLE}/${MAX_CYCLES} cycles)" \
     --patch-json "$(python - <<'PY'
 import json, os
 patch = {
@@ -925,7 +799,10 @@ patch = {
     "formats_excluded": json.loads(os.environ.get("FORMATS_EXCLUDED_JSON", "{}")),
     "obstacle": os.environ.get("OBSTACLE") or None,
     "agents": json.loads(os.environ["AGENTS_JSON"]),
-    "tokens": json.loads(os.environ.get("TOKENS_JSON", "{\"input\":0,\"output\":0,\"cache_read\":0,\"total\":0}")),
+    "tokens": json.loads(os.environ.get("TOKENS_JSON", "{\"input\":0,\"output\":0,\"cache_read\":0,\"cache_creation\":0,\"total\":0}")),
+    "refinement_count": int(os.environ.get("REFINEMENT_COUNT", "0")),
+    "cycles_attempted": int(os.environ.get("CYCLE", "1")),
+    "cycles_cap": int(os.environ.get("MAX_CYCLES", "3")),
 }
 print(json.dumps(patch))
 PY
@@ -934,89 +811,67 @@ PY
 
 The finalize call closes the last `step_history` entry, flips `status` from
 `"running"` to its terminal value, sets `end_time`, and merges the summary
-fields. The run.json on disk is now the authoritative record — read it back
-to produce the runs.jsonl entry below.
+fields. The run.json on disk is now the authoritative record.
 
-4. **Append a run entry** to `/proj_sw/user_dev/llk_code_gen/quasar/runs.jsonl`:
-```json
-{
-  "kernel": "{op}",
-  "kernel_type": "{sfpu|math|pack|unpack}",
-  "arch": "{target_arch}",
-  "reference_arch": "{ref_arch}",
-  "reference_file": "tt_llk_{ref_arch}/{kernel_path}",
-  "generated_file": "tt_llk_{target_arch}/{kernel_path}",
-  "start_time": "{START_TIME}",
-  "end_time": "{END_TIME}",
-  "phases_total": 0,
-  "phases_completed": 0,
-  "compilation_attempts": 0,
-  "debug_cycles": 0,
-  "tests_total": 0,
-  "tests_passed": 0,
-  "lines_generated": 0,
-  "tests_generated": false,
-  "prettified": false,
-  "formatted": true,
-  "optimized": false,
-  "optimization_type": "none",
-  "formats_tested": ["Float16", "Float16_b", "Float32"],
-  "formats_excluded": {"Int32": "requires instr_mod1=0, not implemented"},
-  "status": "success",
-  "obstacle": null,
-  "failures": [
-    {
-      "step": "compile_phase_1",
-      "agent": "writer",
-      "type": "compile_error",
-      "message": "unknown type 'vFloat' — SFPU vector type not available on target",
-      "resolved": true
-    }
-  ],
-  "per_phase": [
-    {
-      "phase": 1,
-      "name": "{phase_name}",
-      "compilation_attempts": 0,
-      "debug_cycles": 0,
-      "test_result": "passed",
-      "compile_errors": [],
-      "test_details": null
-    }
-  ],
-  "prompt": "{original_prompt}",
-  "batch_id": null,
-  "tokens": {
-    "input": 0,
-    "output": 0,
-    "cache_read": 0,
-    "total": 0
-  },
-  "model": "{MODEL}",
-  "run_type": "{RUN_TYPE}",
-  "agents": ["analyzer", "planner", "writer", "tester", "debugger", "optimizer"],
-  "run_id": "{RUN_ID}",
-  "git_commit": "{GIT_COMMIT}",
-  "log_dir": "logs/{RUN_ID}"
-}
+```bash
+bash codegen/scripts/refresh_cost.sh   # final authoritative refresh — overwrites the TOKENS_JSON
+                                       # in the --patch-json above with live-measured spend
 ```
-**Write as a single line** (the above is expanded for readability). Use actual values, not placeholders.
 
-**Notes on special fields**:
-- `status`: Use three-way classification:
-  - `"success"` — compiles AND all tests pass (`tests_passed == tests_total` and `tests_total > 0`)
-  - `"compiled"` — compiles but tests failed, were skipped, or unavailable (`tests_total == 0` or `tests_passed < tests_total`)
-  - `"failed"` — does not compile
-- `prompt`: Store the exact user prompt that initiated this run (e.g., "Generate gelu for Quasar")
-- `batch_id`: Use `$CODEGEN_BATCH_ID` environment variable if set, otherwise `null`. The batch runner script sets this to group runs from a single session.
-- `model`: Use `$CODEGEN_MODEL` environment variable if set (e.g., "opus", "sonnet", "haiku"). Otherwise, detect from the current Claude CLI model. The batch runner script sets this to track which model was used.
-- `run_type`: `"ci"` if `$CODEGEN_BATCH_ID` is set (indicates a scheduled/automated batch run), `"manual"` otherwise (interactive session). This lets the dashboard distinguish Friday CI runs from ad-hoc manual runs.
-- `tests_generated`: `true` if the test-writer agent was spawned to create new tests (Step 3d), `false` if pre-existing tests were found and used. This distinguishes runs that had existing test coverage from ones that had to generate their own.
-- `formats_tested`: Array of DataFormat names included in the test format list (e.g., `["Float16", "Float16_b", "Float32", "Tf32", "MxFp8R", "MxFp8P"]`). Extract from the planner's spec "Recommended Test Formats" section. Use `[]` if no tests were generated.
-- `formats_excluded`: Object mapping excluded format names to reasons (e.g., `{"UInt16": "not in VALID_QUASAR_DEST_REG_FORMATS"}`). Only include Quasar-supported formats that were excluded. Use `{}` if all formats are tested.
-- `tokens`: If token usage is not available from the CLI output, set all values to `0`. When running via `claude -p "..." --output-format json`, the response includes `usage.input_tokens`, `usage.output_tokens`, and `usage.cache_read_input_tokens` — the batch runner script will pass these via `$CODEGEN_TOKENS_INPUT`, `$CODEGEN_TOKENS_OUTPUT`, `$CODEGEN_TOKENS_CACHE_READ` environment variables. `total = input + output`.
+For batch runs this will later be superseded when `cli_output.json` lands in
+`$LOG_DIR` and the dashboard backfills from Anthropic's cumulative
+`total_cost_usd`; for interactive runs this is the final number.
 
-4. **Write the report** to `codegen/artifacts/{op}_report.md` AND print it directly to the terminal:
+### 5c: Append a runs.jsonl entry
+
+`$LOG_DIR/run.json` is the authoritative per-run record — derive the runs.jsonl
+entry from it so the two artifacts stay in sync:
+
+```bash
+python -c "import json; d=json.load(open('$LOG_DIR/run.json')); print(json.dumps(d))" \
+    >> /proj_sw/user_dev/llk_code_gen/quasar/runs.jsonl
+```
+
+Do not rebuild the entry from shell variables — that would let run.json and runs.jsonl drift.
+
+### 5d: Copy artifacts into LOG_DIR
+
+Each run must be self-contained under `$LOG_DIR`:
+
+```bash
+cp codegen/artifacts/{op}_analysis.md       "$LOG_DIR/" 2>/dev/null || true
+cp codegen/artifacts/{op}_arch_research.md  "$LOG_DIR/" 2>/dev/null || true   # present only if analyzer produced a separate file
+cp codegen/artifacts/{op}_refinement_v*.md  "$LOG_DIR/" 2>/dev/null || true
+cp -r codegen/artifacts/{op}_failed_attempt_v*  "$LOG_DIR/" 2>/dev/null || true
+cp tt_llk_{target_arch}/{kernel_path}       "$LOG_DIR/"
+cp tt_llk_{ref_arch}/{kernel_path}          "$LOG_DIR/ref_$(basename tt_llk_{ref_arch}/{kernel_path})"
+
+# Test files (both naming patterns, silent-fail if absent)
+cp tests/sources/{target_arch}/sfpu_{op}_{target_arch}_test.cpp       "$LOG_DIR/" 2>/dev/null || true
+cp tests/sources/{target_arch}/{op}_{target_arch}_test.cpp            "$LOG_DIR/" 2>/dev/null || true
+cp tests/python_tests/{target_arch}/test_{op}_{target_arch}.py        "$LOG_DIR/" 2>/dev/null || true
+cp tests/python_tests/{target_arch}/test_sfpu_{op}_{target_arch}.py   "$LOG_DIR/" 2>/dev/null || true
+
+# Simulator logs
+cp tests/python_tests/{target_arch}/emu_*_.log      "$LOG_DIR/" 2>/dev/null || true
+cp tests/python_tests/{target_arch}/tt-exalens.log  "$LOG_DIR/" 2>/dev/null || true
+```
+
+### 5e: Verify agent logs exist
+
+The following files MUST be present in `$LOG_DIR` (write a placeholder noting
+`"Agent ran but did not produce a log"` if any expected file is missing, so
+missing logs are visible rather than silently absent):
+
+- `agent_analyzer.md` (always)
+- `agent_writer.md` (always)
+- `agent_tester.md` (always)
+- `agent_analysis_refiner_v1.md`, `agent_analysis_refiner_v2.md` (only when the refiner ran)
+- `agent_optimizer.md` (only if the optimizer was invoked)
+
+### 5f: Write and print the report
+
+Write `codegen/artifacts/{op}_report.md` AND print it to the terminal:
 
 ```
 ========================================
@@ -1038,100 +893,62 @@ Tokens:
   Input:          {N}
   Output:         {N}
   Cache Read:     {N}
+  Cache Creation: {N}
   Total:          {N}
+  Cost:           ${X.XX} USD  (estimate; see Claude Console for billing)
+----------------------------------------
+Flow:
+  Cycles Used:       {CYCLE}/{MAX_CYCLES}
+  Refinements:       {REFINEMENT_COUNT}
+  Status:            {STATUS}
 ----------------------------------------
 Quality:
-  Phases:           {completed}/{total}
-  Compile Attempts: {N} (across all phases)
-  Debug Cycles:     {N}
-  Compilation:      PASSED/FAILED
-  Functional Tests: PASSED/FAILED/NOT_AVAILABLE ({passed}/{total})
-  Tests Source:     GENERATED/PRE-EXISTING/NONE
-  Formatted:        YES/NO
-  Prettified:       DISABLED
+  Compile Attempts:  {COMPILATION_ATTEMPTS} (across writer + tester internal loop)
+  Compilation:       PASSED/FAILED
+  Functional Tests:  PASSED/FAILED/NOT_AVAILABLE ({TESTS_PASSED}/{TESTS_TOTAL})
+  Tests Source:      GENERATED/PRE-EXISTING/NONE
+  Formatted:         YES/NO
+  Optimized:         YES/NO ({OPTIMIZATION_TYPE})
 ----------------------------------------
-Per Phase:
-  Phase 1 ({name}): compile_attempts={N}, debug={N}, test={passed/failed}
-  Phase 2 ({name}): compile_attempts={N}, debug={N}, test={passed/failed}
-  ...
+Per Cycle:
+  Cycle 1 ({name}): compiles={N}, tester_attempts={N}, result={passed/failed}
+  Cycle 2 ({name}): compiles={N}, tester_attempts={N}, result={passed/failed}
+  Cycle 3 ({name}): compiles={N}, tester_attempts={N}, result={passed/failed}
 ----------------------------------------
 Failures: {total_failures} ({resolved} resolved, {unresolved} unresolved)
-  [compile_error] compile_phase_1 (writer): unknown type 'vFloat' — RESOLVED
-  [test_failure] test_phase_2 (tester): mismatch at idx 42 — UNRESOLVED
+  [compile_error] writer_cycle_1 (writer): unknown type 'vFloat' — RESOLVED
+  [test_failure] tester_cycle_2 (tester): mismatch at idx 42 — UNRESOLVED
   ...
   (omit this section if FAILURES is empty)
 ----------------------------------------
 Artifacts:
-  - codegen/artifacts/{op}_arch_research.md
   - codegen/artifacts/{op}_analysis.md
-  - codegen/artifacts/{op}_phase{N}_spec.md (one per phase)
+  - codegen/artifacts/{op}_refinement_v*.md (if refinement occurred)
+  - codegen/artifacts/{op}_failed_attempt_v*/ (if refinement occurred)
 Metrics:
   - /proj_sw/user_dev/llk_code_gen/quasar/runs.jsonl
   - {LOG_DIR}/
 ========================================
 ```
 
-This conclusion MUST be both:
-1. **Written to file**: `codegen/artifacts/{op}_report.md`
-2. **Output as text** in your response so the user sees it directly in the terminal
-
-5. **Copy all artifacts to LOG_DIR** so each run is self-contained:
+Copy the written report into `$LOG_DIR`:
 ```bash
-cp codegen/artifacts/{op}_report.md {LOG_DIR}/
-cp codegen/artifacts/{op}_arch_research.md {LOG_DIR}/
-cp codegen/artifacts/{op}_analysis.md {LOG_DIR}/
-cp codegen/artifacts/{op}_phase*_spec.md {LOG_DIR}/
-cp tt_llk_{target_arch}/{kernel_path} {LOG_DIR}/
-# Copy reference kernel (ref_ prefix to avoid name collision with generated kernel)
-cp tt_llk_{ref_arch}/{kernel_path} {LOG_DIR}/ref_$(basename tt_llk_{ref_arch}/{kernel_path})
-# Copy test files — both naming patterns, silent fail if absent
-cp tests/sources/{target_arch}/sfpu_{op}_{target_arch}_test.cpp {LOG_DIR}/ 2>/dev/null || true
-cp tests/sources/{target_arch}/{op}_{target_arch}_test.cpp {LOG_DIR}/ 2>/dev/null || true
-cp tests/python_tests/{target_arch}/test_{op}_{target_arch}.py {LOG_DIR}/ 2>/dev/null || true
-cp tests/python_tests/{target_arch}/test_sfpu_{op}_{target_arch}.py {LOG_DIR}/ 2>/dev/null || true
-# Copy emulator logs (emu_*_.log and tt-exalens.log) from the test directory
-cp tests/python_tests/{target_arch}/emu_*_.log {LOG_DIR}/ 2>/dev/null || true
-cp tests/python_tests/{target_arch}/tt-exalens.log {LOG_DIR}/ 2>/dev/null || true
-# Copy the runs.jsonl entry as a standalone run.json for this run
+cp codegen/artifacts/{op}_report.md "$LOG_DIR/"
 ```
-`{LOG_DIR}/run.json` is already on disk (finalized by `run_json_writer.py` in
-step 3 above), so the runs.jsonl entry must be **derived from that file** —
-read it and append it as a single JSONL line so the two artifacts stay in
-sync:
-```bash
-python -c "import json,sys; d=json.load(open('$LOG_DIR/run.json')); print(json.dumps(d))" \
-    >> /proj_sw/user_dev/llk_code_gen/quasar/runs.jsonl
-```
-Do not rebuild the entry from shell variables — that would let run.json and
-runs.jsonl drift.
-
-6. **Verify all agent logs exist** in LOG_DIR. The following files MUST be present:
-   - `agent_analyzer.md`
-   - `agent_planner.md`
-   - `agent_writer.md`
-   - `agent_phase_tester.md`
-   - `agent_test_writer.md` (only if tests were created)
-   - `agent_arch_lookup.md` (from the arch research agent)
-   - `agent_debugger.md` (only if the debugger was invoked)
-   - `agent_optimizer.md` (only if the optimizer was invoked)
-
-If any expected file is missing, write a placeholder noting `"Agent ran but did not produce a log"` so missing logs are visible rather than silently absent.
 
 ---
 
 ## Inter-Agent Contracts
 
-Each stage produces artifacts that the next stage consumes:
-
 | From → To | Artifact | Required Contents |
 |-----------|----------|-------------------|
-| Researcher → Analyzer, Planner | `artifacts/{op}_arch_research.md` | Available instructions, register layout, arch constraints, **format support matrix** (all Quasar formats evaluated, not just reference formats) |
-| Analyzer → Planner, Test Writer | `artifacts/{op}_analysis.md` | kernel_type, function signatures, dependencies, complexity_class, key constructs, sub-kernel phases, **format support** (starting from full Quasar format set, with per-format applicability and technical justification for exclusions) |
-| Planner → Writer, Test Writer | `artifacts/{op}_phase{N}_spec.md` | target_file_path, instruction_sequence (pseudocode), resource_allocation, includes, **recommended test formats** (exact format list, filtering rules, MX/int handling) |
-| Writer → Debugger | kernel file + error output | Full compiler stderr passed in prompt |
-| Writer/Debugger → Tester | compiled kernel file | File must exist and compile successfully |
-| Tester → next phase or Optimizer | tested kernel file | Phase tests pass before proceeding |
-| Optimizer → Report | optimized kernel file | Kernel compiles and all tests still pass after optimization |
+| Analyzer → Writer, Tester, Refiner | `artifacts/{op}_analysis.md` | Problem Statement, Target Pattern Survey, Available Instructions, Semantic→Instruction Mapping, Instruction Encoding Constraints, Solution Approach (§6a–§6e), Format Applicability, Complexity & Phases |
+| Writer → Tester | kernel file at `tt_llk_{target_arch}/{kernel_path}` | File must exist and compile successfully |
+| Writer → Refiner (on compile failure) | kernel file + `$LOG_DIR/agent_writer.md` + compile stderr | Refiner reads the writer log to distinguish faithful-writer-bad-plan from unfaithful-writer-OK-plan |
+| Tester → Optimizer (on PASS) | tested kernel + test files | Kernel passes every variant |
+| Tester → Refiner (on STUCK) | `$LOG_DIR/agent_tester.md` (10-attempt fix log) + test files | Refiner forensically reconstructs what structural assumption in the analysis misled the writer |
+| Refiner → Writer | `artifacts/{op}_analysis.md` overwritten in place, with `Refinement History` section at the top | Writer follows the refined plan; prior attempt archived under `artifacts/{op}_failed_attempt_v*/` |
+| Optimizer → Report | optimized (or reverted) kernel file | Kernel compiles and all tests still pass |
 
 ---
 
@@ -1142,27 +959,28 @@ Each stage produces artifacts that the next stage consumes:
 | `tt_llk_blackhole/` | Blackhole LLK (reference architecture) |
 | `tt_llk_quasar/` | Quasar LLK (target architecture) |
 | `tt_llk_{arch}/instructions/assembly.yaml` | ISA definition (cross-check, use grep — large file) |
-| `codegen/references/common-errors.md` | Known error patterns for debugging |
+| `codegen/references/common-errors.md` | Known error patterns |
 | `codegen/agents/quasar/` | All agent playbooks (co-located with this orchestrator) |
+| `codegen/skills/llk-arch-lookup/SKILL.md` | Confluence page index and arch-research protocol |
 
 ## Commands
 
 ```bash
 # Compilation check (syntax/type errors)
 # -t flags generate constexpr defines (compile-time); -r flags generate RuntimeParams struct fields
-# Find correct flags from Python test's TestConfig(templates=[...], runtimes=[...])
+# Find correct flags from the Python test's TestConfig(templates=[...], runtimes=[...])
 # or map C++ symbols to param classes in tests/python_tests/helpers/test_variant_parameters.py
-# See codegen/agents/quasar/llk-kernel-writer.md Step 4 for the full symbol→flag mapping table
+# See codegen/agents/quasar/llk-kernel-writer.md Step 4 for the full symbol→flag mapping.
 cd codegen
 source ../tests/.venv/bin/activate
 CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
     -t "PARAM(...)" -r "PARAM(...)" -v
 
-# Functional tests (correctness validation) — two-step compile-then-run flow.
+# Functional tests — two-step compile-then-run flow.
 # Step A: parallel compile (no simulator, no flock).
 source ../tests/.venv/bin/activate
 cd ../tests/python_tests/quasar
-CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{kernel_name}_quasar.py
+CHIP_ARCH=quasar pytest --compile-producer -n 15 test_{kernel_name}_quasar.py
 
 # Step B: simulator consumer — ALWAYS use flock wrapper for simulator exclusivity, no -n.
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
@@ -1172,7 +990,7 @@ flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   sleep 1
   source ../tests/.venv/bin/activate
   cd ../tests/python_tests/quasar
-  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_{kernel_name}_quasar.py
+  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest --run-simulator --compile-consumer --port=5556 test_{kernel_name}_quasar.py
 '
 
 # List available tests

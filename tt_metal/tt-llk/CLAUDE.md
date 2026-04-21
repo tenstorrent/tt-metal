@@ -51,7 +51,7 @@ See `tests/README.md` for details.
 
 ### MCP Servers
 Pre-configured in `.mcp.json`. Atlassian requires authentication on first use.
-- **Atlassian** — Primary source for architecture knowledge. See `codegen/agents/quasar/llk-arch-lookup.md` for full page index. Key pages:
+- **Atlassian** — Primary source for architecture knowledge. See `codegen/skills/llk-arch-lookup/SKILL.md` for full page index. Key pages:
   - Page ID `48300268` — uarch tree root (80+ sub-pages with detailed microarchitecture)
   - Page ID `1256423592` — Quasar/Trinity SFPU Micro-Architecture Spec (primary SFPU reference)
   - Page ID `1170505767` — Tensix SFPU Instruction Set Architecture (per-instruction details)

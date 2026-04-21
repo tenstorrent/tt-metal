@@ -34,7 +34,9 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Path setup — must happen before test-infrastructure imports
 # ---------------------------------------------------------------------------
-_SCRIPT_DIR = Path(__file__).resolve().parent
+# Do NOT .resolve() — it follows hardlinks and breaks worktree isolation
+# when codegen/ is a shared directory across worktrees.
+_SCRIPT_DIR = Path(os.path.abspath(__file__)).parent
 _CODEGEN_DIR = _SCRIPT_DIR.parent
 _LLK_ROOT = _CODEGEN_DIR.parent
 _TESTS_DIR = _LLK_ROOT / "tests"
@@ -50,8 +52,17 @@ os.environ.setdefault("LLK_HOME", str(_LLK_ROOT))
 # ---------------------------------------------------------------------------
 def _build_eval_namespace() -> dict:
     """Import all param classes and enums into a flat namespace for eval."""
+    import helpers.llk_params as llk
+    import helpers.test_variant_parameters as tvp
+    from helpers.format_config import DataFormat
 
-    return {k: v for k, v in locals().items() if not k.startswith("_")}
+    ns = {}
+    for mod in (tvp, llk):
+        for name in dir(mod):
+            if not name.startswith("_"):
+                ns[name] = getattr(mod, name)
+    ns["DataFormat"] = DataFormat
+    return ns
 
 
 # ---------------------------------------------------------------------------
