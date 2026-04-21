@@ -59,6 +59,21 @@ from models.demos.deepseek_v3_b1.weights.transforms.tp4_attention import (
     pack_o_proj_weights_tp4_shuffled,
 )
 
+# On a 4x2 mesh the attention block's weights are packed as two independent
+# per-core fusion artefacts (see tp4_attention.py):
+#   * MERGED_TP4_MAIN_SPEC: the whole attention block *except* gate_mm --
+#     o_proj (TP4-shuffled) + RMSNorm gammas + q_a + q_b + kv_a, packed
+#     across the ~115-core union of their per-tensor core sets.
+#   * MERGED_TP4_GATE_SPEC: gate_mm alone, on its narrow 8-core slab. Kept
+#     out of the main spec so the 8-core allocation doesn't wait on a
+#     lockstep reservation across the 115-core main buffer.
+#
+# TODO(refactor): end goal is one source spec per tensor, with FusionGroupSpecs
+# just assembling those per-tensor specs -- this removes the coarse bundles
+# (``O_PROJ_GATE_MM_RMSNORM_GAMMA_*``, ``QAB_KVA_PROJ_*``) that today force
+# the cross-spec ``_named`` / ``_region`` helpers in ``tp4_attention.py``, and
+# makes it easy to re-bundle tensors into different fusion artefacts without
+# touching the underlying spec objects.
 MERGED_TP4_MAIN_SPEC = build_merged_main_tp4_spec()
 MERGED_TP4_GATE_SPEC = build_gate_mm_tp4_spec()
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
