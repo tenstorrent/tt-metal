@@ -2846,6 +2846,663 @@ void override_program_parameters(
     }
 }
 
+static ProgramDescriptor create_program_gather_in0_descriptor(
+    const tt::tt_metal::Tensor& a,
+    const std::vector<tt::tt_metal::Tensor>& b_tensors,
+    tt_metal::IDevice* device,
+    MathFidelity math_fidelity,
+    bool fp32_dest_acc_en,
+    bool math_approx_mode,
+    bool packer_l1_acc,
+    bool dst_full_sync_en,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
+    uint32_t K,
+    uint32_t in0_block_w,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    std::optional<UnaryWithParam> fused_activation,
+    const CoreRangeSet& hop_cores,
+    tt_metal::Buffer* in0_buffer,
+    tt_metal::Buffer* in1_buffer,
+    const std::vector<tt_metal::Buffer*>& out_buffers,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const tt::tt_metal::Tile& output_tile,
+    tt::DataFormat in0_data_format,
+    tt::DataFormat in1_data_format,
+    tt::DataFormat output_data_format,
+    bool untilize_out,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    uint32_t num_global_cb_receivers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<CoreRangeSet> restricted_cores,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    const auto& b = b_tensors[0];
+    const auto num_output_cb = out_buffers.size();
+    const auto batch = b_tensors.size();
+    const bool in1_is_dram_interleaved = in1_buffer->is_dram() && !b.is_sharded();
+    const bool in1_is_dram_sharded = in1_buffer->is_dram() && b.is_sharded() && !global_cb.has_value();
+
+    /* Core setup */
+    constexpr bool row_major = true;
+    CoreRangeSet all_worker_cores = a.shard_spec().value().grid;
+    CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
+    std::vector<CoreRange> non_idle_cores_vec;
+    auto subdevice_cores = device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX,
+        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    if (restricted_cores.has_value()) {
+        subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
+    }
+    for (const auto& cr : subdevice_cores.ranges()) {
+        auto intersection = non_idle_cores.intersection(cr);
+        if (intersection.empty()) {
+            continue;
+        }
+        bool is_rectangular = cr.end_coord.x > cr.start_coord.x && cr.end_coord.y > cr.start_coord.y;
+        if (is_rectangular) {
+            non_idle_cores_vec.push_back(intersection.bounding_box());
+        } else {
+            for (const auto& ir : intersection.ranges()) {
+                non_idle_cores_vec.push_back(ir);
+            }
+        }
+    }
+    CoreRangeSet all_cores = CoreRangeSet(non_idle_cores_vec);
+    const uint32_t num_cores = all_worker_cores.num_cores();
+    const uint32_t ring_size = num_cores;
+    uint32_t num_hop_cores = hop_cores.num_cores();
+    bool use_hop_cores = num_hop_cores > 0;
+
+    /* Inner dim padding — recompute in0_block_w from shard spec */
+    const uint32_t Kt_pad = in0_buffer->shard_spec().shape()[1] / in0_tile.get_width() * num_cores;
+    in0_block_w = Kt_pad / num_cores;
+    uint32_t num_blocks = Kt_pad / in0_block_w;
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool use_global_cb = global_cb.has_value();
+
+    tt::DataFormat interm0_data_format = packer_l1_acc_en
+                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
+                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
+
+    /* in0 CB sizing */
+    uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_width();
+    uint32_t in0_CB_tiles = per_core_M * in0_shard_width_in_tiles;
+    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+
+    /* in1 CB sizing */
+    uint32_t in1_shard_height_in_tiles = 0;
+    uint32_t in1_shard_width_in_tiles = 0;
+    uint32_t in1_CB_tiles = 0;
+    const auto& bshape = operations::matmul::utilities::get_matmul_tensor_padded_shape(b, /*transpose=*/false);
+    uint32_t in1_tensor_width_in_tiles = bshape[-1] / in1_tile.get_width();
+    if (in1_is_dram_sharded || in1_is_dram_interleaved) {
+        in1_CB_tiles = 2 * in0_shard_width_in_tiles * per_core_N;
+    } else {
+        in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_height();
+        in1_shard_width_in_tiles = in1_buffer->shard_spec().shape()[1] / in1_tile.get_width() / num_global_cb_receivers;
+        in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
+    }
+    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+    uint32_t per_core_N_size_bytes = per_core_N * in1_single_tile_size;
+    uint32_t max_packet_size = 8192;
+    uint32_t in1_block_page_size = per_core_N_size_bytes > max_packet_size ? max_packet_size : per_core_N_size_bytes;
+    uint32_t in1_block_page_size_last =
+        per_core_N_size_bytes > max_packet_size ? per_core_N_size_bytes % max_packet_size : per_core_N_size_bytes;
+    uint32_t in1_block_width_num_pages = (per_core_N_size_bytes + in1_block_page_size - 1) / in1_block_page_size;
+    uint32_t in1_shard_width_in_dram = 0;
+    if (in1_is_dram_sharded) {
+        in1_shard_width_in_dram = in1_buffer->shard_spec().shape()[1] / in1_tile.get_width();
+    }
+
+    /* in2 CB sizing (ring-gathered in0 tiles) */
+    uint32_t in2_CB_tiles = (ring_size - 1) * in0_CB_tiles;
+    uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
+
+    /* output/interm CB sizing */
+    uint32_t out_block_tiles = per_core_M * per_core_N;
+    uint32_t out_CB_size = out_block_tiles * output_single_tile_size;
+    uint32_t interm0_CB_size = out_block_tiles * interm0_single_tile_size;
+
+    /* Compute helper values */
+    uint32_t in0_num_subblocks = per_core_M / out_subblock_h;
+    uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
+    uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
+    uint32_t in1_num_subblocks = per_core_N / out_subblock_w;
+    uint32_t in1_block_height_in_tiles = in0_block_w;
+    uint32_t in1_block_num_tiles = out_subblock_w * in1_block_height_in_tiles * in1_num_subblocks;
+    uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size;
+    uint32_t in1_tensor_size_bytes = in1_block_num_tiles * num_blocks * in1_single_tile_size;
+    uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
+    uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
+
+    /* Unpadded K widths per core */
+    uint32_t K_ = K;
+    std::vector<uint32_t> unpadded_in0_shard_widths_in_tiles(num_cores, 0);
+    for (uint32_t i = 0; i < num_cores && K_ > 0; ++i) {
+        unpadded_in0_shard_widths_in_tiles[i] = std::min(K_, in0_shard_width_in_tiles);
+        K_ -= unpadded_in0_shard_widths_in_tiles[i];
+    }
+
+    /* CB indices */
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    uint32_t remote_cb_index = tt::CBIndex::c_31;
+    uint32_t src2_cb_index = tt::CBIndex::c_2;
+    uint32_t sync_cb_index = tt::CBIndex::c_3;
+    uint32_t sync_cb2_index = tt::CBIndex::c_4;
+    uint32_t output_cb_index = tt::CBIndex::c_5;
+    uint32_t interm0_cb_index = tt::CBIndex::c_6;
+
+    /* Semaphore ID (first and only semaphore) */
+    uint32_t in0_signal_semaphore_id = 0;
+
+    /* Compile-time args */
+    std::vector<uint32_t> in0_sender_compile_time_args = {
+        (std::uint32_t)in0_shard_width_in_tiles,
+        (std::uint32_t)per_core_M,
+        (std::uint32_t)batch,
+        (std::uint32_t)ring_size,
+        (std::uint32_t)in0_signal_semaphore_id,
+    };
+
+    std::vector<uint32_t> in1_sender_writer_compile_time_args = {
+        (std::uint32_t)in1_is_dram_interleaved,
+        (std::uint32_t)in1_is_dram_sharded,
+        (std::uint32_t)in1_block_height_in_tiles,
+        (std::uint32_t)per_core_N,
+        (std::uint32_t)in1_tensor_width_in_tiles,
+        (std::uint32_t)num_blocks,
+        (std::uint32_t)batch,
+        (std::uint32_t)in1_block_page_size,
+        (std::uint32_t)in1_block_page_size_last,
+        (std::uint32_t)in1_block_width_num_pages,
+        (std::uint32_t)in1_shard_width_in_dram,
+        (std::uint32_t)fused_op_signaler.has_value(),
+    };
+    tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
+
+    const uint32_t out_block_num_subblocks = out_block_tiles / out_subblock_num_tiles;
+    TT_FATAL(
+        out_block_num_subblocks == 1 || !untilize_out,
+        "untilize_out is not supported for cases that out_block_num_subblocks > 1");
+    std::vector<uint32_t> compute_kernel_args = {
+        in0_block_w,
+        in0_num_subblocks,
+        in0_block_num_tiles,
+        in0_subblock_num_tiles,
+        in1_num_subblocks,
+        in1_block_num_tiles,
+        in1_block_size_bytes,
+        in1_tensor_size_bytes,
+        in1_per_core_w,
+        num_blocks,
+        out_subblock_h,
+        out_subblock_w,
+        out_subblock_num_tiles,
+        (std::uint32_t)batch,
+        out_block_tiles,
+        (std::uint32_t)untilize_out,
+        (std::uint32_t)in1_is_dram_interleaved,
+        (std::uint32_t)in1_is_dram_sharded,
+    };
+
+    /* Kernel defines */
+    std::map<std::string, std::string> mm_in1_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
+    if (use_global_cb) {
+        mm_in1_kernel_defines["ENABLE_GLOBAL_CB"] = "1";
+        mm_kernel_defines["ENABLE_GLOBAL_CB"] = "1";
+    }
+    if (fused_activation.has_value()) {
+        if (fused_activation.value().op_type == UnaryOpType::RELU) {
+            mm_kernel_defines["PACK_RELU"] = "1";
+        } else {
+            using ttnn::operations::unary::utils::get_defines;
+            mm_kernel_defines.merge(
+                get_defines(fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+        }
+    }
+    if (packer_l1_acc_en) {
+        mm_kernel_defines["PACKER_L1_ACC"] = "1";
+    }
+    if (fp32_dest_acc_en) {
+        mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+
+    auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
+        KernelDescriptor::Defines result;
+        result.reserve(m.size());
+        for (const auto& [k, v] : m) {
+            result.emplace_back(k, v);
+        }
+        return result;
+    };
+
+    /* NOC setup */
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    bool use_dedicated_noc = true;
+    tt_metal::NOC_MODE noc_mode =
+        use_dedicated_noc ? tt_metal::NOC_MODE::DM_DEDICATED_NOC : tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
+
+    /* Build ProgramDescriptor */
+    ProgramDescriptor desc;
+
+    tt::tt_metal::TileDescriptor in0_tile_desc{in0_tile};
+    tt::tt_metal::TileDescriptor in1_tile_desc{in1_tile};
+    tt::tt_metal::TileDescriptor output_tile_desc{output_tile};
+
+    // CB 0: in0 (globally allocated from in0_buffer)
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = in0_CB_size;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = src0_cb_index,
+            .data_format = in0_data_format,
+            .page_size = in0_single_tile_size,
+            .tile = in0_tile_desc});
+        cb_desc.buffer = in0_buffer;
+        desc.cbs.push_back(std::move(cb_desc));
+    }
+
+    // CB 1: in1
+    if (use_global_cb) {
+        uint32_t in1_block_size_bytes_gcb = in1_single_tile_size * in1_block_num_tiles;
+        CBDescriptor cb_desc;
+        cb_desc.total_size = (global_cb->size() / in1_block_size_bytes_gcb) * in1_block_size_bytes_gcb;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = src1_cb_index, .data_format = in1_data_format, .page_size = in1_single_tile_size});
+        cb_desc.remote_format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = remote_cb_index, .data_format = in1_data_format, .page_size = in1_block_size_bytes_gcb});
+        cb_desc.global_circular_buffer = &(*global_cb);
+        desc.cbs.push_back(std::move(cb_desc));
+    } else {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = in1_CB_size;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = src1_cb_index,
+            .data_format = in1_data_format,
+            .page_size = in1_single_tile_size,
+            .tile = in1_tile_desc});
+        if (!in1_is_dram_interleaved && !in1_is_dram_sharded) {
+            cb_desc.buffer = in1_buffer;
+        }
+        desc.cbs.push_back(std::move(cb_desc));
+    }
+
+    // CB 2: in2 (ring-gathered in0 tiles from other shards)
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = in2_CB_size;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = src2_cb_index,
+            .data_format = in0_data_format,
+            .page_size = in0_single_tile_size,
+            .tile = in0_tile_desc});
+        desc.cbs.push_back(std::move(cb_desc));
+    }
+
+    // CB 3: sync
+    {
+        constexpr uint32_t sync_cb_size_bytes = 16;
+        CBDescriptor cb_desc;
+        cb_desc.total_size = sync_cb_size_bytes;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = sync_cb_index, .data_format = tt::DataFormat::UInt16, .page_size = sync_cb_size_bytes});
+        desc.cbs.push_back(std::move(cb_desc));
+    }
+
+    // CB 4: sync2
+    {
+        constexpr uint32_t sync_cb2_size_bytes = 16;
+        CBDescriptor cb_desc;
+        cb_desc.total_size = sync_cb2_size_bytes;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = sync_cb2_index, .data_format = tt::DataFormat::UInt16, .page_size = sync_cb2_size_bytes});
+        desc.cbs.push_back(std::move(cb_desc));
+    }
+
+    // Output and interm CBs (one pair per batch element)
+    std::vector<uint32_t> output_cb_indices;
+    std::vector<uint32_t> interm_cb_indices;
+    if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
+        // Separate interm0 CB (single, shared across batch)
+        {
+            CBDescriptor cb_desc;
+            cb_desc.total_size = interm0_CB_size;
+            cb_desc.core_ranges = all_cores;
+            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = interm0_cb_index,
+                .data_format = interm0_data_format,
+                .page_size = interm0_single_tile_size,
+                .tile = output_tile_desc});
+            desc.cbs.push_back(std::move(cb_desc));
+        }
+        for (uint32_t i = 0; i < num_output_cb; ++i) {
+            output_cb_index += i * 2;
+            TT_FATAL(
+                output_cb_index <= tt::CBIndex::c_31,
+                "Output circular buffer index {} exceeds maximum value {}",
+                output_cb_index,
+                tt::CBIndex::c_31);
+            CBDescriptor cb_desc;
+            cb_desc.total_size = out_CB_size;
+            cb_desc.core_ranges = all_cores;
+            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = output_cb_index,
+                .data_format = output_data_format,
+                .page_size = output_single_tile_size,
+                .tile = output_tile_desc});
+            cb_desc.buffer = out_buffers[i];
+            desc.cbs.push_back(std::move(cb_desc));
+            output_cb_indices.push_back(output_cb_index);
+            interm_cb_indices.push_back(interm0_cb_index);
+        }
+    } else {
+        for (uint32_t i = 0; i < num_output_cb; ++i) {
+            output_cb_index += i * 2;
+            interm0_cb_index += i * 2;
+            TT_FATAL(
+                output_cb_index <= tt::CBIndex::c_31,
+                "Output circular buffer index {} exceeds maximum value {}",
+                output_cb_index,
+                tt::CBIndex::c_31);
+            TT_FATAL(
+                interm0_cb_index <= tt::CBIndex::c_31,
+                "Interm circular buffer index {} exceeds maximum value {}",
+                interm0_cb_index,
+                tt::CBIndex::c_31);
+            // Shared CB: output and interm0 share the same buffer
+            CBDescriptor cb_desc;
+            cb_desc.total_size = out_CB_size;
+            cb_desc.core_ranges = all_cores;
+            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = output_cb_index,
+                .data_format = output_data_format,
+                .page_size = output_single_tile_size,
+                .tile = output_tile_desc});
+            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = interm0_cb_index,
+                .data_format = interm0_data_format,
+                .page_size = interm0_single_tile_size,
+                .tile = output_tile_desc});
+            cb_desc.buffer = out_buffers[i];
+            desc.cbs.push_back(std::move(cb_desc));
+            output_cb_indices.push_back(output_cb_index);
+            interm_cb_indices.push_back(interm0_cb_index);
+        }
+    }
+
+    /* Semaphore descriptor */
+    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+        .id = in0_signal_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
+
+    /* Compute named compile-time args */
+    KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
+        {"cb_in0", src0_cb_index},
+        {"cb_in1", src1_cb_index},
+        {"cb_in2", src2_cb_index},
+        {"cb_sync", sync_cb_index},
+        {"cb_sync2", sync_cb2_index},
+    };
+    for (uint32_t i = 0; i < num_output_cb; ++i) {
+        compute_named_args.emplace_back("cb_mm_out_" + std::to_string(i), output_cb_indices[i]);
+    }
+    for (uint32_t i = 0; i < num_output_cb; ++i) {
+        compute_named_args.emplace_back("cb_mm_partials_" + std::to_string(i), interm_cb_indices[i]);
+    }
+
+    /* Kernel descriptors */
+    KernelDescriptor in0_kernel_desc;
+    in0_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+        "reader_bmm_tile_layout_in0_ring_all_gather.cpp";
+    in0_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    in0_kernel_desc.core_ranges = all_cores;
+    in0_kernel_desc.compile_time_args = in0_sender_compile_time_args;
+    in0_kernel_desc.named_compile_time_args = {{"cb_in0", src0_cb_index}, {"cb_in2", src2_cb_index}};
+    in0_kernel_desc.config = DataMovementConfigDescriptor{
+        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc, .noc_mode = noc_mode};
+
+    KernelDescriptor in1_kernel_desc;
+    in1_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+        "reader_bmm_tile_layout_in1_ring_all_gather.cpp";
+    in1_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    in1_kernel_desc.core_ranges = all_cores;
+    in1_kernel_desc.compile_time_args = in1_sender_writer_compile_time_args;
+    in1_kernel_desc.defines = map_to_defines(mm_in1_kernel_defines);
+    in1_kernel_desc.named_compile_time_args = {
+        {"cb_in1", src1_cb_index},
+        {"cb_sync", sync_cb_index},
+        {"cb_sync2", sync_cb2_index},
+        {"cb_remote", remote_cb_index}};
+    in1_kernel_desc.config = DataMovementConfigDescriptor{
+        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc, .noc_mode = noc_mode};
+
+    KernelDescriptor compute_kernel_desc;
+    compute_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/"
+        "bmm_large_block_zm_fused_bias_activation_gathered.cpp";
+    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = all_cores;
+    compute_kernel_desc.compile_time_args = compute_kernel_args;
+    compute_kernel_desc.named_compile_time_args = std::move(compute_named_args);
+    compute_kernel_desc.defines = map_to_defines(mm_kernel_defines);
+    compute_kernel_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
+
+    /* Runtime args */
+    // DRAM bank mapping for in1_is_dram_sharded
+    std::map<uint32_t, uint32_t> worker_y_to_dram_bank_first_col;
+    std::map<uint32_t, uint32_t> worker_y_to_dram_bank_second_col;
+    uint32_t first_col_max_x = device->arch() == tt::ARCH::WORMHOLE_B0 ? 3 : 7;
+    uint32_t num_receiver_cores_per_dram = 2;
+    if (in1_is_dram_sharded) {
+        num_receiver_cores_per_dram = ring_size / in1_buffer->shard_spec().grid().num_cores();
+        if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+            worker_y_to_dram_bank_first_col = {{0, 1}, {4, 2}, {5, 3}, {9, 0}};
+            worker_y_to_dram_bank_second_col = {{0, 4}, {1, 6}, {2, 9}, {4, 10}, {5, 11}, {6, 8}, {7, 7}, {9, 5}};
+        } else {
+            auto optimal_dram_workers = device->get_optimal_dram_bank_to_logical_worker_assignment(in1_noc);
+            uint32_t num_banks = optimal_dram_workers.size();
+            uint32_t banks_in_first_col = num_banks / 2;
+            std::vector<std::pair<uint32_t, uint32_t>> first_col_anchors;
+            std::vector<std::pair<uint32_t, uint32_t>> second_col_anchors;
+            for (uint32_t bank = 0; bank < num_banks; ++bank) {
+                const auto& core = optimal_dram_workers[bank];
+                if (bank < banks_in_first_col) {
+                    first_col_anchors.push_back({core.y, bank});
+                } else {
+                    second_col_anchors.push_back({core.y, bank});
+                }
+            }
+            auto sort_by_y = [](const auto& a, const auto& b) { return a.first < b.first; };
+            std::sort(first_col_anchors.begin(), first_col_anchors.end(), sort_by_y);
+            std::sort(second_col_anchors.begin(), second_col_anchors.end(), sort_by_y);
+            auto find_nearest_bank = [](uint32_t y,
+                                        const std::vector<std::pair<uint32_t, uint32_t>>& anchors) -> uint32_t {
+                if (anchors.empty()) {
+                    return 0;
+                }
+                uint32_t best_bank = anchors[0].second;
+                uint32_t best_dist = std::abs((int)y - (int)anchors[0].first);
+                for (const auto& [anchor_y, bank] : anchors) {
+                    uint32_t dist = std::abs((int)y - (int)anchor_y);
+                    if (dist < best_dist) {
+                        best_dist = dist;
+                        best_bank = bank;
+                    }
+                }
+                return best_bank;
+            };
+            auto compute_grid = device->compute_with_storage_grid_size();
+            for (uint32_t y = 0; y < compute_grid.y; ++y) {
+                if (!first_col_anchors.empty()) {
+                    worker_y_to_dram_bank_first_col[y] = find_nearest_bank(y, first_col_anchors);
+                }
+                if (!second_col_anchors.empty()) {
+                    worker_y_to_dram_bank_second_col[y] = find_nearest_bank(y, second_col_anchors);
+                }
+            }
+        }
+    }
+
+    auto all_cores_vec = corerange_to_cores(all_cores, std::nullopt, row_major);
+    auto worker_cores_vec = corerange_to_cores(all_worker_cores, std::nullopt, row_major);
+    auto hop_cores_vec = corerange_to_cores(hop_cores, std::nullopt, row_major);
+
+    // Idle cores: short args (just core type)
+    for (auto core : all_cores_vec) {
+        bool core_is_worker =
+            std::find(worker_cores_vec.begin(), worker_cores_vec.end(), core) != worker_cores_vec.end();
+        bool core_is_hop =
+            use_hop_cores && std::find(hop_cores_vec.begin(), hop_cores_vec.end(), core) != hop_cores_vec.end();
+        if (!core_is_worker && !core_is_hop) {
+            auto core_type = CORE_TYPE::IDLE_CORE;
+            in0_kernel_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{(uint32_t)core_type});
+            std::vector<uint32_t> in1_idle_args = {(uint32_t)core_type};
+            if (fused_op_signaler.has_value()) {
+                fused_op_signaler.value().push_llama_rs_rt_args_for_mm(in1_idle_args, core, in1_noc, device);
+            }
+            in1_kernel_desc.runtime_args.emplace_back(core, std::move(in1_idle_args));
+            compute_kernel_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{(uint32_t)core_type});
+        }
+    }
+
+    // Worker cores
+    uint32_t bank_id = 0;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        bool send_to_hop_core = i == 0 && use_hop_cores;
+        const auto& core = worker_cores_vec[i];
+        const auto& core_noc = device->worker_core_from_logical_core(core);
+        CoreCoord next_core;
+        if (send_to_hop_core) {
+            next_core = hop_cores_vec[0];
+        } else {
+            uint32_t next_i = i == 0 ? num_cores - 1 : i - 1;
+            next_core = worker_cores_vec[next_i % num_cores];
+        }
+        const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
+        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
+
+        std::vector<uint32_t> in0_args = {
+            (uint32_t)CORE_TYPE::WORKER_CORE,
+            i,
+            next_core_noc.x,
+            next_core_noc.y,
+            noc,
+            (uint32_t)false,
+        };
+        in0_args.insert(
+            in0_args.end(), unpadded_in0_shard_widths_in_tiles.begin(), unpadded_in0_shard_widths_in_tiles.end());
+        in0_kernel_desc.runtime_args.emplace_back(core, std::move(in0_args));
+
+        std::vector<uint32_t> in1_args = {(uint32_t)CORE_TYPE::WORKER_CORE, in1_buffer->address(), i};
+        if (in1_is_dram_sharded) {
+            if (core.x <= first_col_max_x) {
+                auto it = worker_y_to_dram_bank_first_col.find(core.y);
+                if (it == worker_y_to_dram_bank_first_col.end()) {
+                    log_info(
+                        tt::LogOp,
+                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in first-col map!",
+                        core.x,
+                        core.y,
+                        core.y);
+                }
+                bank_id = it->second;
+            } else {
+                auto it = worker_y_to_dram_bank_second_col.find(core.y);
+                if (it == worker_y_to_dram_bank_second_col.end()) {
+                    log_info(
+                        tt::LogOp,
+                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in second-col map!",
+                        core.x,
+                        core.y,
+                        core.y);
+                }
+                bank_id = it->second;
+            }
+            uint32_t dram_read_offset = 0;
+            if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+                if (core.x % 2 == 0) {
+                    dram_read_offset = 1;
+                }
+            } else {
+                dram_read_offset = i % num_receiver_cores_per_dram;
+            }
+            uint32_t vc = 0;
+            for (uint32_t j = 0; j < i; ++j) {
+                if (worker_cores_vec[j].y == core.y) {
+                    vc = (vc + 1) & 0x3;
+                }
+            }
+            in1_args.push_back((uint32_t)bank_id);
+            in1_args.push_back((uint32_t)vc);
+            in1_args.push_back((uint32_t)dram_read_offset);
+        }
+        if (fused_op_signaler.has_value()) {
+            fused_op_signaler.value().push_llama_rs_rt_args_for_mm(in1_args, core, in1_noc, device);
+        }
+        in1_kernel_desc.runtime_args.emplace_back(core, std::move(in1_args));
+
+        std::vector<uint32_t> compute_args = {(uint32_t)CORE_TYPE::WORKER_CORE, i};
+        compute_args.insert(
+            compute_args.end(), unpadded_in0_shard_widths_in_tiles.begin(), unpadded_in0_shard_widths_in_tiles.end());
+        compute_kernel_desc.runtime_args.emplace_back(core, std::move(compute_args));
+    }
+
+    // Hop cores
+    for (uint32_t i = 0; i < num_hop_cores; ++i) {
+        bool end_of_hop = i == num_hop_cores - 1;
+        const auto& core = hop_cores_vec[i];
+        const auto& core_noc = device->worker_core_from_logical_core(core);
+        CoreCoord next_core = end_of_hop ? worker_cores_vec[num_cores - 1] : hop_cores_vec[i + 1];
+        const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
+        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
+
+        in0_kernel_desc.runtime_args.emplace_back(
+            core,
+            std::vector<uint32_t>{
+                (uint32_t)CORE_TYPE::HOP_CORE, 0, next_core_noc.x, next_core_noc.y, noc, (uint32_t)end_of_hop});
+
+        std::vector<uint32_t> in1_hop_args = {(uint32_t)CORE_TYPE::HOP_CORE};
+        if (fused_op_signaler.has_value()) {
+            fused_op_signaler.value().push_llama_rs_rt_args_for_mm(in1_hop_args, core, in1_noc, device);
+        }
+        in1_kernel_desc.runtime_args.emplace_back(core, std::move(in1_hop_args));
+        compute_kernel_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{(uint32_t)CORE_TYPE::HOP_CORE});
+    }
+
+    /* Push kernels to descriptor (order matches old Program-based API) */
+    desc.kernels.push_back(std::move(in0_kernel_desc));
+    desc.kernels.push_back(std::move(in1_kernel_desc));
+    desc.kernels.push_back(std::move(compute_kernel_desc));
+
+    return desc;
+}
+
 static ProgramDescriptor create_program_mcast_in0_descriptor(
     const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
@@ -5070,8 +5727,6 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     auto mcast_in0 = program_config.mcast_in0;
     auto gather_in0 = program_config.gather_in0;
 
-    TT_FATAL(!gather_in0, "create_descriptor does not support gather_in0 mode");
-
     TT_FATAL(
         operation_attributes.compute_kernel_config.has_value(),
         "Error: compute_kernel_config field should have been populated");
@@ -5124,6 +5779,49 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     }
 
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> fused_op_signaler = std::nullopt;
+
+    if (gather_in0) {
+        auto b_tensors =
+            std::vector<tt::tt_metal::Tensor>(tensor_args.input_tensors.begin() + 1, tensor_args.input_tensors.end());
+        std::vector<tt_metal::Buffer*> out_buffers;
+        out_buffers.reserve(tensor_return_value.size());
+        for (const auto& out_tensor : tensor_return_value) {
+            out_buffers.push_back(out_tensor.buffer());
+        }
+        return reuse_mcast_1d_optimized_helpers::create_program_gather_in0_descriptor(
+            a,
+            b_tensors,
+            device,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode,
+            packer_l1_acc,
+            dst_full_sync_en,
+            ttnn::get_throttle_level(compute_kernel_config),
+            Kt,
+            in0_block_w,
+            out_subblock_h,
+            out_subblock_w,
+            per_core_M,
+            per_core_N,
+            program_config.fused_activation,
+            program_config.hop_cores,
+            in0_buffer,
+            in1_buffer,
+            out_buffers,
+            in0_tile,
+            in1_tile,
+            output_tile,
+            in0_data_format,
+            in1_data_format,
+            output_data_format,
+            untilize_out,
+            operation_attributes.global_cb,
+            program_config.num_global_cb_receivers,
+            operation_attributes.sub_device_id,
+            std::nullopt,
+            fused_op_signaler);
+    }
 
     if (mcast_in0) {
         return reuse_mcast_1d_optimized_helpers::create_program_mcast_in0_descriptor(
