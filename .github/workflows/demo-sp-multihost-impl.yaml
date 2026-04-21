@@ -135,12 +135,12 @@ jobs:
         timeout-minutes: 30
         with:
           allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          explicit: ${{ needs.load-test-matrix.outputs.explicit_nodes }}
           spec: |
             allocationType: Count
             count: 16
             matchLabels:
               exabox.tenstorrent.com/purpose: ci-metal
+              exabox.tenstorrent.com/superpod: sp4_works
 
 
       - name: Create allocation for ${{ matrix.test-group.name }} (MGD)
