@@ -84,19 +84,26 @@ private:
 bool run_command(const std::string& cmd, const std::filesystem::path& log_file, bool verbose) {
     // ZoneScoped;
     // ZoneText( cmd.c_str(), cmd.length());
-    int ret;
     static std::mutex io_mutex;
 
+    std::string redirected;
+    const char* system_line;
     if (verbose) {
         {
             std::lock_guard<std::mutex> lk(io_mutex);
             std::cout << "===== RUNNING SYSTEM COMMAND:\n";
             std::cout << cmd << "\n" << std::endl;
         }
-        ret = ::system(cmd.c_str());
+        system_line = cmd.c_str();
     } else {
-        std::string redirected_cmd = cmd + " >> " + log_file.string() + " 2>&1";
-        ret = ::system(redirected_cmd.c_str());
+        redirected = cmd + " >> " + log_file.string() + " 2>&1";
+        system_line = redirected.c_str();
+    }
+
+    int ret = ::system(system_line);
+
+    if (ret != 0) {
+        log_warning(tt::LogBuildKernels, "System command failed: {} (system() returned {})", system_line, ret);
     }
 
     return (ret == 0);
