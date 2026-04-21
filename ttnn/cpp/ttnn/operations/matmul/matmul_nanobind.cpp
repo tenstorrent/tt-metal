@@ -50,34 +50,6 @@ void py_module(nb::module_& mod) {
         Variant defining matmul program config
     )doc");
 
-    auto matmul_multi_core_program_config =
-        tt_serializable_class<MatmulMultiCoreProgramConfig>(mod, "MatmulMultiCoreProgramConfig", R"doc(
-        Fallback program config that distributes output tiles across the compute grid.
-
-        No tuning parameters are required; the grid is determined automatically
-        from allowed_worker_cores (or the full device grid if not set).
-    )doc");
-    matmul_multi_core_program_config.def(
-        "__init__",
-        [](MatmulMultiCoreProgramConfig* t, std::optional<CoreRangeSet> allowed_worker_cores) {
-            new (t) MatmulMultiCoreProgramConfig{allowed_worker_cores};
-        },
-        nb::arg("allowed_worker_cores") = nb::none());
-    matmul_multi_core_program_config.def_rw(
-        "allowed_worker_cores",
-        &MatmulMultiCoreProgramConfig::allowed_worker_cores,
-        R"doc(
-        Optional set of core ranges to use for computation.
-
-        When set, constrains both the grid size and start coordinate.
-        When nullopt, the full device compute grid is used.
-    )doc");
-    matmul_multi_core_program_config.def("__repr__", [](const MatmulMultiCoreProgramConfig& config) {
-        return fmt::format(
-            "MatmulMultiCoreProgramConfig(allowed_worker_cores={})",
-            config.allowed_worker_cores ? fmt::format("{}", config.allowed_worker_cores->str()) : "None");
-    });
-
     auto matmul_multi_core_reuse_program_config =
         tt_serializable_class<MatmulMultiCoreReuseProgramConfig>(mod, "MatmulMultiCoreReuseProgramConfig", R"doc(
         Configuration class for multi-core reusable matmul operations.
