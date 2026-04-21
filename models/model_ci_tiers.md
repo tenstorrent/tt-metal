@@ -90,9 +90,9 @@ This pipeline covers two areas:
 
 | Tier | Workflow |
 |------|----------|
-| Tier 1 | [`[Tier 1] Models End-To-End Tests`](../.github/workflows/models-t1-e2e-tests.yaml) |
-| Tier 2 | [`[Tier 2] Models End-To-End Tests`](../.github/workflows/models-t2-e2e-tests.yaml) |
-| Tier 3 | [`[Tier 3] Models End-To-End Tests`](../.github/workflows/models-t3-e2e-tests.yaml) |
+| Tier 1 | [`(Tier 1) Models End-To-End Tests`](../.github/workflows/models-t1-e2e-tests.yaml) |
+| Tier 2 | [`(Tier 2) Models End-To-End Tests`](../.github/workflows/models-t2-e2e-tests.yaml) |
+| Tier 3 | [`(Tier 3) Models End-To-End Tests`](../.github/workflows/models-t3-e2e-tests.yaml) |
 | Config | [`models_e2e_tests.yaml`](../tests/pipeline_reorg/models_e2e_tests.yaml) |
 
 ## Unit Tests
@@ -101,9 +101,9 @@ Short module-level tests that compare PCC against the reference implementation. 
 
 | Tier | Workflow |
 |------|----------|
-| Tier 1 | [`[Tier 1] Models Unit Tests`](../.github/workflows/models-t1-unit-tests.yaml) |
-| Tier 2 | [`[Tier 2] Models Unit Tests`](../.github/workflows/models-t2-unit-tests.yaml) |
-| Tier 3 | [`[Tier 3] Models Unit Tests`](../.github/workflows/models-t3-unit-tests.yaml) |
+| Tier 1 | [`(Tier 1) Models Unit Tests`](../.github/workflows/models-t1-unit-tests.yaml) |
+| Tier 2 | [`(Tier 2) Models Unit Tests`](../.github/workflows/models-t2-unit-tests.yaml) |
+| Tier 3 | [`(Tier 3) Models Unit Tests`](../.github/workflows/models-t3-unit-tests.yaml) |
 | Config | [`models_unit_tests.yaml`](../tests/pipeline_reorg/models_unit_tests.yaml) |
 
 ## Sweep Tests
@@ -115,8 +115,8 @@ Parameter sweeps across the configurations each model supports. Currently includ
 
 | Tier | Workflow |
 |------|----------|
-| Tier 1 | [`[Tier 1] Models Sweep Tests`](../.github/workflows/models-t1-sweep-tests.yaml) |
-| Tier 2 | [`[Tier 2] Models Sweep Tests`](../.github/workflows/models-t2-sweep-tests.yaml) |
+| Tier 1 | [`(Tier 1) Models Sweep Tests`](../.github/workflows/models-t1-sweep-tests.yaml) |
+| Tier 2 | [`(Tier 2) Models Sweep Tests`](../.github/workflows/models-t2-sweep-tests.yaml) |
 | Config | [`models_sweep_tests.yaml`](../tests/pipeline_reorg/models_sweep_tests.yaml) |
 
 > **Note:** Tier 3 does not include sweep tests.
