@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /proj_sw/user_dev/njokovic/tt-metal/tt_metal/tt-llk/codegen/hooks/post_bash_hook.py"
+          }
+        ]
+      }
+    ]
+  }
+}
