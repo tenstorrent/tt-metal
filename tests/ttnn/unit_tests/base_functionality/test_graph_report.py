@@ -69,6 +69,45 @@ def _import_to_db(report_dict, tmp_path):
     return conn, conn.cursor()
 
 
+@pytest.fixture
+def single_relu_mock_graph():
+    """Minimal graph: one ttnn::relu consuming tensor 42 and producing tensor 101.
+
+    Shared across TestTensorLifetime cases that only need a single-producer /
+    single-consumer trace to validate schema-level wiring.
+    """
+    return [
+        {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5]},
+        {
+            "counter": 1,
+            "node_type": "tensor",
+            "params": {"tensor_id": "42", "shape": "[1,1,32,32]"},
+            "connections": [],
+        },
+        {
+            "counter": 2,
+            "node_type": "function_start",
+            "params": {"name": "ttnn::relu", "inputs": "1"},
+            "connections": [],
+            "input_tensors": [1],
+        },
+        {
+            "counter": 3,
+            "node_type": "tensor",
+            "params": {"tensor_id": "101", "shape": "[1,1,32,32]"},
+            "connections": [],
+        },
+        {
+            "counter": 4,
+            "node_type": "function_end",
+            "params": {"name": "ttnn::relu"},
+            "connections": [3],
+            "duration_ns": 1000,
+        },
+        {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+    ]
+
+
 class TestTensorLifetime:
     """Tensor lifetime metadata for late-deallocation analysis (tt-metal#27868)."""
 
@@ -116,38 +155,8 @@ class TestTensorLifetime:
         assert recs[0]["tensor_id"] == 999
         assert recs[0]["deallocate_operation_id"] == 10
 
-    def test_tensor_lifetime_table_populated_on_import(self, tmp_path):
-        mock_graph = [
-            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5]},
-            {
-                "counter": 1,
-                "node_type": "tensor",
-                "params": {"tensor_id": "42", "shape": "[1,1,32,32]"},
-                "connections": [],
-            },
-            {
-                "counter": 2,
-                "node_type": "function_start",
-                "params": {"name": "ttnn::relu", "inputs": "1"},
-                "connections": [],
-                "input_tensors": [1],
-            },
-            {
-                "counter": 3,
-                "node_type": "tensor",
-                "params": {"tensor_id": "101", "shape": "[1,1,32,32]"},
-                "connections": [],
-            },
-            {
-                "counter": 4,
-                "node_type": "function_end",
-                "params": {"name": "ttnn::relu"},
-                "connections": [3],
-                "duration_ns": 1000,
-            },
-            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
-        ]
-        report = _make_report(mock_graph)
+    def test_tensor_lifetime_table_populated_on_import(self, tmp_path, single_relu_mock_graph):
+        report = _make_report(single_relu_mock_graph)
         conn, cursor = _import_to_db(report, tmp_path)
         cursor.execute(
             "SELECT tensor_id, producer_operation_id, last_use_operation_id, deallocate_operation_id "
@@ -160,38 +169,8 @@ class TestTensorLifetime:
         assert rows[101][2] == 1
         conn.close()
 
-    def test_tensor_consumers_mirror_input_tensors(self, tmp_path):
-        mock_graph = [
-            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5]},
-            {
-                "counter": 1,
-                "node_type": "tensor",
-                "params": {"tensor_id": "42", "shape": "[1,1,32,32]"},
-                "connections": [],
-            },
-            {
-                "counter": 2,
-                "node_type": "function_start",
-                "params": {"name": "ttnn::relu", "inputs": "1"},
-                "connections": [],
-                "input_tensors": [1],
-            },
-            {
-                "counter": 3,
-                "node_type": "tensor",
-                "params": {"tensor_id": "101", "shape": "[1,1,32,32]"},
-                "connections": [],
-            },
-            {
-                "counter": 4,
-                "node_type": "function_end",
-                "params": {"name": "ttnn::relu"},
-                "connections": [3],
-                "duration_ns": 1000,
-            },
-            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
-        ]
-        report = _make_report(mock_graph)
+    def test_tensor_consumers_mirror_input_tensors(self, tmp_path, single_relu_mock_graph):
+        report = _make_report(single_relu_mock_graph)
         conn, cursor = _import_to_db(report, tmp_path)
         cursor.execute("SELECT operation_id, input_index, tensor_id FROM input_tensors ORDER BY tensor_id")
         inp = cursor.fetchall()
@@ -201,38 +180,8 @@ class TestTensorLifetime:
         assert {(r[2], r[0], r[1]) for r in inp} == {(r[0], r[1], r[2]) for r in tc}
         conn.close()
 
-    def test_tensor_producers_mirror_output_tensors(self, tmp_path):
-        mock_graph = [
-            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5]},
-            {
-                "counter": 1,
-                "node_type": "tensor",
-                "params": {"tensor_id": "42", "shape": "[1,1,32,32]"},
-                "connections": [],
-            },
-            {
-                "counter": 2,
-                "node_type": "function_start",
-                "params": {"name": "ttnn::relu", "inputs": "1"},
-                "connections": [],
-                "input_tensors": [1],
-            },
-            {
-                "counter": 3,
-                "node_type": "tensor",
-                "params": {"tensor_id": "101", "shape": "[1,1,32,32]"},
-                "connections": [],
-            },
-            {
-                "counter": 4,
-                "node_type": "function_end",
-                "params": {"name": "ttnn::relu"},
-                "connections": [3],
-                "duration_ns": 1000,
-            },
-            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
-        ]
-        report = _make_report(mock_graph)
+    def test_tensor_producers_mirror_output_tensors(self, tmp_path, single_relu_mock_graph):
+        report = _make_report(single_relu_mock_graph)
         conn, cursor = _import_to_db(report, tmp_path)
         cursor.execute("SELECT operation_id, output_index, tensor_id FROM output_tensors ORDER BY tensor_id")
         out = cursor.fetchall()
