@@ -124,8 +124,11 @@ class _BsprnStateDict:
 
     def validate_bspm_files(self, hf_config) -> int:
         """Load and validate all per-layer BSPM files.  Returns count of missing files."""
+        layer_indices = list(range(self._first_k_dense, hf_config.num_hidden_layers))
+        if int(getattr(hf_config, "num_nextn_predict_layers", 0)) > 0:
+            layer_indices.append(hf_config.num_hidden_layers)  # MTP layer sits at index num_hidden_layers
         missing = 0
-        for layer_idx in range(self._first_k_dense, hf_config.num_hidden_layers):
+        for layer_idx in layer_indices:
             codes = self._codes_for_layer(layer_idx)
             if codes is None:
                 missing += 1
