@@ -852,7 +852,20 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     if (is_initialized()) {
         if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
             tt::TargetDevice::Mock) {
-            ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
+            try {
+                ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "close_impl: ReadMeshDeviceProfilerResults threw during teardown: {}. "
+                    "Profiler data may be incomplete.",
+                    e.what());
+            } catch (...) {
+                log_warning(
+                    tt::LogMetal,
+                    "close_impl: ReadMeshDeviceProfilerResults threw non-std exception during teardown. "
+                    "Profiler data may be incomplete.");
+            }
         }
 
         if (distributed_context_) {

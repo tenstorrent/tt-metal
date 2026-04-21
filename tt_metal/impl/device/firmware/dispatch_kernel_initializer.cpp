@@ -370,10 +370,40 @@ void DispatchKernelInitializer::process_termination_signals() const {
         const auto& info = dispatch_topology_->get_registered_termination_cores(dev->id());
         for (const auto& core_to_terminate : info) {
             std::vector<uint32_t> val{core_to_terminate.val};
-            detail::WriteToDeviceL1(
-                dev, core_to_terminate.logical_core, core_to_terminate.address, val, core_to_terminate.core_type);
+            try {
+                detail::WriteToDeviceL1(
+                    dev,
+                    core_to_terminate.logical_core,
+                    core_to_terminate.address,
+                    val,
+                    core_to_terminate.core_type);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "process_termination_signals: Device {} write failed (ETH relay dead?): {} — skipping",
+                    dev->id(),
+                    e.what());
+            } catch (...) {
+                log_warning(
+                    tt::LogMetal,
+                    "process_termination_signals: Device {} write failed with non-std exception — skipping",
+                    dev->id());
+            }
         }
-        cluster_.l1_barrier(dev->id());
+        try {
+            cluster_.l1_barrier(dev->id());
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "process_termination_signals: Device {} l1_barrier failed: {}",
+                dev->id(),
+                e.what());
+        } catch (...) {
+            log_warning(
+                tt::LogMetal,
+                "process_termination_signals: Device {} l1_barrier failed with non-std exception",
+                dev->id());
+        }
     }
 }
 
