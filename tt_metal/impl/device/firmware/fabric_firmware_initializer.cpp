@@ -491,6 +491,58 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         }
     }
 
+    // FIX A (#42429): Drain UMD ETH relay queue for non-MMIO devices before returning.
+    //
+    // Root cause: each timed-out probe read in terminate_stale_erisc_routers() (previous or
+    // current session) leaves one stuck command in the 4-slot UMD ETH relay queue
+    // (remote_communication_legacy_firmware.cpp read_non_mmio).  The relay_timeout_count guard
+    // in terminate_stale_erisc_routers() prevents the queue from *filling* during a single call,
+    // but the stuck commands persist in UMD's internal cmd_buf across teardown → next-session
+    // init.  On the next call to terminate_stale_erisc_routers(), relay_timeout_count starts at
+    // 0 (local variable), but if the queue already has ≥ 3 slots occupied from the prior
+    // session the very first new probe read fills the queue → indefinite while(full) hang.
+    //
+    // Fix: call l1_barrier() on each non-MMIO device after the ETH router poll/force-reset
+    // loop.  l1_barrier() calls driver_->l1_membar() → wait_for_non_mmio_flush(), which spins
+    // until the relay ERISC drains all pending commands from the queue.  This resets the relay
+    // to an empty state so the next session's terminate_stale_erisc_routers() starts with a
+    // clean queue regardless of how many probe-read timeouts occurred in this session.
+    //
+    // Wrapped in try/catch: if the relay ERISC itself is dead (completely unresponsive),
+    // wait_for_non_mmio_flush() may throw or block indefinitely.  We tolerate this failure —
+    // the relay drain is best-effort.  The next session's relay_broken guard still protects
+    // against queue saturation; the drain just prevents *cumulative* degradation across
+    // back-to-back sessions.
+    for (auto* dev : devices_) {
+        if (cluster_.get_associated_mmio_device(dev->id()) == dev->id()) {
+            // MMIO devices: l1_barrier is always safe, but there is no relay queue to drain.
+            continue;
+        }
+        try {
+            cluster_.l1_barrier(dev->id());
+            log_debug(
+                tt::LogMetal,
+                "FabricFirmwareInitializer::teardown: relay drain l1_barrier completed for "
+                "non-MMIO Device {} (UMD ETH relay queue flushed)",
+                dev->id());
+        } catch (const std::exception& drain_ex) {
+            log_warning(
+                tt::LogMetal,
+                "FabricFirmwareInitializer::teardown: relay drain l1_barrier threw for "
+                "non-MMIO Device {}: {} — relay queue may still have stuck commands; "
+                "next session's relay_broken guard will protect against queue saturation",
+                dev->id(),
+                drain_ex.what());
+        } catch (...) {
+            log_warning(
+                tt::LogMetal,
+                "FabricFirmwareInitializer::teardown: relay drain l1_barrier threw (unknown "
+                "exception type, likely UmdException<RuntimeError>) for non-MMIO Device {} — "
+                "relay queue may still have stuck commands",
+                dev->id());
+        }
+    }
+
     devices_.clear();
     initialized_.clear();
     // force_reset_channels_ was populated during this teardown and will be consumed by the
