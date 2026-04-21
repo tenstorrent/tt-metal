@@ -56,6 +56,18 @@ class TtMoe(LightweightModule):
     """
 
     @staticmethod
+    def check_cache_complete(cache_path: Path, layer_idx: int, experts_per_chip: int) -> bool:
+        """Check if MoE cache is complete (gate + routed experts + shared expert)."""
+        prefix = f"layer_{layer_idx}"
+        if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate"):
+            return False
+        if not TtRoutedExpert.check_cache_complete(cache_path, f"{prefix}.routed_expert", experts_per_chip):
+            return False
+        if not TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert"):
+            return False
+        return True
+
+    @staticmethod
     def build_ttnn_cache(
         gate_weights: dict | None,
         routed_expert_weights: list[dict] | None,
@@ -259,7 +271,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
-            init_zeros=True,
+            init_zeros=False,
         )
 
         # Initialize routed expert
@@ -460,7 +472,12 @@ class TtMoe(LightweightModule):
         # TtReduceModule uses fused post_combine_reduce kernel:
         # 1. Fused weighted sum over topk (dim=3): reads ROW_MAJOR, outputs TILE_LAYOUT
         # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
-        routed_output = self.reduce_module(combined_output, weights=scores)
+        routed_output = self.reduce_module(
+            combined_output,
+            weights=weights,
+            indices=indices,
+            expert_dispatch_table=self.tt_expert_dispatch_table,
+        )
         logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
 
         # Remove extra batch dimensions to match shared_output shape

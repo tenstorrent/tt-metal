@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t src_cb = get_compile_time_arg_val(0);
@@ -21,6 +22,9 @@ void kernel_main() {
     constexpr uint32_t element_size = get_compile_time_arg_val(12);
     constexpr uint32_t is_reader = get_compile_time_arg_val(13);
 
+    experimental::CircularBuffer cb_src(src_cb);
+    experimental::CircularBuffer cb_dst(dst_cb);
+
     constexpr uint32_t dst_row_size = num_dst_cols * aligned_dst_pixel_size;
     constexpr uint32_t cols_per_core = num_dst_cols / 2;
     constexpr uint32_t process_cols = cols_per_core + ((num_dst_cols % 2) & is_reader);
@@ -31,9 +35,9 @@ void kernel_main() {
     constexpr uint32_t elements_per_pixel = pixel_size / element_size;
     constexpr uint32_t elements_per_aligned_pixel = aligned_pixel_size / element_size;
 
-    uint64_t src_noc_addr = get_noc_addr(get_read_ptr(src_cb));
-    const uint32_t dst_addr_base = get_write_ptr(dst_cb);
-    uint32_t src_addr_base = get_read_ptr(src_cb);
+    uint64_t src_noc_addr = get_noc_addr(cb_src.get_read_ptr());
+    const uint32_t dst_addr_base = cb_dst.get_write_ptr();
+    uint32_t src_addr_base = cb_src.get_read_ptr();
 
     if constexpr (is_aligned) {
         noc_async_read_one_packet_set_state(src_noc_addr, aligned_chunk_size);
