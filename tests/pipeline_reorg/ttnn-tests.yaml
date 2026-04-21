@@ -9,6 +9,20 @@
 # Optional: merge_gate (filter in workflow), ttsim (for TTSim), fast_runtime_mode_off.
 # =============================================================================
 
+- name: "ttnn data movement group"
+  cmd: "pytest --timeout 300 tests/ttnn/unit_tests/operations/data_movement -v"
+  skus:
+    wh_n300_civ2:
+      timeout: 60
+    bh_p100:
+      timeout: 60
+    bh_p150b_civ2:
+      timeout: 60
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
 - name: "ttnn example tests"
   cmd: "./tests/scripts/run_ttnn_examples.sh"
   skus:
