@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);
+    auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0(cb_id_in0);

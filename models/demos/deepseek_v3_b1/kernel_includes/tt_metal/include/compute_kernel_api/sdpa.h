@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack_untilize.h"
+#include "api/compute/experimental/pack_block.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_pack_untilize.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm_reuse_dest_srcb.h"
@@ -17,6 +18,8 @@
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srcb_reuse_api.h"
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srca_srcb_reuse_api.h"
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_sdpa_reduce_row.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_recip.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_sdpa_api.h"
@@ -165,7 +168,7 @@ inline void init_fast_approx_exp_constants() {
 
 inline void fast_approx_exp(uint32_t dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
-    ckernel::sfpu::calculate_exponential<true, true, DST_ACCUM_MODE, true, 4, true>();
+    ckernel::sfpu::calculate_exponential<true, DST_ACCUM_MODE, true, 4, true>();
 }
 
 // TODO: Currently hardcodes the lregs used by red max
@@ -182,11 +185,11 @@ inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_i
     sfpi::vFloat sub_top_4 = prev_max_top_4 - curr_max_top_4;
     sfpi::vFloat sub_bottom_4 = prev_max_bottom_4 - curr_max_bottom_4;
     ckernel::sfpu::_init_sfpu_reciprocal_<false>();
-    sfpi::vFloat exp_top_4 = ckernel::sfpu::
-        _calculate_exponential_piecewise_<exp_approx_mode, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+    sfpi::vFloat exp_top_4 =
+        sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
             sub_top_4, scale_bf16);
-    sfpi::vFloat exp_bottom_4 = ckernel::sfpu::
-        _calculate_exponential_piecewise_<exp_approx_mode, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+    sfpi::vFloat exp_bottom_4 =
+        sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
             sub_bottom_4, scale_bf16);
     // Subtract 1. This is because the bcast mul accumulates to dest
     // Without -1: bcast = prev * exp + prev
@@ -392,11 +395,11 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::vFloat diff_worker = worker_max_vec - cur_max;
 
         // Exponentials of differences
-        sfpi::vFloat exp_prev = ckernel::sfpu::
-            _calculate_exponential_piecewise_<SDPA_EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+        sfpi::vFloat exp_prev =
+            sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_prev, scale_bf16);
-        sfpi::vFloat exp_worker = ckernel::sfpu::
-            _calculate_exponential_piecewise_<SDPA_EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+        sfpi::vFloat exp_worker =
+            sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_worker, scale_bf16);
 
         if constexpr (!final_norm) {
@@ -419,7 +422,7 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
  */
 template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C, bool final_norm = false>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
-    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_(
         calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, final_norm>, idst, vector_mode, scale_bf16);
 }
 #endif
@@ -477,6 +480,7 @@ ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32
 
     // Not final reduction: pack out stats and release regs
     if constexpr (!normalize) {
+        PACK((llk_pack_mop_config<false, false>(cb_cur_ms)));
         tile_regs_commit();
         cb_reserve_back(cb_cur_ms, 1);
         tile_regs_wait();
@@ -522,7 +526,7 @@ ALWI void sdpa_tail_l_block(
         pack_untilize_dest<block_size, block_size * num_blocks, false, false, TILE_C_DIM, 0, dense>(
             cb_l_out, 1, block_index, 8, dense ? 2 : 4);
     } else {
-        pack_tile_block(0, cb_l_out, block_size);
+        pack_block_contiguous(0, cb_l_out, block_size);
     }
     if constexpr (manage_cbs) {
         if constexpr (!untilize) {
@@ -598,6 +602,9 @@ ALWI void sdpa_tail(
         // Reduce packing stride from tile to tile to 32 rows instead of 64
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
             (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
+    }
+    if constexpr (!untilize) {
+        pack_block_contiguous_init(cb_l_out);
     }
 
     // Phase 2: Process all L blocks

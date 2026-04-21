@@ -1,14 +1,14 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation_types.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/programs/binary_ng_program_factory.hpp"

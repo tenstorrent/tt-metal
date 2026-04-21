@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, extract_mesh_config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, extract_mesh_config, get_ep_mesh_composer
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import compare_exact, validate_composed
+from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
 
 
 def torch_masked_bincount(
@@ -159,29 +161,33 @@ def test_masked_bincount(
         tt_indices, tt_dispatch_table, n_routed_experts, topk
     )
 
-    # Compare per-device
-    device_tensors = ttnn.get_device_tensors(tt_histograms)
-    n_cols = mesh_device.shape[1]
-    all_passed = True
+    # Build reference as (num_dispatch_groups, dispatch_group_size, n_routed_experts)
+    reference = torch.zeros(num_dispatch_groups, dispatch_group_size, n_routed_experts, dtype=torch.int32)
+    for group in range(num_dispatch_groups):
+        for chip in range(dispatch_group_size):
+            reference[group, chip] = torch_histograms[(group, chip)]
 
-    for device_id in range(len(device_tensors)):
-        tt_hist = ttnn.to_torch(device_tensors[device_id]).flatten().to(torch.int32)
+    # Compose TTNN output using EP mesh composer
+    tt_histograms_4d = ttnn.unsqueeze_to_4D(tt_histograms)
+    composer = get_ep_mesh_composer(mesh_device)
+    composed = ttnn.to_torch(tt_histograms_4d, mesh_composer=composer).squeeze(2).to(torch.int32)
 
-        row = device_id // n_cols
-        col = device_id % n_cols
+    # Trim to n_routed_experts in case of padding
+    composed = composed[..., :n_routed_experts]
 
-        ref_hist = torch_histograms[(col, row)]
-
-        matches = torch.equal(tt_hist[:n_routed_experts], ref_hist)
-        if not matches:
-            diff_mask = tt_hist[:n_routed_experts] != ref_hist
-            num_diff = diff_mask.sum().item()
-            logger.error(f"Device {device_id} (row={row}, col={col}): {num_diff}/{n_routed_experts} bins differ")
-            logger.error(f"  tt:  {tt_hist[:n_routed_experts]}")
-            logger.error(f"  ref: {ref_hist}")
-            all_passed = False
-        else:
-            logger.info(f"Device {device_id} (row={row}, col={col}): PASS (sum={ref_hist.sum().item()})")
-
-    assert all_passed, "masked_bincount output does not match torch reference on one or more chips"
+    result = validate_composed(
+        composed,
+        reference,
+        num_dispatch_groups,
+        dispatch_group_size,
+        compare_exact,
+        name="masked_bincount",
+    )
+    log_validation_results(
+        results=[result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Masked Bincount Validation",
+    )
+    result.assert_passed("masked_bincount output does not match torch reference")
     logger.info("masked_bincount matches torch reference!")

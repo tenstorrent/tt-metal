@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -352,7 +352,8 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     // -------------------------------------------------------------------------
 
     // FPU is not used at all in the operation
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::UnpackToDestFp32);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
 
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
@@ -360,7 +361,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
         block_size};                 // per_core_block_size
 
     tt::tt_metal::ComputeConfig compute_config{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
         .fp32_dest_acc_en = true,
         .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = false,

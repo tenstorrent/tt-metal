@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ void kernel_main() {
     // configuration parameters (e.g. same data type and same page size) in the host code, we can grab
     // the same parameters from the circular buffer as we would from the DRAM buffer.
     constexpr auto s_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(s_args, dst_addr, get_tile_size(cb_id_out0));
+    const auto s = TensorAccessor(s_args, dst_addr);
 
     // Loop through the matrix dimensions Mt and Nt. bmm will generate C's tiles C=A*B, MN=MK*KN,
     // in row major order, we just read them from CB and write out to DRAM

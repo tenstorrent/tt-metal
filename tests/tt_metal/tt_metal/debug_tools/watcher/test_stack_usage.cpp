@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,8 @@ void RunOneTest(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     unsigned free,
-    std::optional<uint32_t> quasar_dms_per_kernel = std::nullopt) {
+    std::optional<uint32_t> quasar_dms_per_kernel = std::nullopt,
+    bool is_legacy_kernel = false) {
     const auto& hal = MetalContext::instance().hal();
     const bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
     const std::string path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_stack.cpp";
@@ -74,7 +75,9 @@ void RunOneTest(
                 path,
                 coord,
                 tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = dms_per_kernel, .compile_args = compile_args});
+                    .num_threads_per_cluster = dms_per_kernel,
+                    .compile_args = compile_args,
+                    .is_legacy_kernel = is_legacy_kernel});
         }
     } else {
         // BH/WH:
@@ -94,16 +97,17 @@ void RunOneTest(
     }
 
     // Create compute kernels
-    // TODO: Watcher features are temporarily skipped on Quasar until basic runtime bring-up for TRISCs is complete
-    auto num_processor_classes = hal.get_processor_classes_count(HalProgrammableCoreType::TENSIX);
-    if (!is_quasar && num_processor_classes > 1) {
-        auto num_compute_types = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 1);
+    if (is_quasar) {
+        experimental::quasar::CreateKernel(
+            program_, path, coord, experimental::quasar::QuasarComputeConfig{.compile_args = compile_args});
+    } else {
         CreateKernel(program_, path, coord, ComputeConfig{.compile_args = compile_args});
-        for (uint32_t type_idx = 0; type_idx < num_compute_types; type_idx++) {
-            uint32_t processor_idx =
-                hal.get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, type_idx);
-            add_expected_msg(hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, processor_idx, false));
-        }
+    }
+    auto num_compute_types = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 1);
+    for (uint32_t type_idx = 0; type_idx < num_compute_types; type_idx++) {
+        uint32_t processor_idx =
+            hal.get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, type_idx);
+        add_expected_msg(hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, processor_idx, false));
     }
 
     // Also run on idle ethernet, if present
@@ -136,6 +140,7 @@ struct StackUsageTestParams {
     unsigned free_bytes;
     std::optional<uint32_t> quasar_dms_per_kernel;  // nullopt = default (all DMs), value = multi-kernel mode
     bool quasar_only;                               // If true, skip on non-Quasar
+    bool is_legacy_kernel;                          // If true, use legacy kernel mode on Quasar
 };
 
 class StackUsageTest : public MeshWatcherFixture, public ::testing::WithParamInterface<StackUsageTestParams> {};
@@ -151,7 +156,7 @@ TEST_P(StackUsageTest, TestWatcherStackUsage) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [&params](MeshWatcherFixture* f, const std::shared_ptr<distributed::MeshDevice>& d) {
-                RunOneTest(f, d, params.free_bytes, params.quasar_dms_per_kernel);
+                RunOneTest(f, d, params.free_bytes, params.quasar_dms_per_kernel, params.is_legacy_kernel);
             },
             mesh_device);
     }
@@ -162,9 +167,12 @@ INSTANTIATE_TEST_SUITE_P(
     StackUsageTest,
     ::testing::Values(
         // Standard tests (all architectures, default Quasar uses single kernel with all DMs)
-        StackUsageTestParams{"StackUsage0", 0, std::nullopt, false},
-        StackUsageTestParams{"StackUsage16", 16, std::nullopt, false},
+        StackUsageTestParams{"StackUsage0", 0, std::nullopt, false, false},
+        StackUsageTestParams{"StackUsage16", 16, std::nullopt, false, false},
         // Quasar only: multi-kernel mode (launch 8 kernels in total, each mapped to a unique DM each)
-        StackUsageTestParams{"StackUsage0_QuasarMultiKernel", 0, 1, true},
-        StackUsageTestParams{"StackUsage16_QuasarMultiKernel", 16, 1, true}),
+        StackUsageTestParams{"StackUsage0_QuasarMultiKernel", 0, 1, true, false},
+        StackUsageTestParams{"StackUsage16_QuasarMultiKernel", 16, 1, true, false},
+        // Quasar only: legacy kernel mode
+        StackUsageTestParams{"StackUsage0_QuasarLegacy", 0, 1, true, true},
+        StackUsageTestParams{"StackUsage16_QuasarLegacy", 16, 1, true, true}),
     [](const ::testing::TestParamInfo<StackUsageTestParams>& info) { return info.param.test_name; });

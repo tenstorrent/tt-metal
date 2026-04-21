@@ -6,6 +6,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "tt_stl/reflection.hpp"
 
 namespace ttnn::experimental::prim {
 

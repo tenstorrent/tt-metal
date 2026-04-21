@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -359,6 +359,11 @@ class TestTriage:
                 assert (
                     first_entry.line == expected_line
                 ), f"{check.risc_name}: Expected line {expected_line}, got {first_entry.line}"
+
+    def test_dump_configuration(self):
+        result = self.run_triage_script("dump_configuration.py")
+        assert result is not None, "Expected non-None result from dump_configuration.py"
+        assert len(result) > 0, "Expected at least one configuration entry"
 
     def test_dump_running_operations(self):
         self.run_triage_script("dump_running_operations.py")

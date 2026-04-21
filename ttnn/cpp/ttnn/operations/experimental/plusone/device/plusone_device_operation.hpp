@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "plusone_program_factory.hpp"
-
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "plusone_device_operation_types.hpp"
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,26 +41,76 @@ void py_module_types(nb::module_& mod) {
     )doc");
 
     // Unified ComputeKernelConfig - all architecture-specific names are now aliases
-    nb::class_<DeviceComputeKernelConfigPlaceholder>(mod, "DeviceComputeKernelConfig");
+    nb::class_<DeviceComputeKernelConfigPlaceholder>(mod, "DeviceComputeKernelConfig", R"doc(
+        Abstract base type used in op signatures to accept any architecture-specific compute kernel config.
+
+        Example concrete, instantiable class is :class:`ttnn.WormholeComputeKernelConfig`, which is valid for both
+        Wormhole and Blackhole devices. Construct one of the concrete classes and pass it wherever a
+        ``ttnn.DeviceComputeKernelConfig`` is expected.
+    )doc");
 
     // Primary config class (ComputeKernelConfig is the canonical name, but we expose as WormholeComputeKernelConfig
     // for backward compatibility)
-    nb::class_<ComputeKernelConfig>(mod, "WormholeComputeKernelConfig")
+    nb::class_<ComputeKernelConfig>(mod, "WormholeComputeKernelConfig", R"doc(
+        Compute kernel configuration for Wormhole devices. Note that ``BlackholeComputeKernelConfig``
+        is a type alias for the same class (``WormholeComputeKernelConfig``).
+
+        Controls the precision/throughput trade-offs of the on-chip matrix engine and SFPU.
+        Pass an instance of this class as the ``compute_kernel_config`` argument to ops such as
+        :func:`ttnn.matmul`, :func:`ttnn.linear`, and others that accept a
+        :class:`ttnn.DeviceComputeKernelConfig`.
+
+        See the per-attribute docs below for what each field does, and
+        ``tech_reports/matrix_engine/matrix_engine.md`` for the full architectural background.
+    )doc")
         .def(
-            nb::init<MathFidelity, bool, bool, bool, bool, ttnn::operations::compute_throttle_utils::ThrottleLevel>(),
+            nb::init<
+                tt::tt_metal::MathFidelity,
+                bool,
+                bool,
+                bool,
+                bool,
+                ttnn::operations::compute_throttle_utils::ThrottleLevel>(),
             nb::kw_only(),
-            nb::arg("math_fidelity") = nb::cast(MathFidelity::Invalid),
+            nb::arg("math_fidelity") = nb::cast(tt::tt_metal::MathFidelity::Invalid),
             nb::arg("math_approx_mode") = true,
             nb::arg("fp32_dest_acc_en") = false,
             nb::arg("packer_l1_acc") = false,
             nb::arg("dst_full_sync_en") = false,
             nb::arg("throttle_level") = compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
-        .def_rw("math_fidelity", &ComputeKernelConfig::math_fidelity)
-        .def_rw("math_approx_mode", &ComputeKernelConfig::math_approx_mode)
-        .def_rw("fp32_dest_acc_en", &ComputeKernelConfig::fp32_dest_acc_en)
-        .def_rw("packer_l1_acc", &ComputeKernelConfig::packer_l1_acc)
-        .def_rw("dst_full_sync_en", &ComputeKernelConfig::dst_full_sync_en)
-        .def_rw("throttle_level", &ComputeKernelConfig::throttle_level);
+        .def_rw("math_fidelity", &ComputeKernelConfig::math_fidelity, R"doc(
+            Controls the number of mantissa-bit passes through the 5b×7b multiplier array, trading
+            throughput for precision. See :class:`ttnn.MathFidelity` for the available values.
+        )doc")
+        .def_rw("math_approx_mode", &ComputeKernelConfig::math_approx_mode, R"doc(
+            When ``True``, SFPU ops that have an approximate variant (e.g. ``exp``, ``gelu``, ``sqrt``)
+            run in high-performance / lower-precision mode instead of high-precision / lower-performance mode.
+            Has no effect on ops that do not have an approximate variant.
+        )doc")
+        .def_rw("fp32_dest_acc_en", &ComputeKernelConfig::fp32_dest_acc_en, R"doc(
+            When ``True``, the FPU accumulates results into the math destination (DST) register in FP32
+            instead of BFLOAT16. This is required when the output dtype is ``FLOAT32`` and improves
+            numerical accuracy for intermediate accumulations.
+
+            Warning: enabling this halves the number of tiles that fit in DST. With ``DstSync::Half``,
+            BFLOAT16 holds 8 tiles while FP32 holds only 4.
+        )doc")
+        .def_rw("packer_l1_acc", &ComputeKernelConfig::packer_l1_acc, R"doc(
+            When ``True``, the packer reads the current value at the output SRAM address, adds the value
+            from DST, and writes the result back (in-place accumulation in SRAM). This is useful for
+            accumulating partial sums in higher precision circular buffer (e.g. FP32) across multiple kernel launches,
+            and then doing a final pack to a lower-precision circular buffer (e.g. BFLOAT16).
+        )doc")
+        .def_rw("dst_full_sync_en", &ComputeKernelConfig::dst_full_sync_en, R"doc(
+            When ``True``, the math and pack units synchronize over the full DST register rather than
+            the default half-DST split. Leave at ``False`` unless you explicitly need full-DST sync
+            semantics.
+        )doc")
+        .def_rw("throttle_level", &ComputeKernelConfig::throttle_level, R"doc(
+            Inserts NOP instructions into the compute kernel to reduce throughput and limit di/dt
+            (power-supply current transients) when running on large core grids. See
+            :class:`ttnn.ThrottleLevel` for the available levels and their throughput percentages.
+        )doc");
 }
 
 void py_module(nb::module_& mod) {
@@ -70,7 +120,7 @@ void py_module(nb::module_& mod) {
         nb::arg("arch"),
         nb::arg("device_kernel_config") = nb::none(),
         nb::kw_only(),
-        nb::arg("math_fidelity") = nb::cast(MathFidelity::LoFi),
+        nb::arg("math_fidelity") = nb::cast(tt::tt_metal::MathFidelity::LoFi),
         nb::arg("math_approx_mode") = true,
         nb::arg("fp32_dest_acc_en") = false,
         nb::arg("packer_l1_acc") = false,

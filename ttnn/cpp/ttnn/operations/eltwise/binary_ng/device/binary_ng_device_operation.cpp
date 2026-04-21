@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,7 +35,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case BIAS_GELU:
         case HYPOT: return (a == FLOAT32 && b == FLOAT32);
         case GT:
-        case LT:
+        case LT: return ((a == b) && (a == INT32 || a == FLOAT32 || a == UINT16));
         case GE:
         case LE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
         case LCM:
@@ -49,7 +49,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case BITWISE_AND: return a == b && (a == INT32 || a == UINT32 || a == UINT16);
         case DIV_FLOOR:
         case DIV_TRUNC:
-        case REMAINDER: return (a == INT32 && b == INT32);
+        case REMAINDER:
         case FMOD:
         case QUANT:
         case REQUANT:
@@ -57,6 +57,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case MAXIMUM:
         case MINIMUM:
         case XLOGY:
+        case ATAN2:
         case POWER:
         case WHERE_TST:
         case WHERE_TTS: return true;
@@ -238,7 +239,10 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() co
         subtile_broadcast_type,
         is_sfpu,
         is_quant_op,
-        is_where_op);
+        is_where_op,
+        input_layout_a,
+        input_layout_b,
+        output_layout);
 }
 
 DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
@@ -296,7 +300,10 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             "If both output dtype and output tensor provided dtype should match");
     }
 
-    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "First operand to eltwise binary must be tilized");
+    TT_FATAL(
+        input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
+        "First operand to eltwise binary must have TILE or ROW_MAJOR layout, got {}",
+        input_tensor_a.layout());
 
     bool tensor_a_sharded = input_tensor_a.memory_config().is_sharded();
     if (not tensor_a_sharded) {
@@ -319,7 +326,10 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor_a.device() == input_tensor_b->device(),
             "Operands to eltwise binary need to be on the same device!");
-        TT_FATAL(input_tensor_b->layout() == Layout::TILE, "Second operand to eltwise binary must be tilized");
+        TT_FATAL(
+            input_tensor_b->layout() == Layout::TILE || input_tensor_b->layout() == Layout::ROW_MAJOR,
+            "Second operand to eltwise binary must have TILE or ROW_MAJOR layout, got {}",
+            input_tensor_b->layout());
 
         if (not tensor_b_sharded) {
             TT_FATAL(
@@ -361,11 +371,11 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
             a_dim,
             b_dim);
 
-        if (i <= -6) {
+        if (i <= -7) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Broadcasting rule violation for rank >= 6 at dimension index {} (output rank {}). "
-                "Broadcast is supported up to rank 5. dim a: {}, dim b: {}",
+                "Broadcasting rule violation for rank >= 7 at dimension index {} (output rank {}). "
+                "Broadcast is supported up to rank 6. dim a: {}, dim b: {}",
                 i,
                 larger_rank,
                 a_dim,
@@ -452,11 +462,14 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         return TensorSpec(
             output_shape,
             TensorLayout(
-                output_dtype, PageConfig(Layout::TILE), MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
+                output_dtype,
+                PageConfig(attributes.output_layout),
+                MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
     }
 
     // If not sharded, use the memory config from input a that is interleaved
-    return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), attributes.memory_config));
+    return TensorSpec(
+        output_shape, TensorLayout(output_dtype, PageConfig(attributes.output_layout), attributes.memory_config));
 }
 
 BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_output_tensors(
@@ -549,6 +562,12 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS ||
          binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TST);
 
+    auto output_layout = output_tensor ? output_tensor->layout() : Layout::TILE;
+    if (!output_tensor.has_value() && input_tensor_a.layout() == Layout::ROW_MAJOR &&
+        input_tensor_b.layout() == Layout::ROW_MAJOR) {
+        output_layout = Layout::ROW_MAJOR;
+    }
+
     MemoryConfig mem_config_actual = input_tensor_a.memory_config();
     if (input_tensor_a.is_sharded()) {
         mem_config_actual =
@@ -565,7 +584,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
                         tt::LogOp,
                         "BinaryNgDeviceOperation: Using memory config from input tensor B since it is sharded");
                 }
-            } else if (input_tensor_b.shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
+            } else if (input_tensor_b.shard_spec()->num_cores() > input_tensor_a.shard_spec()->num_cores()) {
                 mem_config_actual =
                     operations::binary_ng::compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
                 log_debug(
@@ -623,7 +642,10 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         subtile_broadcast_type,
         is_sfpu_op,
         is_quant_op,
-        is_where_op};
+        is_where_op,
+        input_tensor_a.layout(),
+        input_tensor_b.layout(),
+        output_layout};
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
@@ -650,6 +672,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     MemoryConfig mem_config_actual = memory_config.value_or(
         output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config());
 
+    auto output_layout = output_tensor ? output_tensor->layout() : Layout::TILE;
+    if (!output_tensor.has_value() && input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        output_layout = Layout::ROW_MAJOR;
+    }
+
     auto operation_attributes = OperationType::operation_attributes_t{
         binary_op_type,
         {lhs_activations.begin(), lhs_activations.end()},
@@ -666,7 +693,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         ttnn::operations::binary_ng::SubtileBroadcastType::NONE,
         is_sfpu_op,
         is_quant_op,
-        false};
+        false,
+        input_tensor_a.layout(),
+        Layout::INVALID,
+        output_layout};
+
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

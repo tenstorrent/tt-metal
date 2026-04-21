@@ -1,10 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreCompileTimeDescriptor
+from models.demos.deepseek_v3_b1.utils import get_worker_noc_hop_distance
 
 
 def _get_shard_size_bytes(shard_shape, tile, dtype):
@@ -75,8 +76,8 @@ class GatherSingleCore:
         noc0_cores = []
         noc1_cores = []
         for core in sender_cores:
-            noc0_hop = device.get_worker_noc_hop_distance(core, gather_core, ttnn.NOC.NOC_0)
-            noc1_hop = device.get_worker_noc_hop_distance(core, gather_core, ttnn.NOC.NOC_1)
+            noc0_hop = get_worker_noc_hop_distance(device, core, gather_core, ttnn.NOC.NOC_0)
+            noc1_hop = get_worker_noc_hop_distance(device, core, gather_core, ttnn.NOC.NOC_1)
             if noc0_hop <= noc1_hop:
                 noc0_cores.append(core)
             else:

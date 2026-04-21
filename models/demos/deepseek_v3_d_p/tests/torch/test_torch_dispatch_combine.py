@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -37,6 +37,7 @@ def test_torch_dispatch_combine(
     seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor
 ):
     """Test dispatch→combine round-trip using PyTorch reference implementation."""
+    torch.manual_seed(42)
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
         seq_len_per_chip,
         num_routed_experts,
@@ -55,7 +56,6 @@ def test_torch_dispatch_combine(
         num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-        seed=42,
     )
     # Squeeze the dispatch_group dimension since this is a single-rank pure torch test
     weights = weights.squeeze(0)
@@ -89,13 +89,14 @@ def test_torch_dispatch_combine(
     )
 
     # Compute gate outputs before dispatch
-    expert_offsets, expert_token_counts, cum_sum = get_gate_outputs(
+    expert_offsets, expert_token_counts, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
         experts_per_chip,
         seq_len_per_chip,
         num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
     )
 
     # Forward pass through dispatch module

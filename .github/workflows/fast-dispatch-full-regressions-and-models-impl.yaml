@@ -47,6 +47,7 @@ jobs:
           # Stable set (default path; optional per-model timeout)
           # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
           STABLE='[
+            {"model":"bge_m3"},
             {"model":"common_models"},
             {"model":"functional_unet"},
             {"model":"ttt-llama3.2-1B"},
@@ -176,14 +177,14 @@ jobs:
         with:
           submodules: recursive
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
         run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
@@ -212,6 +213,13 @@ jobs:
               $PYTEST_CMD tests/nightly/single_card/tt_transformers -k ${{ matrix.test-config.model }}
             elif [[ "${{ matrix.test-config.model }}" == *"qwen25_vl"* ]]; then
               $PYTEST_CMD tests/nightly/single_card/qwen25_vl -k ${{ matrix.test-config.model }}
+            elif [[ "${{ matrix.test-config.model }}" == "stable_diffusion_xl_base" ]]; then
+              # Split into separate pytest invocations to avoid host OOM from accumulated memory
+              # across 311 tests in a single process (LoRA tests load ~15GB per test case).
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae
             else
               $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
             fi
@@ -256,14 +264,14 @@ jobs:
         with:
           submodules: recursive
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
         run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
@@ -402,7 +410,15 @@ jobs:
         env:
           PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}
         run: |
-          $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
+          if [[ "${{ matrix.test-config.model }}" == "stable_diffusion_xl_base" ]]; then
+            # Split into separate pytest invocations to avoid host OOM from accumulated memory
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae
+          else
+            $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
+          fi
       - name: Prepare Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
         uses: ./docker-job/.github/actions/prepare-tracy-reports
@@ -436,7 +452,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Download all Tracy profiler reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: tracy_ops_*
           path: all_tracy_reports
@@ -449,7 +465,7 @@ jobs:
           output-path: aggregated_ops
 
       - name: Upload aggregated operations report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: aggregated-device-operations
           path: aggregated_ops/

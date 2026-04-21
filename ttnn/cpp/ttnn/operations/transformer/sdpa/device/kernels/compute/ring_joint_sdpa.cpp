@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,20 +54,25 @@ void kernel_main() {
     constexpr bool uniform_dataformat = get_compile_time_arg_val(36) == 1;
     constexpr bool is_causal = get_compile_time_arg_val(37) == 1;
     constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(39) == 1;
 
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
-    // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
-    // Only needed when any K/joint dimension has padding that doesn't fill a chunk.
+    // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
+    // Needed when any K/joint dimension has padding, or when causal masking is active.
     constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
     constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-    constexpr bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) && !is_causal;
+    constexpr bool needs_lightweight_mask =
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) || is_causal;
 
     constexpr uint32_t neginf_tile_idx = 0;
-    constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? 1 : 0;
+    constexpr uint32_t causal_diag_tile_idx = is_causal ? 1 : 0;
+    constexpr uint32_t base_partial_offset = 1 + (is_causal ? 1 : 0);
+    constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? base_partial_offset : 0;
     constexpr uint32_t joint_l_partial_tile_idx =
-        (joint_l_partial_col > 0) ? (1 + (global_n_partial_col > 0 ? 1 : 0)) : 0;
-    constexpr uint32_t total_mask_tiles = 1 + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
+        (joint_l_partial_col > 0) ? (base_partial_offset + (global_n_partial_col > 0 ? 1 : 0)) : 0;
+    constexpr uint32_t total_mask_tiles =
+        1 + (is_causal ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
@@ -175,8 +180,9 @@ void kernel_main() {
 
         // Build lightweight mask context for this ring iteration
         LightweightMaskContext lw_mask;
-        lw_mask.enabled = needs_lightweight_mask;
+        lw_mask.is_causal = (ring_iter == 0 ? is_causal : false);
         lw_mask.neginf_tile_idx = neginf_tile_idx;
+        lw_mask.causal_diag_tile_idx = causal_diag_tile_idx;
         lw_mask.local_n_padded_tiles = local_n_padded_tiles;
         lw_mask.joint_n_padded_tiles = joint_n_padded_tiles;
         lw_mask.global_n_partial_col = global_n_partial_col;
@@ -221,7 +227,8 @@ void kernel_main() {
                 uniform_dataformat,
                 cb_out,  // cb_normalized_out — output goes directly to cb_out
                 cb_sum_out,
-                cb_sum_in>(
+                cb_sum_in,
+                needs_lightweight_mask>(
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,
@@ -241,15 +248,25 @@ void kernel_main() {
                 q_per_core,
                 lw_mask);
         } else {
-            bool causality = (ring_iter == 0 ? is_causal : false);
+            bool is_causal_ring_iter = (ring_iter == 0 ? is_causal : false);
 
             uint32_t iter_num_kv_chunks = num_kv_chunks;
             if (is_causal && is_balanced && ring_index > ring_id) {
                 iter_num_kv_chunks /= 2;
             }
-            bool balancing = (ring_index >= ring_id ? false : is_balanced);
+            bool skip_first_half_q = (ring_index >= ring_id ? false : is_balanced);
 
-            sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, NH, DHt, vDHt, scale_fp32>(
+            sdpa_ring<
+                cb_qk_im,
+                cb_identity_scale_in,
+                cb_scale_in,
+                Sq_chunk_t,
+                Sk_chunk_t,
+                NH,
+                DHt,
+                vDHt,
+                scale_fp32,
+                needs_lightweight_mask>(
                 qk_in0_block_w,
                 qk_subblock_w,
                 qk_subblock_h,
@@ -300,9 +317,10 @@ void kernel_main() {
                 cb_prev_out,
                 cb_out,
                 lw_mask,
-                causality,
-                balancing,
-                is_last_ring_iter);
+                is_causal_ring_iter,
+                skip_first_half_q,
+                is_last_ring_iter,
+                use_zigzag_balancing);
         }
     }
 }

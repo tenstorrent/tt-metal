@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -86,6 +86,8 @@ public:
     uint32_t buffer_size() const;
 
     uint32_t address_offset() const;
+
+    void set_address_offset(uint32_t offset);
 
     const Buffer* shadow_global_buffer{nullptr};
 
