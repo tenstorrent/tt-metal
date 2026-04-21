@@ -199,6 +199,11 @@ def test_prefill_transformer(
 
     profiler.end("cache_check")
 
+    # Report cache check timing breakdown
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import report_and_clear
+
+    report_and_clear()
+
     # --- Create input (needed early for reference computation) ---
     if input_source == "random":
         token_ids = torch.randint(0, config.vocab_size, (1, isl_total), dtype=torch.int64)
@@ -283,6 +288,10 @@ def test_prefill_transformer(
     profiler.end("weights_creation")
 
     # --- TT transformer ---
+    # Log program cache size BEFORE creation
+    cache_entries_before = mesh_device.num_program_cache_entries()
+    logger.info(f"Program cache entries BEFORE transformer creation: {cache_entries_before}")
+
     profiler.start("tt_transformer_creation")
     transformer = TtPrefillTransformer(
         mesh_device=mesh_device,
@@ -300,6 +309,12 @@ def test_prefill_transformer(
     )
     ttnn.ReadDeviceProfiler(mesh_device)
     ttnn.synchronize_device(mesh_device)
+
+    # Log program cache size AFTER creation
+    cache_entries_after = mesh_device.num_program_cache_entries()
+    logger.info(f"Program cache entries AFTER transformer creation: {cache_entries_after}")
+    logger.info(f"Program cache entries ADDED during creation: {cache_entries_after - cache_entries_before}")
+
     # --- Free memory immediately after transformer creation ---
     del state_dict
     gc.collect()
