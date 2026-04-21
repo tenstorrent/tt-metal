@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 // Make n reads defined by num_reads
 // Writes to Specified Circular Buffers in L1
@@ -28,8 +29,7 @@ void kernel_main() {
     constexpr uint32_t num_pages_per_block_base_offset = num_tensors;
     constexpr uint32_t page_id_per_tensor_offset = num_pages_per_block_base_offset + num_tensors;
 
-    auto tensor_accessors_tuple =
-        make_tensor_accessor_tuple(tensor_accessor_args, src_addr_base_idx, page_size_base_idx);
+    auto tensor_accessors_tuple = make_tensor_accessor_tuple(tensor_accessor_args, src_addr_base_idx);
     auto abstract_tensor_accessor_wrappers = make_abstract_tensor_accessor_wrappers(tensor_accessors_tuple);
 
     tt_l1_ptr uint32_t* arg_ptr = (tt_l1_ptr uint32_t*)get_arg_addr(src_addr_base_idx);
@@ -38,12 +38,14 @@ void kernel_main() {
         page_id_per_tensor[i] = arg_ptr[page_id_per_tensor_offset + i];
     }
 
+    experimental::CircularBuffer cb_in(cb_id_in);
+
     uint32_t curr_tensor = start_tensor;
     uint32_t curr_tensor_id = start_tensor_id;
     // FIX RM CONCAT WIDTH
     for (uint32_t i = 0; i < num_pages; ++i) {
-        cb_reserve_back(cb_id_in, ublock_size_pages);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in);
+        cb_in.reserve_back(ublock_size_pages);
+        uint32_t l1_write_addr = cb_in.get_write_ptr();
 #ifdef WIDTH_CONCAT
         // For width concat we know we start at curr_tensor=0
         // num_pages_per_block[curr_tensor] is always one for width concat
@@ -74,6 +76,6 @@ void kernel_main() {
         }
 #endif
         noc_async_read_barrier();
-        cb_push_back(cb_id_in, ublock_size_pages);
+        cb_in.push_back(ublock_size_pages);
     }
 }

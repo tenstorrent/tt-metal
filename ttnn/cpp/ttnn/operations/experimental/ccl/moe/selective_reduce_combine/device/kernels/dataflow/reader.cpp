@@ -98,12 +98,9 @@ void kernel_main() {
 
     const uint32_t sync_semaphore_addr = get_semaphore(sync_semaphore_id);
 
-    const auto dense_token_maps_addrgen =
-        TensorAccessor(dense_token_maps_ta_args, dense_token_maps_addr, dense_token_maps_page_size_bytes);
-    const auto token_counts_addrgen =
-        TensorAccessor(dense_token_counts_ta_args, dense_token_counts_addr, token_counts_page_size_bytes);
-    const auto token_activations_addrgen =
-        TensorAccessor(token_activations_ta_args, token_activations_addr, token_activations_page_size_bytes);
+    const auto dense_token_maps_addrgen = TensorAccessor(dense_token_maps_ta_args, dense_token_maps_addr);
+    const auto token_counts_addrgen = TensorAccessor(dense_token_counts_ta_args, dense_token_counts_addr);
+    const auto token_activations_addrgen = TensorAccessor(token_activations_ta_args, token_activations_addr);
 
     // wait for metadata to be ready
     auto* sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_semaphore_addr);
@@ -126,7 +123,7 @@ void kernel_main() {
 
     // read dense token counts
     cb_reserve_back(token_counts_cb_id, 1);
-    const uint32_t token_counts_l1_addr = get_read_ptr(token_counts_cb_id);
+    const uint32_t token_counts_l1_addr = get_write_ptr(token_counts_cb_id);
     const uint64_t token_counts_noc_addr = token_counts_addrgen.get_noc_addr(0, /*offset=*/0, /*noc=*/1);
     noc_async_read(token_counts_noc_addr, token_counts_l1_addr, token_counts_page_size_bytes, /*noc=*/1);
     noc_async_read_barrier(/*noc=*/1);
