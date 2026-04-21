@@ -106,31 +106,20 @@ void write_file(const std::filesystem::path& path, const std::string& content) {
         }
     }
 
-    const fs::path tmp_path = path.string() + ".tmp";
-    std::error_code remove_ec;
-    fs::remove(tmp_path, remove_ec);
+    jit_build::utils::FileRenamer tmp(path);
+    std::ofstream f(tmp.path(), std::ios::binary | std::ios::trunc);
+    if (!f) {
+        throw std::runtime_error("Cannot create file: " + path.string());
+    }
 
-    try {
-        std::ofstream f(tmp_path, std::ios::binary | std::ios::trunc);
-        if (!f) {
-            throw std::runtime_error("Cannot create file: " + path.string());
-        }
+    f.write(content.data(), static_cast<std::streamsize>(content.size()));
+    if (!f) {
+        throw std::runtime_error("Failed to write file: " + path.string());
+    }
 
-        f.write(content.data(), static_cast<std::streamsize>(content.size()));
-        if (!f) {
-            throw std::runtime_error("Failed to write file: " + path.string());
-        }
-
-        f.close();
-        if (f.fail()) {
-            throw std::runtime_error("Failed to finalize file: " + path.string());
-        }
-
-        tt::filesystem::safe_rename(tmp_path, path);
-    } catch (...) {
-        std::error_code cleanup_ec;
-        fs::remove(tmp_path, cleanup_ec);
-        throw;
+    f.close();
+    if (f.fail()) {
+        throw std::runtime_error("Failed to finalize file: " + path.string());
     }
 }
 
