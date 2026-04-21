@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <stdint.h>
 #include <cstdint>
 #include "internal/risc_attribs.h"
 #include "noc_parameters.h"
@@ -12,7 +11,6 @@
 #include "noc_overlay_parameters.h"
 #include "api/debug/assert.h"
 #include "internal/tt-2xx/quasar/overlay/rocc_instructions.hpp"
-#include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 
 #if !defined(COMPILE_FOR_DM)
 #error "NOC API V2 requires COMPILE_FOR_DM (uses RoCC custom instructions)"
