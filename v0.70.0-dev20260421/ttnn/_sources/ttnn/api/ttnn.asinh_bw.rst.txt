@@ -1,0 +1,8 @@
+﻿ttnn.asinh\_bw
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.asinh_bw:
+
+.. autooperation:: ttnn.asinh_bw
