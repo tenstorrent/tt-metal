@@ -2,20 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN Decoder Layer for BailingMoeV2 (Ling-mini-2.0).
+"""TTNN Decoder Layers.
 
-Replaces BailingMoeV2DecoderLayer to perform residual adds on-device using ttnn.add,
+Replaces HuggingFace decoder layers to perform residual adds on-device using ttnn.add,
 eliminating host round-trips that force device synchronization.
 """
 
 
+import torch
 import ttnn
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
-from models.experimental.tt_symbiote.core.run_config import trace_enabled
-from models.experimental.tt_symbiote.modules.attention import TTNNBailingMoEAttention
-from models.experimental.tt_symbiote.modules.moe import TTNNBailingMoE
-from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
+from models.experimental.tt_symbiote.core.run_config import trace_enabled, trace_disabled
+from models.experimental.tt_symbiote.modules.attention import TTNNBailingMoEAttention, LlamaAttention
+from models.experimental.tt_symbiote.modules.moe import TTNNBailingMoE, TTNNDeepseekV2MoE, TTNNDeepseekV2DenseMLP
+from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm, TTNNRMSNorm
 
 
 @trace_enabled
@@ -141,6 +142,118 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
 
         if output_router_logits:
             outputs += (router_logits,)
+
+        return outputs
+
+
+@trace_disabled
+class TTNNDeepseekV2DecoderLayer(TTNNModule):
+    """Replaces HF DeepseekV2DecoderLayer to keep residual adds on-device.
+
+    Eliminates 2 host round-trips per layer (one for attention residual,
+    one for MoE/MLP residual) by using ttnn.add instead of aten::add.
+    Cannot be @trace_enabled because children (TTNNDeepseekV2MoE, LlamaAttention)
+    perform host operations (CPU routing, RoPE) that are forbidden during trace
+    capture.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.input_layernorm = None
+        self.post_attention_layernorm = None
+        self.self_attn = None
+        self.mlp = None
+        self._is_dense_layer = False
+
+    @classmethod
+    def from_torch(cls, torch_layer):
+        """Create from HuggingFace DeepseekV2DecoderLayer."""
+        new_layer = cls()
+        new_layer._fallback_torch_layer = torch_layer
+
+        new_layer.input_layernorm = TTNNRMSNorm.from_torch(torch_layer.input_layernorm)
+        new_layer.post_attention_layernorm = TTNNRMSNorm.from_torch(torch_layer.post_attention_layernorm)
+        new_layer.self_attn = LlamaAttention.from_torch(torch_layer.self_attn)
+
+        config = torch_layer.self_attn.config
+        layer_idx = torch_layer.self_attn.layer_idx
+        first_k_dense = getattr(config, "first_k_dense_replace", 0)
+        moe_layer_freq = getattr(config, "moe_layer_freq", 1)
+        n_routed = getattr(config, "n_routed_experts", None)
+        is_moe = n_routed is not None and layer_idx >= first_k_dense and layer_idx % moe_layer_freq == 0
+        new_layer._is_dense_layer = not is_moe
+
+        if is_moe:
+            new_layer.mlp = TTNNDeepseekV2MoE.from_torch(torch_layer.mlp)
+        else:
+            new_layer.mlp = TTNNDeepseekV2DenseMLP.from_torch(torch_layer.mlp)
+
+        return new_layer
+
+    def _ensure_ttnn(self, t):
+        """Convert torch.Tensor to on-device ttnn.Tensor if needed."""
+        if isinstance(t, torch.Tensor) and not isinstance(t, ttnn.Tensor):
+            return ttnn.from_torch(
+                t.to(torch.bfloat16),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        if t.layout != ttnn.TILE_LAYOUT:
+            t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if t.dtype != ttnn.bfloat16:
+            t = ttnn.typecast(t, ttnn.bfloat16)
+        return t
+
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        position_ids=None,
+        past_key_value=None,
+        output_attentions=False,
+        use_cache=False,
+        cache_position=None,
+        **kwargs,
+    ):
+        hs = hidden_states
+        hs = self._ensure_ttnn(hs)
+
+        residual = hs
+
+        hs = self.input_layernorm(hs)
+
+        attn_cache_position = cache_position if cache_position is not None else position_ids
+        attn_out, self_attn_weights, present_key_value = self.self_attn(
+            hidden_states=hs,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+            cache_position=attn_cache_position,
+        )
+
+        attn_out = self._ensure_ttnn(attn_out)
+        hs = ttnn.add(residual, attn_out)
+
+        residual = hs
+
+        hs_normed = self.post_attention_layernorm(hs)
+
+        mlp_out = self.mlp(hs_normed)
+        mlp_out = self._ensure_ttnn(mlp_out)
+
+        hs = ttnn.add(residual, mlp_out)
+
+        outputs = (hs,)
+
+        if output_attentions:
+            outputs += (self_attn_weights,)
+
+        if use_cache:
+            outputs += (present_key_value,)
 
         return outputs
 

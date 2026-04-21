@@ -697,6 +697,32 @@ class TTNNBailingMoeV2MLP(TTNNGlm4MoeMLP):
     pass
 
 
+@trace_enabled
+class TTNNDeepseekV2DenseMLP(TTNNModule):
+    """Pure-TTNN replacement for the HF DeepseekV2MLP (dense layers).
+
+    Performs gate_proj → SiLU → mul(up_proj) → down_proj entirely on device,
+    avoiding __torch_dispatch__ overhead for the element-wise multiply.
+    """
+
+    @classmethod
+    def from_torch(cls, torch_layer):
+        tt_module = cls()
+        tt_module._fallback_torch_layer = torch_layer
+        tt_module.gate_proj = TTNNLinear.from_torch(torch_layer.gate_proj)
+        tt_module.up_proj = TTNNLinear.from_torch(torch_layer.up_proj)
+        tt_module.down_proj = TTNNLinear.from_torch(torch_layer.down_proj)
+        return tt_module
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        x_gate = self.gate_proj(x)
+        x_gate = ttnn.silu(x_gate)
+        x_up = self.up_proj(x)
+        x = ttnn.mul(x_gate, x_up)
+        x = self.down_proj(x)
+        return x
+
+
 class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
     def preprocess_weights_impl(self):
         self.e_score_correction_bias = ttnn.from_torch(

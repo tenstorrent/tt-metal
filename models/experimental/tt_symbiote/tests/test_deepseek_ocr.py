@@ -21,14 +21,13 @@ import pytest
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu, TTNNGelu
 from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm, TTNNRMSNorm
 from models.experimental.tt_symbiote.modules.attention import (
-    LlamaAttention,
     PagedAttentionConfig,
     TTNNPagedAttentionKVCache,
     TTNNSAMAttention,
 )
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 from models.experimental.tt_symbiote.modules.conv import TTNNConv2dNHWC, TTNNImageEncoderViT, TTNNVitModel
-from models.experimental.tt_symbiote.modules.moe import TTNNDeepseekV2MoE
+from models.experimental.tt_symbiote.modules.decoder_layer import TTNNDeepseekV2DecoderLayer
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
@@ -215,21 +214,21 @@ def test_deepseek_ocr(device):
         torch_dtype=torch.bfloat16,
     )
 
-    nn_to_nn = {
-        model.model.layers[0].input_layernorm.__class__: TTNNRMSNorm,
-    }
-
+    decoder_layer_class = model.model.layers[0].__class__
+    rms_norm_class = model.model.layers[0].input_layernorm.__class__
     sam_attn_class = model.model.sam_model.blocks[0].attn.__class__
-    moe_class = model.model.layers[1].mlp.__class__
+
+    nn_to_nn = {}
+
     nn_to_ttnn = {
+        decoder_layer_class: TTNNDeepseekV2DecoderLayer,
+        rms_norm_class: TTNNRMSNorm,
         nn.Linear: TTNNLinear,
         nn.SiLU: TTNNSilu,
         nn.GELU: TTNNGelu,
         nn.LayerNorm: TTNNLayerNorm,
         nn.Conv2d: TTNNConv2dNHWC,
-        model.model.layers[0].self_attn.__class__: LlamaAttention,
         sam_attn_class: TTNNSAMAttention,
-        moe_class: TTNNDeepseekV2MoE,
         model.model.vision_model.__class__: TTNNVitModel,
         model.model.sam_model.__class__: TTNNImageEncoderViT,
     }
@@ -245,6 +244,11 @@ def test_deepseek_ocr(device):
     modules1 = register_module_replacement_dict(model, nn_to_nn, model_config=None)
     modules2 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
     set_device(model, device)
+
+    for layer in model.model.layers:
+        if isinstance(layer, TTNNModule):
+            layer._bypass_tensor_wrapping = True
+
     for k, v in tqdm({**modules1, **modules2}.items()):
         v.preprocess_weights()
         v.move_weights_to_device()
