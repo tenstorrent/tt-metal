@@ -120,6 +120,7 @@ class TtMoERoutingSetup(LightweightModule):
         expert_dispatch_table: torch.Tensor,
         num_links: int = 1,
         experts_per_chip: int = 32,
+        num_dispatch_subgroups: int = 1,
     ):
         """
         Initialize routing setup with the expert-to-chip mapping.
@@ -136,10 +137,12 @@ class TtMoERoutingSetup(LightweightModule):
                 Per-device shape after sharding: (1, num_routed_experts)
             num_links: Number of fabric links to use for cross-chip communication in offset_cumsum
             experts_per_chip: Number of experts per chip (for expert region offset grouping in offset_cumsum)
+            num_dispatch_subgroups: Number of dispatch subgroups partitioning the dispatch axis (1 = whole mesh)
         """
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.experts_per_chip = experts_per_chip
+        self.num_dispatch_subgroups = num_dispatch_subgroups
 
         self.experts_in_dispatch_group = ttnn.from_torch(
             expert_dispatch_table,
@@ -261,6 +264,7 @@ class TtMoERoutingSetup(LightweightModule):
             num_links=self.num_links,
             experts_per_chip=self.experts_per_chip,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            num_dispatch_subgroups=self.num_dispatch_subgroups,
         )
         signpost(header="moe_gate_calculate_global_dispatch_offsets")
 

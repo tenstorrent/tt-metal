@@ -16,7 +16,8 @@ std::array<ttnn::Tensor, 3> offset_cumsum(
     uint32_t cluster_axis,
     uint32_t num_links,
     uint32_t experts_per_chip,
-    const ttnn::MemoryConfig& memory_config);
+    const ttnn::MemoryConfig& memory_config,
+    uint32_t num_dispatch_subgroups = 1);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum
 

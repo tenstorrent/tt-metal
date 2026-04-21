@@ -23,6 +23,13 @@ void OffsetCumsumDeviceOperation::validate_on_program_cache_miss(
         "n_routed_experts ({}) must be divisible by experts_per_chip ({})",
         input_shape[-1],
         args.experts_per_chip);
+    TT_FATAL(
+        args.num_dispatch_subgroups >= 1, "num_dispatch_subgroups must be >= 1 (got {})", args.num_dispatch_subgroups);
+    TT_FATAL(
+        input_shape[-2] % args.num_dispatch_subgroups == 0,
+        "H ({}) must be divisible by num_dispatch_subgroups ({})",
+        input_shape[-2],
+        args.num_dispatch_subgroups);
 }
 
 OffsetCumsumDeviceOperation::spec_return_value_t OffsetCumsumDeviceOperation::compute_output_specs(
@@ -69,7 +76,11 @@ tt::stl::hash::hash_t OffsetCumsumDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& input_tensor) {
     const auto& input_shape = input_tensor.padded_shape();
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<OffsetCumsumDeviceOperation>(
-        args, input_tensor.dtype(), input_tensor.memory_config(), input_shape);
+        args.cluster_axis,
+        args.num_dispatch_subgroups,
+        input_tensor.dtype(),
+        input_tensor.memory_config(),
+        input_shape);
     return hash;
 }
 
@@ -86,9 +97,11 @@ OffsetCumsumDeviceOperation::tensor_return_value_t OffsetCumsumDeviceOperation::
 
 namespace ttnn::prim {
 
-std::array<Tensor, 3> offset_cumsum(const Tensor& input_tensor, uint32_t cluster_axis, uint32_t experts_per_chip) {
+std::array<Tensor, 3> offset_cumsum(
+    const Tensor& input_tensor, uint32_t cluster_axis, uint32_t experts_per_chip, uint32_t num_dispatch_subgroups) {
     using OperationType = ttnn::experimental::prim::OffsetCumsumDeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{cluster_axis, experts_per_chip};
+    auto operation_attributes =
+        OperationType::operation_attributes_t{cluster_axis, experts_per_chip, num_dispatch_subgroups};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, input_tensor);
 }
 

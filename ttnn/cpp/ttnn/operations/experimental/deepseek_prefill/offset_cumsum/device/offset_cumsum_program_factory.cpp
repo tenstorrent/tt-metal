@@ -23,7 +23,12 @@ struct CreatedProgram {
 };
 
 CreatedProgram create_program(
-    const Tensor& input, std::array<Tensor, 3>& tensor_return_value, uint32_t row_idx, uint32_t experts_per_chip) {
+    const Tensor& input,
+    std::array<Tensor, 3>& tensor_return_value,
+    uint32_t row_start,
+    uint32_t subgroup_H,
+    uint32_t row_idx_local,
+    uint32_t experts_per_chip) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::UINT32);
@@ -33,7 +38,9 @@ CreatedProgram create_program(
 
     const auto& logical_shape = input.logical_shape();
     uint32_t W = logical_shape[-1];
-    uint32_t H = logical_shape[-2];
+    // H = dispatch_group_size (subgroup row count). Kernel only reads rows
+    // [row_start, row_start + subgroup_H) of the gathered tensor.
+    uint32_t H = subgroup_H;
 
     auto* src_buffer = input.buffer();
     auto* dst_offsets_buffer = tensor_return_value.at(0).buffer();
@@ -104,7 +111,8 @@ CreatedProgram create_program(
          dst_offsets_buffer->address(),
          dst_totals_buffer->address(),
          dst_expert_region_buffer->address(),
-         row_idx});
+         row_idx_local,
+         row_start});
 
     return CreatedProgram{
         std::move(program),
@@ -122,10 +130,31 @@ OffsetCumsumProgramFactory::cached_mesh_workload_t OffsetCumsumProgramFactory::c
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    for (const auto& coord : tensor_coords.coords()) {
-        uint32_t row_idx = coord[operation_attributes.cluster_axis];
+    // H on the gathered input is num_devices along cluster_axis. Under subgroups, each
+    // subgroup owns a contiguous slice of `dispatch_group_size = H / num_dispatch_subgroups`
+    // rows; the kernel sums and emits offsets only within that slice.
+    const auto& input_shape = input.padded_shape();
+    const uint32_t input_H = input_shape[-2];
+    TT_FATAL(
+        input_H % operation_attributes.num_dispatch_subgroups == 0,
+        "Gathered H ({}) must be divisible by num_dispatch_subgroups ({})",
+        input_H,
+        operation_attributes.num_dispatch_subgroups);
+    const uint32_t dispatch_group_size = input_H / operation_attributes.num_dispatch_subgroups;
 
-        auto result = create_program(input, tensor_return_value, row_idx, operation_attributes.experts_per_chip);
+    for (const auto& coord : tensor_coords.coords()) {
+        uint32_t global_row = coord[operation_attributes.cluster_axis];
+        uint32_t subgroup_idx = global_row / dispatch_group_size;
+        uint32_t row_start = subgroup_idx * dispatch_group_size;
+        uint32_t row_idx_local = global_row - row_start;
+
+        auto result = create_program(
+            input,
+            tensor_return_value,
+            row_start,
+            dispatch_group_size,
+            row_idx_local,
+            operation_attributes.experts_per_chip);
         auto coord_range = ttnn::MeshCoordinateRange(coord);
         mesh_workload.add_program(coord_range, std::move(result.program));
         shared_variables.emplace(coord_range, result.shared_variables);
@@ -139,9 +168,16 @@ void OffsetCumsumProgramFactory::override_runtime_arguments(
     const OffsetCumsumParams& operation_attributes,
     const Tensor& input,
     tensor_return_value_t& tensor_return_value) {
+    const auto& input_shape = input.padded_shape();
+    const uint32_t input_H = input_shape[-2];
+    const uint32_t dispatch_group_size = input_H / operation_attributes.num_dispatch_subgroups;
+
     for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
         auto coord = *(coord_range.begin());
-        uint32_t row_idx = coord[operation_attributes.cluster_axis];
+        uint32_t global_row = coord[operation_attributes.cluster_axis];
+        uint32_t subgroup_idx = global_row / dispatch_group_size;
+        uint32_t row_start = subgroup_idx * dispatch_group_size;
+        uint32_t row_idx_local = global_row - row_start;
 
         auto& shared_vars = cached_workload.shared_variables.at(coord_range);
         auto& runtime_args = GetRuntimeArgs(program, shared_vars.kernel_id, shared_vars.core);
@@ -149,7 +185,8 @@ void OffsetCumsumProgramFactory::override_runtime_arguments(
         runtime_args[1] = tensor_return_value.at(0).buffer()->address();
         runtime_args[2] = tensor_return_value.at(1).buffer()->address();
         runtime_args[3] = tensor_return_value.at(2).buffer()->address();
-        runtime_args[4] = row_idx;
+        runtime_args[4] = row_idx_local;
+        runtime_args[5] = row_start;
     }
 }
 

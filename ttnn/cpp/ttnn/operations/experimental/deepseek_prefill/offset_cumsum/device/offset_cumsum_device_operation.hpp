@@ -32,5 +32,6 @@ struct OffsetCumsumDeviceOperation {
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-std::array<Tensor, 3> offset_cumsum(const Tensor& input_tensor, uint32_t cluster_axis, uint32_t experts_per_chip);
+std::array<Tensor, 3> offset_cumsum(
+    const Tensor& input_tensor, uint32_t cluster_axis, uint32_t experts_per_chip, uint32_t num_dispatch_subgroups = 1);
 }  // namespace ttnn::prim

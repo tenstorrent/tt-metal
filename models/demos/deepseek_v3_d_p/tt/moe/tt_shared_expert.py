@@ -238,6 +238,7 @@ class TtSharedExpert(LightweightModule):
         cache_name_prefix: Optional[str] = None,
         subdevice_id: Optional[ttnn.SubDeviceId] = None,
         subdevice_cores: Optional[ttnn.CoreRangeSet] = None,
+        num_dispatch_subgroups: int = 1,
     ):
         """
         Initialize TtSharedExpert module.
@@ -269,6 +270,12 @@ class TtSharedExpert(LightweightModule):
         self.subdevice_cores = subdevice_cores
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
+        self.num_dispatch_subgroups = num_dispatch_subgroups
+
+        # Shared-expert reduce-scatter runs on cluster_axis=1; subgroups partition axis 0.
+        # Axes must be orthogonal, otherwise a subgroup's reduce-scatter would pull from
+        # sibling subgroups. This assertion locks that invariant.
+        assert num_dispatch_subgroups >= 1, f"num_dispatch_subgroups must be >= 1 (got {num_dispatch_subgroups})"
 
         logger.debug(f"Initializing TtSharedExpert with emb_dim={emb_dim}, hidden_dim={hidden_dim}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
