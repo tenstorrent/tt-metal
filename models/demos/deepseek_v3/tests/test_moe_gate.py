@@ -53,7 +53,7 @@ def generate_reference_io(
     reference_model: ReferenceMoEGate,
     checkpoint_state_dict: dict[str, torch.Tensor],
     module_path: str,
-) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
     moe_state_dict = {
         name[5:]: tensor
         for name, tensor in sub_state_dict(checkpoint_state_dict, module_path + ".").items()
@@ -193,7 +193,6 @@ def test_forward_pass(
     topk_weights_pcc_required = 0.99
     passing, pcc_message = comp_pcc(ref_sorted_weights, tt_sorted_weights, topk_weights_pcc_required)
 
-    # due to tie breaking, the first 2 indices are the most important
     topk_indices_accuracy_required = 0.93 if mode == "decode" else 0.84
     accuracy = tt_sorted_indices.eq(ref_sorted_indices).float().mean()
 
@@ -204,16 +203,7 @@ def test_forward_pass(
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
     assert accuracy >= topk_indices_accuracy_required, f"TopK experts indices output does not match: {accuracy}"
-    # due to tie breaking, we cannot guarantee all the indices are the same as the pytorch version
 
 
 if __name__ == "__main__":
     pytest.main([__file__])
-
-"""
-PCC: 0.9992458745462984
-TopK experts indices accuracy: 0.93359375
-
-TopK experts weights PCC: 0.9991677782697118
-TopK experts indices accuracy: 0.882080078125
-"""
