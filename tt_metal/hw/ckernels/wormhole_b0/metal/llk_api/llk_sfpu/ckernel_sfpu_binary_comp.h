@@ -6,15 +6,66 @@
 
 #include <type_traits>
 
+#include "ckernel.h"
 #include "ckernel_addrmod.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
 
+// Shared replay-buffer layout for calculate_binary_comp_int32.
+// Each sequence is the 8-instruction "core" used by one pair of relational ops:
+// - LT sequence: produces (A < B) in LREG1 (reused by GE, which then inverts via XOR).
+// - GT sequence: produces (A > B) in LREG0 (reused by LE, which then inverts via XOR).
+inline constexpr uint32_t BINARY_COMP_INT32_REPLAY_LEN = 8;
+inline constexpr uint32_t BINARY_COMP_INT32_LT_REPLAY_OFFSET = 0;
+inline constexpr uint32_t BINARY_COMP_INT32_GT_REPLAY_OFFSET =
+    BINARY_COMP_INT32_LT_REPLAY_OFFSET + BINARY_COMP_INT32_REPLAY_LEN;
+
+// Loads the two shared instruction sequences used by calculate_binary_comp_int32
+// (lt/ge and gt/le) into the replay buffer. Must be called once before the first
+// invocation of calculate_binary_comp_int32 for any of lt/gt/le/ge.
+inline void calculate_binary_comp_int32_init() {
+    // LT/GE core: LREG1 := (A - B) sign, with sign-of-A fallback when A and B have opposite signs.
+    lltt::record(BINARY_COMP_INT32_LT_REPLAY_OFFSET, BINARY_COMP_INT32_REPLAY_LEN);
+    // if (LREG3 == 0) -> use int32 subtract + extract sign
+    TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, SFPSETCC_MOD1_LREG_EQ0);
+    // (A - B) -> Use 6 or LO16 as imod to convert operand B to 2's complement
+    TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
+    TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+    // else -> load 0 for inputs of opposite signs
+    TTI_SFPCOMPC(0 /*unused*/, 0 /*unused*/, 0 /*unused*/, 0 /*unused*/);
+    TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x00);
+    // Load 1 if input A is negative
+    TTI_SFPSETCC(0, p_sfpu::LREG2, 0, SFPSETCC_MOD1_LREG_NE0);
+    TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x01);
+    TTI_SFPENCC(0, 0, 0, 0);
+
+    // GT/LE core: LREG0 := (B - A) sign, with sign-of-A fallback when A and B have opposite signs.
+    lltt::record(BINARY_COMP_INT32_GT_REPLAY_OFFSET, BINARY_COMP_INT32_REPLAY_LEN);
+    TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, SFPSETCC_MOD1_LREG_EQ0);
+    // (B - A) -> Use 6 or LO16 as imod to convert operand B to 2's complement
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 6);
+    TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+    TTI_SFPCOMPC(0 /*unused*/, 0 /*unused*/, 0 /*unused*/, 0 /*unused*/);
+    TTI_SFPLOADI(p_sfpu::LREG0, SFPLOADI_MOD0_USHORT, 0x00);
+    // Load 1 if input A is non-negative
+    TTI_SFPSETCC(0, p_sfpu::LREG2, 0, SFPSETCC_MOD1_LREG_EQ0);
+    TTI_SFPLOADI(p_sfpu::LREG0, SFPLOADI_MOD0_USHORT, 0x01);
+    TTI_SFPENCC(0, 0, 0, 0);
+}
+
 // Comparison ops use int32 subtract (whose result is also in the int32 range) + sign check.
 // In order to avoid overflow for inputs of opposite signs, the output is determined directly from a sign check.
+// The 8-instruction "core" for each relational op is shared via the replay buffer; see
+// calculate_binary_comp_int32_init, which must be invoked during kernel init.
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    static_assert(
+        RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le ||
+            RELATIONAL_OP == SfpuType::ge,
+        "Supported operation types: lt, gt, le, ge");
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64 rows
@@ -34,73 +85,27 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
         TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
 
         if constexpr (RELATIONAL_OP == SfpuType::lt) {
-            // if (LREG_3 == 0) -> use int32 subtract + extract sign
-            TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, SFPSETCC_MOD1_LREG_EQ0);
-            // (A - B) -> Use 6 or LO16 as imod to convert operand B to 2's complement
-            TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
-            // else -> load 0 for inputs of opposite signs
-            TTI_SFPCOMPC(0 /*unused*/, 0 /*unused*/, 0 /*unused*/, 0 /*unused*/);
-            TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x00);
-            // Load 1 if input A is negative
-            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, SFPSETCC_MOD1_LREG_NE0);
-            TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x01);
-            TTI_SFPENCC(0, 0, 0, 0);
-
-            // LREG_1 -> dest
+            // Replay LT core: result in LREG1.
+            lltt::replay(BINARY_COMP_INT32_LT_REPLAY_OFFSET, BINARY_COMP_INT32_REPLAY_LEN);
             TT_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_3, dst_index_out * dst_tile_size);
 
         } else if constexpr (RELATIONAL_OP == SfpuType::gt) {
-            // if (LREG_3 == 0) -> use int32 subtract + extract sign
-            TTI_SFPSETCC(0, p_sfpu::LREG3, 0, SFPSETCC_MOD1_LREG_EQ0);
-            // (B - A) -> Use 6 or LO16 as imod to convert operand B to 2's complement
-            TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 6);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, 1);
-            // else -> load 0 for inputs of opposite signs
-            TTI_SFPCOMPC(0 /*unused*/, 0 /*unused*/, 0 /*unused*/, 0 /*unused*/);
-            TTI_SFPLOADI(p_sfpu::LREG0, SFPLOADI_MOD0_USHORT, 0x00);
-            // Load 1 if input A is non-negative
-            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, SFPSETCC_MOD1_LREG_EQ0);
-            TTI_SFPLOADI(p_sfpu::LREG0, SFPLOADI_MOD0_USHORT, 0x01);
-            TTI_SFPENCC(0, 0, 0, 0);
-
-            // LREG_0 -> dest
+            // Replay GT core: result in LREG0.
+            lltt::replay(BINARY_COMP_INT32_GT_REPLAY_OFFSET, BINARY_COMP_INT32_REPLAY_LEN);
             TT_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_3, dst_index_out * dst_tile_size);
 
         } else if constexpr (RELATIONAL_OP == SfpuType::ge) {
-            // Implements GE by using LT logic and then inverting the result
-            TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, SFPSETCC_MOD1_LREG_EQ0);
-            TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
-            TTI_SFPCOMPC(0 /*unused*/, 0 /*unused*/, 0 /*unused*/, 0 /*unused*/);
-            TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x00);
-            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, SFPSETCC_MOD1_LREG_NE0);
-            TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x01);
-            TTI_SFPENCC(0, 0, 0, 0);
-
-            // XOR with 1 to invert the result
+            // Implements GE by reusing the LT core and inverting the result.
+            lltt::replay(BINARY_COMP_INT32_LT_REPLAY_OFFSET, BINARY_COMP_INT32_REPLAY_LEN);
             TTI_SFPLOADI(p_sfpu::LREG7, SFPLOADI_MOD0_USHORT, 0x01);
             TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG1, 0);
-
-            // LREG_1 -> dest
             TT_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_3, dst_index_out * dst_tile_size);
 
         } else if constexpr (RELATIONAL_OP == SfpuType::le) {
-            // Implements LE by using GT logic and then inverting the result
-            TTI_SFPSETCC(0, p_sfpu::LREG3, 0, SFPSETCC_MOD1_LREG_EQ0);
-            TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 6);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, 1);
-            TTI_SFPCOMPC(0 /*unused*/, 0 /*unused*/, 0 /*unused*/, 0 /*unused*/);
-            TTI_SFPLOADI(p_sfpu::LREG0, SFPLOADI_MOD0_USHORT, 0x00);
-            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, SFPSETCC_MOD1_LREG_EQ0);
-            TTI_SFPLOADI(p_sfpu::LREG0, SFPLOADI_MOD0_USHORT, 0x01);
-            TTI_SFPENCC(0, 0, 0, 0);
-
-            // XOR with 1 to invert the result
+            // Implements LE by reusing the GT core and inverting the result.
+            lltt::replay(BINARY_COMP_INT32_GT_REPLAY_OFFSET, BINARY_COMP_INT32_REPLAY_LEN);
             TTI_SFPLOADI(p_sfpu::LREG7, SFPLOADI_MOD0_USHORT, 0x01);
             TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-
-            // LREG_0 -> dest
             TT_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_3, dst_index_out * dst_tile_size);
         }
 

@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_lt_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::lt, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::lt, APPROXIMATE>(sfpu::calculate_binary_comp_int32_init);
 }
 
 template <bool APPROXIMATE>
@@ -28,7 +28,7 @@ inline void llk_math_eltwise_binary_sfpu_lt_int32(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_gt_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::gt, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::gt, APPROXIMATE>(sfpu::calculate_binary_comp_int32_init);
 }
 
 template <bool APPROXIMATE>
@@ -44,7 +44,7 @@ inline void llk_math_eltwise_binary_sfpu_gt_int32(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_ge_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::ge, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::ge, APPROXIMATE>(sfpu::calculate_binary_comp_int32_init);
 }
 
 template <bool APPROXIMATE>
@@ -60,7 +60,7 @@ inline void llk_math_eltwise_binary_sfpu_ge_int32(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_le_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::le, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::le, APPROXIMATE>(sfpu::calculate_binary_comp_int32_init);
 }
 
 template <bool APPROXIMATE>
