@@ -1,0 +1,41 @@
+name: Cleanup ppetrovicTT action cache
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner-label: BH-DeskBox
+            arch: arch-blackhole
+            pool: pipeline-functional
+          - runner-label: BH-QB-GE
+            arch: arch-blackhole
+            pool: pipeline-perf
+          - runner-label: bh-loudbox
+            arch: arch-blackhole
+            pool: pipeline-functional
+          - runner-label: config-t3000
+            arch: arch-wormhole_b0
+            pool: pipeline-functional
+    runs-on:
+      - ${{ matrix.runner-label }}
+      - ${{ matrix.arch }}
+      - in-service
+      - ${{ matrix.pool }}
+    steps:
+      - name: Remove stale ppetrovicTT action cache
+        run: |
+          TARGET="/home/ubuntu/actions-runner/_work/_actions/ppetrovicTT"
+          if [ -d "$TARGET" ]; then
+            sudo rm -rf "$TARGET" 2>/dev/null || rm -rf "$TARGET" || {
+              echo "::warning::Could not remove $TARGET — manual cleanup needed on this machine"
+              exit 0
+            }
+            echo "Cleaned: $TARGET"
+          else
+            echo "Nothing to clean at $TARGET"
+          fi
