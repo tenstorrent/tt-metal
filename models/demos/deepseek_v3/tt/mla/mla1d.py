@@ -1675,7 +1675,7 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
 
-        if use_chunked_mla:
+        if not use_chunked_mla:
             attn_out = ttnn.transformer.flash_mla_prefill(
                 tt_q,
                 tt_kvpe_fp16,
