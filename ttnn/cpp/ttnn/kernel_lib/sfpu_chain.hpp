@@ -220,7 +220,7 @@ inline constexpr uint32_t cx_max_v = CxMax<Vs...>::value;
 // =============================================================================
 
 /**
- * @brief Per-Load CB lifecycle policy
+ * @brief Per-Load CB lifecycle policy — 2x2 matrix over {wait?} x {pop?}.
  *
  * The Load op owns the decision of whether to wait on the CB and whether to pop
  * after copying. The pipeline does NOT override this.
@@ -228,18 +228,22 @@ inline constexpr uint32_t cx_max_v = CxMax<Vs...>::value;
  * - WaitAndPop:  wait for tile, copy, pop (default; streaming input)
  * - WaitNoPop:   wait for tile, copy, don't pop (persistent tile reused across
  *                iterations, e.g. a mask or scaler, or the first of a fan-out pair)
+ * - NoWaitPop:   don't wait, copy, pop (caller pre-waited a batch of tiles upfront
+ *                and wants this Load to consume one; or the last of a fan-out pair
+ *                where the first already waited — OR use WaitAndPop since
+ *                cb_wait_front is idempotent)
  * - NoWaitNoPop: don't wait, don't pop (caller owns CB lifecycle externally,
- *                e.g. sharded / pre-loaded inputs; or the second of a fan-out pair
- *                when the first already waited)
+ *                e.g. sharded / pre-loaded inputs)
  */
 enum class LoadPolicy {
     WaitAndPop,
     WaitNoPop,
+    NoWaitPop,
     NoWaitNoPop,
 };
 
 constexpr bool load_does_wait(LoadPolicy p) { return p == LoadPolicy::WaitAndPop || p == LoadPolicy::WaitNoPop; }
-constexpr bool load_does_pop(LoadPolicy p) { return p == LoadPolicy::WaitAndPop; }
+constexpr bool load_does_pop(LoadPolicy p) { return p == LoadPolicy::WaitAndPop || p == LoadPolicy::NoWaitPop; }
 
 /**
  * @brief Copy a tile from CB into DEST[Slot] with the given CB-lifecycle policy.
