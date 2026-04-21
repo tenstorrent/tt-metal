@@ -796,6 +796,14 @@ void SystemMemoryManager::completion_queue_pop_front(uint32_t num_pages_read, co
 }
 
 void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id, bool stall_prefetcher) {
+    log_info(
+        tt::LogMetal,
+        "TRACE: fetch_queue_write ENTRY cq={} size={} stall={} bypass={} mock={}",
+        cq_id,
+        command_size_B,
+        stall_prefetcher,
+        this->bypass_enable,
+        is_mock_device());
     if (is_mock_device()) {
         return;
     }
@@ -816,6 +824,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         "FetchQ command too large to represent");
     TT_ASSERT(command_size_B > 0, "Command size must be greater than 0");
     if (this->bypass_enable) {
+        log_info(tt::LogMetal, "TRACE: fetch_queue_write BYPASS early return");
         return;
     }
     tt_driver_atomics::sfence();
