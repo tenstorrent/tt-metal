@@ -39,7 +39,11 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_uint32, merge_kernel_defines
+from models.demos.deepseek_v3_b1.utils import (
+    float_to_uint32,
+    get_pinned_optimal_dram_bank_to_logical_worker_assignment,
+    merge_kernel_defines,
+)
 
 
 def _round_up(value: int, alignment: int) -> int:
@@ -630,7 +634,9 @@ class LMHeadSampling:
                 # Compute per-core bank_id and vc for EH DRAM streaming matmul
                 if enable_mtp_on_device:
                     eh_matmul_noc = ttnn.NOC.NOC_0
-                    eh_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(eh_matmul_noc)
+                    eh_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(
+                        mesh_device, eh_matmul_noc
+                    )
                     eh_matmul_core_grid = output_mtp_tensors_per_device[device_idx].memory_config().shard_spec.grid
                     eh_bank_id_core_values = []
                     eh_vc_core_values = []
