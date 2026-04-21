@@ -312,11 +312,7 @@ constexpr T cx_max(T a, T b) {
 /**
  * @brief Variadic chain of ops (Load + compute)
  *
- * All elements have init()/exec()/apply():
- * - apply(offset): init()+exec(offset) per element, sequentially
- * - apply_batched(num_iters, stride): init() once then exec() num_iters times per element
- * - exec_only(offset): exec(offset) without init, for single-op optimization
- *
+ * apply(offset) calls init() + exec(offset) for each element in order.
  * Zero runtime overhead — all dispatch is resolved at compile time.
  */
 template <typename... Ops>
@@ -327,11 +323,8 @@ template <>
 struct SfpuChain<> {
     static constexpr uint32_t max_dst = 0;
     static constexpr uint32_t stride = 1;
-    static constexpr uint32_t num_compute_ops = 0;
 
     ALWI void apply(uint32_t = 0) const {}
-    ALWI void apply_batched(uint32_t, uint32_t) const {}
-    ALWI void exec_only(uint32_t = 0) const {}
 };
 
 /** @brief Recursive case: first op + rest of chain */
@@ -342,7 +335,6 @@ struct SfpuChain<First, Rest...> {
 
     static constexpr uint32_t max_dst = cx_max(First::max_dst, SfpuChain<Rest...>::max_dst);
     static constexpr uint32_t stride = max_dst + 1;
-    static constexpr uint32_t num_compute_ops = (is_load_op_v<First> ? 0 : 1) + SfpuChain<Rest...>::num_compute_ops;
 
     constexpr SfpuChain() = default;
     constexpr SfpuChain(First f, Rest... r) : first(f), rest(r...) {}
@@ -351,21 +343,6 @@ struct SfpuChain<First, Rest...> {
     ALWI void apply(uint32_t offset = 0) const {
         first.apply(offset);
         rest.apply(offset);
-    }
-
-    /** @brief Batched: init once per element, exec num_iters times */
-    ALWI void apply_batched(uint32_t num_iters, uint32_t chain_stride) const {
-        first.init();
-        for (uint32_t k = 0; k < num_iters; ++k) {
-            first.exec(k * chain_stride);
-        }
-        rest.apply_batched(num_iters, chain_stride);
-    }
-
-    /** @brief Exec-only: exec(offset) without init (single-element optimization) */
-    ALWI void exec_only(uint32_t offset = 0) const {
-        first.exec(offset);
-        rest.exec_only(offset);
     }
 };
 

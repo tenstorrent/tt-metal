@@ -111,27 +111,18 @@ ALWI void sfpu_pipeline(
         cb_reserve_back(ocb, num_tiles);
     }
 
-    // Tile loop: init on first tile, then:
-    //   - Single compute op: exec_only (safe, no init interference)
-    //   - Multi compute op: full apply (inits interfere, must re-init each op)
+    // Tile loop: full init+exec (apply) every tile. Multi-op chains require per-op
+    // re-init anyway (SFPU inits interfere), and the single-op case is rare enough
+    // that amortising it across tiles via exec_only isn't worth the extra complexity.
     // Batched path packs multiple tiles per acquire/release cycle.
     for (uint32_t i = 0; i < num_tiles; i += batch_size) {
-        const uint32_t actual = (batch_size == 1) ? 1
-            : (((i + batch_size) <= num_tiles) ? batch_size : (num_tiles - i));
+        const uint32_t actual =
+            (batch_size == 1) ? 1 : (((i + batch_size) <= num_tiles) ? batch_size : (num_tiles - i));
 
         tile_regs_acquire();
 
         for (uint32_t k = 0; k < actual; ++k) {
-            if (i + k == 0) {
-                // First tile: init + exec for all elements
-                chain.apply(k * chain_stride);
-            } else if constexpr (Chain::num_compute_ops <= 1) {
-                // Single compute op: safe to skip init on subsequent tiles
-                chain.exec_only(k * chain_stride);
-            } else {
-                // Multi compute op: must re-init each SFPU op (inits interfere)
-                chain.apply(k * chain_stride);
-            }
+            chain.apply(k * chain_stride);
         }
 
         tile_regs_commit();
