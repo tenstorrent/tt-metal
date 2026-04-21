@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Any
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
@@ -134,7 +135,6 @@ class EmbeddingStage(StageKind):
         return TOKEN_FIFO_SIZE, TOKEN_PAGE_SIZE_BYTES
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
-        print(f"[STAGE P{ctx.my_stage_idx}] EmbeddingStage.create_pipeline_block", flush=True)
         mesh_device = ctx.mesh_device
         my_stage_idx = ctx.my_stage_idx
         activation_fifo_size = ACTIVATION_W_TOKEN_META_FIFO_SIZE if self._forward_metadata else ACTIVATION_FIFO_SIZE
@@ -181,10 +181,8 @@ class PassthroughStage(StageKind):
 
     def __init__(self, payload: PassthroughPayload) -> None:
         self._payload = payload
-        print(f"[STAGE] PassthroughStage.__init__ payload={payload.value}", flush=True)
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
-        print(f"[STAGE P{ctx.my_mesh_id}] PassthroughStage.create_pipeline_block", flush=True)
         mesh_device = ctx.mesh_device
         my_stage_idx = ctx.my_stage_idx
         if self._payload == PassthroughPayload.ACTIVATION:
@@ -240,10 +238,6 @@ class SpecLMHeadStage(StageKind):
         self._persistent_mode = persistent_mode
         self._shared_head_norm = shared_head_norm
         self._state: dict[str, Any] = {}
-        print(
-            f"[STAGE] SpecLMHeadStage.__init__ fp32={fp32_dest_acc_en} persistent={persistent_mode} shared_head_norm={shared_head_norm is not None}",
-            flush=True,
-        )
 
     def _get_sender_coord(self, ctx: StageContext, pipeline_block):
         """Return the broadcast sender MeshCoordinate for SpecLMHead."""
@@ -254,7 +248,6 @@ class SpecLMHeadStage(StageKind):
         return ctx.pipeline_config[ctx.my_mesh_id].exit_node_coord
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
-        print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.create_pipeline_block", flush=True)
         mesh_device = ctx.mesh_device
         my_stage_idx = ctx.my_stage_idx
         pipeline_config = ctx.pipeline_config
@@ -281,7 +274,6 @@ class SpecLMHeadStage(StageKind):
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.setup start", flush=True)
         mesh_device = ctx.mesh_device
         my_stage_idx = ctx.my_stage_idx
         pipeline_config = ctx.pipeline_config
@@ -437,7 +429,6 @@ class SpecLMHeadStage(StageKind):
         }
         if self._persistent_mode:
             self._state["persistent_next_iter_semaphore"] = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
-        print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.setup done", flush=True)
 
     def run_auxiliary_sockets(self) -> None:
         pass
@@ -446,7 +437,6 @@ class SpecLMHeadStage(StageKind):
         pass
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.launch_compute calling LMHeadSampling.op", flush=True)
         d = self._state
         LMHeadSampling.op(
             d["input_tensor_mesh"],
@@ -473,7 +463,6 @@ class SpecLMHeadStage(StageKind):
             is_mtp_verify_stage=True,
             metadata_tensor=d["metadata_tensor"],
         )
-        print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.launch_compute done", flush=True)
 
 
 class BaseLMHeadStage(StageKind):
@@ -509,13 +498,8 @@ class BaseLMHeadStage(StageKind):
         self._enable_mtp = mtp_weights is not None
         self._send_mtp_output_downstream = send_mtp_output_downstream and self._enable_mtp
         self._lmhead_state: dict[str, Any] = {}
-        print(
-            f"[STAGE] BaseLMHeadStage.__init__ fp32={fp32_dest_acc_en} persistent={persistent_mode} mtp={self._enable_mtp} send_mtp_down={self._send_mtp_output_downstream}",
-            flush=True,
-        )
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
-        print(f"[STAGE P{ctx.my_mesh_id}] BaseLMHeadStage.create_pipeline_block", flush=True)
         mesh_device = ctx.mesh_device
         my_stage_idx = ctx.my_stage_idx
         pipeline_config = ctx.pipeline_config
@@ -543,7 +527,6 @@ class BaseLMHeadStage(StageKind):
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        print(f"[STAGE P{ctx.my_mesh_id}] BaseLMHeadStage.setup start", flush=True)
         mesh_device = ctx.mesh_device
         my_mesh_id = ctx.my_mesh_id
         pipeline_config = ctx.pipeline_config
@@ -732,10 +715,6 @@ class BaseLMHeadStage(StageKind):
             eh_gather_total_tiles = num_dram_banks * eh_out_w_per_core + 1
             out_tile_h = BaseLMHeadStage.OUT_TILE.tile_shape[0]
             out_tile_w = BaseLMHeadStage.OUT_TILE.tile_shape[1]
-            print(
-                f"[STAGE P{ctx.my_mesh_id}] eh_gather_total_tiles={eh_gather_total_tiles}, out_tile_h={out_tile_h}, out_tile_w={out_tile_w}",
-                flush=True,
-            )
             eh_gather_shard_shape = (eh_gather_total_tiles * out_tile_h, out_tile_w)
             eh_gather_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -754,10 +733,6 @@ class BaseLMHeadStage(StageKind):
                 device=mesh_device,
                 memory_config=eh_gather_mem_config,
                 mesh_mapper=mesh_mapper,
-            )
-            print(
-                f"[STAGE P{ctx.my_mesh_id}] eh_gather_output_buf shape={eh_gather_output_buf.shape}, memory_config={eh_gather_mem_config}",
-                flush=True,
             )
 
         lmhead_input_socket = pipeline_block.get_downstream_socket()
@@ -801,7 +776,6 @@ class BaseLMHeadStage(StageKind):
         if self._persistent_mode:
             persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
             self._lmhead_state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
-        print(f"[STAGE P{ctx.my_mesh_id}] BaseLMHeadStage.setup done", flush=True)
 
     def run_auxiliary_sockets(self) -> None:
         pass
@@ -810,10 +784,6 @@ class BaseLMHeadStage(StageKind):
         pass
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        print(
-            f"[STAGE P{ctx.my_mesh_id}] BaseLMHeadStage.launch_compute calling LMHeadSampling.op (mtp={self._enable_mtp})",
-            flush=True,
-        )
         d = self._lmhead_state
         pipeline_config = ctx.pipeline_config
         my_stage_idx = ctx.my_stage_idx
@@ -847,7 +817,6 @@ class BaseLMHeadStage(StageKind):
             eh_gather_output_buf_tensor=d.get("eh_gather_output_buf"),
             metadata_tensor=d.get("metadata_tensor"),
         )
-        print(f"[STAGE P{ctx.my_mesh_id}] BaseLMHeadStage.launch_compute done", flush=True)
 
 
 class _CombinedPipelineBlock:
@@ -899,9 +868,8 @@ class _CombinedPipelineBlock:
         next_stage_entry_coord = pipeline_config[my_stage_idx + 1].entry_node_coord
         prev_stage_exit_coord = pipeline_config[num_procs - 1].exit_node_coord
 
-        print(
+        logger.debug(
             f"[COMBINED P{my_stage_idx}] exit_node_coord={exit_node_coord} loopback_entry_coord={loopback_entry_coord} loopback_exit_coord={loopback_exit_coord} next_stage_entry_coord={next_stage_entry_coord} prev_stage_exit_coord={prev_stage_exit_coord}",
-            flush=True,
         )
 
         embedding_size_bytes = embedding_tensor.shape[-1] * 2  # bfloat16
@@ -966,12 +934,11 @@ class _CombinedPipelineBlock:
             metadata_size_bytes=TOKEN_META_PAGE_SIZE_BYTES,
         )
 
-        print(
+        logger.debug(
             f"[COMBINED P{my_stage_idx}] _CombinedPipelineBlock created: "
             f"exit_dev={exit_node_coord} "
             f"spec_root={spec_root_device_coord} spec_exit={spec_exit_device_coord} "
             f"d2h_dev={loopback_exit_coord}",
-            flush=True,
         )
 
     def run(self) -> None:
@@ -1030,10 +997,6 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
             shared_head_norm=shared_head_norm,
         )
         self._embedding_weights = embedding_weights
-        print(
-            f"[STAGE] SpecLMHeadWithEmbeddingStage.__init__ fp32={fp32_dest_acc_en} persistent={persistent_mode} shared_head_norm={shared_head_norm is not None}",
-            flush=True,
-        )
 
     def _get_sender_coord(self, ctx: StageContext, pipeline_block):
         return pipeline_block.spec_entry_coord
@@ -1042,7 +1005,6 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
         return pipeline_block.spec_exit_coord
 
     def create_pipeline_block(self, ctx: StageContext) -> _CombinedPipelineBlock:
-        print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadWithEmbeddingStage.create_pipeline_block", flush=True)
         return _CombinedPipelineBlock(
             ctx.mesh_device,
             self._embedding_weights.embedding,

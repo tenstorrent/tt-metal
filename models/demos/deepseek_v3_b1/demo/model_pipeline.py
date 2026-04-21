@@ -223,9 +223,8 @@ class ModelPipeline:
         signal_to_exit = False
         while len(generated_tokens) < max_new_tokens or signal_to_exit:
             iteration += 1
-            print("\n\n")
-            print(
-                f"Iteration {iteration}: Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
+            logger.debug(
+                f"\n\nIteration {iteration}: Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
             )
 
             if pending:
@@ -234,19 +233,19 @@ class ModelPipeline:
                 result = self.model.read_result()
                 num_reads += 1
 
-            print("Got MD from Device: ")
-            print(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
-            print(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
-            print(
+            logger.debug("Got MD from Device: ")
+            logger.debug(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
+            logger.debug(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
+            logger.debug(
                 f"Token 0: {tokenizer.decode([result.token_0], skip_special_tokens=False)}, Token 1: {tokenizer.decode([result.token_1], skip_special_tokens=False)}"
             )
-            print(f"Slot ID: {result.slot_id}")
+            logger.debug(f"Slot ID: {result.slot_id}")
 
             if not unverified_spec_tokens and not verified_spec_tokens:
                 unverified_spec_tokens.append(result.token_1)
                 emit(result.token_0)
                 num_emits += 1
-                print("Prefill done")
+                logger.debug("Prefill done")
             else:
                 if result.token_0_type == TokenType.BASE:
                     # On acceptance, we check that the base token matches the first token of the last unverified spec token
@@ -254,7 +253,7 @@ class ModelPipeline:
                         verified_spec_tokens.append(unverified_spec_tokens.pop())
                         emit(result.token_0)
                         base_accept += 1
-                        print("Base Accept")
+                        logger.debug("Base Accept")
                         num_emits += 1
                         signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
                         continue
@@ -264,7 +263,7 @@ class ModelPipeline:
                         unverified_spec_tokens.append(result.token_1)
                         emit(result.token_0)
                         base_reject += 1
-                        print("Base Reject")
+                        logger.debug("Base Reject")
                         num_emits += 1
                         signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
 
@@ -280,9 +279,9 @@ class ModelPipeline:
                         emit(result.token_0)
                         spec_accept += 1
                         num_emits += 1
-                        print("Spec Accept")
+                        logger.debug("Spec Accept")
                     else:
-                        print("Spec Reject")
+                        logger.debug("Spec Reject")
                         if signal_to_exit:
                             break
                         spec_reject += 1
@@ -304,9 +303,9 @@ class ModelPipeline:
             num_reads += 1
 
         end_time = time.time()
-        print(f"Time taken: {end_time - start_time} seconds")
-        print(f"Tokens per second: {num_emits / (end_time - start_time)}")
-        print(
+        logger.debug(f"Time taken: {end_time - start_time} seconds")
+        logger.debug(f"Tokens per second: {num_emits / (end_time - start_time)}")
+        logger.debug(
             f"Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
         )
         logger.debug("Generation complete ({} tokens generated)", len(generated_tokens))

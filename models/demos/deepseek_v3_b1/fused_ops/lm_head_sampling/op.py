@@ -28,6 +28,7 @@ CB Layout:
 import math
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
@@ -237,7 +238,7 @@ class LMHeadSampling:
         eh_subblock_k=None,
         eh_gather_output_buf_tensor=None,
     ):
-        print(f"broadcast sender_coord={sender_coord}", flush=True)
+        logger.debug(f"broadcast sender_coord={sender_coord}")
         """
         Execute LM head sampling CCL broadcast + mcast + matmul operation using generic_op.
 
@@ -276,9 +277,8 @@ class LMHeadSampling:
             Output tensor with matmul result. If fused argmax is enabled, output_index_tensor is written in-place.
         """
 
-        print(
+        logger.debug(
             f"[OP] entered mtp_base={is_mtp_base_stage} mtp_verify={is_mtp_verify_stage} persistent={persistent_mode}",
-            flush=True,
         )
         # LMHeadSampling is always fused with k=1 sampling (argmax fast path).
 
@@ -334,7 +334,6 @@ class LMHeadSampling:
         if indices_tensor is None or output_index_tensor is None:
             raise ValueError("indices_tensor and output_index_tensor are required for fused LM-head + sampling")
         # Get mesh/device info
-        print("[lm_head_sampling] getting mesh/device info", flush=True)
         mesh_device = input_tensor_mesh.device()
 
         mesh_shape = mesh_device.shape
@@ -342,7 +341,6 @@ class LMHeadSampling:
         mesh_cols = mesh_shape[1]
         sender_row = int(sender_coord[0])
         sender_col = int(sender_coord[1])
-        print(f"[lm_head_sampling] mesh_rows={mesh_rows} mesh_cols={mesh_cols}", flush=True)
         if skip_ccl is None:
             skip_ccl = mesh_rows * mesh_cols == 1
         if enable_socket_input:
@@ -359,7 +357,6 @@ class LMHeadSampling:
                 raise ValueError("socket output for lm_head_sampling must have exactly one active core")
             socket_core = active_socket_cores[0]
         # Get per-device tensors
-        print("[lm_head_sampling] get_device_tensors (input, intermediate, gamma, vocab, output)...", flush=True)
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
         gamma_tensors_per_device = ttnn.get_device_tensors(gamma_tensor)
@@ -375,7 +372,6 @@ class LMHeadSampling:
         scratch_tensors_per_device = (
             ttnn.get_device_tensors(fabric_scratch_tensor) if (enable_argmax and not skip_ccl) else None
         )
-        print("[lm_head_sampling] get_device_tensors done", flush=True)
         if enable_argmax and not skip_ccl:
             if global_semaphore is None or global_stage2_semaphore is None or fabric_scratch_tensor is None:
                 raise ValueError(
@@ -407,11 +403,6 @@ class LMHeadSampling:
         persistent_next_iter_global_sem_addr = (
             int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore)) if persistent_mode else 0
         )
-        print(
-            f"[lm_head_sampling] persistent_next_iter_global_sem_addr={persistent_next_iter_global_sem_addr}",
-            flush=True,
-        )
-        print("[lm_head_sampling] semaphore addrs done", flush=True)
         # Calculate packet size and page info for CCL broadcast
 
         # Get tile info from input tensor (use a sample device tensor)
@@ -426,7 +417,6 @@ class LMHeadSampling:
         # CCL broadcast page info
         # Matmul shape info from input and vocab tensors
         num_tiles_k = 224
-        print(f"[lm_head_sampling] num_tiles_k={num_tiles_k}", flush=True)
         # RMS tile geometry follows activation width K, not padded (K + metadata) broadcast width.
         activation_cols_for_rms = int(input_shape[1])
         if is_mtp_verify_stage:
@@ -436,7 +426,6 @@ class LMHeadSampling:
         rms_tile_height, rms_tile_width = rms_interpreted_tile.tile_shape
         rms_tile_size = rms_interpreted_tile.get_tile_size(data_format)
         rms_num_tiles = 7  # (input_shape[0] * input_shape[1]) // (rms_tile_height * rms_tile_width)
-        print(f"[lm_head_sampling] rms_num_tiles={rms_num_tiles}", flush=True)
         # Get output tile info
         output_tensor_sample = output_tensors_per_device[0]
         out_tile = output_tensor_sample.get_tile()
@@ -453,7 +442,6 @@ class LMHeadSampling:
 
         # [MTP base stage] Get eh projection matmul info (per-core output width)
         if is_mtp_base_stage:
-            print("[lm_head_sampling] is_mtp_base_stage: computing MTP params...", flush=True)
             eh_projection_tensor_sample = eh_proj_tensors_per_device[0]
             eh_weights_shard_spec = eh_projection_tensor_sample.memory_config().shard_spec
             eh_n_per_core = eh_weights_shard_spec.shape[1]
@@ -488,11 +476,9 @@ class LMHeadSampling:
             while eh_subblock_w > 1 and eh_out_w_per_core % eh_subblock_w != 0:
                 eh_subblock_w -= 1
             sample_device = eh_projection_tensor_sample.device()
-            print("[lm_head_sampling] calling get_max_page_size_and_num_pages (device)...", flush=True)
             eh_page_size, eh_num_pages = get_max_page_size_and_num_pages(
                 sample_device, eh_subblock_k, eh_proj_tile_size
             )
-            print("[lm_head_sampling] get_max_page_size_and_num_pages done", flush=True)
             eh_in1_block_size_bytes = eh_subblock_k * eh_proj_tile_size
             eh_num_in1_buffers = 3  # Triple buffering (must match NumBuffers=3 in dram_streaming_matmul.hpp)
             eh_in1_CB_tiles = eh_subblock_k * eh_num_in1_buffers
@@ -567,19 +553,13 @@ class LMHeadSampling:
         )
 
         # Create mesh program descriptor
-        print("[lm_head_sampling] before MeshProgramDescriptor", flush=True)
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         eh_gather_per_device = (
             ttnn.get_device_tensors(eh_gather_output_buf_tensor) if eh_gather_output_buf_tensor is not None else None
         )
-        print("[lm_head_sampling] before device loop", flush=True)
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
-                print(
-                    f"[lm_head_sampling] mesh coordinate={coord}, device_id={mesh_device.get_device_id(coord)}",
-                    flush=True,
-                )
                 device_idx = row * mesh_cols + col
                 # is_exit_device: whether this device is the exit device
                 # enable_mtp_on_device: whether this device is the exit device and we run MTP on it
@@ -589,7 +569,6 @@ class LMHeadSampling:
                     is_exit_device = row == int(argmax_final_mesh_coord[0]) and col == int(argmax_final_mesh_coord[1])
                 enable_mtp_on_device = is_mtp_base_stage and is_exit_device
 
-                print(f"[lm_head_sampling] grabbing all the tensors", flush=True)
                 # Get per-device tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
@@ -610,7 +589,6 @@ class LMHeadSampling:
                 # Core grid configuration (per-device)
                 # ================================================================
                 # Sender core: from input_tensor (must be single core)
-                print(f"[lm_head_sampling] running core grid configuration", flush=True)
                 mcast_sender_core_grid = input_tensor_device.memory_config().shard_spec.grid
                 assert mcast_sender_core_grid.num_cores() == 1, "input_tensor must be sharded on a single sender core"
                 mcast_sender_core = list(mcast_sender_core_grid.ranges())[0].start
@@ -631,7 +609,6 @@ class LMHeadSampling:
                             "socket input active core must be on sender device/core in multi-device lm_head_sampling"
                         )
                 input_socket_mode = input_socket_mode_selected if recv_socket_on_this_device else input_socket_mode_none
-                print(f"[lm_head_sampling] input_socket_mode={input_socket_mode}", flush=True)
                 # Matmul cores: from vocab_tensor (multiple cores with weight shards)
                 matmul_core_grid = vocab_tensor_device.memory_config().shard_spec.grid
                 argmax_core_grid = matmul_core_grid
@@ -647,7 +624,6 @@ class LMHeadSampling:
                         max(matmul_bbox.end.y, mcast_sender_core.y),
                     ),
                 )
-                print(f"[lm_head_sampling] mcast_grid={mcast_grid}", flush=True)
                 mcast_grid_set = ttnn.CoreRangeSet([mcast_grid])
                 num_mcast_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y
 
@@ -656,7 +632,6 @@ class LMHeadSampling:
                     eh_matmul_noc = ttnn.NOC.NOC_0
                     eh_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(eh_matmul_noc)
                     eh_matmul_core_grid = output_mtp_tensors_per_device[device_idx].memory_config().shard_spec.grid
-                    print(f"[lm_head_sampling] eh_matmul_core_grid={eh_matmul_core_grid}", flush=True)
                     eh_bank_id_core_values = []
                     eh_vc_core_values = []
                     eh_bank_ids = []
@@ -680,7 +655,6 @@ class LMHeadSampling:
                         mcast_receiver_ranges.append(ttnn.CoreRange(ttnn.CoreCoord(c, r), ttnn.CoreCoord(c, r)))
                 mcast_receiver_grid = ttnn.CoreRangeSet(mcast_receiver_ranges)
 
-                print(f"[lm_head_sampling] mcast_receiver_grid={mcast_receiver_grid}", flush=True)
                 # All cores = mcast grid (sender is already included)
                 all_cores = mcast_grid_set
 
@@ -820,8 +794,6 @@ class LMHeadSampling:
 
                 # Determine if sender is part of the mcast rectangle
                 is_part_of_receiver_grid = mcast_grid.contains(mcast_sender_core)
-                print(f"[lm_head_sampling] is_part_of_receiver_grid={is_part_of_receiver_grid}", flush=True)
-                print(f"[OP:{device_idx}:A] persistent target setup", flush=True)
                 persistent_target_mesh_coord = ttnn.MeshCoordinate(sender_row, sender_col)
                 persistent_target_device_idx = sender_row * mesh_cols + sender_col
                 persistent_target_device = input_tensors_per_device[persistent_target_device_idx].device()
@@ -830,7 +802,6 @@ class LMHeadSampling:
                 )
                 persistent_target_node = mesh_device.get_fabric_node_id(persistent_target_mesh_coord)
                 persistent_enable = int(persistent_mode and emit_socket_on_this_device)
-                print(f"[OP:{device_idx}:B] brisc source selection", flush=True)
 
                 # broadcast_rms-style BRISC source selection:
                 # - CCL path: packet CB
@@ -863,18 +834,8 @@ class LMHeadSampling:
                 )
                 eh_gather_receiver_data_addr = 0
                 eh_gather_output_tensor = eh_gather_per_device[device_idx] if eh_gather_per_device is not None else None
-                print(f"[OP:{device_idx}:C] eh_gather enable_mtp={enable_mtp_on_device}", flush=True)
-                print(f"[OP:{device_idx}:C] eh_gather_data_size_bytes={eh_gather_data_size_bytes}", flush=True)
-                print(f"[OP:{device_idx}:C] eh_gather_src_num_pages={eh_gather_src_num_pages}", flush=True)
-                print(
-                    f"[OP:{device_idx}:C] eh_gather_dst_num_pages={eh_gather_dst_num_pages}, eh_gather_send_total_bytes={eh_gather_send_total_bytes}",
-                    flush=True,
-                )
                 if enable_mtp_on_device and eh_gather_output_tensor is not None:
                     eh_gather_receiver_data_addr = int(eh_gather_output_tensor.buffer_address())
-                    print(
-                        f"[OP:{device_idx}:C] eh_gather_receiver_data_addr={eh_gather_receiver_data_addr}", flush=True
-                    )
 
                 # MTP metadata landing buffer on argmax final core (NCRISC unicast from exit input core).
                 metadata_output_l1_addr = 0
@@ -1033,7 +994,6 @@ class LMHeadSampling:
                 ]
                 ncrisc_named_compile_time_args.extend(bcast_config.get_ncrisc_named_ct_args(coord))
 
-                print(f"[OP:{device_idx}:E] BRISC ct args", flush=True)
                 # ================================================================
                 # BRISC compile-time args
                 # ================================================================
@@ -1111,7 +1071,6 @@ class LMHeadSampling:
                 ]
                 brisc_named_compile_time_args.extend(bcast_config.get_brisc_named_ct_args(coord))
 
-                print(f"[OP:{device_idx}:F] TRISC ct args", flush=True)
                 # ================================================================
                 # TRISC compile-time args
                 # ================================================================
@@ -1166,7 +1125,6 @@ class LMHeadSampling:
                     ("argmax_core_noc_y", argmax_core_noc_y if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                 ]
 
-                print(f"[OP:{device_idx}:G] CCL rt args skip_ccl={skip_ccl}", flush=True)
                 # ================================================================
                 # CCL Broadcast common runtime args
                 # ================================================================
@@ -1210,10 +1168,7 @@ class LMHeadSampling:
                 rms_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
                 rmsnorm_input_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
                 rmsnorm_input_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
-                print("old rmsnorm_input_cb_descriptor.total_size", rmsnorm_input_cb_descriptor.total_size)
                 rmsnorm_input_cb_descriptor.total_size = (rms_num_tiles) * rms_tile_size
-                print("new rmsnorm_input_cb_descriptor.total_size", rmsnorm_input_cb_descriptor.total_size)
-                print(f"[OP:{device_idx}:I1] CB0 rmsnorm_input done", flush=True)
 
                 # CB 7: RMSNorm gamma — tensor-backed on sender core.
                 rmsnorm_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -1265,12 +1220,9 @@ class LMHeadSampling:
                 # CB 16: Matmul output — tensor-backed on matmul cores
                 matmul_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_out_cb, output_tensor_device)
 
-                print(f"[OP:{device_idx}:I3] CB2,5,16 matmul done", flush=True)
-
                 # [MTP] CB descriptors (only if is_mtp_base_stage)
                 mtp_cb_descriptors = []
                 if enable_mtp_on_device:
-                    print(f"[OP:{device_idx}:I4] MTP CB section enter", flush=True)
                     # CB 11: h_gamma - tensor-backed on sender core
                     h_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                         h_gamma_cb, h_gamma_tensors_per_device[device_idx]
@@ -1328,7 +1280,6 @@ class LMHeadSampling:
                         format_descriptors=[mcast_eh_dst_cb_format],
                     )
 
-                    print(f"[OP:{device_idx}:I6] CB18 mcast_eh_dst done", flush=True)
                     # CB 9: EH projection weights (in1) buffer - CB-backed working buffer for DRAM streaming
                     eh_cb_format = ttnn.CBFormatDescriptor(
                         buffer_index=matmul_eh_cb,
@@ -1347,13 +1298,11 @@ class LMHeadSampling:
                         matmul_out_eh_cb, output_mtp_tensors_per_device[device_idx]
                     )
 
-                    print(f"[OP:{device_idx}:I7] CB9,17 done", flush=True)
                     # CB 19: EH output gather destination - tensor-backed on argmax_final_core
                     # Holds gathered EH matmul output from all cores + 1 metadata page
                     eh_gather_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                         eh_gather_dst_cb, eh_gather_output_tensor
                     )
-                    print(f"[OP:{device_idx}:I8] CB19 eh_gather done", flush=True)
 
                     mtp_cb_descriptors = [
                         h_gamma_cb_descriptor,
@@ -1427,7 +1376,6 @@ class LMHeadSampling:
 
                 # CB 30: CCL broadcast packet buffer (only in multi-device mode)
 
-                print(f"[OP:{device_idx}:J] semaphore descriptors", flush=True)
                 # ================================================================
                 # Semaphore descriptors (for intra-device mcast)
                 # ================================================================
@@ -1518,7 +1466,6 @@ class LMHeadSampling:
                     bcast_config.get_kernel_defines(coord),
                     [("ENABLE_SOCKET_READER", "1")] if enable_socket_input else [],
                 )
-                print(f"[OP] dev{device_idx} building UnifiedKernelDescriptor", flush=True)
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/lm_head_sampling/kernels/lm_head_sampling_kernel.cpp",
                     core_ranges=all_cores,
@@ -1796,8 +1743,6 @@ class LMHeadSampling:
                     ].extend(persistent_fabric_rt_args)
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
-                print(f"[OP] dev{device_idx} program added to mesh_program_descriptor", flush=True)
-        print("[OP] all devices done, building io_tensors", flush=True)
         io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, gamma_tensor, vocab_tensor, output_tensor]
         io_tensors.extend([indices_tensor, output_index_tensor])
         if is_mtp_base_stage:
@@ -1810,7 +1755,6 @@ class LMHeadSampling:
             io_tensors.append(metadata_tensor)
         if not skip_ccl:
             io_tensors.append(fabric_scratch_tensor)
-        print(f"[OP] calling generic_op with {len(io_tensors)} io_tensors", flush=True)
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
-        print("[OP] generic_op returned", flush=True)
+        logger.debug("[OP] generic_op returned")
         return result
