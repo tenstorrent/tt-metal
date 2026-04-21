@@ -29,7 +29,8 @@ std::array<ttnn::Tensor, 2> dispatch(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
     std::optional<uint32_t> cluster_axis = 0,
     std::optional<uint32_t> num_links = 1,
-    std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear);
+    std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear,
+    bool use_l1_small_for_semaphores = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch
 
