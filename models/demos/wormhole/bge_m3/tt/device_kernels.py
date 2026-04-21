@@ -22,9 +22,9 @@ SDPA, LayerNorm, MLP, attention WO) using ``max_seq_len`` and ``max_batch_size *
 hit L1 bank OOM or ``validate_circular_buffer_region`` (``program.cpp:1145``) on Wormhole. **MLP Wi** may
 force DRAM for mid-seq; see ``bge_m3_mlp_wi_output_memory_config``.
 
-Encoder SDPA picks the largest **Q** and **K** chunk in ``(256, 128, 64, 32)`` that divides ``seq_len``
-(capped at 256 to avoid oversized K tiles), with ``exp_approx_mode`` **False**, to reduce tiling
-iterations without the softmax shortcuts that hurt PCC. Matmul linears use the default ``ttnn`` program config.
+Encoder SDPA follows : **Q chunk = 128**, **K** = largest of ``(256, 128)`` dividing ``seq_len``,
+with ``exp_approx_mode=True`` for 128-aligned lengths (short S32/S64 use flexible smaller tiles and
+``exp_approx_mode=False``). Matmul linears use ``bge_m3_matmul_*`` program config.
 
 **S32 / short ``runtime sequence_length``:** matmul ``core_grid`` row count is **capped at four** (full width)
 only when ``batch_size <= 1`` (single-batch S32: one-tile ``M``, full 8-row grid is mostly idle). For
