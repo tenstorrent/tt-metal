@@ -14,9 +14,6 @@
         "T3K": {
             "model_forward_inference": 0.36678043333333335
         },
-        "P150": {
-            "model_forward_inference": 0.2094502
-        },
         "P150x4": {
             "model_forward_inference": 0.171369
         }
