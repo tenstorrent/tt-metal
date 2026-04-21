@@ -1989,12 +1989,18 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             continue;
         }
 
-        // Find the closest available dispatch core to PCIe for real-time profiler.
-        // On heavily-harvested setups the dispatch core descriptor may return a
-        // coordinate outside the device's TENSIX logical grid.  When that happens
-        // (or when no spare core exists at all) we skip this device entirely.
+        // Use the tensix that dispatch_core_manager reserved for the real-time profiler at
+        // construction time. That slot is taken from the back of the dispatch pool (dispatch
+        // consumes from the front), guaranteeing no collision with dispatch / prefetch /
+        // dispatch_s / fabric mux kernels that get assigned later. ETH dispatch returns
+        // nullopt (its pool is eth cores, not tensixes), and we fall back to the legacy
+        // closest-to-PCIe picker for that path.
         std::optional<tt_cxy_pair> realtime_profiler_core_opt =
-            dispatch_core_manager.get_closest_available_dispatch_core_to_pcie(device_id);
+            dispatch_core_manager.get_reserved_realtime_profiler_core(device_id);
+        bool used_reserved_slot = realtime_profiler_core_opt.has_value();
+        if (!used_reserved_slot) {
+            realtime_profiler_core_opt = dispatch_core_manager.get_closest_available_dispatch_core_to_pcie(device_id);
+        }
 
         if (!realtime_profiler_core_opt.has_value()) {
             log_warning(
@@ -2024,7 +2030,8 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
 
         log_info(
             tt::LogMetal,
-            "Using closest available dispatch core ({}, {}) to PCIe for real-time profiler on device {}",
+            "Using {} tensix ({}, {}) for real-time profiler on device {}",
+            used_reserved_slot ? "reserved" : "closest-to-PCIe",
             realtime_profiler_core.x,
             realtime_profiler_core.y,
             device_id);
