@@ -1352,53 +1352,6 @@ def extract_total_duration_from_graph(graph: list) -> float:
     return 0.0
 
 
-def write_tensor_lifetime_sidecar(report_path: Union[str, Path]) -> Path | None:
-    """
-    Write ``<stem>.tensor_lifetime.json`` beside the capture report using the same rules as import.
-
-    Cheap to consume from TTNN Visualizer without opening SQLite. Skips quietly if the report
-    cannot be parsed or has no graph.
-    """
-    report_path = Path(report_path)
-    if not report_path.is_file():
-        return None
-    try:
-        with open(report_path, "r") as f:
-            report = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(f"tensor_lifetime sidecar skipped (could not read report): {e}")
-        return None
-    if report.get("version") != SUPPORTED_REPORT_VERSION or "graph" not in report:
-        return None
-    python_io = report.get("python_io")
-    if python_io is None:
-        pio_sidecar = report_path.with_suffix(".python_io.json")
-        if pio_sidecar.exists():
-            try:
-                with open(pio_sidecar, "r") as pf:
-                    python_io = json.load(pf)
-            except (json.JSONDecodeError, OSError):
-                python_io = None
-    conn = sqlite3.connect(":memory:")
-    cursor = conn.cursor()
-    create_database_schema(cursor)
-    try:
-        stats = import_graph(
-            cursor,
-            report["graph"],
-            base_operation_id=0,
-            devices=report.get("devices"),
-            python_io=python_io,
-            per_operation_buffers=report.get("per_operation_buffers"),
-        )
-    finally:
-        conn.close()
-    out_path = report_path.with_name(report_path.stem + ".tensor_lifetime.json")
-    with open(out_path, "w") as f:
-        json.dump(stats.get("tensor_lifetime", []), f, indent=2)
-    return out_path
-
-
 def extract_operation_durations(graph: list) -> dict:
     """Extract per-operation durations as {name: seconds}."""
     durations = {}
