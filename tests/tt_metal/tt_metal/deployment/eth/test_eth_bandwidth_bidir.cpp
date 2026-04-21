@@ -22,41 +22,7 @@ using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
-static void prepare_receiver_bidir(
-    tt::tt_metal::IDevice* const recv_device,
-    const CoreCoord& recv_core,
-    uint32_t transfer_size,
-    uint32_t transfer_count,
-    std::vector<uint32_t>& all_zeros,
-    DataMovementProcessor processor,
-    uint32_t recv_l1_address,
-    uint32_t barrier_address,
-    tt_metal::Program* recv_program) {
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        recv_device->id(), recv_device->ethernet_core_from_logical_core(recv_core), all_zeros, recv_l1_address);
-
-    auto recv_eth_config = tt_metal::EthernetConfig{
-        .noc = tt_metal::NOC::NOC_0,
-        .processor = processor,
-        .compile_args =
-            {
-                transfer_size,
-                transfer_count,
-                barrier_address,
-            },
-    };
-    eth_test_common::set_arch_specific_eth_config(recv_eth_config);
-
-    auto recv_kernel = tt_metal::CreateKernel(
-        *recv_program,
-        "tests/tt_metal/tt_metal/deployment/kernels/eth_bidir_recv_kernel.cpp",
-        recv_core,
-        recv_eth_config);
-
-    tt_metal::SetRuntimeArgs(*recv_program, recv_kernel, recv_core, {});
-}
-
-static void prepare_sender_bidir(
+static void prepare_bidir(
     tt::tt_metal::IDevice* const send_device,
     const CoreCoord& send_core,
     uint32_t transfer_size,
@@ -67,8 +33,8 @@ static void prepare_sender_bidir(
     uint32_t num_bytes_per_send,
     uint32_t send_l1_address,
     uint32_t recv_l1_address,
-    uint32_t barrier_address,
     tt_metal::Program* send_program) {
+    /* =================== */
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         send_device->id(), send_device->ethernet_core_from_logical_core(send_core), inputs, send_l1_address);
 
@@ -83,16 +49,12 @@ static void prepare_sender_bidir(
                 send_delta_addr,
                 send_l1_address,
                 recv_l1_address,
-                barrier_address,
             },
     };
     eth_test_common::set_arch_specific_eth_config(send_eth_config);
 
     auto send_kernel = tt_metal::CreateKernel(
-        *send_program,
-        "tests/tt_metal/tt_metal/deployment/kernels/eth_bidir_send_kernel.cpp",
-        send_core,
-        send_eth_config);
+        *send_program, "tests/tt_metal/tt_metal/deployment/kernels/eth_bidir_kernel.cpp", send_core, send_eth_config);
 
     tt_metal::SetRuntimeArgs(*send_program, send_kernel, send_core, {});
 }
@@ -103,7 +65,9 @@ static bool run_test_bandwidth_bidir(
     const std::shared_ptr<distributed::MeshDevice>& send_mesh_device,
     const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device,
     const CoreCoord& send_core,
-    const CoreCoord& recv_core) {
+    const CoreCoord& recv_core,
+    DataMovementProcessor processor0) {
+    /* =================== */
     bool same_device = send_mesh_device == recv_mesh_device;
     auto* const send_device = send_mesh_device->get_devices()[0];
     auto* const recv_device = recv_mesh_device->get_devices()[0];
@@ -111,15 +75,12 @@ static bool run_test_bandwidth_bidir(
     uint32_t num_bytes_per_send = transfer_size / 2;
     uint32_t transfer_count = 20 << 10;
     uint64_t total_transferred = (uint64_t)transfer_size * transfer_count;
-    DataMovementProcessor processor0 = DataMovementProcessor::RISCV_0;
-    DataMovementProcessor processor1 = DataMovementProcessor::RISCV_1;
 
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, transfer_size / sizeof(uint32_t));
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
     struct l1_allocator alloc = new_erisc_allocator();
 
-    uint32_t barrier_address = l1_alloc(&alloc, sizeof(struct barrier));
     uint32_t recv_l1_address = l1_alloc(&alloc, transfer_size);
     uint32_t send_delta_addr = l1_alloc(&alloc, sizeof(uint64_t));
     uint32_t send_l1_address = l1_alloc(&alloc, transfer_size);
@@ -127,31 +88,7 @@ static bool run_test_bandwidth_bidir(
     tt_metal::Program send_program = tt_metal::Program(), recv_program_ = tt_metal::Program();
     tt_metal::Program& recv_program = same_device ? send_program : recv_program_;
 
-    /* Receivers */
-    prepare_receiver_bidir(
-        recv_device,
-        recv_core,
-        transfer_size,
-        transfer_count,
-        all_zeros,
-        processor0,
-        recv_l1_address,
-        barrier_address,
-        &recv_program);
-
-    prepare_receiver_bidir(
-        send_device,
-        send_core,
-        transfer_size,
-        transfer_count,
-        all_zeros,
-        processor1,
-        recv_l1_address,
-        barrier_address,
-        &send_program);
-
-    /* Senders */
-    prepare_sender_bidir(
+    prepare_bidir(
         send_device,
         send_core,
         transfer_size,
@@ -162,21 +99,19 @@ static bool run_test_bandwidth_bidir(
         num_bytes_per_send,
         send_l1_address,
         recv_l1_address,
-        barrier_address,
         &send_program);
 
-    prepare_sender_bidir(
+    prepare_bidir(
         recv_device,
         recv_core,
         transfer_size,
         transfer_count,
         send_delta_addr,
         inputs,
-        processor1,
+        processor0,
         num_bytes_per_send,
         send_l1_address,
         recv_l1_address,
-        barrier_address,
         &recv_program);
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -194,6 +129,8 @@ static bool run_test_bandwidth_bidir(
 }
 
 TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetBandwidthBidir) {
+    const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+
     bool pass = true;
 
     for (const auto& sender_mesh_device : devices_) {
@@ -214,8 +151,13 @@ TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetBandwidthBidir) {
                 }
 
                 log_info(tt::LogTest, "  sender core: {}, receiver core: {}", sender_core, receiver_core);
-                pass &= run_test_bandwidth_bidir(
-                    this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core);
+                for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
+                    const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
+
+                    log_info(tt::LogTest, "    running on {}", processor);
+                    pass &= run_test_bandwidth_bidir(
+                        this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor);
+                }
             }
         }
     }
