@@ -17,9 +17,25 @@ def main():
     sku_name = sys.argv[1]
     sku_config_path = sys.argv[2]
 
+    # Sanitize file path to prevent path traversal attacks
+    # Resolve to absolute canonical path and verify it exists
+    try:
+        sku_config_path = os.path.realpath(sku_config_path)
+    except (OSError, ValueError) as e:
+        print(f"::error::Invalid SKU config path: {e}", file=sys.stderr)
+        sys.exit(1)
+
     if not os.path.exists(sku_config_path):
         print(
             f"::error::SKU config file not found at {sku_config_path}", file=sys.stderr
+        )
+        sys.exit(1)
+
+    # Verify the file is a regular file (not a directory or special file)
+    if not os.path.isfile(sku_config_path):
+        print(
+            f"::error::SKU config path is not a regular file: {sku_config_path}",
+            file=sys.stderr,
         )
         sys.exit(1)
 
