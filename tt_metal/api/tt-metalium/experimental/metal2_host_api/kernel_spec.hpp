@@ -54,7 +54,12 @@ struct DataMovementConfiguration {
     std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
 };
 
-using KernelSpecID = uint32_t;
+// A name identifying a KernelSpec within a ProgramSpec.
+//
+// CONVENTION: define names as `constexpr const char*` constants, e.g.:
+//   constexpr const char* READER_KERNEL = "reader";
+//   KernelSpec{.unique_id = READER_KERNEL, ...};
+// Reusing a single constant helps catch typos and errors at compile time.
 using KernelSpecName = std::string;
 
 struct KernelSpec {
@@ -78,8 +83,11 @@ struct KernelSpec {
     // Threading
     // Number of kernel threads (this can be specified globally or per-node)
     uint8_t num_threads = 1;
-    using ThreadNodeMap = std::unordered_map<Nodes, uint8_t>;  // node -> number of kernel threads
-    std::optional<ThreadNodeMap> thread_node_map = std::nullopt;
+    // Optional per-node thread count specification (overrides global num_threads)
+    // This is currently unsupported, and an open question if we ever want to support it.
+    using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node, num_threads}
+    using ThreadNodeMap = std::vector<NodeSpecificThreadCount>;
+    std::optional<ThreadNodeMap> node_specific_thread_counts = std::nullopt;
 
     // Kernel type (methods)
     bool is_dm_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config_spec); }
@@ -91,12 +99,10 @@ struct KernelSpec {
     struct CompilerOptions {
         using IncludePaths = std::vector<std::string>;
         using Defines = std::vector<std::pair<std::string, std::string>>;
-        using Macros = std::vector<std::string>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
         IncludePaths include_paths;         // -I <path>
         Defines defines;                    // -D <name>=<value>
-        Macros macros;                      // -M <macro>
         OptLevel opt_level = OptLevel::O2;  // -O<level>
         // Can add more options here as needed
     };
