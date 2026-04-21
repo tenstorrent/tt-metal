@@ -8,6 +8,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
+#include "api/debug/dprint_pages.h"
+
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
 using tt::tt_fabric::NocUnicastCommandHeader;
 using tt::tt_fabric::WorkerToFabricEdmSender;
@@ -184,6 +186,8 @@ void kernel_main() {
         fabric_mux_channel_buffer_size_bytes,
         fabric_mux_status_address>(directions, fabric_connections, rt_arg_count);
 
+    DPRINT << "Combine writer going \n";
+
     const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr);
 
     volatile PACKET_HEADER_TYPE* packet_headers[3];
@@ -262,6 +266,12 @@ void kernel_main() {
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
 
         noc_semaphore_wait_min(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
+
+        tt::data_movement::common::print_bf16_pages(
+            src_data_l1_base_addr + *db * source_block_size_bytes,
+            source_token_segment_buffer_size_bytes / 2,
+            token_split_counts[e]);
+
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr
                 [(e * (global_num_tokens + 1) + token_split_offsets[e] + dt) * dense_token_maps_stride_elm];
@@ -312,6 +322,7 @@ void kernel_main() {
         compute_sync_semaphore_val += compute_cores_per_combine_core;
         ++db;
     }
+    // DPRINT<<"Combine writer middle \n";
 
     noc_semaphore_set(compute_sync_semaphore_ptr, 0);
 
@@ -320,6 +331,7 @@ void kernel_main() {
     cb_push_back(data_cb_id, 1);
 
     noc_async_write_barrier(/*noc=*/1);
+    // DPRINT<<"Combine writer middle 2 \n";
 
     if (sync_args.is_sync_core) {
         auto termination_sync_semaphore_ptr =
@@ -367,4 +379,6 @@ void kernel_main() {
         noc_async_write_barrier(/*noc=*/1);
         noc_async_atomic_barrier(/*noc=*/1);
     }
+
+    DPRINT << "Combine writer done \n";
 }
