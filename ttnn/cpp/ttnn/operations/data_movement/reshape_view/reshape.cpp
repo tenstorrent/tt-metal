@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <functional>
 
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/tensor/tensor_spec.hpp>
@@ -11,6 +13,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
@@ -28,6 +31,28 @@
 
 namespace ttnn::operations::data_movement {
 namespace detail {
+
+// Flatten PadValue to float for fill_implicit_tile_padding. uint32 + FLOAT32: bitcast; else static_cast
+// from integer (not a bit pattern). Some integer pad values inexact in float.
+static float pad_value_as_float(const PadValue& pad_value, DataType dtype) {
+    return std::visit(
+        [dtype](auto v) -> float {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, uint32_t>) {
+                if (dtype == DataType::FLOAT32) {
+                    return std::bit_cast<float>(v);
+                }
+            }
+            return static_cast<float>(v);
+        },
+        pad_value);
+}
+
+// True if the inner-2D of `shape` is not tile-aligned, i.e. the tiled output has implicit padding lanes.
+static bool has_inner_2d_tile_padding(const ttnn::Shape& shape) {
+    TT_ASSERT(shape.rank() >= 2, "has_inner_2d_tile_padding requires rank >= 2");
+    return (shape[-1] % tt::constants::TILE_WIDTH != 0) || (shape[-2] % tt::constants::TILE_HEIGHT != 0);
+}
 
 MemoryConfig recompute_shard_spec_for_output(const MemoryConfig& memory_config, const TensorSpec& output_shape) {
     // This function recomputes the shard spec as reshape op's original input
@@ -211,9 +236,12 @@ ttnn::Tensor reshape_tiled(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
     const MemoryConfig& memory_config,
-    const PadValue& /*pad_value*/,
+    const PadValue& pad_value,
     const bool recreate_mapping_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool skip_padding_fill) {
+    // fill_implicit_tile_padding takes float; integer pad is not bit-exact for all dtypes/values.
+    const float fill_value = detail::pad_value_as_float(pad_value, tensor.dtype());
     // squeeze input tensor and requested shape to 3D
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
         if (shape.rank() > 3) {
@@ -259,6 +287,13 @@ ttnn::Tensor reshape_tiled(
             working_output_memory_config,
             recreate_mapping_tensor,
             sub_core_grid);
+
+        // Fill implicit tile padding while still on interleaved (and BFLOAT16 if input was BFLOAT8_B).
+        // output_tensor_3d is rank-3 by construction, so fill_implicit_tile_padding stays on its
+        // non-recursive path and cannot loop back into ttnn::reshape.
+        if (!skip_padding_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
+            output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
+        }
 
         if (memory_config.is_sharded()) {
             TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
@@ -316,6 +351,23 @@ ttnn::Tensor reshape_tiled(
         recreate_mapping_tensor,
         sub_core_grid);
 
+    // Fill implicit tile padding while still in bfloat16 for BFLOAT8_B inputs; otherwise in native dtype.
+    // Skip when the output is tile-aligned. Tensors here are rank-3, so fill_implicit_tile_padding
+    // stays on its non-recursive path and cannot loop back into ttnn::reshape.
+    if (!skip_padding_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
+        if (output_tensor_3d.memory_config().is_sharded()) {
+            // TODO(#43090): drop this s2i/i2s detour once prim::fill_pad supports sharded buffers
+            // without overflowing fill_pad_writer's per-core runtime-arg cap (341).
+            const auto sharded_mem_config = output_tensor_3d.memory_config();
+            MemoryConfig interleaved_mem{TensorMemoryLayout::INTERLEAVED, sharded_mem_config.buffer_type()};
+            auto interleaved = ttnn::sharded_to_interleaved(output_tensor_3d, interleaved_mem, std::nullopt);
+            interleaved = ttnn::fill_implicit_tile_padding(interleaved, fill_value, std::nullopt);
+            output_tensor_3d = ttnn::interleaved_to_sharded(interleaved, sharded_mem_config, std::nullopt);
+        } else {
+            output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
+        }
+    }
+
     if (tensor.dtype() == DataType::BFLOAT8_B) {
         TT_FATAL(!sub_core_grid.has_value(), "Bfloat8 reshape does not support sub core grid specification\n");
         output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
@@ -334,7 +386,8 @@ ttnn::Tensor ttnn::reshape(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool skip_padding_fill) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
@@ -420,7 +473,8 @@ ttnn::Tensor ttnn::reshape(
         mem_config,
         pad_value.value_or(default_pad_value),
         reshape_map_mode == TileReshapeMapMode::RECREATE,
-        sub_core_grid);
+        sub_core_grid,
+        skip_padding_fill);
 }
 
 ttnn::Tensor ttnn::reshape(
@@ -429,8 +483,9 @@ ttnn::Tensor ttnn::reshape(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
-    return reshape(tensor, shape, shape, memory_config, pad_value, reshape_map_mode, sub_core_grid);
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool skip_padding_fill) {
+    return reshape(tensor, shape, shape, memory_config, pad_value, reshape_map_mode, sub_core_grid, skip_padding_fill);
 }
 
 ttnn::Tensor ttnn::reshape(
@@ -439,12 +494,14 @@ ttnn::Tensor ttnn::reshape(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool skip_padding_fill) {
     return reshape(
         tensor,
         operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector),
         memory_config,
         pad_value,
         reshape_map_mode,
-        sub_core_grid);
+        sub_core_grid,
+        skip_padding_fill);
 }
