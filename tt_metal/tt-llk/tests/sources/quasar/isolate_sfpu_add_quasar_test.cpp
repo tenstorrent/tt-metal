@@ -162,7 +162,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 TT_SFPLOAD(p_sfpu::LREG1, sfpmem_mod, ADDR_MOD_7, 0, in1_base + (d << 1));
                 // Add LREG0 + LREG1, store result in LREG2
                 TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0);
-                TTI_NOP;
                 // Store result back to output slice
                 TT_SFPSTORE(p_sfpu::LREG2, sfpmem_mod, ADDR_MOD_7, 0, out_base + (d << 1));
             }
