@@ -18,7 +18,7 @@ _CACHED_MODEL = None
 def _get_model():
     global _CACHED_MODEL
     if _CACHED_MODEL is None:
-        from models.demos.vggt.reference.torch_vggt import load_vggt
+        from reference.torch_vggt import load_vggt
         _CACHED_MODEL = load_vggt(eval_mode=True)
     return _CACHED_MODEL
 
