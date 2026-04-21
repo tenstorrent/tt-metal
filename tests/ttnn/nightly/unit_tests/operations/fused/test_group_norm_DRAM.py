@@ -50,9 +50,6 @@ def test_group_norm_DRAM_rejects_non_uniform_mcast_groups(device):
     """Regression test for GH#40912: N=2 with grid (8,5) creates num_virtual_rows=5
     which is not divisible by num_batches=2, producing non-uniform mcast groups
     that deadlock due to exact-equality semaphore waits in the sender kernel."""
-    if device.core_grid.y == 7:
-        pytest.skip()
-
     N, C, H, W = 2, 768, 12, 12
     num_groups = 32
     bad_grid = ttnn.CoreGrid(y=5, x=8)
