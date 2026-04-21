@@ -37,6 +37,11 @@ struct LLKSharedDevices {
     tt::ARCH arch{tt::ARCH::Invalid};
     uint32_t max_cbs{};
     bool initialized{false};
+
+    void reset() {
+        devices.clear();
+        initialized = false;
+    }
 };
 
 // gtest Environment that owns the device handles for one fixture chain.
@@ -54,10 +59,7 @@ class LLKDeviceEnvironment : public ::testing::Environment {
 public:
     LLKSharedDevices state;
 
-    void TearDown() override {
-        state.devices.clear();
-        state.initialized = false;
-    }
+    void TearDown() override { state.reset(); }
 };
 
 // One Environment instance per Tag — ::testing::AddGlobalTestEnvironment takes
@@ -129,10 +131,7 @@ protected:
     // safety net — it runs at end of RUN_ALL_TESTS in any path that reaches
     // gtest's normal completion (including failures and skips), guaranteeing
     // shutdown order vs MetalContext.
-    static void TearDownTestSuite() {
-        auto& s = shared_state();
-        s.TearDown();
-    }
+    static void TearDownTestSuite() { shared_state().reset(); }
 
     void SetUp() override {
         auto& s = shared_state();
@@ -203,10 +202,7 @@ protected:
     }
 
     // Per-suite cleanup; LLKDeviceEnvironment::TearDown is the final safety net.
-    static void TearDownTestSuite() {
-        auto& s = shared_state();
-        s.TearDown();
-    }
+    static void TearDownTestSuite() { shared_state().reset(); }
 
     bool validate_dispatch_mode() override {
         this->DetectDispatchMode();
