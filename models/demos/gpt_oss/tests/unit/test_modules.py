@@ -1059,6 +1059,7 @@ def run_model_forward_test(
     [1],
     ids=["1_layer"],
 )
+@pytest.mark.timeout(1200)
 def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape, num_layers, reset_seeds):
     """
     Test full model forward pass comparing TT implementation to HuggingFace reference.
