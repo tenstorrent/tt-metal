@@ -85,11 +85,17 @@ def build_synthetic_batch(policy, device: str = "cpu") -> dict[str, torch.Tensor
     # Proprio state
     batch[OBS_STATE] = torch.randn(1, cfg.robot_state_feature.shape[0], generator=g, device=device)
 
-    # Language tokens — bart vocab=51289, max_length default 64. Use a
-    # short fixed sentence's-worth of token ids so the encoder has signal.
-    seq_len = cfg.tokenizer_max_length
+    # Language tokens — bart vocab=51289. The HF config advertises
+    # tokenizer_max_length=1024 but `pad_language_to=max_length` in combo
+    # with that value produces a sequence (text + image tokens + 3 image
+    # views' worth of aux + 30 action + 32 soft prompts) that exceeds the
+    # model's own `max_len_seq=512`. Real-world xvla inference uses short
+    # natural-language instructions (a few words). We fix the benchmark
+    # prompt length at LANG_TOKENS = 16, which keeps the merged sequence
+    # comfortably under the cap and represents a typical "pick up X" prompt.
+    LANG_TOKENS = 16
     # token id 0 = <s>, 2 = </s>; 1 = <pad>. Fill: <s> + N junk + </s> + pad.
-    tokens = torch.full((1, seq_len), 1, dtype=torch.long, device=device)
+    tokens = torch.full((1, LANG_TOKENS), 1, dtype=torch.long, device=device)
     tokens[0, 0] = 0
     tokens[0, 1:8] = torch.tensor([100, 200, 300, 400, 500, 600, 700])
     tokens[0, 8] = 2
