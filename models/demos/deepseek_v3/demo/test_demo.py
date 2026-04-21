@@ -141,8 +141,8 @@ def _demo_case(
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
-            case_id="dual_full_demo",
-            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
+            case_id="dual_full_demo_32upr",
+            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
         _demo_case(
             max_prompts=24,
