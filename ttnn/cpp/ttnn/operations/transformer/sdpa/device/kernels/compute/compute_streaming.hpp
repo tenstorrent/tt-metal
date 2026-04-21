@@ -802,10 +802,8 @@ static __attribute__((noinline, noclone)) void sdpa_inner_loop_step(
         // Ring mask: L1-accumulate causal + padding masks onto cb_qkt_im for this row group.
         if constexpr (use_ring_mask) {
             if (apply_causal || (apply_mask && lw_partial_tile_idx > 0)) {
-#ifdef ARCH_BLACKHOLE
                 // MOP is configured for actual_sbw tiles (blocked matmul); mask needs 1 tile per pack.
-                PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
-#endif
+                configure_single_tile_pack(cb_qkt_im);
                 copy_tile_to_dst_init_short(cb_mask_in);
                 PACK((llk_pack_reconfig_l1_acc(1)));
                 apply_lightweight_mask_streaming<KT_stride>(
@@ -823,9 +821,7 @@ static __attribute__((noinline, noclone)) void sdpa_inner_loop_step(
                     causal_k_start_tile,
                     active_Sk);
                 PACK((llk_pack_reconfig_l1_acc(0)));
-#ifdef ARCH_BLACKHOLE
-                PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, actual_sbw)));
-#endif
+                configure_pack_width(cb_qkt_im, actual_sbw);
             }
         }
 
