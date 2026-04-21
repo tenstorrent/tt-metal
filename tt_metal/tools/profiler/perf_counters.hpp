@@ -539,12 +539,11 @@ void stop_perf_counter() {
     }
 };
 
-// Flush perf counter data from L1 to DRAM without touching the header.
-// Sends ONLY custom markers (from CUSTOM_MARKERS to wIndex). The header
-// (sentinel + guaranteed markers) is reserved at the start of DRAM and
-// written once by finish_profiler at program end.
-// The host-side parser processes these "pre-sentinel" TS_DATA markers
-// and associates them with the run established by the subsequent sentinel.
+// Flush perf counter data from L1 to DRAM. Writes the full L1 buffer
+// (header + custom markers) so each DRAM chunk is self-describing with
+// its own sentinel + guaranteed markers, matching the chunk format that
+// quick_push produces. The host parser associates each chunk with a run
+// via the sentinel + runtime-id slot that follows it.
 __attribute__((noinline)) void perf_counter_flush() {
 #if defined(COMPILE_FOR_BRISC)
     if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
@@ -557,20 +556,12 @@ __attribute__((noinline)) void perf_counter_flush() {
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
-    // Reserve header space on first flush
-    if (profiler_control_buffer[HOST_BUFFER_END_INDEX] == 0) {
-        profiler_control_buffer[HOST_BUFFER_END_INDEX] = CUSTOM_MARKERS;
-    }
-
-    uint32_t send_count = wIndex - CUSTOM_MARKERS;
-
     // Pad to NOC alignment
-    for (uint32_t i = 0; i < (send_count % NOC_ALIGNMENT_FACTOR); i++) {
+    for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
         mark_padding();
-        send_count += PROFILER_L1_MARKER_UINT32_SIZE;
     }
 
-    uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + send_count;
+    uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + wIndex;
     if (currEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
         wIndex = CUSTOM_MARKERS;
         return;  // DRAM full, drop remaining counters
@@ -590,9 +581,9 @@ __attribute__((noinline)) void perf_counter_flush() {
 
     NocRegisterStateSave noc_state;
     profiler_noc_async_write_posted(
-        reinterpret_cast<uint32_t>(&profiler_data_buffer[myRiscID].data[CUSTOM_MARKERS]),
+        reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID].data),
         dram_bank_dst_noc_addr,
-        send_count * sizeof(uint32_t));
+        wIndex * sizeof(uint32_t));
     profiler_noc_async_flush_posted_write();
 
     profiler_control_buffer[HOST_BUFFER_END_INDEX] = currEndIndex;
