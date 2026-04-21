@@ -21,7 +21,7 @@
  * @tparam FULL_CT_DIM   Number of tiles in a full row of the input tensor.
  * @param operand        The input dataflow buffer identifier.
  */
-template <std::uint32_t BLOCK_CT_DIM, std::uint32_t FULL_CT_DIM = BLOCK_CT_DIM>
+template <std::uint32_t FULL_CT_DIM = 1, std::uint32_t BLOCK_CT_DIM = 1>
 inline void llk_unpack_tilize_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
@@ -54,7 +54,7 @@ inline void llk_unpack_tilize_block(
     const LocalDFBInterface& local_dfb = g_dfb_interface[operand_id];
     const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx;
 
-    // TODO (SK): Remove ct_dim loop when block_ct_dim unpacking optimization implemented.
+    // TODO (SK) #42757: Remove ct_dim loop when block_ct_dim unpacking optimization implemented.
     // BLOCK_CT_DIM is currently hardcoded to 1 in tilize_init (see compute/tilize.h), so the MOP
     // emits one SrcA dvalid per invocation. Loop to match the per-tile math consumption same
     // structural pattern as BH/WH llk_unpack_tilize_block

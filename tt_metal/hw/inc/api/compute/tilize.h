@@ -49,10 +49,10 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
     PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, true /*tilize en*/>(ocb, 1, icb)));
 #endif
 #else
-    // TODO(SK): Quasar unpack tilize could issue BLOCK_CT_DIM tiles per MOP invocation, but scheduling
+    // TODO(SK) #42757: Quasar unpack tilize could issue BLOCK_CT_DIM tiles per MOP invocation, but scheduling
     // BLOCK_CT_DIM against FULL_CT_DIM would need a compute-API-level workaround since BH/WH operate
     // tile-by-tile and have no equivalent concept. Deferred: not on the Quasar critical path.
-    UNPACK((llk_unpack_tilize_init<1 /*BLOCK_CT_DIM*/, FULL_CT_DIM>(icb)));  // unpack tile-by-tile
+    UNPACK((llk_unpack_tilize_init<FULL_CT_DIM>(icb)));
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
 #endif
 }
