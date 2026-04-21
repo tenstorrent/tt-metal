@@ -378,13 +378,13 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
                 tt::jit_build::utils::FileRenamer tmp(target_path);
                 std::ofstream out(tmp.path(), std::ios::binary);
                 if (!out.is_open()) {
-                    throw std::runtime_error("Cannot create file: " + target_path);
+                    throw std::runtime_error("Cannot create file: " + target_path.string());
                 }
                 out.write(
                     reinterpret_cast<const char*>(file.content.data()),
                     static_cast<std::streamsize>(file.content.size()));
                 if (!out) {
-                    throw std::runtime_error("Failed to write file: " + target_path);
+                    throw std::runtime_error("Failed to write file: " + target_path.string());
                 }
             }
         }
