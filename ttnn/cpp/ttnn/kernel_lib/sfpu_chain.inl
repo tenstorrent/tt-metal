@@ -17,18 +17,22 @@ using namespace ckernel;
 // Load Implementation
 // =============================================================================
 
-template <uint32_t CB, Dst Slot, LoadPolicy Policy>
-ALWI void Load<CB, Slot, Policy>::init() const {
+template <uint32_t CB, Dst Slot, LoadPolicy Policy, LoadReconfig Reconfig>
+ALWI void Load<CB, Slot, Policy, Reconfig>::init() const {
     // No-op: copy_tile_to_dst_init is handled once by the pipeline before the tile loop.
     // This keeps init() uniform with compute ops but avoids redundant re-initialization.
 }
 
-template <uint32_t CB, Dst Slot, LoadPolicy Policy>
-ALWI void Load<CB, Slot, Policy>::exec(uint32_t offset) const {
+template <uint32_t CB, Dst Slot, LoadPolicy Policy, LoadReconfig Reconfig>
+ALWI void Load<CB, Slot, Policy, Reconfig>::exec(uint32_t offset) const {
     if constexpr (do_wait) {
-        cb_wait_front(CB, 1);
+        // Wait for enough tiles to cover cb_tile_idx (minimum 1 tile for index 0).
+        cb_wait_front(CB, cb_tile_idx + 1);
     }
-    copy_tile(CB, 0, static_cast<uint32_t>(Slot) + offset);
+    if constexpr (Reconfig == LoadReconfig::Srca) {
+        reconfig_data_format_srca(CB);
+    }
+    copy_tile(CB, cb_tile_idx, static_cast<uint32_t>(Slot) + offset);
     if constexpr (do_pop) {
         cb_pop_front(CB, 1);
     }
@@ -59,8 +63,8 @@ struct FirstLoadCB<SfpuChain<First, Rest...>> {
     static constexpr uint32_t value = FirstLoadCB<SfpuChain<Rest...>>::value;
 };
 // Load first element: found it
-template <uint32_t CB, Dst Slot, LoadPolicy Policy, typename... Rest>
-struct FirstLoadCB<SfpuChain<Load<CB, Slot, Policy>, Rest...>> {
+template <uint32_t CB, Dst Slot, LoadPolicy Policy, LoadReconfig Reconfig, typename... Rest>
+struct FirstLoadCB<SfpuChain<Load<CB, Slot, Policy, Reconfig>, Rest...>> {
     static constexpr uint32_t value = CB;
 };
 

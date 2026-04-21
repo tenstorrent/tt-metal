@@ -246,19 +246,40 @@ constexpr bool load_does_wait(LoadPolicy p) { return p == LoadPolicy::WaitAndPop
 constexpr bool load_does_pop(LoadPolicy p) { return p == LoadPolicy::WaitAndPop || p == LoadPolicy::NoWaitPop; }
 
 /**
+ * @brief Data-format reconfig mode for Load.
+ *
+ * Load reads a CB tile via SRCA (copy_tile). If CB's data format differs from
+ * what the pipeline configured (based on FirstLoadCB), set Reconfig = Srca to
+ * emit reconfig_data_format_srca(CB) before the copy. Typical use: chains that
+ * load from multiple CBs with different data formats.
+ */
+enum class LoadReconfig {
+    None,
+    Srca,
+};
+
+/**
  * @brief Copy a tile from CB into DEST[Slot] with the given CB-lifecycle policy.
  *
  * For fan-out (same CB tile to multiple DEST slots), write multiple Loads with
  * explicit policies so the CB is waited/popped exactly once:
  *   Load<cb, Dst::D0, LoadPolicy::WaitNoPop>{},   // wait once
- *   Load<cb, Dst::D1, LoadPolicy::WaitAndPop>{},  // cb_wait_front is idempotent; pop once
+ *   Load<cb, Dst::D1, LoadPolicy::NoWaitPop>{},   // no redundant wait; pop once
  *
- * @tparam CB      Circular buffer index
- * @tparam Slot    DEST slot receiving the tile
- * @tparam Policy  CB lifecycle policy (see LoadPolicy; default WaitAndPop)
+ * The CB tile index defaults to 0 (streaming) but is a runtime field so callers
+ * with a pre-waited batch can pick a specific tile:
+ *   auto load = Load<cb, Dst::D0, LoadPolicy::NoWaitNoPop>{};
+ *   load.cb_tile_idx = 3;
+ *   sfpu_chain(load, SomeOp{});
+ *
+ * @tparam CB        Circular buffer index
+ * @tparam Slot      DEST slot receiving the tile
+ * @tparam Policy    CB lifecycle policy (see LoadPolicy; default WaitAndPop)
+ * @tparam Reconfig  Data-format reconfig for srca (default None)
  */
-template <uint32_t CB, Dst Slot, LoadPolicy Policy = LoadPolicy::WaitAndPop>
+template <uint32_t CB, Dst Slot, LoadPolicy Policy = LoadPolicy::WaitAndPop, LoadReconfig Reconfig = LoadReconfig::None>
 struct Load : LoadTag {
+    static constexpr bool clashes_with_fpu = true;
     static constexpr uint32_t cb = CB;
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static constexpr uint32_t max_dst = dst_idx;
@@ -266,6 +287,8 @@ struct Load : LoadTag {
     static constexpr bool do_wait = load_does_wait(Policy);
     static constexpr bool do_pop = load_does_pop(Policy);
     static_assert(static_cast<uint32_t>(Slot) < 8, "DEST slot exceeds maximum capacity (8)");
+
+    uint32_t cb_tile_idx = 0;
 
     ALWI void init() const;
     ALWI void exec(uint32_t offset = 0) const;
