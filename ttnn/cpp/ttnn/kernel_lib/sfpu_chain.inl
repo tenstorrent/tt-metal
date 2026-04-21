@@ -29,7 +29,8 @@ ALWI void Load<CB, Slot, Policy, Reconfig>::exec(uint32_t offset) const {
         // Wait for enough tiles to cover cb_tile_idx (minimum 1 tile for index 0).
         cb_wait_front(CB, cb_tile_idx + 1);
     }
-    if constexpr (Reconfig == LoadReconfig::Srca) {
+    if constexpr (Reconfig == LoadReconfig::Input) {
+        // Load always reads through unpack A (copy_tile).
         reconfig_data_format_srca(CB);
     }
     copy_tile(CB, cb_tile_idx, static_cast<uint32_t>(Slot) + offset);

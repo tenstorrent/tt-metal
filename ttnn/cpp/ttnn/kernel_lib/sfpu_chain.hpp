@@ -248,14 +248,15 @@ constexpr bool load_does_pop(LoadPolicy p) { return p == LoadPolicy::WaitAndPop 
 /**
  * @brief Data-format reconfig mode for Load.
  *
- * Load reads a CB tile via SRCA (copy_tile). If CB's data format differs from
- * what the pipeline configured (based on FirstLoadCB), set Reconfig = Srca to
- * emit reconfig_data_format_srca(CB) before the copy. Typical use: chains that
- * load from multiple CBs with different data formats.
+ * - None:  no reconfig; CB's data format must already match the current unpack state.
+ * - Input: reconfig the input SRC before the copy. Load always reconfigures SRCA
+ *          because copy_tile goes through unpack A. (Contrast with DestReuseOp,
+ *          which picks srca or srcb based on its ReuseType — here there is no
+ *          choice: Load is always a single-stream SRCA copy.)
  */
 enum class LoadReconfig {
     None,
-    Srca,
+    Input,
 };
 
 /**
