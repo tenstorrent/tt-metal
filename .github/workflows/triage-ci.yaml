@@ -46,4 +46,5 @@ jobs:
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.AUTO_TRIAGE_TOKEN }}
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
