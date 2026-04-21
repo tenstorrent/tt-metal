@@ -179,7 +179,7 @@ public:
     // kernel-specific settings.  Replaces the PoC pattern of exposing
     // individual getters for every internal field.
     tt::jit_build::TargetRecipe export_target_recipe(const JitBuildSettings* settings) const;
-    const std::string& get_weakened_firmware_name() const { return weakened_firmware_name_; }
+    const std::filesystem::path& get_weakened_firmware_name() const { return weakened_firmware_name_; }
     bool get_firmware_is_kernel_object() const { return firmware_is_kernel_object_; }
 };
 
