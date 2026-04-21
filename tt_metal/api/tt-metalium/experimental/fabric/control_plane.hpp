@@ -464,9 +464,8 @@ private:
     // and Routing Table Generator.
     void generate_intermesh_connectivity();
 
-    // Multi-Host Intermesh Connectivity Helper Function:
-    // Assign a logical direction and channel id to each local exit node.
-    std::vector<PortDescriptor> assign_logical_ports_to_exit_nodes(
+    // Propose PortDescriptors per neighbor cable; final maps written after rank-0 pairing.
+    std::vector<PortDescriptor> propose_port_descriptors_for_exit_nodes(
         const std::string& my_host,
         const std::string& neighbor_host,
         bool strict_binding,

@@ -1318,11 +1318,7 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
         }
     }
 
-    // Inter-mesh: use the per-channel peer map (authoritative, populated from PSD physical
-    // cable info during port assignment / broadcast reconciliation). This bypasses the
-    // chip-level inter_mesh_connectivity_ edge, which only retains the FIRST connected_chip_id
-    // when a single (src_chip, dst_mesh) pair has cables to multiple distinct dst chips —
-    // that lossy fallback used to silently route channels to the wrong peer chip.
+    // Prefer intermesh_chan_to_peer_; chip-level map can mis-pick dst when multiple dst chips exist.
     auto chan_peer_it = this->intermesh_chan_to_peer_.find(fabric_node_id);
     if (chan_peer_it != this->intermesh_chan_to_peer_.end()) {
         auto chan_it = chan_peer_it->second.find(chan_id);
@@ -1331,10 +1327,7 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
         }
     }
 
-    // Last-resort fallback: legacy chip-level lookup via inter_mesh_connectivity_. Should
-    // only fire on the local-host code path during early initialization, before
-    // intermesh_chan_to_peer_ is populated. Logged at debug because this path is known-lossy
-    // for multi-peer cabling.
+    // Fallback before intermesh_chan_to_peer_ exists; lossy for multi-peer dst chips.
     const auto& inter_mesh_node = inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id];
     for (const auto& [dst_fabric_mesh_id, edge] : inter_mesh_node) {
         if (edge.port_direction == port_direction) {
@@ -2652,8 +2645,7 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
 void ControlPlane::generate_intermesh_connectivity() {
     intermesh_exit_fabric_node_ids_.clear();
     intermesh_exit_peer_fabric_node_id_pairs_.clear();
-    // Wipe per-channel peer mapping; both code paths repopulate it from PSD physical info.
-    intermesh_chan_to_peer_.clear();
+    intermesh_chan_to_peer_.clear();  // Repopulated from PSD in both single- and multi-host paths.
     AnnotatedIntermeshConnections intermesh_connections;
 
     auto generate_mapping_locally_ = (this->mesh_graph_->get_all_mesh_ids().size() == 1) &&
@@ -2913,26 +2905,9 @@ void ControlPlane::collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_fr
     }
 }
 
-// Assign logical port_ids to physical exit nodes for inter-mesh connections between
-// this host and a neighbor. Each physical ethernet channel between the two hosts gets
-// a logical port_id that encodes the routing direction (N/E/S/W/Z) and a channel index.
-//
-// Z-direction handling:
-//   - If the mesh graph descriptor marks this mesh pair as assign_z_direction, ports are
-//     assigned as Z first (no fallback to NESW).
-//   - Otherwise, NESW ports are tried first. If all NESW ports on a chip are exhausted,
-//     the function falls back to Z ports. This Z fallback is the primary mechanism for
-//     cross-pod connections in the superpod topology, where the descriptor does not set
-//     assign_z_direction.
-//
-// Direction constraint:
-//   All channels on the same physical link (identified by src_asic + dst_asic hash) must
-//   use the same routing direction. This prevents a single link from being split across
-//   multiple routing directions, which the router firmware cannot handle.
-//
-// The resulting PortDescriptor list is sent to the controller (rank 0) for global pairing
-// in pair_logical_intermesh_ports.
-std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
+// Propose PortDescriptors for neighbor cables (rank 0 pairs). One RoutingDirection per physical link; Z/NESW order from
+// MGD.
+std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_nodes(
     const std::string& my_host,
     const std::string& neighbor_host,
     bool strict_binding,
@@ -2951,35 +2926,22 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
 
     std::vector<PortDescriptor> ports_to_neighbor;
 
-    // Track which direction was chosen for each physical link (src_asic + dst_asic pair).
-    // All channels on the same link must use the same direction.
-    std::unordered_map<uint64_t, RoutingDirection> curr_exit_node_direction;
+    std::unordered_map<uint64_t, RoutingDirection> curr_exit_node_direction;  // One RoutingDirection per physical link.
     std::size_t z_fallback_count = 0;
 
-    // Constrain to one peer chip per (src_chip, neighbor_mesh). inter_mesh_connectivity_
-    // collapses (src_mesh, src_chip, dst_mesh) into a single edge whose first
-    // connected_chip_id is used by get_connected_mesh_chip_chan_ids, so multi-peer cabling
-    // on a single src chip must be reduced to a single primary peer chip (most cables;
-    // tie-break on lower chip_id for determinism across hosts). RELAXED MGD permits the
-    // skipped cables to be unused; STRICT configs never hit this because they don't cable
-    // one src chip to multiple peer chips in the same neighbor mesh.
     std::unordered_map<uint64_t, std::unordered_map<ChipId, std::size_t>> cables_per_src_chip_per_dst_chip;
     for (const auto& exit_node : exit_nodes) {
         FabricNodeId dst_fn = this->topology_mapper_->get_fabric_node_id_from_asic_id(exit_node.dst_exit_node);
         cables_per_src_chip_per_dst_chip[*exit_node.src_exit_node][dst_fn.chip_id]++;
     }
-    std::unordered_map<uint64_t, ChipId> primary_dst_chip_per_src_chip;
     for (const auto& [src_asic, dst_chip_counts] : cables_per_src_chip_per_dst_chip) {
-        ChipId best_chip = dst_chip_counts.begin()->first;
-        std::size_t best_count = dst_chip_counts.begin()->second;
-        for (const auto& [chip, count] : dst_chip_counts) {
-            // Tie-break: prefer the lower chip_id for determinism across hosts.
-            if (count > best_count || (count == best_count && chip < best_chip)) {
-                best_chip = chip;
-                best_count = count;
-            }
-        }
-        primary_dst_chip_per_src_chip[src_asic] = best_chip;
+        FabricNodeId src_fn = this->get_fabric_node_id_from_asic_id(src_asic);
+        TT_FATAL(
+            dst_chip_counts.size() <= 1,
+            "Inter-mesh: one src to multiple dst chips on the same neighbor mesh is not supported yet (src {}, "
+            "neighbor M{}).",
+            src_fn,
+            *neighbor_mesh_id);
     }
 
     for (const auto& exit_node : exit_nodes) {
@@ -2992,13 +2954,7 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
             }
         }
 
-        // Skip cables to non-primary peer chips (see multi-peer comment above).
-        FabricNodeId actual_peer_fn = this->topology_mapper_->get_fabric_node_id_from_asic_id(exit_node.dst_exit_node);
-        auto primary_it = primary_dst_chip_per_src_chip.find(*exit_node.src_exit_node);
-        if (primary_it != primary_dst_chip_per_src_chip.end() && actual_peer_fn.chip_id != primary_it->second) {
-            continue;
-        }
-
+        // Skip PSD cables whose ETH link is not up (don't consume mesh edge ports).
         auto src_eth_chan = exit_node.eth_conn.src_chan;
         auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(exit_node_fabric_node_id);
         const auto& soc_desc = this->cluster_.get().get_soc_desc(physical_chip_id);
@@ -3011,13 +2967,7 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
         auto exit_node_hash = (*exit_node.src_exit_node) + (*exit_node.dst_exit_node);
         auto exit_node_chip = exit_node_fabric_node_id.chip_id;
 
-        // Propose a port_id of the requested Z-ness class for this cable. Iterates mesh
-        // edge ports for this chip, skipping those that don't match the requested direction
-        // class (Z vs NESW) or that would violate the same-direction-per-link constraint.
-        // Inter-mesh state (exit_node_directions_, intermesh_chan_to_peer_, intermesh_exit_*)
-        // is intentionally NOT written here — the controller (rank 0) may swap Z↔NESW during
-        // pair_logical_intermesh_ports, so those maps are populated once from the broadcast
-        // in convert_port_descriptors_to_intermesh_connections.
+        // Deferred intermesh_* updates until after rank-0 pairing (Z/NESW may change).
         auto try_assign_port = [&](bool use_z_direction) -> bool {
             for (const auto& [port_id_pair, port_chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
                 if (exit_node_chip != port_chip_id) {
@@ -3114,7 +3064,7 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
             });
         std::unordered_set<FabricNodeId> requested_exit_nodes = this->get_requested_exit_nodes(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_ports, src_exit_node_chips);
-        port_descriptors[my_mesh_id][neighbor_mesh_id] = this->assign_logical_ports_to_exit_nodes(
+        port_descriptors[my_mesh_id][neighbor_mesh_id] = this->propose_port_descriptors_for_exit_nodes(
             my_host, neighbor_host, strict_binding, requested_exit_nodes, assigned_port_ids);
     }
     return port_descriptors;
@@ -3311,24 +3261,7 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
     distributed_context.barrier();
 }
 
-// Pair port descriptors from all hosts into bidirectional intermesh connections.
-// Runs ONLY on the controller (rank 0) which has received port descriptors from every host.
-//
-// For each requested mesh-pair connection, matches source and destination ports by their
-// connection_hash (a hash of the physical cable identity). When both sides agree on direction
-// (both Z or both NESW), the connection is accepted as-is. When they disagree (Z/non-Z
-// mismatch), the controller resolves it:
-//
-//   1. Demotion (Z -> NESW): tried first if the mesh pair does NOT require Z. Finds a free
-//      NESW port on the same chip to replace the Z port, keeping both sides non-Z.
-//   2. Promotion (NESW -> Z): tried if demotion fails or the pair requires Z. Finds a free
-//      Z port on the same chip to replace the NESW port, making both sides Z.
-//   3. Drop: if neither resolution works, the connection is dropped with a warning.
-//
-// Safety invariant: a chip can only have Z connections to ONE neighbor mesh. This prevents
-// the "Golden link counts already set" / "Multiple neighbor meshes per direction" assertions
-// downstream. The can_chip_use_z_for_mesh check enforces this for ALL Z connections
-// (native and promoted).
+// Rank 0: pair by connection_hash; reconcile Z vs NESW (demote/promote); ≤1 Z dst mesh per chip.
 AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const PortDescriptorTable& port_descriptors) {
     AnnotatedIntermeshConnections intermesh_connections;
 
@@ -3342,18 +3275,10 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
 
     validate_requested_intermesh_connections(requested_intermesh_connections, port_descriptors);
 
-    // Track Z port_ids already consumed (per mesh) so we don't double-assign during promotion.
     std::unordered_map<uint32_t, std::unordered_set<port_id_t>> used_z_port_ids;
-    // Track which chip already has a Z connection to which dest mesh (per src mesh), to enforce
-    // the "one neighbor mesh per direction" invariant.
-    // Key: (src_mesh_id, chip_id) -> dest_mesh_id that this chip routes to via Z.
-    std::map<std::pair<uint32_t, ChipId>, uint32_t> chip_z_dest_mesh;
-
-    // Track all port_ids that are unavailable for reassignment on each mesh.
-    // Initialized from the port descriptors (every host's original assignments), then
-    // updated dynamically during promotion/demotion so that freed port_ids become
-    // available for later mesh pairs on the same chip.
-    std::unordered_map<uint32_t, std::unordered_set<port_id_t, hash_pair>> unavailable_port_ids;
+    std::map<std::pair<uint32_t, ChipId>, uint32_t> chip_z_dest_mesh;  // (src_mesh, chip) -> sole Z dst mesh.
+    std::unordered_map<uint32_t, std::unordered_set<port_id_t, hash_pair>>
+        unavailable_port_ids;  // Updated during promote/demote.
     for (const auto& [src_mesh, port_identifiers] : port_descriptors) {
         for (const auto& [dest_mesh, src_ports] : port_identifiers) {
             for (const auto& src_port : src_ports) {
@@ -3362,13 +3287,6 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         }
     }
 
-    // Helper: find an available Z port_id for a given chip on a given mesh.
-    // Only checks used_z_port_ids (Z ports consumed during this pairing iteration).
-    // Note: this may return a Z port that was originally assigned by a different mesh
-    // pair in the host's port descriptors ("stealing"). The reconciliation code in
-    // convert_port_descriptors_to_intermesh_connections handles this by detecting
-    // when a port_id already exists but maps to the wrong physical channel, and
-    // replacing it with the correct one identified by connection_hash.
     auto find_available_z_port = [&](uint32_t mesh_id_val, ChipId chip) -> std::optional<port_id_t> {
         for (const auto& [port_id, port_chip] : mesh_edge_ports_to_chip_id.at(mesh_id_val)) {
             if (port_chip != chip) {
@@ -3390,8 +3308,6 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                d == RoutingDirection::W;
     };
 
-    // Helper: find an available NESW port_id for a given chip on a given mesh.
-    // A port is available if it's NESW, on the correct chip, and not in unavailable_port_ids.
     auto find_available_non_z_port = [&](uint32_t mesh_id_val, ChipId chip) -> std::optional<port_id_t> {
         for (const auto& [port_id, port_chip] : mesh_edge_ports_to_chip_id.at(mesh_id_val)) {
             if (port_chip != chip) {
@@ -3408,8 +3324,6 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         return std::nullopt;
     };
 
-    // Helper: check if promoting a chip to Z for a given dest mesh would violate
-    // the "one neighbor mesh per direction" invariant.
     auto can_chip_use_z_for_mesh = [&](uint32_t src_mesh_val, ChipId chip, uint32_t dest_mesh_val) -> bool {
         auto key = std::make_pair(src_mesh_val, chip);
         auto it = chip_z_dest_mesh.find(key);
@@ -3419,14 +3333,10 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         return it->second == dest_mesh_val;
     };
 
-    // Helper: record that a chip uses Z direction toward a specific dest mesh.
     auto record_chip_z_usage = [&](uint32_t src_mesh_val, ChipId chip, uint32_t dest_mesh_val) {
         chip_z_dest_mesh[{src_mesh_val, chip}] = dest_mesh_val;
     };
 
-    // Helper: try to demote one side of a mismatched pair from Z to non-Z.
-    // On success, marks the new non-Z port as unavailable and frees the original Z port
-    // so it can be reused by a later mesh pair.
     auto try_demote_from_z = [&](uint32_t mesh_val, port_id_t original_port_id) -> std::optional<port_id_t> {
         ChipId chip = mesh_edge_ports_to_chip_id.at(mesh_val).at(original_port_id);
         auto non_z_port = find_available_non_z_port(mesh_val, chip);
@@ -3438,9 +3348,6 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         return non_z_port;
     };
 
-    // Helper: try to promote one side of a mismatched pair from non-Z to Z.
-    // On success, marks the new Z port as unavailable and frees the original non-Z port
-    // so it can be reused by a later mesh pair that needs a non-Z port on the same chip.
     auto try_promote_to_z =
         [&](uint32_t mesh_val, port_id_t original_port_id, uint32_t dest_mesh_val) -> std::optional<port_id_t> {
         ChipId chip = mesh_edge_ports_to_chip_id.at(mesh_val).at(original_port_id);
@@ -3615,12 +3522,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     return intermesh_connections;
 }
 
-// Multi-host intermesh connection establishment: forward port descriptors to the controller
-// (rank 0), receive the final paired connections back, then populate local inter-mesh state
-// from the broadcast keyed by connection_hash. This is the sole writer of exit_node_directions_,
-// intermesh_chan_to_peer_, and the intermesh_exit_* maps on the multi-host path:
-// assign_logical_ports_to_exit_nodes only proposes port_ids; Z<->NESW may be swapped by
-// pair_logical_intermesh_ports, so final bindings are derived here from the broadcast + PSD.
+// Multi-host: apply rank-0 intermesh broadcast, then bind ports to PSD cables via connection_hash.
 AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermesh_connections(
     PortDescriptorTable& port_descriptors) {
     const auto& my_host = physical_system_descriptor_->my_host_name();
@@ -3637,16 +3539,13 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
     const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
 
-    // Build the authoritative (chip, connection_hash) -> physical cable lookup directly
-    // from PSD. Independent of the local maps populated during port assignment so that
-    // filtering decisions there (multi-peer skip, link-down skip) don't accidentally hide
-    // a cable the controller ended up pairing.
     struct CableInfo {
         chan_id_t my_chan;
         FabricNodeId peer_fn;
         chan_id_t peer_chan;
     };
-    std::unordered_map<FabricNodeId, std::unordered_map<std::size_t, CableInfo>> cable_lookup;
+    std::unordered_map<FabricNodeId, std::unordered_map<std::size_t, CableInfo>>
+        cable_lookup;  // Full PSD cables by hash.
     for (const auto& neighbor_host : physical_system_descriptor_->get_host_neighbors(my_host)) {
         const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
         for (const auto& exit_node : exit_nodes) {
@@ -3661,7 +3560,6 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
         }
     }
 
-    // Walk the broadcast connections and write authoritative bindings.
     for (const auto& connection : intermesh_connections) {
         const auto& my_side = std::get<0>(connection);
         if (my_side.first != *my_mesh_id) {
@@ -3675,10 +3573,7 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
         ChipId my_chip = mesh_edge_ports_to_chip_id.at(*my_mesh_id).at(new_port_id);
         FabricNodeId my_fn(my_mesh_id, my_chip);
 
-        // Cable lookup is the single source of truth for which physical channel and which
-        // peer endpoint this connection refers to. If the lookup misses, the controller
-        // referenced a cable PSD doesn't know about — log loudly and skip it rather than
-        // silently producing a wrong mapping.
+        // Map broadcast port+hash to physical cable via PSD; skip on miss (don't invent a mapping).
         auto chip_it = cable_lookup.find(my_fn);
         if (chip_it == cable_lookup.end()) {
             log_warning(
@@ -3706,8 +3601,7 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
         }
         const auto& info = cable_it->second;
 
-        // Sanity: the controller-chosen peer mesh must match the PSD-known peer mesh.
-        if (info.peer_fn.mesh_id != peer_mesh_id) {
+        if (info.peer_fn.mesh_id != peer_mesh_id) {  // Controller vs PSD peer mesh
             log_warning(
                 tt::LogFabric,
                 "Broadcast connection on M{}D{} chan={} disagrees with PSD: controller says peer "
@@ -3778,8 +3672,8 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
             auto asic_id = this->cluster_.get().get_unique_chip_ids().at(physical_chip_id);
             const auto& asic_neighbors = physical_system_descriptor->get_asic_neighbors(tt::tt_metal::AsicID{asic_id});
 
-            // Constrain to one peer chip per (src_chip, neighbor_mesh) — see comment in
-            // assign_logical_ports_to_exit_nodes for the rationale.
+            // Same rule as propose_port_descriptors_for_exit_nodes: one dst chip per (src, neighbor mesh) on same-host
+            // PSD.
             std::unordered_map<MeshId, std::unordered_map<ChipId, std::size_t>> cables_per_neighbor_mesh_per_chip;
             for (const auto& asic_neighbor : asic_neighbors) {
                 if (physical_system_descriptor->get_host_name_for_asic(tt::tt_metal::AsicID{asic_id}) !=
@@ -3794,17 +3688,13 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                     physical_system_descriptor_->get_eth_connections(tt::tt_metal::AsicID{asic_id}, asic_neighbor);
                 cables_per_neighbor_mesh_per_chip[candidate.mesh_id][candidate.chip_id] += cables.size();
             }
-            std::unordered_map<MeshId, ChipId> primary_peer_chip_per_neighbor_mesh;
             for (const auto& [neighbor_mesh, chip_counts] : cables_per_neighbor_mesh_per_chip) {
-                ChipId best_chip = chip_counts.begin()->first;
-                std::size_t best_count = chip_counts.begin()->second;
-                for (const auto& [chip, count] : chip_counts) {
-                    if (count > best_count || (count == best_count && chip < best_chip)) {
-                        best_chip = chip;
-                        best_count = count;
-                    }
-                }
-                primary_peer_chip_per_neighbor_mesh[neighbor_mesh] = best_chip;
+                TT_FATAL(
+                    chip_counts.size() <= 1,
+                    "Inter-mesh: one src to multiple dst chips on the same neighbor mesh is not supported yet (src {}, "
+                    "neighbor M{}).",
+                    node,
+                    *neighbor_mesh);
             }
 
             for (const auto& asic_neighbor : asic_neighbors) {
@@ -3817,11 +3707,6 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                 auto neighbor_node = this->get_fabric_node_id_from_asic_id(*asic_neighbor);
                 if (neighbor_node.mesh_id == local_mesh_id ||
                     processed_neighbors.contains({*neighbor_node.mesh_id, *local_mesh_id})) {
-                    continue;
-                }
-                auto primary_it = primary_peer_chip_per_neighbor_mesh.find(neighbor_node.mesh_id);
-                if (primary_it != primary_peer_chip_per_neighbor_mesh.end() &&
-                    neighbor_node.chip_id != primary_it->second) {
                     continue;
                 }
                 if (!check_connection_requested(
