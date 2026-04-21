@@ -197,7 +197,7 @@ uint32_t get_effective_dram_cores(uint32_t transaction_size, tt::ARCH arch, bool
 
 }  // anonymous namespace
 
-std::vector<uint32_t> get_cycles_for_transaction_size(
+std::pair<uint32_t, uint32_t> get_cycles_for_transaction_size(
     uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions, tt::ARCH arch, bool is_read) {
     bool is_write = !is_read;
     // measured initial latency based on the transaction and device types
@@ -363,7 +363,7 @@ int common_tm_bw_model(
         // sometimes more cores (even if not local) is better
         // computes both and takes the minimum value between the two
         if (num_cores > output_tensor.memory_config().shard_spec().value().grid.num_cores()) {
-            auto read_cycles_not_local = get_cycles_for_transaction_size(
+            auto [read_bw_not_local, read_latency_not_local] = get_cycles_for_transaction_size(
                 input_transaction_size,
                 input_is_dram,
                 false,
@@ -371,15 +371,15 @@ int common_tm_bw_model(
                 arch,
                 true);
 
-            auto write_cycles_not_local = get_cycles_for_transaction_size(
+            auto [write_bw_not_local, write_latency_not_local] = get_cycles_for_transaction_size(
                 output_transaction_size,
                 output_is_dram,
                 false,
                 std::ceil((float)num_write_transactions / (float)num_cores),
                 arch,
                 false);
-            total_read_cycles_not_local = read_cycles_not_local[0] + read_cycles_not_local[1];
-            total_write_cycles_not_local = write_cycles_not_local[0] + write_cycles_not_local[1];
+            total_read_cycles_not_local = read_bw_not_local + read_latency_not_local;
+            total_write_cycles_not_local = write_bw_not_local + write_latency_not_local;
         }
     }
     num_cores = is_local ? output_tensor.memory_config().shard_spec().value().grid.num_cores() : num_cores;
@@ -389,18 +389,18 @@ int common_tm_bw_model(
     num_read_transactions = std::ceil((float)num_read_transactions / (float)num_cores);
     num_write_transactions = std::ceil((float)num_write_transactions / (float)num_cores);
 
-    auto read_cycles = get_cycles_for_transaction_size(
+    auto [read_bw, read_latency] = get_cycles_for_transaction_size(
         input_transaction_size, input_is_dram, is_local, num_read_transactions, arch, true);
 
-    auto write_cycles = get_cycles_for_transaction_size(
+    auto [write_bw, write_latency] = get_cycles_for_transaction_size(
         output_transaction_size, output_is_dram, is_local, num_write_transactions, arch, false);
-    uint32_t total_read_cycles = read_cycles[0] + read_cycles[1];
-    uint32_t total_write_cycles = write_cycles[0] + write_cycles[1];
+    uint32_t total_read_cycles = read_bw + read_latency;
+    uint32_t total_write_cycles = write_bw + write_latency;
 
     int ideal_dev_clock_cycles = 1;
     if ((input_is_dram && output_is_dram) || bcast_local) {
         ideal_dev_clock_cycles =
-            output_only ? total_write_cycles : (int)std::ceil((float)(total_read_cycles + write_cycles[0]));
+            output_only ? total_write_cycles : (int)std::ceil((float)(total_read_cycles + write_bw));
     } else {
         auto ideal_dev_clock_cycles_not_local =
             output_only ? total_write_cycles_not_local

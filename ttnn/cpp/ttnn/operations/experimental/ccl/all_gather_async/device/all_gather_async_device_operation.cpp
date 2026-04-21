@@ -380,14 +380,13 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
     const auto& input_tensor = tensor_args.input_tensor;
 
     // --- Architecture and clock detection ---
-    const auto arch =
-        input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : tt::ARCH::WORMHOLE_B0;
-
+    tt::ARCH arch;
     float clock_rate_ghz;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
-        int freq_mhz = input_tensor.device()->get_clock_rate_mhz();
-        clock_rate_ghz = freq_mhz / 1000.0f;
+        arch = input_tensor.device()->arch();
+        clock_rate_ghz = input_tensor.device()->get_clock_rate_mhz() / 1000.0f;
     } else {
+        arch = tt::ARCH::WORMHOLE_B0;
         clock_rate_ghz = 1.0f;
     }
 
@@ -447,18 +446,19 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
     const uint32_t write_page_size = output_tensor.buffer()->page_size();
 
     const int64_t output_size_bytes = static_cast<int64_t>(N) * input_size_bytes;
+    const uint32_t num_workers_per_link = 1;
     const uint32_t read_pages_per_worker =
-        tt::div_up(static_cast<uint32_t>(input_size_bytes / read_page_size), num_links);
+        tt::div_up(static_cast<uint32_t>(input_size_bytes / read_page_size), num_workers_per_link * num_links);
     const uint32_t write_pages_per_worker =
-        tt::div_up(static_cast<uint32_t>(output_size_bytes / write_page_size), num_links);
+        tt::div_up(static_cast<uint32_t>(output_size_bytes / write_page_size), num_workers_per_link * num_links);
 
-    auto read_est = ttnn::operations::data_movement::get_cycles_for_transaction_size(
+    auto [read_bw_cycles, read_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
         read_page_size, input_is_dram, /*is_local=*/false, read_pages_per_worker, arch, /*is_read=*/true);
-    auto write_est = ttnn::operations::data_movement::get_cycles_for_transaction_size(
+    auto [write_bw_cycles, write_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
         write_page_size, output_is_dram, /*is_local=*/false, write_pages_per_worker, arch, /*is_read=*/false);
 
-    const int local_bw_cycles = static_cast<int>(std::max(read_est[0], write_est[0]));
-    const int pipeline_latency_cycles = static_cast<int>(read_est[1] + write_est[1]);
+    const int local_bw_cycles = static_cast<int>(std::max(read_bw_cycles, write_bw_cycles));
+    const int pipeline_latency_cycles = static_cast<int>(read_latency_cycles + write_latency_cycles);
     const int ideal_dev_clock_cycles = std::max(local_bw_cycles, fabric_cycles) + pipeline_latency_cycles;
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
