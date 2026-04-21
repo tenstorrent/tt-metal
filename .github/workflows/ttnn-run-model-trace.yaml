@@ -298,6 +298,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Probe LFC for HF_MODEL (CIv2)
+        id: lfc-probe
         if: ${{ needs.validate-inputs.outputs.ci-version == 'civ2' && matrix.hf_model != '' }}
         env:
           INPUT_HF_MODEL: ${{ matrix.hf_model }}
@@ -309,8 +310,10 @@ jobs:
           echo "HTTP status: $STATUS"
           if [[ "$STATUS" != "200" ]]; then
             echo "::warning::LFC does not serve ${INPUT_HF_MODEL} (HTTP $STATUS). Will fall through to direct HF download."
+            echo "lfc_available=false" >> $GITHUB_OUTPUT
           else
             echo "LFC has ${INPUT_HF_MODEL}"
+            echo "lfc_available=true" >> $GITHUB_OUTPUT
           fi
 
       - name: Verify CIv1 weights (MLPerf)
@@ -336,6 +339,7 @@ jobs:
           HF_MODEL: ${{ matrix.hf_model }}
           TEST_PATH: ${{ matrix.test_path }}
           EXTRA_ARGS: ${{ matrix.extra_args }}
+          LFC_AVAILABLE: ${{ steps.lfc-probe.outputs.lfc_available || 'true' }}
         run: |
           TRACER_OUTPUT_DIR="model_tracer/traced_operations"
 

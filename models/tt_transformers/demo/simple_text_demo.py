@@ -981,7 +981,12 @@ def test_demo_text(
         # is always the clean HF name (e.g. "meta-llama/Llama-3.1-8B-Instruct"),
         # even if a previous parametrized test mutated os.environ["HF_MODEL"]
         # to an absolute LFC cache path.
-        model_location = model_location_generator(hf_dir, download_if_ci_v2=True, ci_v2_timeout_in_s=900)
+        #
+        # LFC_AVAILABLE is set by the workflow's LFC probe step.  When the model
+        # isn't cached in LFC, skip the CIv2 wget download and let HuggingFace
+        # transformers download the weights directly via HF_HOME.
+        use_lfc = os.getenv("LFC_AVAILABLE", "true").lower() == "true"
+        model_location = model_location_generator(hf_dir, download_if_ci_v2=use_lfc, ci_v2_timeout_in_s=900)
         # Downstream code (model_config.py) reads HF_MODEL for CKPT_DIR/TOKENIZER_PATH
         os.environ["HF_MODEL"] = str(model_location)
 
