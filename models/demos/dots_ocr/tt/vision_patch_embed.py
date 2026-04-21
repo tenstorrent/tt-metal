@@ -63,6 +63,16 @@ class PatchEmbedTT(LightweightModule):
 
         # Projection weight: [embed_dim, in_channels * patch_size * patch_size]
         proj_weight_key = f"{prefix}.proj.weight"
+        # Dots checkpoints sometimes nest the conv under a patchifier module.
+        if proj_weight_key not in state_dict:
+            for alt in (
+                f"{prefix}.patchifier.proj.weight",
+                f"{prefix}.patchifier.proj._linear.weight",
+                f"{prefix}.patchifier._linear.weight",
+            ):
+                if alt in state_dict:
+                    proj_weight_key = alt
+                    break
         if proj_weight_key in state_dict and ttnn is not None and self.mesh_device is not None:
             weight = state_dict[proj_weight_key]
             memory_config = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
@@ -126,6 +136,43 @@ class PatchEmbedTT(LightweightModule):
         Returns:
             ttnn.Tensor: Patch embeddings [B, num_patches, embed_dim]
         """
+        # HF processors for Qwen2/Dots may return either:
+        # - raw images:        [B, C, H, W]
+        # - patchified vectors:[S, patch_dim] (already flattened per patch)
+        # Support both, mirroring qwen25_vl's "preprocess then project" flow.
+        if pixel_values.dim() == 2:
+            # Already patchified: [S, patch_dim]
+            x = pixel_values.to(torch.bfloat16)
+            # Add batch dim for consistency
+            x = x.unsqueeze(0)  # [1, S, patch_dim]
+            B = 1
+            num_patches = x.shape[1]
+            # Linear projection if weights exist, else pass-through / dummy
+            if self.proj_weight is not None:
+                ttnn_mod = get_ttnn()
+                weight = self.proj_weight
+                if ttnn_mod is not None and not isinstance(weight, torch.Tensor):
+                    weight = ttnn_mod.to_torch(weight)
+                x = torch.nn.functional.linear(
+                    x.float(), weight.reshape(self.embed_dim, -1).float()[:, : x.shape[-1]]
+                ).to(torch.bfloat16)
+            else:
+                x = torch.randn(B, num_patches, self.embed_dim, dtype=torch.bfloat16)
+
+            ttnn = get_ttnn()
+            if ttnn is None or self.mesh_device is None:
+                return x
+            memory_config = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+            dtype_tt = getattr(ttnn, "bfloat16", torch.bfloat16)
+            return ttnn.from_torch(
+                x,
+                device=self.mesh_device,
+                dtype=dtype_tt,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=memory_config,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
         B, C, H, W = pixel_values.shape
         assert C == self.in_channels, f"Expected {self.in_channels} channels, got {C}"
 

@@ -86,8 +86,43 @@ class PatchMerger(LightweightModule):
         self.w2 = as_weight_tensor("feed_forward.2", dtype)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = self.norm(x)
+        # Support both TT tensors and torch tensors (hybrid vision path).
+        if isinstance(x, torch.Tensor) or not _HAS_TTNN:
+            x = self.norm(x)
+            if x.dim() == 2:
+                x = x.unsqueeze(0).unsqueeze(0)
+            elif x.dim() == 3:
+                x = x.unsqueeze(1)
 
+            # [B, 1, S_patch, H] -> [B, 1, S_img, H*m^2]
+            x = x.reshape(x.shape[0], x.shape[1], -1, self.mlp_size)
+
+            # Bring weights back to torch if they are TT tensors
+            w1 = self.w1
+            w2 = self.w2
+            if _HAS_TTNN and not isinstance(w1, torch.Tensor):
+                w1 = ttnn.to_torch(w1)
+            if _HAS_TTNN and not isinstance(w2, torch.Tensor):
+                w2 = ttnn.to_torch(w2)
+
+            # `self.w1`/`self.w2` were built from `torch_weight(...)` which transposes the checkpoint weights.
+            # `torch.nn.functional.linear` expects weights shaped [out_features, in_features], so transpose back
+            # when needed.
+            w1_t = w1
+            w2_t = w2
+            if w1_t.dim() == 2 and w1_t.shape[0] == self.mlp_size and w1_t.shape[1] == self.mlp_size:
+                # square: either orientation works
+                pass
+            if w2_t.dim() == 2 and w2_t.shape[0] == self.mlp_size and w2_t.shape[1] == self.out_hidden_size:
+                # stored as [in, out] due to transpose during load → convert to [out, in]
+                w2_t = w2_t.t()
+
+            x = torch.nn.functional.linear(x.float(), w1_t.float()).to(torch.bfloat16)
+            x = torch.nn.functional.gelu(x)
+            x = torch.nn.functional.linear(x.float(), w2_t.float()).to(torch.bfloat16)
+            return x
+
+        x = self.norm(x)
         # Merge spatial dimensions into channel dim: [B, 1, S_patch, H] -> [B, 1, S_img, H*m^2]
         # Workaround for reshape tilized hangs: convert to row-major first.
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
@@ -97,17 +132,7 @@ class PatchMerger(LightweightModule):
         # Use DRAM_MEMORY_CONFIG if available, otherwise fallback for test environments
         memory_config = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
 
-        x = ttnn.linear(
-            x,
-            self.w1,
-            compute_kernel_config=None,
-            memory_config=memory_config,
-        )
+        x = ttnn.linear(x, self.w1, compute_kernel_config=None, memory_config=memory_config)
         x = ttnn.gelu(x)
-        x = ttnn.linear(
-            x,
-            self.w2,
-            compute_kernel_config=None,
-            memory_config=memory_config,
-        )
+        x = ttnn.linear(x, self.w2, compute_kernel_config=None, memory_config=memory_config)
         return x

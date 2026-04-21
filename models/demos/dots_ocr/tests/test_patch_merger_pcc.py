@@ -100,4 +100,4 @@ def test_patch_merger_pcc_gt_0_99(tmp_path):
         assert pcc > 0.99, f"PCC too low: {pcc}"
     finally:
         if device is not None:
-            ttnn.close_mesh_device(device)
+            close_dots_mesh_device(device)

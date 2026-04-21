@@ -26,7 +26,7 @@ def test_vision_encoder_pcc_gt_0_99(tmp_path):
     if not hasattr(ttnn, "open_mesh_device"):
         pytest.skip("TTNN runtime has no open_mesh_device (mesh API missing)")
 
-    from models.demos.dots_ocr.tt.mesh import open_mesh_device
+    from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, open_mesh_device
     from models.demos.dots_ocr.tt.vision import VisionEncoder
 
     torch.manual_seed(0)
@@ -69,7 +69,7 @@ def test_vision_encoder_pcc_gt_0_99(tmp_path):
 
     finally:
         if device is not None:
-            ttnn.close_mesh_device(device)
+            close_dots_mesh_device(device)
 
 
 def test_vision_encoder_smoke():

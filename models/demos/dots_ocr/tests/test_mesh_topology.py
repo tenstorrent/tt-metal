@@ -17,6 +17,7 @@ from models.demos.dots_ocr.tt.mesh import (
     DOTS_MAX_DP_ROWS,
     DOTS_MAX_TP_COLS,
     resolve_mesh_shape,
+    resolve_physical_mesh_shape,
     resolve_supported_mesh_shape,
 )
 
@@ -27,6 +28,11 @@ def test_resolve_mesh_shape_known_names():
     assert resolve_mesh_shape("T3K") == (1, 8)
     assert resolve_mesh_shape("T3K_2X4") == (2, 4)
     assert resolve_mesh_shape("TG") == (8, 4)
+
+
+def test_physical_matches_resolve_mesh_shape():
+    """T3K is an 8-device Wormhole LLMBox; physical grid is 1×8."""
+    assert resolve_physical_mesh_shape("T3K") == resolve_mesh_shape("T3K") == (1, 8)
 
 
 def test_resolve_mesh_shape_aliases():

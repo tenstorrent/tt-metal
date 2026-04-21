@@ -39,11 +39,12 @@ class DotsModelArgs(ModelArgs):
 
     * ``MESH_DEVICE=N150`` (mesh ``1x1``, TP=1) — fully supported.
     * ``MESH_DEVICE=N300`` (mesh ``1x2``, TP=2) — fully supported.
-    * ``MESH_DEVICE=T3K`` on T3K hardware — opens a ``1x2`` submesh (TP=2) with
-      a warning. 6 of the 8 chips stay idle; no data-parallel support yet.
+    * ``MESH_DEVICE=T3K`` — physical **8-device** Wormhole LLMBox (``1×8``). ``open_mesh_device()``
+      can open the full mesh then ``create_submesh`` to logical ``1×1`` or ``1×2`` (TP≤2 per
+      ``num_key_value_heads=2``); see ``DOTS_T3K_OPEN_FULL_MESH`` / ``DOTS_T3K_TP``.
 
-    Use ``models.demos.dots_ocr.tt.mesh.open_mesh_device()`` to open the mesh —
-    it honors ``MESH_DEVICE`` and clamps to a supported shape automatically.
+    Use ``models.demos.dots_ocr.tt.mesh.open_mesh_device()`` / ``close_dots_mesh_device()``
+    on T3K when the full 8-device path is used (see ``DOTS_T3K_OPEN_FULL_MESH``).
 
     Optional context cap for DRAM-constrained runs: ``export DOTS_MAX_SEQ_LEN=8192``
     (legacy ``DOTS_MAX_SEQ_LEN_WH_LB`` is still honored for back-compat).
@@ -56,9 +57,10 @@ class DotsModelArgs(ModelArgs):
 
     def __init__(self, *args, hf_config=None, **kwargs):
         if os.getenv("HF_MODEL") is None:
-            if hf_config is None:
-                raise ValueError("DotsModelArgs: set HF_MODEL or pass hf_config so HF_MODEL can be inferred.")
-            os.environ["HF_MODEL"] = getattr(hf_config, "_name_or_path", None) or "rednote-hilab/dots.mocr"
+            # Keep legacy behavior (HF_MODEL drives shared tt_transformers loading),
+            # but don't hard-require it for call sites that already provide HF-derived weights/configs.
+            if hf_config is not None:
+                os.environ["HF_MODEL"] = getattr(hf_config, "_name_or_path", None) or "rednote-hilab/dots.mocr"
         super().__init__(*args, **kwargs)
 
         # `ModelArgs.__init__` defines `self.trust_remote_code_hf` but does not accept it

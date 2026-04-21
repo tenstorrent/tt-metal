@@ -61,7 +61,7 @@ inputs_embeds [B, S, D] with vision tokens inserted
 ## Wormhole topology notes
 - **N150** (1x1 mesh, TP=1) — default single-chip target.
 - **N300** (1x2 mesh, TP=2) — supported; text decoder shards 12 heads / 2 KV heads over 2 chips.
-- **T3K** (physical LLMBox hardware) — `MESH_DEVICE=T3K` is auto-clamped to a 1x2 submesh because `dots.mocr` has `num_key_value_heads=2` (pure TP=8 would violate `n_kv_heads % cluster_shape[1] == 0`). 6 of 8 chips stay idle.
+- **T3K** (8-device Wormhole LLMBox) — physical topology is `1×8`. `dots.mocr` only supports TP≤2 (`num_key_value_heads=2`), so inference uses a **logical** `1×1` or `1×2` submesh. With `DOTS_T3K_OPEN_FULL_MESH=1` (default), `open_mesh_device()` opens the full 8-device mesh then `create_submesh` to that logical shape; use `close_dots_mesh_device()` to tear down parent + submesh.
 - DRAM heavy: `DRAM_MEMORY_CONFIG` for weights/activations.
 - Chunked prefill for long sequences (already in `generator.py`).
 
