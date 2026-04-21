@@ -352,6 +352,25 @@ class TestShardedInput:
             allowed_worker_cores=shard_grid,
         )
 
+    def test_origin_grid(self, device):
+        """HEIGHT_SHARDED in0 across the full device grid at origin — baseline sharded path."""
+        grid = device.compute_with_storage_grid_size()
+        cols, rows = grid.x, grid.y
+        M = 32 * cols * rows
+        torch.manual_seed(42)
+        ta = torch.randn(1, 1, M, self.K, dtype=torch.bfloat16)
+        tb = torch.randn(self.K, self.N, dtype=torch.bfloat16)
+        shard_grid = _crs(cols, rows)
+        a = ttnn.from_torch(
+            ta,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self._shard_mem(shard_grid, per_core_M_tiles=1),
+        )
+        b = ttnn.from_torch(tb, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        assert_with_pcc(ta @ tb, ttnn.to_torch(ttnn.matmul(a, b, program_config=self._cfg(shard_grid))), 0.999)
+
     @pytest.mark.parametrize("skip_rows", [1, 2])
     def test_offset_grid(self, device, skip_rows):
         """HEIGHT_SHARDED in0 on offset cores — no sub-device."""
@@ -401,6 +420,221 @@ class TestShardedInput:
             assert_with_pcc(
                 ta @ tb,
                 ttnn.to_torch(ttnn.matmul(a, b, program_config=self._cfg(shard_grid), sub_device_id=sd_id)),
+                0.999,
+            )
+        finally:
+            _teardown(device, mgr)
+
+
+# ---------------------------------------------------------------------------
+# 5b) HEIGHT_SHARDED in0  (Factory B — Reuse Optimized)
+# ---------------------------------------------------------------------------
+
+
+class TestReuseSharded:
+    """HEIGHT_SHARDED in0 with MatmulMultiCoreReuseProgramConfig (Factory B).
+
+    Factory B uses shard_spec.grid directly as all_cores when in0 is sharded,
+    so allowed_worker_cores is passed but not used for the core set in the
+    sharded path.  These tests verify that sharded in0 works on offset grids
+    and sub-devices, and that setting allowed_worker_cores causes no crash.
+    """
+
+    K, N = 256, 128
+
+    def _shard_mem(self, shard_grid, per_core_M_tiles):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(shard_grid, [32 * per_core_M_tiles, self.K], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    def _cfg(self, shard_grid):
+        return ttnn.MatmulMultiCoreReuseProgramConfig(
+            in0_block_w=self.K // 32,  # all K in one block
+            out_subblock_h=1,
+            out_subblock_w=self.N // 32,
+            per_core_M=1,
+            per_core_N=self.N // 32,  # all N per core (Reuse distributes M only)
+            allowed_worker_cores=shard_grid,
+        )
+
+    def test_origin_grid(self, device):
+        """HEIGHT_SHARDED in0 across the full device grid at origin."""
+        grid = device.compute_with_storage_grid_size()
+        cols, rows = grid.x, grid.y
+        M = 32 * cols * rows
+        torch.manual_seed(42)
+        ta = torch.randn(1, 1, M, self.K, dtype=torch.bfloat16)
+        # Factory B requires matching tensor ranks (non-broadcast matmul path).
+        tb = torch.randn(1, 1, self.K, self.N, dtype=torch.bfloat16)
+        shard_grid = _crs(cols, rows)
+        a = ttnn.from_torch(
+            ta,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self._shard_mem(shard_grid, per_core_M_tiles=1),
+        )
+        b = ttnn.from_torch(tb, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        assert_with_pcc(ta @ tb, ttnn.to_torch(ttnn.matmul(a, b, program_config=self._cfg(shard_grid))), 0.999)
+
+    @pytest.mark.parametrize("skip_rows", [1, 2])
+    def test_offset_grid(self, device, skip_rows):
+        """HEIGHT_SHARDED in0 on an offset shard grid — no sub-device."""
+        grid = device.compute_with_storage_grid_size()
+        if grid.y <= skip_rows:
+            pytest.skip(f"Need >{skip_rows} rows, device has {grid.y}")
+        cols, wrows = grid.x, grid.y - skip_rows
+        M = 32 * cols * wrows
+        torch.manual_seed(42)
+        ta = torch.randn(1, 1, M, self.K, dtype=torch.bfloat16)
+        tb = torch.randn(1, 1, self.K, self.N, dtype=torch.bfloat16)
+        shard_grid = _crs(cols, wrows, start_y=skip_rows)
+        a = ttnn.from_torch(
+            ta,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self._shard_mem(shard_grid, per_core_M_tiles=1),
+        )
+        b = ttnn.from_torch(tb, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        assert_with_pcc(ta @ tb, ttnn.to_torch(ttnn.matmul(a, b, program_config=self._cfg(shard_grid))), 0.999)
+
+    @pytest.mark.parametrize("skip_rows", [1, 2])
+    def test_offset_grid_on_subdevice(self, device, skip_rows):
+        """HEIGHT_SHARDED in0 on offset cores with matching worker sub-device."""
+        mgr, sd_id, cols, wrows, sy = _setup_subdevice(device, skip_rows)
+        try:
+            M = 32 * cols * wrows
+            torch.manual_seed(42)
+            ta = torch.randn(1, 1, M, self.K, dtype=torch.bfloat16)
+            tb = torch.randn(1, 1, self.K, self.N, dtype=torch.bfloat16)
+            shard_grid = _crs(cols, wrows, start_y=sy)
+            a = ttnn.from_torch(
+                ta,
+                dtype=ttnn.bfloat16,
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self._shard_mem(shard_grid, per_core_M_tiles=1),
+            )
+            b = ttnn.from_torch(tb, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+            assert_with_pcc(
+                ta @ tb,
+                ttnn.to_torch(ttnn.matmul(a, b, program_config=self._cfg(shard_grid), sub_device_id=sd_id)),
+                0.999,
+            )
+        finally:
+            _teardown(device, mgr)
+
+
+# ---------------------------------------------------------------------------
+# 5c) HEIGHT_SHARDED in0 on first column  (Factory D — 2D mcast)
+# ---------------------------------------------------------------------------
+
+
+class TestMcast2DSharded:
+    """HEIGHT_SHARDED in0 on the first worker column with 2D mcast (Factory D).
+
+    In the 2D mcast layout (transpose_mcast=False) the leftmost column (x=0)
+    are the in0 senders: they hold their M-slice in L1 via HEIGHT_SHARDED and
+    multicast it along their row.  In1 is multicast column-wise as usual.
+    The shard_grid is the first column only; allowed_worker_cores covers the
+    full gx×gy rectangle.
+
+    The factory requires in0_block_w == K_tiles (process all K in one block),
+    so we use K=64 (K_tiles=2) to keep in0_block_w manageable.
+    """
+
+    K = 64  # K_tiles = 64/32 = 2; factory requires in0_block_w == K_tiles for HEIGHT_SHARDED
+
+    def _first_col(self, gy, start_y=0):
+        return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, start_y), ttnn.CoreCoord(0, start_y + gy - 1))})
+
+    def _shard_mem(self, shard_grid):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(shard_grid, [32, self.K], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    def _cfg(self, worker_grid):
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            in0_block_w=self.K // 32,  # must equal K_tiles for HEIGHT_SHARDED in0
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            transpose_mcast=False,
+            allowed_worker_cores=worker_grid,
+        )
+
+    def test_default_grid(self, device):
+        """HEIGHT_SHARDED in0 on the full-device first column, no explicit AWC."""
+        grid = device.compute_with_storage_grid_size()
+        gx, gy = grid.x, grid.y
+        M, N = 32 * gy, 32 * gx
+        torch.manual_seed(42)
+        ta = torch.randn(1, 1, M, self.K, dtype=torch.bfloat16)
+        tb = torch.randn(self.K, N, dtype=torch.bfloat16)
+        shard_grid = self._first_col(gy)
+        a = ttnn.from_torch(
+            ta,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self._shard_mem(shard_grid),
+        )
+        b = ttnn.from_torch(tb, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        assert_with_pcc(ta @ tb, ttnn.to_torch(ttnn.matmul(a, b, program_config=self._cfg(None))), 0.999)
+
+    @pytest.mark.parametrize("skip_rows", [1, 2])
+    def test_offset_grid(self, device, skip_rows):
+        """HEIGHT_SHARDED in0 on first column of an offset worker grid."""
+        grid = device.compute_with_storage_grid_size()
+        if grid.y <= skip_rows:
+            pytest.skip(f"Need >{skip_rows} rows, device has {grid.y}")
+        gx, gy = grid.x, grid.y - skip_rows
+        start_y = skip_rows
+        M, N = 32 * gy, 32 * gx
+        torch.manual_seed(42)
+        ta = torch.randn(1, 1, M, self.K, dtype=torch.bfloat16)
+        tb = torch.randn(self.K, N, dtype=torch.bfloat16)
+        shard_grid = self._first_col(gy, start_y=start_y)
+        worker_grid = _crs(gx, gy, start_y=start_y)
+        a = ttnn.from_torch(
+            ta,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self._shard_mem(shard_grid),
+        )
+        b = ttnn.from_torch(tb, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        assert_with_pcc(ta @ tb, ttnn.to_torch(ttnn.matmul(a, b, program_config=self._cfg(worker_grid))), 0.999)
+
+    @pytest.mark.parametrize("skip_rows", [1, 2])
+    def test_offset_grid_on_subdevice(self, device, skip_rows):
+        """HEIGHT_SHARDED in0 on first column of an offset worker sub-device."""
+        mgr, sd_id, cols, wrows, sy = _setup_subdevice(device, skip_rows)
+        try:
+            gx, gy = cols, wrows
+            M, N = 32 * gy, 32 * gx
+            torch.manual_seed(42)
+            ta = torch.randn(1, 1, M, self.K, dtype=torch.bfloat16)
+            tb = torch.randn(self.K, N, dtype=torch.bfloat16)
+            shard_grid = self._first_col(gy, start_y=sy)
+            worker_grid = _crs(gx, gy, start_y=sy)
+            a = ttnn.from_torch(
+                ta,
+                dtype=ttnn.bfloat16,
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self._shard_mem(shard_grid),
+            )
+            b = ttnn.from_torch(tb, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+            assert_with_pcc(
+                ta @ tb,
+                ttnn.to_torch(ttnn.matmul(a, b, program_config=self._cfg(worker_grid), sub_device_id=sd_id)),
                 0.999,
             )
         finally:
