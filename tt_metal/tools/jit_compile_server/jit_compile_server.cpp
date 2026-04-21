@@ -258,7 +258,7 @@ void link_one(
     dephash_path.concat(".dephash");
     tt::jit_build::utils::FileRenamer dephash_file(dephash_path);
     std::ofstream hash_file(dephash_file.path());
-    tt::jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
+    tt::jit_build::write_dependency_hashes({{elf_path, std::move(link_deps)}}, out_dir, elf_path, hash_file);
     hash_file.close();
     if (hash_file.fail()) {
         fs::remove(dephash_file.path());
