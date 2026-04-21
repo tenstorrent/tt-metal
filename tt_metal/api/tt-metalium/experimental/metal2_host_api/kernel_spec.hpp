@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -70,10 +71,16 @@ struct KernelSpec {
     // Kernel identifier: used to reference this kernel within the ProgramSpec
     KernelSpecName unique_id;
 
-    // Kernel source
-    std::string source;
-    enum class SourceType { FILE_PATH, SOURCE_CODE };
-    SourceType source_type = SourceType::FILE_PATH;
+    // Kernel source: either a path to a source file, or the source code itself.
+    // (Wrapper types disambiguate the string-constructible variant alternatives,
+    // ensuring compile-time enforcement.)
+    struct SourceFilePath {
+        std::filesystem::path path;
+    };
+    struct SourceCode {
+        std::string code;
+    };
+    std::variant<SourceFilePath, SourceCode> source;
 
     // Target nodes
     // The logical coordinates for the set of device nodes on which the kernel will run
@@ -86,8 +93,8 @@ struct KernelSpec {
     // Optional per-node thread count specification (overrides global num_threads)
     // This is currently unsupported, and an open question if we ever want to support it.
     using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node, num_threads}
-    using ThreadNodeMap = std::vector<NodeSpecificThreadCount>;
-    std::optional<ThreadNodeMap> node_specific_thread_counts = std::nullopt;
+    using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
+    std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
 
     // Kernel type (methods)
     bool is_dm_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config_spec); }
