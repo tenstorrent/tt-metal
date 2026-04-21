@@ -16,10 +16,12 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.demo.decoder_stage import create_decoder_block_tensors
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
+from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
@@ -30,10 +32,93 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     extract_routed_expert_output,
 )
 from models.demos.deepseek_v3_b1.weights.prepare import (
+    SramExpertCoreGrids,
+    _load_routing_frequencies,
+    build_sram_hot_expert_config,
     get_layer_raw_tensors,
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
 )
+
+# Blackhole DRAM-worker cores excluded from the SRAM hot-expert down-proj grid.
+_BH_DRAM_WORKER_CORES = {(0, 0), (0, 3), (0, 7), (0, 9), (7, 1), (7, 4), (7, 6), (7, 9)}
+
+# Target number of hot experts per layer (top-ranked by routing frequency).
+_SRAM_HOT_EXPERTS_PER_LAYER = 17
+
+
+def _build_down_cores(submesh) -> list[ttnn.CoreCoord]:
+    """112-core down-proj grid matching the DRAM routed-expert pipeline.
+
+    Mirrors ``_build_down_grid`` in
+    ``tests/unit_tests/per_core_allocation/test_matmul_expert.py``: on a 13x10
+    device we exclude 8 DRAM workers, 9 phantoms (col 12, rows 0-8), and the
+    mcast core (12, 9).  On a 12x10 device col 12 does not exist and only the
+    8 DRAM workers are excluded.
+    """
+    grid = submesh.compute_with_storage_grid_size()
+    num_cols = grid.x
+    assert num_cols >= 12 and grid.y >= 10, f"Need at least 12x10 grid, got {num_cols}x{grid.y}"
+    cores = []
+    max_col = min(num_cols, 13)
+    for row in range(10):
+        for col in range(max_col):
+            if col == 12:
+                continue
+            if (col, row) in _BH_DRAM_WORKER_CORES:
+                continue
+            cores.append(ttnn.CoreCoord(col, row))
+    assert len(cores) == 112, f"Expected 112 down cores, got {len(cores)}"
+    return cores
+
+
+def _build_sram_core_grids(submesh) -> SramExpertCoreGrids:
+    """Build the gate/up/down SRAM core grids used by the routed-expert pipeline.
+
+    * ``gate``: 64-core "A" grid from ``SharedExpertOp.build_ab_grids()``
+    * ``up``:   64-core "B" grid (disjoint from A) from the same helper
+    * ``down``: 112-core down-proj grid
+
+    These grids are tile-aligned and satisfy ``N % num_cores == 0`` for
+    ``N=2048`` (gate/up) and ``N=7168`` (down).
+    """
+    a_cores, b_cores = SharedExpertOp.build_ab_grids()
+    down_cores = _build_down_cores(submesh)
+    return SramExpertCoreGrids(
+        gate=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in a_cores]),
+        up=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in b_cores]),
+        down=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in down_cores]),
+    )
+
+
+def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
+    """Build the (sram_hot_experts, sram_core_grids, sram_assigner) triple.
+
+    Uses routing frequencies from ``data/routing_frequencies.json`` to pick
+    the top ``_SRAM_HOT_EXPERTS_PER_LAYER`` experts for ``layer_idx`` and
+    allocates them on the per-projection grids of the routed-expert pipeline
+    (64 / 64 / 112 cores for gate / up / down).
+    """
+    sram_core_grids = _build_sram_core_grids(submesh)
+    sram_assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
+
+    freqs = _load_routing_frequencies()
+    l1_budget_bytes = 10 * 1024 * 1024  # generous; truncated to N experts below
+    full_config = build_sram_hot_expert_config(
+        state_dict,
+        [layer_idx],
+        sram_assigner,
+        sram_core_grids,
+        l1_budget_bytes,
+        freqs,
+    )
+    sram_hot_experts = {k: v[:_SRAM_HOT_EXPERTS_PER_LAYER] for k, v in full_config.items()}
+    logger.info(
+        "SRAM hot experts: layer {} -> {} experts selected",
+        layer_idx,
+        len(sram_hot_experts.get(layer_idx, [])),
+    )
+    return sram_hot_experts, sram_core_grids, sram_assigner
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -304,6 +389,11 @@ def create_decoder_golden_tensors(
     [pytest.param(True, marks=pytest.mark.skip_post_commit), False],
     ids=["validate_standalone_moe", "just_decoder_moe"],
 )
+@pytest.mark.parametrize(
+    "use_sram_hot_experts",
+    [False, True],
+    ids=["no_sram_hot_experts", "sram_hot_experts"],
+)
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder(
     bh_2d_mesh_device,
@@ -326,6 +416,7 @@ def test_decoder(
     num_routed_experts,
     validate_standalone_mla,
     validate_standalone_moe,
+    use_sram_hot_experts,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation with CCL broadcast, kv cache, mla, reduce, residual add"""
@@ -364,6 +455,16 @@ def test_decoder(
             state_dict, ROUTED_EXPERT_LAYER_IDX, rigged_group_count
         )
 
+    sram_hot_experts = None
+    sram_core_grids = None
+    sram_assigner = None
+    if use_sram_hot_experts:
+        if effective_num_routed_experts != 256:
+            pytest.skip("SRAM hot experts currently only wired for unrigged_all_experts (full 256-expert set)")
+        sram_hot_experts, sram_core_grids, sram_assigner = _build_sram_hot_expert_kwargs(
+            state_dict, submesh, ROUTED_EXPERT_LAYER_IDX
+        )
+
     logger.info("Preparing layer weights on device...")
     layer_weights = prepare_moe_layer_weights(
         submesh,
@@ -371,6 +472,9 @@ def test_decoder(
         ROUTED_EXPERT_LAYER_IDX,
         num_routed_experts=effective_num_routed_experts,
         move_to_device=True,
+        sram_hot_experts=sram_hot_experts,
+        sram_core_grids=sram_core_grids,
+        sram_assigner=sram_assigner,
     )
 
     logger.info("Creating decoder block tensors...")

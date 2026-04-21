@@ -19,6 +19,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.prepare import (
@@ -31,7 +32,10 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3MTPWeights,
     MoERoutedExpertWeights,
     OverlappedTensor,
+    SramExpertCoreGrids,
+    SramHotExpertConfig,
     prepare_attention_weights,
+    prepare_compressed_sram_slots,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
     prepare_lm_head_weights,
@@ -216,6 +220,9 @@ class CacheWeightProvider:
         hf_model_id: str | None = None,
         hf_revision: str = "local",
         schema_version: int = 1,
+        sram_hot_experts: SramHotExpertConfig | None = None,
+        sram_core_grids: SramExpertCoreGrids | None = None,
+        sram_assigner: CompressedTensorAssigner | None = None,
     ) -> None:
         cache_path = Path(cache_path)
         model_path = Path(model_path)
@@ -226,6 +233,9 @@ class CacheWeightProvider:
         self._schema_version = schema_version
         self._hf_model_id = hf_model_id or model_path.name
         self._hf_revision = hf_revision
+        self._sram_hot_experts = sram_hot_experts
+        self._sram_core_grids = sram_core_grids
+        self._sram_assigner = sram_assigner
 
     def _cache_config(self, device: ttnn.MeshDevice) -> CacheConfig:
         context = CacheContext(
@@ -305,6 +315,24 @@ class CacheWeightProvider:
         assert isinstance(attn.gate_mm, OverlappedTensor)
         assert attn.gate_bias is not None
         assert isinstance(routed, MoERoutedExpertWeights)
+
+        sram_slots = None
+        sram_expert_indices = (self._sram_hot_experts or {}).get(layer_id)
+        if sram_expert_indices:
+            assert self._sram_core_grids is not None, "sram_core_grids required for SRAM hot experts"
+            assert self._sram_assigner is not None, "sram_assigner required for SRAM hot experts"
+            t0 = time.perf_counter()
+            sram_slots = prepare_compressed_sram_slots(
+                device=device,
+                state_dict=self._state_dict,
+                layer_idx=layer_id,
+                initial_expert_indices=sram_expert_indices,
+                core_grids=self._sram_core_grids,
+                assigner=self._sram_assigner,
+                move_to_device=True,
+            )
+            logger.info(f"CacheWeightProvider MoE layer {layer_id}: prepare_sram_slots {time.perf_counter() - t0:.3f}s")
+
         return DeepSeekV3MoELayerWeights(
             q_a_proj=attn.q_a_proj,
             q_b_proj=attn.q_b_proj,
@@ -324,6 +352,7 @@ class CacheWeightProvider:
             routed_gate_proj=routed.routed_gate_proj,
             routed_up_proj=routed.routed_up_proj,
             routed_down_proj=routed.routed_down_proj,
+            sram_slots=sram_slots,
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
@@ -341,6 +370,17 @@ class CacheWeightProvider:
 
 class SyntheticWeightProvider:
     """Create deterministic synthetic embedding and LM head weights in place (no cache)."""
+
+    def __init__(
+        self,
+        *,
+        sram_hot_experts: SramHotExpertConfig | None = None,
+        sram_core_grids: SramExpertCoreGrids | None = None,
+        sram_assigner: CompressedTensorAssigner | None = None,
+    ) -> None:
+        self._sram_hot_experts = sram_hot_experts
+        self._sram_core_grids = sram_core_grids
+        self._sram_assigner = sram_assigner
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         emb_w = torch.zeros(
@@ -374,7 +414,14 @@ class SyntheticWeightProvider:
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
         return prepare_moe_layer_weights(
-            device, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS, move_to_device=True
+            device,
+            sd,
+            layer_id,
+            num_routed_experts=NUM_ROUTED_EXPERTS,
+            move_to_device=True,
+            sram_hot_experts=self._sram_hot_experts,
+            sram_core_grids=self._sram_core_grids,
+            sram_assigner=self._sram_assigner,
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
@@ -389,11 +436,21 @@ class SyntheticWeightProvider:
 class StateDictWeightProvider:
     """Load real HF safetensors via LazyStateDict and prepare weights at runtime (no tensorbin cache)."""
 
-    def __init__(self, model_path: Path) -> None:
+    def __init__(
+        self,
+        model_path: Path,
+        *,
+        sram_hot_experts: SramHotExpertConfig | None = None,
+        sram_core_grids: SramExpertCoreGrids | None = None,
+        sram_assigner: CompressedTensorAssigner | None = None,
+    ) -> None:
         model_path = Path(model_path)
         assert model_path.exists(), f"Model path does not exist: {model_path}"
         assert model_path.is_dir(), f"Model path is not a directory: {model_path}"
         self._state_dict = LazyStateDict(model_path)
+        self._sram_hot_experts = sram_hot_experts
+        self._sram_core_grids = sram_core_grids
+        self._sram_assigner = sram_assigner
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         return prepare_embedding_weights(self._state_dict, device, move_to_device=True)
@@ -408,6 +465,9 @@ class StateDictWeightProvider:
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
             move_to_device=True,
+            sram_hot_experts=self._sram_hot_experts,
+            sram_core_grids=self._sram_core_grids,
+            sram_assigner=self._sram_assigner,
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:

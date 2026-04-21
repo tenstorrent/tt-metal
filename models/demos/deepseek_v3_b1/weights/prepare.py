@@ -16,6 +16,7 @@ with :class:`~weights.cache.CacheConfig` and the ``prepare_*`` functions
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,7 +52,7 @@ O_PROJ_GATE_MM_NORMS_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_S
 MERGED_TP4_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.tp4_merged_fusion_group_spec()
 KV_B12_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 GATE_UP_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
-from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
 from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
@@ -194,6 +195,78 @@ class MoERoutedExpertWeights:
 
 
 @dataclass
+class SramCompressedExpertSlots:
+    """SRAM (L1) hot expert slots using per-core CompressedTensor.
+
+    Each slot holds one expert's gate/up/down projection weights as a per-core
+    L1 CompressedTensor.  These CTs are directly usable as ``sram_cts`` in
+    :class:`~micro_ops.matmul_expert.op.ExpertKernel`.
+
+    Slot management is decoupled from the MoE op itself — populate slots at
+    weight preparation time, then pass the CTs through when combining.
+    """
+
+    num_slots: int
+    slot_experts: list[int]
+    gate_proj: list[CompressedTensor]
+    up_proj: list[CompressedTensor]
+    down_proj: list[CompressedTensor]
+
+    def is_dram_flags(self, num_total_experts: int) -> list[int]:
+        """Build SRAM/DRAM routing flags for ``create_expert_selection_meta``.
+
+        Returns a list of length *num_total_experts* where SRAM-resident
+        experts are ``0`` and all others are ``1``.
+        """
+        flags = [1] * num_total_experts
+        for eid in self.slot_experts:
+            flags[eid] = 0
+        return flags
+
+
+#: Per-layer SRAM hot expert configuration.
+#:
+#: Maps ``layer_idx → list[expert_idx]`` specifying which routed experts to
+#: pre-load into L1 SRAM slots for each MoE layer.  Layers absent from the
+#: dict get no SRAM slots.
+#:
+#: Example::
+#:
+#:     config: SramHotExpertConfig = {
+#:         3: [10, 42, 100],   # layer 3: 3 hot experts
+#:         7: [5, 20],         # layer 7: 2 hot experts
+#:     }
+SramHotExpertConfig = dict[int, list[int]]
+
+
+@dataclass(frozen=True)
+class SramExpertCoreGrids:
+    """Per-projection core grids for SRAM hot experts.
+
+    The routed-expert pipeline uses three distinct, tile-aligned core grids:
+      * ``gate`` — "A" compute grid (e.g. 64 cores, N=2048)
+      * ``up``   — "B" compute grid, disjoint from A (e.g. 64 cores, N=2048)
+      * ``down`` — "down" grid covering the full matmul core set
+                  (e.g. 112 cores, N=7168)
+
+    Matching these grids is required so each projection's ``N`` is divisible
+    by the per-projection core count, and so the ExpertKernel can locate each
+    shard on the cores it expects.  For symmetric unit-test weights (single
+    ``(K, N)`` shared by all three projections) pass the same ``CoreRangeSet``
+    for ``gate``/``up``/``down``.
+    """
+
+    gate: ttnn.CoreRangeSet
+    up: ttnn.CoreRangeSet
+    down: ttnn.CoreRangeSet
+
+    @classmethod
+    def uniform(cls, core_grid: ttnn.CoreRangeSet) -> "SramExpertCoreGrids":
+        """Broadcast a single ``CoreRangeSet`` to all three projections."""
+        return cls(gate=core_grid, up=core_grid, down=core_grid)
+
+
+@dataclass
 class DeepSeekV3DenseLayerWeights:
     """Weights for a dense layer (0..first_k_dense_replace-1).
 
@@ -263,6 +336,9 @@ class DeepSeekV3MoELayerWeights:
     routed_gate_proj: list[ttnn.Tensor]
     routed_up_proj: list[ttnn.Tensor]
     routed_down_proj: list[ttnn.Tensor]
+
+    # Optional SRAM hot expert slots (per-core CompressedTensor)
+    sram_slots: SramCompressedExpertSlots | None = None
 
 
 @dataclass
@@ -1188,6 +1264,356 @@ def prepare_moe_routed_experts_bspm(
     return routed
 
 
+# ---------------------------------------------------------------------------
+# SRAM hot expert slots (CompressedTensor, per-core L1)
+# ---------------------------------------------------------------------------
+
+
+def _build_l1_compressed_tensor(
+    weight: torch.Tensor,
+    core_grid: ttnn.CoreRangeSet,
+    *,
+    assigner: CompressedTensorAssigner | None = None,
+    assignment: np.ndarray | None = None,
+    device=None,
+    mesh_mapper_config=None,
+) -> CompressedTensor:
+    """Create a single per-core L1 CompressedTensor for one expert projection.
+
+    Uses WIDTH_SHARDED on *core_grid*: each core holds (K, N_per_core) where
+    N_per_core = N / num_cores.  Exactly one of *assigner* or *assignment* must
+    be provided.
+
+    Args:
+        weight: Float weight tensor.  For single-device: ``(K, N)``.
+                For multi-device: ``(mesh_rows, mesh_cols, K, N_per_device)``.
+        core_grid: L1 compute cores for the shard.
+        assigner: ``CompressedTensorAssigner`` (mutually exclusive with *assignment*).
+        assignment: Pre-computed BSPM tile-level assignment array (mutually
+                    exclusive with *assigner*).
+        device: Device/mesh to allocate on (``None`` keeps host-only).
+        mesh_mapper_config: ``ttnn.MeshMapperConfig`` for multi-device.
+    """
+    assert (assigner is None) != (assignment is None), "Provide exactly one of assigner or assignment"
+
+    num_cores = core_grid.num_cores()
+    if weight.ndim == 4:
+        K, N = weight.shape[2], weight.shape[3]
+    else:
+        K, N = weight.shape[0], weight.shape[1]
+    per_core_N = N // num_cores
+    assert N % num_cores == 0, f"N ({N}) must be divisible by num_cores ({num_cores})"
+
+    shard_spec = ttnn.ShardSpec(core_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    if assigner is not None:
+        return CompressedTensor.from_torch(
+            weight.float(),
+            assigner,
+            device=device,
+            memory_config=mem_config,
+            per_core_allocation=True,
+            mesh_mapper_config=mesh_mapper_config,
+        )
+    return CompressedTensor.from_bspm(
+        weight.float(),
+        assignment,
+        device=device,
+        memory_config=mem_config,
+    )
+
+
+def prepare_compressed_sram_slots(
+    device,
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+    initial_expert_indices: list[int],
+    core_grids: SramExpertCoreGrids,
+    assigner: CompressedTensorAssigner,
+    *,
+    move_to_device: bool = True,
+) -> SramCompressedExpertSlots:
+    """Allocate SRAM hot expert slots as per-core L1 CompressedTensors.
+
+    Each expert's gate, up, and down projections are independently allocated in
+    L1 as WIDTH_SHARDED ``CompressedTensor`` objects with ``per_core_allocation=True``.
+
+    The returned :class:`SramCompressedExpertSlots` holds CTs that can be
+    passed directly to ``ExpertKernel.op()`` as ``sram_cts``.
+
+    Args:
+        device: Device or mesh device.
+        state_dict: HuggingFace state dict with expert weights.
+        layer_idx: Decoder layer index.
+        initial_expert_indices: Global expert indices to load into slots.
+        core_grids: :class:`SramExpertCoreGrids` assigning a distinct
+            (tile-aligned, ``N``-divisible) grid to each projection, matching
+            the routed-expert pipeline's per-projection layout (e.g.
+            64 / 64 / 112 cores on Blackhole).  For symmetric unit-test
+            weights use :meth:`SramExpertCoreGrids.uniform`.
+        assigner: ``CompressedTensorAssigner`` for mixed-precision encoding.
+        move_to_device: Whether to place tensors on device.
+    """
+    grids = core_grids
+    num_slots = len(initial_expert_indices)
+    logger.info(
+        "Preparing {} compressed SRAM slots for layer {} (experts: {})",
+        num_slots,
+        layer_idx,
+        initial_expert_indices,
+    )
+    logger.info(
+        "  SRAM core grids: gate={} cores, up={} cores, down={} cores",
+        grids.gate.num_cores(),
+        grids.up.num_cores(),
+        grids.down.num_cores(),
+    )
+    t0 = time.perf_counter()
+
+    device_for_torch = device if move_to_device else None
+    gate_cts: list[CompressedTensor] = []
+    up_cts: list[CompressedTensor] = []
+    down_cts: list[CompressedTensor] = []
+
+    # Match the DRAM MoE convention (see `_moe_routed_expert_tensor_target`):
+    # expert weights are REPLICATED across every device in the submesh, so each
+    # device holds a full copy of each hot expert in its own SRAM.  Without a
+    # `mesh_mapper_config`, `CompressedTensor._pack_data_and_assignment` forces
+    # `num_devices = 1` and takes the single-device packer path, which is wrong
+    # for a multi-device mesh handle.  Build an explicit all-replicate config
+    # sized to the mesh shape.
+    mesh_mapper_config = None
+    if device_for_torch is not None:
+        num_mesh_devices = getattr(device_for_torch, "get_num_devices", lambda: 1)()
+        if num_mesh_devices > 1:
+            mesh_shape = device_for_torch.shape
+            mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementReplicate()] * mesh_shape.dims())
+
+    for slot_idx, expert_idx in enumerate(initial_expert_indices):
+        gate_key = _key(layer_idx, f"mlp.experts.{expert_idx}.gate_proj.weight")
+        up_key = _key(layer_idx, f"mlp.experts.{expert_idx}.up_proj.weight")
+        down_key = _key(layer_idx, f"mlp.experts.{expert_idx}.down_proj.weight")
+
+        gate_w = state_dict[gate_key].T.contiguous()
+        up_w = state_dict[up_key].T.contiguous()
+        down_w = state_dict[down_key].T.contiguous()
+
+        gate_cts.append(
+            _build_l1_compressed_tensor(
+                gate_w,
+                grids.gate,
+                assigner=assigner,
+                device=device_for_torch,
+                mesh_mapper_config=mesh_mapper_config,
+            )
+        )
+        up_cts.append(
+            _build_l1_compressed_tensor(
+                up_w,
+                grids.up,
+                assigner=assigner,
+                device=device_for_torch,
+                mesh_mapper_config=mesh_mapper_config,
+            )
+        )
+        down_cts.append(
+            _build_l1_compressed_tensor(
+                down_w,
+                grids.down,
+                assigner=assigner,
+                device=device_for_torch,
+                mesh_mapper_config=mesh_mapper_config,
+            )
+        )
+        logger.debug("  SRAM slot {} ← expert {} prepared", slot_idx, expert_idx)
+
+    logger.info(
+        "Compressed SRAM slots for layer {} done in {:.3f}s ({} slots)",
+        layer_idx,
+        time.perf_counter() - t0,
+        num_slots,
+    )
+    return SramCompressedExpertSlots(
+        num_slots=num_slots,
+        slot_experts=list(initial_expert_indices),
+        gate_proj=gate_cts,
+        up_proj=up_cts,
+        down_proj=down_cts,
+    )
+
+
+def compute_expert_l1_bytes(
+    assignments: list[np.ndarray],
+    tensor_shapes: list[tuple[int, int]],
+    core_grids: SramExpertCoreGrids,
+    tile_hw: int = 32,
+) -> int:
+    """Compute the exact L1 byte cost for one expert across all projections.
+
+    Each projection's shard-to-core tile mapping is computed via
+    ``compute_shard_page_mapping``, then per-tile byte sizes (determined by
+    the assignment codes) are summed per ``(core.x, core.y)``.  The per-core
+    totals are accumulated across all projections, and the maximum across
+    cores is returned — this is the true worst-case L1 footprint for a
+    single core under per-core allocation.
+
+    Args:
+        assignments: 3 projection assignment arrays in order
+            ``[gate, up, down]``, each ``(tiles_h, tiles_w)`` with tt-metal
+            format codes (0=bfp8, 1=bfp4, 2=bfp2, 3=bfp0).
+        tensor_shapes: 3 projection ``(K, N)`` logical shapes in the same
+            order (must match assignment tile counts).
+        core_grids: :class:`SramExpertCoreGrids` giving one grid per
+            projection.  Use :meth:`SramExpertCoreGrids.uniform` for symmetric
+            unit-test weights.
+        tile_hw: Tile dimension (default 32).
+
+    Returns:
+        L1 bytes needed on the most loaded core (max across cores of the
+        sum across projections).  Cores that hold no shard for a given
+        projection simply contribute zero bytes for that projection.
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import compute_shard_page_mapping
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import bfp_tile_packed_size
+
+    _MANT_BITS = {0: 7, 1: 3, 2: 1, 3: 0}
+    tile_byte_lut = np.array(
+        [bfp_tile_packed_size(_MANT_BITS[c], tile_hw) for c in range(4)],
+        dtype=np.int64,
+    )
+
+    assert len(assignments) == 3 and len(tensor_shapes) == 3, (
+        "compute_expert_l1_bytes expects exactly 3 projections in order [gate, up, down], "
+        f"got {len(assignments)} assignments / {len(tensor_shapes)} shapes"
+    )
+    grids = [core_grids.gate, core_grids.up, core_grids.down]
+
+    per_core_totals: dict[tuple[int, int], int] = {}
+
+    for assignment, (K, N), grid in zip(assignments, tensor_shapes, grids):
+        num_cores = grid.num_cores()
+        per_core_N = N // num_cores
+        shard_spec = ttnn.ShardSpec(grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+        shard_mapping = compute_shard_page_mapping([K, N], mem_config, tile_hw)
+        assignment_flat = assignment.ravel()
+
+        for core, page_indices in shard_mapping:
+            shard_bytes = int(tile_byte_lut[assignment_flat[list(page_indices)]].sum())
+            key = (core.x, core.y)
+            per_core_totals[key] = per_core_totals.get(key, 0) + shard_bytes
+
+    return max(per_core_totals.values()) if per_core_totals else 0
+
+
+def _load_routing_frequencies(path: Path | None = None) -> dict[int, list[int]]:
+    """Load per-layer routing frequencies from a JSON file.
+
+    The file maps ``"layer_idx" → list[int]`` where each list has 256 entries
+    (one per routed expert) representing activation counts from calibration.
+    """
+    if path is None:
+        path = Path(__file__).resolve().parent.parent / "data" / "routing_frequencies.json"
+    with open(path) as f:
+        raw = json.load(f)
+    return {int(k): v for k, v in raw.items()}
+
+
+def build_sram_hot_expert_config(
+    state_dict: dict[str, torch.Tensor],
+    layer_indices: list[int],
+    assigner: CompressedTensorAssigner,
+    core_grids: SramExpertCoreGrids,
+    l1_budget_bytes: int,
+    routing_frequencies: dict[int, list[int]],
+    *,
+    tile_hw: int = 32,
+) -> SramHotExpertConfig:
+    """Build per-layer SRAM hot expert config using two-pass greedy allocation.
+
+    For each layer, experts are sorted by routing frequency (descending).
+    Each candidate's exact L1 byte size is computed via
+    :func:`compute_expert_l1_bytes` using the ``CompressedTensorAssigner``
+    on CPU.  Experts are accumulated until ``l1_budget_bytes`` is exhausted.
+
+    Args:
+        state_dict: HuggingFace state dict with expert weight tensors.
+        layer_indices: MoE layer indices to consider.
+        assigner: ``CompressedTensorAssigner`` for on-CPU format selection.
+        core_grids: :class:`SramExpertCoreGrids` giving a distinct
+            per-projection grid (gate/up/down) — see
+            :meth:`SramExpertCoreGrids.uniform` for symmetric test cases.
+        l1_budget_bytes: Maximum L1 bytes available per core for hot experts.
+        routing_frequencies: ``layer_idx → list[int]`` activation counts.
+        tile_hw: Tile dimension (default 32).
+
+    Returns:
+        ``SramHotExpertConfig`` mapping ``layer_idx → list[expert_idx]``.
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
+
+    def _quantize_fn(x, fmt_str):
+        mant_map = {"bfp8": 7, "bfp4": 3, "bfp2": 1, "bfp0": 0}
+        return quantize_dequantize_bfp(x, mant_map[fmt_str])
+
+    config: SramHotExpertConfig = {}
+
+    for layer_idx in layer_indices:
+        freqs = routing_frequencies.get(layer_idx)
+        if freqs is None:
+            logger.warning("No routing frequencies for layer {}, skipping", layer_idx)
+            continue
+
+        ranked_experts = sorted(range(len(freqs)), key=lambda e: freqs[e], reverse=True)
+
+        selected: list[int] = []
+        budget_used = 0
+
+        for expert_idx in ranked_experts:
+            if freqs[expert_idx] == 0:
+                break
+
+            gate_key = _key(layer_idx, f"mlp.experts.{expert_idx}.gate_proj.weight")
+            up_key = _key(layer_idx, f"mlp.experts.{expert_idx}.up_proj.weight")
+            down_key = _key(layer_idx, f"mlp.experts.{expert_idx}.down_proj.weight")
+
+            # Cast to float32: bfloat16 can't be consumed by the assigner
+            # (downstream ``np.asarray(..., dtype=np.float32)`` rejects it).
+            gate_w = state_dict[gate_key].T.contiguous().float()
+            up_w = state_dict[up_key].T.contiguous().float()
+            down_w = state_dict[down_key].T.contiguous().float()
+
+            weights = [gate_w, up_w, down_w]
+            assignments = []
+            shapes = []
+            for w in weights:
+                result = assigner.assign(w, _quantize_fn)
+                assignments.append(result.assignment)
+                shapes.append(tuple(w.shape))
+
+            expert_bytes = compute_expert_l1_bytes(assignments, shapes, core_grids, tile_hw)
+
+            if budget_used + expert_bytes > l1_budget_bytes:
+                break
+
+            selected.append(expert_idx)
+            budget_used += expert_bytes
+
+        if selected:
+            config[layer_idx] = selected
+            logger.info(
+                "Layer {}: {} SRAM experts selected ({} / {} bytes used)",
+                layer_idx,
+                len(selected),
+                budget_used,
+                l1_budget_bytes,
+            )
+
+    return config
+
+
 def prepare_routed_expert_weights(
     device,
     state_dict: dict[str, torch.Tensor],
@@ -1444,11 +1870,22 @@ def prepare_moe_layer_weights(
     bspm_dir: Path | None = None,
     bspm_variant: str = "B",
     bspm_budget: float = 3.5,
+    sram_hot_experts: SramHotExpertConfig | None = None,
+    sram_core_grids: SramExpertCoreGrids | None = None,
+    sram_assigner: CompressedTensorAssigner | None = None,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer.
 
     ``bspm_dir``, when provided, must be the model-specific BSPM subdirectory
     (e.g. ``results/deepseek-r1-0528``), not the results root.
+
+    When ``sram_hot_experts`` includes ``layer_idx``, the listed experts are
+    additionally loaded into L1 SRAM slots as per-core CompressedTensors.
+    ``sram_core_grids`` and ``sram_assigner`` are required in that case.
+    Each projection (gate / up / down) has a distinct ``N`` and must be given
+    its own tile-aligned grid via :class:`SramExpertCoreGrids`; a symmetric
+    single-grid layout (e.g. for unit tests) can be built with
+    :meth:`SramExpertCoreGrids.uniform`.
     """
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
@@ -1478,6 +1915,22 @@ def prepare_moe_layer_weights(
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None
     assert isinstance(routed, MoERoutedExpertWeights)
+
+    sram_slots = None
+    sram_expert_indices = (sram_hot_experts or {}).get(layer_idx)
+    if sram_expert_indices:
+        assert sram_core_grids is not None, "sram_core_grids required when sram_hot_experts specifies this layer"
+        assert sram_assigner is not None, "sram_assigner required when sram_hot_experts specifies this layer"
+        sram_slots = prepare_compressed_sram_slots(
+            device=device,
+            state_dict=state_dict,
+            layer_idx=layer_idx,
+            initial_expert_indices=sram_expert_indices,
+            core_grids=sram_core_grids,
+            assigner=sram_assigner,
+            move_to_device=move_to_device,
+        )
+
     result = DeepSeekV3MoELayerWeights(
         q_a_proj=attn.q_a_proj,
         q_b_proj=attn.q_b_proj,
@@ -1497,6 +1950,7 @@ def prepare_moe_layer_weights(
         routed_gate_proj=routed.routed_gate_proj,
         routed_up_proj=routed.routed_up_proj,
         routed_down_proj=routed.routed_down_proj,
+        sram_slots=sram_slots,
     )
     logger.info("MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return result
