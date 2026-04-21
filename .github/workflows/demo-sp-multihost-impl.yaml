@@ -47,7 +47,7 @@ jobs:
         run: |
           {
             echo "allocation_spec<<EOF"
-            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}" .github/sku_config.yaml
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}"
             echo "EOF"
           } >> $GITHUB_OUTPUT
 

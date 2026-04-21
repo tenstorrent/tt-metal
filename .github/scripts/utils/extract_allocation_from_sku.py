@@ -7,58 +7,31 @@ import os
 
 
 def main():
-    if len(sys.argv) != 3:
+    if len(sys.argv) != 2:
         print(
-            "Usage: extract_allocation_from_sku.py <sku_name> <sku_config_path>",
+            "Usage: extract_allocation_from_sku.py <sku_name>",
             file=sys.stderr,
         )
         sys.exit(1)
 
     sku_name = sys.argv[1]
-    user_provided_path = sys.argv[2]
 
-    # Define safe base directory (repository root)
+    # Hardcoded path to SKU config file
     # Script is in .github/scripts/utils/
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    BASE_DIRECTORY = os.path.realpath(os.path.join(script_dir, "..", "..", ".."))
-
-    # Sanitize file path to prevent path traversal attacks
-    # Join user input with base directory and resolve to absolute path
-    try:
-        sku_config_path = os.path.abspath(
-            os.path.join(BASE_DIRECTORY, user_provided_path)
-        )
-    except (OSError, ValueError) as e:
-        print(f"::error::Invalid SKU config path: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Verify the resolved path is within the safe base directory
-    if not sku_config_path.startswith(BASE_DIRECTORY + os.sep):
-        print(
-            f"::error::SKU config path is outside repository",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    repo_root = os.path.realpath(os.path.join(script_dir, "..", "..", ".."))
+    sku_config_path = os.path.join(repo_root, ".github", "sku_config.yaml")
 
     # Verify the file exists
     if not os.path.exists(sku_config_path):
-        print(f"::error::SKU config file not found", file=sys.stderr)
-        sys.exit(1)
-
-    # Verify the file is a regular file (not a directory or special file)
-    if not os.path.isfile(sku_config_path):
         print(
-            f"::error::SKU config path is not a regular file",
-            file=sys.stderr,
+            f"::error::SKU config file not found at {sku_config_path}", file=sys.stderr
         )
         sys.exit(1)
 
-    # Path has been fully validated - safe to use
-    validated_config_path = sku_config_path
-
-    # Safely open and parse the validated YAML file
+    # Open and parse the YAML file
     try:
-        with open(validated_config_path, "r", encoding="utf-8") as f:
+        with open(sku_config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
     except (OSError, IOError) as e:
         print(f"::error::Failed to read SKU config file: {e}", file=sys.stderr)
