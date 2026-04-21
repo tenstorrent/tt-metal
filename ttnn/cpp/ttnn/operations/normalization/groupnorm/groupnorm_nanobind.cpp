@@ -194,14 +194,19 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         )doc");
     mod.def(
         "_find_expected_dram_grid",
-        [](uint32_t max_x, uint32_t max_y, uint32_t num_channels, int num_groups, uint32_t input_nhw)
-            -> ttnn::CoreGrid {
-            auto result = find_expected_dram_grid(max_x, max_y, num_channels, num_groups, input_nhw);
+        [](uint32_t max_x,
+           uint32_t max_y,
+           uint32_t num_channels,
+           int num_groups,
+           uint32_t input_nhw,
+           uint32_t num_batches) -> ttnn::CoreGrid {
+            auto result = find_expected_dram_grid(max_x, max_y, num_channels, num_groups, input_nhw, num_batches);
             if (!result.has_value()) {
                 throw std::runtime_error(
                     "Cannot find a valid DRAM group-norm grid for num_channels=" + std::to_string(num_channels) +
                     ", num_groups=" + std::to_string(num_groups) + ", input_nhw=" + std::to_string(input_nhw) +
-                    ", max_grid=(" + std::to_string(max_x) + ", " + std::to_string(max_y) + ")");
+                    ", num_batches=" + std::to_string(num_batches) + ", max_grid=(" + std::to_string(max_x) + ", " +
+                    std::to_string(max_y) + ")");
             }
             return result.value();
         },
@@ -210,9 +215,11 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         nb::arg("num_channels"),
         nb::arg("num_groups"),
         nb::arg("input_nhw"),
+        nb::arg("num_batches") = 1,
         R"doc(
             Find the largest valid CoreGrid within (max_x, max_y) bounds
             for DRAM interleaved group-norm. Raises if no valid grid exists.
+            num_batches ensures uniform multicast group sizes across batches.
         )doc");
     mod.def(
         "determine_expected_group_norm_sharded_config_and_grid_size",
