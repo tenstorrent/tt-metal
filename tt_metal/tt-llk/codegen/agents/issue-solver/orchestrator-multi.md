@@ -406,9 +406,17 @@ For each arch in ARCHES:
       report STUCK with your evidence rather than silently changing the shape.
 
       A sibling fixer is concurrently applying the fix for another arch in the
-      same worktree but in a different tt_llk_{arch}/ subdirectory, so do not
-      touch any file outside tt_llk_${arch}/ (except possibly tests/ paths
-      that are scoped per arch).
+      same worktree but in a different tt_llk_{arch}/ subdirectory. Allowed
+      scope for your fixer is exactly what the plan enumerates:
+        - tt_llk_${arch}/ LLK edits per the plan's ### ${arch} subsection
+        - any file under ## Implementation → ### shared test sources (the plan
+          assigns each to exactly one arch's fixer)
+        - any file under ## Implementation → ### monorepo consumers (plan's
+          Per-arch ownership column — typically the per-arch public wrapper
+          tt_metal/hw/ckernels/${arch}/metal/llk_api/*_api.h owned by
+          ${arch}'s fixer, and shared tt-metal/models/ttnn files owned by a
+          single designated arch)
+      Do NOT touch any file the plan did not list.
 
       WORKTREE_DIR: ${WORKTREE_DIR}
       LOG_DIR:      ${LOG_DIR_OF[$arch]}

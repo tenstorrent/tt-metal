@@ -80,6 +80,52 @@ LLK code lives in these directories (per arch):
 - `tests/sources/` — C++ test sources
 - `tests/python_tests/{arch_dir}/` — Python test files per arch (`blackhole`, `wormhole`, `quasar`)
 
+### Search Scope — Monorepo Context (MANDATORY when applicable)
+
+Detect monorepo context *before* emitting the analysis:
+
+```bash
+# If WORKTREE_DIR/tt_metal/hw/ckernels/{arch}/metal/llk_api/ exists, we are
+# running inside the tt-metal monorepo (tt-llk embedded at tt_metal/tt-llk/).
+# Downstream consumers of any low-level _llk_*_ symbol live OUTSIDE tt-llk
+# and MUST be audited — the tt-llk grep scope above will NOT find them.
+MONOREPO_ROOT=""
+if [ -d "$WORKTREE_DIR/tt_metal/hw/ckernels" ]; then
+    MONOREPO_ROOT="$WORKTREE_DIR"
+fi
+```
+
+If `MONOREPO_ROOT` is set, for every low-level `_llk_*_` symbol whose signature might change you MUST additionally search:
+- `$MONOREPO_ROOT/tt_metal/hw/ckernels/{arch}/metal/llk_api/` — per-arch public wrappers that forward to the low-level symbol; renaming or extending the low-level signature almost always requires a matching change here
+- `$MONOREPO_ROOT/tt_metal/hw/inc/api/compute/` — the public compute-kernel API surface (eltwise_binary.h, bcast.h, etc.) called by every user kernel
+- `$MONOREPO_ROOT/models/**/kernel_includes/**/compute_kernel_api/` — per-model overrides (e.g. deepseek) that may pin arguments the new signature reinterprets
+- `$MONOREPO_ROOT/ttnn/cpp/ttnn/kernel/compute/` — TTNN compute kernels
+- `$MONOREPO_ROOT/tests/tt_metal/**/test_kernels/compute/` — tt-metal test kernels that exercise the public wrapper
+
+Concretely:
+
+```bash
+if [ -n "$MONOREPO_ROOT" ]; then
+    # The underscored low-level symbol — almost exclusively called from the public wrapper
+    grep -rn "_{symbol_name}_" \
+        "$MONOREPO_ROOT/tt_metal/hw/ckernels/" \
+        "$MONOREPO_ROOT/tt_metal/hw/inc/" \
+        --include="*.h" --include="*.hpp"
+
+    # The public (un-underscored) symbol — used directly by tt-metal kernels/models
+    grep -rn "{public_symbol_name}" \
+        "$MONOREPO_ROOT/tt_metal/" \
+        "$MONOREPO_ROOT/models/" \
+        "$MONOREPO_ROOT/ttnn/" \
+        --include="*.h" --include="*.hpp" --include="*.cpp" \
+        | grep -v "$MONOREPO_ROOT/tt_metal/tt-llk/"   # exclude the tt-llk subtree (already covered above)
+fi
+```
+
+For **every** hit outside the tt-llk subtree, record: path (relative to `MONOREPO_ROOT`), line, the exact call-site arguments, and — critically — whether the arguments bind to parameters whose semantics change under the planned signature. A caller passing a non-default value to a parameter whose meaning is changing is a **silent semantic break** and must be flagged explicitly in the output.
+
+If the analyzer produces **zero** monorepo hits despite `MONOREPO_ROOT` being set, say so explicitly in the output (`Downstream Consumers: none`). Silence is not a valid proxy for "no downstream impact".
+
 ---
 
 ## Step 3: Understand the Context
@@ -176,6 +222,18 @@ Create `codegen/artifacts/issue_{number}_analysis.md`. The **"Affected Files per
 | blackhole | `tt_llk_blackhole/llk_lib/...` | ... |
 | wormhole  | `tt_llk_wormhole_b0/llk_lib/...` | ... |
 | quasar    | `tt_llk_quasar/llk_lib/...` (if applicable) | ... |
+
+## Downstream Monorepo Consumers  *(mandatory when MONOREPO_ROOT is set; omit only in standalone tt-llk runs)*
+List every caller of the changed symbol outside the tt-llk subtree, grouped by kind. Flag any site that binds a non-default value to a parameter whose semantics change — those are silent-break risks and must be explicitly dispositioned in the plan.
+
+| File:line | Site kind | Call args (verbatim) | Semantic-break risk? | Notes |
+|-----------|-----------|----------------------|----------------------|-------|
+| `tt_metal/hw/ckernels/{arch}/metal/llk_api/{name}_api.h:N` | public wrapper | `_llk_{name}_<BType>(…)` | yes / no | wrapper forwards to the low-level symbol |
+| `tt_metal/hw/inc/api/compute/{file}.h:N` | public compute-API caller | `llk_{name}<…>(…)` | yes / no | |
+| `models/…/compute_kernel_api/{file}.h:N` | per-model override | `llk_{name}<…>(…)` | yes / no | |
+| `ttnn/…/kernel/compute/{file}.hpp:N` | TTNN kernel | `llk_{name}<…>(…)` | yes / no | |
+
+If MONOREPO_ROOT is not set (standalone tt-llk repo), omit this table and state: *"Running in standalone tt-llk mode — no monorepo consumers to audit."*
 
 ## Relevant Code
 [Key code snippets with file:line references]

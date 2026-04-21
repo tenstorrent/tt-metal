@@ -111,7 +111,25 @@ grep -rn "{symbol_name}" "$LLK_DIR/" --include="*.h"
 grep -rn "{symbol_name}" tests/sources/ --include="*.cpp" --include="*.h"
 # Python helper wiring (runtime/template parameter definitions)
 grep -rn "{symbol_name}" tests/python_tests/ --include="*.py"
+
+# Monorepo consumers — MANDATORY when $WORKTREE_DIR/tt_metal/hw/ckernels/ exists.
+# The analyzer's "Downstream Monorepo Consumers" table is the authoritative
+# list; you MUST cross-reference it here and disposition every row. If that
+# table is missing from the analysis in monorepo context, REPORT STUCK — the
+# plan cannot be made sound without it.
+if [ -d "$WORKTREE_DIR/tt_metal/hw/ckernels" ]; then
+    grep -rn "_{symbol_name}_" \
+        "$WORKTREE_DIR/tt_metal/hw/ckernels/" \
+        "$WORKTREE_DIR/tt_metal/hw/inc/" \
+        --include="*.h" --include="*.hpp"
+    grep -rn "{public_symbol_name}" \
+        "$WORKTREE_DIR/tt_metal/" "$WORKTREE_DIR/models/" "$WORKTREE_DIR/ttnn/" \
+        --include="*.h" --include="*.hpp" --include="*.cpp" \
+        | grep -v "$WORKTREE_DIR/tt_metal/tt-llk/"
+fi
 ```
+
+**Silent-break rule (monorepo context):** when the analyzer's table flags a call site as a semantic-break risk (a parameter whose meaning is changing under your `## API Contract`), you MUST either (a) enumerate the call-site update under `## Implementation → ### monorepo consumers` below so the fixer updates it, or (b) prove the binding is a no-op under the new semantics (e.g., the value was 0 and is still 0 for the renamed parameter). Leaving a flagged binding untouched without this audit is a silent-break failure mode and the plan is incomplete.
 
 For each call site whose semantics would change under your new API:
 
@@ -194,6 +212,20 @@ Each entry:
 - **Call site(s)**: line numbers of the affected calls
 - **What to change**: explicit edit (new arg, renamed param, new helper wiring)
 - **Why**: which test parametrization(s) would otherwise regress, with short justification tied back to `## API Contract`
+
+### monorepo consumers  *(mandatory when $WORKTREE_DIR/tt_metal/hw/ckernels/ exists; omit in standalone tt-llk runs)*
+
+When the worktree is the tt-metal monorepo, the low-level `_llk_*_` symbol you just changed is almost always forwarded by a public wrapper at `tt_metal/hw/ckernels/{arch}/metal/llk_api/{name}_api.h`, and consumed throughout `tt_metal/`, `models/`, and `ttnn/`. Those files live OUTSIDE the tt-llk subtree and are invisible to the default grep scope. The analyzer's "Downstream Monorepo Consumers" table enumerates them — use it as the source of truth here.
+
+Each entry:
+- **File**: absolute repo-root-relative path (e.g. `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_api.h`)
+- **Call site(s)**: line numbers
+- **What to change**: explicit edit, typically one of:
+  - *Public wrapper*: grow the wrapper's signature to match the new separated low-level (mirror the sibling `_A`/`_B` wrapper if one exists) and forward every new parameter
+  - *Behavior preservation*: caller passed a non-default value to a parameter whose meaning is splitting — update the call to restore pre-split semantics (e.g. `…, 1` → `…, 1, 1` if the old single value set both new knobs)
+  - *No change*: caller passes default — still list it here with a one-line proof so the fixer/reviewer knows it was audited, not missed
+- **Per-arch ownership**: which `### {arch}` fixer owns the edit (e.g. BH wrapper edit → blackhole fixer; `models/` or `ttnn/` edits → assign to one arch's fixer to avoid merge conflicts, typically the first arch alphabetically)
+- **Why**: which semantic-break row from the analyzer table this resolves
 
 ## Order of Operations
 1. Apply the `## API Contract` change in every arch's primary file (parallel is fine if the orchestrator forks — each fixer stays in its own arch's files)
