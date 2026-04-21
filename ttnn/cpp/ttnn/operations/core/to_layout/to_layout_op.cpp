@@ -151,9 +151,8 @@ Tensor to_layout_impl(
             for (int index = -1; index >= -logical_rank; --index) {
                 output_tensor_end[index] = tensor.logical_shape()[index] - 1;
             }
-            tensor = ttnn::untilize_with_unpadding(
+            return ttnn::untilize_with_unpadding(
                 tensor, output_tensor_end, output_memory_config, use_multicore_untilize, sub_core_grids);
-            return ttnn::to_memory_config(tensor, output_memory_config);
         }
         if (layout == ttnn::TILE_LAYOUT) {
             if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -204,8 +203,7 @@ Tensor to_layout_impl(
                     TileReshapeMapMode::CACHE,
                     sub_core_grids);
             }
-
-            return ttnn::to_memory_config(tensor, output_memory_config);
+            return tensor;
         }
         TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
     }

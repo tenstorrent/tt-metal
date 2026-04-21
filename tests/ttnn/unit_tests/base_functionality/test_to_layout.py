@@ -839,3 +839,255 @@ def test_to_layout_pad_value_default_is_zero(device, shape):
 
     assert torch.equal(output_default, output_explicit)
     assert torch.equal(output_default, torch_output_tensor)
+
+
+# ---------------------------------------------------------------------------
+# to_layout on ND-sharded tensors
+#
+# Exercises ttnn.to_layout when the input is an ND-sharded tensor and:
+#   - the target layout differs from the input layout (TILE <-> ROW_MAJOR)
+#   - the requested output memory_config is:
+#       * the same ND shard spec as the input   (input/output share shard spec)
+#       * a different ND shard spec             (reshard during layout change)
+#       * an interleaved memory config          (sharded -> interleaved)
+#   - the input and/or output shards are evenly or unevenly divided along the
+#     outer (non-tile) dims.
+#
+# For TILE layout the inner-2 dims of any sharded shape must be 32-aligned, so
+# uneven sharding is only applied on the outer dim(s).
+# ---------------------------------------------------------------------------
+
+
+def _make_nd_mem_config(shard_shape, grid, buffer_type=ttnn.BufferType.L1, orientation=ttnn.ShardOrientation.ROW_MAJOR):
+    nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=orientation)
+    return ttnn.MemoryConfig(buffer_type, nd_shard_spec)
+
+
+_GRID_1x1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+_GRID_2x1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+_GRID_3x1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))})
+_GRID_4x1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+_GRID_6x1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))})
+_GRID_2x2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+_GRID_3x3 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 2))})
+_GRID_6x3 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 2))})  # 18 cores
+
+
+# Each case is (tensor_shape, input_shard_shape, input_grid, output_shard_shape, output_grid, id_suffix).
+# Shard shapes use tile-aligned inner-2 dims (32-multiples) so the same cases are valid for both
+# TILE and ROW_MAJOR tensors. Unevenness can appear on outer dim(s) OR on the inner-2 (tile) dims
+# (e.g. 160 / 64 -> shards of 64, 64, 32 along that dim).
+_ND_SHARDED_CASES = [
+    # Even input & output, same shard spec (1 shard on 1 core).
+    ([1, 1, 64, 64], [1, 1, 64, 64], _GRID_1x1, [1, 1, 64, 64], _GRID_1x1, "even_same_1shard"),
+    # Even input & output, same shard spec, multiple shards along outer dim.
+    ([4, 1, 32, 64], [1, 1, 32, 64], _GRID_4x1, [1, 1, 32, 64], _GRID_4x1, "even_same_4shards_dim0"),
+    # Even input & output, 3-D sharded along dim 0.
+    ([6, 32, 64], [2, 32, 64], _GRID_3x1, [2, 32, 64], _GRID_3x1, "even_same_3shards_dim0"),
+    # Even input & output, different shard spec (reshard along dim 0).
+    ([6, 32, 64], [2, 32, 64], _GRID_3x1, [3, 32, 64], _GRID_2x1, "even_diff_reshard_dim0"),
+    # Even input & output, different shard spec (collapse to 1 shard).
+    ([4, 1, 32, 64], [1, 1, 32, 64], _GRID_4x1, [4, 1, 32, 64], _GRID_1x1, "even_diff_collapse"),
+    # Even input, sharded along dims 0 & 1, reshard to only dim 0.
+    ([4, 6, 32, 32], [1, 2, 32, 32], _GRID_6x1, [2, 6, 32, 32], _GRID_2x1, "even_diff_reshard_dim01"),
+    # Uneven input (dim 0 = 5, shard_shape dim 0 = 2 -> last shard has 1), same shard spec.
+    ([5, 32, 64], [2, 32, 64], _GRID_3x1, [2, 32, 64], _GRID_3x1, "uneven_in_same"),
+    # Uneven output (dim 0 = 6 reshard to shard_shape dim 0 = 4 -> last shard has 2).
+    ([6, 32, 64], [6, 32, 64], _GRID_1x1, [4, 32, 64], _GRID_2x1, "even_in_uneven_out"),
+    # Uneven input & uneven output (both dim 0 unevenly sharded, different specs).
+    ([7, 32, 64], [3, 32, 64], _GRID_3x1, [4, 32, 64], _GRID_2x1, "uneven_in_uneven_out"),
+    # Uneven input, sharded to interleaved-like target (single-shard collapse keeps remainder).
+    ([5, 32, 64], [2, 32, 64], _GRID_3x1, [5, 32, 64], _GRID_1x1, "uneven_in_collapsed_out"),
+    # --- Uneven sharding on the INNER-2 (tile) dims ---
+    # Each uneven-inner case is duplicated with two grid sizings:
+    #   * one where num_cores >= num_shards  -> 1 shard per core (simpler case)
+    #   * one where num_cores <  num_shards  -> multiple shards per core
+    #     (ND shards are round-robin distributed across the grid)
+    #
+    # [2,160,160] sharded [1,64,64]:
+    #   dim0 even (2/1=2), dim1 160/64 -> 3 shards (64,64,32), dim2 160/64 -> 3 shards (64,64,32) => 18 shards.
+    # Same shard spec across input and output; both last-2 dims unevenly sharded.
+    (
+        [2, 160, 160],
+        [1, 64, 64],
+        _GRID_6x3,  # 18 cores -> 1 shard/core
+        [1, 64, 64],
+        _GRID_6x3,
+        "uneven_inner_same_1shard_per_core",
+    ),
+    # Same tensor/shard shape, but pack 3 shards per core (6 cores, 18 shards).
+    (
+        [2, 160, 160],
+        [1, 64, 64],
+        _GRID_6x1,  # 6 cores -> 3 shards/core
+        [1, 64, 64],
+        _GRID_6x1,
+        "uneven_inner_same_multi_shard_per_core",
+    ),
+    # [3,160,160] sharded [2,64,64]: uneven on ALL dims
+    # (dim0 3/2->(2,1), dim1/2 160/64->(64,64,32)) => 2*3*3 = 18 shards.
+    (
+        [3, 160, 160],
+        [2, 64, 64],
+        _GRID_6x3,  # 18 cores -> 1 shard/core
+        [2, 64, 64],
+        _GRID_6x3,
+        "uneven_all_dims_same_1shard_per_core",
+    ),
+    # Same tensor/shard, packed 3 shards per core (6 cores, 18 shards).
+    (
+        [3, 160, 160],
+        [2, 64, 64],
+        _GRID_6x1,  # 6 cores -> 3 shards/core
+        [2, 64, 64],
+        _GRID_6x1,
+        "uneven_all_dims_same_multi_shard_per_core",
+    ),
+    # Same tensor/shard, packed 2 shards per core (9 cores, 18 shards).
+    (
+        [3, 160, 160],
+        [2, 64, 64],
+        _GRID_3x3,  # 9 cores -> 2 shards/core
+        [2, 64, 64],
+        _GRID_3x3,
+        "uneven_all_dims_same_2shards_per_core",
+    ),
+    # Uneven-all-dims input reshard to a DIFFERENT shard spec that is also uneven on the last-2 dims.
+    # Input [3,160,160] sharded [2,64,64] (18 shards) packed 3/core over 6 cores ->
+    # output [3,96,96] sharded [3,96,96]? dim0 3/3=1, dim1 160/96->(96,64), dim2 160/96->(96,64) => 1*2*2=4 shards.
+    # Output uses 2 cores -> 2 shards/core on output.
+    (
+        [3, 160, 160],
+        [2, 64, 64],
+        _GRID_6x1,  # input: 6 cores -> 3 shards/core
+        [3, 96, 96],
+        _GRID_2x1,  # output: 2 cores -> 2 shards/core
+        "uneven_all_dims_diff_reshard_multi_shard_per_core",
+    ),
+    # Inner-2 uneven on input (8 shards) packed 2 shards per core (4 cores), output is a single shard.
+    # input [2,96,96] sharded [1,64,64]: dim1/2 96/64->(64,32) => 2*2*2=8 shards.
+    (
+        [2, 96, 96],
+        [1, 64, 64],
+        _GRID_4x1,  # 4 cores -> 2 shards/core
+        [2, 96, 96],
+        _GRID_1x1,
+        "uneven_inner_collapsed_out_multi_shard_per_core",
+    ),
+]
+
+
+def _run_to_layout_nd_sharded(device, tensor_shape, input_mem_config, target_layout, output_mem_config, from_layout):
+    torch.manual_seed(0)
+    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=from_layout,
+        device=device,
+        memory_config=input_mem_config,
+    )
+    assert input_tensor.is_sharded()
+    assert input_tensor.layout == from_layout
+
+    output_tensor = ttnn.to_layout(input_tensor, target_layout, memory_config=output_mem_config)
+    assert output_tensor.layout == target_layout
+    assert tuple(output_tensor.shape) == tuple(tensor_shape)
+
+    output_torch = ttnn.to_torch(output_tensor)
+    assert tuple(output_torch.shape) == tuple(tensor_shape)
+    assert_with_pcc(torch_input, output_torch, 0.9999)
+    assert torch.allclose(torch_input, output_torch)
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, input_shard_shape, input_grid, output_shard_shape, output_grid, case_id",
+    _ND_SHARDED_CASES,
+    ids=[c[-1] for c in _ND_SHARDED_CASES],
+)
+@pytest.mark.parametrize(
+    "output_memory_mode",
+    ["same_shard", "different_shard", "interleaved_dram"],
+)
+@pytest.mark.parametrize(
+    "shard_orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+)
+def test_to_layout_nd_sharded_rm_to_tile(
+    device,
+    tensor_shape,
+    input_shard_shape,
+    input_grid,
+    output_shard_shape,
+    output_grid,
+    case_id,
+    output_memory_mode,
+    shard_orientation,
+):
+    """ROW_MAJOR ND-sharded -> TILE, varying output memory config."""
+    input_mem_config = _make_nd_mem_config(input_shard_shape, input_grid, orientation=shard_orientation)
+
+    if output_memory_mode == "same_shard":
+        output_mem_config = input_mem_config
+    elif output_memory_mode == "different_shard":
+        output_mem_config = _make_nd_mem_config(output_shard_shape, output_grid, orientation=shard_orientation)
+    elif output_memory_mode == "interleaved_dram":
+        output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        raise ValueError(output_memory_mode)
+
+    _run_to_layout_nd_sharded(
+        device,
+        tensor_shape,
+        input_mem_config,
+        ttnn.TILE_LAYOUT,
+        output_mem_config,
+        from_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, input_shard_shape, input_grid, output_shard_shape, output_grid, case_id",
+    _ND_SHARDED_CASES,
+    ids=[c[-1] for c in _ND_SHARDED_CASES],
+)
+@pytest.mark.parametrize(
+    "output_memory_mode",
+    ["same_shard", "different_shard", "interleaved_dram"],
+)
+@pytest.mark.parametrize(
+    "shard_orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+)
+def test_to_layout_nd_sharded_tile_to_rm(
+    device,
+    tensor_shape,
+    input_shard_shape,
+    input_grid,
+    output_shard_shape,
+    output_grid,
+    case_id,
+    output_memory_mode,
+    shard_orientation,
+):
+    """TILE ND-sharded -> ROW_MAJOR, varying output memory config."""
+    input_mem_config = _make_nd_mem_config(input_shard_shape, input_grid, orientation=shard_orientation)
+
+    if output_memory_mode == "same_shard":
+        output_mem_config = input_mem_config
+    elif output_memory_mode == "different_shard":
+        output_mem_config = _make_nd_mem_config(output_shard_shape, output_grid, orientation=shard_orientation)
+    elif output_memory_mode == "interleaved_dram":
+        output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        raise ValueError(output_memory_mode)
+
+    _run_to_layout_nd_sharded(
+        device,
+        tensor_shape,
+        input_mem_config,
+        ttnn.ROW_MAJOR_LAYOUT,
+        output_mem_config,
+        from_layout=ttnn.TILE_LAYOUT,
+    )

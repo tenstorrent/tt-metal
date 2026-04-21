@@ -34,6 +34,10 @@ bool can_use_sharded_optimized_factories(
     }
 
     if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+            operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+            return false;
+        }
         if (operation_attributes.output_mem_config.shard_spec().value().shape[1] % tt::constants::TILE_WIDTH != 0) {
             return false;
         }
@@ -153,7 +157,6 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
 
     auto output_layout = TensorLayout(
         operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config);
-
     return {TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout(
