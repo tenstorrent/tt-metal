@@ -19,6 +19,14 @@ on:
         description: "Maximum issues to create (0 = unlimited, useful for testing)"
         type: number
         default: 0
+      issue-numbers:
+        description: >-
+          Optional. Comma/whitespace-separated list of issue numbers, `#123`
+          tokens, or full GitHub issue URLs. Leave empty to process every
+          open CI-triage issue.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -43,6 +51,7 @@ jobs:
       assign-owners: true
       issue-repo: ebanerjeeTT/issue_dump
       target-repo: tenstorrent/tt-metal
+      issue-numbers: ${{ inputs.issue-numbers }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.AUTO_TRIAGE_TOKEN }}
