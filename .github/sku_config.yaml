@@ -3,6 +3,12 @@
 
 # Each SKU entry contains:
 #   runs_on: Array of GitHub Actions runner labels that tests for this SKU.
+#   allocation: (Optional) Configuration for TTOP allocation
+#     type: "Count" or "MGD"
+#     count: Number of nodes (for Count type)
+#     match_labels: Dictionary of Kubernetes labels
+#     topology_keys: List of topology keys (for MGD type)
+#   mgd: (Optional) MGD configuration text for runtime topology
 skus:
   wh_llmbox:
     runs_on:
@@ -207,6 +213,12 @@ skus:
   bh_sp1:
     runs_on:
       - exabox-multihost-with-nfs
+    allocation:
+      type: MGD
+      match_labels:
+        exabox.tenstorrent.com/purpose: ci-metal
+      topology_keys:
+        - exabox.tenstorrent.com/quad
     mgd: |
       mesh_descriptors {
         name: \"M0\"
@@ -220,57 +232,10 @@ skus:
   bh_sp4:
     runs_on:
       - exabox-multihost-with-nfs
-    explicit_nodes: "bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08,bh-glx-c03u02,bh-glx-c03u08,bh-glx-c04u02,bh-glx-c04u08,bh-glx-c05u02,bh-glx-c05u08,bh-glx-c06u02,bh-glx-c06u08,bh-glx-c07u02,bh-glx-c07u08,bh-glx-c08u02,bh-glx-c08u08"
-    mgd: |
-      mesh_descriptors {
-        name: \"SP4_M0\"
-        arch: BLACKHOLE
-        device_topology { dims: [ 32,4 ] dim_types: [ RING,RING ] }
-        host_topology   { dims: [ 4,1 ] }
-        channels { count: 2 policy: RELAXED }
-      }
-      graph_descriptors {
-        name: \"SP4_G0\"
-        type: \"FABRIC\"
-        instances { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 0 } }
-        instances { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 1 } }
-        instances { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 2 } }
-        instances { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 3 } }
-        connections {
-          nodes { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 0 } }
-          nodes { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 1 } }
-          channels { count: 1 policy: STRICT }
-          assign_z_direction: true
-        }
-        connections {
-          nodes { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 0 } }
-          nodes { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 2 } }
-          channels { count: 1 policy: STRICT }
-          assign_z_direction: true
-        }
-        connections {
-          nodes { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 0 } }
-          nodes { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 3 } }
-          channels { count: 1 policy: STRICT }
-          assign_z_direction: true
-        }
-        connections {
-          nodes { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 1 } }
-          nodes { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 2 } }
-          channels { count: 1 policy: STRICT }
-          assign_z_direction: true
-        }
-        connections {
-          nodes { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 1 } }
-          nodes { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 3 } }
-          channels { count: 1 policy: STRICT }
-          assign_z_direction: true
-        }
-        connections {
-          nodes { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 2 } }
-          nodes { mesh { mesh_descriptor: \"SP4_M0\" mesh_id: 3 } }
-          channels { count: 1 policy: STRICT }
-          assign_z_direction: true
-        }
-      }
-      top_level_instance { graph { graph_descriptor: \"SP4_G0\" graph_id: 0 } }
+    allocation:
+      type: Count
+      count: 16
+      match_labels:
+        exabox.tenstorrent.com/purpose: ci-metal
+        exabox.tenstorrent.com/superpod: sp4_works
+        exabox.tenstorrent.com/SP5: C110
