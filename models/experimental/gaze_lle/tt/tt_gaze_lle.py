@@ -264,10 +264,17 @@ class TtGazeLLE:
         )
 
     @torch.no_grad()
-    def __call__(self, images: torch.Tensor, bboxes: List[Sequence[float]]):
+    def __call__(self, images: torch.Tensor, bboxes: List[Sequence[float]], captures=None):
+        """Run forward. If ``captures`` is a mutable dict, intermediate tt tensors
+        are downloaded to torch and stored under named stage keys for PCC testing.
+        Captures inflict many ``to_torch`` syncs, so only use them in PCC tests."""
         ref = self.ref
         b = images.shape[0]
         assert b == 1, "TtGazeLLE currently supports B=1 only"
+
+        def _capture(key, tt_tensor):
+            if captures is not None:
+                captures[key] = ttnn.to_torch(tt_tensor).to(torch.float32)
 
         # ---- 1. Upload pre-patched image. A single pure-layout permute+reshape on host
         # turns the (B, 3, H, W) image into (B, num_patches, ps*ps*3) so the device side
@@ -283,27 +290,35 @@ class TtGazeLLE:
             core_grid=_CORE_GRID,
             compute_kernel_config=_LOFI,
         )
+        _capture("patch_embed", patches_tt)
 
         # ---- 3. Add DINOv2 pos_embed for patch tokens, then prepend [CLS+pos_cls, REG].
         patches_tt = ttnn.add(patches_tt, self.pos_patches_tt)
         x_tt = ttnn.concat([self.prefix_tt, patches_tt], dim=1)
         ttnn.deallocate(patches_tt)
+        _capture("after_prefix", x_tt)
 
         # ---- 4. DINOv2 backbone.
-        for bp in self.block_params:
+        capture_blocks = {0, 5, 11} if captures is not None else set()
+        for i, bp in enumerate(self.block_params):
             x_tt = _dinov2_block(x_tt, bp, self.num_heads)
+            if i in capture_blocks:
+                _capture(f"after_block_{i}", x_tt)
         x_tt = ttnn.layer_norm(x_tt, weight=self.final_norm_w, bias=self.final_norm_b, epsilon=1e-6)
+        _capture("after_final_norm", x_tt)
 
         # ---- 5. Drop CLS + register tokens on device.
         total_prefix = 1 + self.num_reg_tokens
         shp = x_tt.shape
         feat_tt = ttnn.slice(x_tt, [0, total_prefix, 0], [shp[0], shp[1], shp[2]])
         ttnn.deallocate(x_tt)
+        _capture("after_slice", feat_tt)
 
         # ---- 6. Gaze decoder: project 768→256, add pos_embed, multiply head_map by head_token.
         x_tt = ttnn.linear(feat_tt, self.proj_w, bias=self.proj_b, core_grid=_CORE_GRID)
         ttnn.deallocate(feat_tt)
         x_tt = ttnn.add(x_tt, self.gaze_pos_embed_tt)
+        _capture("after_gaze_proj_pos", x_tt)
 
         # ---- Build head-map on device from a 4-scalar bbox. Eliminates the
         # mid-pipeline upload of the pre-computed (1024,) mask.
@@ -325,17 +340,20 @@ class TtGazeLLE:
         ttnn.deallocate(h_mask)
         ttnn.deallocate(w_mask)
         head_map_tt = ttnn.reshape(mask_2d, (b, fh * fw, 1))
+        _capture("head_map", head_map_tt)
         head_contrib = ttnn.mul(head_map_tt, self.head_token_tt)  # (B, 1024, 256)
         ttnn.deallocate(head_map_tt)
         x_tt = ttnn.add(x_tt, head_contrib)
         ttnn.deallocate(head_contrib)
+        _capture("after_head_conditioning", x_tt)
 
         # ---- 7. Prepend in/out token, run 3 gaze blocks, split outputs.
         if self.inout:
             x_tt = ttnn.concat([self.inout_token, x_tt], dim=1)
 
-        for gp in self.gaze_block_params:
+        for i, gp in enumerate(self.gaze_block_params):
             x_tt = _gaze_block(x_tt, gp, num_heads=8)
+        _capture("after_gaze_blocks", x_tt)
 
         inout_preds_tt = None
         if self.inout:
@@ -359,6 +377,7 @@ class TtGazeLLE:
         ttnn.deallocate(patch_out)
         hm = ttnn.add(hm, self.heatmap_b_tt)
         hm = ttnn.sigmoid(hm)
+        _capture("heatmap_compact", hm)
 
         # ---- 9. Download the small outputs.
         heatmap_compact = ttnn.to_torch(hm).to(torch.float32)
@@ -375,7 +394,12 @@ class TtGazeLLE:
 
         inout_preds = None
         if self.inout:
+            if captures is not None:
+                captures["inout_scalar"] = ttnn.to_torch(inout_preds_tt).to(torch.float32).reshape(b)
             inout_preds = ttnn.to_torch(inout_preds_tt).to(torch.float32).reshape(b)
             ttnn.deallocate(inout_preds_tt)
+
+        if captures is not None:
+            captures["heatmap"] = heatmap
 
         return {"heatmap": heatmap, "inout": inout_preds}
