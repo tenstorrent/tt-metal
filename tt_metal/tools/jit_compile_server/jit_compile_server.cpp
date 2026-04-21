@@ -81,74 +81,6 @@ constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
 constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
 fs::path g_server_cache_root = kDefaultServerCacheRoot;
 
-bool safe_exists_value_or_false(const fs::path& path) { return tt::filesystem::safe_exists(path).value_or(false); }
-
-void ensure_safe_create_directories(const fs::path& path) {
-    if (!tt::filesystem::safe_create_directories(path)) {
-        throw std::runtime_error(fmt::format("Failed to create directory: {}", path.string()));
-    }
-}
-
-void ensure_safe_hard_link_or_copy(const fs::path& target, const fs::path& link) {
-    if (!tt::filesystem::safe_hard_link_or_copy(target, link)) {
-        throw std::runtime_error(
-            fmt::format("Failed to create hard link or copy from {} to {}", target.string(), link.string()));
-    }
-}
-
-void ensure_safe_rename(const fs::path& src, const fs::path& dst) {
-    if (!tt::filesystem::safe_rename(src, dst)) {
-        throw std::runtime_error(fmt::format("Failed to rename {} to {}", src.string(), dst.string()));
-    }
-}
-
-std::error_code stream_open_error_code() {
-    if (errno != 0) {
-        return std::error_code(errno, std::system_category());
-    }
-    return std::make_error_code(std::errc::io_error);
-}
-
-template <typename Stream>
-void reset_stream_before_open(Stream& stream) {
-    if (stream.is_open()) {
-        stream.close();
-    }
-    stream.clear();
-}
-
-bool open_ifstream_with_retry(
-    std::ifstream& stream, const fs::path& path, std::error_code& ec, std::ios_base::openmode mode = std::ios::in) {
-    return tt::filesystem::retry_on_estale_ec(
-        [&](std::error_code& open_ec) {
-            reset_stream_before_open(stream);
-            errno = 0;
-            stream.open(path, mode | std::ios::in);
-            if (!stream.is_open()) {
-                open_ec = stream_open_error_code();
-                return false;
-            }
-            return true;
-        },
-        ec);
-}
-
-bool open_ofstream_with_retry(
-    std::ofstream& stream, const fs::path& path, std::error_code& ec, std::ios_base::openmode mode = std::ios::out) {
-    return tt::filesystem::retry_on_estale_ec(
-        [&](std::error_code& open_ec) {
-            reset_stream_before_open(stream);
-            errno = 0;
-            stream.open(path, mode | std::ios::out);
-            if (!stream.is_open()) {
-                open_ec = stream_open_error_code();
-                return false;
-            }
-            return true;
-        },
-        ec);
-}
-
 // Reject paths that could escape the cache root: absolute paths, ".." components, or
 // empty strings.  Throws on violation.
 void validate_safe_relative_path(const std::string& path, const char* field_name) {
@@ -199,13 +131,8 @@ fs::path resolve_uploaded_firmware_path(std::uint64_t build_key, const tt::tt_me
     const fs::path firmware_file = fs::path(target.weakened_firmware_name).filename();
     const fs::path fw_dir = firmware_cache_dir(build_key, target.target_name);
     fs::path candidate = fw_dir / firmware_file;
-    auto candidate_exists = tt::filesystem::safe_exists(candidate);
-    if (candidate_exists.value_or(false)) {
+    if (fs::exists(candidate)) {
         return candidate;
-    }
-    if (!candidate_exists.has_value()) {
-        throw std::runtime_error(fmt::format(
-            "Failed to check firmware artifact for target {} at {}", target.target_name, candidate.string()));
     }
 
     throw std::runtime_error(fmt::format(
@@ -218,28 +145,22 @@ fs::path resolve_uploaded_firmware_path(std::uint64_t build_key, const tt::tt_me
 }
 
 void build_failure(const std::string& target, const std::string& op, const std::string& cmd, const fs::path& log_file) {
-    std::ifstream file;
-    std::error_code open_ec;
-    if (open_ifstream_with_retry(file, log_file, open_ec)) {
+    std::ifstream file{log_file};
+    if (file.is_open()) {
         std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         throw std::runtime_error(fmt::format("{} {} failure -- cmd: {}\nLog: {}", target, op, cmd, log_contents));
     }
-    throw std::runtime_error(fmt::format(
-        "{} {} failure -- cmd: {} (log file {} could not be opened: {})",
-        target,
-        op,
-        cmd,
-        log_file.string(),
-        open_ec.message()));
+    throw std::runtime_error(
+        fmt::format("{} {} failure -- cmd: {} (log file {} not found)", target, op, cmd, log_file.string()));
 }
 
 bool need_compile(const fs::path& out_dir, const fs::path& obj) {
-    return !safe_exists_value_or_false(out_dir / obj) || !tt::jit_build::dependencies_up_to_date(out_dir, obj);
+    return !fs::exists(out_dir / obj) || !tt::jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
 bool need_link(const fs::path& out_dir, const std::string& target_name) {
     fs::path elf_path = out_dir / (target_name + ".elf");
-    return !safe_exists_value_or_false(elf_path) || !tt::jit_build::dependencies_up_to_date(out_dir, elf_path);
+    return !fs::exists(elf_path) || !tt::jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
 std::string format_args(const std::vector<std::string>& args) {
@@ -284,16 +205,16 @@ void compile_one(
     append_tokenized(args, target.defines);
 
     fs::path log_path = obj_path;
-    log_path += ".log";
+    log_path.concat(".log");
     tt::jit_build::utils::FileRenamer log_file(log_path);
     tt::filesystem::safe_remove(log_file.path());
     if (!tt::jit_build::utils::exec_command(args, out_dir, log_file.path())) {
         build_failure(target.target_name, "compile", format_args(args), log_file.path());
     }
     fs::path dephash_path = obj_temp_path;
-    dephash_path += ".dephash";
+    dephash_path.concat(".dephash");
     tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, dephash_path);
-    tt::filesystem::safe_remove(temp_d_path);
+    fs::remove(temp_d_path);
 }
 
 void link_one(
@@ -326,53 +247,22 @@ void link_one(
     args.push_back(elf_file.path().string());
 
     fs::path log_path = elf_path;
-    log_path += ".log";
+    log_path.concat(".log");
     tt::jit_build::utils::FileRenamer log_file(log_path);
-    tt::filesystem::safe_remove(log_file.path());
+    fs::remove(log_file.path());
     if (!tt::jit_build::utils::exec_command(args, out_dir, log_file.path())) {
         build_failure(target.target_name, "link", format_args(args), log_file.path());
     }
 
     fs::path dephash_path = elf_path;
-    dephash_path += ".dephash";
+    dephash_path.concat(".dephash");
     tt::jit_build::utils::FileRenamer dephash_file(dephash_path);
-    std::ofstream hash_file;
-    [[maybe_unused]] std::error_code hash_open_ec;
-    const bool hash_file_opened = open_ofstream_with_retry(hash_file, dephash_file.path(), hash_open_ec);
-    if (hash_file_opened) {
-        tt::jit_build::write_dependency_hashes(
-            {{elf_path.string(), std::move(link_deps)}}, out_dir, elf_path, hash_file);
-        hash_file.close();
-        if (hash_file.fail()) {
-            tt::filesystem::safe_remove(dephash_file.path());
-        }
-    } else {
-        tt::filesystem::safe_remove(dephash_file.path());
+    std::ofstream hash_file(dephash_file.path());
+    tt::jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
+    hash_file.close();
+    if (hash_file.fail()) {
+        fs::remove(dephash_file.path());
     }
-}
-
-std::vector<std::uint8_t> read_file_bytes(const fs::path& path) {
-    std::ifstream file;
-    std::error_code open_ec;
-    if (!open_ifstream_with_retry(file, path, open_ec, std::ios::binary | std::ios::ate)) {
-        throw std::runtime_error(fmt::format("Cannot read ELF file {}: {}", path.string(), open_ec.message()));
-    }
-    std::streampos pos = file.tellg();
-    if (pos == std::streampos(-1)) {
-        throw std::runtime_error("Cannot determine size of ELF file: " + path.string());
-    }
-    auto byte_count = static_cast<std::streamsize>(pos);
-    file.seekg(0, std::ios::beg);
-    std::vector<std::uint8_t> data(static_cast<size_t>(byte_count));
-    file.read(reinterpret_cast<char*>(data.data()), byte_count);
-    if (file.gcount() != byte_count || (!file && !file.eof())) {
-        throw std::runtime_error(fmt::format(
-            "Failed to read ELF file '{}' fully (expected {} bytes, got {})",
-            path.string(),
-            byte_count,
-            file.gcount()));
-    }
-    return data;
 }
 
 void build_target(
@@ -384,7 +274,7 @@ void build_target(
         throw std::runtime_error("srcs and objs must have the same size for target " + target.target_name);
     }
 
-    ensure_safe_create_directories(out_dir);
+    fs::create_directories(out_dir);
 
     const size_t num_objs = target.objs.size();
     std::vector<fs::path> temp_objs;
@@ -425,7 +315,12 @@ void build_target(
         for (size_t i = 0; i < num_objs; ++i) {
             fs::path temp_path = out_dir / temp_objs[i];
             if (!compiled[i]) {
-                ensure_safe_hard_link_or_copy(out_dir / target.objs[i], temp_path);
+                std::error_code ec;
+                fs::path obj_path = out_dir / target.objs[i];
+                fs::create_hard_link(obj_path, temp_path, ec);
+                if (ec) {
+                    fs::copy_file(obj_path, temp_path, fs::copy_options::overwrite_existing);
+                }
             }
             link_obj_paths.push_back(std::move(temp_path));
         }
@@ -436,21 +331,17 @@ void build_target(
         fs::path src_path = out_dir / temp_objs[i];
         fs::path dst_path = out_dir / target.objs[i];
         if (compiled[i]) {
-            ensure_safe_rename(src_path, dst_path);
-            fs::path src_dephash = src_path;
-            src_dephash += ".dephash";
-            fs::path dst_dephash = dst_path;
-            dst_dephash += ".dephash";
-            ensure_safe_rename(src_dephash, dst_dephash);
-        } else if (safe_exists_value_or_false(src_path)) {
-            tt::filesystem::safe_remove(src_path);
+            fs::rename(src_path, dst_path);
+            fs::rename(fs::path(src_path).concat(".dephash"), fs::path(dst_path).concat(".dephash"));
+        } else if (fs::exists(src_path)) {
+            fs::remove(src_path);
         }
     }
 
     fs::path elf_path = out_dir / (target.target_name + ".elf");
     tt::tt_metal::jit_server::ElfBlob blob;
     blob.name = target.target_name;
-    blob.data = read_file_bytes(elf_path);
+    blob.data = tt::jit_build::utils::read_file_bytes(elf_path);
     response.elf_blobs.push_back(std::move(blob));
 }
 
@@ -481,48 +372,19 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
 
         if (!request.generated_files.empty()) {
             const fs::path genfiles_dir = kernel_cache_dir(request.build_key, request.kernel_name);
-            ensure_safe_create_directories(genfiles_dir);
+            fs::create_directories(genfiles_dir);
             for (const auto& file : request.generated_files) {
                 fs::path target_path = genfiles_dir / file.name;
-                fs::path temp_path = target_path;
-                temp_path += ".tmp";
-
-                std::error_code cleanup_ec;
-                fs::remove(temp_path, cleanup_ec);
-
-                std::ofstream out;
-                std::error_code open_ec;
-                if (!open_ofstream_with_retry(out, temp_path, open_ec, std::ios::binary)) {
-                    throw std::runtime_error(
-                        fmt::format("Cannot create file {}: {}", target_path.string(), open_ec.message()));
+                tt::jit_build::utils::FileRenamer tmp(target_path);
+                std::ofstream out(tmp.path(), std::ios::binary);
+                if (!out.is_open()) {
+                    throw std::runtime_error("Cannot create file: " + target_path);
                 }
-
-                try {
-                    out.write(
-                        reinterpret_cast<const char*>(file.content.data()),
-                        static_cast<std::streamsize>(file.content.size()));
-                    if (!out) {
-                        throw std::runtime_error("Failed to write file: " + target_path.string());
-                    }
-
-                    out.close();
-                    if (!out) {
-                        throw std::runtime_error("Failed to finalize file: " + target_path.string());
-                    }
-                } catch (...) {
-                    std::error_code remove_ec;
-                    fs::remove(temp_path, remove_ec);
-                    throw;
-                }
-
-                std::error_code rename_ec;
-                fs::rename(temp_path, target_path, rename_ec);
-                if (rename_ec) {
-                    std::error_code remove_ec;
-                    fs::remove(temp_path, remove_ec);
-                    throw std::runtime_error(
-                        fmt::format(
-                            "Failed to publish generated file {}: {}", target_path.string(), rename_ec.message()));
+                out.write(
+                    reinterpret_cast<const char*>(file.content.data()),
+                    static_cast<std::streamsize>(file.content.size()));
+                if (!out) {
+                    throw std::runtime_error("Failed to write file: " + target_path);
                 }
             }
         }
@@ -571,15 +433,13 @@ tt::tt_metal::jit_server::UploadFirmwareResponse upload_firmware_callback(
             }
 
             fs::path fw_dir = firmware_cache_dir(request.build_key, safe_target);
-            ensure_safe_create_directories(fw_dir);
+            fs::create_directories(fw_dir);
             fs::path target_path = fw_dir / safe_file;
 
             tt::jit_build::utils::FileRenamer tmp(target_path);
-            std::ofstream out;
-            std::error_code open_ec;
-            if (!open_ofstream_with_retry(out, tmp.path(), open_ec, std::ios::binary)) {
-                throw std::runtime_error(
-                    fmt::format("Cannot create firmware file {}: {}", target_path.string(), open_ec.message()));
+            std::ofstream out(tmp.path(), std::ios::binary);
+            if (!out.is_open()) {
+                throw std::runtime_error("Cannot create firmware file: " + target_path.string());
             }
             out.write(
                 reinterpret_cast<const char*>(artifact.data.data()),
