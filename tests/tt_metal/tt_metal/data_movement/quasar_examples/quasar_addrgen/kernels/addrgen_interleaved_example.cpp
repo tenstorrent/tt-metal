@@ -26,6 +26,8 @@
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include <cstdint>
 
+using namespace overlay;
+
 constexpr uint32_t num_banks = 4;
 constexpr uint32_t first_bank = 20;   // use banks 20–23
 constexpr uint32_t bank_offset = 36;  // banks are 1MB (2^20 B) apart in address space

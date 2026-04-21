@@ -32,6 +32,8 @@
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include <cstdint>
 
+using namespace overlay;
+
 constexpr uint32_t H = 6;
 constexpr uint32_t W = 7;
 constexpr uint32_t k = 3;

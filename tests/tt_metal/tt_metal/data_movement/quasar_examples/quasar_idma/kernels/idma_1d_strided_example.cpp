@@ -23,6 +23,8 @@
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 #include <cstdint>
 
+using namespace overlay;
+
 constexpr uint32_t num_elements = 10;
 constexpr uint32_t elem_size = 8;
 constexpr uint32_t src_stride = 2 * elem_size;  // 16 — read every other element
