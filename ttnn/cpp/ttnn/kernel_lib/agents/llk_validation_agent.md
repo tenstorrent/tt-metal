@@ -82,7 +82,15 @@ Unobserved combo fails -> record as UNSUPPORTED, continue.
 
 ═══ SUB-STAGE 2c: HELPER INTEGRATION ═══
 
-Write test kernels using the ACTUAL helper API from {{HELPER_HPP}}.
+Write test kernels using the ACTUAL helper API from {{HELPER_HPP}}. Land them
+in the kernel_lib validation suite so later changes MUST re-run them:
+
+- Compute / dataflow kernels under `ttnn/cpp/ttnn/kernel_lib/tests/{feature}/`
+  (match the existing `chain_and_binary/` layout: `compute_kernels/`,
+  `dataflow_kernels/`)
+- Pytest under `tests/ttnn/unit_tests/kernel_lib/test_{feature}.py`
+- Launch via `ttnn.generic_op` with a `ProgramDescriptor` (see
+  `test_helpers_chain_and_binary.py` for the scaffold pattern)
 
 Mandatory coverage per op:
 1. Default path (default dtype, default args)
@@ -91,9 +99,23 @@ Mandatory coverage per op:
 4. Runtime arg variation (at least 2 values)
 5. Policy variation (at least 2 input policies)
 6. Chain composition (combine with another op in a chain)
+7. `num_tiles ∈ {1, 8, 64}` — single tile, fits-in-DEST, multi-DEST-window
+
+Golden comparisons use `comp_pcc` with PCC ≥ 0.9999 for bf16-only paths,
+≥ 0.999 when mixed fp32 is involved.
+
+Run via:
+```
+scripts/tt-test.sh --run-all tests/ttnn/unit_tests/kernel_lib/test_{feature}.py
+```
 
 Helper fails but raw passed -> fix .hpp/.inl internally, re-run 2c only.
 If fix requires an API change -> L1 TRIGGER (see below).
+
+If the change re-opens coverage in an existing suite (e.g. touching
+`sfpu_chain` Load lifecycle re-opens `test_helpers_chain_and_binary.py`),
+EXTEND that suite rather than adding a parallel one. One pytest file per
+helper feature.
 
 ═══ SUB-STAGE 2d: PERFORMANCE ═══
 

@@ -47,7 +47,42 @@ ttnn/cpp/ttnn/kernel_lib/
   {name}_helpers.hpp      <- declarations, enums, structs, examples
   {name}_helpers.inl      <- implementation
   agents/                 <- this directory (pipeline docs + agent prompts)
+  tests/{feature}/        <- validation kernels + pytest (see "Validation Tests")
 ```
+
+## Validation Tests
+
+Every helper change (new helper OR update) MUST land alongside at least one
+pytest that runs a custom compute kernel on device and validates against a
+torch golden. Host-side `./build_metal.sh` is NOT sufficient — kernels JIT
+at runtime, so compilation success is not correctness.
+
+Existing suites — run these AND add to them for any change that touches the
+covered surface:
+
+| Suite | What it covers | Location |
+|---|---|---|
+| `test_helpers_chain_and_binary.py` | `sfpu_chain` Load lifecycle (fan-out, `LoadPolicy`, `NoWaitPop`); `binary_op` same-CB dedup; `DestReuseOp` as chain element; Load inside a PostOp chain (FPU-clash reinit) | `tests/ttnn/unit_tests/kernel_lib/` + kernels in `ttnn/cpp/ttnn/kernel_lib/tests/chain_and_binary/` |
+
+When a new surface is added (new enum value, new policy, new op struct, new
+reconfig path) the update MUST:
+
+1. Add or extend a test kernel that exercises the exact new path.
+2. Parameterize over at least `num_tiles ∈ {1, 8, 64}` — single tile, fits in
+   DEST, and spans multiple DEST windows. These three cover most off-by-one
+   and batching regressions.
+3. Include a torch golden using `comp_pcc(...)` (>= 0.9999 for bf16-only
+   paths; >= 0.999 when fp32 mixed dtypes are involved).
+4. Skip Blackhole unless the feature is explicitly Blackhole-tested.
+
+Run via:
+```
+scripts/tt-test.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py
+```
+
+Phase 2 (Validate) of the pipeline is responsible for adding these tests —
+see [llk_validation_agent.md](llk_validation_agent.md) for the concrete
+sub-stage 2c / 2d steps.
 
 ## Kernel Migration Steps
 
@@ -86,7 +121,10 @@ Keep the scope surgical:
 
 ### Step 4 — Verify on device
 
-- Build (`./build_metal.sh`).
+- Build (`./build_metal.sh`) — note this only compiles the host library.
+  Kernels JIT at runtime. A passing build is necessary but insufficient.
+- Run the kernel_lib validation suite to confirm the helpers themselves still
+  work: `scripts/tt-test.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py`.
 - Run the nightly pytest suite for this operation (e.g. `scripts/tt-test.sh --run-all tests/ttnn/nightly/unit_tests/operations/<op>/*.py`).
 - Confirm both `fp32_dest_acc_en=False` and `fp32_dest_acc_en=True` cases pass when the operation tests FP32 accumulation.
 - If any test fails: diagnose whether it's a helper gap (→ Step 2) or a migration mistake (→ Step 3).

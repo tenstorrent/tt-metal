@@ -346,7 +346,23 @@ Categorize every identified call site. This is mandatory — it tells the implem
 
 ### Test Plan
 
-Specific pytest commands to run after migration. Not optional.
+Two required categories:
+
+**1. kernel_lib validation suite** — extend or add to
+`tests/ttnn/unit_tests/kernel_lib/test_{feature}.py` + kernels under
+`ttnn/cpp/ttnn/kernel_lib/tests/{feature}/`. Every new enum value, new
+policy, new op struct, or new reconfig path MUST have a test kernel that
+launches via `ttnn.generic_op` and compares against a torch golden.
+Parameterize over `num_tiles ∈ {1, 8, 64}` at minimum. Reference scaffold:
+`test_helpers_chain_and_binary.py`. This suite is the pre-merge gate —
+Phase 2 (Validate) invokes it and blocks on failure.
+
+```bash
+scripts/tt-test.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py
+```
+
+**2. Op-specific migration tests** — pytest commands for the kernels this
+helper is meant to replace.
 
 ```bash
 # [describe what each command tests and which tier/pattern it covers]
