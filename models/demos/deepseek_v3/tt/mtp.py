@@ -143,7 +143,7 @@ class MTP2D(AbstractModule):
             batch_size_per_row=batch_size_per_row,
         )
         head_norm_cfg = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
-        head_cfg = LMHead1D.prefill_model_config(mesh_device)
+        head_cfg = LMHead1D.prefill_model_config(hf_config, mesh_device)
         return {
             "embedding": Embedding2D.prefill_model_config(hf_config, mesh_device),
             "hidden_norm_reshard": ReshardConfig(memory_config=hidden_norm_cfg["input_memory_config"]),

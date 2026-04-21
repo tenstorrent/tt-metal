@@ -64,6 +64,10 @@
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 
+#ifdef TT_METAL_USE_EMULE
+#include "impl/emulation/emulated_program_runner.hpp"
+#endif
+
 namespace tt::tt_metal {
 struct RuntimeArgsData;
 struct TraceDescriptor;
@@ -848,7 +852,12 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             TT_ASSERT(!MetalContext::instance().device_manager()->is_dispatch_firmware_active());
         }
 
-        detail::CompileProgram(device, program);
+#ifdef TT_METAL_USE_EMULE
+        if (MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Emule)
+#endif
+        {
+            detail::CompileProgram(device, program);
+        }
         program.impl().finalize_dataflow_buffer_configs();
         if (!program.impl().is_finalized()) {
             program.impl().finalize_offsets(device);
@@ -859,46 +868,55 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 
         auto device_id = device->id();
 
-        MetalContext::instance().get_cluster().dram_barrier(device_id);
-
-        // Note: the l1_barrier below is needed to be sure writes to cores that
-        // don't get the GO mailbox (eg, storage cores) have all landed
-        MetalContext::instance().get_cluster().l1_barrier(device->id());
-
-        std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
-        std::unordered_set<CoreCoord> not_done_cores;
-        const auto& hal = MetalContext::instance().hal();
-        for (uint32_t programmable_core_type_index = 0;
-             programmable_core_type_index < logical_cores_used_in_program.size();
-             programmable_core_type_index++) {
-            CoreType core_type = hal.get_core_type(programmable_core_type_index);
-            HalProgrammableCoreType programmable_core_type =
-                hal.get_programmable_core_type(programmable_core_type_index);
-
-            for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-                auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
-                auto runtime_id = program.get_runtime_id();
-                kg->launch_msg.view().kernel_config().host_assigned_id() =
-                    runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device->id());
-
-                auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
-                not_done_cores.insert(physical_core);
-                if (force_slow_dispatch) {
-                    tt::llrt::send_reset_go_signal(device->id(), physical_core);
-                }
-
-                tt::llrt::write_launch_msg_to_core(
-                    device->id(),
-                    physical_core,
-                    kg->launch_msg.view(),
-                    kg->go_msg.view(),
-                    hal.get_dev_addr(
-                        programmable_core_type, HalL1MemAddrType::LAUNCH));
-            }
+#ifdef TT_METAL_USE_EMULE
+        if (MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+            // Emulated mode always executes synchronously (slow dispatch only).
+            // The wait_until_cores_done flag is not honored; all kernels complete
+            // before this function returns.
+            emule::execute_program_emulated(device, program);
+            return;
         }
-        if (wait_until_cores_done) {
-            // Wait for all cores to be done
-            llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
+#endif
+        {
+            MetalContext::instance().get_cluster().dram_barrier(device_id);
+
+            // Note: the l1_barrier below is needed to be sure writes to cores that
+            // don't get the GO mailbox (eg, storage cores) have all landed
+            MetalContext::instance().get_cluster().l1_barrier(device->id());
+
+            std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
+            std::unordered_set<CoreCoord> not_done_cores;
+            const auto& hal = MetalContext::instance().hal();
+            for (uint32_t programmable_core_type_index = 0;
+                 programmable_core_type_index < logical_cores_used_in_program.size();
+                 programmable_core_type_index++) {
+                CoreType core_type = hal.get_core_type(programmable_core_type_index);
+                HalProgrammableCoreType programmable_core_type =
+                    hal.get_programmable_core_type(programmable_core_type_index);
+                for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+                    auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+                    auto runtime_id = program.get_runtime_id();
+                    kg->launch_msg.view().kernel_config().host_assigned_id() =
+                        runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device->id());
+
+                    auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
+                    not_done_cores.insert(physical_core);
+                    if (force_slow_dispatch) {
+                        tt::llrt::send_reset_go_signal(device->id(), physical_core);
+                    }
+
+                    tt::llrt::write_launch_msg_to_core(
+                        device->id(),
+                        physical_core,
+                        kg->launch_msg.view(),
+                        kg->go_msg.view(),
+                        hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
+                }
+            }
+            if (wait_until_cores_done) {
+                // Wait for all cores to be done
+                llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
+            }
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
@@ -939,6 +957,11 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     program.impl().allocate_dataflow_buffers(validation_device);
     program.impl().validate_dataflow_buffer_region(validation_device);
 
+    bool is_emulated = false;
+#ifdef TT_METAL_USE_EMULE
+    is_emulated = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+#endif
+
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
     uint32_t max_cbs = hal.get_arch_num_circular_buffers();
@@ -948,7 +971,10 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
         for (const auto& logical_core : logical_cores) {
             KernelGroup* kernel_group = program.impl().kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
-            ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
+            // Skip binary writing for emulated mode (JIT compilation happens in execute_program_emulated)
+            if (!is_emulated) {
+                ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
+            }
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
                 uint64_t kernel_config_base =
@@ -1496,6 +1522,15 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer) {
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
+    circular_buffer->config().set_globally_allocated_address(buffer);
+    circular_buffer->assign_global_address();
+}
+
+void UpdateDynamicCircularBufferAddress(
+    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset) {
+    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
+    TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
+    circular_buffer->config().set_address_offset(address_offset);
     circular_buffer->config().set_globally_allocated_address(buffer);
     circular_buffer->assign_global_address();
 }
