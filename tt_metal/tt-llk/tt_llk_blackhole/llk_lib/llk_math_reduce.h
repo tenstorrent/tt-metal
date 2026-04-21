@@ -29,42 +29,62 @@ inline void reduce_row_perform_transpose()
 {
     if (enforce_fp32_accumulation)
     {
-        // BH Issue #449 W/A: SFPU-staged 2-pass transpose.
-        // ADDR_MOD_7 (dest.incr=2) and Phase 3 replay body programmed once in init.
-        // Phase 1: inline (ADDR_MOD_0, no DstRWC advance so Phase 3 replay starts at 0).
-        // Phase 3: replay×8 from slot 0 (recorded in init).
-        constexpr std::uint32_t HI16_STAGE = 128;
+        // BH Issue #449 W/A: SFPU-staged 2-pass transpose (v4: Phase 1 lo-only).
+        // Phase 1: SFPU extracts lo16 only to LO16_STAGE (16 ops; was 24 in v3).
+        //   Hi16 does NOT need staging — Phase 2 hi reads hi16 directly from the fp32 face
+        //   via MOVD2B(Fp32=0) with dst_32bit_addr_en=1 (routes read_dst16b through
+        //   read_dst32b(adj_row) >> 16 → pure hi16 regardless of tile offset D).
+        // Phase 2 hi: dst_32bit_addr_en=1, MOVD2B reads hi16 from face (dst=0),
+        //   TRNSPSRCB, MOVB2D writes transposed hi16 back to face via adj_row (lo16=0 as
+        //   side effect of write_dst32b(adj_row, data<<16)). No HI16_STAGE scratch.
+        // Phase 2 lo: dst_32bit_addr_en=0, unchanged — transposes LO16_STAGE scratch.
+        // Phase 3: SFPLOAD INT32 from face (reads face hi16+0 via adj_row via read_dst32b,
+        //   no dst_32bit_addr_en dependency) + SFPLOAD LO16_ONLY from LO16_STAGE
+        //   (preserves LReg hi16) + SFPSTORE INT32 = 24 ops (unchanged count).
+        // Total SFPU: 40 ops (-8 vs 48 in v3). Uses only dest_32b_lo=0 in MOV* (avoids
+        // BH Issue #449 HW bug, which affects dest_32b_lo=1).
         constexpr std::uint32_t LO16_STAGE = 144;
 
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
 
-        // Phase 1: SFPU splits fp32 face into hi16/lo16 raw at scratch rows (inline).
+        // Phase 1: SFPU extracts lo16 only (hi16 read directly from face by Phase 2 hi).
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 #pragma GCC unroll 4
         for (std::uint32_t g = 0; g < 4; g++)
         {
             const std::uint32_t src_row = g * 4;
-            const std::uint32_t hi_row  = HI16_STAGE + g * 4;
             const std::uint32_t lo_row  = LO16_STAGE + g * 4;
 #pragma GCC unroll 2
             for (std::uint32_t parity = 0; parity < 4; parity += 2)
             {
                 TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, src_row + parity);
-                TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, hi_row + parity);
                 TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, lo_row + parity);
             }
         }
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 
-        // Phase 2: plain MOVD2B(DEST_NORM)+TRNSPSRCB+MOVB2D(DEST_NORM) for each half.
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, HI16_STAGE);
-        TTI_TRNSPSRCB;
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, HI16_STAGE);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE + 4);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE + 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE + 12);
+        // Phase 2 hi: enable dst_32bit_addr_en=1 so MOVD2B/MOVB2D route through
+        // read_dst32b/write_dst32b(adj_row). Reads hi16 from face (dst=0), transposes,
+        // writes transposed hi16 back to face. (Face lo16 gets zeroed as side effect.)
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
+        _llk_math_dbg_feature_disable_(); // dst_32bit_addr_en = 1
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
 
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_TRNSPSRCB;
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+
+        // Restore dst_32bit_addr_en=0 before Phase 2 lo (which needs direct physical
+        // addressing for LO16_STAGE scratch access).
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
+        _llk_math_dbg_feature_enable_(); // dst_32bit_addr_en = 0
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
+
+        // Phase 2 lo: unchanged — transposes LO16_STAGE scratch in place.
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
         TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
@@ -76,6 +96,7 @@ inline void reduce_row_perform_transpose()
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
 
         // Phase 3: replay from slot 0 (body recorded once in _llk_math_reduce_init_).
+        // Now reads hi16 from face (not HI16_STAGE) via SFPLOAD INT32 (adj_row path).
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 #pragma GCC unroll 8
         for (std::uint32_t i = 0; i < 8; i++)
@@ -344,13 +365,16 @@ inline void _llk_math_reduce_init_()
             .set(ADDR_MOD_7);
 
         // Record Phase 3 recombine body once; reduce_row_perform_transpose replays it x8.
-        // LO16_STAGE=144, HI16_STAGE=128: load lo16 then hi16 (HI16_ONLY preserves lo16),
-        // store as INT32. ADDR_MOD_7 on STORE advances SFPU DstRWC +2 per replay iter.
-        constexpr std::uint32_t HI16_STAGE = 128;
+        // v4: hi16 read from face (imm=0) via SFPLOAD INT32 — uses read_dst32b(adj_row)
+        //   directly, works for any tile offset. Phase 2 hi already wrote transposed hi16
+        //   to the face via MOVB2D with dst_32bit_addr_en=1.
+        // Then SFPLOAD LO16_ONLY from LO16_STAGE (preserves LReg[31:16] = face_hi16,
+        //   sets LReg[15:0] = transposed lo16). SFPSTORE INT32 writes full fp32 to face.
+        //   ADDR_MOD_7 on STORE advances SFPU DstRWC +2 per replay iter.
         constexpr std::uint32_t LO16_STAGE = 144;
         lltt::record<lltt::NoExec>(0, 3);
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_0, LO16_STAGE);
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, HI16_STAGE);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, LO16_STAGE);
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
