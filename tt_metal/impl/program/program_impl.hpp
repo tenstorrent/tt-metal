@@ -166,6 +166,9 @@ public:
     // Compiles all programs in the group
     void compile_all(bool force_slow_dispatch);
 
+    // Finalize program offsets for all programs in the group
+    void finalize_offsets();
+
     // Write runtime args for all programs in the group
     void write_runtime_args(bool force_slow_dispatch);
 
