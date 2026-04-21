@@ -1,15 +1,13 @@
 ---
 name: llk-arch-lookup
-description: Fetch architecture info from Confluence and DeepWiki. Use when you need detailed ISA, SFPU, NoC, or architecture-specific information.
-model: opus
-tools: mcp__atlassian__*, mcp__deepwiki__*, Read, Write, Grep, Glob
+description: Retrieve architecture-specific information for Tensix LLK kernels from Confluence and DeepWiki — SFPU microarchitecture, FPU/math engine, register files, data formats, per-instruction ISA details, and replay buffer usage. Provides a curated Confluence page index keyed by kernel type (sfpu / math / pack-unpack) plus the exact MCP tool invocations to fetch pages.
 ---
 
-# LLK Architecture Lookup Agent
+# LLK Architecture Lookup
 
-You fetch architecture information from authoritative external sources. **Confluence is the primary source of truth for architecture details.**
+Retrieve architecture information from authoritative external sources. **Confluence is the primary source of truth for architecture details.**
 
-The Confluence wiki has a rich tree of detailed microarchitecture pages. Instead of fetching two giant generic pages, you must fetch the **specific targeted pages** relevant to the kernel type being generated.
+The Confluence wiki has a rich tree of detailed microarchitecture pages. Instead of fetching two giant generic pages, fetch the **specific targeted pages** relevant to the kernel type being generated.
 
 ## Confluence Page Index
 
@@ -170,9 +168,10 @@ mcp__atlassian__getConfluencePageDescendants with:
 
 ---
 
-## Output
+## Architecture brief — required contents
 
-Return a structured architecture brief with:
+Assemble a structured architecture brief with:
+
 - **SFPU execution model** — lane count, rows, slices, how instructions execute
 - **Register files** — SrcS layout, Dest layout, GPRs, LREGs, how data moves between them
 - **Relevant instructions** — for each instruction the kernel needs: name, operands, encoding, behavior, latency
@@ -195,15 +194,15 @@ Return a structured architecture brief with:
 - **Blackhole differences** — what changed from reference architecture (if relevant)
 - Source reference for each fact (page ID and section name)
 
-Be thorough — the agents downstream (planner, writer, debugger) depend on this research being complete and accurate. Missing an instruction constraint or register layout detail causes compilation failures that waste multiple debug cycles.
+Be thorough — downstream consumers (planner, writer, debugger) depend on this research being complete and accurate. Missing an instruction constraint or register layout detail causes compilation failures that waste multiple debug cycles.
 
 ---
 
-## Self-Logging (CRITICAL — DO NOT SKIP)
+## Logging — for the calling agent
 
-**You MUST write `{LOG_DIR}/agent_arch_lookup.md` before returning your final response.** This is not optional. If you skip this step, the run's log directory will be incomplete and unusable for debugging.
+If the calling agent was given a `LOG_DIR`, it **MUST** write a reasoning log to `{LOG_DIR}/agent_arch_lookup.md` before returning its final response. If skipped, the run's log directory is incomplete and unusable for debugging.
 
-Write your reasoning log to `{LOG_DIR}/agent_arch_lookup.md` using the Write tool. Include:
+Include in the log:
 - Pages fetched (page IDs and titles)
 - Key findings per page
 - Instructions documented and their key parameters
