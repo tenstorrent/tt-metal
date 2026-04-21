@@ -38,7 +38,7 @@ struct DispatchProgramFactory {
         const MeshCoordinate& mesh_coordinate,
         const DispatchInputs& tensor_args,
         tensor_return_value_t& tensor_return_value,
-        const MeshCoordinateRangeSet& tensor_coords,
+        const ttnn::distributed::MeshCoordinateRange& subgroup_range,
         const GlobalSemaphore& init_semaphore,
         const GlobalSemaphore& cross_device_semaphore);
 

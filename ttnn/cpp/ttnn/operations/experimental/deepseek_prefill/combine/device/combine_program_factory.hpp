@@ -37,7 +37,7 @@ struct CombineProgramFactory {
         const MeshCoordinate& mesh_coordinate,
         const CombineInputs& tensor_args,
         ttnn::Tensor& tensor_return_value,
-        const MeshCoordinateRangeSet& tensor_coords,
+        const ttnn::distributed::MeshCoordinateRange& subgroup_range,
         const GlobalSemaphore& init_semaphore);
 
     static void override_runtime_arguments(

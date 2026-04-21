@@ -16,6 +16,16 @@ std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
     tt::tt_fabric::Topology topology,
     std::optional<uint32_t> axis);
 
+// Same as `get_neighbors`, but restricts the search to a sub-range of the mesh.
+// Used by MoE dispatch subgroups: the "world" each program sees is a single subgroup
+// rather than the full mesh, so neighbors across a subgroup boundary must be pruned.
+// `mesh_coordinate` must lie inside `range`.
+std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors_in_range(
+    const ttnn::distributed::MeshCoordinateRange& range,
+    const ttnn::distributed::MeshCoordinate& mesh_coordinate,
+    tt::tt_fabric::Topology topology,
+    std::optional<uint32_t> axis);
+
 // Utilities to code-gen variadic length containers for kernels
 template <typename T>
 std::string stringify(const T& vec) {

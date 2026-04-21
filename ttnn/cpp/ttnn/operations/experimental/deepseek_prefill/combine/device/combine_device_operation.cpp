@@ -117,7 +117,8 @@ ttnn::Tensor prefill_combine(
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     bool init_zeros,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    uint32_t num_dispatch_subgroups) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::combine::CombineDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -131,7 +132,8 @@ ttnn::Tensor prefill_combine(
             .output_mem_config = memory_config,
             .worker_core_range_set = worker_core_range_set,
             .init_zeros = init_zeros,
-            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
+            .num_dispatch_subgroups = num_dispatch_subgroups},
         OperationType::tensor_args_t{
             .dispatched_buffer = dispatched_buffer,
             .dispatched_metadata = dispatched_metadata,

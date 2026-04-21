@@ -68,6 +68,44 @@ void create_tensor_cb(
 
 }  // namespace detail
 
+namespace {
+
+// Partition a single contiguous MeshCoordinateRangeSet along `axis` into `num_subgroups`
+// equal contiguous sub-ranges. See dispatch_program_factory.cpp for the mirror helper.
+std::vector<ttnn::distributed::MeshCoordinateRange> split_into_subgroups(
+    const ttnn::distributed::MeshCoordinateRangeSet& tensor_coords, uint32_t axis, uint32_t num_subgroups) {
+    TT_FATAL(
+        tensor_coords.ranges().size() == 1,
+        "Combine subgroups require tensor_coords to be a single contiguous range (got {} ranges)",
+        tensor_coords.ranges().size());
+    const auto& full_range = tensor_coords.ranges().front();
+    const auto full_shape = full_range.shape();
+    TT_FATAL(axis < full_shape.dims(), "axis ({}) out of range for mesh shape with {} dims", axis, full_shape.dims());
+    const uint32_t axis_size = full_shape[axis];
+    TT_FATAL(
+        axis_size % num_subgroups == 0,
+        "axis {} size ({}) must be divisible by num_subgroups ({})",
+        axis,
+        axis_size,
+        num_subgroups);
+    const uint32_t subgroup_span = axis_size / num_subgroups;
+
+    std::vector<ttnn::distributed::MeshCoordinateRange> subgroups;
+    subgroups.reserve(num_subgroups);
+    for (uint32_t i = 0; i < num_subgroups; ++i) {
+        tt::stl::SmallVector<uint32_t> start_vals(
+            full_range.start_coord().coords().begin(), full_range.start_coord().coords().end());
+        tt::stl::SmallVector<uint32_t> end_vals(
+            full_range.end_coord().coords().begin(), full_range.end_coord().coords().end());
+        start_vals[axis] = full_range.start_coord()[axis] + i * subgroup_span;
+        end_vals[axis] = start_vals[axis] + subgroup_span - 1;
+        subgroups.emplace_back(ttnn::MeshCoordinate(start_vals), ttnn::MeshCoordinate(end_vals));
+    }
+    return subgroups;
+}
+
+}  // namespace
+
 CombineProgramFactory::cached_mesh_workload_t CombineProgramFactory::create_mesh_workload(
     const CombineParams& operation_attributes,
     const MeshCoordinateRangeSet& tensor_coords,
@@ -80,15 +118,22 @@ CombineProgramFactory::cached_mesh_workload_t CombineProgramFactory::create_mesh
 
     auto sem_buffer_type = operation_attributes.use_l1_small_for_semaphores ? tt::tt_metal::BufferType::L1_SMALL
                                                                             : tt::tt_metal::BufferType::L1;
-    auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
-        mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
 
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(
-            operation_attributes, coord, tensor_args, tensor_return_value, tensor_coords, init_barrier_semaphore);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+    const uint32_t subgroup_axis = operation_attributes.axis.value_or(0);
+    const auto subgroups =
+        split_into_subgroups(tensor_coords, subgroup_axis, operation_attributes.num_dispatch_subgroups);
+
+    for (const auto& subgroup_range : subgroups) {
+        auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
+            mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
+        tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+
+        for (const auto& coord : subgroup_range) {
+            auto cached_program = create_at(
+                operation_attributes, coord, tensor_args, tensor_return_value, subgroup_range, init_barrier_semaphore);
+            workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+            shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+        }
     }
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
@@ -98,7 +143,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     const MeshCoordinate& mesh_coordinate,
     const CombineInputs& tensor_args,
     ttnn::Tensor& tensor_return_value,
-    const MeshCoordinateRangeSet& tensor_coords,
+    const ttnn::distributed::MeshCoordinateRange& subgroup_range,
     const GlobalSemaphore& init_semaphore) {
     tt::tt_metal::Program program{};
 
@@ -110,13 +155,21 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto* mesh_device = dispatched_buffer.device();
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
 
-    const auto& mesh_view = mesh_device->get_view();
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
     uint32_t src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
-    uint32_t linearized_mesh_coord = ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
-    uint32_t mesh_rows = mesh_view.num_rows();
-    uint32_t mesh_cols = mesh_view.num_cols();
+
+    // Subgroup-local view: kernel sees only chips inside `subgroup_range`.
+    const auto subgroup_shape = subgroup_range.shape();
+    const uint32_t mesh_rows = subgroup_shape[0];
+    const uint32_t mesh_cols = subgroup_shape.dims() > 1 ? subgroup_shape[1] : 1;
+    uint32_t linearized_mesh_coord = 0;
+    {
+        const auto& start = subgroup_range.start_coord();
+        const uint32_t local_row = mesh_coordinate[0] - start[0];
+        const uint32_t local_col = mesh_coordinate.dims() > 1 ? (mesh_coordinate[1] - start[1]) : 0;
+        linearized_mesh_coord = local_row * mesh_cols + local_col;
+    }
 
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
@@ -124,7 +177,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     log_debug(
         tt::LogOp,
         "Creating prefill combine program for mesh coordinate: ({}, {}) with mesh id: {} "
-        "chip id: {} linearized: {} mesh shape: ({}, {}) topology: {} num_links: {}",
+        "chip id: {} linearized subgroup: {} subgroup shape: ({}, {}) subgroup: [{}, {}] topology: {} num_links: {}",
         mesh_coordinate[0],
         mesh_coordinate[1],
         src_mesh_id,
@@ -132,6 +185,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         linearized_mesh_coord,
         mesh_rows,
         mesh_cols,
+        subgroup_range.start_coord(),
+        subgroup_range.end_coord(),
         topology,
         num_links);
 
@@ -139,7 +194,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     const auto [neighbors, directions] =
-        ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+        ccl::common::get_neighbors_in_range(subgroup_range, mesh_coordinate, topology, operation_attributes.axis);
 
     auto dispatched_shape = dispatched_buffer.logical_shape();
     auto hidden_size = dispatched_shape[-1];
@@ -234,7 +289,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     }
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
-    for (const auto& coord : tensor_coords.coords()) {
+    for (const auto& coord : subgroup_range) {
         auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);

@@ -31,6 +31,7 @@ class TtCombineModule(LightweightModule):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         init_zeros: bool = True,
+        num_dispatch_subgroups: int = 1,
     ):
         """
         Initialize combine module wrapper.
@@ -57,6 +58,7 @@ class TtCombineModule(LightweightModule):
         self.topology = topology
         self.memory_config = memory_config
         self.init_zeros = init_zeros
+        self.num_dispatch_subgroups = num_dispatch_subgroups
 
     def forward(
         self,
@@ -88,5 +90,6 @@ class TtCombineModule(LightweightModule):
             topology=self.topology,
             memory_config=self.memory_config,
             init_zeros=self.init_zeros,
+            num_dispatch_subgroups=self.num_dispatch_subgroups,
         )
         return output

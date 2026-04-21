@@ -72,7 +72,8 @@ void bind_combine(nb::module_& mod) {
         nb::arg("num_links") = 1,
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("init_zeros") = true,
-        nb::arg("use_l1_small_for_semaphores") = false);
+        nb::arg("use_l1_small_for_semaphores") = false,
+        nb::arg("num_dispatch_subgroups") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail

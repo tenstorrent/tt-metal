@@ -35,6 +35,7 @@ class TtDispatchModule(LightweightModule):
         cluster_axis: int = 0,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
+        num_dispatch_subgroups: int = 1,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -58,6 +59,7 @@ class TtDispatchModule(LightweightModule):
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.topology = topology
+        self.num_dispatch_subgroups = num_dispatch_subgroups
 
     @staticmethod
     def shard_expert_offsets(
@@ -200,6 +202,7 @@ class TtDispatchModule(LightweightModule):
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
+            num_dispatch_subgroups=self.num_dispatch_subgroups,
         )
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape

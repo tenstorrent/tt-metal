@@ -29,7 +29,8 @@ std::array<ttnn::Tensor, 2> dispatch(
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    uint32_t num_dispatch_subgroups) {
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
@@ -47,6 +48,18 @@ std::array<ttnn::Tensor, 2> dispatch(
     TT_FATAL(
         topology_ == tt::tt_fabric::Topology::Linear || topology_ == tt::tt_fabric::Topology::Ring,
         "topology must be Linear or Ring. 2D topologies are not supported.");
+
+    TT_FATAL(num_dispatch_subgroups >= 1, "num_dispatch_subgroups must be >= 1 (got {})", num_dispatch_subgroups);
+    {
+        const auto resolved_axis = cluster_axis.value_or(0);
+        const auto axis_size = mesh_device->shape()[resolved_axis];
+        TT_FATAL(
+            axis_size % num_dispatch_subgroups == 0,
+            "mesh axis {} size ({}) must be divisible by num_dispatch_subgroups ({})",
+            resolved_axis,
+            axis_size,
+            num_dispatch_subgroups);
+    }
 
     std::optional<uint32_t> axis = cluster_axis;
     uint32_t num_links_ = num_links.value_or(ccl::common::get_num_links(*mesh_device, axis));
@@ -73,7 +86,8 @@ std::array<ttnn::Tensor, 2> dispatch(
         usable_topology,
         memory_config_,
         subdevice_core_range_set,
-        use_l1_small_for_semaphores);
+        use_l1_small_for_semaphores,
+        num_dispatch_subgroups);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch

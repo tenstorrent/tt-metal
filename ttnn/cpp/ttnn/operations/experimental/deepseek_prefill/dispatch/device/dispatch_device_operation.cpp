@@ -143,7 +143,8 @@ prefill_dispatch(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    uint32_t num_dispatch_subgroups) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -158,7 +159,8 @@ prefill_dispatch(
             .topology = topology,
             .output_mem_config = memory_config,
             .worker_core_range_set = worker_core_range_set,
-            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
+            .num_dispatch_subgroups = num_dispatch_subgroups},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weights_tensor = weights_tensor,

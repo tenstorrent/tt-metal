@@ -61,5 +61,6 @@ prefill_dispatch(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = false,
+    uint32_t num_dispatch_subgroups = 1);
 }  // namespace ttnn::prim
