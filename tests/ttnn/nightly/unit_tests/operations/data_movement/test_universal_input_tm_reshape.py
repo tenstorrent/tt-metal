@@ -400,3 +400,123 @@ def test_reshape_cross_strategy(device, input_shape, output_shape, case_id, in_s
     tt_output = ttnn.reshape(tt_input, output_shape, memory_config=out_memcfg)
     actual = ttnn.to_torch(tt_output)
     _assert_reshape(torch_output, actual, ttnn.bfloat16)
+
+
+# ---------------------------------------------------------------------------
+# Check pad_value behavior for tiled reshape.
+# ---------------------------------------------------------------------------
+
+
+def _read_padded_region(tensor):
+    """Return a flat torch tensor view of the full padded buffer."""
+    padded = ttnn.reshape(tensor, tensor.padded_shape, tensor.padded_shape)
+    return ttnn.to_torch(padded)
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    [
+        ((12,), (12, 1, 1)),
+        ((32, 32), (32, 16, 2)),
+        ((1, 96), (3, 1, 32)),
+    ],
+    ids=["issue_22178", "tile_to_sub_tile", "reshape_1d_to_3d"],
+)
+@pytest.mark.parametrize("pad_value", [0.0, 1.0, -2.5], ids=["pad_0", "pad_1", "pad_neg"])
+def test_reshape_tiled_pad_value(device, input_shape, output_shape, pad_value):
+    """Padded tile regions must be filled with pad_value (issue #22178)."""
+    torch.manual_seed(0)
+    torch_input = torch.arange(1, int(torch.tensor(input_shape).prod().item()) + 1, dtype=torch.float32).reshape(
+        input_shape
+    )
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.reshape(tt_input, output_shape, pad_value=pad_value)
+
+    full = _read_padded_region(tt_output)
+
+    # Logical volume preserved and values unchanged.
+    logical = ttnn.to_torch(tt_output).reshape(-1)
+    assert torch.equal(logical, torch_input.reshape(-1)), "Logical values changed during reshape"
+
+    # Any element outside the logical volume must equal pad_value.
+    total_padded = full.numel()
+    total_logical = logical.numel()
+    assert total_padded >= total_logical
+
+    if total_padded > total_logical:
+        padded_flat = full.reshape(-1)
+        # Pad locations aren't contiguous, so check padded_sum - logical_sum == pad_count * pad_value.
+        pad_count = total_padded - total_logical
+        observed_pad_sum = padded_flat.sum().item() - logical.sum().item()
+        expected_pad_sum = pad_count * pad_value
+        assert abs(observed_pad_sum - expected_pad_sum) < 1e-3 * max(1.0, abs(expected_pad_sum)), (
+            f"Padded region not filled with pad_value={pad_value}: "
+            f"expected sum {expected_pad_sum}, observed {observed_pad_sum}"
+        )
+
+
+def test_reshape_tiled_default_pad_is_zero(device):
+    """Without an explicit pad_value, padded tile regions must default to 0 (issue #22178)."""
+    torch_input = torch.ones((12,), dtype=torch.float32)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_output = ttnn.reshape(tt_input, (12, 1, 1))
+    full = _read_padded_region(tt_output)
+
+    # Sum of the full padded buffer must equal sum of the logical input (since pad is 0).
+    assert (
+        abs(full.sum().item() - torch_input.sum().item()) < 1e-3
+    ), "Default pad_value should be 0; padded region contains non-zero data"
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    [
+        # tile-aligned input -> output with inner dim not tile-aligned, forcing tile padding on output
+        ([128, 128], [128, 4, 32]),
+    ],
+    ids=["sharded_tile_padded_output"],
+)
+@pytest.mark.parametrize(
+    "strategy",
+    [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK],
+    ids=["height", "block"],
+)
+@pytest.mark.parametrize("pad_value", [0.0, 1.0, -2.5], ids=["pad_0", "pad_1", "pad_neg"])
+def test_reshape_tiled_pad_value_sharded(device, input_shape, output_shape, strategy, pad_value):
+    """Sharded tiled reshape with tile-padded output: exercises the s2i -> fill_pad -> i2s detour."""
+    torch.manual_seed(0)
+    torch_input = torch.arange(1, int(torch.tensor(input_shape).prod().item()) + 1, dtype=torch.bfloat16).reshape(
+        input_shape
+    )
+
+    input_mem_cfg = make_sharded_memory_config(device, input_shape, strategy, ttnn.TILE_LAYOUT)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=input_mem_cfg,
+    )
+
+    tt_output = ttnn.reshape(tt_input, output_shape, pad_value=pad_value)
+
+    # Logical values preserved.
+    logical = ttnn.to_torch(tt_output).reshape(-1).to(torch.float32)
+    assert torch.equal(logical, torch_input.reshape(-1).to(torch.float32)), "Logical values changed during reshape"
+
+    # Padded-region check: sum(padded) - sum(logical) == pad_count * pad_value.
+    full = _read_padded_region(tt_output).to(torch.float32)
+    total_padded = full.numel()
+    total_logical = logical.numel()
+    assert total_padded > total_logical, "Test expects the output to have tile padding"
+    pad_count = total_padded - total_logical
+    observed_pad_sum = full.sum().item() - logical.sum().item()
+    expected_pad_sum = pad_count * pad_value
+    # bf16 accumulation is lossy for large buffers; scale tolerance with pad_count.
+    tol = max(1e-2, 1e-2 * pad_count * max(1.0, abs(pad_value)))
+    assert abs(observed_pad_sum - expected_pad_sum) < tol, (
+        f"Padded region not filled with pad_value={pad_value} (strategy={strategy}): "
+        f"expected sum {expected_pad_sum}, observed {observed_pad_sum}"
+    )

@@ -12,6 +12,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
@@ -38,6 +39,29 @@ static uint32_t find_best_n_1d(uint32_t dim, uint32_t max_n, uint32_t align) {
         }
     }
     return 0;
+}
+
+// Largest n = rows * cols with rows <= max_rows, cols <= max_cols, dim % n == 0,
+// and (dim / n) % align == 0. Returns {rows, cols} or {0, 0} if no valid grid exists.
+static std::pair<uint32_t, uint32_t> find_best_n_2d(
+    uint32_t dim, uint32_t max_rows, uint32_t max_cols, uint32_t align) {
+    uint32_t best_n = 0, best_rows = 0, best_cols = 0;
+    for (uint32_t rows = 1; rows <= max_rows; rows++) {
+        for (uint32_t cols = 1; cols <= max_cols; cols++) {
+            uint32_t n = rows * cols;
+            if (n > best_n && dim % n == 0 && (dim / n) % align == 0) {
+                best_n = n;
+                best_rows = rows;
+                best_cols = cols;
+            }
+        }
+    }
+    return {best_rows, best_cols};
+}
+
+// fill_implicit_tile_padding takes a float; flatten the PadValue variant accordingly.
+static float pad_value_as_float(const PadValue& pad_value) {
+    return std::visit([](auto v) -> float { return static_cast<float>(v); }, pad_value);
 }
 
 // Returns a sharded output MemoryConfig, or INTERLEAVED if no valid grid exists.
@@ -260,9 +284,10 @@ ttnn::Tensor reshape_tiled(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
     const MemoryConfig& memory_config,
-    const PadValue& /*pad_value*/,
+    const PadValue& pad_value,
     const bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    const float fill_value = detail::pad_value_as_float(pad_value);
     // squeeze input tensor and requested shape to 3D
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
         if (shape.rank() > 3) {
@@ -308,6 +333,8 @@ ttnn::Tensor reshape_tiled(
                 working_output_memory_config,
                 recreate_mapping_tensor,
                 sub_core_grid);
+            // Fill implicit tile padding while still in bfloat16/interleaved (cheaper than on BFLOAT8_B).
+            output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
             output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
             if (memory_config.is_sharded()) {
                 auto output_mem_config =
@@ -350,6 +377,28 @@ ttnn::Tensor reshape_tiled(
             recreate_mapping_tensor,
             sub_core_grid);
 
+        // Route sharded outputs through interleaved: fill_pad's per-core runtime-arg
+        // budget overflows on some block-sharded grids.
+        const bool output_has_tile_padding = (requested_shape_3d[-1] % tt::constants::TILE_WIDTH != 0) ||
+                                             (requested_shape_3d[-2] % tt::constants::TILE_HEIGHT != 0);
+        if (output_has_tile_padding) {
+            if (output_tensor_3d.memory_config().is_sharded()) {
+                // TODO(fill_pad): drop this s2i/i2s detour once prim::fill_pad supports
+                // sharded buffers without overflowing fill_pad_writer's per-core runtime-arg cap.
+                MemoryConfig interleaved_mem{
+                    TensorMemoryLayout::INTERLEAVED, output_tensor_3d.memory_config().buffer_type()};
+                auto interleaved = ttnn::sharded_to_interleaved(output_tensor_3d, interleaved_mem, std::nullopt);
+                interleaved = ttnn::fill_implicit_tile_padding(interleaved, fill_value, std::nullopt);
+                auto resharded_mem_config =
+                    detail::recompute_shard_spec_for_output(memory_config, interleaved.tensor_spec());
+                output_tensor_3d = resharded_mem_config.is_sharded()
+                                       ? ttnn::interleaved_to_sharded(interleaved, resharded_mem_config, std::nullopt)
+                                       : interleaved;
+            } else {
+                output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
+            }
+        }
+
         return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
     }
 
@@ -390,6 +439,14 @@ ttnn::Tensor reshape_tiled(
         updated_mem_config,
         recreate_mapping_tensor,
         sub_core_grid);
+
+    // Fill implicit tile padding while still in bfloat16 for BFLOAT8_B inputs; otherwise in native dtype.
+    // Symmetric with the direct sharded path: skip the dispatch when the output is tile-aligned.
+    const bool interleaved_output_has_tile_padding = (requested_shape_3d[-1] % tt::constants::TILE_WIDTH != 0) ||
+                                                     (requested_shape_3d[-2] % tt::constants::TILE_HEIGHT != 0);
+    if (interleaved_output_has_tile_padding) {
+        output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
+    }
 
     if (tensor.dtype() == DataType::BFLOAT8_B) {
         TT_FATAL(!sub_core_grid.has_value(), "Bfloat8 reshape does not support sub core grid specification\n");
