@@ -24,9 +24,9 @@ def reset_device(request, device_params):
         request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
 
         num_devices = ttnn.GetNumPCIeDevices()
-        assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
+        assert device_id < num_devices, "open_device not supported for non-mmio device"
         updated_device_params = get_updated_device_params(device_params)
-        new_device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
+        new_device = ttnn.open_device(device_id=device_id, **updated_device_params)
         ttnn.SetDefaultDevice(device)
         return new_device
 

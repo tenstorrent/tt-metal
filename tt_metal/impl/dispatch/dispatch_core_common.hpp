@@ -39,4 +39,9 @@ DispatchCoreAxis resolve_dispatch_core_axis(
 // Helper functions to get the dispatch core config/type
 DispatchCoreConfig get_dispatch_core_config();
 
+// Returns a cluster-aware default DispatchCoreConfig matching Python behavior:
+// - Default type: ETH for N300, T3K, N300_2x2 clusters; else WORKER
+// - Default axis: Blackhole + fabric tensix MUX -> ROW; Blackhole without MUX -> COL; otherwise ROW
+DispatchCoreConfig get_default_dispatch_core_config();
+
 }  // namespace tt::tt_metal

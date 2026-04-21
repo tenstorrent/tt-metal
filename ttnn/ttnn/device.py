@@ -153,25 +153,6 @@ class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
         super().__init__(self.type, self.axis)
 
 
-def CreateDevice(
-    device_id: int,
-    num_command_queues: int = 1,
-    l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
-    trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
-    dispatch_core_config: DispatchCoreConfig = None,
-    *,
-    worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
-):
-    return ttnn._ttnn.device.CreateDevice(
-        device_id,
-        num_command_queues,
-        l1_small_size,
-        trace_region_size,
-        dispatch_core_config or DispatchCoreConfig(),
-        worker_l1_size=worker_l1_size,
-    )
-
-
 def CreateDevices(
     device_ids: List[int],
     num_command_queues: int = 1,
@@ -181,13 +162,16 @@ def CreateDevices(
     *,
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
+    # Use C++ default dispatch_core_config if not provided (cluster-aware default)
+    kwargs = {"worker_l1_size": worker_l1_size}
+    if dispatch_core_config is not None:
+        kwargs["dispatch_core_config"] = dispatch_core_config
     return ttnn._ttnn.device.CreateDevices(
         device_ids,
         num_command_queues,
         l1_small_size,
         trace_region_size,
-        dispatch_core_config or DispatchCoreConfig(),
-        worker_l1_size=worker_l1_size,
+        **kwargs,
     )
 
 

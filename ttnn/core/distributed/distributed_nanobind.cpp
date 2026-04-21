@@ -41,6 +41,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn-nanobind/pipeline_module_nanobind.hpp"
+#include <impl/dispatch/dispatch_core_common.hpp>
 
 // note from nanobind docs:
 // We strongly recommend that you replace all use of std::unique_ptr<T> by
@@ -549,7 +550,7 @@ void py_module(nb::module_& mod) {
         nb::arg("l1_small_size"),
         nb::arg("trace_region_size"),
         nb::arg("num_command_queues"),
-        nb::arg("dispatch_core_config"),
+        nb::arg("dispatch_core_config") = nb::cast(tt::tt_metal::get_default_dispatch_core_config()),
         nb::arg("mesh_shape") = nb::none(),
         nb::arg("offset") = nb::none(),
         nb::arg("physical_device_ids") = nb::cast(std::vector<int>{}),

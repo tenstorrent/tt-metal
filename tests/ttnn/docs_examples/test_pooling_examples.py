@@ -18,7 +18,7 @@ def test_global_avg_pool2d(device):
 
 
 def test_max_pool2d():
-    device = ttnn.CreateDevice(0, l1_small_size=8192)
+    device = ttnn.open_device(device_id=0, l1_small_size=8192)
     # Define input parameters
     kernel_h, kernel_w = 2, 2
     stride_h, stride_w = 1, 1
@@ -60,7 +60,7 @@ def test_max_pool2d():
 
 
 def test_avg_pool2d():
-    device = ttnn.CreateDevice(0, l1_small_size=8192)
+    device = ttnn.open_device(device_id=0, l1_small_size=8192)
     # Define input parameters
     kernel_h, kernel_w = 2, 2
     stride_h, stride_w = 1, 1

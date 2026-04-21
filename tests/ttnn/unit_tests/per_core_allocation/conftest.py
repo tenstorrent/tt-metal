@@ -20,7 +20,7 @@ def device(request):
     original_default_device = ttnn.GetDefaultDevice()
 
     device_id = request.config.getoption("device_id")
-    device = ttnn.CreateDevice(device_id=device_id)
+    device = ttnn.open_device(device_id=device_id)
     ttnn.SetDefaultDevice(device)
 
     yield device

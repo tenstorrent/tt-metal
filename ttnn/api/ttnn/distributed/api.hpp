@@ -8,6 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
+#include <tt-metalium/dispatch_core_common.hpp>
 
 namespace ttnn::distributed {
 
@@ -16,7 +17,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
+    const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = tt::tt_metal::get_default_dispatch_core_config(),
     const std::optional<MeshCoordinate>& offset = std::nullopt,
     const std::vector<int>& physical_device_ids = {},
     size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
@@ -26,8 +27,8 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
-    const std::optional<MeshShape>& mesh_shape,
+    const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = tt::tt_metal::get_default_dispatch_core_config(),
+    const std::optional<MeshShape>& mesh_shape = std::nullopt,
     const std::optional<MeshCoordinate>& offset = std::nullopt,
     const std::vector<int>& physical_device_ids = {},
     size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);

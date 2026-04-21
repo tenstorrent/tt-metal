@@ -34,8 +34,8 @@ def mesh_device_fixture():
     num_devices = ttnn.GetNumPCIeDevices()
     # As of now take device id as 0.
     device_id = 0
-    assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
-    device = ttnn.CreateDevice(device_id=device_id, l1_small_size=32768)
+    assert device_id < num_devices, "open_device not supported for non-mmio device"
+    device = ttnn.open_device(device_id=device_id, l1_small_size=32768)
     ttnn.SetDefaultDevice(device)
 
     device_name = "Unknown"

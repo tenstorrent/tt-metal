@@ -297,7 +297,6 @@ from ttnn.device import (
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
-    CreateDevice,
     CreateDevices,
     CloseDevice,
     CloseDevices,

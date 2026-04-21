@@ -13,7 +13,7 @@ import ttnn
 
 @pytest.fixture(scope="function")
 def first_grayskull_device():
-    device = ttnn.CreateDevice(0)
+    device = ttnn.open_device(device_id=0)
     yield device
 
     ttnn.CloseDevice(device)

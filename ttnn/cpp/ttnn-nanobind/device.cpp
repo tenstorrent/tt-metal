@@ -40,6 +40,7 @@
 #include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <impl/dispatch/dispatch_core_common.hpp>
 
 using namespace tt::tt_metal;
 namespace nb = nanobind;
@@ -59,7 +60,7 @@ void ttnn_device(nb::module_& mod) {
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
         nb::arg("num_command_queues") = 1,
-        nb::arg("dispatch_core_config") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
+        nb::arg("dispatch_core_config") = nb::cast(tt::tt_metal::get_default_dispatch_core_config()),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
         nb::rv_policy::reference,  // cleanup has to happen in c++ land
         R"doc(
@@ -172,39 +173,6 @@ void device_module(nb::module_& m_device) {
         .def(nb::self != nb::self);
 
     m_device.def(
-        "CreateDevice",
-        [](int device_id,
-           uint8_t num_command_queues,
-           size_t l1_small_size,
-           size_t trace_region_size,
-           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
-           size_t worker_l1_size) {
-            return MeshDevice::create_unit_mesh(
-                device_id,
-                l1_small_size,
-                trace_region_size,
-                num_command_queues,
-                dispatch_core_config,
-                /*l1_bank_remap=*/{},
-                worker_l1_size);
-        },
-        R"doc(
-        Creates an instance of TT device.
-
-        +------------------+------------------------+---------------------+------------------------------+----------+
-        | Argument         | Description            | Data type           | Valid range                  | Required |
-        +==================+========================+=====================+==============================+==========+
-        | device_id        | Device index           | int                 |                              | Yes      |
-        +------------------+------------------------+---------------------+------------------------------+----------+
-    )doc",
-        nb::arg("device_id"),
-        nb::arg("num_command_queues") = 1,
-        nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
-        nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        nb::arg("DispatchCoreConfig") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
-        nb::kw_only(),
-        nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
-    m_device.def(
         "CreateDevices",
         [](const std::vector<int>& device_ids,
            uint8_t num_command_queues,
@@ -222,19 +190,19 @@ void device_module(nb::module_& m_device) {
                 worker_l1_size);
         },
         R"doc(
-        Creates an instance of TT device.
+        Creates instances of TT devices for multiple device IDs.
 
         +------------------+------------------------+---------------------+------------------------------+----------+
         | Argument         | Description            | Data type           | Valid range                  | Required |
         +==================+========================+=====================+==============================+==========+
-        | device_id        | Device index           | int                 |                              | Yes      |
+        | device_ids       | List of device indices | List[int]           |                              | Yes      |
         +------------------+------------------------+---------------------+------------------------------+----------+
     )doc",
         nb::arg("device_ids"),
         nb::arg("num_command_queues") = 1,
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        nb::arg("DispatchCoreConfig") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
+        nb::arg("dispatch_core_config") = nb::cast(tt::tt_metal::get_default_dispatch_core_config()),
         nb::kw_only(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     m_device.def("CloseDevice", [](MeshDevice* device) { device->close(); }, R"doc(

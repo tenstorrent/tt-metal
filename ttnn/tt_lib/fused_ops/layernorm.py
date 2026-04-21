@@ -185,7 +185,7 @@ def ref_layernorm(x, eps, gamma, beta, H, W):
 
 if __name__ == "__main__":
     # Initialize the device
-    device = ttnn.CreateDevice(0)
+    device = ttnn.open_device(device_id=0)
 
     H = 64
     W = 96
