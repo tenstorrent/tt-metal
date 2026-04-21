@@ -24,13 +24,15 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
     CoreCoord grid_size = program_config.compute_with_storage_grid_size;
     uint32_t batch = input.padded_shape()[0];
     uint32_t W = input.padded_shape()[3];
-    const uint32_t tile_width = input.tensor_spec().tile().get_width();
-    uint32_t num_virtual_cols = std::min<uint32_t>(grid_size.x, args.num_groups);
-
-    while (num_virtual_cols > 0 &&
-           ((W / num_virtual_cols) % tile_width != 0 || (args.num_groups % num_virtual_cols) != 0)) {
-        num_virtual_cols -= 1;
-    }
+    uint32_t num_virtual_cols =
+        ttnn::operations::normalization::compute_num_virtual_cols(grid_size.x, args.num_groups, W);
+    TT_FATAL(
+        num_virtual_cols > 0,
+        "group_norm: No valid num_virtual_cols for grid_x={}, num_groups={}, W={}. "
+        "Channels must be aligned to tile width and divisible by num_groups.",
+        grid_size.x,
+        args.num_groups,
+        W);
 
     uint32_t num_actual_rows = grid_size.y;
     uint32_t num_virtual_rows = (grid_size.x / num_virtual_cols) * num_actual_rows;
@@ -216,7 +218,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     // multicast groups.  Non-uniform groups cause a deadlock because the sender
     // kernel waits for an exact semaphore count equal to (group_size - 1).
     if (!a.is_sharded()) {
-        if (auto* mc_config = std::get_if<GroupNormMultiCoreProgramConfig>(&args.program_config)) {
+        if (const auto* mc_config = std::get_if<GroupNormMultiCoreProgramConfig>(&args.program_config)) {
             CoreCoord grid_size = mc_config->compute_with_storage_grid_size;
             uint32_t W = a.padded_shape()[3];
             uint32_t num_batches = a.padded_shape()[0];
@@ -227,7 +229,8 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
                     num_virtual_rows < num_batches || num_virtual_rows % num_batches == 0,
                     "group_norm: The core grid (x={}, y={}) produces num_virtual_rows={} which is not "
                     "divisible by num_batches={}. This creates non-uniform multicast groups and will "
-                    "deadlock. Use find_expected_dram_grid() with num_batches to select a valid grid.",
+                    "deadlock. Use determine_expected_group_norm_dram_grid_size() with num_batches to select a valid "
+                    "grid.",
                     grid_size.x,
                     grid_size.y,
                     num_virtual_rows,

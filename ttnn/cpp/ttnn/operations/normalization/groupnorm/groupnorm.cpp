@@ -34,29 +34,41 @@ void validate_dram_grid(
     auto suggested =
         find_expected_dram_grid(requested.x, requested.y, W, num_groups, Ht * ttnn::types::TILE_SIZE, num_batches);
 
+    uint32_t nvc_for_msg = compute_num_virtual_cols(requested.x, num_groups, W);
+    uint32_t nvr_for_msg = nvc_for_msg > 0 ? (requested.x / nvc_for_msg) * requested.y : 0;
+
     // User supplied invalid grid, but suggested a valid grid
     if (suggested.has_value()) {
         TT_THROW(
             "group_norm: Requested core_grid (x={}, y={}) is invalid for the input dimensions "
-            "(Ht={}, W={}, num_groups={}). The grid must satisfy "
-            "num_virtual_rows = (grid_x / num_virtual_cols) * grid_y <= Ht, and "
-            "Ht must be divisible by num_virtual_rows (otherwise remainder tiles are dropped). "
+            "(Ht={}, W={}, num_groups={}, num_batches={}). The grid must satisfy: "
+            "num_virtual_rows = (grid_x / num_virtual_cols) * grid_y <= Ht, "
+            "Ht must be divisible by num_virtual_rows, and "
+            "num_virtual_rows must be divisible by num_batches (for uniform multicast groups). "
+            "Computed num_virtual_rows={}, num_virtual_cols={}. "
             "The largest valid grid that fits is (x={}, y={}).",
             requested.x,
             requested.y,
             Ht,
             W,
             num_groups,
+            num_batches,
+            nvr_for_msg,
+            nvc_for_msg,
             suggested->x,
             suggested->y);
     } else {
         TT_THROW(
             "group_norm: Cannot find any valid core grid for the given configuration. "
-            "Input height in tiles (Ht={}) is too small for any grid with W={}, num_groups={}. "
+            "Input height in tiles (Ht={}) is too small for any grid with W={}, num_groups={}, "
+            "num_batches={}. Computed num_virtual_rows={}, num_virtual_cols={}. "
             "Requested grid was (x={}, y={}).",
             Ht,
             W,
             num_groups,
+            num_batches,
+            nvr_for_msg,
+            nvc_for_msg,
             requested.x,
             requested.y);
     }
