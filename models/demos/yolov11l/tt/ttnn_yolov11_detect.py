@@ -87,10 +87,11 @@ class TtnnDetect:
         deallocate_tensors(y1, y2, y3, x1, x2, x3, x4, x5, x6, y)
         ya = ttnn.reallocate(ya)
         yb = ttnn.reallocate(yb)
-        ya = ttnn.reshape(ya, (ya.shape[0], y.shape[1], 4, 16))
-        # Avoid large L1 allocation in softmax for 1280x1280 detect head.
-        ya = ttnn.to_memory_config(ya, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        n_anchors = y.shape[1]
+        ya = ttnn.reshape(ya, (ya.shape[0], n_anchors * 4, 16))
         ya = ttnn.softmax(ya, dim=-1)
+        ya = ttnn.to_layout(ya, ttnn.ROW_MAJOR_LAYOUT)
+        ya = ttnn.reshape(ya, (ya.shape[0], n_anchors, 4, 16))
         ya = ttnn.permute(ya, (0, 2, 1, 3))
         c = self.dfl(ya)
         ttnn.deallocate(ya)
