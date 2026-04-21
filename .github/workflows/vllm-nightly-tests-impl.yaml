@@ -646,7 +646,7 @@ jobs:
       - name: 🤖 AI job summary
         if: always() && !cancelled()
         continue-on-error: true
-        uses: ppetrovicTT/tt-github-actions/.github/actions/ai_job_summary@dc295de942ec4625d5dd5c503b17ca4ac08973ab
+        uses: ppetrovicTT/tt-github-actions/.github/actions/ai_job_summary@c0b5c013073dcb1495f28e0f9e9025dc698c487f
         with:
           config-path: docker-job/.github/ai-summary/vllm-nightly.yaml
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
@@ -679,7 +679,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: summary
-        uses: ppetrovicTT/tt-github-actions/.github/actions/ai_run_summary@dc295de942ec4625d5dd5c503b17ca4ac08973ab
+        uses: ppetrovicTT/tt-github-actions/.github/actions/ai_run_summary@c0b5c013073dcb1495f28e0f9e9025dc698c487f
         with:
           config-path: .github/ai-summary/vllm-nightly.yaml
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
