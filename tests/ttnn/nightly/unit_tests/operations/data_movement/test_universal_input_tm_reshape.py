@@ -275,9 +275,10 @@ def test_reshape_sharded_to_sharded(device, input_shape, output_shape, case_id, 
     "input_shape,output_shape",
     [
         ([256, 128], [128, 256]),  # 2D swap
-        ([256, 128], [1, 256, 128]),  # 2D -> 3D
+        ([256, 128], [1, 256, 128]),  # 2D -> 3D, zero-cost view
+        ([256, 128], [256, 2, 64]),  # 2D -> 3D with dim change (non-zero-cost)
     ],
-    ids=["2d_swap", "2d_to_3d"],
+    ids=["2d_swap", "2d_to_3d_view", "2d_to_3d_dim_change"],
 )
 @pytest.mark.parametrize(
     "strategy",
@@ -286,9 +287,29 @@ def test_reshape_sharded_to_sharded(device, input_shape, output_shape, case_id, 
 )
 @pytest.mark.parametrize("layout", LAYOUTS, ids=["TILE", "ROW_MAJOR"])
 def test_reshape_non_4d_sharded_input(device, input_shape, output_shape, strategy, layout):
-    """Non-4D tensor with sharded input."""
+    """Non-4D tensor with sharded input; 2D->3D case forces real data movement."""
     mem_cfg = make_sharded_memory_config(device, input_shape, strategy, layout)
     _run_reshape(device, input_shape, output_shape, mem_cfg, layout)
+
+
+# ---------------------------------------------------------------------------
+# Irregular (non-tile-aligned) shapes with interleaved I/O: validates the
+# reshape scheme can change dimensionality outside the zero-cost view path.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    [
+        ([50, 100], [50, 2, 50]),  # 2D -> 3D, non-tile-aligned dims
+        ([50, 100], [100, 50]),  # 2D swap, non-tile-aligned
+        ([50, 2, 50], [50, 100]),  # 3D -> 2D, non-tile-aligned
+    ],
+    ids=["irregular_2d_to_3d", "irregular_2d_swap", "irregular_3d_to_2d"],
+)
+def test_reshape_irregular_interleaved(device, input_shape, output_shape):
+    """Irregular (non-tile-aligned) shapes with DRAM interleaved I/O."""
+    _run_reshape(device, input_shape, output_shape, ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT)
 
 
 # ---------------------------------------------------------------------------
@@ -313,8 +334,10 @@ def test_reshape_non_4d_sharded_input(device, input_shape, output_shape, strateg
     [
         ([1, 4, 256, 128], [1, 1, 1024, 128], "view_like"),
         ([1, 4, 256, 128], [1, 4, 128, 256], "data_movement"),
+        # Irregular aligned: odd multipliers (3, 9) with tile-aligned dims.
+        ([1, 3, 96, 96], [1, 9, 32, 96], "irregular_aligned"),
     ],
-    ids=["view_like", "data_movement"],
+    ids=["view_like", "data_movement", "irregular_aligned"],
 )
 @pytest.mark.parametrize("layout", LAYOUTS, ids=["TILE", "ROW_MAJOR"])
 def test_reshape_cross_strategy_sharded(device, in_strategy, out_strategy, input_shape, output_shape, case_id, layout):
@@ -390,8 +413,10 @@ def test_reshape_sharded_default_output(device, strategy, layout):
     [
         ([1, 4, 256, 128], [1, 1, 1024, 128], "merge_ch"),
         ([1, 4, 256, 128], [1, 4, 128, 256], "swap_hw"),
+        # Irregular aligned: odd multipliers (3, 9) with tile-aligned dims.
+        ([1, 3, 96, 96], [1, 1, 288, 96], "irregular_aligned"),
     ],
-    ids=["merge_ch", "swap_hw"],
+    ids=["merge_ch", "swap_hw", "irregular_aligned"],
 )
 @pytest.mark.parametrize(
     "strategy",
