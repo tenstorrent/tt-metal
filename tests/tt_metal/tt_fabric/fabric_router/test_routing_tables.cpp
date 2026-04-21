@@ -25,6 +25,7 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <fmt/format.h>
 
 namespace {
 
@@ -1317,121 +1318,23 @@ TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
     std::filesystem::remove_all(temp_dir);
 }
 
-TEST_F(ControlPlaneFixture, SP5_TestBlitzDecodePipelineBuilder) {
-    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+namespace {
 
-    tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+struct Sp5BlitzPipelineStage {
+    std::size_t stage_index;
+    MeshCoordinate entry_node_coord;
+    MeshCoordinate exit_node_coord;
+};
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& mesh_graph = control_plane.get_mesh_graph();
-    auto mesh_ids = mesh_graph.get_mesh_ids();
-    std::sort(mesh_ids.begin(), mesh_ids.end());
+// Split out of TEST_F to satisfy clang-tidy readability-function-cognitive-complexity for TestBody.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- consolidated pipeline validation checks
+void validate_sp5_blitz_decode_pipeline_stages(
+    const tt::tt_fabric::ControlPlane& control_plane,
+    const tt::tt_fabric::MeshGraph& mesh_graph,
+    const std::vector<MeshId>& mesh_ids,
+    const std::vector<Sp5BlitzPipelineStage>& stages) {
     const auto num_meshes = mesh_ids.size();
 
-    ASSERT_GE(num_meshes, 2u) << "Pipeline builder requires at least 2 meshes";
-
-    auto fn_to_coord = [&](const FabricNodeId& fn) { return mesh_graph.chip_to_coordinate(fn.mesh_id, fn.chip_id); };
-
-    // --- build_pipeline_from_topology ---
-    std::set<FabricNodeId> used_nodes;
-
-    // Select one inter-mesh pair per hop, avoiding collisions.
-    // hop[i] connects mesh_ids[i] -> mesh_ids[(i+1) % N].
-    std::vector<std::pair<FabricNodeId, FabricNodeId>> hops;
-    hops.reserve(num_meshes);
-    for (std::size_t i = 0; i < num_meshes; i++) {
-        auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
-            mesh_ids[i], mesh_ids[(i + 1) % num_meshes]);
-        ASSERT_FALSE(pairs.empty()) << "No inter-mesh connection from mesh " << *mesh_ids[i] << " to mesh "
-                                    << *mesh_ids[(i + 1) % num_meshes];
-
-        bool found = false;
-        for (const auto& pair : pairs) {
-            if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
-                continue;
-            }
-            hops.push_back(pair);
-            used_nodes.insert(pair.first);
-            used_nodes.insert(pair.second);
-            found = true;
-            break;
-        }
-        ASSERT_TRUE(found) << "No non-colliding inter-mesh pair from mesh " << *mesh_ids[i] << " to mesh "
-                           << *mesh_ids[(i + 1) % num_meshes] << " (all " << pairs.size()
-                           << " candidate pairs overlap with already-claimed nodes)";
-    }
-
-    // Find two unclaimed nodes on mesh_0 for stage 0 entry and loopback exit.
-    // We need a pair that has a direct intra-mesh ethernet link between them
-    // (loopback_exit -> stage_0_entry). Prefer non-Z direction links.
-    auto mesh_0_coord_range = mesh_graph.get_coord_range(mesh_ids[0]);
-    std::vector<FabricNodeId> unclaimed_mesh_0_nodes;
-    for (const auto& coord : mesh_0_coord_range) {
-        auto chip_id = mesh_graph.coordinate_to_chip(mesh_ids[0], coord);
-        FabricNodeId fn(mesh_ids[0], chip_id);
-        if (!used_nodes.contains(fn)) {
-            unclaimed_mesh_0_nodes.push_back(fn);
-        }
-    }
-    ASSERT_GE(unclaimed_mesh_0_nodes.size(), 2u)
-        << "Need at least 2 unclaimed nodes on mesh " << *mesh_ids[0] << " for stage 0 entry and loopback exit, found "
-        << unclaimed_mesh_0_nodes.size();
-
-    std::optional<FabricNodeId> stage_0_entry_fn;
-    std::optional<FabricNodeId> loopback_exit_fn;
-    bool found_non_z_pair = false;
-
-    for (std::size_t a = 0; a < unclaimed_mesh_0_nodes.size() && !found_non_z_pair; a++) {
-        auto fn_a = unclaimed_mesh_0_nodes[a];
-        auto channels_a = control_plane.get_active_fabric_eth_channels(fn_a);
-        for (const auto& [chan_id, direction] : channels_a) {
-            auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(fn_a, chan_id);
-            if (peer_fn.mesh_id != mesh_ids[0]) {
-                continue;
-            }
-            bool peer_unclaimed = !used_nodes.contains(peer_fn) &&
-                                  std::find(unclaimed_mesh_0_nodes.begin(), unclaimed_mesh_0_nodes.end(), peer_fn) !=
-                                      unclaimed_mesh_0_nodes.end();
-            if (!peer_unclaimed) {
-                continue;
-            }
-            bool is_non_z = (direction != tt::tt_fabric::eth_chan_directions::Z);
-            if (!loopback_exit_fn.has_value() || (is_non_z && !found_non_z_pair)) {
-                loopback_exit_fn = fn_a;
-                stage_0_entry_fn = peer_fn;
-                found_non_z_pair = is_non_z;
-            }
-        }
-    }
-
-    ASSERT_TRUE(loopback_exit_fn.has_value()) << "Could not find a directly-connected unclaimed pair on mesh "
-                                              << *mesh_ids[0] << " for loopback exit -> stage 0 entry";
-
-    struct BlitzDecodePipelineStage {
-        std::size_t stage_index;
-        MeshCoordinate entry_node_coord;
-        MeshCoordinate exit_node_coord;
-    };
-
-    std::vector<BlitzDecodePipelineStage> stages;
-    stages.reserve(num_meshes + 1);
-
-    stages.push_back(
-        {static_cast<std::size_t>(*mesh_ids[0]), fn_to_coord(*stage_0_entry_fn), fn_to_coord(hops[0].first)});
-
-    for (std::size_t i = 1; i < num_meshes; i++) {
-        stages.push_back(
-            {static_cast<std::size_t>(*mesh_ids[i]), fn_to_coord(hops[i - 1].second), fn_to_coord(hops[i].first)});
-    }
-
-    stages.push_back(
-        {static_cast<std::size_t>(*mesh_ids[0]),
-         fn_to_coord(hops[num_meshes - 1].second),
-         fn_to_coord(*loopback_exit_fn)});
-
-    // --- validate_pipeline ---
     auto coord_str = [](const MeshCoordinate& c) { return fmt::format("({}, {})", c[0], c[1]); };
 
     ASSERT_EQ(stages.size(), num_meshes + 1) << "Expected " << (num_meshes + 1) << " stages (num_meshes=" << num_meshes
@@ -2171,5 +2074,118 @@ TEST_F(ControlPlaneFixture, SP5_TestBlitzDecodePipelineBuilder) {
             }
         }
     }
+}
+
+}  // namespace
+
+TEST_F(ControlPlaneFixture, SP5_TestBlitzDecodePipelineBuilder) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+    const auto num_meshes = mesh_ids.size();
+
+    ASSERT_GE(num_meshes, 2u) << "Pipeline builder requires at least 2 meshes";
+
+    auto fn_to_coord = [&](const FabricNodeId& fn) { return mesh_graph.chip_to_coordinate(fn.mesh_id, fn.chip_id); };
+
+    // --- build_pipeline_from_topology ---
+    std::set<FabricNodeId> used_nodes;
+
+    // Select one inter-mesh pair per hop, avoiding collisions.
+    // hop[i] connects mesh_ids[i] -> mesh_ids[(i+1) % N].
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> hops;
+    hops.reserve(num_meshes);
+    for (std::size_t i = 0; i < num_meshes; i++) {
+        auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
+            mesh_ids[i], mesh_ids[(i + 1) % num_meshes]);
+        ASSERT_FALSE(pairs.empty()) << "No inter-mesh connection from mesh " << *mesh_ids[i] << " to mesh "
+                                    << *mesh_ids[(i + 1) % num_meshes];
+
+        bool found = false;
+        for (const auto& pair : pairs) {
+            if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
+                continue;
+            }
+            hops.push_back(pair);
+            used_nodes.insert(pair.first);
+            used_nodes.insert(pair.second);
+            found = true;
+            break;
+        }
+        ASSERT_TRUE(found) << "No non-colliding inter-mesh pair from mesh " << *mesh_ids[i] << " to mesh "
+                           << *mesh_ids[(i + 1) % num_meshes] << " (all " << pairs.size()
+                           << " candidate pairs overlap with already-claimed nodes)";
+    }
+
+    // Find two unclaimed nodes on mesh_0 for stage 0 entry and loopback exit.
+    // We need a pair that has a direct intra-mesh ethernet link between them
+    // (loopback_exit -> stage_0_entry). Prefer non-Z direction links.
+    auto mesh_0_coord_range = mesh_graph.get_coord_range(mesh_ids[0]);
+    std::vector<FabricNodeId> unclaimed_mesh_0_nodes;
+    for (const auto& coord : mesh_0_coord_range) {
+        auto chip_id = mesh_graph.coordinate_to_chip(mesh_ids[0], coord);
+        FabricNodeId fn(mesh_ids[0], chip_id);
+        if (!used_nodes.contains(fn)) {
+            unclaimed_mesh_0_nodes.push_back(fn);
+        }
+    }
+    ASSERT_GE(unclaimed_mesh_0_nodes.size(), 2u)
+        << "Need at least 2 unclaimed nodes on mesh " << *mesh_ids[0] << " for stage 0 entry and loopback exit, found "
+        << unclaimed_mesh_0_nodes.size();
+
+    std::optional<FabricNodeId> stage_0_entry_fn;
+    std::optional<FabricNodeId> loopback_exit_fn;
+    bool found_non_z_pair = false;
+
+    for (std::size_t a = 0; a < unclaimed_mesh_0_nodes.size() && !found_non_z_pair; a++) {
+        auto fn_a = unclaimed_mesh_0_nodes[a];
+        auto channels_a = control_plane.get_active_fabric_eth_channels(fn_a);
+        for (const auto& [chan_id, direction] : channels_a) {
+            auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(fn_a, chan_id);
+            if (peer_fn.mesh_id != mesh_ids[0]) {
+                continue;
+            }
+            bool peer_unclaimed = !used_nodes.contains(peer_fn) &&
+                                  std::find(unclaimed_mesh_0_nodes.begin(), unclaimed_mesh_0_nodes.end(), peer_fn) !=
+                                      unclaimed_mesh_0_nodes.end();
+            if (!peer_unclaimed) {
+                continue;
+            }
+            bool is_non_z = (direction != tt::tt_fabric::eth_chan_directions::Z);
+            if (!loopback_exit_fn.has_value() || (is_non_z && !found_non_z_pair)) {
+                loopback_exit_fn = fn_a;
+                stage_0_entry_fn = peer_fn;
+                found_non_z_pair = is_non_z;
+            }
+        }
+    }
+
+    ASSERT_TRUE(loopback_exit_fn.has_value()) << "Could not find a directly-connected unclaimed pair on mesh "
+                                              << *mesh_ids[0] << " for loopback exit -> stage 0 entry";
+
+    std::vector<Sp5BlitzPipelineStage> stages;
+    stages.reserve(num_meshes + 1);
+
+    stages.push_back(
+        {static_cast<std::size_t>(*mesh_ids[0]), fn_to_coord(*stage_0_entry_fn), fn_to_coord(hops[0].first)});
+
+    for (std::size_t i = 1; i < num_meshes; i++) {
+        stages.push_back(
+            {static_cast<std::size_t>(*mesh_ids[i]), fn_to_coord(hops[i - 1].second), fn_to_coord(hops[i].first)});
+    }
+
+    stages.push_back(
+        {static_cast<std::size_t>(*mesh_ids[0]),
+         fn_to_coord(hops[num_meshes - 1].second),
+         fn_to_coord(*loopback_exit_fn)});
+
+    validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, stages);
 }
 }  // namespace tt::tt_fabric::fabric_router_tests
