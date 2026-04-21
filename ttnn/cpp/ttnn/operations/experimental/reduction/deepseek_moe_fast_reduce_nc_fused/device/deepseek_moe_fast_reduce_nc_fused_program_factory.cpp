@@ -18,6 +18,47 @@ using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
+namespace {
+
+// Matches compile-time arg order in deepseek_moe_fast_reduce_nc_fused_reader.cpp (get_compile_time_arg_val 0..13).
+struct DeepseekMoeFastReduceNcFusedReaderCtArgs {
+    uint32_t cb_in_act_id{};
+    uint32_t cb_scores_id{};
+    uint32_t cb_scores_rm_id{};
+    uint32_t act_page_size{};
+    uint32_t scores_buf_page_size{};
+    uint32_t scores_tile_size{};
+    uint32_t num_cores_to_be_used{};
+    uint32_t input_granularity{};
+    uint32_t reduction_dim{};
+    uint32_t reduction_dim_size{};
+    uint32_t inner_num_tiles{};
+    uint32_t reduction_num_tiles{};
+    uint32_t num_tokens{};
+    uint32_t scores_cb_rm_page_size{};
+};
+
+std::vector<uint32_t> to_reader_ct_arg_vector(const DeepseekMoeFastReduceNcFusedReaderCtArgs& ct) {
+    return {
+        ct.cb_in_act_id,
+        ct.cb_scores_id,
+        ct.cb_scores_rm_id,
+        ct.act_page_size,
+        ct.scores_buf_page_size,
+        ct.scores_tile_size,
+        ct.num_cores_to_be_used,
+        ct.input_granularity,
+        ct.reduction_dim,
+        ct.reduction_dim_size,
+        ct.inner_num_tiles,
+        ct.reduction_num_tiles,
+        ct.num_tokens,
+        ct.scores_cb_rm_page_size,
+    };
+}
+
+}  // namespace
+
 namespace ttnn::experimental::prim {
 
 DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastReduceNCFusedProgramFactory::create(
@@ -73,7 +114,6 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
     const uint32_t num_output_tiles = input_tensor.physical_volume() / num_tile_elements / reduction_dim_size;
 
     auto grid = device->compute_with_storage_grid_size();
-    const auto num_cores_x = grid.x;
     const auto
         [num_cores_to_be_used,
          all_cores,
@@ -133,38 +173,24 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    // Reader CT args layout:
-    //  [0]  cb_in_act_id
-    //  [1]  cb_scores_id
-    //  [2]  cb_scores_rm_id
-    //  [3]  act_page_size
-    //  [4]  scores_buf_page_size
-    //  [5]  scores_tile_size
-    //  [6]  num_cores_to_be_used
-    //  [7]  input_granularity
-    //  [8]  reduction_dim
-    //  [9]  reduction_dim_size
-    //  [10] inner_num_tiles
-    //  [11] reduction_num_tiles
-    //  [12] num_tokens
-    //  [13] scores_cb_page_size (!= scores_buf_page_size)
-    //  [13..] TensorAccessorArgs for input (activation) tensor
-    //  [13+N_act..] TensorAccessorArgs for scores tensor
-    std::vector<uint32_t> reader_ct_args = {
-        cb_in_act_id,
-        cb_scores_id,
-        cb_scores_rm_id,
-        input_page_size,
-        scores_page_size,
-        scores_tile_size,
-        num_cores_to_be_used,
-        input_granularity,
-        reduction_dim,
-        reduction_dim_size,
-        inner_num_tiles,
-        reduction_num_tiles,
-        num_tokens,
-        scores_cb_rm_page_size};
+    // Reader CT args: fields 0..13 = DeepseekMoeFastReduceNcFusedReaderCtArgs / reader kernel; then TensorAccessorArgs.
+    const DeepseekMoeFastReduceNcFusedReaderCtArgs reader_ct_named{
+        .cb_in_act_id = cb_in_act_id,
+        .cb_scores_id = cb_scores_id,
+        .cb_scores_rm_id = cb_scores_rm_id,
+        .act_page_size = input_page_size,
+        .scores_buf_page_size = scores_page_size,
+        .scores_tile_size = scores_tile_size,
+        .num_cores_to_be_used = num_cores_to_be_used,
+        .input_granularity = input_granularity,
+        .reduction_dim = reduction_dim,
+        .reduction_dim_size = reduction_dim_size,
+        .inner_num_tiles = inner_num_tiles,
+        .reduction_num_tiles = reduction_num_tiles,
+        .num_tokens = num_tokens,
+        .scores_cb_rm_page_size = scores_cb_rm_page_size,
+    };
+    std::vector<uint32_t> reader_ct_args = to_reader_ct_arg_vector(reader_ct_named);
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(scores_tensor.buffer()).append_to(reader_ct_args);
 
@@ -270,39 +296,48 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
     // the size of the inner dimensions in tiles (inner_num_tiles). The number
     // of tiles to process is the size of the reduce dimension in tiles
     // (reduction_num_tiles).
-    for (const auto & core : all_cores) {
-        CoreCoord core = {i % num_cores_x, i / num_cores_x};
+    TT_FATAL(
+        core_group_2.ranges().empty() || num_cols_per_core_group_1 >= num_cols_per_core_group_2,
+        "num_cols_per_core_group_1 must be greater than or equal to num_cols_per_core_group_2");
 
-        uint32_t num_tiles_per_core;
-        if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_cols_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_cols_per_core_group_2;
-        } else {
-            TT_THROW("Core not in specified core ranges.");
+    const auto core_groups = {core_group_1, core_group_2};
+
+    uint32_t start_tiles_read = 0;
+    for (const auto& core_group : core_groups) {
+        if (core_group.ranges().empty()) {
+            continue;
         }
+
+        uint32_t num_tiles_per_core =
+            core_group_1.contains(core_group.ranges().at(0)) ? num_cols_per_core_group_1 : num_cols_per_core_group_2;
         uint32_t page_id_range_length = num_tiles_per_core * num_cores_to_be_used;
 
-        uint32_t start_tiles_read = i;
-        uint32_t start_tiles_to_read = start_tiles_read + page_id_range_length;
+        for (const auto& core : corerange_to_cores(core_group)) {
+            uint32_t start_tiles_to_read = start_tiles_read + page_id_range_length;
 
-        uint32_t start_slice_row_offset = (start_tiles_read / input_tensor_Wt) * slice_Wt;
-        uint32_t start_pages_read_in_row = start_tiles_read % input_tensor_Wt;
+            uint32_t start_slice_row_offset = (start_tiles_read / input_tensor_Wt) * slice_Wt;
+            uint32_t start_pages_read_in_row = start_tiles_read % input_tensor_Wt;
 
-        std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(), scores_tensor.buffer()->address(), start_tiles_read, start_tiles_to_read};
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+            std::vector<uint32_t> reader_rt_args = {
+                input_tensor.buffer()->address(),
+                scores_tensor.buffer()->address(),
+                start_tiles_read,
+                start_tiles_to_read};
+            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
-        std::vector<uint32_t> writer_rt_args = {
-            start_tiles_read, start_tiles_to_read, start_slice_row_offset, start_pages_read_in_row};
-        for (const ttnn::Tensor& output_tensor : output_tensors) {
-            writer_rt_args.push_back(output_tensor.buffer()->address());
+            std::vector<uint32_t> writer_rt_args = {
+                start_tiles_read, start_tiles_to_read, start_slice_row_offset, start_pages_read_in_row};
+            for (const ttnn::Tensor& output_tensor : output_tensors) {
+                writer_rt_args.push_back(output_tensor.buffer()->address());
+            }
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
+
+            start_tiles_read++;
         }
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }
 
     return cached_program_t{
-        std::move(program), {reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_x}};
+        std::move(program), {reader_kernel_id, writer_kernel_id, corerange_to_cores(all_cores), num_cores_to_be_used}};
 }
 
 void DeepseekMoEFastReduceNCFusedProgramFactory::override_runtime_arguments(
@@ -317,22 +352,19 @@ void DeepseekMoEFastReduceNCFusedProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     const tt::tt_metal::KernelHandle& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const tt::tt_metal::KernelHandle& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const uint32_t num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
-    const uint32_t num_cores_x = cached_program.shared_variables.num_cores_x;
+    const auto& all_cores = cached_program.shared_variables.all_cores;
+    const uint32_t ncores = cached_program.shared_variables.ncores;
 
-    auto& reader_kernel_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_kernel_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-        CoreCoord core = {i % num_cores_x, i / num_cores_x};
+    for (uint32_t i = 0; i < ncores; ++i) {
+        const auto& core = all_cores[i];
+        auto& reader_rt_args = GetRuntimeArgs(program, reader_kernel_id, core);
+        reader_rt_args[0] = input_tensor.buffer()->address();
+        reader_rt_args[1] = scores_tensor.buffer()->address();
 
-        auto& reader_kernel_args = reader_kernel_args_by_core[core.x][core.y];
-        reader_kernel_args[0] = input_tensor.buffer()->address();
-        reader_kernel_args[1] = scores_tensor.buffer()->address();
-
-        auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];
+        auto& writer_rt_args = GetRuntimeArgs(program, writer_kernel_id, core);
         const uint32_t output_tensor_start_idx = 4;
         for (unsigned j = 0; j < output_tensors.size(); ++j) {
-            writer_kernel_args[output_tensor_start_idx + j] = output_tensors.at(j).buffer()->address();
+            writer_rt_args[output_tensor_start_idx + j] = output_tensors.at(j).buffer()->address();
         }
     }
 }
