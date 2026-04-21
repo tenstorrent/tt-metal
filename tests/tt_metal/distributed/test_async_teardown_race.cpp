@@ -53,6 +53,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_impl.hpp"
+#include "fabric/fabric_builder_context.hpp"
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_init.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
