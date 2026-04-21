@@ -341,11 +341,59 @@ jobs:
           EXTRA_ARGS: ${{ matrix.extra_args }}
           LFC_AVAILABLE: ${{ steps.lfc-probe.outputs.lfc_available || 'true' }}
         run: |
-          # When model is not in LFC, unset the restricted proxy so
-          # HuggingFace transformers can download weights directly.
+          # When model is not in LFC, we need HuggingFace access.
+          # CIv2 runners route all traffic through a restricted proxy that
+          # blocks huggingface.co.  Strategy:
+          #   1. Try direct access (unset proxy)
+          #   2. If direct fails, keep proxy but add HF domains to NO_PROXY
+          #   3. Log which path was taken for debugging
           if [[ "$LFC_AVAILABLE" != "true" ]]; then
-            echo "::notice::Model not in LFC — unsetting proxy for direct HF download"
+            echo "::notice::Model not in LFC — attempting direct HF download"
+
+            # Diagnostic: test connectivity with and without proxy
+            echo "--- Connectivity diagnostics ---"
+            echo "Current proxy: HTTP_PROXY=${HTTP_PROXY:-<unset>}"
+
+            # Test 1: without proxy
             unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
+            DIRECT_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 https://huggingface.co 2>/dev/null || echo "000")
+            echo "Direct (no proxy): HTTP $DIRECT_STATUS"
+
+            if [[ "$DIRECT_STATUS" == "200" || "$DIRECT_STATUS" == "301" || "$DIRECT_STATUS" == "302" ]]; then
+              echo "✅ Direct internet access works — proxy vars cleared"
+            else
+              echo "⚠️  Direct access failed — no NAT egress from this pod"
+              echo "Restoring proxy and adding HF domains to NO_PROXY..."
+              export HTTP_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128"
+              export HTTPS_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128"
+              export http_proxy="http://proxy.restricted-proxy.svc.cluster.local:3128"
+              export https_proxy="http://proxy.restricted-proxy.svc.cluster.local:3128"
+              export NO_PROXY="${NO_PROXY},huggingface.co,*.huggingface.co,cdn-lfs.huggingface.co,cdn-lfs-us-1.huggingface.co"
+              export no_proxy="${no_proxy},huggingface.co,*.huggingface.co,cdn-lfs.huggingface.co,cdn-lfs-us-1.huggingface.co"
+
+              # Test 2: with proxy + NO_PROXY for HF
+              NOPROXY_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 https://huggingface.co 2>/dev/null || echo "000")
+              echo "With NO_PROXY for HF: HTTP $NOPROXY_STATUS"
+
+              if [[ "$NOPROXY_STATUS" == "000" ]]; then
+                echo "⚠️  Still cannot reach HF — trying THROUGH proxy..."
+                unset NO_PROXY no_proxy
+                export NO_PROXY="http://large-file-cache.large-file-cache.svc.cluster.local,harbor.*.tenstorrent.net"
+                export no_proxy="http://large-file-cache.large-file-cache.svc.cluster.local,harbor.*.tenstorrent.net"
+                PROXY_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --proxy "$HTTP_PROXY" https://huggingface.co 2>/dev/null || echo "000")
+                echo "Through proxy: HTTP $PROXY_STATUS"
+                if [[ "$PROXY_STATUS" != "000" && "$PROXY_STATUS" != "403" ]]; then
+                  echo "✅ Proxy allows HF — keeping proxy for HF downloads"
+                else
+                  echo "::warning::Cannot reach huggingface.co from this runner (direct=$DIRECT_STATUS, no_proxy=$NOPROXY_STATUS, proxy=$PROXY_STATUS). Model download will likely fail."
+                  # Last resort: unset proxy and hope for the best
+                  unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
+                fi
+              else
+                echo "✅ NO_PROXY bypass works for HF"
+              fi
+            fi
+            echo "--- End diagnostics ---"
           fi
 
           TRACER_OUTPUT_DIR="model_tracer/traced_operations"
