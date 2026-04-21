@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// EXPERIMENT: trip llk-wormhole-changed so PR-gate runs LLK unit tests for perf measurement (revert before merging).
 #pragma once
 
 #include <cstring>

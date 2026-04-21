@@ -573,9 +573,6 @@ jobs:
       test_splits: 1
       pytest_markers: "quasar"
 
-  # NOTE: LLK unit tests (llk-fd-unit-tests-* / llk-sd-unit-tests-*) moved to merge-gate.yaml —
-  # they were duplicating CI cost on every PR commit for coverage that only needs to block merges.
-
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:

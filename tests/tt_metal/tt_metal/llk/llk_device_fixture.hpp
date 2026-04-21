@@ -131,8 +131,7 @@ protected:
     // shutdown order vs MetalContext.
     static void TearDownTestSuite() {
         auto& s = shared_state();
-        s.devices.clear();
-        s.initialized = false;
+        s.TearDown();
     }
 
     void SetUp() override {
@@ -206,8 +205,7 @@ protected:
     // Per-suite cleanup; LLKDeviceEnvironment::TearDown is the final safety net.
     static void TearDownTestSuite() {
         auto& s = shared_state();
-        s.devices.clear();
-        s.initialized = false;
+        s.TearDown();
     }
 
     bool validate_dispatch_mode() override {
