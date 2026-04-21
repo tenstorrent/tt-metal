@@ -97,10 +97,21 @@ def _install_ttnn_attention(model, device):
 
     proj uses HiFi4 + fp32 dest so the downstream world_points_conf head
     stays above the 0.99 PCC floor (bf16 LoFi was 0.988 — FAIL).
+
+    Also fuse Block.norm1 into the attention's device path: upload x_bf16,
+    LN on device, qkv matmul on device, download qkv. Saves one CPU LN
+    call per block and makes the norm1 Identity on the host side.
     """
     import ttnn
     import torch.nn.functional as F
+    import torch.nn as nn
     from vggt.layers.attention import Attention  # type: ignore
+    from vggt.layers.block import Block  # type: ignore
+
+    attn_owner_block: dict = {}
+    for blk in model.modules():
+        if isinstance(blk, Block):
+            attn_owner_block[id(blk.attn)] = blk
 
     for m in model.modules():
         if isinstance(m, Attention) and not getattr(m, "_tt_attn_ready", False):
@@ -119,6 +130,18 @@ def _install_ttnn_attention(model, device):
                 if pb is not None else None
             )
             m._tt_device = device
+            # Fuse Block.norm1 if owned by a Block.
+            blk = attn_owner_block.get(id(m))
+            if blk is not None and isinstance(blk.norm1, nn.LayerNorm):
+                g = blk.norm1.weight.detach().reshape(1, 1, -1).to(torch.bfloat16)
+                b = blk.norm1.bias.detach().reshape(1, 1, -1).to(torch.bfloat16)
+                m._tt_ln_g = ttnn.from_torch(g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                m._tt_ln_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                m._tt_ln_eps = float(blk.norm1.eps)
+                blk.norm1 = nn.Identity()
+                m._tt_fused_ln = True
+            else:
+                m._tt_fused_ln = False
             m._tt_attn_ready = True
 
     if getattr(Attention, "_tt_patched", False):
@@ -134,6 +157,8 @@ def _install_ttnn_attention(model, device):
         tt_in = ttnn.from_torch(
             x_bf16, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self._tt_device
         )
+        if self._tt_fused_ln:
+            tt_in = ttnn.layer_norm(tt_in, weight=self._tt_ln_g, bias=self._tt_ln_b, epsilon=self._tt_ln_eps)
         tt_qkv = ttnn.linear(tt_in, self._tt_qkv_w, bias=self._tt_qkv_b)
         qkv = ttnn.to_torch(tt_qkv).to(x.dtype)
         qkv = qkv.reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
