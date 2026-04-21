@@ -59,3 +59,18 @@ install(
     DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/soc_descriptors
     COMPONENT metalium-validation
 )
+
+# Install core descriptor YAML files for mock device testing.
+# These are required by get_core_descriptor_file(), which looks for files in:
+# get_root_dir() + "/tt_metal/core_descriptors/"
+# Production core descriptors (BH/WH) are already installed via JITAPI_FILES.
+# These simulation/versim variants are only needed for mock device tests.
+install(
+    FILES
+        ${PROJECT_SOURCE_DIR}/tt_metal/core_descriptors/blackhole_simulation_1x2_arch.yaml
+        ${PROJECT_SOURCE_DIR}/tt_metal/core_descriptors/quasar_simulation_1x3_arch.yaml
+        ${PROJECT_SOURCE_DIR}/tt_metal/core_descriptors/quasar_simulation_8x4_arch.yaml
+        ${PROJECT_SOURCE_DIR}/tt_metal/core_descriptors/wormhole_b0_versim_1x1_arch.yaml
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/core_descriptors
+    COMPONENT metalium-validation
+)

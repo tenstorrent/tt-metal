@@ -402,20 +402,34 @@ def render_report(report: ValidationReport) -> str:
             lines.append(f"| `{cat}` | {cat_counts[cat]} | {DIFF_CATEGORIES.get(cat, cat)} |")
         lines.append("")
 
-    # Detailed diffs
+    # Detailed diffs (truncated to avoid exceeding GitHub step summary 1MB limit)
     if report.diffed:
+        max_detailed_entries = 20
+        shown = report.diffed[:max_detailed_entries]
+        remaining = len(report.diffed) - max_detailed_entries
+
         lines.append("## Detailed diffs")
         lines.append("")
-        for r in report.diffed:
+        if remaining > 0:
+            lines.append(
+                f"> Showing first {max_detailed_entries} of {len(report.diffed)} diffed configs. "
+                f"{remaining} additional entries omitted to stay within GitHub step summary size limits."
+            )
+            lines.append("")
+
+        for r in shown:
             lines.append(f"### `{r.op_name}` config_hash `{r.config_hash[:16]}...`")
             lines.append(f"master config_id={r.master_config_id}, sweep config_id={r.sweep_config_id}")
             lines.append("")
             lines.append("| Path | Category | Master | Sweep |")
             lines.append("|------|----------|--------|-------|")
-            for d in r.diffs:
+            max_diffs_per_entry = 10
+            for d in r.diffs[:max_diffs_per_entry]:
                 lines.append(
                     f"| `{d.path}` | `{d.category}` | {_trunc(d.master_value, 40)} | {_trunc(d.sweep_value, 40)} |"
                 )
+            if len(r.diffs) > max_diffs_per_entry:
+                lines.append(f"| ... | | {len(r.diffs) - max_diffs_per_entry} more diffs omitted | |")
             lines.append("")
 
     return "\n".join(lines)
@@ -501,7 +515,7 @@ def main() -> int:
 
     if failing_diffs:
         print(
-            f"FAIL: {len(failing_diffs)} config(s) have argument diffs " f"(ignoring categories: {ignore or 'none'})",
+            f"FAIL: {len(failing_diffs)} config(s) have argument diffs (ignoring categories: {ignore or 'none'})",
             file=sys.stderr,
         )
         return 1
