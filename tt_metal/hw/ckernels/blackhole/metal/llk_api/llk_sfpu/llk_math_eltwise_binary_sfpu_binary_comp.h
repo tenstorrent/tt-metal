@@ -29,21 +29,21 @@ inline void llk_math_eltwise_binary_sfpu_lt_int(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for lt_int. Supported data formats are: Int32, UInt32, UInt16");
     if constexpr (DATA_FORMAT == DataFormat::Int32) {
-        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_(
             ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, ITERATIONS, SfpuType::lt>,
             dst_index0,
             dst_index1,
             odst,
             vector_mode);
     } else if constexpr (DATA_FORMAT == DataFormat::UInt32) {
-        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_(
             ckernel::sfpu::calculate_binary_comp_uint32<APPROXIMATE, ITERATIONS, SfpuType::lt>,
             dst_index0,
             dst_index1,
             odst,
             vector_mode);
     } else {
-        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_(
             ckernel::sfpu::calculate_binary_comp_uint16<APPROXIMATE, ITERATIONS, SfpuType::lt>,
             dst_index0,
             dst_index1,
@@ -71,21 +71,21 @@ inline void llk_math_eltwise_binary_sfpu_gt_int(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for gt_int. Supported data formats are: Int32, UInt32, UInt16");
     if constexpr (DATA_FORMAT == DataFormat::Int32) {
-        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_(
             ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, ITERATIONS, SfpuType::gt>,
             dst_index0,
             dst_index1,
             odst,
             vector_mode);
     } else if constexpr (DATA_FORMAT == DataFormat::UInt32) {
-        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_(
             ckernel::sfpu::calculate_binary_comp_uint32<APPROXIMATE, ITERATIONS, SfpuType::gt>,
             dst_index0,
             dst_index1,
             odst,
             vector_mode);
     } else {
-        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_(
             ckernel::sfpu::calculate_binary_comp_uint16<APPROXIMATE, ITERATIONS, SfpuType::gt>,
             dst_index0,
             dst_index1,
@@ -113,21 +113,21 @@ inline void llk_math_eltwise_binary_sfpu_le_int(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for le_int. Supported data formats are: Int32, UInt32, UInt16");
     if constexpr (DATA_FORMAT == DataFormat::Int32) {
-        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_(
             ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, ITERATIONS, SfpuType::le>,
             dst_index0,
             dst_index1,
             odst,
             vector_mode);
     } else if constexpr (DATA_FORMAT == DataFormat::UInt32) {
-        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_(
             ckernel::sfpu::calculate_binary_comp_uint32<APPROXIMATE, ITERATIONS, SfpuType::le>,
             dst_index0,
             dst_index1,
             odst,
             vector_mode);
     } else {
-        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_(
             ckernel::sfpu::calculate_binary_comp_uint16<APPROXIMATE, ITERATIONS, SfpuType::le>,
             dst_index0,
             dst_index1,
@@ -155,21 +155,21 @@ inline void llk_math_eltwise_binary_sfpu_ge_int(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for ge_int. Supported data formats are: Int32, UInt32, UInt16");
     if constexpr (DATA_FORMAT == DataFormat::Int32) {
-        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_(
             ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, ITERATIONS, SfpuType::ge>,
             dst_index0,
             dst_index1,
             odst,
             vector_mode);
     } else if constexpr (DATA_FORMAT == DataFormat::UInt32) {
-        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_(
             ckernel::sfpu::calculate_binary_comp_uint32<APPROXIMATE, ITERATIONS, SfpuType::ge>,
             dst_index0,
             dst_index1,
             odst,
             vector_mode);
     } else {
-        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_(
             ckernel::sfpu::calculate_binary_comp_uint16<APPROXIMATE, ITERATIONS, SfpuType::ge>,
             dst_index0,
             dst_index1,
@@ -178,10 +178,7 @@ inline void llk_math_eltwise_binary_sfpu_ge_int(
     }
 }
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_binary_sfpu_eq_fp32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::eq>();
-}
+inline void llk_math_eltwise_binary_sfpu_eq_fp32_init() { llk_math_eltwise_binary_sfpu_init<SfpuType::eq>(); }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_eq_fp32(
