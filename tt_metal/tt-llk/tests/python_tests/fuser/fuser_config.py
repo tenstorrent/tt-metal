@@ -127,7 +127,7 @@ class FuserConfig(TestConfig):
         from .fused_generator import FusedKernelGenerator
 
         code_generator = FusedKernelGenerator(self)
-        code_generator.write_kernel(self.test_name, self.global_config.regenerate_cpp)
+        code_generator.write_kernel(self.test_name)
         self.build_elfs()
 
     def run_perf_test(self, worker_id: str, run_count: int = 2):

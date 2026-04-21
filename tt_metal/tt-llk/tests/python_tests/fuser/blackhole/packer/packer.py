@@ -58,7 +58,7 @@ class Packer(BasePacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
-        return f"_llk_pack_<{dest_sync}, {dest_acc}, false>({block.tile_id_block}, L1_ADDRESS(buffer_Res{stage}[{block.tile_id_global}]));\n"
+        buffer = operation.output.cpp_name
+        return f"_llk_pack_<{dest_sync}, {dest_acc}, false>({block.tile_id_block}, L1_ADDRESS({buffer}[{block.tile_id_global}]));\n"

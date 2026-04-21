@@ -6,9 +6,13 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import torch
-from helpers.llk_params import DataFormat, PartialFace, format_dict
+from helpers.llk_params import DataFormat, PartialFace, format_dict, format_tile_sizes
 from helpers.stimuli_generator import generate_random_face
-from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
+from helpers.tile_constants import (
+    DEFAULT_TILE_C_DIM,
+    DEFAULT_TILE_R_DIM,
+    calculate_tile_size_bytes,
+)
 from helpers.tile_shape import TileShape, construct_tile_shape
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_res_tiles
@@ -33,6 +37,7 @@ class Operand:
     tile_count: Optional[int] = None
     tile_count_x: Optional[int] = None
     tile_count_y: Optional[int] = None
+    tile_size: Optional[int] = None
 
     def __post_init__(self):
         self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
@@ -46,6 +51,15 @@ class Operand:
                 or self.tile_shape.total_col_dim() < 16
             )
             else PartialFace.No
+        )
+
+        TILE_SIZES = {
+            DataFormat.Bfp8_b: 68,
+            DataFormat.Float32: 256,
+        }
+
+        self.tile_size = TILE_SIZES.get(self.data_format, 128) * (
+            self.tile_shape.total_num_faces() / 4
         )
 
     def is_input(self) -> bool:
@@ -169,6 +183,23 @@ class Operand:
             packed_tiles.append((addr, packed))
 
         return packed_tiles
+
+    @property
+    def cpp_name(self) -> str:
+        return f"buffer_{self.name}"
+
+    def cpp_value(self, dest_acc: bool) -> str:
+        buffer_size = calculate_tile_size_bytes(
+            data_format=self.data_format,
+            tile_dimensions=(
+                self.tile_shape.total_row_dim(),
+                self.tile_shape.total_col_dim(),
+            ),
+            format_tile_sizes=format_tile_sizes,
+            use_srcs=True,
+            dest_acc=dest_acc,
+        )
+        return f"UNUSED const Operand {self.cpp_name}({hex(self.l1_address)}, {buffer_size});\n"
 
 
 class OperandMapping:
@@ -425,5 +456,13 @@ class OperandRegistry:
 
             output._raw_data = raw_tensor
 
+    def generate_cpp(self, dest_acc: bool):
+        code = "// Inputs\n"
+        for operand in self.get_all_inputs():
+            code += operand.cpp_value(dest_acc)
 
-operand_registry: OperandRegistry = OperandRegistry()
+        code += "// Outputs\n"
+        for operand in self.get_all_outputs():
+            code += operand.cpp_value(dest_acc)
+
+        return code

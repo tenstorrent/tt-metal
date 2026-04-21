@@ -100,16 +100,17 @@ class MatmulUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
         kt_dim = operation.kt_dim
-        unpack_tile_size_a = operation.tile_size_unpack_a
-        unpack_tile_size_b = operation.tile_size_unpack_b
+        unpack_tile_size_a = operation.src_a.tile_size
+        unpack_tile_size_b = operation.src_b.tile_size
         full_ct_dim = operation.src_b.dimensions[1] // 32
         output_ct_dim = operation.src_a.tile_count_x
         src_a_partial_face = operation.src_a.partial_face.cpp_enum_value
         src_b_partial_face = operation.src_b.partial_face.cpp_enum_value
+        buffer_a = operation.src_a.cpp_name
+        buffer_b = operation.src_b.cpp_name
 
         return (
             f"    {{\n"
@@ -119,7 +120,7 @@ class MatmulUnpacker(Unpacker):
             f"            std::uint32_t srca_tile_idx = row * {kt_dim} + kt;\n"
             f"            std::uint32_t srcb_tile_idx = kt * {full_ct_dim} + col;\n"
             f"            _llk_unpack_AB_matmul_<>(\n"
-            f"                L1_ADDRESS(buffer_A{stage}[0]), L1_ADDRESS(buffer_B{stage}[0]),\n"
+            f"                L1_ADDRESS({buffer_a}[0]), L1_ADDRESS({buffer_b}[0]),\n"
             f"                srca_tile_idx, srcb_tile_idx,\n"
             f"                {unpack_tile_size_a}, {unpack_tile_size_b},\n"
             f"                {src_a_partial_face}, {src_b_partial_face},\n"

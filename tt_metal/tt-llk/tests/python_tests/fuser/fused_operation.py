@@ -6,14 +6,11 @@ from dataclasses import dataclass
 from typing import Tuple
 
 import torch
-from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestSync,
     StochasticRounding,
     Tilize,
-    format_tile_sizes,
 )
-from helpers.matmul_sweep import validate_tile_dimensions
 
 from .fused_math import ComputePipeline
 from .fused_operand import Operand, OperandMapping
@@ -29,60 +26,16 @@ class FusedOperation:
     throttle: int = 0
     stochastic_rnd: StochasticRounding = StochasticRounding.No
     tiny_tiles: bool = False
-    partial_face_A: bool = False
-    partial_face_B: bool = False
-    partial_face: bool = False
     dest_sync: DestSync = DestSync.Half
-    srca_reuse_count: int = 4
     block_size: Tuple[int, int] = (32, 32)
     bh_tilize: Tilize = Tilize.No
 
     def __post_init__(self):
-        mapping = self.operand_mapping
-        registry = mapping.operand_registry
-
-        src_a = registry.get(mapping.src_a)
-        src_b = registry.get(mapping.src_b)
-        output = registry.get(mapping.output)
-
-        TILE_SIZES = {
-            DataFormat.Bfp8_b: 68,
-            DataFormat.Float32: 256,
-        }
-
-        pack_size = TILE_SIZES.get(output.data_format, 128)
-        unpack_size_a = TILE_SIZES.get(src_a.data_format, 128)
-        unpack_size_b = TILE_SIZES.get(src_b.data_format, 128)
-
-        if self.tiny_tiles:
-            pack_size = (pack_size // self.output.tile_shape.total_num_faces()) * (
-                self.in0_tile_r_dim // self.output.tile_shape.face_r_dim
-            )
-            unpack_size_a = (
-                unpack_size_a // self.src_a.tile_shape.total_num_faces()
-            ) * (self.in0_tile_r_dim // self.src_a.tile_shape.face_r_dim)
-            unpack_size_b = (
-                unpack_size_a // self.src_a.tile_shape.total_num_faces()
-            ) * (self.in0_tile_r_dim // self.src_b.tile_shape.face_r_dim)
-
-        self.tile_size_pack = pack_size
-        self.tile_size_unpack_a = unpack_size_a
-        self.tile_size_unpack_b = unpack_size_b
-
-        self.buffer_A_tile_size = format_tile_sizes[self.src_a.data_format]
-        self.buffer_B_tile_size = format_tile_sizes[self.src_b.data_format]
-        self.buffer_Res_tile_size = format_tile_sizes[self.output.data_format]
-
-        num_rows = output.tile_shape.total_row_dim()
-        num_cols = output.tile_shape.total_col_dim()
+        num_rows = self.output.tile_shape.total_row_dim()
+        num_cols = self.output.tile_shape.total_col_dim()
 
         self.block_tiles_x = self.block_size[1] // num_cols
         self.block_tiles_y = self.block_size[0] // num_rows
-
-        validate_tile_dimensions(self.src_a.dimensions[0], num_rows)
-        validate_tile_dimensions(self.src_a.dimensions[1], num_cols)
-        validate_tile_dimensions(self.src_b.dimensions[0], num_rows)
-        validate_tile_dimensions(self.src_b.dimensions[1], num_cols)
 
         self.kt_dim = self.src_a.dimensions[1] // num_cols
 

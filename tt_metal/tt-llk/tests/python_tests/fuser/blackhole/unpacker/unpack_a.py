@@ -157,9 +157,10 @@ class UnpackerA(Unpacker):
         unpack_to_dest = "true" if operation.unpack_to_dest else "false"
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
+        buffer_a = operation.src_a.cpp_name
 
         return (
             f"_llk_unpack_A_<{broadcast_type}, false, {reuse_dest}, {unpack_to_dest}>(\n"
-            f"    L1_ADDRESS(buffer_A{stage}[{block.tile_id_global}]), unpack_a_src_format{stage}, unpack_a_dst_format{stage}\n"
+            f"    L1_ADDRESS({buffer_a}[{block.tile_id_global}]), unpack_a_src_format{stage}, unpack_a_dst_format{stage}\n"
             f");\n"
         )

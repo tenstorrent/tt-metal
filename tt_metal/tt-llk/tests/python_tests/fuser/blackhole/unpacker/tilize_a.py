@@ -82,12 +82,13 @@ class UnpackerTilizeA(Unpacker):
     ) -> str:
         stage = operation.stage_id
         block_ct_dim = operation.src_a.tile_count_x
+        buffer_a = operation.src_a.cpp_name
 
         return (
             f"{{\n"
             f"    std::uint32_t row = ({block.tile_id_global}) / {block_ct_dim};\n"
             f"    std::uint32_t col = ({block.tile_id_global}) % {block_ct_dim};\n"
-            f"    _llk_unpack_tilize_(L1_ADDRESS(buffer_A{stage}[row * {block_ct_dim}]), col, unpack_a_src_format{stage}, unpack_a_dst_format{stage});\n"
+            f"    _llk_unpack_tilize_(L1_ADDRESS({buffer_a}[row * {block_ct_dim}]), col, unpack_a_src_format{stage}, unpack_a_dst_format{stage});\n"
             f"}}\n"
         )
 
