@@ -8,6 +8,7 @@ from typing import Tuple
 import torch
 from helpers.llk_params import (
     DestSync,
+    GoldenType,
     StochasticRounding,
     Tilize,
 )
@@ -58,23 +59,16 @@ class FusedOperation:
 
     def golden(self, config) -> torch.Tensor:
         # calculate l1 golden
-        src_a_dims = self.math.operations[0].src_a.dimensions
-        src_b_dims = self.math.operations[0].src_b.dimensions
-
-        tensor_a = self.math.operations[0].src_a.raw_data.view(src_a_dims)
-        tensor_b = self.math.operations[0].src_b.raw_data.view(src_b_dims)
-
-        l1_golden_tensor = self.math.golden(tensor_a, tensor_b, self, config)
+        l1_golden_tensor = self.math.golden(
+            self, config, golden_type=GoldenType.L1_GOLDEN
+        )
         l1_golden_tensor = self.math.packer().golden(l1_golden_tensor, self, config)
 
         self.output.l1_golden = l1_golden_tensor.flatten()
 
         # calculate master golden
-        golden_tensor_a = self.math.operations[0].src_a.master_golden.view(src_a_dims)
-        golden_tensor_b = self.math.operations[0].src_b.master_golden.view(src_b_dims)
-
         master_golden_tensor = self.math.golden(
-            golden_tensor_a, golden_tensor_b, self, config
+            self, config, golden_type=GoldenType.MASTER_GOLDEN
         )
         master_golden_tensor = self.math.packer().golden(
             master_golden_tensor, self, config

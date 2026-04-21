@@ -554,4 +554,9 @@ class TopKSortDirection(Enum):
     Ascending = 1
 
 
+class GoldenType(Enum):
+    L1_GOLDEN = "L1_GOLDEN"
+    MASTER_GOLDEN = "MASTER_GOLDEN"
+
+
 # *********************************
