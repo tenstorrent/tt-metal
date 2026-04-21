@@ -157,6 +157,95 @@ MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view) {
     TT_THROW("Failed to find offset for mesh device view");
 }
 
+// Result of evaluating whether the real-time profiler can be brought up on a given device.
+struct RealtimeProfilerEligibility {
+    bool enabled = false;
+    CoreCoord core{};  // Only meaningful when enabled == true; tensix core reserved for the RT profiler kernel.
+};
+
+// Consolidated eligibility check for the real-time profiler on a single device.
+//
+// Logs (at info/warning) the reason RT profiler is being disabled so the user gets a
+// clear explanation, and returns {enabled=false} in that case. When enabled, the
+// returned `core` is the dispatch-pool-reserved tensix to use both for the RT
+// profiler BRISC kernel and as the sender core of the D2H socket.
+//
+// Checks performed (in order):
+//   1. Device is MMIO-capable. D2H sockets need a PCIe-connected sender core;
+//      remote devices (e.g. device 1 on N300) cannot map pinned host memory.
+//   2. The D2H socket's memory-allocation path is supported on this host. On
+//      architectures with 64-bit PCIe addressing (Blackhole) the D2H socket
+//      only takes the pinned-memory path — there is no hugepage fallback — so
+//      IOMMU must be enabled on the host for the pinning to succeed. If not,
+//      we disable cleanly rather than fault inside UMD's sysmem mapping.
+//   3. A tensix core was reserved for the RT profiler at dispatch_core_manager
+//      construction time. The reservation only happens for MMIO chips with
+//      WORKER dispatch — for ETH dispatch the dispatch pool holds ethernet
+//      cores, which cannot run the RT profiler's BRISC worker kernel.
+//   4. Defensive: the reserved coordinate lives inside the logical TENSIX grid
+//      (harvesting overlays could in principle produce a stale entry).
+RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* device) {
+    auto device_id = device->id();
+    const auto& metal = MetalContext::instance();
+    const auto& hal = metal.hal();
+    const auto& cluster = metal.get_cluster();
+    auto& dispatch_core_manager = metal.get_dispatch_core_manager();
+
+    // 1. MMIO capability.
+    if (!device->is_mmio_capable()) {
+        log_info(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: device is not MMIO-capable (remote device). "
+            "D2H sockets require the sender core to sit on a PCIe-connected chip.",
+            device_id);
+        return {};
+    }
+
+    // 2. D2H socket memory-allocation precondition (IOMMU vs. hugepage fallback).
+    if (hal.get_supports_64_bit_pcie_addressing() && !cluster.is_iommu_enabled()) {
+        log_info(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: this architecture uses 64-bit PCIe "
+            "addressing for the D2H socket, which requires IOMMU to be enabled on the host. "
+            "IOMMU is currently disabled and no hugepage fallback is available. Enable IOMMU "
+            "(or run on a system that has it) to re-enable RT profiler.",
+            device_id);
+        return {};
+    }
+
+    // 3. Reserved tensix core for the RT profiler kernel / D2H sender.
+    std::optional<tt_cxy_pair> reserved = dispatch_core_manager.get_reserved_realtime_profiler_core(device_id);
+    if (!reserved.has_value()) {
+        log_info(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: no tensix core could be reserved for the "
+            "RT profiler (typically because dispatch is configured for ETH cores). Switch to "
+            "DispatchCoreConfig(DispatchCoreType::WORKER) to re-enable RT profiler.",
+            device_id);
+        return {};
+    }
+
+    CoreCoord core(reserved->x, reserved->y);
+
+    // 4. Sanity-check the reservation against the TENSIX grid.
+    const auto& soc = cluster.get_soc_desc(device_id);
+    CoreCoord tensix_grid = soc.get_grid_size(CoreType::TENSIX);
+    if (core.x >= tensix_grid.x || core.y >= tensix_grid.y) {
+        log_warning(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: reserved core ({}, {}) is outside the "
+            "TENSIX logical grid ({}, {}).",
+            device_id,
+            core.x,
+            core.y,
+            tensix_grid.x,
+            tensix_grid.y);
+        return {};
+    }
+
+    return {.enabled = true, .core = core};
+}
+
 }  // namespace
 
 MeshDeviceImpl::ScopedDevices::ScopedDevices(
@@ -1807,79 +1896,14 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         IDevice* device = this->get_device(coord);
         auto device_id = device->id();
 
-        // D2H sockets require the sender core to reside on a PCIe-connected (MMIO)
-        // device.  Remote devices (e.g. device 1 on N300) are reachable only via
-        // ethernet and cannot map pinned host memory, so skip them.
-        if (!device->is_mmio_capable()) {
-            log_info(
-                tt::LogMetal,
-                "Device {} is not MMIO-capable (remote) — skipping RT profiler for this device",
-                device_id);
+        // Single, consolidated eligibility gate for the real-time profiler. Covers
+        // MMIO capability, IOMMU / hugepage fallback preconditions, and the reserved
+        // dispatch-pool tensix core. Logs the specific reason when disabling.
+        auto eligibility = evaluate_realtime_profiler_eligibility(device);
+        if (!eligibility.enabled) {
             continue;
         }
-
-        // Use the tensix that dispatch_core_manager reserved for the real-time profiler at
-        // construction time. That slot is taken from the back of the dispatch pool (dispatch
-        // consumes from the front), guaranteeing no collision with dispatch / prefetch /
-        // dispatch_s / fabric mux kernels that get assigned later.
-        //
-        // The reservation only happens for MMIO chips with WORKER dispatch — for ETH dispatch
-        // the dispatch pool holds ethernet cores, not tensixes, and the RT profiler kernel
-        // (a BRISC worker kernel) cannot run on an ethernet core. Rather than fall back to a
-        // picker that could return an ethernet coordinate, we disable RT profiler on that
-        // device cleanly. ETH dispatch users who need RT profiler must opt in to WORKER
-        // dispatch (DispatchCoreConfig(DispatchCoreType::WORKER)) when opening the device.
-        std::optional<tt_cxy_pair> realtime_profiler_core_opt =
-            dispatch_core_manager.get_reserved_realtime_profiler_core(device_id);
-
-        if (!realtime_profiler_core_opt.has_value()) {
-            log_info(
-                tt::LogMetal,
-                "No reserved tensix available for real-time profiler on device {} (typically because dispatch is "
-                "configured for ETH cores) — skipping RT profiler for this device",
-                device_id);
-            continue;
-        }
-
-        CoreCoord realtime_profiler_core(realtime_profiler_core_opt->x, realtime_profiler_core_opt->y);
-
-        // Defensive: the reservation is taken from the dispatch tensix pool, so it is by
-        // construction inside the TENSIX grid, but validate anyway in case core descriptor
-        // overlays produce a stale entry for harvested devices.
-        const auto& soc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
-        CoreCoord tensix_grid = soc.get_grid_size(CoreType::TENSIX);
-        if (realtime_profiler_core.x >= tensix_grid.x || realtime_profiler_core.y >= tensix_grid.y) {
-            log_warning(
-                tt::LogMetal,
-                "Reserved RT profiler core ({}, {}) on device {} is outside the TENSIX logical grid "
-                "({}, {}) — disabling RT profiler on this device",
-                realtime_profiler_core.x,
-                realtime_profiler_core.y,
-                device_id,
-                tensix_grid.x,
-                tensix_grid.y);
-            continue;
-        }
-
-        // The D2H socket backing the RT profiler needs a host buffer that the device
-        // can DMA into. On architectures with 64-bit PCIe addressing (e.g. Blackhole)
-        // we do not have a hugepage fallback — the socket always goes through the
-        // pinned-memory path, which in turn needs a stable host physical address.
-        // Without an IOMMU, producing that stable mapping for an anonymous POSIX
-        // shm region is not reliably supported in all deployments and can fault
-        // deep inside UMD's sysmem mapping. Rather than take that risk, disable
-        // the RT profiler on this device with a clear explanation.
-        if (hal.get_supports_64_bit_pcie_addressing() && !MetalContext::instance().get_cluster().is_iommu_enabled()) {
-            log_info(
-                tt::LogMetal,
-                "Real-time profiler disabled on device {}: this architecture uses 64-bit PCIe "
-                "addressing for the D2H socket, which requires IOMMU to be enabled on the host. "
-                "IOMMU is currently disabled, so no hugepage fallback is available and RT profiler "
-                "cannot be brought up safely. Enable IOMMU (or run on a system that has it) to "
-                "re-enable RT profiler.",
-                device_id);
-            continue;
-        }
+        CoreCoord realtime_profiler_core = eligibility.core;
 
         log_info(
             tt::LogMetal,
@@ -1904,9 +1928,31 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             device_id,
             this->id());
 
-        dev_state.socket = std::make_unique<D2HSocket>(
-            mesh_device, sender_core, kRealtimeProfilerFifoSize, kRealtimeProfilerPageSize);
-        dev_state.socket->set_page_size(kRealtimeProfilerPageSize);
+        // Defensive guard: the D2H socket construction is where host-side memory
+        // pinning / hugepage mapping actually happens, and that interaction with
+        // UMD / the kernel driver has historically been the most fragile part of
+        // bringing up the RT profiler (e.g. `pin_pages` failing on BH without
+        // IOMMU). The `evaluate_realtime_profiler_eligibility` gate above should
+        // already filter out the known-bad configurations, but we don't want a
+        // *future* regression in that path to kill an otherwise-healthy run.
+        // If anything goes wrong here, log a clear warning and fall through to
+        // the next device — no activation is notified for this chip, so the
+        // rest of the stack will simply see "RT profiler not active" for it.
+        try {
+            dev_state.socket = std::make_unique<D2HSocket>(
+                mesh_device, sender_core, kRealtimeProfilerFifoSize, kRealtimeProfilerPageSize);
+            dev_state.socket->set_page_size(kRealtimeProfilerPageSize);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "Real-time profiler disabled on device {}: D2H socket construction failed ({}). "
+                "This typically indicates a host-side memory pinning / hugepage mapping issue "
+                "(e.g. IOMMU misconfiguration or UMD DMA pin failure). Continuing without RT "
+                "profiler on this device.",
+                device_id,
+                e.what());
+            continue;
+        }
 
         // Store sync and diagnostic addresses
         dev_state.realtime_profiler_base_addr = realtime_profiler_base_addr;
