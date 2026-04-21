@@ -68,6 +68,7 @@ string build_trisc_prolog(const char* trisc_define) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
     prolog << "#include \"kernel_bindings_generated.h\"\n";
+    prolog << "#include \"kernel_args_generated.h\"\n";
     prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
@@ -132,6 +133,86 @@ void write_kernel_bindings_generated_header(const std::filesystem::path& out_dir
     write_file(path, content.str());
 }
 
+// Emits per-kernel accessors for named RTAs, CRTAs, and CTAs inside the user-configurable
+// args namespace. Also emits get_vararg() / get_common_vararg() helpers with the named-args
+// offset baked in — so that vararg indices in kernel code are stable across schema changes.
+//
+// The generated header itself is never hashed; the kernel cache key is derived in
+// Kernel::compute_hash() from the input data (kernel source, schema, CTA bindings, etc).
+// So we don't need to massage the generation order for hash stability — we just emit what
+// we're given.
+void write_kernel_args_generated_header(const string& out_dir, const JitBuildSettings& settings) {
+    const string path = out_dir + "kernel_args_generated.h";
+
+    // Named RTAs/CRTAs come straight from the settings as ordered vectors.
+    const vector<string>& rta_names = settings.get_named_runtime_args();
+    const vector<string>& crta_names = settings.get_named_common_runtime_args();
+
+    // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
+    // The order in which we emit them doesn't matter: CTA values are baked into the header
+    // as independent constexpr constants; they don't affect RTA/CRTA byte offsets.
+    vector<pair<string, uint32_t>> cta_entries;
+    settings.process_named_compile_time_args(
+        [&cta_entries](const std::unordered_map<std::string, uint32_t>& named_args) {
+            for (const auto& [name, value] : named_args) {
+                cta_entries.emplace_back(name, value);
+            }
+        });
+
+    const string& ns = settings.get_args_namespace();
+
+    ostringstream content;
+    content << "// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.\n"
+               "//\n"
+               "// SPDX-License-Identifier: Apache-2.0\n\n"
+               "// AUTO-GENERATED — do not edit.\n\n"
+               "#pragma once\n\n";
+
+    const bool has_any = !rta_names.empty() || !crta_names.empty() || !cta_entries.empty();
+    if (!has_any) {
+        content << "// No named kernel args for this kernel.\n";
+        write_file(path, content.str());
+        return;
+    }
+
+    content << "#include \"experimental/kernel_args.h\"\n\n";
+    content << "namespace " << ns << " {\n";
+
+    // Named RTAs
+    // Here, rta_offset tracks the byte_offset of the RTA in the dispatch buffer.
+    // (Only uint32_t arg types are currently supported, but we later want to extend this.)
+    uint32_t rta_offset = 0;
+    for (const auto& name : rta_names) {
+        content << "constexpr experimental::RtaArg<uint32_t> " << name << "{" << rta_offset << "};\n";
+        rta_offset += sizeof(uint32_t);
+    }
+    // Named CRTAs
+    uint32_t crta_offset = 0;
+    for (const auto& name : crta_names) {
+        content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
+        crta_offset += sizeof(uint32_t);
+    }
+    // Named CTAs
+    // No offsets to deal with here; CTA values are emitted directly into the generated header.
+    for (const auto& [name, value] : cta_entries) {
+        content << "constexpr experimental::CtaVal<uint32_t> " << name << "{" << value << "u};\n";
+    }
+
+    content << "}  // namespace " << ns << "\n\n";
+
+    // Vararg helpers.
+    // The starting offset (named_arg_count) is baked in so kernel code uses 0-based
+    // indexing: get_vararg(0) is the first vararg, regardless of named-arg count.
+    const uint32_t named_rta_words = static_cast<uint32_t>(rta_names.size());
+    const uint32_t named_crta_words = static_cast<uint32_t>(crta_names.size());
+    content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>(" << named_rta_words
+            << " + idx); }\n"
+            << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
+            << named_crta_words << " + idx); }\n";
+
+    write_file(path, content.str());
+}
+
 }  // namespace
 
 void jit_build_genfiles_kernel_include(
@@ -140,11 +221,15 @@ void jit_build_genfiles_kernel_include(
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
     fs::path out_dir = fs::path(env.get_out_kernel_root_path()) / settings.get_full_kernel_name();
+
     write_kernel_bindings_generated_header(out_dir, settings);
+    write_kernel_args_generated_header(out_dir, settings);
+
     fs::path kernel_header = out_dir / "kernel_includes.hpp";
 
     const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
-    const string kernel_header_content = string("#include \"kernel_bindings_generated.h\"\n") + kernel_src_to_include;
+    const string kernel_header_content = string("#include \"kernel_bindings_generated.h\"\n") +
+                                         string("#include \"kernel_args_generated.h\"\n") + kernel_src_to_include;
     write_file(kernel_header, kernel_header_content);
 }
 
@@ -154,7 +239,10 @@ void jit_build_genfiles_triscs_src(
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
     const fs::path out_dir = fs::path(env.get_out_kernel_root_path()) / settings.get_full_kernel_name();
+    
     write_kernel_bindings_generated_header(out_dir, settings);
+    write_kernel_args_generated_header(out_dir, settings);
+
     const fs::path unpack_cpp = out_dir / "chlkc_unpack.cpp";
     const fs::path math_cpp = out_dir / "chlkc_math.cpp";
     const fs::path pack_cpp = out_dir / "chlkc_pack.cpp";
