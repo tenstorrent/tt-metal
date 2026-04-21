@@ -80,4 +80,15 @@ void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHa
 // Called internally by the real-time profiler receiver thread.
 void InvokeProgramRealtimeProfilerCallbacks(const ProgramRealtimeRecord& record);
 
+// Returns true if the real-time profiler is currently active on at least one chip,
+// i.e. at least one MeshDevice finished the init+sync handshake and has a receiver
+// thread delivering records. Callers can use this to distinguish "RT profiler is
+// disabled on this configuration" (e.g. ETH dispatch) from "RT profiler is on but
+// has not produced records yet".
+bool IsProgramRealtimeProfilerActive();
+
+// Internal lifecycle hooks wired by MeshDevice (not for end-user calls).
+void NotifyProgramRealtimeProfilerActivated(uint32_t chip_id);
+void NotifyProgramRealtimeProfilerDeactivated(uint32_t chip_id);
+
 }  // end namespace tt

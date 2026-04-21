@@ -280,5 +280,6 @@ SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
 ProgramRealtimeRecord = ttnn._ttnn.device.ProgramRealtimeRecord
 RegisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.RegisterProgramRealtimeProfilerCallback
 UnregisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.UnregisterProgramRealtimeProfilerCallback
+IsProgramRealtimeProfilerActive = ttnn._ttnn.device.IsProgramRealtimeProfilerActive
 
 __all__ = []

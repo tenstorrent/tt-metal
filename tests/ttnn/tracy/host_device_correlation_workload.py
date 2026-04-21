@@ -51,14 +51,24 @@ def main():
 
     input_loc = "models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/"
 
-    # RT profiler requires a tensix dispatch core (it is a BRISC kernel that
-    # cannot run on an ethernet core). Force WORKER dispatch so the
-    # dispatch_core_manager reserves a tensix slot at construction time.
+    # Use the platform default dispatch config: the workload must not pick a
+    # dispatch type just to keep the real-time profiler alive. On platforms
+    # whose default is ETH dispatch the RT profiler silently bows out (see
+    # mesh_device.cpp); IsProgramRealtimeProfilerActive() tells us whether
+    # that happened so the outer pytest test can pytest.skip cleanly.
     mesh_device = ttnn.open_mesh_device(
         ttnn.MeshShape(1, 1),
         l1_small_size=24576,
-        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER),
     )
+
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        print(
+            "SKIP: Real-time profiler is not active on this configuration "
+            "(typically ETH dispatch on WH N300). Nothing to correlate.",
+            file=sys.stderr,
+        )
+        ttnn.close_mesh_device(mesh_device)
+        sys.exit(5)
 
     # Register callback to capture device-side program records
     handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_record)

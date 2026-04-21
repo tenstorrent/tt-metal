@@ -193,6 +193,21 @@ void DataCollector::InvokeProgramRealtimeProfilerCallbacks(const tt::ProgramReal
     }
 }
 
+void DataCollector::NotifyRealtimeProfilerActivated(uint32_t chip_id) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    realtime_profiler_active_chips_.insert(chip_id);
+}
+
+void DataCollector::NotifyRealtimeProfilerDeactivated(uint32_t chip_id) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    realtime_profiler_active_chips_.erase(chip_id);
+}
+
+bool DataCollector::IsRealtimeProfilerActive() const {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    return !realtime_profiler_active_chips_.empty();
+}
+
 void DataCollector::DumpData() {
     if (program_id_to_dispatch_data.empty() && program_id_to_kernel_groups.empty() &&
         program_id_to_call_count.empty()) {

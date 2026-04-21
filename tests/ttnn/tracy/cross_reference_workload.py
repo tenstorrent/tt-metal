@@ -29,6 +29,7 @@ Exit codes:
   2  insufficient devices for requested mesh (pytest should skip)
   3  REQUIRE_GALAXY set but not on a Galaxy/TG cluster (pytest should skip)
   4  device profiler readback failed
+  5  Real-time profiler not active on this dispatch config (pytest should skip)
 """
 
 import ast
@@ -86,11 +87,25 @@ def main():
         print(f"ERROR: Need {rows*cols} devices, have {ttnn.GetNumAvailableDevices()}", file=sys.stderr)
         sys.exit(2)
 
+    # Use the platform default dispatch config. The workload must not pick a
+    # dispatch type just to keep the real-time profiler alive; on platforms
+    # whose default is ETH dispatch the RT profiler silently bows out and
+    # IsProgramRealtimeProfilerActive() returns False — exit 5 so the outer
+    # pytest test can pytest.skip cleanly rather than assertion-fail on an
+    # empty RT-records snapshot.
     device = ttnn.open_mesh_device(
         ttnn.MeshShape(rows, cols),
         l1_small_size=24576,
-        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER),
     )
+
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        print(
+            "SKIP: Real-time profiler is not active on this configuration "
+            "(typically ETH dispatch on WH N300). Nothing to cross-reference.",
+            file=sys.stderr,
+        )
+        ttnn.close_mesh_device(device)
+        sys.exit(5)
 
     rt_records = []
     lock = threading.Lock()

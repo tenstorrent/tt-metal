@@ -347,6 +347,8 @@ def _run_cross_reference_workload(
         pytest.skip("Workload reported insufficient devices for requested mesh")
     if proc.returncode == 3:
         pytest.skip("Workload reported non-Galaxy cluster (REQUIRE_GALAXY)")
+    if proc.returncode == 5:
+        pytest.skip("Real-time profiler not active on this dispatch config (workload exit code 5)")
     assert proc.returncode == 0, f"Cross-reference workload failed (rc={proc.returncode})"
 
     if not rt_path.exists() or not dev_path.exists():
@@ -578,6 +580,8 @@ def test_host_device_correlation(tmp_path):
         timeout_s=600,
     )
     print(f"\n--- Workload output (tail) ---\n{stdout[-4000:]}\n--- End workload output ---")
+    if rc == 5:
+        pytest.skip("Real-time profiler not active on this dispatch config (workload exit code 5)")
     assert rc == 0, f"Workload failed (rc={rc})"
     assert tracy_file.exists(), f"Tracy trace file not generated: {tracy_file}"
     assert device_records_json.exists(), f"Device records file not written: {device_records_json}"

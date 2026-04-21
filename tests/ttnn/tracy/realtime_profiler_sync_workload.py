@@ -21,9 +21,13 @@ import ttnn
 
 
 def main():
-    # RT profiler requires a tensix dispatch core (it is a BRISC kernel that
-    # cannot run on an ethernet core). Force WORKER dispatch so the
-    # dispatch_core_manager reserves a tensix slot at construction time.
+    # This workload's sole purpose is to exercise the real-time profiler's
+    # host-device sync handshake, so it legitimately forces WORKER dispatch:
+    # the test is explicitly verifying RT profiler behavior. This matches the
+    # pattern used by matmul_workload.py for the callback / short-zones tests.
+    # The ResNet50 workloads (cross_reference / host_device_correlation) don't
+    # get this luxury — they run a model that is incompatible with WORKER
+    # dispatch on N300 — and instead skip via IsProgramRealtimeProfilerActive.
     mesh_device = ttnn.open_mesh_device(
         ttnn.MeshShape(1, 1),
         l1_small_size=24576,

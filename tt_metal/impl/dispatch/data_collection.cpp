@@ -74,6 +74,18 @@ void InvokeProgramRealtimeProfilerCallbacks(const ProgramRealtimeRecord& record)
     tt::tt_metal::MetalContext::instance().data_collector()->InvokeProgramRealtimeProfilerCallbacks(record);
 }
 
+bool IsProgramRealtimeProfilerActive() {
+    return tt::tt_metal::MetalContext::instance().data_collector()->IsRealtimeProfilerActive();
+}
+
+void NotifyProgramRealtimeProfilerActivated(uint32_t chip_id) {
+    tt::tt_metal::MetalContext::instance().data_collector()->NotifyRealtimeProfilerActivated(chip_id);
+}
+
+void NotifyProgramRealtimeProfilerDeactivated(uint32_t chip_id) {
+    tt::tt_metal::MetalContext::instance().data_collector()->NotifyRealtimeProfilerDeactivated(chip_id);
+}
+
 }  // namespace tt
 
 // Public experimental API — delegates to the internal tt:: functions.
@@ -87,5 +99,7 @@ ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
 void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle) {
     tt::UnregisterProgramRealtimeProfilerCallback(handle);
 }
+
+bool IsProgramRealtimeProfilerActive() { return tt::IsProgramRealtimeProfilerActive(); }
 
 }  // namespace tt::tt_metal::experimental

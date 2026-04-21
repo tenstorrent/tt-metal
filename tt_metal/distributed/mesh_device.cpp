@@ -957,6 +957,12 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     }
 
     realtime_profiler_tracy_handler_.reset();
+    // Clear activation state before destroying the per-device records so that a
+    // concurrent tt::IsProgramRealtimeProfilerActive() query never sees a stale
+    // "active" entry for a chip that is in the middle of shutdown.
+    for (const auto& dev_state : realtime_profiler_devices_) {
+        tt::NotifyProgramRealtimeProfilerDeactivated(dev_state.chip_id);
+    }
     realtime_profiler_devices_.clear();
 
     if (is_initialized()) {
@@ -2253,6 +2259,14 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         log_warning(
             tt::LogMetal, "[Real-time profiler] No local devices found in mesh, skipping real-time profiler setup");
         return;
+    }
+
+    // Announce activation so tt::IsProgramRealtimeProfilerActive() (and its Python
+    // equivalent) can report the true state to external callers. This is the first
+    // point at which RT profiler has live per-chip state on MeshDevice side; we mark
+    // deactivation on close, paired with realtime_profiler_devices_.clear().
+    for (const auto& dev_state : realtime_profiler_devices_) {
+        tt::NotifyProgramRealtimeProfilerActivated(dev_state.chip_id);
     }
 
     // Always run the real-time profiler's own host-device sync.

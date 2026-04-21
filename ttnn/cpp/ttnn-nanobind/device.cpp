@@ -649,6 +649,24 @@ void device_module(nb::module_& m_device) {
             Args:
                 handle (int): The handle returned by RegisterProgramRealtimeProfilerCallback.
         )doc");
+
+    m_device.def(
+        "IsProgramRealtimeProfilerActive",
+        []() { return tt::tt_metal::experimental::IsProgramRealtimeProfilerActive(); },
+        R"doc(
+            Returns True if the real-time profiler is currently running on at least one chip.
+
+            Returns False when the profiler was silently disabled for the current run
+            (for example, ETH dispatch, remote-only mesh, or a platform that can't reserve
+            a tensix dispatch core). Tests that want to collect RT records should call this
+            after opening the device and skip their verification when it returns False —
+            registered callbacks will simply never fire in that case.
+
+            Example:
+                >>> mesh_device = ttnn.open_mesh_device(...)
+                >>> if not ttnn.device.IsProgramRealtimeProfilerActive():
+                ...     pytest.skip("Real-time profiler not active on this configuration")
+        )doc");
 }
 
 void py_device_module(nb::module_& mod) {
