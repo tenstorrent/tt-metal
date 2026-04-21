@@ -60,6 +60,14 @@ def main():
         for key in allocation["topology_keys"]:
             lines.append(f"  - {key}")
 
+    # Add MGD section if present
+    if "mgd" in skus[sku_name]:
+        lines.append("mgd: |")
+        mgd_content = skus[sku_name]["mgd"]
+        # Add 2-space indentation to each line of MGD content
+        for line in mgd_content.splitlines():
+            lines.append(f"  {line}")
+
     # Print the spec
     for line in lines:
         print(line)

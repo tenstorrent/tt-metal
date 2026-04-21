@@ -24,7 +24,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.filter-tests.outputs.matrix }}
-      mgd: ${{ steps.extract-mgd.outputs.mgd }}
       allocation_spec: ${{ steps.extract-allocation.outputs.allocation_spec }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/demo_sp_multihost_tests.yaml
@@ -51,23 +50,6 @@ jobs:
             python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}" .github/sku_config.yaml
             echo "EOF"
           } >> $GITHUB_OUTPUT
-
-      - name: Extract MGD configuration from SKU
-        id: extract-mgd
-        run: |
-          {
-            echo "mgd<<EOF"
-            python3 .github/scripts/utils/extract_mgd_from_sku.py "bh_${{ inputs.sp-config }}" .github/sku_config.yaml
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-
-      - name: Debug - Show extracted MGD
-        run: |
-          echo "=== Extracted MGD content ==="
-          cat << 'DEBUG_EOF'
-          ${{ steps.extract-mgd.outputs.mgd }}
-          DEBUG_EOF
-          echo "=== End MGD ==="
 
       - name: Verify test timeouts against budget
         run: |
@@ -135,7 +117,6 @@ jobs:
           namespace: ttop-ci
           spec: |
             ${{ needs.load-test-matrix.outputs.allocation_spec }}
-            ${{ needs.load-test-matrix.outputs.mgd != '' && format('mgd: |{0}{1}', '\n', needs.load-test-matrix.outputs.mgd) || '' }}
 
       - name: Get Allocation data
         uses: ./.github/actions/ttop-get-allocation-data
@@ -210,7 +191,7 @@ jobs:
         timeout-minutes: 5
         with:
           directory: /ci/ttrun
-          mgd: ${{ needs.load-test-matrix.outputs.mgd }}
+          mgdFile: /tmp/dummy/doesnotexist.textproto
           copyToWorkers: false
           ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
 
