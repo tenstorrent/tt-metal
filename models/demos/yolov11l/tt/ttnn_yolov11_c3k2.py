@@ -10,7 +10,16 @@ from models.demos.yolov11l.tt.ttnn_yolov11_c3k import TtnnC3K
 
 
 class TtnnC3k2:
-    def __init__(self, device, parameter, conv_pt, is_bk_enabled=False, reshard=False):
+    def __init__(
+        self,
+        device,
+        parameter,
+        conv_pt,
+        is_bk_enabled=False,
+        reshard=False,
+        use_block_sharded=False,
+        cv1_config_override=None,
+    ):
         self.is_bk_enabled = is_bk_enabled
         self.reshard = reshard
         self.parameter = parameter
@@ -35,9 +44,14 @@ class TtnnC3k2:
             )
             self.inner = [TtnnBottleneck(device, parameter[i], conv_pt.m[i]) for i in range(n_inner)]
         else:
-            # Conv2d here requires sharded layout; WIDTH_SHARDED is typically less L1-heavy
-            # than forcing HEIGHT_SHARDED for these high-resolution PAN/FPN stages.
-            cv1_shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED if reshard else None
+            if reshard:
+                cv1_shard_layout = (
+                    ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                    if use_block_sharded
+                    else ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                )
+            else:
+                cv1_shard_layout = None
             self.cv1 = TtnnConv(
                 device,
                 parameter.cv1,
@@ -45,6 +59,7 @@ class TtnnC3k2:
                 reshard=reshard,
                 deallocate_activation=True,
                 shard_layout=cv1_shard_layout,
+                config_override=cv1_config_override,
             )
             self.cv2 = TtnnConv(
                 device,
@@ -61,7 +76,6 @@ class TtnnC3k2:
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.cv1(device, x)
         x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         y1 = x[:, :, :, : x.shape[-1] // 2]
         y2 = x[:, :, :, x.shape[-1] // 2 : x.shape[-1]]
         branches = [y1, y2]

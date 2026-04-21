@@ -27,11 +27,11 @@ class TtnnAttention:
             qkv[:, :, self.head_dim :, :],
         )
         q_permuted = ttnn.permute(q, (0, 1, 3, 2))
-        attn = ttnn.matmul(q_permuted, k, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn = ttnn.matmul(q_permuted, k, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8))
         attn = ttnn.multiply(attn, self.scale)
         attn = ttnn.softmax(attn, dim=-1)
         attn = ttnn.permute(attn, (0, 1, 3, 2))
-        x1 = ttnn.matmul(v, attn, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x1 = ttnn.matmul(v, attn, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8))
         x1 = ttnn.reshape(x1, (1, 1, (x1.shape[0] * x1.shape[1] * x1.shape[2]), x1.shape[3]))
         x1 = ttnn.permute(x1, (0, 1, 3, 2))
         v = ttnn.reshape(v, (1, 1, (v.shape[0] * v.shape[1] * v.shape[2]), v.shape[3]))
