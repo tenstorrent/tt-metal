@@ -320,9 +320,6 @@ jobs:
             matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
           fi
 
-          # TEMPORARY: restrict to bh-loudbox for AI summary integration test
-          matrix=$(echo "$matrix" | jq -c '[.[] | select(."runner-label" == "bh-loudbox")]')
-
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
 
   vllm-tests:
