@@ -475,14 +475,6 @@ def _cross_reference_impl(
     print(f"  Within {RELATIVE_TOLERANCE*100:.0f}% tolerance:  {within}/{matched}")
     print(f"  Diagnostics:             {out_file}")
 
-    for d in details:
-        tag = "skip" if d["below_threshold"] else ("OK" if d["within_tolerance"] else "FAIL")
-        print(
-            f"    pid={d['program_id']:>6} [{d['instance']}]: "
-            f"rt={d['rt_duration_ns']:>12.1f} ns  dev={d['dev_duration_ns']:>12.1f} ns  "
-            f"err={d['relative_error']*100:>6.2f}%  {tag}"
-        )
-
     _save_artifacts(test_name, **{"cross_reference.json": out_file, "workload_output.log": workload_log})
 
     assert matched > 0, (
