@@ -5,14 +5,13 @@
 // MPI sub-context bring-up: dual fabric modes + intra-context DistributedContext + inter-context MPI_COMM_WORLD.
 // Dispatch mirrors models/demos/deepseek_v3_b1/docs/example_dual_rankbindings_one_psd.md (PrefillDecodeDisaggregated).
 //
-// Launch (from repo root):
-//   tt-run --mock-cluster-rank-binding \
+// Launch (from repo root); join lines with shell line-continuation as needed:
+//   tt-run --mock-cluster-rank-binding
 //     tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml
-//     \
-//     --rank-bindings-mapping \
-//     tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml \
-//     --mpi-args "--allow-run-as-root --oversubscribe" \
-//     ./build/test/tt_metal/distributed/distributed_unit_tests \
+//     --rank-bindings-mapping
+//     tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml
+//     --mpi-args "--allow-run-as-root --oversubscribe"
+//     ./build/test/tt_metal/distributed/distributed_unit_tests
 //     --gtest_filter="MpiSubContext.*"
 
 #include <gtest/gtest.h>
