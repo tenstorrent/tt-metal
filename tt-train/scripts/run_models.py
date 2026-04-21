@@ -37,6 +37,23 @@ def get_git_commit_hash() -> str:
     return sha
 
 
+def get_arch_name() -> str:
+    with open("/sys/class/tenstorrent/tenstorrent!0/tt_card_type", "r") as arch_name:
+        return arch_name.read().rstrip()
+
+
+def get_allocatable_device_memory() -> float:
+    try:
+        import ttnn
+
+        with ttnn.manage_device(device_id=0) as device:
+            dram_view = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM)
+            total_dram = dram_view.total_bytes_per_bank * dram_view.num_banks * ttnn.get_num_devices()
+            return total_dram
+    except:
+        return 12 * 1024 * 1024 * 1024
+
+
 def run_and_save_log(cmd: list[str], log_path: Path):
     """Run a command, writing stdout to log_path and to this process's stdout. Return exit code."""
     print(f"Running: {' '.join(cmd)}")
@@ -116,6 +133,10 @@ def main() -> int:
     # Save current git commit hash
     git_commit_hash = get_git_commit_hash()
 
+    # Get additional metadata
+    arch_name = get_arch_name()
+    ci_runner_label = get_env("CI_RUNNER_LABEL", required=False)
+
     # Create output directory to store metrics
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -135,6 +156,13 @@ def main() -> int:
         model_filename = model["filename"]
         binary = os.path.expandvars(model["binary"])
         args = process_args(model["args"]) if model["args"] is not None else []
+
+        # Check if model should be skipped
+        if (skip_arches := model.get("skip-arch")) is not None:
+            skip_arch = skip_arches if isinstance(skip_arches, list) else [skip_arches]
+            if any(a in arch_name for a in skip_arch):
+                print(f"Skipping {model_filename}")
+                continue
 
         # Microseconds since epoch (same as shell: date +%s%N | cut -b1-16)
         current_time = int(time.time_ns() // 1_000)
@@ -166,7 +194,9 @@ def main() -> int:
             continue
 
         # Extract the following metrics from the log
-        memory_data = analyze_memory.main(["--logs", str(log_path)])
+        memory_data = analyze_memory.main(
+            ["--logs", str(log_path), "--device_memory", str(get_allocatable_device_memory())]
+        )
         if memory_data is None:
             raise Exception(f"analyze_memory returned None. Please check the log {log_path}.")
         print(memory_data)
@@ -175,10 +205,6 @@ def main() -> int:
         if step_data is None:
             raise Exception(f"analyze_steps returned None. Please check the log {log_path}.")
         print(step_data)
-
-        # Get additional metadata from CI ENV
-        arch_name = get_env("CI_ARCH_NAME", required=False)
-        ci_runner_label = get_env("CI_RUNNER_LABEL", required=False)
 
         # Build metrics payload and write JSON alongside the log
         pydantic_data = tt_train_metrics.TtTrainMetricsData(

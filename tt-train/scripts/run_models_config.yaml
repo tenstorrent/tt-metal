@@ -107,6 +107,9 @@ models:
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_qwen3_06b.yaml"
       - "--track_memory"
+    skip-arch:
+      - "n150"
+      - "n300"
     tokenize:
       text_file: "data/shakespeare.txt"
       hf_tokenizer: "Qwen/Qwen3-0.6B"
