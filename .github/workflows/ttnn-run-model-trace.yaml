@@ -308,13 +308,10 @@ jobs:
           STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$URL" || echo "000")
           echo "HTTP status: $STATUS"
           if [[ "$STATUS" != "200" ]]; then
-            echo "::error::LFC does not serve ${INPUT_HF_MODEL} (HTTP $STATUS at $URL)."
-            echo "::error::Upload the weights to /mldata/model_checkpoints/pytorch/huggingface/${INPUT_HF_MODEL}/,"
-            echo "::error::or re-run this workflow on a CIv1 runner label (topology-6u, BH-LLMBox, BH-DeskBox, BH-LoudBox)"
-            echo "::error::where /mnt/MLPerf provides the weights."
-            exit 1
+            echo "::warning::LFC does not serve ${INPUT_HF_MODEL} (HTTP $STATUS). Will fall through to direct HF download."
+          else
+            echo "LFC has ${INPUT_HF_MODEL}"
           fi
-          echo "LFC has ${INPUT_HF_MODEL}"
 
       - name: Verify CIv1 weights (MLPerf)
         if: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && matrix.hf_model != '' }}
