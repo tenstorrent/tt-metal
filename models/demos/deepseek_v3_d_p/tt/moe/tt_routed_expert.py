@@ -417,7 +417,6 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             Output tensor matching the shape of ``x``.
         """
-
         return ttnn.experimental.deepseek_prefill.routed_expert_ffn(
             x,
             gate_proj,

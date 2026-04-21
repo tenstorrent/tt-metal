@@ -59,9 +59,21 @@ ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
     const uint32_t counts_page_size = counts_buffer->aligned_page_size();
     const tt::DataFormat idx_data_format = tt::tt_metal::datatype_to_dataformat_converter(start.dtype());
 
-    // Single-core implementation: reader streams tiles, writer drains them.
-    const CoreCoord core{0, 0};
-    const CoreRange core_range{core, core};
+    // Multi-core implementation: every tensix core in the device's compute
+    // grid participates. Cores are assigned a flat core_id in row-major order
+    // (core_id = y * grid_x + x) and each handles a contiguous chunk of tile
+    // rows computed as
+    //   my_row_start = (num_tile_rows * core_id) / num_cores
+    //   my_row_end   = (num_tile_rows * (core_id + 1)) / num_cores
+    // so the remainder is distributed across the last few cores. The split is
+    // computed inside each kernel from counts[global_expert_id], so no
+    // host-side knowledge of the slice size is needed. When num_tile_rows <
+    // num_cores, tail cores compute my_rows == 0 and exit immediately.
+    const auto grid = global_tensor.device()->compute_with_storage_grid_size();
+    const uint32_t num_cores = grid.x * grid.y;
+    constexpr bool row_wise = true;
+    const auto cores = tt::tt_metal::grid_to_cores(num_cores, grid.x, grid.y, row_wise);
+    const CoreRange core_range{{0, 0}, {grid.x - 1, grid.y - 1}};
     const CoreRangeSet core_range_set{core_range};
 
     constexpr uint32_t cb_tile = tt::CBIndex::c_0;
@@ -102,6 +114,7 @@ ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
         tiles_per_row,
         global_num_tiles,
         max_output_tiles,
+        num_cores,
     };
     tt::tt_metal::TensorAccessorArgs(global_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_compile_time_args);
@@ -114,6 +127,7 @@ ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
         operation_attributes.global_expert_id,
         tiles_per_row,
         max_output_tiles,
+        num_cores,
     };
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(writer_compile_time_args);
@@ -130,13 +144,22 @@ ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
         core_range_set,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    tt::tt_metal::SetRuntimeArgs(
-        program, reader_kernel_id, core, {global_buffer->address(), start_buffer->address(), counts_buffer->address()});
-    tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, {output_buffer->address(), counts_buffer->address()});
+    // Per-core runtime args: buffer addresses + trailing core_id. The core_id
+    // selects which chunk of tile rows this core processes.
+    for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
+        const auto& core = cores[core_id];
+        tt::tt_metal::SetRuntimeArgs(
+            program,
+            reader_kernel_id,
+            core,
+            {global_buffer->address(), start_buffer->address(), counts_buffer->address(), core_id});
+        tt::tt_metal::SetRuntimeArgs(
+            program, writer_kernel_id, core, {output_buffer->address(), counts_buffer->address(), core_id});
+    }
 
     return cached_program_t{
         std::move(program),
-        {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id, .cores = {core}}};
+        {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id, .cores = cores}};
 }
 
 void ExtractProgramFactory::override_runtime_arguments(

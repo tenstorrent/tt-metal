@@ -36,6 +36,10 @@ void kernel_main() {
     const uint32_t global_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_addr = get_arg_val<uint32_t>(1);
     const uint32_t counts_addr = get_arg_val<uint32_t>(2);
+    // core_id ∈ [0, num_cores). Core i handles the tile-row range
+    //   [ (N * i)     / num_cores,
+    //     (N * (i+1)) / num_cores ).
+    const uint32_t core_id = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_tile = get_compile_time_arg_val(0);
     constexpr uint32_t cb_start_scratch = get_compile_time_arg_val(1);
@@ -45,8 +49,9 @@ void kernel_main() {
     // Upper bounds used for runtime asserts (see comment block above).
     constexpr uint32_t global_num_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t max_output_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(7);
 
-    constexpr uint32_t global_accessor_offset = 7;
+    constexpr uint32_t global_accessor_offset = 8;
     constexpr auto global_args = TensorAccessorArgs<global_accessor_offset>();
     const auto global_accessor = TensorAccessor(global_args, global_addr, get_tile_size(cb_tile));
 
@@ -80,10 +85,21 @@ void kernel_main() {
     ASSERT(start_tile_idx + num_tiles <= global_num_tiles);
     ASSERT(num_tiles <= max_output_tiles);
 
+    // Split the tile rows across num_cores cores. Each core's range is
+    //   [ (N * core_id)     / num_cores,
+    //     (N * (core_id+1)) / num_cores )
+    // which distributes the N % num_cores remainder rows across the tail cores
+    // and covers every row exactly once.
+    const uint32_t my_row_start = (num_tile_rows * core_id) / num_cores;
+    const uint32_t my_row_end = (num_tile_rows * (core_id + 1)) / num_cores;
+    const uint32_t my_rows = my_row_end - my_row_start;
+    const uint32_t my_num_tiles = my_rows * tiles_per_row;
+    const uint32_t my_start_tile = start_tile_idx + my_row_start * tiles_per_row;
+
     const uint32_t tile_bytes = get_tile_size(cb_tile);
 
-    uint32_t tile_idx = start_tile_idx;
-    const uint32_t end_tile_idx = start_tile_idx + num_tiles;
+    uint32_t tile_idx = my_start_tile;
+    const uint32_t end_tile_idx = my_start_tile + my_num_tiles;
     while (tile_idx < end_tile_idx) {
         const uint32_t remaining = end_tile_idx - tile_idx;
         const uint32_t batch = remaining < READ_BATCH ? remaining : READ_BATCH;

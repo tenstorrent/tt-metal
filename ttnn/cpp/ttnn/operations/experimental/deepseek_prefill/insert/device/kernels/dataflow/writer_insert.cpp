@@ -30,6 +30,10 @@ void kernel_main() {
     const uint32_t global_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_addr = get_arg_val<uint32_t>(1);
     const uint32_t counts_addr = get_arg_val<uint32_t>(2);
+    // core_id ∈ [0, num_cores). Core i writes the global tile-row range
+    //   [ start_row + (N * i)     / num_cores,
+    //     start_row + (N * (i+1)) / num_cores ).
+    const uint32_t core_id = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_tile = get_compile_time_arg_val(0);
     constexpr uint32_t cb_start_scratch = get_compile_time_arg_val(1);
@@ -37,8 +41,9 @@ void kernel_main() {
     constexpr uint32_t global_expert_id = get_compile_time_arg_val(3);
     constexpr uint32_t tiles_per_row = get_compile_time_arg_val(4);
     constexpr uint32_t global_num_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(6);
 
-    constexpr uint32_t global_accessor_offset = 6;
+    constexpr uint32_t global_accessor_offset = 7;
     constexpr auto global_args = TensorAccessorArgs<global_accessor_offset>();
     const auto global_accessor = TensorAccessor(global_args, global_addr, get_tile_size(cb_tile));
 
@@ -69,17 +74,29 @@ void kernel_main() {
     // Runtime bounds check: slice must stay inside global_tensor.
     ASSERT(start_tile_idx + num_tiles <= global_num_tiles);
 
+    // Split the tile rows across num_cores cores. Each core's range is
+    //   [ (N * core_id)     / num_cores,
+    //     (N * (core_id+1)) / num_cores )
+    // matching the reader so this core's CB is drained by exactly its own
+    // writer. The destination tile index in global is offset by
+    // start_tile_idx + my_row_start * tiles_per_row.
+    const uint32_t my_row_start = (num_tile_rows * core_id) / num_cores;
+    const uint32_t my_row_end = (num_tile_rows * (core_id + 1)) / num_cores;
+    const uint32_t my_rows = my_row_end - my_row_start;
+    const uint32_t my_num_tiles = my_rows * tiles_per_row;
+    const uint32_t my_dst_start = start_tile_idx + my_row_start * tiles_per_row;
+
     const uint32_t tile_bytes = get_tile_size(cb_tile);
 
     uint32_t offset = 0;
-    while (offset < num_tiles) {
-        const uint32_t remaining = num_tiles - offset;
+    while (offset < my_num_tiles) {
+        const uint32_t remaining = my_num_tiles - offset;
         const uint32_t batch = remaining < WRITE_BATCH ? remaining : WRITE_BATCH;
 
         cb_wait_front(cb_tile, batch);
         uint32_t l1_read_addr = get_read_ptr(cb_tile);
         for (uint32_t i = 0; i < batch; ++i) {
-            noc_async_write_tile(start_tile_idx + offset + i, global_accessor, l1_read_addr);
+            noc_async_write_tile(my_dst_start + offset + i, global_accessor, l1_read_addr);
             l1_read_addr += tile_bytes;
         }
         noc_async_write_barrier();
