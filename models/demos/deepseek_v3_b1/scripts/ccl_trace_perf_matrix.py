@@ -132,8 +132,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ccl",
         choices=sorted(CCL_CONFIGS),
-        default="all_gather",
-        help="CCL to profile (default: all_gather).",
+        default=None,
+        help="CCL to profile. If omitted, runs all configured CCLs.",
     )
     parser.add_argument(
         "--num-links",
@@ -210,6 +210,12 @@ def format_float(value: float | None, decimals: int) -> str:
     if value is None:
         return "n/a"
     return f"{value:.{decimals}f}"
+
+
+def get_selected_ccls(selected_ccl: str | None) -> list[str]:
+    if selected_ccl is not None:
+        return [selected_ccl]
+    return list(CCL_CONFIGS)
 
 
 def write_text_sync(path: Path, text: str) -> None:
@@ -458,19 +464,14 @@ def collect_bucket_order(results: list[RunResult], config: CCLConfig) -> list[tu
     return sorted(buckets, key=lambda bucket: bucket_sort_key(bucket, config))
 
 
-def render_summary(
+def render_summary_section(
     config: CCLConfig,
     test_target: str,
-    timestamp: str,
-    details_rel: str,
     num_links_list: list[int],
     max_payload_sizes: list[int],
     results: list[RunResult],
 ) -> str:
     lines = [
-        f"# {config.title}",
-        "",
-        f"Timestamp: {timestamp}",
         f"Test target: {test_target}",
         f"Configured benchmark shape: {format_shape(config.benchmark_shape)}",
         f"Configured transport mode: {config.transport_mode}",
@@ -480,88 +481,125 @@ def render_summary(
         "Conversion: us = cycles / CHIP_FREQ[MHz], ns = cycles * 1000 / CHIP_FREQ[MHz].",
         "Op time = max(avg per top-level (RISC processor type, zone) bucket across devices).",
         f"Top-level zones: {', '.join(config.top_level_zones)}",
+        "",
+    ]
+
+    if not results:
+        lines.append("Results pending.")
+        lines.append("")
+        return "\n".join(lines)
+
+    observed_freqs = sorted({result.chip_freq_mhz for result in results})
+    lines.append("Observed CHIP_FREQ[MHz]: " + ", ".join(format_float(freq, 3) for freq in observed_freqs))
+    lines.append("")
+
+    summary_headers = ["num_links", "max_payload_size_bytes", "op_time_us", "op_cycles", "op_bucket"]
+    summary_rows = []
+    result_lookup = {}
+    for result in results:
+        row = [
+            str(result.num_links),
+            str(result.max_payload_size),
+            format_float(cycles_to_us(result.op_cycles, result.chip_freq_mhz), 3),
+            format_float(result.op_cycles, 1),
+            bucket_display(result.op_bucket, config),
+        ]
+        summary_rows.append(row)
+        result_lookup[(result.num_links, result.max_payload_size)] = result
+
+    matrix_headers = ["num_links \\ max_payload"] + [str(payload) for payload in max_payload_sizes]
+    matrix_rows_us = []
+    matrix_rows_cycles = []
+    for num_links in num_links_list:
+        row_us = [str(num_links)]
+        row_cycles = [str(num_links)]
+        for max_payload in max_payload_sizes:
+            result = result_lookup.get((num_links, max_payload))
+            value_us = cycles_to_us(result.op_cycles, result.chip_freq_mhz) if result is not None else None
+            value_cycles = result.op_cycles if result is not None else None
+            row_us.append(format_float(value_us, 3))
+            row_cycles.append(format_float(value_cycles, 1))
+        matrix_rows_us.append(row_us)
+        matrix_rows_cycles.append(row_cycles)
+
+    lines.append("### Per-run overview")
+    lines.append("")
+    lines.append(format_markdown_table(summary_headers, summary_rows))
+    lines.append("")
+
+    lines.append("### Perf matrix (op time, us)")
+    lines.append("")
+    lines.append(format_markdown_table(matrix_headers, matrix_rows_us))
+    lines.append("")
+
+    lines.append("### Perf matrix (op time, cycles)")
+    lines.append("")
+    lines.append(format_markdown_table(matrix_headers, matrix_rows_cycles))
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def render_summary(
+    selected_ccls: list[str],
+    test_targets: dict[str, str],
+    timestamp: str,
+    details_rel: str,
+    num_links_by_ccl: dict[str, list[int]],
+    max_payload_sizes: list[int],
+    results_by_ccl: dict[str, list[RunResult]],
+) -> str:
+    lines = [
+        "# DeepSeek CCL trace perf matrix",
+        "",
+        f"Timestamp: {timestamp}",
+        f"CCLs: {', '.join(selected_ccls)}",
         f"Details file: {details_rel}",
         "",
     ]
 
-    if results:
-        observed_freqs = sorted({result.chip_freq_mhz for result in results})
-        lines.append("Observed CHIP_FREQ[MHz]: " + ", ".join(format_float(freq, 3) for freq in observed_freqs))
+    for ccl in selected_ccls:
+        config = CCL_CONFIGS[ccl]
+        lines.append(f"## {ccl}")
         lines.append("")
-
-        summary_headers = ["num_links", "max_payload_size_bytes", "op_time_us", "op_cycles", "op_bucket"]
-        summary_rows = []
-        result_lookup = {}
-        for result in results:
-            row = [
-                str(result.num_links),
-                str(result.max_payload_size),
-                format_float(cycles_to_us(result.op_cycles, result.chip_freq_mhz), 3),
-                format_float(result.op_cycles, 1),
-                bucket_display(result.op_bucket, config),
-            ]
-            summary_rows.append(row)
-            result_lookup[(result.num_links, result.max_payload_size)] = result
-
-        lines.append("## Per-run overview")
-        lines.append("")
-        lines.append(format_markdown_table(summary_headers, summary_rows))
-        lines.append("")
-
-        matrix_headers = ["num_links \\ max_payload"] + [str(payload) for payload in max_payload_sizes]
-        matrix_rows_us = []
-        matrix_rows_cycles = []
-        for num_links in num_links_list:
-            row_us = [str(num_links)]
-            row_cycles = [str(num_links)]
-            for max_payload in max_payload_sizes:
-                result = result_lookup.get((num_links, max_payload))
-                value_us = cycles_to_us(result.op_cycles, result.chip_freq_mhz) if result is not None else None
-                value_cycles = result.op_cycles if result is not None else None
-                row_us.append(format_float(value_us, 3))
-                row_cycles.append(format_float(value_cycles, 1))
-            matrix_rows_us.append(row_us)
-            matrix_rows_cycles.append(row_cycles)
-
-        lines.append("## Perf matrix (op time, us)")
-        lines.append("")
-        lines.append(format_markdown_table(matrix_headers, matrix_rows_us))
-        lines.append("")
-
-        lines.append("## Perf matrix (op time, cycles)")
-        lines.append("")
-        lines.append(format_markdown_table(matrix_headers, matrix_rows_cycles))
+        lines.append(
+            render_summary_section(
+                config=config,
+                test_target=test_targets[ccl],
+                num_links_list=num_links_by_ccl[ccl],
+                max_payload_sizes=max_payload_sizes,
+                results=results_by_ccl[ccl],
+            ).rstrip()
+        )
         lines.append("")
 
     return "\n".join(lines) + "\n"
 
 
-def render_details(
+def render_details_section(
     config: CCLConfig,
     test_target: str,
-    timestamp: str,
+    num_links_list: list[int],
     results: list[RunResult],
 ) -> str:
     lines = [
-        f"# {config.title} details",
-        "",
-        f"Timestamp: {timestamp}",
         f"Test target: {test_target}",
         f"Configured benchmark shape: {format_shape(config.benchmark_shape)}",
         f"Configured transport mode: {config.transport_mode}",
+        f"Configured num_links: {', '.join(str(v) for v in num_links_list)}",
         f"Trace id: {TRACE_ID}",
         "Source: profile_log_device.csv only (top-level zones only; no micro-profiling).",
         "",
     ]
 
     if not results:
-        return "\n".join(lines) + "\n"
+        lines.append("Results pending.")
+        lines.append("")
+        return "\n".join(lines)
 
     bucket_order = collect_bucket_order(results, config)
     for result in results:
-        lines.append(
-            f"## ccl={result.ccl}, num_links={result.num_links}, max_payload_size_bytes={result.max_payload_size}"
-        )
+        lines.append(f"### num_links={result.num_links}, max_payload_size_bytes={result.max_payload_size}")
         lines.append("")
         lines.append(f"Report: {result.report_path}")
         lines.append(f"CHIP_FREQ[MHz]: {format_float(result.chip_freq_mhz, 3)}")
@@ -600,7 +638,7 @@ def render_details(
                 ]
             )
 
-        lines.append("### Per-device averages")
+        lines.append("#### Per-device averages")
         lines.append("")
         lines.append(format_markdown_table(device_headers, device_rows))
         lines.append("")
@@ -634,7 +672,7 @@ def render_details(
                 ]
             )
 
-        lines.append("### Bucket averages across devices")
+        lines.append("#### Bucket averages across devices")
         lines.append("")
         lines.append(format_markdown_table(bucket_headers, bucket_rows))
         lines.append("")
@@ -647,25 +685,50 @@ def render_details(
         )
         lines.append("")
 
+    return "\n".join(lines)
+
+
+def render_details(
+    selected_ccls: list[str],
+    test_targets: dict[str, str],
+    timestamp: str,
+    num_links_by_ccl: dict[str, list[int]],
+    results_by_ccl: dict[str, list[RunResult]],
+) -> str:
+    lines = [
+        "# DeepSeek CCL trace perf matrix details",
+        "",
+        f"Timestamp: {timestamp}",
+        f"CCLs: {', '.join(selected_ccls)}",
+        "",
+    ]
+
+    for ccl in selected_ccls:
+        config = CCL_CONFIGS[ccl]
+        lines.append(f"## {ccl}")
+        lines.append("")
+        lines.append(
+            render_details_section(
+                config=config,
+                test_target=test_targets[ccl],
+                num_links_list=num_links_by_ccl[ccl],
+                results=results_by_ccl[ccl],
+            ).rstrip()
+        )
+        lines.append("")
+
     return "\n".join(lines) + "\n"
 
 
 def main() -> int:
     args = parse_args()
-    config = CCL_CONFIGS[args.ccl]
-    test_target = args.test_target or config.test_target
+    selected_ccls = get_selected_ccls(args.ccl)
+    if len(selected_ccls) > 1 and args.test_target is not None:
+        raise RuntimeError("--test-target requires --ccl when profiling multiple CCLs")
 
-    num_links_list = parse_int_list(args.num_links) if args.num_links is not None else list(config.default_num_links)
     max_payload_sizes = parse_int_list(args.max_payload_sizes)
-    if not num_links_list:
-        raise RuntimeError("num_links list is empty")
     if not max_payload_sizes:
         raise RuntimeError("max payload sizes list is empty")
-    invalid_num_links = [value for value in num_links_list if value not in config.supported_num_links]
-    if invalid_num_links:
-        supported = ", ".join(str(value) for value in config.supported_num_links)
-        invalid = ", ".join(str(value) for value in invalid_num_links)
-        raise RuntimeError(f"{args.ccl} supports num_links in {{{supported}}}, got {{{invalid}}}")
 
     repo_root = get_repo_root()
     report_root = repo_root / "generated" / "profiler" / "reports"
@@ -679,77 +742,100 @@ def main() -> int:
     details_path = output_dir / f"ccl_trace_perf_details_{timestamp}.md"
     details_rel = to_repo_relative(details_path, repo_root)
 
-    results: list[RunResult] = []
-    for max_payload in max_payload_sizes:
-        for num_links in num_links_list:
-            env = os.environ.copy()
-            env[config.env_num_links] = str(num_links)
-            env[config.env_max_payload_size] = str(max_payload)
+    test_targets = {}
+    num_links_by_ccl = {}
+    for ccl in selected_ccls:
+        config = CCL_CONFIGS[ccl]
+        test_targets[ccl] = args.test_target or config.test_target
+        num_links_list = (
+            parse_int_list(args.num_links) if args.num_links is not None else list(config.default_num_links)
+        )
+        if not num_links_list:
+            raise RuntimeError("num_links list is empty")
+        invalid_num_links = [value for value in num_links_list if value not in config.supported_num_links]
+        if invalid_num_links:
+            supported = ", ".join(str(value) for value in config.supported_num_links)
+            invalid = ", ".join(str(value) for value in invalid_num_links)
+            raise RuntimeError(f"{ccl} supports num_links in {{{supported}}}, got {{{invalid}}}")
+        num_links_by_ccl[ccl] = num_links_list
 
-            before = set(list_profile_logs(report_root))
-            run_start = time.time()
+    results_by_ccl: dict[str, list[RunResult]] = {ccl: [] for ccl in selected_ccls}
+    for ccl in selected_ccls:
+        config = CCL_CONFIGS[ccl]
+        test_target = test_targets[ccl]
+        num_links_list = num_links_by_ccl[ccl]
 
-            run_tracy_pytest(test_target, env, repo_root)
+        for max_payload in max_payload_sizes:
+            for num_links in num_links_list:
+                env = os.environ.copy()
+                env[config.env_num_links] = str(num_links)
+                env[config.env_max_payload_size] = str(max_payload)
 
-            after = list_profile_logs(report_root)
-            new_logs = [path for path in after if path not in before]
-            if not new_logs:
-                new_logs = [path for path in after if path.stat().st_mtime >= run_start - 1.0]
-            if not new_logs:
-                if not report_root.exists():
-                    raise RuntimeError(
-                        "Profiler report directory was not created after the first run: "
-                        f"{report_root}. Check TT_METAL_HOME and profiler output setup."
+                before = set(list_profile_logs(report_root))
+                run_start = time.time()
+
+                run_tracy_pytest(test_target, env, repo_root)
+
+                after = list_profile_logs(report_root)
+                new_logs = [path for path in after if path not in before]
+                if not new_logs:
+                    new_logs = [path for path in after if path.stat().st_mtime >= run_start - 1.0]
+                if not new_logs:
+                    if not report_root.exists():
+                        raise RuntimeError(
+                            "Profiler report directory was not created after the first run: "
+                            f"{report_root}. Check TT_METAL_HOME and profiler output setup."
+                        )
+                    raise RuntimeError("No new profile_log_device.csv found after the test run under " f"{report_root}")
+
+                profile_log = max(new_logs, key=lambda path: path.stat().st_mtime)
+                profile_log_rel = to_repo_relative(profile_log, repo_root)
+                chip_freq_mhz, device_stats, bucket_stats, op_bucket, op_cycles = summarize_profile_log(
+                    profile_log,
+                    config,
+                )
+                results_by_ccl[ccl].append(
+                    RunResult(
+                        ccl=ccl,
+                        num_links=num_links,
+                        max_payload_size=max_payload,
+                        report_path=profile_log_rel,
+                        chip_freq_mhz=chip_freq_mhz,
+                        device_stats=device_stats,
+                        bucket_stats=bucket_stats,
+                        op_bucket=op_bucket,
+                        op_cycles=op_cycles,
                     )
-                raise RuntimeError("No new profile_log_device.csv found after the test run under " f"{report_root}")
-
-            profile_log = max(new_logs, key=lambda path: path.stat().st_mtime)
-            profile_log_rel = to_repo_relative(profile_log, repo_root)
-            chip_freq_mhz, device_stats, bucket_stats, op_bucket, op_cycles = summarize_profile_log(
-                profile_log,
-                config,
-            )
-            results.append(
-                RunResult(
-                    ccl=args.ccl,
-                    num_links=num_links,
-                    max_payload_size=max_payload,
-                    report_path=profile_log_rel,
-                    chip_freq_mhz=chip_freq_mhz,
-                    device_stats=device_stats,
-                    bucket_stats=bucket_stats,
-                    op_bucket=op_bucket,
-                    op_cycles=op_cycles,
                 )
-            )
 
-            summary_text = render_summary(
-                config=config,
-                test_target=test_target,
-                timestamp=timestamp,
-                details_rel=details_rel,
-                num_links_list=num_links_list,
-                max_payload_sizes=max_payload_sizes,
-                results=results,
-            )
-            details_text = render_details(
-                config=config,
-                test_target=test_target,
-                timestamp=timestamp,
-                results=results,
-            )
-            write_text_sync(summary_path, summary_text)
-            write_text_sync(details_path, details_text)
-
-            print(
-                "Updated reports after ccl={}, num_links={}, max_payload_size_bytes={}: op_time={} us ({:.1f} cycles)".format(
-                    args.ccl,
-                    num_links,
-                    max_payload,
-                    format_float(cycles_to_us(op_cycles, chip_freq_mhz), 3),
-                    op_cycles,
+                summary_text = render_summary(
+                    selected_ccls=selected_ccls,
+                    test_targets=test_targets,
+                    timestamp=timestamp,
+                    details_rel=details_rel,
+                    num_links_by_ccl=num_links_by_ccl,
+                    max_payload_sizes=max_payload_sizes,
+                    results_by_ccl=results_by_ccl,
                 )
-            )
+                details_text = render_details(
+                    selected_ccls=selected_ccls,
+                    test_targets=test_targets,
+                    timestamp=timestamp,
+                    num_links_by_ccl=num_links_by_ccl,
+                    results_by_ccl=results_by_ccl,
+                )
+                write_text_sync(summary_path, summary_text)
+                write_text_sync(details_path, details_text)
+
+                print(
+                    "Updated reports after ccl={}, num_links={}, max_payload_size_bytes={}: op_time={} us ({:.1f} cycles)".format(
+                        ccl,
+                        num_links,
+                        max_payload,
+                        format_float(cycles_to_us(op_cycles, chip_freq_mhz), 3),
+                        op_cycles,
+                    )
+                )
 
     print(f"Wrote summary: {summary_path}")
     print(f"Wrote details: {details_path}")
