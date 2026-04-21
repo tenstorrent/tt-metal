@@ -17,6 +17,12 @@ Layout mapping from the legacy rotary tests (``[W, Z, Y, X]`` with cos/sin ``[1,
   cos/sin tiled to ``[1, 1, Y, X]`` where every sequence row matches ``token_idx`` (equivalent broadcast to
   legacy ``rotary_embedding(..., token_idx)``).
 
+- **Prefill vs batch / positions**: In this codebase prefill tensors are ``[1, num_heads, seq_len, head_dim]``;
+  the leading ``1`` is not a multi-user batch axis. Different sequence positions use different rows of
+  ``cos/sin`` along ``seq_len``—there is no shared ``token_idx`` across users. Per-batch **decode** positions
+  (different users at different cached steps) are what ``is_decode=True`` and ``[1, batch, …]`` cos/sin fix
+  relative to the legacy op (see ``test_rotary_embedding_hf_decode_per_batch_position``).
+
 The HF op requires TILE layout and ``head_dim`` divisible by 64; ``test_rotary_embedding_hf_row_major`` skips
 because row-major inputs are rejected by validation.
 
@@ -28,7 +34,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, divup, is_blackhole
+from models.common.utility_functions import comp_pcc, divup, is_blackhole, nearest_32
 from ttnn.types import BlackholeComputeKernelConfig
 
 
@@ -71,6 +77,112 @@ def _from_hf_prefill_shape(x_1hsd: torch.Tensor, w: int, z: int) -> torch.Tensor
     _, h, y, x = x_1hsd.shape
     assert h == w * z
     return x_1hsd.reshape(w, z, y, x)
+
+
+# Thirty-two cache indices in [0, 2048), non-contiguous and spread out (not ``torch.arange(32)``).
+_DECODE_PER_BATCH_POSITION_INDICES = [
+    0,
+    57,
+    113,
+    179,
+    241,
+    307,
+    367,
+    431,
+    499,
+    563,
+    641,
+    701,
+    769,
+    823,
+    887,
+    947,
+    1009,
+    1063,
+    1129,
+    1187,
+    1249,
+    1301,
+    1367,
+    1429,
+    1483,
+    1549,
+    1601,
+    1663,
+    1723,
+    1789,
+    1847,
+    2005,
+]
+
+
+def _torch_hf_rope_decode_broadcast_heads(x_1bhd: torch.Tensor, cos_1b1d: torch.Tensor, sin_1b1d: torch.Tensor):
+    """HF decode RoPE: cos/sin ``[1, batch, 1, head_dim]`` broadcast across ``num_heads``."""
+    cos_e = cos_1b1d.expand(-1, -1, x_1bhd.shape[2], -1)
+    sin_e = sin_1b1d.expand(-1, -1, x_1bhd.shape[2], -1)
+    return (x_1bhd * cos_e) + (rotate_half(x_1bhd) * sin_e)
+
+
+def _decode_qk_heads_mem_config(device, batch: int, num_heads: int, head_dim: int) -> ttnn.MemoryConfig:
+    """HEIGHT-sharded L1 for decode Q/K (aligned with ``test_rotary_embedding_hf_decode_baseline``)."""
+    padded_heads = nearest_32(num_heads)
+    shard_h = padded_heads
+    if is_blackhole():
+        return ttnn.create_sharded_memory_config(
+            shape=(shard_h, head_dim),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    grid_size = device.compute_with_storage_grid_size()
+    batch_grid = ttnn.num_cores_to_corerangeset(batch, grid_size, row_wise=True)
+    return ttnn.create_sharded_memory_config(
+        shape=(padded_heads, head_dim),
+        core_grid=batch_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
+def _decode_hf_cos_sin_sharded(device, batch: int, head_dim: int, cos_torch, sin_torch, *, dtype):
+    """Shard cos/sin like ``HfRotarySetupNew.get_rot_mats`` (HEIGHT ``(TILE_SIZE, head_dim)`` on batch grid)."""
+    core_grid = device.compute_with_storage_grid_size()
+    num_cores = min(batch, core_grid.x * core_grid.y)
+    batch_grid = ttnn.num_cores_to_corerangeset(num_cores, core_grid, row_wise=True)
+    mem_config = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, head_dim),
+        core_grid=batch_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    pad_h = ttnn.TILE_SIZE - cos_torch.shape[2]
+    if pad_h > 0:
+        z = torch.zeros(1, batch, pad_h, head_dim, dtype=cos_torch.dtype, device=cos_torch.device)
+        cos_torch = torch.cat([cos_torch, z], dim=2)
+        sin_torch = torch.cat([sin_torch, z], dim=2)
+    cos_interleaved = ttnn.from_torch(
+        cos_torch,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    sin_interleaved = ttnn.from_torch(
+        sin_torch,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    if batch % ttnn.TILE_SIZE != 0:
+        cos_interleaved = cos_interleaved[:, :batch, :, :]
+        sin_interleaved = sin_interleaved[:, :batch, :, :]
+    cos_tensor = ttnn.interleaved_to_sharded(cos_interleaved, mem_config)
+    sin_tensor = ttnn.interleaved_to_sharded(sin_interleaved, mem_config)
+    return cos_tensor, sin_tensor
 
 
 @pytest.mark.parametrize(
@@ -154,6 +266,82 @@ def test_rotary_embedding_hf_prefill(
     p, o = comp_pcc(pt_out[0], tt_got_back[0])
     logger.info(o)
     assert p
+
+
+def test_rotary_embedding_hf_decode_per_batch_position(device):
+    """Decode mode: each batch row uses a different cached position (legacy op could not do this).
+
+    ``cos_cache`` / ``sin_cache`` are ``[1, batch, 1, head_dim]`` with one row per user; positions are taken
+    from a full ``[1, 1, cache_size, head_dim]`` cache at thirty-two **non-contiguous** indices spread across
+    ``[0, cache_size)`` (see ``_DECODE_PER_BATCH_POSITION_INDICES``).
+    """
+    assert len(_DECODE_PER_BATCH_POSITION_INDICES) == 32
+    torch.manual_seed(0)
+
+    batch = 32
+    num_heads = 8
+    head_dim = 128
+    cache_size = 2048
+    dtype = ttnn.bfloat16
+
+    for pos in _DECODE_PER_BATCH_POSITION_INDICES:
+        assert 0 <= pos < cache_size
+
+    cos_full = torch.randn(1, 1, cache_size, head_dim, dtype=torch.float32)
+    sin_full = torch.randn(1, 1, cache_size, head_dim, dtype=torch.float32)
+
+    cos_rows = torch.stack([cos_full[0, 0, pos, :] for pos in _DECODE_PER_BATCH_POSITION_INDICES], dim=0)
+    sin_rows = torch.stack([sin_full[0, 0, pos, :] for pos in _DECODE_PER_BATCH_POSITION_INDICES], dim=0)
+    cos_1b1d = cos_rows.unsqueeze(0).unsqueeze(2)  # [1, batch, 1, head_dim]
+    sin_1b1d = sin_rows.unsqueeze(0).unsqueeze(2)
+
+    torch_input = torch.randn(1, batch, num_heads, head_dim, dtype=torch.float32)
+    torch_golden = _torch_hf_rope_decode_broadcast_heads(torch_input, cos_1b1d, sin_1b1d)
+
+    padded_heads = nearest_32(num_heads)
+    inp_for_dev = torch_input
+    if padded_heads != num_heads:
+        pad_h = padded_heads - num_heads
+        z = torch.zeros(1, batch, pad_h, head_dim, dtype=torch_input.dtype)
+        inp_for_dev = torch.cat([torch_input, z], dim=2)
+
+    qk_mem = _decode_qk_heads_mem_config(device, batch, num_heads, head_dim)
+    input_tensor = ttnn.from_torch(
+        inp_for_dev.to(torch.bfloat16),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=qk_mem,
+    )
+    cos_tt, sin_tt = _decode_hf_cos_sin_sharded(
+        device,
+        batch,
+        head_dim,
+        cos_1b1d.to(torch.bfloat16),
+        sin_1b1d.to(torch.bfloat16),
+        dtype=dtype,
+    )
+
+    rope_cfg = _hf_rope_compute_kernel_config()
+    out_tt = ttnn.experimental.rotary_embedding_hf(
+        input_tensor,
+        cos_tt,
+        sin_tt,
+        is_decode=True,
+        compute_kernel_config=rope_cfg,
+    )
+    out_torch = ttnn.to_torch(out_tt).to(torch.float32)
+    if padded_heads != num_heads:
+        out_torch = out_torch[:, :, :num_heads, :]
+
+    p, o = comp_pcc(torch_golden, out_torch)
+    logger.info(o)
+    assert p
+
+    ttnn.deallocate(out_tt)
+    ttnn.deallocate(input_tensor)
+    ttnn.deallocate(cos_tt)
+    ttnn.deallocate(sin_tt)
 
 
 @pytest.mark.parametrize(
