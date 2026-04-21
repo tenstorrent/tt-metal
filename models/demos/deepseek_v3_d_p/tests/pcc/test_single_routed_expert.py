@@ -15,6 +15,7 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -91,11 +92,26 @@ def test_single_routed_expert(
     )
     logger.debug(f"TTNN input shape: {tt_input.shape}")
 
+    # Single-chip, single-expert: build a trivial (1, 1, 1) table with expert id 0,
+    # sharded across the (1, 1) EP mesh.
+    global_expert_idx_tt = ttnn.from_torch(
+        ExpertMapping.create_global_expert_idx_table(
+            experts_per_chip=experts_per_chip,
+            dispatch_group_size=1,
+            num_dispatch_groups=1,
+        ),
+        mesh_mapper=get_ep_mesh_mapper(mesh_device),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+    )
+
     # Create TtRoutedExpert
     logger.debug("Creating TtRoutedExpert...")
     tt_expert = TtRoutedExpert(
         mesh_device=mesh_device,
         experts_per_chip=experts_per_chip,
+        global_expert_idx_table=global_expert_idx_tt,
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
         max_tokens=num_tokens,

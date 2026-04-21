@@ -23,7 +23,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
@@ -274,10 +274,25 @@ class TtMoe(LightweightModule):
             init_zeros=False,
         )
 
+        # Build (group, chip, local_expert) -> global expert id table, sharded
+        # across the EP mesh so each device holds (1, 1, experts_per_chip).
+        global_expert_idx_tt = ttnn.from_torch(
+            ExpertMapping.create_global_expert_idx_table(
+                experts_per_chip=experts_per_chip,
+                dispatch_group_size=dispatch_group_size,
+                num_dispatch_groups=num_dispatch_groups,
+            ),
+            mesh_mapper=get_ep_mesh_mapper(mesh_device),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+        )
+
         # Initialize routed expert
         self.routed_expert = TtRoutedExpert(
             mesh_device=mesh_device,
             experts_per_chip=experts_per_chip,
+            global_expert_idx_table=global_expert_idx_tt,
             emb_dim=emb_dim,
             hidden_dim=hidden_dim,
             max_tokens=max_dispatched_tokens_per_expert,

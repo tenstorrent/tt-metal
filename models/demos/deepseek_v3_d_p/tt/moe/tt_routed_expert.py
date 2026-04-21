@@ -190,6 +190,7 @@ class TtRoutedExpert(LightweightModule):
         self,
         mesh_device,
         experts_per_chip: int,
+        global_expert_idx_table: ttnn.Tensor,
         emb_dim: int = 7 * 1024,
         hidden_dim: int = 2 * 1024,
         max_tokens: int = 1600,
@@ -217,6 +218,10 @@ class TtRoutedExpert(LightweightModule):
             activations_dtype: Data type for activations (default: bfloat8_b)
             weights_dtype: Data type for weights (default: bfloat4_b)
             compute_kernel_config: Compute kernel configuration
+            global_expert_idx_table: TTNN tensor mapping local expert slots to global expert ids.
+                          Produced by sharding ExpertMapping.create_global_expert_idx_table via
+                          get_ep_mesh_mapper, so each device holds (1, 1, experts_per_chip) of
+                          global ids. Required.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -230,6 +235,7 @@ class TtRoutedExpert(LightweightModule):
         self.compute_kernel_config = compute_kernel_config
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
+        self.global_expert_idx_table = global_expert_idx_table
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")

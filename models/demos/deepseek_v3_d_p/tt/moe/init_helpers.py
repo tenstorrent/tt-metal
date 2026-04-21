@@ -75,6 +75,7 @@ class ExpertMapping:
     - `get_global_expert_idx()`: Computes global expert index from (group, chip, local_expert)
     - `gather_weights_for_mesh_distribution()`: Gathers weights in mesh order using the above
     - `create_dispatch_table()`: Creates runtime dispatch table for token routing
+    - `create_global_expert_idx_table()`: Builds a (group, chip, local_expert) -> global expert id lookup tensor
     - `get_weights_mesh_mapper()`: Returns mesh mapper with dims=(0, 1) for weight distribution
 
     The default layout is column-major: experts 0..N are placed in group 0, then N+1..2N in group 1, etc.
@@ -238,6 +239,48 @@ class ExpertMapping:
                 table[group, expert_id] = chip_id
 
         logger.debug(f"[ExpertMapping.create_dispatch_table] OUTPUT: table.shape={table.shape}")
+        return table
+
+    @staticmethod
+    def create_global_expert_idx_table(
+        experts_per_chip: int,
+        dispatch_group_size: int,
+        num_dispatch_groups: int,
+        is_col_major: bool = True,
+    ) -> torch.Tensor:
+        """
+        Build a lookup tensor mapping mesh position (group, chip, local_expert) to
+        global expert index, using `get_global_expert_idx` as the source of truth.
+
+        Args:
+            experts_per_chip: Number of experts per chip
+            dispatch_group_size: Number of chips per dispatch group (mesh rows)
+            num_dispatch_groups: Number of dispatch groups (mesh columns)
+            is_col_major: Expert ordering (True=column-major, False=row-major)
+
+        Returns:
+            Tensor of shape (num_dispatch_groups, dispatch_group_size, experts_per_chip)
+            where table[g, c, e] is the global expert id assigned to local_expert e
+            on chip c of dispatch group g.
+        """
+        table = torch.zeros(
+            (num_dispatch_groups, dispatch_group_size, experts_per_chip),
+            dtype=torch.int32,
+        )
+        for group in range(num_dispatch_groups):
+            for chip in range(dispatch_group_size):
+                for local_expert in range(experts_per_chip):
+                    table[group, chip, local_expert] = ExpertMapping.get_global_expert_idx(
+                        group=group,
+                        chip=chip,
+                        local_expert=local_expert,
+                        experts_per_chip=experts_per_chip,
+                        dispatch_group_size=dispatch_group_size,
+                        num_dispatch_groups=num_dispatch_groups,
+                        is_col_major=is_col_major,
+                    )
+
+        logger.debug(f"[ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape={table.shape}")
         return table
 
     @staticmethod

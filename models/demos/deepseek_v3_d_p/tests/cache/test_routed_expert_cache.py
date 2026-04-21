@@ -11,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
     compute_constants,
     extract_mesh_config,
     get_ep_mesh_composer,
@@ -100,6 +101,21 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     )
     dispatched_buffer_tt = ttnn.reshape(dispatched_buffer_tt, per_device_shape)
 
+    # Build (group, chip, local_expert) -> global expert id table, sharded across
+    # the EP mesh so each device holds (1, 1, experts_per_chip). Shared across all
+    # TtRoutedExpert instances built below.
+    global_expert_idx_tt = ttnn.from_torch(
+        ExpertMapping.create_global_expert_idx_table(
+            experts_per_chip=experts_per_chip,
+            dispatch_group_size=dispatch_group_size,
+            num_dispatch_groups=num_dispatch_groups,
+        ),
+        mesh_mapper=get_ep_mesh_mapper(mesh_device),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+    )
+
     # Helper to convert output back to torch (follows PCC test pattern)
     mesh_composer = get_ep_mesh_composer(mesh_device)
 
@@ -119,11 +135,12 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     logger.info(f"dispatched_buffer_tt.shape={dispatched_buffer_tt.shape}")
 
     expert_from_weights = TtRoutedExpert(
-        mesh_device,
-        experts_per_chip,
-        emb_dim,
-        hidden_dim,
-        max_dispatched_tokens_per_expert,
+        mesh_device=mesh_device,
+        experts_per_chip=experts_per_chip,
+        global_expert_idx_table=global_expert_idx_tt,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        max_tokens=max_dispatched_tokens_per_expert,
         torch_weights=torch_weights,
         weights_dtype=weights_dtype,
         weight_cache_path=None,
@@ -157,11 +174,12 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
 
     profiler.start("cold_load")
     expert_cold = TtRoutedExpert(
-        mesh_device,
-        experts_per_chip,
-        emb_dim,
-        hidden_dim,
-        max_dispatched_tokens_per_expert,
+        mesh_device=mesh_device,
+        experts_per_chip=experts_per_chip,
+        global_expert_idx_table=global_expert_idx_tt,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        max_tokens=max_dispatched_tokens_per_expert,
         torch_weights=None,
         weights_dtype=weights_dtype,
         weight_cache_path=CACHE_DIR,
@@ -174,11 +192,12 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     # === Path 3: Warm Cache ===
     profiler.start("warm_load")
     expert_warm = TtRoutedExpert(
-        mesh_device,
-        experts_per_chip,
-        emb_dim,
-        hidden_dim,
-        max_dispatched_tokens_per_expert,
+        mesh_device=mesh_device,
+        experts_per_chip=experts_per_chip,
+        global_expert_idx_table=global_expert_idx_tt,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        max_tokens=max_dispatched_tokens_per_expert,
         torch_weights=None,
         weights_dtype=weights_dtype,
         weight_cache_path=CACHE_DIR,
