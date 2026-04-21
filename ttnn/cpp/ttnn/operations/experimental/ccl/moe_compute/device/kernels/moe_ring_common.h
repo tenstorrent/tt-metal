@@ -8,11 +8,7 @@
 #include <algorithm>
 #include <stdint.h>
 
-namespace detail {
-
-enum class MoEActivationFunction : uint8_t { SILU = 0, SWIGLU = 1 };
-
-}  // namespace detail
+#include "../hostdevcommon/config.hpp"
 //=============================================================================
 // MoE Ring All-to-All Configuration
 //
@@ -27,9 +23,6 @@ enum class MoEActivationFunction : uint8_t { SILU = 0, SWIGLU = 1 };
 //=============================================================================
 
 namespace moe_ring {
-
-// Enum for selecting MoE configuration type
-enum class MoEConfigType : uint32_t { DEEPSEEK = 0, GPT = 1 };
 
 constexpr uint32_t NUM_CORES = 12;
 
@@ -198,23 +191,23 @@ struct GptRingConfig {
 };
 
 // Template trait for config type selection
-template <MoEConfigType ConfigType>
+template <ttnn::experimental::prim::detail::MoEConfigType ConfigType>
 struct ConfigTypeSelector;
 
 // Template specialization for DeepSeek
 template <>
-struct ConfigTypeSelector<MoEConfigType::DEEPSEEK> {
+struct ConfigTypeSelector<ttnn::experimental::prim::detail::MoEConfigType::DEEPSEEK> {
     using type = DeepSeekRingConfig;
 };
 
 // Template specialization for GPT
 template <>
-struct ConfigTypeSelector<MoEConfigType::GPT> {
+struct ConfigTypeSelector<ttnn::experimental::prim::detail::MoEConfigType::GPT> {
     using type = GptRingConfig;
 };
 
 // Helper alias template
-template <MoEConfigType ConfigType>
+template <ttnn::experimental::prim::detail::MoEConfigType ConfigType>
 using ConfigType_t = typename ConfigTypeSelector<ConfigType>::type;
 
 }  // namespace moe_ring
