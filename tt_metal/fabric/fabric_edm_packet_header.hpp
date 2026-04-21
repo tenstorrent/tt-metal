@@ -851,6 +851,10 @@ public:
         this->command_fields.unicast_seminc_fused.noc_address = noc_address;
     }
 
+    void set_fused_unicast_write_atomic_inc_value(uint32_t val) volatile {
+        this->command_fields.unicast_seminc_fused.val = val;
+    }
+
     void set_src_ch_id(uint8_t ch_id) volatile { this->src_ch_id = ch_id; }
 };
 

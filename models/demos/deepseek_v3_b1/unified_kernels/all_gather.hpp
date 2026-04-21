@@ -75,7 +75,7 @@ FORCE_INLINE void wait_for_bits(volatile tt_l1_ptr uint32_t* sem_ptr) {
 // Compile-time arg structs
 // ============================================================================
 
-static constexpr uint32_t MAX_NUM_LINKS = 2;
+static constexpr uint32_t MAX_NUM_LINKS = 1;
 
 // Transport core BRISC and NCRISC share this schema; r2_active differs.
 template <
@@ -137,8 +137,8 @@ struct GatherArgs {
 // ============================================================================
 // Transport sender (BRISC fwd / NCRISC bwd on transport core)
 //
-// Multi-link: opens num_links connections and rotates chunks across them,
-// following the broadcast.hpp forward_chunks pattern.
+// Single-link only: reuses one connection with a small header ring to reduce
+// flush frequency on multi-chunk slices.
 // ============================================================================
 
 template <typename CTArgs>
@@ -147,29 +147,39 @@ public:
     void operator()(const TransportArgs& args) { impl(args); }
 
 private:
+    static constexpr uint32_t max_header_ring_size = 2;
+    static constexpr uint32_t header_ring_size = CTArgs::num_chunks <= 1 ? 1u : max_header_ring_size;
+
     void impl([[maybe_unused]] const TransportArgs& args) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        PacketHeaderPool::reset();
+        static_assert(CTArgs::num_links == 1, "All-gather TransportSender is single-link only");
 
         size_t arg_idx = size_t(args.per_core_rta_start_idx);
-        const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
+        [[maybe_unused]] const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+        [[maybe_unused]] const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
 
-        std::array<tt::tt_fabric::WorkerToFabricEdmSender, CTArgs::num_links> connections;
-        std::array<volatile PACKET_HEADER_TYPE*, CTArgs::num_links> headers;
-        for (uint32_t link = 0; link < CTArgs::num_links; link++) {
-            connections[link] =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-            connections[link].open_start();
-            headers[link] = PacketHeaderPool::allocate_header();
-            fabric_set_unicast_route(headers[link], dst_chip_id, dst_mesh_id);
-            connections[link].open_finish();
-        }
+        constexpr bool use_posted_transport_writes = true;
+
+        auto connection =
+            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
 
         const uint64_t dest_output_noc =
             safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.dest_output_base_addr, 0);
         const uint64_t dest_recv_sem_noc =
             safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.dest_recv_sem_addr, 0);
+
+        const auto connection_direction = connection.get_connection_direction();
+        std::array<volatile PACKET_HEADER_TYPE*, header_ring_size> headers = {};
+        connection.open_start();
+        PacketHeaderPool::reset();
+        for (uint32_t i = 0; i < header_ring_size; ++i) {
+            headers[i] = PacketHeaderPool::allocate_header();
+            fabric_set_single_hop_unicast_route_from_direction(headers[i], connection_direction);
+            headers[i]->to_noc_fused_unicast_write_atomic_inc(
+                {dest_output_noc, dest_recv_sem_noc, /* placeholder inc_value */ 1, false}, CTArgs::chunk_size_bytes);
+        }
+        connection.open_finish();
+        connection.setup_stateful_send_cmd_bufs<use_posted_transport_writes>();
 
         volatile tt_l1_ptr uint32_t* handoff_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.handoff_sem_bank_addr);
@@ -177,34 +187,70 @@ private:
         // racing with the gather core's NOC atomic incs on the same word).
         const uint64_t local_handoff_noc = get_noc_addr(args.handoff_sem_bank_addr);
 
-        // Send a full slice (possibly multi-chunk) rotating across links.
+        uint32_t cached_free_write_slots = 0;
+        uint32_t current_header_idx = 0;
+        uint32_t pending_header_count = 0;
+
+        auto flush_transport = [&]() __attribute__((always_inline)) {
+            if constexpr (use_posted_transport_writes) {
+                noc_async_posted_writes_flushed();
+            } else {
+                noc_async_writes_flushed();
+            }
+        };
+
+        auto refill_free_write_slots = [&]() __attribute__((always_inline)) {
+            do {
+                cached_free_write_slots = connection.get_num_free_write_slots();
+            } while (cached_free_write_slots == 0);
+        };
+
+        auto drain_tail_before_reuse_or_teardown = [&]() __attribute__((always_inline)) {
+            if (pending_header_count != 0) {
+                flush_transport();
+                pending_header_count = 0;
+            }
+        };
+
+        // Send a full slice (possibly multi-chunk) over the single connection.
         auto send_slice = [&](uint32_t src_addr, uint32_t dest_slot_index) __attribute__((always_inline)) {
+            drain_tail_before_reuse_or_teardown();
+
             const uint32_t inc_value = 1u << (dest_slot_index * CTArgs::recv_sem_bits_per_slot);
             const uint64_t dest_base = dest_output_noc + dest_slot_index * CTArgs::slice_size_bytes;
 
-            uint32_t current_link = 0;
+            for (uint32_t i = 0; i < header_ring_size; ++i) {
+                headers[i]->set_fused_unicast_write_atomic_inc_value(inc_value);
+            }
+
+            uint32_t current_chunk_offset_bytes = 0;
             for (uint32_t chunk_idx = 0; chunk_idx < CTArgs::num_chunks; chunk_idx++) {
-                const uint32_t chunk_offset = chunk_idx * CTArgs::chunk_size_bytes;
-                const uint32_t payload_bytes =
-                    (chunk_idx < CTArgs::num_chunks - 1) ? CTArgs::chunk_size_bytes : CTArgs::last_chunk_bytes;
+                const bool is_last_chunk = (chunk_idx == CTArgs::num_chunks - 1);
+                const uint32_t payload_bytes = is_last_chunk ? CTArgs::last_chunk_bytes : CTArgs::chunk_size_bytes;
 
-                headers[current_link]->to_noc_fused_unicast_write_atomic_inc(
-                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                        dest_base + chunk_offset, dest_recv_sem_noc, inc_value, false},
-                    payload_bytes);
-                connections[current_link].wait_for_empty_write_slot();
-                connections[current_link].send_payload_without_header_non_blocking_from_address(
-                    src_addr + chunk_offset, payload_bytes);
-                connections[current_link].send_payload_flush_non_blocking_from_address(
-                    reinterpret_cast<uint32_t>(headers[current_link]), sizeof(PACKET_HEADER_TYPE));
+                if (cached_free_write_slots == 0) {
+                    refill_free_write_slots();
+                }
 
-                if (++current_link == CTArgs::num_links) {
-                    current_link = 0;
-                    noc_async_writes_flushed();
+                auto* header = headers[current_header_idx++];
+                if constexpr (CTArgs::last_chunk_bytes != CTArgs::chunk_size_bytes) {
+                    header->set_payload_size_bytes(payload_bytes);
+                }
+                header->set_fused_unicast_write_atomic_inc_write_noc_address(dest_base + current_chunk_offset_bytes);
+
+                connection.send_current_slot_stateful_non_blocking<use_posted_transport_writes>(
+                    src_addr + current_chunk_offset_bytes, payload_bytes, reinterpret_cast<uint32_t>(header));
+
+                cached_free_write_slots--;
+                pending_header_count++;
+                current_chunk_offset_bytes += CTArgs::chunk_size_bytes;
+
+                if (current_header_idx == header_ring_size) {
+                    current_header_idx = 0;
+                    flush_transport();
+                    pending_header_count = 0;
                 }
             }
-            // Trailing flush for partial rotation at end of slice
-            noc_async_writes_flushed();
         };
 
         // Round 1: wait for bit 1 (scratch[0] ready), send local slice
@@ -226,9 +272,8 @@ private:
             noc_semaphore_inc(local_handoff_noc, 1 << 2);
         }
 
-        for (uint32_t link = 0; link < CTArgs::num_links; link++) {
-            connections[link].close();
-        }
+        drain_tail_before_reuse_or_teardown();
+        connection.close();
         noc_async_full_barrier();
 #endif
     }

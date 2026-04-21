@@ -38,7 +38,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 
 RECV_SEM_BITS_PER_SLOT = 4
 RING_SIZE = 4
-MAX_NUM_LINKS = 2
+MAX_NUM_LINKS = 1
 
 
 def _get_neighbor_coord(mesh_shape, row, col, offset, cluster_axis=0):
@@ -185,6 +185,8 @@ def _transport_common_rt_schema(
 
 class AllGatherConfig:
     """All-gather host-side config for a 4-device torused ring.
+
+    The transport path is currently single-link only.
 
     Two init modes:
 
@@ -568,9 +570,9 @@ class AllGatherConfig:
     def _build_transport_per_core_rt_args(self, coord, program, core, dst_fabric_node_id):
         """Build per-core RT args for one transport RISC direction.
 
-        Layout: [dst_mesh_id, dst_chip_id, <link 0 fabric args>, <link 1 fabric args>, ...]
-        The kernel reads dst_mesh_id / dst_chip_id once, then builds num_links
-        connections by iterating over the remaining args.
+        Layout: [dst_mesh_id, dst_chip_id, <single-link fabric args>]
+        The kernel reads dst_mesh_id / dst_chip_id once, then builds the
+        single transport connection from the remaining args.
         """
         info = self._per_device[coord]
         out = [

@@ -27,7 +27,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-DEFAULT_NUM_LINKS = [1, 2]
 DEFAULT_MAX_PAYLOAD_SIZES = [2048, 4096, 8192, 15232]
 TRACE_ID = 1
 CHIP_FREQ_RE = re.compile(r"CHIP_FREQ\[MHz\]:\s*(\d+(?:\.\d+)?)")
@@ -38,6 +37,9 @@ class CCLConfig:
     title: str
     test_target: str
     benchmark_shape: tuple[int, int]
+    default_num_links: tuple[int, ...]
+    supported_num_links: tuple[int, ...]
+    transport_mode: str
     env_num_links: str
     env_max_payload_size: str
     top_level_zones: tuple[str, ...]
@@ -70,6 +72,9 @@ CCL_CONFIGS = {
         title="CCL all-gather trace perf matrix",
         test_target=("models/demos/deepseek_v3_b1/tests/unit_tests/test_ccl_all_gather.py::" "test_ccl_all_gather"),
         benchmark_shape=(1, 7168),
+        default_num_links=(1,),
+        supported_num_links=(1,),
+        transport_mode="single-link only",
         env_num_links="CCL_ALL_GATHER_NUM_LINKS",
         env_max_payload_size="CCL_ALL_GATHER_MAX_PAYLOAD_SIZE_BYTES",
         top_level_zones=("ALLGATHER_GATHER", "ALLGATHER_TRANSPORT"),
@@ -82,6 +87,9 @@ CCL_CONFIGS = {
         title="CCL all-reduce trace perf matrix",
         test_target=("models/demos/deepseek_v3_b1/tests/unit_tests/test_ccl_all_reduce.py::" "test_ccl_all_reduce"),
         benchmark_shape=(1, 2048),
+        default_num_links=(1, 2),
+        supported_num_links=(1, 2),
+        transport_mode="configurable (1 or 2 links)",
         env_num_links="CCL_ALL_REDUCE_NUM_LINKS",
         env_max_payload_size="CCL_ALL_REDUCE_MAX_PAYLOAD_SIZE_BYTES",
         top_level_zones=("CCL_SENDER_WRITER", "CCL_RECEIVER", "CCL_COMPUTE"),
@@ -129,8 +137,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--num-links",
-        default=",".join(str(v) for v in DEFAULT_NUM_LINKS),
-        help="Comma or space separated num_links values (default: 1,2).",
+        default=None,
+        help="Comma or space separated num_links values. Defaults are CCL-specific.",
     )
     parser.add_argument(
         "--max-payload-sizes",
@@ -465,6 +473,8 @@ def render_summary(
         f"Timestamp: {timestamp}",
         f"Test target: {test_target}",
         f"Configured benchmark shape: {format_shape(config.benchmark_shape)}",
+        f"Configured transport mode: {config.transport_mode}",
+        f"Configured num_links: {', '.join(str(v) for v in num_links_list)}",
         f"Trace id: {TRACE_ID}",
         "Source: profile_log_device.csv only (top-level zones only; no micro-profiling).",
         "Conversion: us = cycles / CHIP_FREQ[MHz], ns = cycles * 1000 / CHIP_FREQ[MHz].",
@@ -538,6 +548,7 @@ def render_details(
         f"Timestamp: {timestamp}",
         f"Test target: {test_target}",
         f"Configured benchmark shape: {format_shape(config.benchmark_shape)}",
+        f"Configured transport mode: {config.transport_mode}",
         f"Trace id: {TRACE_ID}",
         "Source: profile_log_device.csv only (top-level zones only; no micro-profiling).",
         "",
@@ -644,12 +655,17 @@ def main() -> int:
     config = CCL_CONFIGS[args.ccl]
     test_target = args.test_target or config.test_target
 
-    num_links_list = parse_int_list(args.num_links)
+    num_links_list = parse_int_list(args.num_links) if args.num_links is not None else list(config.default_num_links)
     max_payload_sizes = parse_int_list(args.max_payload_sizes)
     if not num_links_list:
         raise RuntimeError("num_links list is empty")
     if not max_payload_sizes:
         raise RuntimeError("max payload sizes list is empty")
+    invalid_num_links = [value for value in num_links_list if value not in config.supported_num_links]
+    if invalid_num_links:
+        supported = ", ".join(str(value) for value in config.supported_num_links)
+        invalid = ", ".join(str(value) for value in invalid_num_links)
+        raise RuntimeError(f"{args.ccl} supports num_links in {{{supported}}}, got {{{invalid}}}")
 
     repo_root = get_repo_root()
     report_root = repo_root / "generated" / "profiler" / "reports"

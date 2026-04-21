@@ -36,6 +36,7 @@ TRANSPORT_CORE = ttnn.CoreCoord(0, 1)
 
 NUM_DEVICES = 4
 TILE_W = 32
+ALL_GATHER_NUM_LINKS = 1
 
 ENV_NUM_LINKS = "CCL_ALL_GATHER_NUM_LINKS"
 ENV_MAX_PAYLOAD_SIZE = "CCL_ALL_GATHER_MAX_PAYLOAD_SIZE_BYTES"
@@ -62,7 +63,10 @@ def _get_num_links_params(defaults: list[int]) -> list[int]:
     value = os.getenv(ENV_NUM_LINKS)
     if value is None or value.strip() == "":
         return defaults
-    return [_parse_env_int(ENV_NUM_LINKS, value)]
+    parsed = _parse_env_int(ENV_NUM_LINKS, value)
+    if parsed != ALL_GATHER_NUM_LINKS:
+        raise ValueError(f"CCL all-gather is single-link only, got {ENV_NUM_LINKS}={parsed}")
+    return [parsed]
 
 
 MAX_PAYLOAD_SIZE = _get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
@@ -252,7 +256,7 @@ def _verify_per_slot_identity(submesh, ttnn_result, inputs, expected_slot_tensor
 
 
 @pytest.mark.parametrize("output_shape", [[1, 7168]])
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", [ALL_GATHER_NUM_LINKS])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -315,7 +319,7 @@ def test_ccl_all_gather_deterministic_fill(
 
 
 @pytest.mark.parametrize("output_shape", [[1, 7168]])
-@pytest.mark.parametrize("num_links", _get_num_links_params([1]))
+@pytest.mark.parametrize("num_links", _get_num_links_params([ALL_GATHER_NUM_LINKS]))
 @pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
@@ -408,12 +412,12 @@ def test_ccl_all_gather(
 
 
 # ---------------------------------------------------------------------------
-# Feature-matrix test (shape, num_links, chunk sizing)
+# Feature-matrix test (shape, single-link chunk sizing)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("output_shape", [[1, 896], [1, 7168]])
-@pytest.mark.parametrize("num_links", [1, 2])
+@pytest.mark.parametrize("num_links", [ALL_GATHER_NUM_LINKS])
 @pytest.mark.parametrize(
     "max_chunk_size_bytes",
     [
