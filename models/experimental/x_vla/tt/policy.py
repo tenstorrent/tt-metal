@@ -87,4 +87,11 @@ def load_policy_ttnn(weights: Path):
     lm = policy.model.vlm.language_model
     lm.model.encoder = bart_mod.TTNNBartEncoder(lm.model.encoder, device).to(torch.bfloat16)
 
+    # Iter18: replace the FFN inside every DaViT SpatialBlock and
+    # ChannelBlock with an on-device PreNorm+MLP+residual unit. This
+    # touches the largest weight matrices in the vision tower (each
+    # FFN's fc1/fc2 is dim x 4*dim).
+    davit_mod = _load_module_file("xvla_ttnn_davit_ffn", "ttnn_davit_ffn.py")
+    davit_mod.swap_davit_ffns(policy.model.vlm.vision_tower, device)
+
     return policy
