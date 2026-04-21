@@ -12,6 +12,7 @@ Unlike TtSharedExpert, this module:
 - Each device holds weights for `experts_per_chip` local experts
 """
 
+from math import ceil
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,9 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 
 
 class TtRoutedExpert(LightweightModule):
+    MAX_EXPERT_LENGTH = 2048
+    MAX_EXPERT_ITERS = ceil(25_000 / MAX_EXPERT_LENGTH)
+
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str, experts_per_chip: int) -> bool:
         """Check if all routed expert weight cache files exist."""
@@ -327,6 +331,7 @@ class TtRoutedExpert(LightweightModule):
 
     def _expert_ffn(
         self,
+        expert_iter: int,
         x: ttnn.Tensor,
         gate_proj: ttnn.Tensor,
         up_proj: ttnn.Tensor,
@@ -337,6 +342,8 @@ class TtRoutedExpert(LightweightModule):
         Single expert FFN computation.
 
         Args:
+            expert_iter: Index of the current expert iteration. Used only on the
+                Blackhole path; pass 0 on Wormhole.
             x: Input tensor. Shape is (1, tokens, emb_dim) for the Blackhole path
                 (after ttnn.narrow) or (tokens, emb_dim) for the Wormhole path
                 (after tensor indexing).
@@ -352,6 +359,7 @@ class TtRoutedExpert(LightweightModule):
         """
 
         return ttnn.experimental.deepseek_prefill.routed_expert_ffn(
+            expert_iter,
             x,
             gate_proj,
             up_proj,
@@ -400,16 +408,30 @@ class TtRoutedExpert(LightweightModule):
             # Extract tokens for this expert
             # Shape: (1, max_tokens, emb_dim)
             tokens = ttnn.narrow(dispatched_buffer, dim=0, start=local_expert, length=1)
+            out = ttnn.narrow(expert_outputs, dim=0, start=local_expert, length=1)
             logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
-            # Run FFN
-            output = self._expert_ffn(
-                tokens,
-                self.gate_projs[local_expert],
-                self.up_projs[local_expert],
-                self.down_projs[local_expert],
-                out=ttnn.narrow(expert_outputs, dim=0, start=local_expert, length=1),
-            )
+            expert_iters = ceil(tokens.shape[1] / self.MAX_EXPERT_LENGTH)
+            expert_lengths = [self.MAX_EXPERT_LENGTH] * expert_iters
+            expert_lengths[-1] = tokens.shape[1] - self.MAX_EXPERT_LENGTH * (expert_iters - 1)  # Handle any remainder
+            start = 0
+            for expert_iter in range(expert_iters):
+                signpost(f"FFN iteration {expert_iter+1}/{expert_iters} for Expert {local_expert+1}")
+                expert_tokens = ttnn.narrow(tokens, dim=1, start=start, length=expert_lengths[expert_iter])
+                expert_out = ttnn.narrow(out, dim=1, start=start, length=expert_lengths[expert_iter])
+                start += expert_lengths[expert_iter]
+
+                # Run FFN
+                output = self._expert_ffn(
+                    expert_iter,
+                    expert_tokens,
+                    self.gate_projs[local_expert],
+                    self.up_projs[local_expert],
+                    self.down_projs[local_expert],
+                    out=expert_out,
+                )
+                logger.debug(f"Expert {local_expert}: FFN iteration {expert_iter+1} output shape {expert_out.shape}")
+
             logger.debug(f"Expert {local_expert}: output shape {output.shape}")
 
         # Shape: (experts_per_chip, max_tokens, emb_dim)
@@ -460,7 +482,9 @@ class TtRoutedExpert(LightweightModule):
             logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
             # Run FFN
+            # expert_iter is unused on the Wormhole path; pass 0.
             output = self._expert_ffn(
+                0,
                 tokens,
                 self.gate_projs[local_expert],
                 self.up_projs[local_expert],

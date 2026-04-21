@@ -53,6 +53,7 @@ ttnn::Tensor routed_expert_ffn_wh(
 
 // Blackhole-optimized path (14x10 grid)
 ttnn::Tensor routed_expert_ffn_bh(
+    uint32_t expert_iter,
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,

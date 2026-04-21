@@ -25,6 +25,8 @@ void bind_routed_expert_ffn(nb::module_& mod) {
             output   = activated @ down_proj
 
         Args:
+            expert_iter (int): Index of the current expert iteration. Used only on
+                Blackhole; pass 0 on Wormhole.
             x (ttnn.Tensor): Input tensor.
             gate_proj (ttnn.Tensor): Gate projection weight (emb_dim, hidden_dim).
             up_proj (ttnn.Tensor): Up projection weight (emb_dim, hidden_dim).
@@ -39,10 +41,11 @@ void bind_routed_expert_ffn(nb::module_& mod) {
 
         Example:
             >>> output = ttnn.experimental.deepseek_prefill.routed_expert_ffn(
-                    x, gate_proj, up_proj, down_proj,
+                    expert_iter, x, gate_proj, up_proj, down_proj,
                     compute_kernel_config=compute_kernel_config)
         )doc",
         &routed_expert_ffn,
+        nb::arg("expert_iter"),
         nb::arg("x").noconvert(),
         nb::arg("gate_proj").noconvert(),
         nb::arg("up_proj").noconvert(),

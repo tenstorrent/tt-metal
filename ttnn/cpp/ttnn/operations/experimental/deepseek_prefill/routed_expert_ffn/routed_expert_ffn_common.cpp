@@ -136,6 +136,7 @@ ttnn::Tensor routed_expert_ffn_default(
 }  // namespace detail
 
 ttnn::Tensor routed_expert_ffn(
+    uint32_t expert_iter,
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
@@ -165,7 +166,8 @@ ttnn::Tensor routed_expert_ffn(
     if (is_wormhole) {
         return detail::routed_expert_ffn_wh(x, gate_proj, up_proj, down_proj, compute_kernel_config, output);
     }
-    return detail::routed_expert_ffn_bh(x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output));
+    return detail::routed_expert_ffn_bh(
+        expert_iter, x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn

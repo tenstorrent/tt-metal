@@ -12,6 +12,7 @@
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn {
 
 ttnn::Tensor routed_expert_ffn(
+    uint32_t expert_iter,
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,

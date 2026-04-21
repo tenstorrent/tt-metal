@@ -26,9 +26,9 @@ from tests.ttnn.utils_for_testing import comp_pcc
         (1600, 7168, 2048),  # DeepSeek V3 dims, 1.6K tokens
         (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens
         (3200, 7168, 2048),  # DeepSeek V3 dims, 3.2K tokens
-        (4096, 7168, 2048),  # DeepSeek V3 dims, 4K tokens
+        (8192, 7168, 2048),  # DeepSeek V3 dims, 8K tokens
     ],
-    ids=["ds-v3-1k", "ds-v3-1.6k", "ds-v3-2k", "ds-v3-3.2k", "ds-v3-4k"],
+    ids=["ds-v3-1k", "ds-v3-1.6k", "ds-v3-2k", "ds-v3-3.2k", "ds-v3-8k"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
