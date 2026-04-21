@@ -150,6 +150,7 @@ class UnpackerAB(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
+        buffer_a = operation.src_a.cpp_name
+        buffer_b = operation.src_b.cpp_name
         broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
-        return f"_llk_unpack_AB_<{broadcast_type}>(L1_ADDRESS(buffer_A{stage}[{block.tile_id_global}]), L1_ADDRESS(buffer_B{stage}[{block.tile_id_global}]));\n"
+        return f"_llk_unpack_AB_<{broadcast_type}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"

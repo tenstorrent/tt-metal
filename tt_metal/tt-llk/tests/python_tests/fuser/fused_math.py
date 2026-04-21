@@ -125,10 +125,6 @@ class ComputePipeline:
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         stage = operation.stage_id
-        buffer_A_address = operation.src_a.l1_address
-        buffer_B_address = operation.src_b.l1_address
-        buffer_A_tile_size = operation.buffer_A_tile_size
-        buffer_B_tile_size = operation.buffer_B_tile_size
         unpack_a_src = operation.unpack_a_in
         unpack_a_dst = operation.unpack_a_out
         unpack_b_src = operation.unpack_b_in
@@ -136,8 +132,6 @@ class ComputePipeline:
 
         code = (
             f"    // Operation {stage}: Fused Unpack\n"
-            f"    UNUSED const Operand buffer_A{stage}({hex(buffer_A_address)}, {buffer_A_tile_size});\n"
-            f"    UNUSED const Operand buffer_B{stage}({hex(buffer_B_address)}, {buffer_B_tile_size});\n"
             f"    UNUSED const std::uint32_t unpack_a_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_src.name});\n"
             f"    UNUSED const std::uint32_t unpack_a_dst_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_dst.name});\n"
             f"    UNUSED const std::uint32_t unpack_b_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_b_src.name});\n"
@@ -149,8 +143,8 @@ class ComputePipeline:
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         stage = operation.stage_id
-        unpa_tile_size = operation.tile_size_unpack_a
-        unpb_tile_size = operation.tile_size_unpack_b
+        unpa_tile_size = operation.src_a.tile_size
+        unpb_tile_size = operation.src_b.tile_size
         dest_acc = config.dest_acc.cpp_enum_value
         unpa_face_r_dim = operation.src_a.tile_shape.face_r_dim
         unpb_face_r_dim = operation.src_b.tile_shape.face_r_dim
@@ -345,14 +339,11 @@ class ComputePipeline:
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         stage = operation.stage_id
-        buffer_Res_tile_size = operation.buffer_Res_tile_size
         pack_src = operation.pack_in
         pack_dst = operation.pack_out
-        result_buffer_address = operation.output.l1_address
 
         return (
             f"// Operation {stage}: Packer\n"
-            f"const Operand buffer_Res{stage}({hex(result_buffer_address)}, {buffer_Res_tile_size});\n"
             f"const std::uint32_t pack_src_format{stage} = ckernel::to_underlying(DataFormat::{pack_src.name});\n"
             f"const std::uint32_t pack_dst_format{stage} = ckernel::to_underlying(DataFormat::{pack_dst.name});\n"
         )
@@ -363,7 +354,7 @@ class ComputePipeline:
         stage = operation.stage_id
         bh_tilize = operation.bh_tilize.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
-        pack_size = operation.tile_size_pack
+        pack_size = operation.output.tile_size
         face_r_dim = operation.output.tile_shape.face_r_dim
         num_faces = operation.output.tile_shape.total_num_faces()
 
