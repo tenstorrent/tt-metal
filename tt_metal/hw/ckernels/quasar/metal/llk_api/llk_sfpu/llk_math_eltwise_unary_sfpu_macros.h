@@ -11,33 +11,33 @@
 // invocations architecture agnostic
 
 // For ops that require only the init function
-#define SFPU_UNARY_KERNEL_INIT(OP, APPROXIMATE) llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>();
+#define SFPU_UNARY_KERNEL_INIT(OP, APPROXIMATE) llk_math_eltwise_unary_sfpu_init<SfpuType::OP>();
 
 // For ops that need a custom init callback
 #define SFPU_INIT_KERNEL_CALL(OP, INIT_CB, APPROXIMATE) \
-    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>)
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP>(INIT_CB<APPROXIMATE>)
 
 // For ops that need a custom init callback but takes one extra init-parameter
 #define SFPU_ONE_PARAM_KERNEL_INIT(OP, INIT_CB, APPROXIMATE, PARAM0) \
-    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, PARAM0);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP>(INIT_CB<APPROXIMATE>, PARAM0);
 
 // For ops that need a custom init callback with two template parameters (e.g., APPROXIMATE and legacy_compat or
 // fast_approx)
 #define SFPU_TWO_TEMPLATE_PARAM_INIT(OP, INIT_CB, APPROXIMATE, PARAM0) \
-    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE, PARAM0>)
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP>(INIT_CB<APPROXIMATE, PARAM0>)
 
 // For ops that need a custom init callback with three template parameters (e.g., APPROXIMATE, DST_ACCUM and
 // legacy_compat)
 #define SFPU_THREE_TEMPLATE_PARAM_INIT(OP, INIT_CB, APPROXIMATE, PARAM0, PARAM1) \
-    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE, PARAM0, PARAM1>)
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP>(INIT_CB<APPROXIMATE, PARAM0, PARAM1>)
 
 // For ops that need a custom init callback and take two extra init-parameters
 #define SFPU_TWO_PARAM_KERNEL_INIT(OP, INIT_CB, APPROXIMATE, PARAM0, PARAM1) \
-    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, PARAM0, PARAM1)
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP>(INIT_CB<APPROXIMATE>, PARAM0, PARAM1)
 
 // For ops where init takes multiple template parameters (e.g., approximate, fast_approx, scale).
 #define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, FAST_APPROX, SCALE, CLAMP_NEGATIVE) \
-    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROX>(INIT_CB<APPROX, FAST_APPROX, SCALE, CLAMP_NEGATIVE>)
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP>(INIT_CB<APPROX, FAST_APPROX, SCALE, CLAMP_NEGATIVE>)
 
 // For the int32 comparison variants
 #define SFPU_COMP_INT32_KERNEL(OP, MODE, APPROXIMATE, ITERATIONS, DST_IDX, PARAM0) \
