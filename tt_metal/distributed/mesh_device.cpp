@@ -1861,6 +1861,26 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             continue;
         }
 
+        // The D2H socket backing the RT profiler needs a host buffer that the device
+        // can DMA into. On architectures with 64-bit PCIe addressing (e.g. Blackhole)
+        // we do not have a hugepage fallback — the socket always goes through the
+        // pinned-memory path, which in turn needs a stable host physical address.
+        // Without an IOMMU, producing that stable mapping for an anonymous POSIX
+        // shm region is not reliably supported in all deployments and can fault
+        // deep inside UMD's sysmem mapping. Rather than take that risk, disable
+        // the RT profiler on this device with a clear explanation.
+        if (hal.get_supports_64_bit_pcie_addressing() && !MetalContext::instance().get_cluster().is_iommu_enabled()) {
+            log_info(
+                tt::LogMetal,
+                "Real-time profiler disabled on device {}: this architecture uses 64-bit PCIe "
+                "addressing for the D2H socket, which requires IOMMU to be enabled on the host. "
+                "IOMMU is currently disabled, so no hugepage fallback is available and RT profiler "
+                "cannot be brought up safely. Enable IOMMU (or run on a system that has it) to "
+                "re-enable RT profiler.",
+                device_id);
+            continue;
+        }
+
         log_info(
             tt::LogMetal,
             "Using reserved tensix ({}, {}) for real-time profiler on device {}",
