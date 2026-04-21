@@ -185,12 +185,24 @@ def _scale_tiles_random_formats(b_torch, formats, distribution="random", weights
         fmt_indices = fmt_indices.reshape(tiles_h, tiles_w)
     elif distribution == "uniform":
         if weights is not None:
-            int_weights = [int(weights.get(f, 1)) for f in formats]
+            raw_weights = [float(weights.get(f, 1)) for f in formats]
         else:
-            int_weights = [1] * len(formats)
-        pattern = torch.cat([torch.full((w,), i, dtype=torch.long) for i, w in enumerate(int_weights)])
-        reps = (tiles_h + len(pattern) - 1) // len(pattern)
-        col = pattern.repeat(reps)[:tiles_h]
+            raw_weights = [1.0] * len(formats)
+        total_w = sum(raw_weights)
+        # Largest-remainder apportionment: weights are proportions scaled to tiles_h
+        # so ratios hold even when tiles_h < sum(weights). Avoids the pitfall of
+        # treating weights as absolute tile counts (e.g. {"bfp4": 77, "bfp0": 23}
+        # with tiles_h=8 would otherwise truncate to all-bfp4).
+        quotas = [w * tiles_h / total_w for w in raw_weights]
+        floor_shares = [int(q) for q in quotas]
+        remainders = [q - fs for q, fs in zip(quotas, floor_shares)]
+        leftover = tiles_h - sum(floor_shares)
+        order = sorted(range(len(raw_weights)), key=lambda i: -remainders[i])
+        shares = list(floor_shares)
+        for i in order[:leftover]:
+            shares[i] += 1
+        parts = [torch.full((s,), i, dtype=torch.long) for i, s in enumerate(shares) if s > 0]
+        col = torch.cat(parts) if parts else torch.zeros(tiles_h, dtype=torch.long)
         fmt_indices = col.unsqueeze(1).expand(tiles_h, tiles_w).contiguous()
     else:
         raise ValueError(f"Unknown distribution: {distribution}")
@@ -795,11 +807,16 @@ def _compute_dram_matmul_params(
     num_dram_cores,
     num_dram_cores_active,
     cores_per_dram_bank,
-    subblock_k,
-    subblock_n=None,
+    num_subblocks_k,
+    num_subblocks_n=None,
     k_parallel_per_bank=1,
 ):
-    """Compute DRAM per-core tiling and subblock_k.
+    """Compute DRAM per-core tiling.
+
+    Test callers pass num_subblocks_k / num_subblocks_n (dimensionless split counts)
+    and this helper derives subblock_k = Kt // num_subblocks_k, subblock_n =
+    dram_per_core_N // num_subblocks_n. Defaults: num_subblocks_k = 4 when Kt>8
+    else 1; num_subblocks_n = dram_per_core_N (→ subblock_n=1).
 
     For K-split (k_parallel_per_bank > 1): cores within a bank share the same
     N-slice and split K. N padding/sizing uses n_parallel_per_bank, not cores_per_dram_bank.
@@ -811,24 +828,32 @@ def _compute_dram_matmul_params(
     # Per-core N tiles = N / (num_banks × n_parallel). For K-split, n_parallel=1, so
     # all cores in a bank share the bank's full N-slice.
     dram_per_core_N = n_dram_padded // (num_banks * n_parallel_per_bank) // tile_w
-    if subblock_k is None:
-        subblock_k = Kt // 4 if Kt > 8 else Kt
-    if subblock_k % 2 != 0:
+
+    if num_subblocks_k is None:
+        num_subblocks_k = 4 if Kt > 8 else 1
+    assert Kt % num_subblocks_k == 0, f"Kt ({Kt}) must be divisible by num_subblocks_k ({num_subblocks_k})"
+    subblock_k = Kt // num_subblocks_k
+    # Kernel subblock_k must be even when > 1.
+    if subblock_k % 2 != 0 and subblock_k > 1:
         subblock_k = max(2, subblock_k - 1)
-    assert Kt % subblock_k == 0
-    if subblock_n is None:
-        subblock_n = 1
+        assert Kt % subblock_k == 0
+        num_subblocks_k = Kt // subblock_k
+
+    if num_subblocks_n is None:
+        num_subblocks_n = dram_per_core_N  # subblock_n=1
     assert (
-        dram_per_core_N % subblock_n == 0
-    ), f"dram_per_core_N ({dram_per_core_N}) must be divisible by subblock_n ({subblock_n})"
-    num_subblocks_k = Kt // subblock_k
+        dram_per_core_N % num_subblocks_n == 0
+    ), f"dram_per_core_N ({dram_per_core_N}) must be divisible by num_subblocks_n ({num_subblocks_n})"
+    subblock_n = dram_per_core_N // num_subblocks_n
+
     assert (
         num_subblocks_k % k_parallel_per_bank == 0
     ), f"num_subblocks_k ({num_subblocks_k}) must be divisible by k_parallel_per_bank ({k_parallel_per_bank})"
     N_dram_per_device = dram_per_core_N * tile_w * num_banks * n_parallel_per_bank
     logger.info(
-        f"DRAM matmul params: Kt={Kt}, dram_per_core_N={dram_per_core_N}, subblock_k={subblock_k}, "
-        f"subblock_n={subblock_n}, N_dram_per_device={N_dram_per_device}, "
+        f"DRAM matmul params: Kt={Kt}, dram_per_core_N={dram_per_core_N}, "
+        f"num_subblocks_k={num_subblocks_k}, num_subblocks_n={num_subblocks_n}, "
+        f"subblock_k={subblock_k}, subblock_n={subblock_n}, N_dram_per_device={N_dram_per_device}, "
         f"k_parallel_per_bank={k_parallel_per_bank}, n_parallel_per_bank={n_parallel_per_bank}"
     )
     return Kt, dram_per_core_N, subblock_k, subblock_n, N_dram_per_device
@@ -1040,8 +1065,8 @@ def _run_standard(
     dram_expert_ids,
     active_expert_ids,
     formats_per_device,
-    subblock_k,
-    subblock_n,
+    num_subblocks_k,
+    num_subblocks_n,
     n_parallel_per_bank,
     sram_cores_override,
     sram_k_parallel,
@@ -1080,8 +1105,8 @@ def _run_standard(
         num_dram_cores,
         num_dram_cores,
         cores_per_dram_bank,
-        subblock_k,
-        subblock_n,
+        num_subblocks_k,
+        num_subblocks_n,
         k_parallel_per_bank=k_parallel_per_bank,
     )
 
@@ -1285,8 +1310,8 @@ def _run_accum(
     dram_expert_ids,
     active_expert_ids,
     formats_per_device,
-    subblock_k,
-    subblock_n,
+    num_subblocks_k,
+    num_subblocks_n,
     n_parallel_per_bank,
     sram_cores_override,
     sram_k_parallel,
@@ -1323,8 +1348,8 @@ def _run_accum(
         num_dram_cores,
         num_dram_cores,
         cores_per_dram_bank,
-        subblock_k,
-        subblock_n,
+        num_subblocks_k,
+        num_subblocks_n,
     )
 
     assert len(formats_per_device) == num_devices
@@ -1485,8 +1510,8 @@ def _run_slice_k(
     dram_expert_ids,
     active_expert_ids,
     formats_per_device,
-    subblock_k,
-    subblock_n,
+    num_subblocks_k,
+    num_subblocks_n,
     n_parallel_per_bank,
     sram_cores_override,
     sram_k_parallel,
@@ -1525,8 +1550,8 @@ def _run_slice_k(
         num_dram_cores,
         num_dram_cores,
         cores_per_dram_bank,
-        subblock_k,
-        subblock_n,
+        num_subblocks_k,
+        num_subblocks_n,
         k_parallel_per_bank=k_parallel_per_bank,
     )
 
@@ -1705,8 +1730,8 @@ def _run_hybrid_expert_multi_device(
     dram_expert_ids,
     active_expert_ids,
     formats_per_device,
-    subblock_k=None,
-    subblock_n=None,
+    num_subblocks_k=None,
+    num_subblocks_n=None,
     n_parallel_per_bank=1,
     pcc_threshold=0.97,
     accum_experts=False,
@@ -1719,7 +1744,13 @@ def _run_hybrid_expert_multi_device(
     fmt_ratios=None,
     k_parallel_per_bank=1,
 ):
-    """Dispatcher: delegate to the appropriate variant."""
+    """Dispatcher: delegate to the appropriate variant.
+
+    num_subblocks_k / num_subblocks_n are DRAM-only knobs (dimensionless split
+    counts along K / per-core-N). subblock_k = Kt // num_subblocks_k and
+    subblock_n = dram_per_core_N // num_subblocks_n are derived inside
+    _compute_dram_matmul_params.
+    """
     cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
     assert dram_expert_ids, "DRAM expert path is always required"
     assert len(dram_expert_ids) <= num_experts, "dram_expert_ids exceeds num_experts"
@@ -1740,8 +1771,8 @@ def _run_hybrid_expert_multi_device(
             dram_expert_ids,
             active_expert_ids,
             formats_per_device,
-            subblock_k,
-            subblock_n,
+            num_subblocks_k,
+            num_subblocks_n,
             n_parallel_per_bank,
             sram_cores_override,
             sram_k_parallel,
@@ -1764,8 +1795,8 @@ def _run_hybrid_expert_multi_device(
             dram_expert_ids,
             active_expert_ids,
             formats_per_device,
-            subblock_k,
-            subblock_n,
+            num_subblocks_k,
+            num_subblocks_n,
             n_parallel_per_bank,
             sram_cores_override,
             sram_k_parallel,
@@ -1786,8 +1817,8 @@ def _run_hybrid_expert_multi_device(
             dram_expert_ids,
             active_expert_ids,
             formats_per_device,
-            subblock_k,
-            subblock_n,
+            num_subblocks_k,
+            num_subblocks_n,
             n_parallel_per_bank,
             sram_cores_override,
             sram_k_parallel,
@@ -1820,7 +1851,7 @@ def test_hybrid_expert_1sram_1dram(device):
         active_expert_ids=[0, 1],
         formats_per_device=[["bfp4"]],
         sram_n_parallel=4,
-        subblock_k=2,
+        num_subblocks_k=2,
     )
 
 
@@ -1837,7 +1868,7 @@ def test_hybrid_expert_0sram_2dram(device):
         active_expert_ids=[0, 1],
         formats_per_device=[["bfp4"]],
         sram_n_parallel=4,
-        subblock_k=2,
+        num_subblocks_k=2,
     )
 
 
@@ -1969,7 +2000,7 @@ def test_hybrid_expert_single_device_sparse_accum_experts(device):
             ["bfp4", "bfp2", "bfp0"],
         ],
         sram_n_parallel=56,
-        subblock_k=8,  # Kt=8, num_subblocks_k=1
+        num_subblocks_k=1,
         accum_experts=True,
     )
 
@@ -1999,7 +2030,7 @@ def test_hybrid_expert_multi_device_sparse_accum_experts(bh_2d_mesh_device):
             ["bfp2"],
         ],
         sram_n_parallel=56,
-        subblock_k=8,  # Kt=8, num_subblocks_k=1
+        num_subblocks_k=1,
         accum_experts=True,
     )
 
@@ -2027,7 +2058,7 @@ def test_hybrid_expert_irregular_sram_gate_grid(device):
         sram_k_parallel=8,
         sram_n_parallel=8,
         dram_fuse_silu=True,
-        subblock_n=1,
+        num_subblocks_n=1,
         n_parallel_per_bank=1,
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
@@ -2052,7 +2083,7 @@ def test_hybrid_expert_irregular_sram_up_grid(device):
         sram_cores_override=b_cores,
         sram_k_parallel=8,
         sram_n_parallel=8,
-        subblock_n=1,
+        num_subblocks_n=1,
         n_parallel_per_bank=1,
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
@@ -2076,7 +2107,7 @@ def test_hybrid_expert_irregular_sram_down_grid(device):
         formats_per_device=[["bfp4", "bfp0"]],
         sram_cores_override=down_cores,
         accum_experts=True,
-        subblock_n=7,
+        num_subblocks_n=2,
         n_parallel_per_bank=2,
         k_parallel_per_bank=1,
         fmt_distribution="uniform",
@@ -2115,7 +2146,7 @@ def test_hybrid_expert_irregular_sram_gate_grid_multi_device(bh_2d_mesh_device):
         sram_k_parallel=8,
         sram_n_parallel=8,
         dram_fuse_silu=True,
-        subblock_n=1,
+        num_subblocks_n=1,
         n_parallel_per_bank=1,
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
@@ -2153,7 +2184,7 @@ def test_hybrid_expert_irregular_sram_up_grid_multi_device(bh_2d_mesh_device):
         sram_cores_override=b_cores,
         sram_k_parallel=8,
         sram_n_parallel=8,
-        subblock_n=1,
+        num_subblocks_n=1,
         n_parallel_per_bank=1,
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
@@ -2190,7 +2221,7 @@ def test_hybrid_expert_irregular_sram_down_grid_multi_device(bh_2d_mesh_device):
         ],
         sram_cores_override=down_cores,
         accum_experts=True,
-        subblock_n=7,
+        num_subblocks_n=2,
         n_parallel_per_bank=2,
         k_parallel_per_bank=1,
         fmt_distribution="uniform",
@@ -2508,7 +2539,8 @@ def test_benchmark_gate_proj(device, formats_per_device, fmt_ratios):
         active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
         formats_per_device=[formats_per_device],
         dram_fuse_silu=True,
-        subblock_n=1,
+        num_subblocks_k=4,
+        num_subblocks_n=1,
         n_parallel_per_bank=1,
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
@@ -2519,8 +2551,8 @@ def test_benchmark_gate_proj(device, formats_per_device, fmt_ratios):
 @pytest.mark.parametrize(
     "formats_per_device, fmt_ratios",
     [
-        (["bfp4", "bfp0"], {"bfp4": 3, "bfp0": 1}),
-        (["bfp4", "bfp2", "bfp0"], {"bfp4": 2, "bfp2": 1, "bfp0": 1}),
+        (["bfp4", "bfp0"], {"bfp4": 77.8, "bfp0": 22.2}),
+        (["bfp4", "bfp2", "bfp0"], {"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3}),
     ],
     ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
 )
@@ -2536,7 +2568,8 @@ def test_benchmark_up_proj(device, formats_per_device, fmt_ratios):
         dram_expert_ids=list(range(8)),
         active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
         formats_per_device=[formats_per_device],
-        subblock_n=1,
+        num_subblocks_k=4,
+        num_subblocks_n=1,
         n_parallel_per_bank=1,
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
@@ -2547,8 +2580,8 @@ def test_benchmark_up_proj(device, formats_per_device, fmt_ratios):
 @pytest.mark.parametrize(
     "formats_per_device, fmt_ratios",
     [
-        (["bfp4", "bfp0"], {"bfp4": 3, "bfp0": 1}),
-        (["bfp4", "bfp2", "bfp0"], {"bfp4": 2, "bfp2": 1, "bfp0": 1}),
+        (["bfp4", "bfp0"], {"bfp4": 77.8, "bfp0": 22.2}),
+        (["bfp4", "bfp2", "bfp0"], {"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3}),
     ],
     ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
 )
@@ -2565,7 +2598,8 @@ def test_benchmark_down_proj(device, formats_per_device, fmt_ratios):
         active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
         formats_per_device=[formats_per_device],
         accum_experts=True,
-        subblock_n=7,
+        num_subblocks_k=1,
+        num_subblocks_n=2,
         n_parallel_per_bank=2,
         k_parallel_per_bank=1,
         fmt_distribution="uniform",

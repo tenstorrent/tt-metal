@@ -396,6 +396,16 @@ struct MatmulExpertCompressedDRAM {
                 // No per-expert flush: the tail block stays in flight and is drained
                 // by the next expert's first inner-loop barrier (or by the final flush
                 // below if this is the last DRAM expert).
+                //
+                // Safety net for the num_iterations == 1 case: the inner-loop push
+                // branch only fires when num_free == num_buffers - extra_blocks_in_flight,
+                // which never happens on a single iter (num_free goes 3→2 in the else
+                // branch and the loop exits). For num_iterations >= 2, iter 1 always
+                // fires the if-branch signal path, so this block is compiled out.
+                if constexpr (num_iterations == 1) {
+                    noc_async_read_barrier_with_trid(fmt_trid_pending);
+                    fmt_sync::producer_signal(CTArgs::fmt_sem_addr_0, CTArgs::fmt_sem_addr_1);
+                }
                 fmt_slot ^= 1;
 
                 // End-of-expert token return: only core 0 waits. Every other core
@@ -469,7 +479,7 @@ struct MatmulExpertCompressedDRAM {
             pack_reconfig_data_format<true>(CTArgs::cb_out);
             compressed_custom_mm_block_init_short<false, true, false>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             if constexpr (CTArgs::fuse_silu) {
-                PACK((llk_math_eltwise_unary_sfpu_silu_init<false>()));
+                PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
             }
             if constexpr (CTArgs::accum_experts) {
                 cb_wait_front(CTArgs::cb_in0, num_tiles_k * num_active_experts);
