@@ -2,7 +2,7 @@
 
 `unit_tests_llk` is a C++ gtest binary that exercises the LLK (Low-Level Kernel)
 compute path on real Tenstorrent hardware. It is the primary way to validate
-compute-kernel changes locally and is the same binary that runs in the PR gate
+compute-kernel changes locally and is the same binary that runs in the merge gate
 and in the L2 nightly pipeline.
 
 This document is a tutorial for developers writing or debugging LLK tests.
@@ -86,7 +86,7 @@ Each test opts into a mode via its fixture choice — see [Fixtures](#fixtures).
 
 ### Shard a run across multiple processes
 
-`gtest`'s built-in sharding splits the test set across N runners. The PR gate
+`gtest`'s built-in sharding splits the test set across N runners. The merge gate
 uses this to fan out FD runs:
 
 ```bash
@@ -186,9 +186,11 @@ so per-test setup is bounded to copying a few handles.
      ./build/test/tt_metal/unit_tests_llk --gtest_filter='*MyNewThing*'
    ```
 
-6. **Push** — the PR gate detects changes under
+6. **Push and enter the merge queue** — the merge gate detects changes under
    `tests/tt_metal/tt_metal/llk/**` and runs the test binary on the supported
-   architectures in both dispatch modes automatically.
+   architectures in both dispatch modes automatically. The PR gate does **not**
+   run the LLK unit tests (by design, to avoid re-running the same suite on every
+   PR commit); they run once per queued merge.
 
 ### What if my test only works under slow dispatch?
 
@@ -203,7 +205,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, MySdOnlyThing) {
 
 Document the reason in a code comment. Under FD the test prints
 `Skipping: test requires slow dispatch (TT_METAL_SLOW_DISPATCH_MODE=1)`. The
-PR-gate SD jobs (and the L2 nightly) will still cover it.
+merge-gate SD jobs (and the L2 nightly) will still cover it.
 
 ### What if my test is architecture-specific?
 
@@ -219,14 +221,20 @@ The same binary runs in three places, each with a different filter:
 
 | Job | Workflow | Trigger | Dispatch | Filter |
 |---|---|---|---|---|
-| `llk-fd-unit-tests-{arch}` | `pr-gate.yaml` | LLK changes (or `main`) | FD | none (full FD set) |
-| `llk-sd-unit-tests-{arch}` | `pr-gate.yaml` | LLK changes (or `main`) | SD | SD-only fixtures plus arch-specific fixtures |
+| `llk-fd-unit-tests-{arch}` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | FD | none (full FD set) |
+| `llk-sd-unit-tests-{arch}` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | SD | SD-only fixtures plus arch-specific fixtures |
 | `llk-sd-unit-tests` | `tt-metal-l2-nightly.yaml` | nightly cron / `workflow_dispatch` | SD | none (full SD set) |
 
-The PR-gate FD jobs are sharded across multiple runners using
+The merge-gate FD jobs are sharded across multiple runners using
 `GTEST_TOTAL_SHARDS` / `GTEST_SHARD_INDEX` and run with
 `TT_METAL_LLK_ASSERTS=1`. The L2 nightly runs the full SD set across the
 broader hardware pool.
+
+The PR gate intentionally does **not** run the LLK unit tests — the suite runs
+once per queued merge (via merge gate) plus nightly, rather than on every PR
+commit. If you need PR-gate feedback on an LLK change, run the relevant
+invocation from [Quick start](#quick-start) locally before entering the merge
+queue.
 
 Trigger gating uses `find-changed-files.sh`'s `llk-unit-tests-changed` flag,
 which fires on any change under `tests/tt_metal/tt_metal/llk/**`. Changes to
@@ -256,4 +264,4 @@ via the per-arch LLK-changed flags.
 | Test silently skips with *"Not a Quasar device"* / on a non-Blackhole machine | Fixture is `LLKQuasar*` / `LLKBlackholeSingleCardFixture`. By design — runs only on matching hardware. |
 | `Mixing fast and slow dispatch is prohibited!` | Test is calling `tt_metal::detail::LaunchProgram(...)` (slow-dispatch only) inside a process running FD. Convert to `EnqueueMeshWorkload` + `Finish`. |
 | `device->close()` issues at shutdown | Don't add per-test device-open/close logic; rely on the suite-shared fixtures in `llk_device_fixture.hpp`. |
-| PR-gate `llk-fd-unit-tests-*` not triggered | Check `find-changed-files.sh` — the `llk-unit-tests-changed` case must match your file path (currently `tests/tt_metal/tt_metal/llk/**`). |
+| Merge-gate `llk-fd-unit-tests-*` not triggered | Check `find-changed-files.sh` — the `llk-unit-tests-changed` case must match your file path (currently `tests/tt_metal/tt_metal/llk/**`). Note the merge gate (not the PR gate) runs these. |
