@@ -363,6 +363,26 @@ __attribute__((noinline)) void finish_profiler() {
                     reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex].data),
                     dram_bank_dst_noc_addr,
                     send_size);
+
+                // If perf_counter_flush advanced the DRAM offset past 0 (i.e. this risc
+                // reserved DRAM[0..CUSTOM_MARKERS] for the header), nothing has populated
+                // that region yet because body writes begin at offset CUSTOM_MARKERS.
+                // Write the header there now — the sentinel plus the profileScopeGuaranteed
+                // ZONE_END timestamps that profileScopeGuaranteed's destructor just wrote.
+                // currEndIndexGuaranteed = CUSTOM_MARKERS + pre-update hostIndex value, so
+                // the check below is equivalent to "hostIndex was > 0 on entry".
+                if (currEndIndexGuaranteed > CUSTOM_MARKERS) {
+                    const uint32_t header_dram_offset =
+                        (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
+                            PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                        hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC;
+                    const uint64_t header_dram_addr =
+                        s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, header_dram_offset);
+                    profiler_noc_async_write_posted(
+                        reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex].data),
+                        header_dram_addr,
+                        CUSTOM_MARKERS * sizeof(uint32_t));
+                }
             }
         }
     }
