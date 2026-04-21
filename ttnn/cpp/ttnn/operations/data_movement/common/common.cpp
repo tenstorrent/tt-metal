@@ -12,6 +12,9 @@
 
 #include <numeric>
 
+#include <tt-metalium/experimental/noc_estimator/noc_estimator.hpp>
+#include <tt-logger/tt-logger.hpp>
+
 namespace ttnn::operations::data_movement {
 
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
@@ -82,21 +85,42 @@ ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uin
 
 enum DatumIndex { WormholeIndex = 0, BlackholeIndex = 1 };
 
+namespace noc_estimator = tt::tt_metal::experimental::noc_estimator;
+
+namespace {
+noc_estimator::Architecture to_noc_arch(int index) {
+    return (index == WormholeIndex) ? noc_estimator::Architecture::WORMHOLE_B0 : noc_estimator::Architecture::BLACKHOLE;
+}
+}  // namespace
+
 float get_transaction_noc_bw(
     uint32_t transaction_size, const std::map<uint32_t, std::array<float, 2>>& dict, int index) {
-    uint32_t lower_pow2 = std::pow(2, std::floor(std::log2(transaction_size)));
+    try {
+        noc_estimator::NocEstimatorParams params;
+        params.arch = to_noc_arch(index);
+        params.transaction_size_bytes = std::max(transaction_size, 64u);
+        params.num_transactions = 64;
+        params.mechanism = noc_estimator::NocMechanism::UNICAST;
+        params.pattern = noc_estimator::NocPattern::ONE_TO_ONE;
+        params.memory = noc_estimator::MemoryType::L1;
 
+        auto estimate = noc_estimator::estimate_noc_performance(params);
+        float freq_ghz = (index == WormholeIndex) ? 1.0f : 1.2f;
+        return static_cast<float>(estimate.bandwidth_bytes_per_cycle) * freq_ghz;
+    } catch (const std::runtime_error&) {
+        // Fallback: existing power-of-2 interpolation
+    }
+
+    // --- Legacy fallback below ---
+    uint32_t lower_pow2 = std::pow(2, std::floor(std::log2(transaction_size)));
     uint32_t upper_pow2 = std::pow(2, std::ceil(std::log2(transaction_size)));
 
     auto lower_it = dict.lower_bound(lower_pow2);
     auto upper_it = dict.lower_bound(upper_pow2);
 
-    // If lower bound not found, use first entry
     if (lower_it == dict.end()) {
         lower_it = dict.begin();
     }
-
-    // If upper bound not found, use last entry
     if (upper_it == dict.end()) {
         upper_it = std::prev(dict.end());
     }
@@ -150,11 +174,42 @@ std::vector<uint32_t> get_cycles_for_transaction_size(
     const std::map<uint32_t, std::array<float, 2>>& l1_read_bw,
     const std::map<uint32_t, std::array<float, 2>>& l1_write_bw,
     const std::map<uint32_t, std::array<float, 2>>& dram_bw) {
+    transaction_size = std::max(transaction_size, 16u);
+
+    // Try NOC estimator
+    try {
+        noc_estimator::NocEstimatorParams params;
+        params.arch = to_noc_arch(index);
+        params.transaction_size_bytes = std::max(transaction_size, 64u);
+        params.num_transactions = std::max(num_transactions, 1u);
+
+        if (is_dram) {
+            params.mechanism = noc_estimator::NocMechanism::UNICAST;
+            params.pattern = is_read ? noc_estimator::NocPattern::ONE_FROM_ONE : noc_estimator::NocPattern::ONE_TO_ONE;
+            params.memory = noc_estimator::MemoryType::DRAM_INTERLEAVED;
+        } else if (is_local) {
+            params.mechanism = noc_estimator::NocMechanism::UNICAST;
+            params.pattern = noc_estimator::NocPattern::ONE_TO_ONE;
+            params.memory = noc_estimator::MemoryType::L1;
+            params.loopback = true;
+        } else {
+            params.mechanism = noc_estimator::NocMechanism::UNICAST;
+            params.pattern = is_read ? noc_estimator::NocPattern::ONE_FROM_ONE : noc_estimator::NocPattern::ONE_TO_ONE;
+            params.memory = noc_estimator::MemoryType::L1;
+        }
+
+        auto estimate = noc_estimator::estimate_noc_performance(params);
+        uint32_t total_cycles = static_cast<uint32_t>(std::ceil(estimate.latency_cycles));
+        return {total_cycles, 0u};
+    } catch (const std::runtime_error& e) {
+        log_warning(tt::LogOp, "NOC estimator fallback in get_cycles_for_transaction_size: {}", e.what());
+    }
+
+    // Legacy fallback
     auto transaction_type = is_local ? l1_local_bw : (is_read ? l1_read_bw : l1_write_bw);
     if (is_dram) {
         transaction_type = dram_bw;
     }
-    // measured initial latency based on the transaction and device types
     uint32_t latency_cyles = 1;
     if (transaction_type == l1_local_bw) {
         latency_cyles = index == WormholeIndex ? 56 : 88;
@@ -166,7 +221,6 @@ std::vector<uint32_t> get_cycles_for_transaction_size(
         latency_cyles = index == WormholeIndex ? 358 : 529;
     }
 
-    transaction_size = std::max(transaction_size, 16u);
     auto transaction_bw = get_transaction_noc_bw(transaction_size, transaction_type, index);
     float device_frequency_hz = index == WormholeIndex ? 1e9 : 1.2e9;
     uint32_t cycles =

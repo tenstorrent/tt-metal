@@ -35,3 +35,15 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+
+# Integration tests for NOC estimator usage in ttnn (common.cpp, conv2d, OpPerformanceModel)
+add_executable(test_noc_estimator_integration ${CMAKE_CURRENT_SOURCE_DIR}/test_noc_estimator_integration.cpp)
+
+target_link_libraries(test_noc_estimator_integration PRIVATE TT::Metalium)
+
+set_target_properties(
+    test_noc_estimator_integration
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
