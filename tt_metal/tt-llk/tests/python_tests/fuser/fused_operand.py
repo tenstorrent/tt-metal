@@ -199,7 +199,7 @@ class Operand:
             use_srcs=True,
             dest_acc=dest_acc,
         )
-        return f"UNUSED const Operand {self.cpp_name}({hex(self.l1_address)}, {buffer_size});\n"
+        return f"[[maybe_unused]] const Operand {self.cpp_name}({hex(self.l1_address)}, {buffer_size});\n"
 
 
 class OperandRegistry:
