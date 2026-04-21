@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "tt_metal.hpp"
+#include "tt_metal/fabric/fabric_init.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_builder.hpp"
