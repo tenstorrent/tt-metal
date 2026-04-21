@@ -992,8 +992,20 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     fpu_ref_cnt = get_counter_ref_cnt("FPU_COUNTER")
     math_counter = get_counter_series("MATH_COUNTER")
     math_ref_cnt = get_counter_ref_cnt("MATH_COUNTER")
-    srca_write = get_counter_series("SRCA_WRITE")
-    srcb_write = get_counter_series("SRCB_WRITE")
+    # SRCA_WRITE / SRCB_WRITE enum slots exist but are not collected by the hardware
+    # counter arrays (unpack_counters selects the _ACTUAL grant counters instead).
+    # Prefer the _ACTUAL series, and fall back to _THREAD0 + _THREAD1 if those are
+    # also absent.
+    srca_write = get_counter_series("SRCA_WRITE_ACTUAL")
+    if srca_write is None and has_counter("SRCA_WRITE_THREAD0"):
+        srca_t0 = get_counter_series("SRCA_WRITE_THREAD0")
+        srca_t1 = get_counter_series("SRCA_WRITE_THREAD1") if has_counter("SRCA_WRITE_THREAD1") else 0
+        srca_write = (srca_t0.fillna(0) + (srca_t1 if isinstance(srca_t1, int) else srca_t1.fillna(0)))
+    srcb_write = get_counter_series("SRCB_WRITE_ACTUAL")
+    if srcb_write is None and has_counter("SRCB_WRITE_THREAD0"):
+        srcb_t0 = get_counter_series("SRCB_WRITE_THREAD0")
+        srcb_t1 = get_counter_series("SRCB_WRITE_THREAD1") if has_counter("SRCB_WRITE_THREAD1") else 0
+        srcb_write = (srcb_t0.fillna(0) + (srcb_t1 if isinstance(srcb_t1, int) else srcb_t1.fillna(0)))
     unpack0_busy = get_counter_series("UNPACK0_BUSY_THREAD0")
     unpack1_busy = get_counter_series("UNPACK1_BUSY_THREAD0")
     srca_write_avail = get_counter_series("SRCA_WRITE_AVAILABLE")
