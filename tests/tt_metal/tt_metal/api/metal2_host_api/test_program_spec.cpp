@@ -572,8 +572,10 @@ TEST_F(ProgramSpecTestQuasar, MissingWorkerSpecsInfersWorkers) {
 
 TEST_F(ProgramSpecTestQuasar, InferredWorkersPartitionByCoverage) {
     // Two kernels on disjoint node ranges should produce two inferred WorkerSpecs.
-    // If inference gets this wrong (e.g., merges nodes with differing coverage),
-    // downstream validation will fail.
+    // This is a black-box check: if inference wrongly produced a single worker
+    // covering both nodes, ValidateProgramSpec's "kernel target_nodes must contain
+    // worker target_nodes" rule would reject it (each kernel only covers one of
+    // the two nodes). So NO_THROW implies inference partitioned correctly.
     NodeCoord node_a{0, 0};
     NodeCoord node_b{1, 0};
 

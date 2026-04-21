@@ -33,7 +33,8 @@ using WorkerSpecName = std::string;
 // ProgramSpec & WorkerSpec
 //------------------------------------------------
 
-// WorkerSpec describes the configuration of a worker node
+// WorkerSpec describes the specific configuration of a worker node,
+// (kernels, DFBs, and semaphores) and the set of nodes it applies to.
 struct WorkerSpec {
     // Worker type identifier
     WorkerSpecName unique_id;
@@ -59,11 +60,10 @@ struct ProgramSpec {
     std::vector<SemaphoreSpec> semaphores;
 
     // (Optional) Worker specifications.
-    // If std::nullopt, workers are inferred automatically from kernel/DFB/semaphore
-    // target_nodes fields (nodes with identical coverage become one inferred WorkerSpec,
-    // named "inferred_worker@<node_range_set>").
-    // User-supplied workers let you assign readable names, and act as a redundant sanity
-    // check on which nodes each entity covers.
+    // Providing WorkerSpecs explicitly improves the readability of the
+    // ProgramSpec and results in clearer error messaging.
+    // If left as std::nullopt, the runtime automatically infers WorkerSpecs
+    // based on the target_nodes fields of the kernel, DFB and semaphore specs.
     std::optional<std::vector<WorkerSpec>> workers = std::nullopt;
 };
 
