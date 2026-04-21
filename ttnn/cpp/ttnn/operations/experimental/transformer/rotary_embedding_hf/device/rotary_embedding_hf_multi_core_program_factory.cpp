@@ -181,8 +181,9 @@ RotaryEmbeddingHfMultiCore::cached_program_t RotaryEmbeddingHfMultiCore::create(
             (std::uint32_t)Ht,
             (std::uint32_t)Wt,
             (std::uint32_t)HtWt,
-            (std::uint32_t)half_Wt * input_single_tile_size,
+            (std::uint32_t)half_Wt,
         };
+        tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
     } else {
@@ -276,24 +277,16 @@ RotaryEmbeddingHfMultiCore::cached_program_t RotaryEmbeddingHfMultiCore::create(
 
         uint32_t cos_sin_start_id = num_tiles_written % HtWt;
 
-        std::vector<uint32_t> reader_rt_args;
-        if (in_sharded) {
-            reader_rt_args = {
-                cos_buffer->address(),
-                sin_buffer->address(),
-                num_rows_per_core,
-                num_tiles_written / Wt % Ht,
-                cos_sin_start_id};
-        } else {
-            reader_rt_args = {
-                src_buffer->address(),
-                cos_buffer->address(),
-                sin_buffer->address(),
-                num_rows_per_core,
-                num_tiles_written,
-                num_tiles_written / Wt % Ht,
-                cos_sin_start_id};
-        }
+        // reader_rotary_embedding_hf_interleaved.cpp expects:
+        // 0 src, 1 cos, 2 sin, 3 num_rows, 4 start_id, 5 start_row_id, 6 cos_sin_start_id
+        std::vector<uint32_t> reader_rt_args = {
+            src_buffer->address(),
+            cos_buffer->address(),
+            sin_buffer->address(),
+            num_rows_per_core,
+            num_tiles_written,
+            num_tiles_written / Wt % Ht,
+            cos_sin_start_id};
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
 
         tt::tt_metal::SetRuntimeArgs(
@@ -365,16 +358,10 @@ void RotaryEmbeddingHfMultiCore::override_runtime_arguments(
 
         {
             auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            if (in_sharded) {
-                runtime_args[0] = cos_buffer->address();
-                runtime_args[1] = sin_buffer->address();
-                runtime_args[4] = cos_sin_start_id;
-            } else {
-                runtime_args[0] = src_buffer->address();
-                runtime_args[1] = cos_buffer->address();
-                runtime_args[2] = sin_buffer->address();
-                runtime_args[6] = cos_sin_start_id;
-            }
+            runtime_args[0] = src_buffer->address();
+            runtime_args[1] = cos_buffer->address();
+            runtime_args[2] = sin_buffer->address();
+            runtime_args[6] = cos_sin_start_id;
         }
 
         {
