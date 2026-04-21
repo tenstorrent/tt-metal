@@ -2142,14 +2142,35 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
                 // If this is a performance counter, extract fields from data and store in marker meta_data
                 if (marker.marker_id == PERF_COUNTER_PROFILER_ID) {
-                    marker.meta_data["counter type"] =
-                        enchantum::to_string(static_cast<PerfCounterType>(PerfCounter(marker.data).counter_type));
-                    marker.meta_data["ref cnt"] = PerfCounter(marker.data).ref_cnt;
-                    marker.meta_data["value"] = PerfCounter(marker.data).counter_value;
+                    const PerfCounter perf_counter(marker.data);
+                    const uint32_t counter_type_raw = perf_counter.counter_type;
+                    // counter_type is an 8-bit field; values outside PerfCounterType's
+                    // valid range (0..STALL_GRANT_SFPU_2) indicate garbage data (e.g. dropped
+                    // markers reinterpreting an adjacent region, or a DRAM-region write that
+                    // went past the host-reported end). Skip enrichment rather than let a
+                    // bogus enum propagate into downstream analysis.
+                    if (!enchantum::contains<PerfCounterType>(counter_type_raw)) {
+                        log_warning(
+                            tt::LogMetal,
+                            "PerfCounter marker at device {} core {},{} risc {} run {} has "
+                            "out-of-range counter_type={} (raw data 0x{:x}); skipping enrichment.",
+                            marker.chip_id,
+                            marker.core_x,
+                            marker.core_y,
+                            enchantum::to_string(marker.risc),
+                            marker.runtime_host_id,
+                            counter_type_raw,
+                            marker.data);
+                    } else {
+                        marker.meta_data["counter type"] =
+                            enchantum::to_string(static_cast<PerfCounterType>(counter_type_raw));
+                        marker.meta_data["ref cnt"] = perf_counter.ref_cnt;
+                        marker.meta_data["value"] = perf_counter.counter_value;
 
-                    const auto& marker_ret = updateDeviceMarker(marker, device_marker_it);
-                    device_marker_it = marker_ret.first;
-                    next_device_marker_it = marker_ret.second;
+                        const auto& marker_ret = updateDeviceMarker(marker, device_marker_it);
+                        device_marker_it = marker_ret.first;
+                        next_device_marker_it = marker_ret.second;
+                    }
                 }
             }
         }
