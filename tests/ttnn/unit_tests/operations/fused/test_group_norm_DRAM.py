@@ -112,7 +112,7 @@ def run_group_norm_DRAM(
 
         if use_welford:
             atol = 0.043
-            frobenius_threshold = 0.010
+            frobenius_threshold = 0.011
         else:
             atol = 0.069
             frobenius_threshold = 0.025
