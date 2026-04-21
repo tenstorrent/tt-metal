@@ -185,7 +185,7 @@ std::vector<uint32_t> get_cycles_for_transaction_size(
 
         if (is_dram) {
             params.mechanism = noc_estimator::NocMechanism::UNICAST;
-            params.pattern = is_read ? noc_estimator::NocPattern::ONE_FROM_ONE : noc_estimator::NocPattern::ONE_TO_ONE;
+            params.pattern = is_read ? noc_estimator::NocPattern::ONE_FROM_ALL : noc_estimator::NocPattern::ONE_TO_ALL;
             params.memory = noc_estimator::MemoryType::DRAM_INTERLEAVED;
         } else if (is_local) {
             params.mechanism = noc_estimator::NocMechanism::UNICAST;
