@@ -21,7 +21,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().get_simulator_enabled()) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
