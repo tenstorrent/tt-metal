@@ -335,40 +335,15 @@ ttnn::Tensor ttnn::reshape(
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
-
-    const auto [logical_shape, padded_shape] =
-        operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
-    if (tensor.logical_shape() == logical_shape && tensor.padded_shape() == padded_shape) {
-        return tensor;
-    }
-
-    // ND sharded tensors: convert to interleaved, reshape, then convert back.
-    // The reshape op assumes legacy 2D shard specs throughout its internal paths.
-    if (is_device_tensor(tensor) && tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
-        if (mem_config.is_sharded()) {
-            tt::tt_metal::TensorSpec
-                output_spec(  // check if the output sharded memory config is even compatible with the reshaped tensor
-                              // so that we can TT_FATAL out before launching device operations.
-                    logical_shape,
-                    tt::tt_metal::TensorLayout(tensor.dtype(), tensor.tensor_spec().page_config(), mem_config));
-            (void)output_spec;
-        }
-        MemoryConfig interleaved_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
-        auto interleaved_tensor = ttnn::to_memory_config(tensor, interleaved_config);
-        auto result = ttnn::reshape(
-            interleaved_tensor,
-            logical_input_shape,
-            padded_input_shape,
-            interleaved_config,
-            pad_value,
-            reshape_map_mode,
-            sub_core_grid);
-        return ttnn::to_memory_config(result, mem_config);
-    }
-
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
 
+    const auto [logical_shape, padded_shape] =
+        operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
+    // First Case, No reshape Required
+    if (tensor.logical_shape() == logical_shape && tensor.padded_shape() == padded_shape) {
+        return tensor;
+    }
     PadValue default_pad_value;
     if (tensor.dtype() == DataType::BFLOAT8_B or tensor.dtype() == DataType::BFLOAT16 or
         tensor.dtype() == DataType::FLOAT32) {
