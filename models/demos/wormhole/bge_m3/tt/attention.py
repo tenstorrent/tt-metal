@@ -305,10 +305,9 @@ class BgeM3Attention(LightweightModule):
             if cfg.score_dtype is not None and sdpa_mask.dtype != cfg.score_dtype:
                 sdpa_mask = ttnn.typecast(sdpa_mask, dtype=cfg.score_dtype)
 
-            score_memcfg = cfg.score_memcfg or ttnn.DRAM_MEMORY_CONFIG
-
-            if sdpa_mask.memory_config() != score_memcfg:
-                sdpa_mask = ttnn.to_memory_config(sdpa_mask, score_memcfg)
+            # SDPA requires attn_mask in DRAM (ttnn sdpa_device_operation); L1 score_memcfg must not apply here.
+            if sdpa_mask.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                sdpa_mask = ttnn.to_memory_config(sdpa_mask, ttnn.DRAM_MEMORY_CONFIG)
 
         # Stage 4: encoder SDPA (chunk sizes must divide the actual sequence length, including S<128).
         sdpa_program_config = _sdpa_program_config_for_seq_len(seq_len, cfg.mesh_device)
