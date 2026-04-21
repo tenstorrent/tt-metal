@@ -664,7 +664,6 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, con
                 logical_core_filter->empty(),
                 "logical_core_filter is only supported for sharded buffer layouts (interleaved layout does not support "
                 "per-core filtering)");
-            // Empty filter -> no-op (consistent with sharded path).
             return;
         }
         WriteToDeviceInterleavedContiguous(buffer, host_buffer);
