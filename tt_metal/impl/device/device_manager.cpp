@@ -268,7 +268,7 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
     env_impl_.initialize_fabric_config();
 
     // Mock devices don't support fabric operations
-    bool is_mock = env_impl_.get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    bool is_mock = env_impl_.get_cluster().is_mock_or_emulated();
     if (any_remote_devices && !is_mock) {
         auto fabric_config = ctx_.get_fabric_config();
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
