@@ -203,6 +203,14 @@ bool configure_fabric_cores(
         if (dead_channels.count(router_chan)) {
             // Skip L1 clear for dead channels — WriteToDeviceL1 on non-MMIO chips routes
             // writes through ethernet and will hang if the channel is unreachable.
+            //
+            // Cascade prevention (#42429): for corrupt-but-reachable channels (probe read
+            // succeeded in terminate_stale_erisc_routers, but status was garbage),
+            // terminate_stale_erisc_routers now zeroes edm_status_address before adding
+            // the channel to probe_dead_channels.  This means the NEXT session sees
+            // edm_status=0 ("clean") and does not add the channel to pre_known_dead_channels,
+            // so this L1 clear loop will process it normally — breaking the infinite cascade
+            // where corrupt status persisted across container restarts on bare metal.
             continue;
         }
         auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);

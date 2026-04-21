@@ -487,9 +487,15 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
     // UMD firmware which does NOT understand the fabric TERMINATE protocol.  Attempting teardown
     // (which sends TERMINATE signals and polls for EDMStatus::TERMINATED) on ERISCs running base
     // firmware would time out on every channel, adding ~N*5s of wasted time and no benefit.
-    // The L1 clear in configure_fabric_cores() already zeroed edm_status_address et al., so the
-    // next session's terminate_stale_erisc_routers() will see clean zeros and not misclassify
-    // these channels as corrupt.
+    //
+    // L1 cleanup status: configure_fabric_cores() zeroed edm_status_address for HEALTHY channels
+    // (those that completed soft reset). Dead channels (probe read timed out) had their L1 clear
+    // SKIPPED — WriteToDeviceL1 would hang on the dead ETH path. However,
+    // terminate_stale_erisc_routers() now zeroes edm_status_address for corrupt-but-reachable
+    // channels (probe read succeeded but status was garbage), breaking the cascade where corrupt
+    // status persisted in L1 across container restarts on bare metal. Truly dead channels
+    // (probe read threw) remain dirty, but those represent hardware failures that require
+    // reset to recover — the cascade prevention covers the software-crash corruption case.
     initializers_[FabricFirmwareInitializer::key]->init(active_devices, init_done_);
     init_done_.insert(FabricFirmwareInitializer::key);
 

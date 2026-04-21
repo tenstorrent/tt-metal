@@ -592,6 +592,15 @@ std::unordered_set<uint32_t> FabricFirmwareInitializer::terminate_stale_erisc_ro
             } catch (...) {
                 // write-side also unresponsive — best effort only, ignore
             }
+            // Best-effort: zero edm_status_address even on probe-dead channels.
+            // If the read threw but the write succeeds (asymmetric failure), this prevents
+            // the next session from seeing stale garbage.  If the write also throws, no harm.
+            try {
+                std::vector<uint32_t> zero_buf(1, 0);
+                detail::WriteToDeviceL1(dev, eth_logical_core, router_sync_address, zero_buf, CoreType::ETH);
+            } catch (...) {
+                // write-side also unresponsive — best effort only
+            }
             corrupt_count++;
             continue;
         }
@@ -627,6 +636,31 @@ std::unordered_set<uint32_t> FabricFirmwareInitializer::terminate_stale_erisc_ro
                 detail::WriteToDeviceL1(dev, eth_logical_core, term_addr, term_buf, CoreType::ETH);
             } catch (...) {
                 // write-side also unresponsive — best effort only, ignore
+            }
+            // Fix #42429 (cascade prevention): zero edm_status_address so the NEXT session's
+            // terminate_stale_erisc_routers() sees a clean 0 instead of the same garbage value.
+            // Without this, the corrupt status persists in L1 across container restarts (bare
+            // metal L1 is NOT cleared on process exit), causing every subsequent session to
+            // re-classify this channel as corrupt → add to probe_dead_channels → skip L1 clear
+            // → garbage persists → cascade forever until hardware reset.
+            //
+            // The probe read above SUCCEEDED (we're in the !known_status path, not the catch
+            // path), so the write path to this channel works.  Zeroing edm_status_address lets
+            // the next session treat this channel as clean and attempt normal initialization,
+            // which will either succeed (the ETH link recovered) or fail at soft reset (caught
+            // by configure_fabric_cores) — either way, no infinite cascade.
+            try {
+                std::vector<uint32_t> zero_buf(1, 0);
+                detail::WriteToDeviceL1(dev, eth_logical_core, router_sync_address, zero_buf, CoreType::ETH);
+                log_warning(
+                    tt::LogMetal,
+                    "terminate_stale_erisc_routers: Device {} chan={} zeroed edm_status_address "
+                    "(was 0x{:08x}) to break corruption cascade for next session",
+                    dev->id(),
+                    eth_chan_id,
+                    status_buf[0]);
+            } catch (...) {
+                // write failed — best effort; the channel may truly be unreachable
             }
             // Fix #42429 (corrupt path): also add corrupt channels to probe_dead_channels so
             // configure_fabric_cores() skips assert_risc_reset_at_core() for them.
