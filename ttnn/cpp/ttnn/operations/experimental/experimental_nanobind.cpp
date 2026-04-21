@@ -68,7 +68,13 @@
 #include "ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
+<<<<<<< rmillerTT/par_seq_opts
 #include "ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.hpp"
+=======
+#include "ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
+#include "ttnn/operations/experimental/generic/patchable_generic_op_nanobind.hpp"
+>>>>>>> main
 
 namespace ttnn::operations::experimental {
 
@@ -156,6 +162,8 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_dispatch(mod);
     deepseek_prefill::detail::bind_combine(mod);
     deepseek_prefill::detail::bind_routed_expert_ffn(mod);
+    deepseek_prefill::detail::bind_extract(mod);
+    deepseek_prefill::detail::bind_insert(mod);
 
     deepseek_moe_post_combine_tilize::detail::bind_deepseek_moe_post_combine_tilize(mod);
     fusion::detail::bind_fusion_dispatch_op(mod);

@@ -117,8 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // Binary with reuse_dest: SrcA = DEST (from datacopy), SrcB = unpacked B. Compute op(SrcA, SrcB) -> DEST.
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, false /*EN_DI*/, REUSE_DEST_TYPE>(
-        ckernel::DEFAULT_TENSOR_SHAPE); // tiny-tile testing not yet supported
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE>(ckernel::DEFAULT_TENSOR_SHAPE); // tiny-tile testing not yet supported
 
     for (int block = 0; block < num_blocks; block++)
     {
