@@ -72,9 +72,13 @@ setup_worktree() {
   # ── Create worktree ──
   WORKTREE_DIR="/tmp/codegen_worktree_${task_id}"
 
-  if [[ -d "$WORKTREE_DIR" ]]; then
+  # Remove stale worktree: covers both (a) directory exists and (b) directory is
+  # missing but still registered in git ("missing but already registered" error).
+  if [[ -d "$WORKTREE_DIR" ]] || git -C "$REPO_ROOT" worktree list 2>/dev/null | grep -q "$WORKTREE_DIR"; then
     echo "[worktree] Cleaning up stale worktree at $WORKTREE_DIR"
-    git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
+    git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+    git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
+    rm -rf "$WORKTREE_DIR" 2>/dev/null || true
   fi
 
   echo "[worktree] Creating worktree at $WORKTREE_DIR"
@@ -88,12 +92,14 @@ setup_worktree() {
   echo "[worktree] Symlinking codegen infrastructure into worktree"
   mkdir -p "${wt_llk}/codegen"
 
-  # Read-only: agent playbooks, references, scripts, config
+  # Read-only: agent playbooks, references, scripts, config, hooks
   # Use -snf so symlinks replace any existing dirs/files from main
   ln -snf "${LLK_ROOT}/codegen/agents"     "${wt_llk}/codegen/agents"
   ln -snf "${LLK_ROOT}/codegen/references" "${wt_llk}/codegen/references"
   ln -snf "${LLK_ROOT}/codegen/scripts"    "${wt_llk}/codegen/scripts"
   ln -snf "${LLK_ROOT}/codegen/config"     "${wt_llk}/codegen/config"
+  ln -snf "${LLK_ROOT}/codegen/hooks"      "${wt_llk}/codegen/hooks"
+  ln -snf "${LLK_ROOT}/codegen/skills"     "${wt_llk}/codegen/skills"
   ln -sf  "${LLK_ROOT}/codegen/CLAUDE.md"  "${wt_llk}/codegen/CLAUDE.md"
   # __init__.py is required so `import codegen.config.settings` (Step -1 env
   # validation, agent_tools imports) works inside the worktree.
@@ -101,6 +107,12 @@ setup_worktree() {
 
   # Writable: artifacts dir is per-worktree (no cross-contamination)
   mkdir -p "${wt_llk}/codegen/artifacts"
+
+  # Gitignored test artifacts: symlink venv + SFPI compiler from the source
+  # branch so settings.validate() passes without running setup scripts again.
+  # These are not tracked in git so the worktree checkout leaves them absent.
+  [[ -d "${LLK_ROOT}/tests/.venv" ]] && ln -snf "${LLK_ROOT}/tests/.venv" "${wt_llk}/tests/.venv"
+  [[ -d "${LLK_ROOT}/tests/sfpi"  ]] && ln -snf "${LLK_ROOT}/tests/sfpi"  "${wt_llk}/tests/sfpi"
 
   # Top-level config files (use -sf to overwrite any that exist on main)
   ln -sf "${LLK_ROOT}/CLAUDE.md"    "${wt_llk}/CLAUDE.md"
