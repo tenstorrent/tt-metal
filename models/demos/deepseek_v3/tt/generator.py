@@ -31,6 +31,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     DEFAULT_SAMPLING_TOP_K,
     DEFAULT_SAMPLING_TOP_P,
     USERS_PER_ROW,
+    align_prefill_padded_seq_len,
     even_int_div,
     make_deepseek_sampling_args,
 )
@@ -467,7 +468,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.model_shared_state = RowBatchedModel.create_shared_state(
             hf_config=self.hf_config,
             mesh_device=self.mesh_device,
-            batch_size_per_row=self.batch_size_per_row,
         )
         self._dump_meminfo("After creating model shared states...")
 
@@ -1208,9 +1208,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         max_len = max(len(t) for t in tokens_list)
         if self.prefill_max_tokens is not None:
             max_len = min(self.prefill_max_tokens, max_len)  # truncate all sequences to the prefill_max_tokens
-        # Round up to nearest multiple of TILE_SIZE.
-        alignment = ttnn.TILE_SIZE * 16
-        max_len = ((max_len + alignment - 1) // alignment) * alignment
+        max_len = align_prefill_padded_seq_len(max_len, self.mesh_device.shape[0])
 
         pad_id = self._get_pad_id()
 

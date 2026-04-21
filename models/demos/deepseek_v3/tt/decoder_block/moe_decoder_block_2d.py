@@ -12,7 +12,7 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.tt.moe_quad import MoEQuad
+from models.demos.deepseek_v3.tt.moe_optimized import MoEOptimized
 from models.demos.deepseek_v3.utils.config_helpers import (
     get_fabric_config,
     is_quad_mesh,
@@ -36,7 +36,7 @@ def _moe_cls(
     """Use optimized MoE when quad mesh (16x8), ring fabric"""
     fc = fabric_config if fabric_config is not None else get_fabric_config()
     if is_quad_mesh(mesh_device) and is_ring_fabric(fc):
-        return MoEQuad
+        return MoEOptimized
     return MoE
 
 
@@ -121,13 +121,9 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
-        batch_size_per_row: int,
     ) -> ModelState:
         moe_cls = _moe_cls(fabric_config=fabric_config, mesh_device=mesh_device)
-        if moe_cls is MoEQuad:
-            moe_shared = moe_cls.create_shared_state(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
-        else:
-            moe_shared = moe_cls.create_shared_state(hf_config, mesh_device)
+        moe_shared = moe_cls.create_shared_state(hf_config, mesh_device)
         return {
             "shared_expert": {},
             "moe": moe_shared,

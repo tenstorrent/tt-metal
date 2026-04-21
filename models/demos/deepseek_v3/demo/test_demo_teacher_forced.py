@@ -11,7 +11,11 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.demo.demo import run_demo
 from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
-from models.demos.deepseek_v3.utils.config_helpers import DEFAULT_MAX_SEQ_LEN, K_CHUNK_SIZE
+from models.demos.deepseek_v3.utils.config_helpers import (
+    DEFAULT_MAX_SEQ_LEN,
+    K_CHUNK_SIZE,
+    align_prefill_padded_seq_len,
+)
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
@@ -67,7 +71,7 @@ def _assert_no_garbage_tokens(
         )
 
 
-def _tile_align(length: int) -> int:
+def _get_tile_aligned_max_seq_len(length: int) -> int:
     k_chunk_size = K_CHUNK_SIZE
     aligned_size = max(int(ttnn.TILE_SIZE), k_chunk_size)
     return ((int(length) + aligned_size - 1) // aligned_size) * aligned_size
@@ -185,7 +189,8 @@ def test_demo_teacher_forcing_accuracy(
 
     # Teacher forcing only needs enough configured context for the prompt plus the
     # number of forced decode steps under test.
-    configured_max_seq_len = _tile_align(tf_prompt_len + max_new_tokens)
+    tf_prompt_len_padded = align_prefill_padded_seq_len(tf_prompt_len, mesh_shape[0])
+    configured_max_seq_len = _get_tile_aligned_max_seq_len(tf_prompt_len_padded + max_new_tokens)
     if configured_max_seq_len > DEFAULT_MAX_SEQ_LEN:
         pytest.skip(
             f"Requested teacher-forced context requires max_seq_len={configured_max_seq_len}, "

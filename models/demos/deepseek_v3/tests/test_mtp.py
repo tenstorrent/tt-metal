@@ -565,12 +565,11 @@ class _MtpModuleRunner:
             hf_config=self.hf_config,
             mesh_device=self.mesh_device,
             fabric_config=self.fabric_config,
-            batch_size_per_row=self.batch_size_per_row,
         )
         self.model_decode_cfg = MTP2D.decode_model_config(
             hf_config=self.hf_config,
             mesh_device=self.mesh_device,
-            fabric_config=get_fabric_config(),
+            fabric_config=self.fabric_config,
             batch_size_per_row=self.batch_size_per_row,
         )
         mtp_decode_run_config = create_run_config(

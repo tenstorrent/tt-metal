@@ -61,6 +61,20 @@ DEFAULT_SAMPLING_TOP_P = 0.95
 DEFAULT_SAMPLING_TOP_K = 32
 
 
+def align_prefill_padded_seq_len(seq_len: int, num_mesh_rows: int) -> int:
+    """Round ``seq_len`` up to a multiple of ``TILE_SIZE * num_mesh_rows`` (mesh axis 0).
+
+    Used when padding prefill token batches so the workspace sequence length satisfies
+    dispatch / mesh-row alignment constraints.
+    """
+    seq_len_i = int(seq_len)
+    rows = int(num_mesh_rows)
+    if rows <= 0:
+        raise ValueError(f"num_mesh_rows must be > 0, got {num_mesh_rows!r}")
+    alignment = int(ttnn.TILE_SIZE) * rows
+    return ((seq_len_i + alignment - 1) // alignment) * alignment
+
+
 def make_deepseek_sampling_args(
     mesh_device,
     vocab_size: int,

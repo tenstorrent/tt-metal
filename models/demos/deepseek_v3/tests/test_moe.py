@@ -14,7 +14,7 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.tt.moe_quad import MoEQuad
+from models.demos.deepseek_v3.tt.moe_optimized import MoEOptimized
 from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
     get_fabric_config,
@@ -71,7 +71,7 @@ def load_real_moe_input(mode: str, module_path: str, num_tokens: int) -> torch.T
 def _moe_cls(mesh_device: ttnn.Device, fabric_config: ttnn.FabricConfig):
     """Same selection as ``moe_decoder_block_2d._moe_cls``: quad (16x8) + ring uses fused MoE path."""
     if is_quad_mesh(mesh_device) and is_ring_fabric(fabric_config):
-        return MoEQuad
+        return MoEOptimized
     return MoE
 
 
@@ -170,12 +170,7 @@ def run_test_forward_pass_moe(
         topk_fallback=topk_fallback,
     )
     model_state = moe_cls.create_state(hf_config, mesh_device, ccl)
-    if moe_cls is MoEQuad:
-        # Prefill quad config sizes buffers with ``USERS_PER_ROW``; only decode varies batch_size_per_row.
-        quad_shared_kw = {"batch_size_per_row": batch_size_per_row} if mode == "decode" else {}
-        model_shared_state = moe_cls.create_shared_state(hf_config, mesh_device, **quad_shared_kw)
-    else:
-        model_shared_state = moe_cls.create_shared_state(hf_config, mesh_device)
+    model_shared_state = moe_cls.create_shared_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     tt_input = ttnn.from_torch(

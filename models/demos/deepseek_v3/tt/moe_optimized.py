@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from time import perf_counter
 
 import torch
 from loguru import logger
@@ -43,21 +42,35 @@ from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 
 def _assert_quad_ring(fabric_config: ttnn.FabricConfig, mesh_device: ttnn.Device) -> None:
     if not is_ring_fabric(fabric_config):
-        raise AssertionError("MoEQuad requires ring fabric")
+        raise AssertionError("MoEOptimized requires ring fabric")
     if mesh_device.shape[0] != 16:
         raise AssertionError(
-            f"MoEQuad requires 16 dispatch-device rows (quad); got mesh_device.shape[0]={mesh_device.shape[0]}"
+            f"MoEOptimized requires 16 dispatch-device rows (quad); got mesh_device.shape[0]={mesh_device.shape[0]}"
         )
 
 
-def _assert_quad_ring_run_cfg(cfg: RunDecodeConfig | RunPrefillConfig) -> None:
-    if not is_ring_fabric(cfg["fabric_config"]):
-        raise AssertionError("MoEQuad requires ring fabric")
-    if cfg["num_dispatch_devices"] != 16:
-        raise AssertionError(f"MoEQuad requires num_dispatch_devices==16, got {cfg['num_dispatch_devices']}")
+def _decode_sharded_io_memory_config(
+    hf_config: PretrainedConfig,
+    mesh_device: ttnn.Device,
+    batch_size_per_row: int,
+) -> ttnn.MemoryConfig:
+    hidden_size = hf_config.hidden_size
+    tp_size = mesh_device.shape[1]
+    shard_core_grid = ttnn.CoreGrid(y=7, x=4)
+    per_core_width = (hidden_size // tp_size) // shard_core_grid.num_cores
+    return ttnn.create_sharded_memory_config(
+        shape=(
+            ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE),
+            ttnn.core.roundup(per_core_width, ttnn.TILE_SIZE),
+        ),
+        core_grid=shard_core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
 
 
-class MoEQuad(SharedStateAddOn, AbstractModule):
+class MoEOptimized(SharedStateAddOn, AbstractModule):
     """MoE forward path optimized for quad mesh (16 dispatch rows) with ring fabric only.
 
     Same external API shape as `MoE` (convert_weights, create_shared_state, model_config, forward_*).
@@ -73,7 +86,7 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
     ) -> WeightConfig:
         assert (
             len(state_dicts) == 1 and state_dicts[0] is not None
-        ), f"MoEQuad expects exactly one non-padding state dict, got {len(state_dicts)}"
+        ), f"MoEOptimized expects exactly one non-padding state dict, got {len(state_dicts)}"
         (state_dict,) = state_dicts
         assert state_dict is not None
 
@@ -91,16 +104,12 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        *,
-        batch_size_per_row: int | None = None,
     ) -> ModelState:
         """Create shared model state containing tensors that are constant across all instances.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
-            batch_size_per_row: Decode users-per-row used to size preallocated dispatch buffers; defaults to
-                ``USERS_PER_ROW`` when omitted (must be >= the batch used in ``decode_model_config``).
         Returns:
             ModelState containing shared tensors
         """
@@ -109,10 +118,9 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
 
         logger.info(
-            "Creating MoEQuad shared state: expert mapping tensor "
+            "Creating MoEOptimized shared state: expert mapping tensor "
             f"(num_devices={num_devices}, experts_per_device={num_experts_per_device})..."
         )
-        expert_mapping_start = perf_counter()
 
         num_experts = num_devices * num_experts_per_device
         torch_expert_mapping_tensor = (
@@ -127,27 +135,26 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-        logger.info(f"Created MoEQuad expert mapping tensor in {perf_counter() - expert_mapping_start:.2f}s")
-
         config = {
             "expert_mapping_tensor": expert_mapping_tensor,
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
         }
 
-        # TODO: #41009 — preallocated tensors for all_to_all_dispatch_metadata
-        rows_per_block = USERS_PER_ROW if batch_size_per_row is None else batch_size_per_row
-        batch = rows_per_block * mesh_device.shape[0]
-        preallocated_all_to_all_dispatch_metadata_tensors = (
-            AllToAllDispatchMetadataConfig.create_preallocated_dispatch_output_tensors(
-                mesh_device,
-                batch,
-                hf_config.hidden_size,
-                hf_config.num_experts_per_tok,
+        # TODO: #42722 - preallocated tensors for all_to_all_dispatch_metadata
+        if False:
+            rows_per_block = USERS_PER_ROW
+            batch = rows_per_block * mesh_device.shape[0]
+            preallocated_all_to_all_dispatch_metadata_tensors = (
+                AllToAllDispatchMetadataConfig.create_preallocated_dispatch_output_tensors(
+                    mesh_device,
+                    batch,
+                    hf_config.hidden_size,
+                    hf_config.num_experts_per_tok,
+                )
             )
-        )
-        config[
-            "quad_ring_preallocated_all_to_all_dispatch_metadata_tensors"
-        ] = preallocated_all_to_all_dispatch_metadata_tensors
+            config[
+                "quad_ring_preallocated_all_to_all_dispatch_metadata_tensors"
+            ] = preallocated_all_to_all_dispatch_metadata_tensors
 
         return config
 
@@ -189,121 +196,68 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         batch_size_per_row: int,
         topk_fallback: bool = False,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
-        """Generate decode configuration for this module.
-
-        Args:
-            hf_config: HuggingFace model configuration object
-            mesh_device: TTNN mesh device the model will be placed later on
-        Returns:
-            ModelDecodeConfig containing operator configurations for decode mode
-        """
+        """Build operator configuration for decode or prefill."""
 
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
         _assert_quad_ring(fabric_config, mesh_device)
 
+        mesh_stub = MeshDeviceStub(mesh_device.shape)
+        memory_config = ttnn.L1_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+
         if mode == "decode":
-            memory_config = ttnn.L1_MEMORY_CONFIG
-
-            HIDDEN_SIZE = hf_config.hidden_size
-            TP_SIZE = mesh_device.shape[1]
-
-            shard_core_grid = ttnn.CoreGrid(y=7, x=4)
-            per_core_width = (HIDDEN_SIZE // TP_SIZE) // shard_core_grid.num_cores
-            input_output_memory_config = ttnn.create_sharded_memory_config(
-                shape=(
-                    ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE),
-                    ttnn.core.roundup(per_core_width, ttnn.TILE_SIZE),
-                ),
-                core_grid=shard_core_grid,
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-            # Construct the config
-            config = {
-                "mesh_device": MeshDeviceStub(mesh_device.shape),
-                "num_devices": mesh_device.get_num_devices(),
-                "fabric_config": fabric_config,
-                "num_experts_per_device": num_experts_per_device,
-                "hidden_size": hf_config.hidden_size,
-                "num_experts_per_tok": hf_config.num_experts_per_tok,
-                "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
-                "all_to_all_dispatch_output_memory_config": memory_config,
-                "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
-                "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
-                "all_to_all_combine_output_memory_config": memory_config,
-                "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
-                "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
-                "input_memory_config": input_output_memory_config,
-                "output_memory_config": input_output_memory_config,
-                "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
-                "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
-                "sum_experts_output_memory_config": memory_config,
-                "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
-                    cluster_axis=1,
-                    dim=3,
-                    memory_config=input_output_memory_config,
-                ),
-                "ring_sum_experts_output_memory_config": DeepseekMoEReduceScatterConfig.create_default_input_memory_config(
-                    batch_size_per_row, HIDDEN_SIZE, TP_SIZE
-                ),
-                "ring_final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
-                    cluster_axis=1,
-                    dim=3,
-                    output_memory_config=input_output_memory_config,
-                ),
-                "revert_tp": AllGatherAsyncConfig(
-                    mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dim=-1,  # Last dimension
-                    # memory_config=ttnn.create_sharded_memory_config(  # Bad PCC
-                    #     shape=(batch_size_per_row, HIDDEN_SIZE),
-                    #     core_grid=ttnn.CoreGrid(y=7, x=8),
-                    #     strategy=ttnn.ShardStrategy.WIDTH,
-                    # ),
-                    memory_config=memory_config,
-                    cluster_axis=1,
-                ),
-            }
+            io_memory_config = _decode_sharded_io_memory_config(hf_config, mesh_device, batch_size_per_row)
+            reduce_scatter_memory_config = io_memory_config
         else:
-            memory_config = ttnn.DRAM_MEMORY_CONFIG
+            io_memory_config = memory_config
+            reduce_scatter_memory_config = memory_config
 
-            # Construct the config
-            config = {
-                "mesh_device": MeshDeviceStub(mesh_device.shape),
-                "num_devices": mesh_device.get_num_devices(),
-                "fabric_config": fabric_config,
-                "num_experts_per_device": num_experts_per_device,
-                "hidden_size": hf_config.hidden_size,
-                "num_experts_per_tok": hf_config.num_experts_per_tok,
-                "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
-                "all_to_all_dispatch_output_memory_config": memory_config,
-                "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
-                "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
-                "all_to_all_combine_output_memory_config": memory_config,
-                "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
-                "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
-                "input_memory_config": memory_config,
-                "output_memory_config": memory_config,
-                "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
-                "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
-                "sum_experts_output_memory_config": memory_config,
-                "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
-                    cluster_axis=1,
-                    dim=3,
-                    memory_config=memory_config,
-                ),
-                "revert_tp": AllGatherAsyncConfig(
-                    mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dim=-1,  # Last dimension
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    cluster_axis=1,
-                ),
-            }
+        config: ModelDecodeConfig | ModelPrefillConfig = {
+            "mesh_device": mesh_stub,
+            "num_devices": mesh_device.get_num_devices(),
+            "fabric_config": fabric_config,
+            "num_experts_per_device": num_experts_per_device,
+            "hidden_size": hf_config.hidden_size,
+            "num_experts_per_tok": hf_config.num_experts_per_tok,
+            "num_dispatch_devices": mesh_device.shape[0],
+            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+            "all_to_all_dispatch_output_memory_config": memory_config,
+            "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
+            "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
+            "all_to_all_combine_output_memory_config": memory_config,
+            "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
+            "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
+            "input_memory_config": io_memory_config,
+            "output_memory_config": io_memory_config,
+            "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
+            "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
+            "sum_experts_output_memory_config": memory_config,
+            "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
+                cluster_axis=1,
+                dim=3,
+                memory_config=reduce_scatter_memory_config,
+            ),
+            "revert_tp": AllGatherAsyncConfig(
+                mesh_device=mesh_stub,
+                dim=-1,
+                memory_config=memory_config,
+                cluster_axis=1,
+            ),
+        }
+
+        if mode == "decode":
+            hidden_size = hf_config.hidden_size
+            tp_size = mesh_device.shape[1]
+            config[
+                "ring_sum_experts_output_memory_config"
+            ] = DeepseekMoEReduceScatterConfig.create_default_input_memory_config(
+                batch_size_per_row, hidden_size, tp_size
+            )
+            config["ring_final_output_reduce_scatter"] = DeepseekMoEReduceScatterConfig(
+                cluster_axis=1,
+                dim=3,
+                output_memory_config=io_memory_config,
+            )
 
         batch = batch_size_per_row * mesh_device.shape[0]
         seq_len = 1
@@ -437,7 +391,7 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
 
         if x_dim not in expected_dims:
             raise ValueError(
-                f"MoEQuad: Unexpected input dimension {x_dim}. Expected one of {expected_dims}. "
+                f"MoEOptimized: Unexpected input dimension {x_dim}. Expected one of {expected_dims}. "
                 f"(hidden_size={hidden_size}, tp_size={tp_size})"
             )
 
@@ -498,8 +452,6 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
             shape=(batch_size_per_device, 1, seq_len, cfg["hidden_size"]),
         )
 
-        _assert_quad_ring_run_cfg(cfg)
-
         # TODO: #41009 — can move towards removing these TMs once optimized moe_gate is integrated
         topk_experts_indices_rm = ttnn.to_layout(
             topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -518,7 +470,7 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
             topk_experts_weights_rm, (2, 0, 1, 3), memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
-        post_combine_output_tensor = cls._forward_moe_quad_ring_impl(
+        post_combine_output_tensor = cls._forward_moe_optimized_ring_impl(
             cfg,
             x_rm,
             topk_experts_indices_rm,
@@ -547,8 +499,6 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         # Chunk along local batch dimension to keep all_to_all_dispatch output small in prefill.
         chunk_size = min(batch_size_per_device, max(1, cfg.get("moe_chunk_size", batch_size_per_device)))
         output_chunks: list[ttnn.Tensor] = []
-
-        _assert_quad_ring_run_cfg(cfg)
 
         # TODO: #41009
         topk_experts_indices_rm = ttnn.to_layout(
@@ -607,7 +557,7 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
                 value=0.0,
             )
 
-            post_combine_output_tensor = cls._forward_moe_quad_ring_impl(
+            post_combine_output_tensor = cls._forward_moe_optimized_ring_impl(
                 cfg,
                 x_rm_chunk,
                 topk_experts_indices_rm_chunk,
@@ -635,7 +585,7 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         return post_combine_output_tensor
 
     @classmethod
-    def _forward_moe_quad_ring_impl(
+    def _forward_moe_optimized_ring_impl(
         cls,
         cfg: RunDecodeConfig | RunPrefillConfig,
         x_rm: ttnn.Tensor,
