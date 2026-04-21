@@ -1,7 +1,74 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Python helper utilities for ttnn.experimental.moe_compute """
+"""Python helper utilities for ttnn.experimental.moe_compute.
+
+This module provides reference implementations for preparing weight tensors
+for the fused MoE compute operation. The functions here are "executable
+specifications" that produce the exact byte layout the kernels expect.
+
+**Weight tensor layout overview**
+
+``ttnn.experimental.moe_compute`` takes **two packed weight tensor arguments**
+that contain **three logical expert weight matrices**:
+
+- ``matmul_w0_w1_tensor``: W0 (gate) and W1 (up) weights interleaved/packed.
+- ``matmul_w2_tensor``: W2 (down projection) weights.
+
+The layout is highly specific to the MoE ring-all-to-all kernel implementation.
+Constants defined here must stay in sync with
+``moe_ring_common.h`` (TILE_SIZE=32, W0_W1_TILES_PER_TXN=14, etc.).
+
+**Constants (must match moe_ring_common.h)**
+
+- ``NUM_W0_W1_TILES_H = 224`` (tiles) -> 7168 elements for the reference hidden size
+- ``NUM_W2_TILES_H = 64`` (tiles) -> 2048 elements
+- ``W0_W1_TILES_PER_TXN = 14``
+- ``W0_W1_TXNS_PER_BLOCK = 2``
+- ``W2_TILES_PER_TXN = 14``
+- ``W2_TXNS_PER_BLOCK = 2``
+- ``W2_BLOCKS_PER_EXPERT = 50``
+
+**Bias support (``has_bias=True``)**
+
+When bias is enabled, callers must pack bias values into the weight tensors
+in a kernel-specific format and set ``has_bias=True`` on the ``moe_compute`` call:
+
+- **W0/W1 bias (b0, b1)**: PyTorch format is ``(L, E, N)`` where L=layers, E=experts,
+  N=intermediate dim. This is expanded to tile format ``(L, E, 32, N)`` with only
+  row 0 populated, concatenated **after** W0/W1 along the K (input) dimension, then
+  K is padded to a multiple of 14 tiles (W0_W1_TILES_PER_TXN). For the reference
+  config (hidden=7168), K grows from 224 to 225 tiles, padded to 238 tiles (7616
+  elements).
+
+- **W2 bias (b2)**: PyTorch format is ``(L, E, K)``. Expanded to tile format
+  ``(L, E, 32, K)`` with row 0 populated, K-column-sharded like W2, appended along
+  the N (intermediate) axis **without** ring-rotation (matching GPT-OSS behavior).
+  N+32 is then padded to 70 tiles (2240 elements) to align DRAM reads.
+
+**Output shapes (reference config)**
+
+- ``prepare_w0_w1_tensor_for_moe_compute``: ``(num_cores, L, E, 3, K, 4*TILE_SIZE)``
+- ``prepare_w0_w1_tensor_with_bias``: K becomes ``K_padded`` (e.g., 7616)
+- ``prepare_w2_tensor_for_moe_compute``: ``(num_cores, L, E, 5, N+192, 4*TILE_SIZE)``
+- ``prepare_w2_tensor_with_bias``: N+192 becomes N_target (e.g., 2240)
+
+The leading ``num_cores`` dimension (typically 12) corresponds to DRAM bank layout.
+
+**DRAM sharding**
+
+Callers must create DRAM-sharded memory configs with heights derived from the
+padded dimensions above. See ``test_moe_compute_6U.py`` for the exact shard
+spec calculations using ``K_for_shard`` and ``w2_N_total``.
+
+**Available functions**
+
+- Non-bias: ``prepare_w0_w1_tensor_for_moe_compute``, ``prepare_w2_tensor_for_moe_compute``
+- With bias: ``prepare_w0_w1_tensor_with_bias``, ``prepare_w2_tensor_with_bias``
+- Helpers: ``cluster_distance``, ``map_shared_experts``, ``add_shared_expert_weights``
+
+See individual function docstrings for argument details and layout invariants.
+"""
 
 from __future__ import annotations
 
@@ -429,6 +496,10 @@ def prepare_w0_w1_tensor_with_bias(
 
     Returns:
         torch_w0_w1_paired: Prepared tensor with bias of shape (12, L, E, 3, K_padded, 4*ttnn.TILE_SIZE)
+
+    See also:
+        Module docstring for full layout contract and constants that must match
+        moe_ring_common.h; ``prepare_w0_w1_tensor_for_moe_compute`` for the non-bias path.
     """
     import torch
 
@@ -497,6 +568,10 @@ def prepare_w2_tensor_with_bias(
 
     Returns:
         N_with_bias: Prepared tensor of shape (num_cores, L, E, 5, N_target, 4*ttnn.TILE_SIZE)
+
+    See also:
+        Module docstring for full layout contract and constants that must match
+        moe_ring_common.h; ``prepare_w2_tensor_for_moe_compute`` for the non-bias path.
     """
     import torch
 
