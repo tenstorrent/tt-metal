@@ -85,6 +85,43 @@ FORCE_INLINE void zero_tile(uint32_t l1_addr, uint32_t tile_bytes) {
     }
 }
 
+// Extract row `row` from a full 32x32 tile at `src_tile_l1` and write it into row 0
+// (left+right faces) of destination tile at `dst_tile_l1`. Same output contract as
+// copy_row_to_tile, but source is a whole tile instead of a 2-row stub.
+FORCE_INLINE void extract_row_from_full_tile(uint32_t src_tile_l1, uint32_t row, uint32_t dst_tile_l1) {
+    // Tile faces: face 0 (top-left, 0..511), face 1 (top-right, 512..1023),
+    //             face 2 (bot-left, 1024..1535), face 3 (bot-right, 1536..2047).
+    // Within a face, row r (0..15) is at byte offset r*32 (16 bf16 cols * 2 bytes).
+    uint32_t top_bottom_off = (row < 16) ? 0 : 1024;
+    uint32_t row_in_face = row & 15u;
+    uint32_t row_byte_off = row_in_face * 32;
+
+    volatile uint32_t* src_L = reinterpret_cast<volatile uint32_t*>(src_tile_l1 + top_bottom_off + row_byte_off);
+    volatile uint32_t* dst_L = reinterpret_cast<volatile uint32_t*>(dst_tile_l1);
+    for (uint32_t i = 0; i < 8; i++) {
+        dst_L[i] = src_L[i];
+    }
+
+    volatile uint32_t* src_R = reinterpret_cast<volatile uint32_t*>(src_tile_l1 + top_bottom_off + 512 + row_byte_off);
+    volatile uint32_t* dst_R = reinterpret_cast<volatile uint32_t*>(dst_tile_l1 + 512);
+    for (uint32_t i = 0; i < 8; i++) {
+        dst_R[i] = src_R[i];
+    }
+}
+
+// Extract single bf16 element at (row, col) from a full 32x32 tile.
+FORCE_INLINE void extract_scalar_from_full_tile(
+    uint32_t src_tile_l1, uint32_t row, uint32_t col, uint32_t dst_tile_l1) {
+    uint32_t face_off = ((row < 16) ? 0u : 1024u) + ((col < 16) ? 0u : 512u);
+    uint32_t row_in_face = row & 15u;
+    uint32_t col_in_face = col & 15u;
+    uint32_t byte_off = row_in_face * 32 + col_in_face * 2;
+
+    volatile uint16_t* src = reinterpret_cast<volatile uint16_t*>(src_tile_l1 + face_off + byte_off);
+    volatile uint16_t* dst = reinterpret_cast<volatile uint16_t*>(dst_tile_l1);
+    *dst = *src;
+}
+
 void kernel_main() {
     // Runtime args
     uint32_t conv_out_addr = get_arg_val<uint32_t>(0);   // [1, N, qkv_dim_tp]
@@ -116,11 +153,15 @@ void kernel_main() {
     constexpr uint32_t ab_tiles_per_row = get_compile_time_arg_val(12);    // ceil(Nv_TP / 32)
     constexpr uint32_t state_tiles = Kt * Vt;
 
-    // Scratch layout offsets (same as decode reader)
+    // Scratch layout: whole tiles for Q/K/V/a/b (loaded once per 32-token tile-row),
+    // plus per-pair scalar stubs for neg_exp_A/dt_bias (loaded once per pair).
+    constexpr uint32_t TILE_BYTES = 2048;
     constexpr uint32_t SCRATCH_Q = 0;
-    constexpr uint32_t SCRATCH_K = Kt * 128;
-    constexpr uint32_t SCRATCH_V = 2 * Kt * 128;
-    constexpr uint32_t SCRATCH_SCALAR = 3 * Kt * 128;
+    constexpr uint32_t SCRATCH_K = Kt * TILE_BYTES;
+    constexpr uint32_t SCRATCH_V = 2 * Kt * TILE_BYTES;
+    constexpr uint32_t SCRATCH_A = (2 * Kt + Vt) * TILE_BYTES;
+    constexpr uint32_t SCRATCH_B = SCRATCH_A + TILE_BYTES;
+    constexpr uint32_t SCRATCH_SCALAR = SCRATCH_B + TILE_BYTES;  // neg_exp_A + dt_bias (64 B each)
 
     // CB indices
     constexpr uint32_t cb_q_raw = tt::CBIndex::c_0;
@@ -214,85 +255,86 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_state, state_tiles);
 
-        // Cache neg_exp_A and dt_bias scratch locations for per-token copy
+        // Cache neg_exp_A and dt_bias scratch locations (constant across all tokens for this pair)
         uint32_t neg_scratch = scratch_l1 + SCRATCH_SCALAR + 128;
         uint32_t dt_scratch = scratch_l1 + SCRATCH_SCALAR + 192;
 
-        // ---- Stream N tokens for this pair ----
-        for (uint32_t t = 0; t < num_tokens; t++) {
-            uint32_t tile_row = t / 32;
-            uint32_t row_in_tile = t % 32;
+        // ---- Stream N tokens for this pair, grouped by tile-row (32 tokens per tile) ----
+        // Each tile-row: 1 NOC read per Q/K/V/a/b tile (amortized across up to 32 tokens),
+        // instead of 1 partial-tile NOC read per token as in the original implementation.
+        uint32_t num_tile_rows = (num_tokens + 31) / 32;
 
-            // Reserve per-token CBs
-            cb_reserve_back(cb_q_raw, Kt);
-            cb_reserve_back(cb_k_raw, Kt);
-            cb_reserve_back(cb_v, Vt);
-            cb_reserve_back(cb_a, 1);
-            cb_reserve_back(cb_b, 1);
-            cb_reserve_back(cb_neg_exp_A, 1);
-            cb_reserve_back(cb_dt_bias, 1);
+        for (uint32_t tr = 0; tr < num_tile_rows; tr++) {
+            uint32_t base = tr * 32;
+            uint32_t rows_here = (base + 32 <= num_tokens) ? 32 : (num_tokens - base);
 
-            uint32_t wp_q = get_write_ptr(cb_q_raw);
-            uint32_t wp_k = get_write_ptr(cb_k_raw);
-            uint32_t wp_v = get_write_ptr(cb_v);
-            uint32_t wp_a = get_write_ptr(cb_a);
-            uint32_t wp_b = get_write_ptr(cb_b);
-            uint32_t wp_neg = get_write_ptr(cb_neg_exp_A);
-            uint32_t wp_dt = get_write_ptr(cb_dt_bias);
-
-            // Issue NOC reads for this token's Q/K/V/a/b
-            // conv_out tile_id: tile_row * conv_tiles_per_row + head_offset + kt
+            // ---- Whole-tile NOC reads for this tile-row's Q/K/V/a/b ----
             for (uint32_t kt = 0; kt < Kt; kt++) {
-                uint32_t q_tile = tile_row * conv_tiles_per_row + k_head * Kt + kt;
-                issue_row_reads(conv_rd, q_tile, row_in_tile, scratch_l1 + SCRATCH_Q + kt * 128);
+                uint32_t q_tile = tr * conv_tiles_per_row + k_head * Kt + kt;
+                noc_async_read_tile(q_tile, conv_rd, scratch_l1 + SCRATCH_Q + kt * TILE_BYTES);
             }
             for (uint32_t kt = 0; kt < Kt; kt++) {
-                uint32_t k_tile = tile_row * conv_tiles_per_row + key_tile_offset + k_head * Kt + kt;
-                issue_row_reads(conv_rd, k_tile, row_in_tile, scratch_l1 + SCRATCH_K + kt * 128);
+                uint32_t k_tile = tr * conv_tiles_per_row + key_tile_offset + k_head * Kt + kt;
+                noc_async_read_tile(k_tile, conv_rd, scratch_l1 + SCRATCH_K + kt * TILE_BYTES);
             }
             for (uint32_t vt = 0; vt < Vt; vt++) {
-                uint32_t v_tile = tile_row * conv_tiles_per_row + v_tile_offset + v_head * Vt + vt;
-                issue_row_reads(conv_rd, v_tile, row_in_tile, scratch_l1 + SCRATCH_V + vt * 128);
+                uint32_t v_tile = tr * conv_tiles_per_row + v_tile_offset + v_head * Vt + vt;
+                noc_async_read_tile(v_tile, conv_rd, scratch_l1 + SCRATCH_V + vt * TILE_BYTES);
             }
+            // a, b: [1, N, Nv_TP] tiles — one tile per tile-row when Nv_TP <= 32.
+            uint32_t ab_tile = tr * ab_tiles_per_row;
+            noc_async_read_tile(ab_tile, a_rd, scratch_l1 + SCRATCH_A);
+            noc_async_read_tile(ab_tile, b_rd, scratch_l1 + SCRATCH_B);
 
-            // a, b: [1, N, Nv_TP] — tile_row * ab_tiles_per_row + (v_head / 32)
-            uint32_t ab_tile = tile_row * ab_tiles_per_row;
-            issue_scalar_read(a_rd, ab_tile, row_in_tile, v_head, scratch_l1 + SCRATCH_SCALAR);
-            issue_scalar_read(b_rd, ab_tile, row_in_tile, v_head, scratch_l1 + SCRATCH_SCALAR + 64);
+            noc_async_read_barrier();  // ONE barrier per 32 tokens
 
-            noc_async_read_barrier();
+            // ---- Extract per-token tiles from scratch (local L1 copies, no NOC) ----
+            for (uint32_t r = 0; r < rows_here; r++) {
+                cb_reserve_back(cb_q_raw, Kt);
+                cb_reserve_back(cb_k_raw, Kt);
+                cb_reserve_back(cb_v, Vt);
+                cb_reserve_back(cb_a, 1);
+                cb_reserve_back(cb_b, 1);
+                cb_reserve_back(cb_neg_exp_A, 1);
+                cb_reserve_back(cb_dt_bias, 1);
 
-            // Local copy: Q rows → CB tiles
-            for (uint32_t kt = 0; kt < Kt; kt++) {
-                copy_row_to_tile(row_in_tile, scratch_l1 + SCRATCH_Q + kt * 128, wp_q + kt * tile_bytes);
+                uint32_t wp_q = get_write_ptr(cb_q_raw);
+                uint32_t wp_k = get_write_ptr(cb_k_raw);
+                uint32_t wp_v = get_write_ptr(cb_v);
+                uint32_t wp_a = get_write_ptr(cb_a);
+                uint32_t wp_b = get_write_ptr(cb_b);
+                uint32_t wp_neg = get_write_ptr(cb_neg_exp_A);
+                uint32_t wp_dt = get_write_ptr(cb_dt_bias);
+
+                // Q: extract row r from each of Kt whole tiles
+                for (uint32_t kt = 0; kt < Kt; kt++) {
+                    extract_row_from_full_tile(scratch_l1 + SCRATCH_Q + kt * TILE_BYTES, r, wp_q + kt * tile_bytes);
+                }
+                // K: zero then extract (outer product requires other rows to be zero)
+                for (uint32_t kt = 0; kt < Kt; kt++) {
+                    uint32_t dst = wp_k + kt * tile_bytes;
+                    zero_tile(dst, tile_bytes);
+                    extract_row_from_full_tile(scratch_l1 + SCRATCH_K + kt * TILE_BYTES, r, dst);
+                }
+                // V
+                for (uint32_t vt = 0; vt < Vt; vt++) {
+                    extract_row_from_full_tile(scratch_l1 + SCRATCH_V + vt * TILE_BYTES, r, wp_v + vt * tile_bytes);
+                }
+
+                // Scalars: extract element (r, v_head) for a/b; (0, v_head) for per-pair constants
+                extract_scalar_from_full_tile(scratch_l1 + SCRATCH_A, r, v_head, wp_a);
+                extract_scalar_from_full_tile(scratch_l1 + SCRATCH_B, r, v_head, wp_b);
+                copy_scalar_to_tile(0, v_head, neg_scratch, wp_neg);
+                copy_scalar_to_tile(0, v_head, dt_scratch, wp_dt);
+
+                cb_push_back(cb_q_raw, Kt);
+                cb_push_back(cb_k_raw, Kt);
+                cb_push_back(cb_v, Vt);
+                cb_push_back(cb_a, 1);
+                cb_push_back(cb_b, 1);
+                cb_push_back(cb_neg_exp_A, 1);
+                cb_push_back(cb_dt_bias, 1);
             }
-
-            // K: zero tiles, then copy rows (required for outer product)
-            for (uint32_t kt = 0; kt < Kt; kt++) {
-                uint32_t tile_addr = wp_k + kt * tile_bytes;
-                zero_tile(tile_addr, tile_bytes);
-                copy_row_to_tile(row_in_tile, scratch_l1 + SCRATCH_K + kt * 128, tile_addr);
-            }
-
-            // V rows
-            for (uint32_t vt = 0; vt < Vt; vt++) {
-                copy_row_to_tile(row_in_tile, scratch_l1 + SCRATCH_V + vt * 128, wp_v + vt * tile_bytes);
-            }
-
-            // Scalars
-            copy_scalar_to_tile(row_in_tile, v_head, scratch_l1 + SCRATCH_SCALAR, wp_a);
-            copy_scalar_to_tile(row_in_tile, v_head, scratch_l1 + SCRATCH_SCALAR + 64, wp_b);
-            copy_scalar_to_tile(0, v_head, neg_scratch, wp_neg);
-            copy_scalar_to_tile(0, v_head, dt_scratch, wp_dt);
-
-            // Push to compute
-            cb_push_back(cb_q_raw, Kt);
-            cb_push_back(cb_k_raw, Kt);
-            cb_push_back(cb_v, Vt);
-            cb_push_back(cb_a, 1);
-            cb_push_back(cb_b, 1);
-            cb_push_back(cb_neg_exp_A, 1);
-            cb_push_back(cb_dt_bias, 1);
         }
     }
 
