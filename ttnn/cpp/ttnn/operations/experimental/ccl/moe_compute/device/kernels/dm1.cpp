@@ -7,21 +7,18 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "moe_ring_common.h"
 
+#include "api/debug/dprint_pages.h"
+
 namespace detail {
 inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
 
-// Type holder to extract config type at compile time
-template <uint32_t ConfigTypeValue>
-struct ConfigTypeHolder {
-    static constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(ConfigTypeValue);
-    using type = moe_ring::ConfigType_t<config_type>;
-};
 }  // namespace detail
 
 void kernel_main() {
     // Extract config type from compile-time argument
     constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
-    using config_t = typename detail::ConfigTypeHolder<moe_config_type_value>::type;
+    constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
+    using config_t = moe_ring::ConfigType_t<config_type>;
 
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
@@ -45,7 +42,7 @@ void kernel_main() {
     constexpr uint32_t tile_width_size_bytes = get_named_compile_time_arg_val("tile_width_size_bytes");
 
     constexpr uint32_t combine_shard_width_tiles = get_named_compile_time_arg_val("combine_shard_width_tiles");
-    constexpr uint32_t buffer_size_total_tokens = get_named_compile_time_arg_val("buffer_size_total_tokens");
+    constexpr uint32_t token_expert_row_offset = get_named_compile_time_arg_val("token_expert_row_offset");
     constexpr uint32_t height_shard_dim = get_named_compile_time_arg_val("height_shard_dim");
     constexpr uint32_t width_shard_dim = get_named_compile_time_arg_val("width_shard_dim");
     constexpr uint32_t matmul_combine_sync_semaphore_id =
@@ -94,11 +91,11 @@ void kernel_main() {
 
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
-        buffer_size_total_tokens / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
+        token_expert_row_offset * combine_shard_width_tiles * tile_width_size_bytes;
     cb_reserve_back(cb_s2c_in, 1);
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     cb_push_back(cb_s2c_in, 1);
-    constexpr uint32_t source_width_tiles = 20;  // token segments/core are all padded up to 20
+    constexpr uint32_t source_width_tiles = config_t::W2_TILES_PER_EXPERT_W;  // padded width in tiles
     const uint32_t output_width_tiles_core = config_t::W2_TILES_PER_CORE[ring_core_id];
     // offset in tiles into the token width for this core
     const uint32_t width_tile_base = config_t::COMBINE_W_OFFSET_PER_CORE[ring_core_id];
@@ -267,9 +264,12 @@ void kernel_main() {
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - chunk * tile_height);
 
             cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
+            DPRINT << "past cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h) \n";
 
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
             const uint32_t elts_per_page = source_width_tiles * tile_width;
+
+            // tt::data_movement::common::print_bf16_pages(source_base_l1_addr, elts_per_page, num_tokens_block);
 
             while (width_tiles_to_send > 0) {
                 const uint32_t width_tile_start = width_tile_base + width_tiles_sent;
