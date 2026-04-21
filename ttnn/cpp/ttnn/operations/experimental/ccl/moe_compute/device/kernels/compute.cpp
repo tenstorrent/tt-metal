@@ -13,9 +13,10 @@
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_binary.h"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
-#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace detail {
@@ -50,8 +51,24 @@ inline void pack_compute_activation<MoEActivationFunction::SILU>() {
     PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
     PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
 
-    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true, ckernel::BinaryOp::MUL, 8, false),
+        0,
+        1,
+        0,
+        (int)VectorMode::RC)));
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true, ckernel::BinaryOp::MUL, 8, false),
+        2,
+        3,
+        2,
+        (int)VectorMode::RC)));
 };
 
 template <>

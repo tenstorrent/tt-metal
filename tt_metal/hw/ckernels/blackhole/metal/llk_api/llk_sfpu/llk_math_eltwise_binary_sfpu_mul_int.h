@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include "llk_math_eltwise_binary_sfpu_init.h"
-#include "llk_math_eltwise_binary_sfpu_params.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "ckernel_sfpu_mul_int32.h"
 #include "sfpu/ckernel_sfpu_mul_int.h"
 
@@ -17,9 +16,9 @@ inline void llk_math_eltwise_binary_sfpu_mul_int_init() {
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for mul_int. Supported data formats are: Int32, UInt32, UInt16");
     if constexpr (DATA_FORMAT == DataFormat::UInt16) {
-        llk_math_eltwise_binary_sfpu_init<SfpuType::mul_uint16>(sfpu::_init_mul_int_<APPROXIMATE>);
+        SFPU_BINARY_INIT_CB(mul_uint16, sfpu::_init_mul_int_, (APPROXIMATE));
     } else {
-        llk_math_eltwise_binary_sfpu_init<SfpuType::mul_int32>(sfpu::mul_int32_init<APPROXIMATE>);
+        SFPU_BINARY_INIT_CB(mul_int32, sfpu::mul_int32_init, (APPROXIMATE));
     }
 }
 
@@ -30,10 +29,18 @@ inline void llk_math_eltwise_binary_sfpu_mul_int(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for mul_int. Supported data formats are: Int32, UInt32, UInt16");
     if constexpr (DATA_FORMAT == DataFormat::UInt16) {
-        _llk_math_eltwise_binary_sfpu_params_(
-            sfpu::_mul_int_<APPROXIMATE, ITERATIONS>, dst_index0, dst_index1, odst, vector_mode);
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _mul_int_,
+            (APPROXIMATE, ITERATIONS),
+            dst_index0,
+            dst_index1,
+            odst,
+            vector_mode);
     } else {
-        _llk_math_eltwise_binary_sfpu_params_(sfpu::mul_int32<APPROXIMATE>, dst_index0, dst_index1, odst, vector_mode);
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROXIMATE), dst_index0, dst_index1, odst, vector_mode);
     }
 }
 

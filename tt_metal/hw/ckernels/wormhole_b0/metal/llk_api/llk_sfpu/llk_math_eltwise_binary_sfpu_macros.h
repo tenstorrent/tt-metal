@@ -128,7 +128,7 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_and_call_(
         ##__VA_ARGS__)
 
 // =============================================================================
-// Binary SFPU init macros (3 total)
+// Binary SFPU init macros (4 total)
 //
 // These mirror the unary SFPU_INIT* macros and delegate to the existing
 // `ckernel::llk_math_eltwise_binary_sfpu_init<SfpuType::OP>` wrapper, which
@@ -139,6 +139,10 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_and_call_(
 // Bare init: no callback.
 //   SFPU_BINARY_INIT(add_fp32);
 #define SFPU_BINARY_INIT(OP) ::ckernel::llk_math_eltwise_binary_sfpu_init<::ckernel::SfpuType::OP>()
+
+// Init with a non-templated callback.
+//   SFPU_BINARY_INIT_FN(lcm, sfpu::calculate_sfpu_lcm_init);
+#define SFPU_BINARY_INIT_FN(OP, INIT_CB) ::ckernel::llk_math_eltwise_binary_sfpu_init<::ckernel::SfpuType::OP>(INIT_CB)
 
 // Init with a templated callback.
 //   SFPU_BINARY_INIT_CB(mul_int32, sfpu::mul_int32_init, (APPROXIMATE));

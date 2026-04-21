@@ -30,8 +30,7 @@
 
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
-#include "llk_math_eltwise_binary_sfpu_init.h"
-#include "llk_math_eltwise_binary_sfpu_params.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 
 namespace ckernel::sfpu {
 
@@ -118,15 +117,20 @@ inline void swiglu_init() {
 
 namespace ckernel {
 
-inline void llk_math_eltwise_binary_sfpu_swiglu_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::swiglu_init);
-}
+inline void llk_math_eltwise_binary_sfpu_swiglu_init() { SFPU_BINARY_INIT_FN(unused, ckernel::sfpu::swiglu_init); }
 
 template <bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::SwiGLUConfigGPTOSS>
 inline void llk_math_eltwise_binary_sfpu_swiglu(
     uint gate_tile, uint32_t up_tile, uint32_t out_tile, int vector_mode = VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_(
-        ckernel::sfpu::calculate_swiglu<is_fp32_dest_acc_en, 8, Config>, gate_tile, up_tile, out_tile, vector_mode);
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_swiglu,
+        (is_fp32_dest_acc_en, 8, Config),
+        gate_tile,
+        up_tile,
+        out_tile,
+        vector_mode);
 }
 
 }  // namespace ckernel

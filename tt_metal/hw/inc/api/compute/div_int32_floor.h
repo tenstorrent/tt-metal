@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary_sfpu_div_int32_floor.h"
+#include "ckernel_sfpu_div_int32_floor.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -30,16 +31,32 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void div_int32_floor_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_div_int32_floor<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_div_int32_floor,
+        (APPROX, 8),
+        idst0,
+        idst1,
+        odst,
+        (int)VectorMode::RC)));
 }
 ALWI void div_int32_trunc_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_div_int32_trunc<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_div_int32_trunc,
+        (APPROX, 8),
+        idst0,
+        idst1,
+        odst,
+        (int)VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void div_int32_floor_tile_init() { MATH((llk_math_eltwise_binary_sfpu_div_int32_floor_init<APPROX>())); }
-ALWI void div_int32_trunc_tile_init() { MATH((llk_math_eltwise_binary_sfpu_div_int32_trunc_init<APPROX>())); }
+ALWI void div_int32_floor_tile_init() { MATH((SFPU_BINARY_INIT_CB(div_int32_floor, sfpu::div_floor_init, (APPROX)))); }
+ALWI void div_int32_trunc_tile_init() { MATH((SFPU_BINARY_INIT_CB(div_int32_trunc, sfpu::div_trunc_init, (APPROX)))); }
 
 }  // namespace ckernel

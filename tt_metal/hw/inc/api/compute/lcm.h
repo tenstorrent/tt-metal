@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary_sfpu_lcm.h"
+#include "ckernel_sfpu_lcm.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -30,12 +31,13 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void lcm_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_lcm<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL_FN(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_lcm, idst0, idst1, odst, (int)VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lcm_tile_init() { MATH((llk_math_eltwise_binary_sfpu_lcm_init())); }
+ALWI void lcm_tile_init() { MATH((SFPU_BINARY_INIT_FN(lcm, sfpu::calculate_sfpu_lcm_init))); }
 
 }  // namespace ckernel

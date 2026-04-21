@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary_sfpu_binary_comp.h"
+#include "ckernel_sfpu_binary_comp.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -31,31 +32,63 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void lt_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_lt_int32<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_comp_int32,
+        (APPROX, 8, SfpuType::lt),
+        idst0,
+        idst1,
+        odst,
+        (int)VectorMode::RC)));
 }
 
 ALWI void gt_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_gt_int32<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_comp_int32,
+        (APPROX, 8, SfpuType::gt),
+        idst0,
+        idst1,
+        odst,
+        (int)VectorMode::RC)));
 }
 
 ALWI void ge_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_ge_int32<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_comp_int32,
+        (APPROX, 8, SfpuType::ge),
+        idst0,
+        idst1,
+        odst,
+        (int)VectorMode::RC)));
 }
 
 ALWI void le_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_le_int32<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_comp_int32,
+        (APPROX, 8, SfpuType::le),
+        idst0,
+        idst1,
+        odst,
+        (int)VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lt_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_lt_int32_init())); }
+ALWI void lt_int32_tile_init() { MATH((SFPU_BINARY_INIT(lt))); }
 
-ALWI void gt_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_gt_int32_init())); }
+ALWI void gt_int32_tile_init() { MATH((SFPU_BINARY_INIT(gt))); }
 
-ALWI void ge_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_ge_int32_init())); }
+ALWI void ge_int32_tile_init() { MATH((SFPU_BINARY_INIT(ge))); }
 
-ALWI void le_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_le_int32_init())); }
+ALWI void le_int32_tile_init() { MATH((SFPU_BINARY_INIT(le))); }
 
 // clang-format off
 /**
@@ -78,19 +111,35 @@ ALWI void le_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_le_int32_ini
 // clang-format on
 
 ALWI void lt_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_lt_uint16<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_comp_uint16,
+        (APPROX, 8, SfpuType::lt),
+        idst0,
+        idst1,
+        odst,
+        (int)VectorMode::RC)));
 }
 
 ALWI void gt_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_gt_uint16<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_comp_uint16,
+        (APPROX, 8, SfpuType::gt),
+        idst0,
+        idst1,
+        odst,
+        (int)VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 
-ALWI void lt_uint16_tile_init() { MATH((llk_math_eltwise_binary_sfpu_lt_uint16_init())); }
+ALWI void lt_uint16_tile_init() { MATH((SFPU_BINARY_INIT(lt))); }
 
-ALWI void gt_uint16_tile_init() { MATH((llk_math_eltwise_binary_sfpu_gt_uint16_init())); }
+ALWI void gt_uint16_tile_init() { MATH((SFPU_BINARY_INIT(gt))); }
 
 }  // namespace ckernel

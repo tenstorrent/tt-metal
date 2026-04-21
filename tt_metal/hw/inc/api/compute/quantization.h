@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary_sfpu_quant.h"
+#include "ckernel_sfpu_quant.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -26,7 +27,8 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void quant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_quant_int32<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quant_int32, (APPROX), idst0, idst1, odst, (int)VectorMode::RC)));
 }
 
 // clang-format off
@@ -44,7 +46,8 @@ ALWI void quant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  */
 // clang-format on
 ALWI void requant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_requant_int32<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_requant_int32, (APPROX), idst0, idst1, odst, (int)VectorMode::RC)));
 }
 
 // clang-format off
@@ -62,7 +65,8 @@ ALWI void requant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  */
 // clang-format on
 ALWI void dequant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_dequant_int32<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_dequant_int32, (APPROX), idst0, idst1, odst, (int)VectorMode::RC)));
 }
 
 // clang-format off
@@ -78,7 +82,7 @@ ALWI void dequant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * */
 // clang-format on
 ALWI void quant_tile_init(const uint32_t zero_point) {
-    MATH((llk_math_eltwise_binary_sfpu_quant_int32_init<APPROX>(zero_point)));
+    MATH((SFPU_BINARY_INIT_CB_ARGS(quant_int32, sfpu::quant_init, (APPROX), zero_point)));
 }
 
 // clang-format off
@@ -94,7 +98,7 @@ ALWI void quant_tile_init(const uint32_t zero_point) {
  * */
 // clang-format on
 ALWI void requant_tile_init(const uint32_t zero_point) {
-    MATH((llk_math_eltwise_binary_sfpu_requant_int32_init<APPROX>(zero_point)));
+    MATH((SFPU_BINARY_INIT_CB_ARGS(requant_int32, sfpu::quant_init, (APPROX), zero_point)));
 }
 
 // clang-format off
@@ -110,7 +114,7 @@ ALWI void requant_tile_init(const uint32_t zero_point) {
  * */
 // clang-format on
 ALWI void dequant_tile_init(const uint32_t zero_point) {
-    MATH((llk_math_eltwise_binary_sfpu_dequant_int32_init<APPROX>(zero_point)));
+    MATH((SFPU_BINARY_INIT_CB_ARGS(dequant_int32, sfpu::quant_init, (APPROX), zero_point)));
 }
 
 }  // namespace ckernel
