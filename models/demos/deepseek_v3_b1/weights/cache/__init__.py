@@ -13,6 +13,8 @@ from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpe
 from models.demos.deepseek_v3_b1.weights.cache.types import (
     ArtifactTarget,
     CacheContext,
+    CompressedTensorBuildInputs,
+    CompressedTensorTarget,
     Fingerprint,
     FusionGroupSpec,
     MeshMapperConfig,
@@ -58,6 +60,8 @@ class CacheConfig:
 __all__ = [
     "ArtifactTarget",
     "CacheConfig",
+    "CompressedTensorBuildInputs",
+    "CompressedTensorTarget",
     "EphemeralTensorCache",
     "CacheContext",
     "Fingerprint",

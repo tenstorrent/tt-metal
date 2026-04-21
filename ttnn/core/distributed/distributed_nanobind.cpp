@@ -692,7 +692,14 @@ void py_module(nb::module_& mod) {
 
     auto py_distributed_host_buffer = static_cast<nb::class_<DistributedHostBuffer>>(mod.attr("DistributedHostBuffer"));
     py_distributed_host_buffer.def("is_local", &DistributedHostBuffer::is_local, nb::arg("coord"))
-        .def("shape", &DistributedHostBuffer::shape, nb::rv_policy::reference_internal);
+        .def("shape", &DistributedHostBuffer::shape, nb::rv_policy::reference_internal)
+        .def(
+            "get_shard",
+            &DistributedHostBuffer::get_shard,
+            nb::arg("coord"),
+            R"doc(
+            Returns the HostBuffer shard at the given coordinate, or None if not local/populated.
+        )doc");
 
     auto py_tensor_topology = static_cast<nb::class_<TensorTopology>>(mod.attr("TensorTopology"));
     py_tensor_topology
