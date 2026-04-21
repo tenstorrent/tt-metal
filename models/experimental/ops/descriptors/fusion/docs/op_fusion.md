@@ -114,10 +114,15 @@ flattened across nesting depth — `fused.leaf` works even if the leaf is deeply
 nested.
 
 ```python
+tt_x = ttnn.from_torch(...)
+op0 = descriptors.layer_norm(input_tensor=tt_x, ...)
+op1 = descriptors.rms_norm(input_tensor=op0.output_tensors[0], ...)
+op2 = descriptors.matmul(input_tensor=op1.output_tensors[0], ...)
+
 # Inline (positional args)
 [out] = Sequential(op0, op1, op2).run(results=[op2])
 
-# Inline (named kwargs — enables self.fused.op1 access for persistent mode)
+# Inline (named kwargs — enables fused.proj access for persistent mode)
 [out] = Sequential(stem=op0, norm=op1, proj=op2).run(results=[op2])
 
 # Composition via nesting (flattened automatically)
@@ -125,9 +130,29 @@ stem = Sequential(op0, op1)
 [out] = Sequential(stem, op2).run(results=[op2])  # equivalent to op0 -> op1 -> op2
 ```
 
-`run()` returns output tensors from the `results` descriptors. When `results`
-is omitted, default results are returned (last op's output for Sequential,
-each branch's leaf for Parallel).
+#### Selecting outputs: `run(results=...)`
+
+`results` is a list of `OpDescriptor` references picking which outputs `run()`
+should return, in the order you want them. Only descriptors actually present
+in the tree may appear — passing a descriptor that isn't in the container
+raises an error.
+
+```python
+tt_x = ttnn.from_torch(...)
+ln   = descriptors.layer_norm(input_tensor=tt_x, ...)
+rms  = descriptors.rms_norm(input_tensor=ln.output_tensors[0], ...)
+mm   = descriptors.matmul(input_tensor=rms.output_tensors[0], ...)
+[norm_out, mm_out] = Sequential(ln, rms, mm).run(results=[rms, mm])
+```
+
+When `results` is omitted, a default list is returned:
+
+- **`Sequential`**: the last item's outputs. If the last item is a
+  `Parallel` / nested container, its default outputs are used recursively —
+  so `Sequential(stem, Parallel(a, b)).run()` returns `(a_out, b_out)`.
+- **`Parallel`**: one output per top-level branch. If a branch is itself a
+  `Sequential`, the same `Sequential` rule above applies to that branch
+  (i.e. recurse into its last item).
 
 ### `Parallel`
 
@@ -136,31 +161,61 @@ Groups items that run concurrently on disjoint core subsets. Requires at least
 
 ```python
 # Standalone: independent ops merged into one dispatch
+tt_q, tt_kv = ttnn.from_torch(...), ttnn.from_torch(...)
+q_rms  = descriptors.rms_norm(input_tensor=tt_q, ...)
+kv_rms = descriptors.rms_norm(input_tensor=tt_kv, ...)
 tt_q, tt_kv = Parallel(q=q_rms, kv=kv_rms).run()
 
 # Branching tree (positional): stem runs first, then two branches in parallel.
-# For persistent mode, hold your own refs to the descriptors to call update().
+# Each branch's input is the stem's deferred output tensor, which wires the
+# internal edge. In persistent mode, call update() directly on the refs you
+# already hold — e.g. stem_op.update(new_x).
+tt_x = ttnn.from_torch(...)
+stem_op  = descriptors.rms_norm(input_tensor=tt_x, ...)
+branch_a = descriptors.matmul(input_tensor=stem_op.output_tensors[0], ...)
+branch_b = descriptors.matmul(input_tensor=stem_op.output_tensors[0], ...)
 a_out, b_out = Sequential(
     stem_op,
     Parallel(branch_a, branch_b),
 ).run()
 
-# Branching tree (named): same behavior, but the container hoists descriptors
-# as attributes, so persistent-mode access goes through the container:
-# `fused.stem.update(...)` / `fused.a.update(...)`.
-a_out, b_out = Sequential(
+# Branching tree (named): same topology, but each name is hoisted as an
+# attribute on the container, so you can reach any descriptor through `fused`
+# without holding individual refs. `fused.stem is stem_op` — the container
+# stores the same object — so either form works for persistent-mode updates.
+stem_op = descriptors.rms_norm(input_tensor=tt_x, ...)
+fused = Sequential(
     stem=stem_op,
-    branches=Parallel(a=branch_a, b=branch_b),
-).run()
+    branches=Parallel(
+        a=descriptors.matmul(input_tensor=stem_op.output_tensors[0], ...),
+        b=descriptors.matmul(input_tensor=stem_op.output_tensors[0], ...),
+    ),
+)
+new_x = ttnn.from_torch(...)
+fused.stem.update(new_x)     # equivalent to stem_op.update(new_x)
+a_out, b_out = fused.run()
 
-# Nested: Parallel items can contain Sequential chains with further splits
-a1_out, a2_out, b_out = Sequential(
-    stem=stem,
+# Nested: Parallel items can contain Sequential chains with further splits.
+# Names from every level flatten onto `fused`, so deeply nested descriptors
+# are reachable both directly (`fused.op_a`) and by explicit path
+# (`fused.branches.left.op_a`) — duplicates across levels are rejected at
+# construction time, so the flat form is always unambiguous.
+stem_op = descriptors.rms_norm(input_tensor=tt_x, ...)
+op_a    = descriptors.matmul(input_tensor=stem_op.output_tensors[0], ...)
+op_a1   = descriptors.matmul(input_tensor=op_a.output_tensors[0], ...)
+op_a2   = descriptors.matmul(input_tensor=op_a.output_tensors[0], ...)
+op_b    = descriptors.matmul(input_tensor=stem_op.output_tensors[0], ...)
+fused = Sequential(
+    stem=stem_op,
     branches=Parallel(
         left=Sequential(op_a=op_a, leaves=Parallel(a1=op_a1, a2=op_a2)),
         right=op_b,
     ),
-).run(results=[op_a1, op_a2, op_b])
+)
+new_x = ttnn.from_torch(...)
+fused.stem.update(new_x)                        # update the root input
+assert fused.op_a is fused.branches.left.op_a   # both paths reach the same descriptor
+a1_out, a2_out, b_out = fused.run(results=[op_a1, op_a2, op_b])
 ```
 
 Items after a `Parallel` in a `Sequential` are not allowed — the tree
@@ -168,10 +223,15 @@ diverges and cannot rejoin. Place trailing items inside each branch instead.
 
 ### `OpDescriptor.update()`
 
-Replaces input tensors on a descriptor, by position or by name:
+Replaces input tensors on a descriptor, by position or by name. Given a
+descriptor produced by any factory:
 
 ```python
-desc.update(new_tensor)                          # positional (replaces index 0)
+weight = ttnn.from_torch(...)
+desc = descriptors.rms_norm(input_tensor=None, weight=weight, ...)
+
+new_t, new_w = ttnn.from_torch(...), ttnn.from_torch(...)
+desc.update(new_t)                               # positional (replaces index 0)
 desc.update(input_tensor=new_t, weight=new_w)    # keyword (by name)
 ```
 
