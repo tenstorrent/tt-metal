@@ -70,6 +70,104 @@ def _upload(t: torch.Tensor, device, dtype=None, layout=None):
     )
 
 
+# ---------- 2D RoPE on device ----------
+#
+# VGGT uses RotaryPositionEmbedding2D with base=100.0. For a fixed image
+# layout (B=1, S=1, img_size=518, patch=14) the per-token cos/sin values
+# are constant, so we precompute them once and upload as ttnn tensors.
+# All 48 aggregator blocks reuse the same 4 tables.
+#
+# Apply on-device (for a token tensor shaped (B, H, N, Dh=64)):
+#   v_part, h_part = split on last dim at Dh/2
+#   v_part = v_part * cos_y + rotate_half_D(v_part) * sin_y   with D=32
+#   h_part = h_part * cos_x + rotate_half_D(h_part) * sin_x
+#   out    = concat([v_part, h_part], dim=-1)
+# where rotate_half_D(x) for x shape (B, H, N, 32):
+#   x1 = x[..., :16]; x2 = x[..., 16:]; return concat([-x2, x1], dim=-1)
+
+
+def _precompute_rope_tables(device, B=1, N_patch_hw=37, num_register_tokens=4,
+                            head_dim=64, base_frequency=100.0):
+    """Produce the (cos_y, sin_y, cos_x, sin_x) lookup tensors for VGGT's
+    default geometry. Shapes are (1, 1, N, Dh/2) so they broadcast over
+    (B, H, N, Dh/2) half-tokens."""
+    import ttnn
+
+    patch_start_idx = 1 + num_register_tokens  # 5 special tokens
+    N = patch_start_idx + N_patch_hw * N_patch_hw  # 5 + 1369 = 1374
+
+    # Positions matching aggregator.forward() for B*S=1 and aa_order pos:
+    #   grid of (y, x) indices in [0, 37] -> shift +1, prepend 5 zeros.
+    ys = torch.arange(N_patch_hw)
+    xs = torch.arange(N_patch_hw)
+    grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
+    pos = torch.stack((grid_y, grid_x), dim=-1).reshape(1, -1, 2) + 1  # (1, 1369, 2)
+    pos_special = torch.zeros(1, patch_start_idx, 2, dtype=pos.dtype)
+    pos = torch.cat([pos_special, pos], dim=1)  # (1, 1374, 2)
+
+    D = head_dim // 2  # 32
+    exponents = torch.arange(0, D, 2).float() / D  # (D/2 = 16,)
+    inv_freq = 1.0 / (base_frequency ** exponents)  # (16,)
+    max_position = int(pos.max()) + 1  # 39
+    positions = torch.arange(max_position, dtype=inv_freq.dtype)
+    angles = torch.einsum("i,j->ij", positions, inv_freq)  # (max_pos, 16)
+    angles = torch.cat((angles, angles), dim=-1)  # (max_pos, 32)
+    cos_table = angles.cos()
+    sin_table = angles.sin()
+
+    # Per-token lookup then reshape (1, 1, N, D) for broadcast over (B, H).
+    def lookup_and_upload(table, idx):
+        # table: (max_pos, D), idx: (1, N)
+        looked = table[idx]  # (1, N, D)
+        t = looked.reshape(1, 1, N, D).to(torch.bfloat16).contiguous()
+        return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tables = {
+        "cos_y": lookup_and_upload(cos_table, pos[..., 0]),
+        "sin_y": lookup_and_upload(sin_table, pos[..., 0]),
+        "cos_x": lookup_and_upload(cos_table, pos[..., 1]),
+        "sin_x": lookup_and_upload(sin_table, pos[..., 1]),
+    }
+    return tables, N, D
+
+
+def _install_ttnn_rope_tables(model, device):
+    """Compute and cache the RoPE lookup tables on every RoPE instance."""
+    from vggt.layers.rope import RotaryPositionEmbedding2D  # type: ignore
+    for m in model.modules():
+        if isinstance(m, RotaryPositionEmbedding2D) and not getattr(m, "_tt_rope_ready", False):
+            tables, N, D = _precompute_rope_tables(
+                device, base_frequency=m.base_frequency,
+            )
+            m._tt_rope_tables = tables
+            m._tt_rope_N = N
+            m._tt_rope_D = D
+            m._tt_rope_ready = True
+
+
+def _apply_rope_device(tt_tokens, tables, B, H, N, Dh):
+    """2D RoPE applied to (B, H, N, Dh) ttnn tensor. Returns same shape."""
+    import ttnn
+    D = Dh // 2  # 32
+    Dq = D // 2  # 16
+    cos_y = tables["cos_y"]; sin_y = tables["sin_y"]
+    cos_x = tables["cos_x"]; sin_x = tables["sin_x"]
+
+    # Split tokens into v (first D) and h (last D).
+    v_part = ttnn.slice(tt_tokens, [0, 0, 0, 0], [B, H, N, D])
+    h_part = ttnn.slice(tt_tokens, [0, 0, 0, D], [B, H, N, Dh])
+
+    def rope_1d(part, cos, sin):
+        x1 = ttnn.slice(part, [0, 0, 0, 0], [B, H, N, Dq])
+        x2 = ttnn.slice(part, [0, 0, 0, Dq], [B, H, N, D])
+        rot = ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+        return ttnn.add(ttnn.multiply(part, cos), ttnn.multiply(rot, sin))
+
+    v_out = rope_1d(v_part, cos_y, sin_y)
+    h_out = rope_1d(h_part, cos_x, sin_x)
+    return ttnn.concat([v_out, h_out], dim=-1)
+
+
 # ---------- Full on-device Block port ----------
 
 def _install_ttnn_block(model, device):
@@ -205,14 +303,16 @@ def _install_ttnn_block(model, device):
             )
             tt_kt = ttnn.permute(tt_k, (0, 1, 3, 2))
 
-        # RoPE still on host (drop down, apply, come back).
+        # RoPE on device: apply 2D rotary embedding to q and k without
+        # round-tripping through host. Tables are precomputed once for the
+        # fixed VGGT geometry and cached on the RoPE module.
         if self._tt_has_rope:
-            q = ttnn.to_torch(tt_q)
-            k = ttnn.to_torch(tt_kt).transpose(-2, -1).contiguous()
-            q = self.attn.rope(q, pos)
-            k = self.attn.rope(k, pos)
-            tt_q = _upload(q, dev)
-            tt_kt = _upload(k.transpose(-2, -1).contiguous(), dev)
+            tables = self.attn.rope._tt_rope_tables
+            tt_q = _apply_rope_device(tt_q, tables, B, H, N, Dh)
+            # k lives transposed in tt_kt; untranspose, apply RoPE, transpose.
+            tt_k = ttnn.permute(tt_kt, (0, 1, 3, 2))
+            tt_k = _apply_rope_device(tt_k, tables, B, H, N, Dh)
+            tt_kt = ttnn.permute(tt_k, (0, 1, 3, 2))
 
         # Attention compute on device. fp32 intermediate for softmax
         # stability over the 1374-long row (bf16 collapsed conf PCC).
@@ -309,6 +409,8 @@ def _ensure_installed(device):
     if _INSTALL_DONE.get(id(device)):
         return
     model = _get_model()
+    # RoPE tables must exist before the block patch reads them.
+    _install_ttnn_rope_tables(model, device)
     _install_ttnn_block(model, device)
     _install_ttnn_mlp(model, device)
     _INSTALL_DONE[id(device)] = True
