@@ -525,7 +525,7 @@ TEST_F(MeshDeviceFixture, TensixComputeUnpackUntilize) {
 /******************************
 Following tests are for Quasar
 *******************************/
-enum class QuasarTestMode { TILIZE, UNTILIZE_BLOCK, UNTILIZE_DST };
+enum class QuasarTestMode { TILIZE, UNTILIZE, UNTILIZE_DST };
 
 static void run_quasar_tilize_untilize_test(
     IDevice* dev,
@@ -541,10 +541,9 @@ static void run_quasar_tilize_untilize_test(
     CoreCoord core = {0, 0};
 
     uint32_t num_tiles = num_tiles_r * num_tiles_c;
-    uint32_t input_single_tile_size = is_tilize ? tt::tile_size(data_format) : tt::datum_size(data_format) * 1024;
+    uint32_t input_single_tile_size = tt::tile_size(data_format);
     tt::DataFormat output_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
-    uint32_t output_single_tile_size =
-        is_tilize ? (fp32_dest_acc_en ? 4 * 1024 : tt::tile_size(data_format)) : tt::datum_size(output_format) * 1024;
+    uint32_t output_single_tile_size = tt::tile_size(output_format);
     uint32_t src_dram_buffer_size = input_single_tile_size * num_tiles;
     uint32_t dst_dram_buffer_size = output_single_tile_size * num_tiles;
 
@@ -609,7 +608,7 @@ static void run_quasar_tilize_untilize_test(
             compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
             compute_args = {num_tiles_r, num_tiles_c, l1_input_dfb, l1_output_dfb};
             break;
-        case QuasarTestMode::UNTILIZE_BLOCK:
+        case QuasarTestMode::UNTILIZE:
             compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize.cpp";
             compute_args = {num_tiles_r, num_tiles_c, l1_input_dfb, l1_output_dfb};
             break;
@@ -695,7 +694,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
                         this->devices_.at(0)->get_devices()[0],
                         cfg[0],
                         cfg[1],
-                        QuasarTestMode::UNTILIZE_BLOCK,
+                        QuasarTestMode::UNTILIZE,
                         dst_full_sync_en,
                         fp32_dest_acc_en,
                         data_format);
@@ -732,12 +731,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
 
 // Quasar Unpack Tilize
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
-    std::vector<vector<uint32_t>> test_configs = {{1, 4}, {4, 1}, {2, 2}};
+    std::vector<vector<uint32_t>> test_configs = {{1, 4}, {4, 1}, {2, 40}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (tt::DataFormat data_format : {tt::DataFormat::Float16_b, tt::DataFormat::Int16}) {
-                    if ((fp32_dest_acc_en || dst_full_sync_en || cfg[0] != 2 || cfg[1] != 2 ||
+                    if ((fp32_dest_acc_en || dst_full_sync_en || cfg[0] != 2 || cfg[1] != 40 ||
                          data_format != tt::DataFormat::Int16)) {
                         continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
                     }

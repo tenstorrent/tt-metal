@@ -17,17 +17,18 @@
  * Configures UNP_A stride registers and programs the MOP for tilizing
  * BLOCK_CT_DIM tiles from row-major L1 data into face format in SrcA.
  *
- * @tparam BLOCK_CT_DIM  Number of tiles per row (block width in tiles).
+ * @tparam BLOCK_CT_DIM  Number of tiles per MOP invocation.
+ * @tparam FULL_CT_DIM   Number of tiles in a full row of the input tensor.
  * @param operand        The input dataflow buffer identifier.
  */
-template <std::uint32_t BLOCK_CT_DIM>
+template <std::uint32_t BLOCK_CT_DIM, std::uint32_t FULL_CT_DIM = BLOCK_CT_DIM>
 inline void llk_unpack_tilize_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
     // TODO: Once narrow-tile is supported c_dim_faces will be variable.
     constexpr std::uint32_t c_dim_faces = 2;
 
-    _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE, BLOCK_CT_DIM, BLOCK_CT_DIM, c_dim_faces>(operand_id);
+    _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE, FULL_CT_DIM, BLOCK_CT_DIM, c_dim_faces>(operand_id);
 }
 
 /**
@@ -53,9 +54,12 @@ inline void llk_unpack_tilize_block(
     const LocalDFBInterface& local_dfb = g_dfb_interface[operand_id];
     const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx;
 
-    // Determine which tile-row this index falls in
-    const std::uint32_t row = input_tile_index / block_c_tiles;
-    const std::uint32_t l1_face_idx = (rd_entry_idx + row * block_c_tiles) * faces_per_entry;
-
-    _llk_unpack_tilize_<p_unpacr::UNP_A>(l1_face_idx);
+    // TODO (SK): Remove ct_dim loop when block_ct_dim unpacking optimization implemented.
+    // BLOCK_CT_DIM is currently hardcoded to 1 in tilize_init (see compute/tilize.h), so the MOP
+    // emits one SrcA dvalid per invocation. Loop to match the per-tile math consumption same
+    // structural pattern as BH/WH llk_unpack_tilize_block
+    const std::uint32_t l1_base_idx = (rd_entry_idx + input_tile_index) * faces_per_entry;
+    for (std::uint32_t t = 0; t < block_c_tiles; t++) {
+        _llk_unpack_tilize_<p_unpacr::UNP_A>(l1_base_idx + t);
+    }
 }
