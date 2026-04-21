@@ -113,18 +113,15 @@ bool configure_fabric_cores(
     // per-call timeout unlike read_non_mmio).  Skipping the L1 clear for dead channels is
     // safe: firmware won't start on them regardless of whether L1 was zeroed.
     //
-    // Seed with pre_known_dead_channels: channels confirmed problematic by
-    // terminate_stale_erisc_routers() — either probe read timed out (physically dead link)
-    // OR status word was corrupt (not a valid EDMStatus value).  For these channels we skip
-    // assert_risc_reset_at_core() entirely.
+    // Seed with pre_known_dead_channels: channels where the probe L1 read in
+    // terminate_stale_erisc_routers() threw an exception (physically dead link — ERISC
+    // completely unresponsive).  For these channels we skip assert_risc_reset_at_core()
+    // entirely because the ETH relay path is non-functional.
     //
-    // Why: assert_risc_reset_at_core() calls read_non_mmio first (to get current reset state).
-    // On a dead/corrupt channel, that read times out after 5 s and leaves a stuck command in
-    // the relay ETH core's 4-slot command queue (CMD_BUF_SIZE=4, wormhole/eth_interface.h).
-    // With 4 dead channels (ch0/1/6/7 on T3K Device 4), the queue fills after ch0/1/6 each
-    // contribute one stuck command.  Ch7's read_non_mmio then enters the no-timeout while(full)
-    // loop → indefinite hang.  Skipping the call for ALL pre-confirmed problematic channels
-    // (both probe-dead and corrupt) prevents this.
+    // Note: channels with corrupt/garbage L1 status (probe read succeeded but value was
+    // not a valid EDMStatus) are NOT in this set — their probe read succeeded, proving
+    // the relay path works, so assert_risc_reset_at_core() should also succeed.  Those
+    // channels proceed through normal soft reset here.
     std::unordered_set<uint32_t> dead_channels = pre_known_dead_channels;
     if (!pre_known_dead_channels.empty()) {
         all_channels_healthy = false;

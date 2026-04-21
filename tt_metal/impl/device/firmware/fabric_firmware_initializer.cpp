@@ -662,15 +662,17 @@ std::unordered_set<uint32_t> FabricFirmwareInitializer::terminate_stale_erisc_ro
             } catch (...) {
                 // write failed — best effort; the channel may truly be unreachable
             }
-            // Fix #42429 (corrupt path): also add corrupt channels to probe_dead_channels so
-            // configure_fabric_cores() skips assert_risc_reset_at_core() for them.
-            // When status is garbage (not a valid EDMStatus), the ERISC firmware is in an unknown
-            // state — assert_risc_reset_at_core() calls read_non_mmio first, and if the channel is
-            // effectively dead, that read will time out and leave a stuck command in the 4-slot relay
-            // ETH queue.  With 4 dead channels (ch0/1/6/7 on T3K Device 4), the queue fills and
-            // ch7's read_non_mmio enters the no-timeout while(full) loop → indefinite hang.
-            // Treating corrupt channels the same as probe-dead channels avoids this hang.
-            probe_dead_channels.insert(eth_chan_id);
+            // Fix #42429 (corrupt path): do NOT add to probe_dead_channels here.
+            // The probe read above SUCCEEDED (we're in the !known_status path, not the catch
+            // path), proving the ETH relay to this channel is functional.  assert_risc_reset_at_core()
+            // in configure_fabric_cores() uses the same relay path (UMD register write through ETH),
+            // so it should also succeed.  Let it attempt normal soft reset — if it times out, THAT
+            // timeout catches the dead channel at configure_fabric_cores() level.
+            //
+            // Previously, we added corrupt channels to probe_dead_channels, which caused
+            // configure_fabric_cores() to skip soft reset entirely.  Without the soft reset,
+            // BRISC stayed halted and new firmware couldn't start → configure_fabric_cores()
+            // returned false → session failed, even though the channel was actually reachable.
             corrupt_count++;
             continue;
         }
