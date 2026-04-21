@@ -48,12 +48,15 @@ def pack_compact_tiles(
     :func:`unpack_compact_tiles` to reconstruct tile offsets during load.
 
     Args:
-        w_kn: ``(K, N)`` float32 numpy array in logical tile order (pre-DRAM-shuffle).
+        w_kn: ``(K, N)`` float32 numpy array in tile order.
         assignment_2d: ``(tiles_h, tiles_w)`` int8 tile format codes.
-        tile_hw: Tile dimension (default 32).
+        tile_hw: Tile dimension (default 32). Must equal ``DEFAULT_TILE_HW`` (32); any
+            other value raises ``ValueError`` because the underlying BFP pack/unpack
+            primitives are hardcoded to 32-element groups.  The parameter exists only
+            for documentation completeness and is never varied in practice.
 
     Returns:
-        Flat ``bytes``, variable-length per tile, logical row-major order.
+        Flat ``bytes``, variable-length per tile, row-major order.
     """
     if tile_hw != DEFAULT_TILE_HW:
         raise ValueError(f"tile_hw={tile_hw} is not supported; underlying BFP primitives require {DEFAULT_TILE_HW}")

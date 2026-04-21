@@ -93,27 +93,9 @@ class TensorCacheProtocol(Protocol):
         *,
         preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
+        reconstruct: Callable[["CompressedTensorBuildInputs", object], "CompressedTensor"] | None = None,
     ) -> "ttnn.Tensor | dict[str, OverlappedTensor] | CompressedTensor":
         ...
-
-
-def _expert_dram_memory_config(device, K: int, N_padded: int, num_banks: int) -> ttnn.MemoryConfig:
-    """Reconstruct the WIDTH_SHARDED DRAM MemoryConfig for a routed expert projection.
-
-    Mirrors the shard spec built in ``prepare_moe_routed_experts_bspm()``.
-    Used by ``_load_compressed`` to reconstruct the on-device layout from stored params.
-    """
-    per_core_N = N_padded // num_banks
-    dram_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
-            )
-        }
-    )
-    shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
-    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
 
 def build_mesh_mapper_for_target(target: TensorTarget, device):
@@ -304,28 +286,31 @@ class TensorCache:
         Layout::
 
             objects/{id[:2]}/{id}/
-                tiles.bin        — compact packed tile bytes, logical row-major order
-                assignment.npy   — (tiles_h, tiles_w) int8 tile format codes
+                tiles.bin        — compact packed tile bytes, DRAM-shuffled order
+                assignment.npy   — (tiles_h, tiles_w) int8 tile format codes, DRAM-shuffled order
                 metadata.json    — K, N_padded, num_banks, …
                 manifest.json    — fingerprint + logical_name
         """
         from models.demos.deepseek_v3_b1.compressed_tensor.compact_io import pack_compact_tiles
 
-        target: CompressedTensorTarget = fingerprint.target  # type: ignore[assignment]
+        assert isinstance(
+            fingerprint.target, CompressedTensorTarget
+        ), f"_store_compressed requires CompressedTensorTarget, got {type(fingerprint.target)}"
+        target: CompressedTensorTarget = fingerprint.target
         obj_dir = self._objects_dir / artifact_id[:2] / artifact_id
         obj_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Compact tile bytes (logical order, variable length)
+        # 1. Compact tile bytes (DRAM-shuffled order, variable length)
         tiles_path = obj_dir / "tiles.bin"
-        compact_bytes = pack_compact_tiles(inputs.w_logical, inputs.assignment_logical)
+        compact_bytes = pack_compact_tiles(inputs.w, inputs.assignment)
         tiles_path.write_bytes(compact_bytes)
 
         # 2. Assignment array
         assignment_path = obj_dir / "assignment.npy"
-        np.save(str(assignment_path), inputs.assignment_logical.astype(np.int8))
+        np.save(str(assignment_path), inputs.assignment.astype(np.int8))
 
         # 3. Metadata — everything needed to reconstruct the memory config at load time
-        tiles_h, tiles_w = inputs.assignment_logical.shape
+        tiles_h, tiles_w = inputs.assignment.shape
         metadata_dict = {
             "artifact_id": artifact_id,
             "artifact_kind": "compressed_tensor",
@@ -353,35 +338,20 @@ class TensorCache:
     def _load_compressed(
         self,
         obj_dir: Path,
-        device,
         target: "CompressedTensorTarget",
-    ) -> "CompressedTensor":
-        """Reconstruct a device-resident CompressedTensor from a compact CAS object.
+    ) -> "CompressedTensorBuildInputs":
+        """Read a compact CAS object and return DRAM-shuffled build inputs.
 
-        Flow: read compact tile bytes + assignment → unpack to float → apply DRAM
-        shuffle → repack via CompressedTensor.from_bspm.  The tile unpack/repack is
-        lossless for integer mantissa formats (BFP4/BFP2).
+        Tiles are stored in DRAM-shuffled order (written by :meth:`_store_compressed`
+        after :func:`bspm_expert_cache.get_or_create_bspm_expert` applies the shuffle).
+        The caller's ``reconstruct`` callback handles device upload.
         """
         from models.demos.deepseek_v3_b1.compressed_tensor.compact_io import unpack_compact_tiles
-        from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
-        from models.demos.deepseek_v3_b1.weights.transforms.moe import shuffle_dram_assignment, shuffle_dram_tiles
 
-        assignment_logical = np.load(str(obj_dir / "assignment.npy"))
+        assignment = np.load(str(obj_dir / "assignment.npy"))
         compact_bytes = (obj_dir / "tiles.bin").read_bytes()
-
-        w_logical = unpack_compact_tiles(compact_bytes, assignment_logical)  # (K, N_padded) float32
-
-        w_torch = torch.from_numpy(w_logical).unsqueeze(0)  # (1, K, N_padded)
-        w_shuffled = shuffle_dram_tiles(w_torch, tile_size=32, num_banks=target.num_banks).squeeze(0)
-        assignment_shuffled = shuffle_dram_assignment(assignment_logical, target.num_banks)
-
-        mem_config = _expert_dram_memory_config(device, target.K, target.N_padded, target.num_banks)
-        return CompressedTensor.from_bspm(
-            w_shuffled.float(),
-            assignment_shuffled,
-            device=device,
-            memory_config=mem_config,
-        )
+        w = unpack_compact_tiles(compact_bytes, assignment)  # (K, N_padded) float32, DRAM-shuffled
+        return CompressedTensorBuildInputs(w=w, assignment=assignment)
 
     def get_or_create(
         self,
@@ -390,6 +360,7 @@ class TensorCache:
         *,
         preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
+        reconstruct: Callable[["CompressedTensorBuildInputs", object], "CompressedTensor"] | None = None,
     ) -> "ttnn.Tensor | dict[str, OverlappedTensor] | CompressedTensor":
         """Load from cache or build, then return a device tensor or overlapped views."""
         target = fingerprint.target
@@ -403,18 +374,24 @@ class TensorCache:
 
         # --- CompressedTensorTarget: use compact tiles.bin layout ---
         if isinstance(target, CompressedTensorTarget):
+            if reconstruct is None:
+                raise TypeError(
+                    "TensorCache.get_or_create with CompressedTensorTarget requires a 'reconstruct' callback; "
+                    "use get_or_create_bspm_expert() instead of calling get_or_create() directly."
+                )
             entry = self._lookup_compressed(artifact_id)
             if isinstance(entry, PresentCacheEntry):
                 logger.debug("Cache hit (compressed) for {} ({})", logical, artifact_id[:12])
-                return self._load_compressed(entry.paths.object_dir, device, target)
+                inputs = self._load_compressed(entry.paths.object_dir, target)
+                return reconstruct(inputs, device)
             if isinstance(entry, CorruptCacheEntry):
                 logger.warning("Corrupt compressed cache entry for {} ({}), rebuilding", logical, artifact_id[:12])
                 shutil.rmtree(entry.paths.object_dir, ignore_errors=True)
             t0 = time.perf_counter()
             tensors = raw_tensors() if callable(raw_tensors) else raw_tensors
             preprocessed = preprocess(tensors)
-            inputs: CompressedTensorBuildInputs = preprocessed[target.name]
-            obj_dir = self._store_compressed(artifact_id, fingerprint, inputs)
+            inputs = preprocessed[target.name]
+            self._store_compressed(artifact_id, fingerprint, inputs)
             elapsed = time.perf_counter() - t0
             logger.info(
                 "Cache miss (compressed) for {} resolved in {:.3f}s, stored as {}",
@@ -422,7 +399,7 @@ class TensorCache:
                 elapsed,
                 artifact_id[:12],
             )
-            return self._load_compressed(obj_dir, device, target)
+            return reconstruct(inputs, device)
 
         # --- TensorTarget / FusionGroupSpec: original path ---
         entry = self._lookup(artifact_id)
@@ -503,6 +480,7 @@ class EphemeralTensorCache:
         *,
         preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
+        reconstruct: Callable[["CompressedTensorBuildInputs", object], "CompressedTensor"] | None = None,
     ) -> "ttnn.Tensor | dict[str, OverlappedTensor] | CompressedTensor":
         target = fingerprint.target
         if not isinstance(target, (TensorTarget, FusionGroupSpec, CompressedTensorTarget)):
@@ -515,21 +493,13 @@ class EphemeralTensorCache:
         preprocessed = preprocess(tensors)
 
         if isinstance(target, CompressedTensorTarget):
-            from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
-            from models.demos.deepseek_v3_b1.weights.transforms.moe import shuffle_dram_assignment, shuffle_dram_tiles
-
+            if reconstruct is None:
+                raise TypeError(
+                    "EphemeralTensorCache.get_or_create with CompressedTensorTarget requires a 'reconstruct' callback; "
+                    "use get_or_create_bspm_expert() instead of calling get_or_create() directly."
+                )
             inputs: CompressedTensorBuildInputs = preprocessed[target.name]
-            w_torch = torch.from_numpy(inputs.w_logical).unsqueeze(0)
-            w_shuffled = shuffle_dram_tiles(w_torch, tile_size=32, num_banks=target.num_banks).squeeze(0)
-            assignment_shuffled = shuffle_dram_assignment(inputs.assignment_logical, target.num_banks)
-            mem_config = _expert_dram_memory_config(device, target.K, target.N_padded, target.num_banks)
-            device_for_ct = device if self._move_to_device else None
-            return CompressedTensor.from_bspm(
-                w_shuffled.float(),
-                assignment_shuffled,
-                device=device_for_ct,
-                memory_config=mem_config,
-            )
+            return reconstruct(inputs, device)
 
         if isinstance(target, TensorTarget):
             torch_tensor = preprocessed[target.name]
