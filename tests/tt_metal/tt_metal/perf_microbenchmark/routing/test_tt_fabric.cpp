@@ -273,8 +273,10 @@ int main(int argc, char** argv) {
                         "Test {} HUNG - aborting test suite. System may be in a bad state.",
                         built_test.parametrized_name);
                     test_context.record_hung_test(built_test.parametrized_name);
-                    test_context.reset_devices();
-                    break;
+                    // Abort immediately. Going through reset_devices()/close_devices() would block on
+                    // hardware that's still running the stuck kernels, and on multi-host runs other
+                    // ranks would be left blocking on wait_for_programs().
+                    tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->abort(1);
                 }
 
                 log_info(tt::LogTest, "Test {} Finished.", built_test.parametrized_name);
