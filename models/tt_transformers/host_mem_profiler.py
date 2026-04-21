@@ -87,7 +87,7 @@ if __name__ == "__main__":
 
     safe_name = args.name.replace("/", "_").replace(" ", "_")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = OUTPUT_ROOT / f"{safe_name}_{timestamp}"
+    out_dir = Path(os.path.abspath(os.path.join(OUTPUT_ROOT, f"{safe_name}_{timestamp}")))
     out_dir.mkdir(parents=True, exist_ok=True)
 
     plot_results(model["name"], elapsed, mib, out_dir)
