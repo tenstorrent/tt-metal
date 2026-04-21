@@ -34,12 +34,11 @@ _mod.install()
 def load_policy_ttnn(weights: Path):
     """Load X-VLA with the optimized backend.
 
-    Iteration 1 (current): override `dtype = "bfloat16"` before
-    instantiation. The xvla policy natively supports bf16 — see
-    `XVLAModel._apply_dtype` — and bf16 weights both halve memory traffic
-    and unlock fast bf16 matmul paths on modern CPUs (and on Blackhole).
-    The accuracy oracle (PCC vs the fp32-cached reference action chunk)
-    will tell us whether the precision drop is acceptable.
+    Iteration 1: override `dtype = "bfloat16"` before instantiation.
+    Iteration 2 (current): wrap the SoftPromptedTransformer in torch.compile.
+        It is invoked 10x per inference (one per flow-matching denoising
+        step) on identical shapes, so a single Inductor compile is amortized
+        across every call after the first warmup pass. bf16 stays from iter1.
     """
     from lerobot.configs.policies import PreTrainedConfig
     from lerobot.policies.xvla.modeling_xvla import XVLAPolicy
@@ -49,4 +48,8 @@ def load_policy_ttnn(weights: Path):
     config.dtype = "bfloat16"
     policy = XVLAPolicy.from_pretrained(str(weights), config=config)
     policy.eval()
+
+    policy.model.transformer = torch.compile(
+        policy.model.transformer, mode="reduce-overhead", dynamic=False
+    )
     return policy
