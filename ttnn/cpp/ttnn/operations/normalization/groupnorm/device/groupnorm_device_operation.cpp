@@ -5,6 +5,7 @@
 #include "groupnorm_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/normalization/groupnorm/groupnorm_grid_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -209,6 +210,30 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(reciprocals.value().storage_type() == StorageType::DEVICE, "Reciprocals tensor must be on device");
         TT_FATAL(reciprocals.value().buffer() != nullptr, "Reciprocals tensor must be allocated in buffers on device");
         TT_FATAL(a.device() == reciprocals.value().device(), "Input and reciprocals tensors must be on same device");
+    }
+
+    // For non-sharded DRAM tensors, validate that the grid produces uniform
+    // multicast groups.  Non-uniform groups cause a deadlock because the sender
+    // kernel waits for an exact semaphore count equal to (group_size - 1).
+    if (!a.is_sharded()) {
+        if (auto* mc_config = std::get_if<GroupNormMultiCoreProgramConfig>(&args.program_config)) {
+            CoreCoord grid_size = mc_config->compute_with_storage_grid_size;
+            uint32_t W = a.padded_shape()[3];
+            uint32_t num_batches = a.padded_shape()[0];
+            uint32_t nvc = ttnn::operations::normalization::compute_num_virtual_cols(grid_size.x, args.num_groups, W);
+            if (nvc > 0) {
+                uint32_t num_virtual_rows = (grid_size.x / nvc) * grid_size.y;
+                TT_FATAL(
+                    num_virtual_rows < num_batches || num_virtual_rows % num_batches == 0,
+                    "group_norm: The core grid (x={}, y={}) produces num_virtual_rows={} which is not "
+                    "divisible by num_batches={}. This creates non-uniform multicast groups and will "
+                    "deadlock. Use find_expected_dram_grid() with num_batches to select a valid grid.",
+                    grid_size.x,
+                    grid_size.y,
+                    num_virtual_rows,
+                    num_batches);
+            }
+        }
     }
 }
 
