@@ -13,18 +13,16 @@
 // - SfpuMul on DEST slots D0 + D1 -> D0, after binary_exec filled D0 and
 //   the PostOp Load filled D1.
 
-#include "api/compute/common_globals.h"
-#include "api/compute/eltwise_binary.h"
+#include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_a = tt::CBIndex::c_0;
-    constexpr uint32_t cb_b = tt::CBIndex::c_1;
-    constexpr uint32_t cb_c = tt::CBIndex::c_2;
-    constexpr uint32_t cb_output = tt::CBIndex::c_16;
+    constexpr uint32_t cb_a = static_cast<uint32_t>(tt::CBIndex::c_0);
+    constexpr uint32_t cb_b = static_cast<uint32_t>(tt::CBIndex::c_1);
+    constexpr uint32_t cb_c = static_cast<uint32_t>(tt::CBIndex::c_2);
+    constexpr uint32_t cb_output = static_cast<uint32_t>(tt::CBIndex::c_16);
 
     binary_op_init_common(cb_a, cb_b, cb_output);
 
@@ -38,4 +36,3 @@ void MAIN {
             Load<cb_c, Dst::D1, LoadPolicy::WaitAndPop>{},
             SfpuMul<Dst::D0, Dst::D1, Dst::D0>{}));
 }
-}  // namespace NAMESPACE

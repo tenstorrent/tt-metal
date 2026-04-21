@@ -9,15 +9,13 @@
 // would be waited twice and popped twice per tile, which either deadlocks
 // (insufficient tiles on the second wait) or skips every other tile's data.
 
-#include "api/compute/common_globals.h"
-#include "api/compute/eltwise_binary.h"
+#include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_input = tt::CBIndex::c_0;
-    constexpr uint32_t cb_output = tt::CBIndex::c_16;
+    constexpr uint32_t cb_input = static_cast<uint32_t>(tt::CBIndex::c_0);
+    constexpr uint32_t cb_output = static_cast<uint32_t>(tt::CBIndex::c_16);
 
     binary_op_init_common(cb_input, cb_input, cb_output);
 
@@ -25,4 +23,3 @@ void MAIN {
     // Ht = 1, Wt = num_tiles: stream all tiles as a flat row.
     add(cb_input, cb_input, cb_output, BinaryInputBlockShape::of(1, num_tiles));
 }
-}  // namespace NAMESPACE

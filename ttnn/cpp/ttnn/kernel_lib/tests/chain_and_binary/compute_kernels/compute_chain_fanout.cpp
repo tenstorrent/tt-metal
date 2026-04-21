@@ -9,16 +9,13 @@
 // - Single-compute-op chain (Exp) path after the num_compute_ops removal —
 //   must still produce correct results now that chain.apply is called every tile.
 
-#include "api/compute/common_globals.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "ttnn/cpp/ttnn/kernel_lib/sfpu_chain.hpp"
+#include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_input = tt::CBIndex::c_0;
-    constexpr uint32_t cb_output = tt::CBIndex::c_16;
+    constexpr uint32_t cb_input = static_cast<uint32_t>(tt::CBIndex::c_0);
+    constexpr uint32_t cb_output = static_cast<uint32_t>(tt::CBIndex::c_16);
 
     init_sfpu(cb_input, cb_output);
 
@@ -36,4 +33,3 @@ void MAIN {
         cb_output,
         num_tiles);
 }
-}  // namespace NAMESPACE

@@ -411,7 +411,14 @@ template <
     Dst Slot = Dst::D0,
     LoadPolicy Policy = LoadPolicy::WaitNoPop,
     DestReuseReconfig Reconfig = DestReuseReconfig::None>
-struct DestReuseOp : LoadTag {
+struct DestReuseOp {
+    // NOT a LoadTag: DestReuseOp does its own binary_dest_reuse_tiles_init
+    // inside exec(). If we inherited LoadTag, apply_post_chain_batched would
+    // spuriously call copy_tile_to_dst_init_short(FirstLoadCB) before us,
+    // which corrupts state when the chain has no actual Load to init for.
+    // clashes_with_fpu stays true (explicit) so binary_op still re-runs
+    // binary_init per tile to restore the AB MOP after we clobber it.
+    static constexpr bool clashes_with_fpu = true;
     static constexpr uint32_t cb = CB;
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static constexpr uint32_t max_dst = dst_idx;

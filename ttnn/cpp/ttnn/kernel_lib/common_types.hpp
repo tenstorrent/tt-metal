@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "api/compute/common_globals.h"  // ALWI
+
 /**
  * @file common_types.hpp
  * @brief Common types shared between kernel library helpers (reduce, binary_op, etc.)

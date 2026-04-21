@@ -110,14 +110,13 @@ def _build_and_run(
         cbs.append(_cb_descriptor(extra_id, core_range))
     cbs.append(_cb_descriptor(OUT_CB, core_range))
 
-    # Reader: compile-time arg 0 = num_inputs, followed by TensorAccessorArgs per input.
-    reader_ct_args = [num_inputs]
+    # Reader: compile-time args are TensorAccessorArgs per input; NUM_INPUTS is a define.
+    reader_ct_args = []
     for t in input_tensors:
         reader_ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
     reader_rt = ttnn.RuntimeArgs()
     src_addrs = [t.buffer_address() for t in input_tensors]
-    # Pad src addresses to 3 entries so fixed offsets work.
     while len(src_addrs) < 3:
         src_addrs.append(0)
     reader_rt[core.x][core.y] = [*src_addrs, num_tiles, 0]
@@ -128,6 +127,7 @@ def _build_and_run(
         core_ranges=core_range,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt,
+        defines=[("NUM_INPUTS", str(num_inputs))],
         config=ttnn.ReaderConfigDescriptor(),
     )
 
@@ -163,9 +163,25 @@ def _build_and_run(
     result = ttnn.generic_op([*input_tensors, output_tensor], program)
     got = ttnn.to_torch(result)
 
+    # 1) PCC — tolerant of bf16 quantisation but catches structural bugs.
     passing, info = comp_pcc(expected_output.float(), got.float(), pcc=0.9999)
     logger.info(f"{Path(compute_kernel_path).name} num_tiles={num_tiles}: {info}")
     assert passing, f"PCC mismatch: {info}"
+
+    # 2) allclose — per-element numeric check bounded to bf16 tolerance.
+    # bf16 has 7-bit mantissa (~0.78% relative precision per op). After 2–3
+    # compounded ops on values in [-3, 3] range, products can land near ~10,
+    # where a single bf16 ULP is ~0.08. rtol=5e-2 + atol=1e-1 tracks that bound
+    # while still flagging bit-level corruption (off-by-one tile, wrong slot,
+    # missing reinit would produce errors an order of magnitude larger).
+    allclose = torch.allclose(got.float(), expected_output.float(), rtol=5e-2, atol=1e-1)
+    if not allclose:
+        diff = (got.float() - expected_output.float()).abs()
+        logger.error(
+            f"{Path(compute_kernel_path).name} num_tiles={num_tiles} allclose FAILED: "
+            f"max_abs_err={diff.max().item():.4g}, mean_abs_err={diff.mean().item():.4g}"
+        )
+    assert allclose, "allclose mismatch beyond bf16 tolerance"
 
 
 # ---------------------------------------------------------------------------
@@ -225,14 +241,17 @@ def test_binary_dest_reuse_mul(device, num_tiles):
     a = torch.randn(shape, dtype=torch.bfloat16)
     b = torch.randn(shape, dtype=torch.bfloat16)
 
-    # cb_scale holds a single tile whose entire 32x32 block is a single constant-ish
-    # pattern. Use a 32x32 tile of random values — the test multiplies each (a-b)
-    # tile by scale[0], so every output tile is elementwise (a - b) * scale.
+    # cb_scale is a persistent single tile reused across all output tiles.
+    # The reader reads page_id=t for every input CB, so the scale tensor must
+    # have at least num_tiles pages — replicate a single scale tile that many
+    # times. DestReuseMul's WaitNoPop policy reads CB[0] each iteration; the
+    # extra pages sit unused in L1 and are discarded at kernel exit.
     scale_tile = torch.randn((1, 1, 32, 32), dtype=torch.bfloat16)
+    scale_full = scale_tile.repeat(1, 1, 1, num_tiles)  # [1, 1, 32, 32*num_tiles]
 
     a_tensor, _ = _make_tensor(shape, device, data=a)
     b_tensor, _ = _make_tensor(shape, device, data=b)
-    scale_tensor, _ = _make_tensor((1, 1, 32, 32), device, data=scale_tile)
+    scale_tensor, _ = _make_tensor(shape, device, data=scale_full)
 
     # Output tile n = (a_tile_n - b_tile_n) * scale_tile (element-wise per 32x32).
     expected = torch.zeros_like(a)
