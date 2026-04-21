@@ -116,10 +116,14 @@ void kernel_main() {
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
 
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast_metadata_args{
-        get_named_compile_time_arg_val("mcast_metadata_receiver_semaphore_addr"),
-        0,
-        0,
+    deepseek_b1_ops::Mcast::DMArgs mcast_metadata_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("mcast_metadata_receiver_semaphore_addr"),
+                0,
+                0,
+            },
     };
 
     // RMSNorm reader runtime args
@@ -679,18 +683,22 @@ void kernel_main() {
     // RMSNorm2 writer args (BRISC is no-op)
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm2_args{};
 
-    deepseek_b1_ops::Mcast::SenderArgs mcast_metadata_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
-        get_named_compile_time_arg_val("mcast_metadata_receiver_semaphore_addr"),
-        sizeof(deepseek_b1_ops::DeepseekMetadata),
-        get_named_compile_time_arg_val("rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
-        get_common_arg_val<uint32_t>(metadata_addr_common_rta_idx),
-        get_common_arg_val<uint32_t>(metadata_addr_common_rta_idx),
+    deepseek_b1_ops::Mcast::DMArgs mcast_metadata_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("mcast_metadata_receiver_semaphore_addr"),
+                sizeof(deepseek_b1_ops::DeepseekMetadata),
+                get_named_compile_time_arg_val("rmsnorm_input_cb"),
+                get_named_compile_time_arg_val("rmsnorm_num_tiles"),
+                get_common_arg_val<uint32_t>(metadata_addr_common_rta_idx),
+                get_common_arg_val<uint32_t>(metadata_addr_common_rta_idx),
+            },
+        .receiver = {},
     };
 
     // Mcast CB indices from named compile-time args
