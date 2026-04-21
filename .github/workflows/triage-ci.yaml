@@ -27,6 +27,14 @@ on:
         required: false
         type: string
         default: ""
+      skip-assigning-for-issues-that-already-have-owners:
+        description: >-
+          When true (default), any issue that already has a recommended-owner
+          comment is skipped before any expensive work runs. Uncheck to force
+          re-resolution on every issue.
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -52,6 +60,7 @@ jobs:
       issue-repo: ebanerjeeTT/issue_dump
       target-repo: tenstorrent/tt-metal
       issue-numbers: ${{ inputs.issue-numbers }}
+      skip-assigning-for-issues-that-already-have-owners: ${{ inputs.skip-assigning-for-issues-that-already-have-owners }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.AUTO_TRIAGE_TOKEN }}
