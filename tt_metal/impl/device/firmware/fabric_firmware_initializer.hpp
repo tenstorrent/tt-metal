@@ -56,17 +56,29 @@ private:
     // tear down the WH ETH PHY link and break non-MMIO L1 access for the rest of the mesh).
     // Called before configure_fabric_cores() clears L1 (Fix A).
     //
-    // Returns the set of ETH channel IDs whose initial probe read threw (i.e. the remote ERISC
-    // is completely unresponsive — physically dead link).  The caller passes this set to
-    // configure_fabric_cores() so it can skip assert_risc_reset_at_core() for these channels;
-    // those calls hang indefinitely on some hardware (observed: ch7 on Device 4 T3K hangs
-    // >10 min while ch0/1/6 correctly time out after 5 s) causing CI timeouts.
-    std::unordered_set<uint32_t> terminate_stale_erisc_routers(
+    // Returns {probe_dead_channels, relay_broken}:
+    // - probe_dead_channels: ETH channel IDs whose probe read timed out (ERISC unresponsive).
+    //   Passed to configure_fabric_cores() to skip assert_risc_reset_at_core() for dead channels.
+    // - relay_broken: true when the relay queue reached saturation risk (kMaxRelayTimeouts
+    //   consecutive read timeouts), indicating the non-MMIO device's ETH relay path is broken
+    //   and the device is effectively unreachable for ANY L1 write (not just ETH core writes).
+    //   Callers use this to skip dispatch kernel initialization for unreachable non-MMIO devices.
+    std::pair<std::unordered_set<uint32_t>, bool> terminate_stale_erisc_routers(
         Device* dev, const tt_fabric::FabricBuilderContext& builder_context) const;
+
+    // FIX E (#42429): Return the set of non-MMIO device IDs whose ETH relay path was confirmed
+    // broken during fabric init (relay_broken=true in terminate_stale_erisc_routers).
+    // DeviceManager uses this to skip dispatch kernel initialization for unreachable devices —
+    // dispatch writes to non-MMIO devices go through the same dead ETH relay and hang.
+    const std::unordered_set<ChipId>& get_dead_relay_devices() const { return dead_relay_devices_; }
 
     tt::tt_fabric::ControlPlane& control_plane_;
     std::vector<Device*> devices_;
     std::atomic_flag initialized_;
+
+    // FIX E: Non-MMIO devices whose ETH relay path was broken during fabric init.
+    // These devices cannot receive ANY writes (including dispatch firmware) via the relay.
+    std::unordered_set<ChipId> dead_relay_devices_;
 
     // GAP 5: Track channels that were force-reset during teardown.
     // On the next verify_all_fabric_channels_healthy() call, channels that were force-reset

@@ -583,7 +583,7 @@ bool FabricFirmwareInitializer::is_initialized() const { return initialized_.tes
 //                                rest of the mesh.
 //                                TODO(F2, #42429): replace with surgical per-channel reset
 //                                once single-ERISC reset is verified to not drop the PHY.
-std::unordered_set<uint32_t> FabricFirmwareInitializer::terminate_stale_erisc_routers(
+std::pair<std::unordered_set<uint32_t>, bool> FabricFirmwareInitializer::terminate_stale_erisc_routers(
     Device* dev, const tt_fabric::FabricBuilderContext& builder_context) const {
     // Channels whose probe L1 read threw (physically dead link — remote ERISC completely
     // unresponsive).  Returned to the caller so configure_fabric_cores() can skip
@@ -591,7 +591,7 @@ std::unordered_set<uint32_t> FabricFirmwareInitializer::terminate_stale_erisc_ro
     std::unordered_set<uint32_t> probe_dead_channels;
 
     if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
-        return probe_dead_channels;
+        return {probe_dead_channels, false};
     }
 
     const auto router_sync_address = builder_context.get_fabric_router_sync_address_and_status().first;
@@ -879,7 +879,7 @@ std::unordered_set<uint32_t> FabricFirmwareInitializer::terminate_stale_erisc_ro
             probe_dead_channels.size());
     }
 
-    return probe_dead_channels;
+    return {probe_dead_channels, relay_broken};
 }
 
 void FabricFirmwareInitializer::compile_and_configure_fabric() {
@@ -933,12 +933,23 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
             // This gives old firmware a chance to terminate cleanly rather than being
             // interrupted mid-execution by an L1 overwrite.
             //
-            // The returned set contains channels whose probe read timed out — i.e. the remote
-            // ERISC is completely unresponsive (physically dead ETH link).  Pass this set to
-            // configure_fabric() so that configure_fabric_cores() can skip
-            // assert_risc_reset_at_core() for those channels, preventing the indefinite hang
-            // observed on T3K Device 4 channel 7 (#42429).
-            const auto probe_dead_channels = terminate_stale_erisc_routers(dev, builder_context);
+            // The returned pair contains:
+            // - probe_dead_channels: channels whose probe read timed out (ERISC unresponsive).
+            //   Passed to configure_fabric() so configure_fabric_cores() can skip
+            //   assert_risc_reset_at_core() for those channels (#42429).
+            // - relay_broken: true when kMaxRelayTimeouts consecutive read timeouts occurred,
+            //   indicating the non-MMIO device's ETH relay path is fully broken.
+            //   FIX E: track these devices so DeviceManager can skip dispatch kernel init
+            //   for them (dispatch writes also route through the dead ETH relay and hang).
+            auto [probe_dead_channels, relay_broken] = terminate_stale_erisc_routers(dev, builder_context);
+            if (relay_broken) {
+                dead_relay_devices_.insert(dev->id());
+                log_warning(
+                    tt::LogMetal,
+                    "compile_and_configure_fabric: Device {} ETH relay broken — marking as dead-relay device. "
+                    "Dispatch kernel initialization will be skipped for this device (#42429 FIX E).",
+                    dev->id());
+            }
 
             dev->configure_fabric(probe_dead_channels);
             configured_count++;

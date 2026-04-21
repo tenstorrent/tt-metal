@@ -499,7 +499,33 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
     initializers_[FabricFirmwareInitializer::key]->init(active_devices, init_done_);
     init_done_.insert(FabricFirmwareInitializer::key);
 
-    initializers_[DispatchKernelInitializer::key]->init(active_devices, init_done_);
+    // FIX E (#42429): Filter out non-MMIO devices whose ETH relay path is broken.
+    // DispatchKernelInitializer writes dispatch firmware to all devices (including non-MMIO).
+    // On non-MMIO devices, these writes route through the ETH relay.  If the relay is dead
+    // (relay_broken=true in terminate_stale_erisc_routers), WriteRuntimeArgsToDevice hangs
+    // indefinitely waiting for wait_for_non_mmio_flush — the same failure fixed by FIX C for
+    // ETH firmware, but here for dispatch (WORKER core) firmware on non-MMIO devices.
+    auto* fabric_init =
+        static_cast<FabricFirmwareInitializer*>(initializers_[FabricFirmwareInitializer::key].get());
+    const auto& dead_relay_devices = fabric_init->get_dead_relay_devices();
+    std::vector<Device*> dispatch_devices;
+    if (dead_relay_devices.empty()) {
+        dispatch_devices = active_devices;
+    } else {
+        for (auto* dev : active_devices) {
+            if (dead_relay_devices.count(dev->id()) == 0) {
+                dispatch_devices.push_back(dev);
+            } else {
+                log_warning(
+                    tt::LogMetal,
+                    "initialize_fabric_and_dispatch_fw: skipping dispatch kernel init for Device {} "
+                    "(dead ETH relay — dispatch writes would hang in wait_for_non_mmio_flush)",
+                    dev->id());
+            }
+        }
+    }
+
+    initializers_[DispatchKernelInitializer::key]->init(dispatch_devices, init_done_);
     init_done_.insert(DispatchKernelInitializer::key);
 
     initializers_[DispatchKernelInitializer::key]->configure();
