@@ -620,7 +620,6 @@ def _expert_tensor_to_list(expert_tensor: torch.Tensor) -> list[torch.Tensor]:
 @pytest.mark.parametrize("matmul_N", [2048])
 @pytest.mark.parametrize("scheme", ["random_sequential_experts"])
 @pytest.mark.parametrize("compute_output_height_shard_dim", [4])
-@pytest.mark.parametrize("compute_output_width_shard_dim", [4])
 @pytest.mark.parametrize("combine_mux_core_range", [((1, 1), (3, 3))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
@@ -655,7 +654,6 @@ def test_optimized_moe_decode_block(
     matmul_N,
     scheme,
     compute_output_height_shard_dim,
-    compute_output_width_shard_dim,
     combine_mux_core_range,
     combine_token_parallel_core_dim,
     combine_data_parallel_core_dim,
@@ -694,6 +692,16 @@ def test_optimized_moe_decode_block(
         total_experts_per_cluster = routed_experts_per_cluster
         effective_experts_k = select_experts_k
         num_shared_experts = 0
+
+    # Determine compute_output_width_shard_dim based on hidden_size
+    if hidden_size == 7168:
+        compute_output_width_shard_dim = 4  # DeepSeekRingConfig::OUTPUT_WIDTH_SHARD_DIM
+    elif hidden_size == 2880:
+        compute_output_width_shard_dim = 3  # GptRingConfig::OUTPUT_WIDTH_SHARD_DIM
+    else:
+        raise ValueError(
+            f"Unsupported hidden size {hidden_size} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)"
+        )
 
     if cluster_axis == 1:
         shard_dims = (None, shard_dim)
@@ -1227,7 +1235,6 @@ def test_optimized_moe_decode_block(
             tt_w2,
             layer_id=layer_id,
             output_height_shard_dim=compute_output_height_shard_dim,
-            output_width_shard_dim=compute_output_width_shard_dim,
             cluster_axis=cluster_axis,
             mux_core_range_set=combine_mux_cores,
             optional_output_tensor=tt_preallocated_combine_output,
