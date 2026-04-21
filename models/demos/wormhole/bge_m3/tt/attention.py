@@ -60,22 +60,14 @@ def _sdpa_storage_grid(mesh_device: ttnn.MeshDevice | None):
         return (8, 8)
 
 
-def _sdpa_compute_grid_for_seq_len(seq_len: int, mesh_device: ttnn.MeshDevice | None):
+def _sdpa_compute_grid_for_seq_len(_seq_len: int, mesh_device: ttnn.MeshDevice | None):
     """``compute_with_storage_grid_size`` for ``SDPAProgramConfig``.
 
-    For **runtime ``seq_len == 512``** only, cap the worker grid to **(min(8, gx), max(2, min(6, gy)))**
-    using the same ``(x, y)`` tuple convention as SDPA unit tests. **q_chunk / k_chunk** stay on the
-    default largest-divisor path. Other ``seq_len`` values use the full device grid from
-    ``_sdpa_storage_grid``.
+    Use the full device compute grid for every sequence length. An older **S512-only** cap
+    (smaller worker grid) hurt 512-token throughput; chunk sizes and ``exp_approx_mode`` still
+    follow ``_sdpa_chunks_for_seq_len`` / ``_sdpa_exp_approx_for_seq_len`` and are unchanged for S8192.
     """
-    base = _sdpa_storage_grid(mesh_device)
-    if seq_len != 512:
-        return base
-    if isinstance(base, tuple):
-        gx, gy = int(base[0]), int(base[1])
-    else:
-        gx, gy = int(getattr(base, "x", 8)), int(getattr(base, "y", 8))
-    return (min(8, gx), max(2, min(6, gy)))
+    return _sdpa_storage_grid(mesh_device)
 
 
 def _sdpa_program_config_for_seq_len(seq_len: int, mesh_device: ttnn.MeshDevice | None) -> ttnn.SDPAProgramConfig:
