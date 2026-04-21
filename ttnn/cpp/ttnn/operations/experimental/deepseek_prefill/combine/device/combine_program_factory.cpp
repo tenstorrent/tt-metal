@@ -542,10 +542,10 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     uint32_t cb_factor;
     {
         const auto arch = mesh_device->arch();
-        if (arch == tt::ARCH::BLACKHOLE) {
+        if (arch == tt::ARCH::BLACKHOLE || !is_tile_layout) {
             cb_factor = 1;
         } else {
-            cb_factor = 4;  // Wormhole_B0 and others
+            cb_factor = 4;  // Wormhole_B0 and others for TILE_LAYOUT
         }
     }
 

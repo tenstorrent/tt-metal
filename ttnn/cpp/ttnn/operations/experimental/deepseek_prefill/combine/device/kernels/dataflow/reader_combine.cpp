@@ -294,6 +294,24 @@ void kernel_main() {
 
         DPRINT_COMBINE << "Expert=" << local_expert << " tokens=" << expert_tokens << ENDL();
 
+#if IS_TILE_LAYOUT
+#else
+        // Prefetch first batch
+        uint32_t first_batch_end = (start_page + read_batch_size < end_page) ? start_page + read_batch_size : end_page;
+        uint32_t first_batch_count = first_batch_end - start_page;
+        if (first_batch_count > 0) {
+            for (uint32_t t = 0; t < first_batch_count; t++) {
+                noc_async_read_page(
+                    start_page + t, dispatched_buffer_addr_gen, buffer_base + t * aligned_dispatched_buffer_page_size);
+                noc_async_read_page(
+                    start_page + t,
+                    dispatched_metadata_addr_gen,
+                    metadata_base + t * aligned_dispatched_metadata_page_size);
+            }
+            noc_async_read_barrier();
+        }
+#endif
+
         for (uint32_t B = 0; B < num_batches; B++) {
             uint32_t batch_start = start_page + B * read_batch_size;
             uint32_t batch_end = (batch_start + read_batch_size < end_page) ? batch_start + read_batch_size : end_page;
@@ -348,17 +366,6 @@ void kernel_main() {
             // the idle deadlocks waiting for a signal that never re-arrives.
             noc_semaphore_wait(data_ready_sem_ptr, 1);
             noc_semaphore_set(data_ready_sem_ptr, 0);
-#else
-            // ROW_MAJOR: DMA read dispatched_buffer rows + metadata
-            for (uint32_t t = 0; t < batch_count; t++) {
-                noc_async_read_page(
-                    batch_start + t, dispatched_buffer_addr_gen, buffer_base + t * aligned_dispatched_buffer_page_size);
-                noc_async_read_page(
-                    batch_start + t,
-                    dispatched_metadata_addr_gen,
-                    metadata_base + t * aligned_dispatched_metadata_page_size);
-            }
-            noc_async_read_barrier();
 #endif
 
             // In TILE_LAYOUT the sender only routes tokens when has_non_local is true (the idle
@@ -418,9 +425,38 @@ void kernel_main() {
                     }
                 }
 
+#if IS_TILE_LAYOUT
+#else
+                // Issue next batch reads BEFORE write barrier to overlap DMA reads with NOC writes
+                uint32_t next_batch_start = batch_start + read_batch_size;
+                bool has_next_batch = (next_batch_start < end_page);
+                if (has_next_batch) {
+                    uint32_t next_batch_end =
+                        (next_batch_start + read_batch_size < end_page) ? next_batch_start + read_batch_size : end_page;
+                    uint32_t next_batch_count = next_batch_end - next_batch_start;
+                    for (uint32_t t = 0; t < next_batch_count; t++) {
+                        noc_async_read_page(
+                            next_batch_start + t,
+                            dispatched_buffer_addr_gen,
+                            buffer_base + t * aligned_dispatched_buffer_page_size);
+                        noc_async_read_page(
+                            next_batch_start + t,
+                            dispatched_metadata_addr_gen,
+                            metadata_base + t * aligned_dispatched_metadata_page_size);
+                    }
+                }
+#endif
+
                 if (batch_did_local_write) {
                     noc_async_write_barrier();
                 }
+
+#if IS_TILE_LAYOUT
+#else
+                if (has_next_batch) {
+                    noc_async_read_barrier();
+                }
+#endif
             }
         }
     }
