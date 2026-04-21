@@ -9,6 +9,7 @@
 #include <string_view>
 #include <unordered_set>
 
+#include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program.hpp>
@@ -339,6 +340,68 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 }
 
 // ----------------------------------------------------------------------------
+// Default Inference (optional inputs -> explicit)
+// ----------------------------------------------------------------------------
+//
+// Some optional parameters in the ProgramSpec are automatically inferred by the
+// runtime if the user doesn't specify them explicitly:
+//   - WorkerSpecs
+//   - Gen1 DM kernel configuration (TODO)
+//
+//
+// Infer WorkerSpecs from kernels, DFBs, and semaphores.
+std::vector<WorkerSpec> InferWorkers(const ProgramSpec& spec) {
+    using CoverageSig = std::tuple<std::set<KernelSpecName>, std::set<DFBSpecName>, std::set<SemaphoreSpecName>>;
+
+    std::map<NodeCoord, CoverageSig> node_to_sig;
+
+    // Compute coverage signatures for each node mentioned in any target_nodes field.
+    auto for_each_node = [&](const std::variant<NodeCoord, NodeRange, NodeRangeSet>& target_nodes, auto&& fn) {
+        const NodeRangeSet range_set = to_node_range_set(target_nodes);
+        for (const NodeRange& range : range_set.ranges()) {
+            for (const NodeCoord& node : range) {
+                fn(node);
+            }
+        }
+    };
+
+    // Accumulate coverage signatures from kernels, DFBs, and semaphores.
+    for (const KernelSpec& kernel : spec.kernels) {
+        for_each_node(
+            kernel.target_nodes, [&](const NodeCoord& n) { std::get<0>(node_to_sig[n]).insert(kernel.unique_id); });
+    }
+    for (const DataflowBufferSpec& dfb : spec.dataflow_buffers) {
+        for_each_node(dfb.target_nodes, [&](const NodeCoord& n) { std::get<1>(node_to_sig[n]).insert(dfb.unique_id); });
+    }
+    for (const SemaphoreSpec& sem : spec.semaphores) {
+        for_each_node(sem.target_nodes, [&](const NodeCoord& n) { std::get<2>(node_to_sig[n]).insert(sem.unique_id); });
+    }
+
+    // Group nodes by coverage signature.
+    std::map<CoverageSig, std::vector<NodeCoord>> sig_to_nodes;
+    for (const auto& [node, sig] : node_to_sig) {
+        sig_to_nodes[sig].push_back(node);
+    }
+
+    // Build one WorkerSpec per signature.
+    // Inferred unique_ids have the form "inferred_worker@<node_range_set>"
+    // (so auto-generated status is explicit in error messages).
+    std::vector<WorkerSpec> workers;
+    workers.reserve(sig_to_nodes.size());
+    for (const auto& [sig, nodes] : sig_to_nodes) {
+        NodeRangeSet nrs = NodeRangeSet(ttsl::Span<const NodeCoord>(nodes)).merge_ranges();
+        workers.push_back(WorkerSpec{
+            .unique_id = fmt::format("inferred_worker@{}", nrs),
+            .kernels = std::vector<KernelSpecName>(std::get<0>(sig).begin(), std::get<0>(sig).end()),
+            .dataflow_buffers = std::vector<DFBSpecName>(std::get<1>(sig).begin(), std::get<1>(sig).end()),
+            .semaphores = std::vector<SemaphoreSpecName>(std::get<2>(sig).begin(), std::get<2>(sig).end()),
+            .target_nodes = nrs,
+        });
+    }
+    return workers;
+}
+
+// ----------------------------------------------------------------------------
 // ValidateNodeBounds: Node coordinate bounds checking
 // ----------------------------------------------------------------------------
 //
@@ -634,12 +697,9 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate WorkerSpecs
     //////////////////////////////
 
-    // WorkerSpecs are now required for all architectures.
-    // NOTE: WorkerSpec data is strictly redundant, but improves clarity and messaging.
-    //       If it's hated, we can make it optional, and derive the WorkerSpec if absent.
-    //       (Only on WH/BH though, I definitely want to require it on Quasar.)
-    TT_FATAL(spec.workers.has_value(), "Workers are required");
-    const auto& workers = spec.workers.value();
+    // By contract, MakeProgramFromSpec runs InferWorkers before validation, so
+    // spec.workers is always populated here — either by the user or by inference.
+    const auto& workers = *spec.workers;
     TT_FATAL(!workers.empty(), "At least one WorkerSpec is required");
 
     // WorkerSpecs may not overlap in their target nodes
@@ -1350,13 +1410,23 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 // Public Entry Point
 // ============================================================================
 
-Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
-    log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.program_id);
+Program MakeProgramFromSpec(const ProgramSpec& user_spec, bool skip_validation) {
+    log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", user_spec.program_id);
 
-    // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
+    // Step 1a: Copy the spec and infer defaults for any optional fields the user
+    // left unspecified. After this, `spec` is guaranteed to have workers populated.
+    // NOTE: We copy before CollectSpecData because the collected data caches
+    // pointers into spec.kernels; downstream maps (kernel_to_risc_mask) are keyed
+    // by those same pointers, so `collected` and the solver must see the same spec.
+    ProgramSpec spec = user_spec;
+    if (!spec.workers.has_value()) {
+        spec.workers = InferWorkers(spec);
+    }
+
+    // Step 1b: Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
 
-    // Step 1b: Validate semantic rules (can be skipped for trusted inputs)
+    // Step 1c: Validate semantic rules (can be skipped for trusted inputs)
     if (!skip_validation) {
         ValidateProgramSpec(spec, collected);
     }

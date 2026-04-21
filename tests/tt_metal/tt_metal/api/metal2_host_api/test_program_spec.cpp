@@ -561,16 +561,52 @@ TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
 // SECTION 3: WorkerSpec Validation Tests
 // ============================================================================
 
-TEST_F(ProgramSpecTestQuasar, MissingWorkerSpecsFails) {
-    // Gen2 requires WorkerSpecs
-    NodeCoord node{0, 0};
+TEST_F(ProgramSpecTestQuasar, MissingWorkerSpecsInfersWorkers) {
+    // If the user omits WorkerSpecs, they get inferred from kernel/DFB/semaphore
+    // target_nodes. An otherwise-valid spec should create successfully.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.workers = std::nullopt;
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, InferredWorkersPartitionByCoverage) {
+    // Two kernels on disjoint node ranges should produce two inferred WorkerSpecs.
+    // If inference gets this wrong (e.g., merges nodes with differing coverage),
+    // downstream validation will fail.
+    NodeCoord node_a{0, 0};
+    NodeCoord node_b{1, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.program_id = "multi_region";
 
-    auto kernel = MakeMinimalDMKernel("kernel", node);
-    spec.kernels = {kernel};
-    // spec.workers is NOT set (nullopt)
+    spec.kernels = {MakeMinimalDMKernel("kernel_a", node_a), MakeMinimalDMKernel("kernel_b", node_b)};
+    // spec.workers left unset -> inference should yield one worker per node.
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, InferredWorkerWithDFBOnlyNodeFails) {
+    // If a DFB targets a node that no kernel covers, the inferred worker for
+    // that node has no kernels, which fails validation.
+    NodeCoord kernel_node{0, 0};
+    NodeCoord dfb_extra_node{1, 0};
+    NodeRangeSet dfb_nodes{
+        std::vector<NodeRange>{NodeRange{kernel_node, kernel_node}, NodeRange{dfb_extra_node, dfb_extra_node}}};
+
+    ProgramSpec spec;
+    spec.program_id = "dfb_only_node";
+
+    auto producer = MakeMinimalDMKernel("producer", kernel_node);
+    auto consumer = MakeMinimalDMKernel("consumer", kernel_node);
+    auto dfb = MakeMinimalDFB("dfb", dfb_nodes);
+
+    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    // spec.workers left unset.
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
