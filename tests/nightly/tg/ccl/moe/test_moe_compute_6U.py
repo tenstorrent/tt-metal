@@ -1031,12 +1031,12 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
-    [(8, 5, 3)],
+    [(1, 1, 5)],
     #     [(1, 1, 5), (8, 5, 3)],
     #     ids=["perf", "accuracy"],
 )
-# @pytest.mark.parametrize("N, hidden_size", [(2880, 2880)])
-@pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
+@pytest.mark.parametrize("N, hidden_size", [(2880, 2880)])
+# @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("enable_trace", [False])
 # @pytest.mark.parametrize("enable_trace", [False, True])

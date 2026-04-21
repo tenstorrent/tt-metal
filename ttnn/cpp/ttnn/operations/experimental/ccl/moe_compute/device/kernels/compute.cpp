@@ -10,6 +10,9 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
 
+// DEBUG
+#include "api/compute/eltwise_unary/fill.h"
+
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
@@ -60,18 +63,12 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
     PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
 };
 
-// Type holder to extract config type at compile time
-template <uint32_t ConfigTypeValue>
-struct ConfigTypeHolder {
-    static constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(ConfigTypeValue);
-    using type = moe_ring::ConfigType_t<config_type>;
-};
-
 }  // namespace detail
 void kernel_main() {
     // Extract config type from compile-time argument
     constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
-    using config_t = typename detail::ConfigTypeHolder<moe_config_type_value>::type;
+    constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
+    using config_t = moe_ring::ConfigType_t<config_type>;
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -138,8 +135,6 @@ void kernel_main() {
     constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
     constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
-    constexpr uint32_t w2_blocks_per_a2a_iter =
-        moe_ring::W2_TILES_PER_A2A_ITER_W * w2_txns_h / w2_txns_per_block;  // 4 * 5 / 2 = 10
     constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
 
     //-------------------------------------------------------------------------
@@ -147,6 +142,10 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // The number of times to repeat the all2all
     constexpr uint32_t num_a2a_iters = config_t::NUM_A2A_ITERS;
+
+    constexpr uint32_t w2_blocks_per_a2a_iter = w2_blocks_per_expert / num_a2a_iters;
+    // OG CODE
+    // moe_ring::W2_TILES_PER_A2A_ITER_W * w2_txns_h / w2_txns_per_block;
 
     // The number of steps to take in the all2all is the number of cores
     constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
@@ -287,6 +286,7 @@ void kernel_main() {
 
                 tile_regs_acquire();
                 for (uint32_t block_id = 0; block_id < w2_blocks_per_a2a_iter; ++block_id) {
+                    WAYPOINT("W2LW");
                     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
 
                     for (uint32_t k = 0; k < w2_tiles_per_block; k += w2_tiles_per_iter_w) {
@@ -321,6 +321,14 @@ void kernel_main() {
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
 
+                DPRINT << "COMPUTE: done with a2a \n";
+
+                fill_tile_init();
+                fill_tile(0, 1.0);
+                fill_tile(1, 1.0);
+                fill_tile(2, 1.0);
+                fill_tile(3, 1.0);
+
                 tile_regs_commit();
 
                 tile_regs_wait();
@@ -333,7 +341,9 @@ void kernel_main() {
 
                 tile_regs_release();
             }
+
             cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);
+            DPRINT << "COMPUTE: done with cb_push_back(cb_c2s_out, num_w0_w1_tiles_h) \n";
 
             // Toggle the buffer to use
             use_second_half_buffer = !use_second_half_buffer;
