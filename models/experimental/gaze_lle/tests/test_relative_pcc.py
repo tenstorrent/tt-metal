@@ -145,8 +145,8 @@ def _torch_shadow_forward(ref_model, images: torch.Tensor, bboxes, patch_size: i
         x = _torch_gaze_block(x, blk)
     stages["after_gaze_blocks"] = x.clone()
 
-    # ---- In/out head.
-    inout_logits = ref_model.inout_head[2](F.relu(ref_model.inout_head[0](x[:, 0, :])))
+    # ---- In/out head (index 3 is the second Linear now that Dropout is at index 2).
+    inout_logits = ref_model.inout_head[3](F.relu(ref_model.inout_head[0](x[:, 0, :])))
     inout_pred = torch.sigmoid(inout_logits).reshape(b)
     stages["inout_scalar"] = inout_pred.clone()
 

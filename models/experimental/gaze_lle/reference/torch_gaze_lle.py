@@ -29,19 +29,23 @@ class DinoV2Config:
     num_register_tokens: int = 4
 
 
+# `dinov2_vitb14` / `dinov2_vitl14` from facebookresearch/dinov2 torch.hub have NO
+# register tokens. The `*_reg` variants have 4. Gaze-LLE ships against the
+# non-register variants, so we default to 0 here to match pretrained weights.
 DINOV2_CONFIGS = {
-    "vitb14": DinoV2Config(embed_dim=768, depth=12, num_heads=12),
-    "vitl14": DinoV2Config(embed_dim=1024, depth=24, num_heads=16),
+    "vitb14": DinoV2Config(embed_dim=768, depth=12, num_heads=12, num_register_tokens=0),
+    "vitl14": DinoV2Config(embed_dim=1024, depth=24, num_heads=16, num_register_tokens=0),
 }
 
 
 class LayerScale(nn.Module):
     def __init__(self, dim: int, init_value: float = 1.0):
         super().__init__()
-        self.scale_factor = nn.Parameter(init_value * torch.ones(dim))
+        # ``gamma`` matches the official DINOv2 checkpoint key (`blocks.*.ls{1,2}.gamma`).
+        self.gamma = nn.Parameter(init_value * torch.ones(dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x * self.scale_factor
+        return x * self.gamma
 
 
 class Mlp(nn.Module):
@@ -156,12 +160,16 @@ def positionalencoding2d(d_model: int, height: int, width: int) -> torch.Tensor:
 
 
 class GazeBlock(nn.Module):
-    """Small transformer block for Gaze-LLE decoder (matches timm Block shape)."""
+    """Small transformer block for Gaze-LLE decoder (matches timm Block defaults).
+
+    ``timm.models.vision_transformer.Block`` defaults to ``qkv_bias=False`` — the
+    official Gaze-LLE checkpoint accordingly stores no ``transformer.*.attn.qkv.bias``.
+    """
 
     def __init__(self, dim: int = 256, num_heads: int = 8, mlp_ratio: float = 4.0):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim, eps=1e-6)
-        self.attn = Attention(dim, num_heads)
+        self.attn = Attention(dim, num_heads, qkv_bias=False)
         self.norm2 = nn.LayerNorm(dim, eps=1e-6)
         self.mlp = Mlp(dim, int(dim * mlp_ratio))
 
@@ -205,9 +213,13 @@ class GazeLLE(nn.Module):
             nn.Sigmoid(),
         )
         if inout:
+            # Layout matches the official Gaze-LLE checkpoint: index 0=Linear,
+            # 1=ReLU, 2=Dropout(0.1), 3=Linear, 4=Sigmoid. Dropout is a no-op at
+            # eval time but must be present so pretrained weights load.
             self.inout_head = nn.Sequential(
                 nn.Linear(dim, 128),
                 nn.ReLU(),
+                nn.Dropout(0.1),
                 nn.Linear(128, 1),
                 nn.Sigmoid(),
             )

@@ -61,7 +61,7 @@ class _BlockParams:
         self.norm1_b = _to_device(block.norm1.bias.unsqueeze(0), device)
         self.qkv_w = _to_device(block.attn.qkv.weight.T.contiguous(), device, dtype=ttnn.bfloat8_b)
         self.qkv_b = _to_device(block.attn.qkv.bias.unsqueeze(0), device)
-        ls1 = block.ls1.scale_factor.detach()
+        ls1 = block.ls1.gamma.detach()
         proj_w = block.attn.proj.weight.detach() * ls1.unsqueeze(-1)
         proj_b = block.attn.proj.bias.detach() * ls1
         self.proj_w = _to_device(proj_w.T.contiguous(), device, dtype=ttnn.bfloat8_b)
@@ -72,7 +72,7 @@ class _BlockParams:
         self.norm2_b = _to_device(block.norm2.bias.unsqueeze(0), device)
         self.fc1_w = _to_device(block.mlp.fc1.weight.T.contiguous(), device, dtype=ttnn.bfloat8_b)
         self.fc1_b = _to_device(block.mlp.fc1.bias.unsqueeze(0), device)
-        ls2 = block.ls2.scale_factor.detach()
+        ls2 = block.ls2.gamma.detach()
         fc2_w = block.mlp.fc2.weight.detach() * ls2.unsqueeze(-1)
         fc2_b = block.mlp.fc2.bias.detach() * ls2
         self.fc2_w = _to_device(fc2_w.T.contiguous(), device, dtype=ttnn.bfloat8_b)
@@ -122,13 +122,21 @@ def _dinov2_block(x, p: _BlockParams, num_heads: int):
 
 
 class _GazeBlockParams:
-    """Holds on-device weights for one gaze-decoder transformer block (no LayerScale)."""
+    """Holds on-device weights for one gaze-decoder transformer block (no LayerScale).
+
+    The official Gaze-LLE checkpoint uses ``qkv_bias=False`` for the gaze decoder's
+    attention, so we tolerate ``block.attn.qkv.bias`` being ``None``.
+    """
 
     def __init__(self, block, device):
         self.norm1_w = _to_device(block.norm1.weight.unsqueeze(0), device)
         self.norm1_b = _to_device(block.norm1.bias.unsqueeze(0), device)
         self.qkv_w = _to_device(block.attn.qkv.weight.T.contiguous(), device)
-        self.qkv_b = _to_device(block.attn.qkv.bias.unsqueeze(0), device)
+        self.qkv_b = (
+            _to_device(block.attn.qkv.bias.unsqueeze(0), device)
+            if block.attn.qkv.bias is not None
+            else None
+        )
         self.proj_w = _to_device(block.attn.proj.weight.T.contiguous(), device)
         self.proj_b = _to_device(block.attn.proj.bias.unsqueeze(0), device)
         self.norm2_w = _to_device(block.norm2.weight.unsqueeze(0), device)
@@ -229,11 +237,11 @@ class TtGazeLLE:
 
         if inout:
             self.inout_token = _to_device(ref_model.inout_token.weight.unsqueeze(0), device)
-            # Reference inout_head = Sequential(Linear 256->128, ReLU, Linear 128->1, Sigmoid)
+            # inout_head = Linear 256->128 [0], ReLU [1], Dropout [2], Linear 128->1 [3], Sigmoid [4].
             self.inout_fc1_w = _to_device(ref_model.inout_head[0].weight.T.contiguous(), device)
             self.inout_fc1_b = _to_device(ref_model.inout_head[0].bias.unsqueeze(0), device)
-            self.inout_fc2_w = _to_device(ref_model.inout_head[2].weight.T.contiguous(), device)
-            self.inout_fc2_b = _to_device(ref_model.inout_head[2].bias.unsqueeze(0), device)
+            self.inout_fc2_w = _to_device(ref_model.inout_head[3].weight.T.contiguous(), device)
+            self.inout_fc2_b = _to_device(ref_model.inout_head[3].bias.unsqueeze(0), device)
 
         # --- Fused heatmap head. ConvTranspose2d(k=2, s=2) bias + Conv2d(256->1, k=1, bias=False)
         # is algebraically equivalent to a single per-pixel matmul with weight shape
