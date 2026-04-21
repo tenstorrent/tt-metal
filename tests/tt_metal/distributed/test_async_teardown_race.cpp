@@ -52,6 +52,8 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_impl.hpp"
+#include "fabric/fabric_init.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -2144,6 +2146,268 @@ TEST_F(AsyncTeardownFabric2DFixture, DispatchSWaitWithoutClearPreservesCounter) 
             "dispatch_s WAIT-without-CLEAR counter preservation verified",
             kRounds);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Dead-channel fix coverage: Scenarios U – Y
+//
+// Background (#42429): When ETH channels are dead or corrupt, the naive
+// assert_risc_reset_at_core() call times out and leaves a stuck command in
+// the relay ETH core's 4-slot CMD queue.  With 4 dead channels the queue
+// fills and the 4th channel enters a no-timeout while(full) loop → indefinite
+// hang.  The fix: terminate_stale_erisc_routers() probes each channel and
+// returns probe_dead_channels; configure_fabric_cores() skips the soft reset
+// (and the L1 clear) for those channels; Device::configure_fabric() throws
+// immediately if configure_fabric_cores() returns false.
+//
+// Scenarios U and V exercise the public configure_fabric_cores() and
+// Device::configure_fabric() APIs directly on healthy hardware by passing
+// all active ETH channels as pre_known_dead.  This proves the skip logic
+// fires correctly and the TT_THROW path is reachable — without touching real
+// dead channels or leaving hardware in a broken state.
+//
+// Scenarios W – Y document code paths that require mock/fault-injection
+// infrastructure not yet available.  They are GTEST_SKIPped with detailed
+// TODOs so future developers know exactly what is missing.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Scenario U: ConfigureFabricCores_SkipsPreKnownDeadChannels
+//
+// Verifies that configure_fabric_cores() immediately returns false and skips
+// ALL soft-reset and L1-write operations when pre_known_dead_channels
+// covers every active ETH channel on device 0.
+//
+// Mechanism: the fix sets all_channels_healthy = false as soon as
+// pre_known_dead_channels is non-empty (line ~127 of fabric_init.cpp), then
+// continues with each channel skipped.  Calling it with all channels as
+// pre-dead exercises both the early-false path and the per-channel skip.
+//
+// Safety: this call does NOT touch hardware — every channel's soft reset and
+// L1 write is skipped.  The device retains its original initialisation state
+// and teardown succeeds normally.
+//
+// Pass = returns false in <30s.  Fail = returns true, or watchdog fires.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DFixture, ConfigureFabricCores_SkipsPreKnownDeadChannels) {
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Device 0 is the MMIO device — always present.
+    IDevice* device0 = mesh_device_->get_device(MeshCoordinate(0, 0));
+    ASSERT_NE(device0, nullptr) << "[Scenario U] Could not get device 0";
+
+    const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device0->id());
+    const auto& active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+    ASSERT_FALSE(active_channels.empty())
+        << "[Scenario U] Device 0 has no active fabric ETH channels — cannot exercise skip logic";
+
+    // Build a set of all channel IDs — we will pretend every channel is dead.
+    std::unordered_set<uint32_t> all_chans;
+    for (const auto& [chan_id, _] : active_channels) {
+        all_chans.insert(chan_id);
+    }
+    log_info(
+        tt::LogTest,
+        "[Scenario U] Device {} has {} active ETH channels — passing all as pre_known_dead",
+        device0->id(),
+        all_chans.size());
+
+    // Call configure_fabric_cores() with every channel marked pre-dead.
+    // Expected: returns false immediately (all_channels_healthy = false on first
+    // non-empty check), no assert_risc_reset_at_core called, no L1 writes.
+    const bool result = tt::tt_fabric::configure_fabric_cores(device0, all_chans);
+    EXPECT_FALSE(result)
+        << "[Scenario U] configure_fabric_cores should return false when all channels are pre-known-dead";
+
+    log_info(
+        tt::LogTest,
+        "[Scenario U] configure_fabric_cores returned false for {} pre-dead channels — "
+        "skip logic confirmed, no soft-reset or L1 write attempted",
+        all_chans.size());
+}
+
+// ---------------------------------------------------------------------------
+// Scenario V: DeviceConfigureFabric_ThrowsOnDeadChannels
+//
+// Verifies that Device::configure_fabric() throws when configure_fabric_cores()
+// returns false (i.e., when all ETH channels are pre-known-dead).
+//
+// Mechanism: Device::configure_fabric() calls configure_fabric_cores() and
+// TT_THROW()s with "has dead ETH channels" if the result is false.  This is
+// the fail-fast path that prevents the indefinite hang caused by
+// WriteRuntimeArgsToDevice routing through dead ethernet links.
+//
+// Safety: same as Scenario U — configure_fabric_cores skips every channel so
+// no hardware state is changed.  The exception is caught by EXPECT_THROW;
+// the device remains properly initialised and teardown succeeds normally.
+//
+// Pass = throws std::exception containing "has dead ETH channels" in <30s.
+// Fail = does not throw, throws wrong message, or watchdog fires.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DFixture, DeviceConfigureFabric_ThrowsOnDeadChannels) {
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    IDevice* device0 = mesh_device_->get_device(MeshCoordinate(0, 0));
+    ASSERT_NE(device0, nullptr) << "[Scenario V] Could not get device 0";
+
+    const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device0->id());
+    const auto& active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+    ASSERT_FALSE(active_channels.empty())
+        << "[Scenario V] Device 0 has no active fabric ETH channels — cannot exercise throw path";
+
+    std::unordered_set<uint32_t> all_chans;
+    for (const auto& [chan_id, _] : active_channels) {
+        all_chans.insert(chan_id);
+    }
+    log_info(
+        tt::LogTest,
+        "[Scenario V] Device {} has {} active ETH channels — passing all as pre_dead to configure_fabric()",
+        device0->id(),
+        all_chans.size());
+
+    // Device::configure_fabric() is on the impl Device class, not on IDevice.
+    // static_cast is safe here: the MeshDevice creates Device instances and
+    // IDevice* is always the Device impl underneath.
+    auto* dev_impl = static_cast<tt::tt_metal::Device*>(device0);
+    ASSERT_NE(dev_impl, nullptr) << "[Scenario V] static_cast to Device* failed";
+
+    // configure_fabric() calls configure_fabric_cores() which returns false
+    // (pre_known_dead non-empty) → TT_THROW "has dead ETH channels".
+    // No hardware writes are made — configure_fabric_cores skips all channels.
+    bool threw = false;
+    std::string caught_what;
+    try {
+        dev_impl->configure_fabric(all_chans);
+    } catch (const std::exception& e) {
+        threw = true;
+        caught_what = e.what();
+    }
+
+    EXPECT_TRUE(threw) << "[Scenario V] Device::configure_fabric() did not throw with all channels dead";
+    if (threw) {
+        EXPECT_NE(caught_what.find("has dead ETH channels"), std::string::npos)
+            << "[Scenario V] Exception message does not contain 'has dead ETH channels': " << caught_what;
+        log_info(
+            tt::LogTest,
+            "[Scenario V] Device::configure_fabric() threw as expected: {}",
+            caught_what.substr(0, 120));
+    }
+
+    log_info(
+        tt::LogTest,
+        "[Scenario V] TT_THROW fail-fast path confirmed — no indefinite hang when all {} channels are dead",
+        all_chans.size());
+}
+
+// ---------------------------------------------------------------------------
+// Scenario W: ConfigureFabricCores_CatchesResetExceptionAndRecords  [SKIPPED]
+//
+// INTENT: Inject a std::exception from cluster.assert_risc_reset_at_core() on
+// one channel, then verify:
+//   1. The catch block marks that channel dead (dead_channels.insert(router_chan))
+//   2. The L1 clear loop skips that channel
+//   3. configure_fabric_cores() returns false
+//
+// WHY NOT IMPLEMENTED: This requires mock infrastructure to replace the UMD
+// cluster's assert_risc_reset_at_core() with a stub that throws on demand.
+// The real UMD call goes to hardware; we cannot inject an exception without
+// either:
+//   (a) a gMock wrapper around tt_ClusterManager / UMD Cluster, or
+//   (b) a seam/virtual dispatch in the production code for testing.
+//
+// TODO: Once UMD Cluster is mockable (or a test-seam is added to
+//       configure_fabric_cores()), implement this test to cover the catch
+//       block at fabric_init.cpp lines ~174–196.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DFixture, ConfigureFabricCores_CatchesResetExceptionAndRecords) {
+    GTEST_SKIP()
+        << "[Scenario W] SKIPPED — requires mock/fault-injection for "
+           "cluster.assert_risc_reset_at_core() to inject std::exception. "
+           "TODO: add UMD Cluster mock seam and implement the catch-block coverage test.";
+}
+
+// ---------------------------------------------------------------------------
+// Scenario X: TerminateStaleEriscRouters_CorruptStatusDetected  [SKIPPED]
+//
+// INTENT: Write an invalid EDMStatus value (e.g. 0xBAADF00D) to the
+// router_sync_address of one active ETH channel, then close + reopen the
+// FABRIC_2D mesh and verify:
+//   1. terminate_stale_erisc_routers() reads the corrupt word and classifies
+//      it as NOT a valid EDMStatus (is_known_edm_status() returns false)
+//   2. The channel is added to probe_dead_channels
+//   3. configure_fabric_cores() receives that set and skips the channel
+//
+// WHY NOT IMPLEMENTED: Writing 0xBAADF00D to router_sync_address AFTER the
+// mesh is closed (ERISC halted) leaves the value in L1 when the ERISC does
+// not restart (configure_fabric_cores skips the soft reset for the corrupt
+// channel).  This permanently corrupts that machine until a host-level
+// hardware reset is performed, making the test unusable in CI.
+//
+// The write-before-close variant does not work either: the running ERISC
+// firmware overwrites the corrupt word with TERMINATED when it processes the
+// TERMINATE command written to term_addr during teardown, erasing our inject.
+//
+// TODO: Options for a safe implementation —
+//   (a) Override ReadFromDeviceL1 with a mock that returns 0xBAADF00D for the
+//       target channel, then run terminate_stale_erisc_routers in a unit test.
+//   (b) Expose terminate_stale_erisc_routers() as a free function (currently
+//       private method of FabricFirmwareInitializer) so it can be called from
+//       a unit test with a mock device/cluster.
+//   (c) Add a dedicated "corrupt L1 recovery" hardware test that explicitly
+//       accepts the cost of a machine reset and is tagged accordingly in CI.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DRepeatFixture, TerminateStaleEriscRouters_CorruptStatusDetected) {
+    GTEST_SKIP()
+        << "[Scenario X] SKIPPED — writing a corrupt EDMStatus to ERISC L1 after close() "
+           "permanently breaks the machine until a hardware reset (configure_fabric_cores "
+           "skips the soft reset for corrupt channels, leaving the ERISC halted with the bad "
+           "value in L1). "
+           "TODO: mock ReadFromDeviceL1 or expose terminate_stale_erisc_routers() as a free "
+           "function for unit testing.";
+}
+
+// ---------------------------------------------------------------------------
+// Scenario Y: CompileAndConfigureFabric_JoinsAllFuturesBeforeRethrow  [SKIPPED]
+//
+// INTENT: Force compile_fabric() to throw on exactly one device while
+// succeeding on all others, then verify:
+//   1. All shared_future::get() calls are drained before the exception is
+//      rethrown (no orphaned tasks left running with access to
+//      BuildEnvManager::device_id_to_build_env_)
+//   2. No SIGSEGV from concurrent unordered_map access during cleanup
+//   3. The original exception message propagates to the caller
+//
+// This tests the "Join ALL futures before acting on any exception" fix in
+// FabricFirmwareInitializer::compile_and_configure_fabric() (lines ~775–796
+// of fabric_firmware_initializer.cpp).
+//
+// WHY NOT IMPLEMENTED: compile_fabric() calls
+// tt::tt_fabric::create_and_compile_fabric_program(), which compiles real
+// ETH kernel binaries on real hardware.  There is no seam to make it fail on
+// one device without either:
+//   (a) A mock IDevice that overrides compile_fabric() to throw, or
+//   (b) A test-seam in FabricFirmwareInitializer::compile_and_configure_fabric
+//       that accepts a factory for compile operations.
+//
+// Without such a seam, the only observable guarantee is that no SIGSEGV
+// occurs on a successful multi-device open — which is already covered by
+// Scenarios D, E, H, I, O, R, S that exercise FABRIC_2D on multi-device
+// meshes.  The crash this test guards against is non-deterministic by nature
+// (data race in unordered_map) and would not be reliably caught in a single
+// test run anyway.
+//
+// TODO: Introduce a compile-factory seam (std::function<bool(Device*)>) in
+//       FabricFirmwareInitializer so tests can inject a throwing stub for one
+//       device and verify the join-before-rethrow invariant under TSAN.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownFabric2DRepeatFixture, CompileAndConfigureFabric_JoinsAllFuturesBeforeRethrow) {
+    GTEST_SKIP()
+        << "[Scenario Y] SKIPPED — requires a compile-factory seam in "
+           "FabricFirmwareInitializer::compile_and_configure_fabric() to inject a throwing "
+           "stub for one device. "
+           "TODO: add std::function<bool(Device*)> compile_fn parameter (defaulting to "
+           "dev->compile_fabric()) and implement the multi-device throw + join-before-rethrow "
+           "test under TSAN.";
 }
 
 }  // namespace tt::tt_metal::distributed::test
