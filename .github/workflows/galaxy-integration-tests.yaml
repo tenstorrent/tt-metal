@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - all
-          - llama3
           - resnet50
           - unit
           - sd35

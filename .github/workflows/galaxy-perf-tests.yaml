@@ -11,9 +11,6 @@ on:
         options:
           - all
 #          - cnn
-#          - llama70b
-#          - llama_unit_tests
-#          - llama70b_prefill
           - sd35
           - flux1-dev
           - motif
@@ -21,7 +18,6 @@ on:
           - wan2-2
           - mochi
           - qwenimage
-          - gpt-oss
           - deepseek_v3
       build-type:
         required: false

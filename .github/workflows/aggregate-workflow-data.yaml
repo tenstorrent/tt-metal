@@ -68,9 +68,15 @@ jobs:
               ".github/workflows/t3000-e2e-tests.yaml",
               ".github/workflows/t3000-integration-tests.yaml",
               ".github/workflows/t3000-profiler-tests.yaml",
-              ".github/workflows/t3000-perplexity-tests.yaml",
               ".github/workflows/t3000-demo-tests.yaml",
               ".github/workflows/t3000-unit-tests.yaml",
+
+              ".github/workflows/models-t1-e2e-tests.yaml",
+              ".github/workflows/models-t1-unit-tests.yaml",
+              ".github/workflows/models-t2-e2e-tests.yaml",
+              ".github/workflows/models-t2-unit-tests.yaml",
+              ".github/workflows/models-t3-e2e-tests.yaml",
+              ".github/workflows/models-t3-unit-tests.yaml",
 
               ".github/workflows/perf-device-models.yaml",
               ".github/workflows/perf-models.yaml",

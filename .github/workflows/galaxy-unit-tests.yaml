@@ -13,10 +13,8 @@ on:
           - unit
           - fabric
           - multiprocess
-          - llama3-70b
           - prefetcher
           - distributed-ops
-          - gpt-oss
       platform:
         required: false
         type: choice

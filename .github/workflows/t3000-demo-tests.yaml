@@ -10,29 +10,15 @@ on:
         default: all
         options:
           - all
-          - falcon7b
-          - falcon40b
-          - llama3
-          - llama3_vision
-          - llama3_90b_vision
-          - llama3_70b
           - resnet50
           - sentence_bert
           - sd35_large
           - flux1-dev
           - motif
           - qwenimage
-          - mistral
-          - mixtral
-          - whisper
-          - qwen3
-          - qwen25
-          - qwen25_vl
-          - qwen3_vl
-          - gemma3
           - wan22
           - mochi
-          - gpt-oss
+          - qwen3_vl
       platform:
         required: false
         type: choice
@@ -67,7 +53,7 @@ on:
   workflow_call:
     inputs:
       model:
-        description: "Select model to test (all, falcon7b, falcon40b, llama3, etc.)"
+        description: "Select model to test (all, resnet50, sd35_large, wan22, mochi, etc.)"
         required: false
         type: string
         default: "all"

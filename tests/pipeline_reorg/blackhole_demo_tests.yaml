@@ -19,7 +19,7 @@
   model-name: whisper
 
 - name: whisper nightly
-  cmd: pytest tests/nightly/single_card/whisper --timeout=600
+  cmd: pytest models/demos/audio/whisper/tests/test_whisper_modules.py --timeout=600
   skus:
     bh_p150:
       timeout: 10
