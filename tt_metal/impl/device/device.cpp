@@ -388,38 +388,105 @@ void Device::configure_fabric(const std::unordered_set<uint32_t>& pre_dead_chann
         return;
     }
 
-    // Returns false if any channel had a timed-out soft reset (remote chip unreachable).
-    // When channels are dead, ALL subsequent L1 writes to the device (WriteRuntimeArgsToDevice,
-    // ConfigureDeviceWithProgram, write_launch_msg_to_core, l1_barrier) route through the same
-    // dead ethernet path and will block indefinitely — there is no safe recovery path for this
-    // device.  Throw immediately to fail fast with a clear diagnostic rather than hanging for
-    // 10 minutes until the CI timeout kills the process.  See #42429.
+    // Returns FabricCoresHealth describing per-channel reset results.
+    // newly_dead_channels: channels that NEWLY failed soft reset in this call (not pre-known).
+    // If only pre-known dead channels exist, we can continue in degraded mode with a warning;
+    // if newly-discovered dead channels appear, we must TT_THROW (all subsequent L1 writes to
+    // this device would route through the dead ETH path and hang indefinitely).  See #42429.
     //
     // pre_dead_channels: channels already confirmed dead by terminate_stale_erisc_routers().
     // Passed through so configure_fabric_cores() can skip assert_risc_reset_at_core() for them
     // and avoid the indefinite hang observed on T3K Device 4 ch7 (#42429).
-    const bool fabric_cores_healthy = tt::tt_fabric::configure_fabric_cores(this, pre_dead_channels);
-    if (!fabric_cores_healthy) {
-        TT_THROW(
-            "configure_fabric: Device {} has dead ETH channels (soft reset timed out). "
-            "Cannot write fabric firmware — all L1 writes would hang on the dead ethernet path. "
-            "Hardware requires a reset to recover.",
-            this->id_);
+    const auto health = tt::tt_fabric::configure_fabric_cores(this, pre_dead_channels);
+    if (!health.all_channels_healthy) {
+        if (!health.newly_dead_channels.empty()) {
+            // Truly unexpected new dead channels: ALL L1 writes to this device now route through
+            // the dead ETH path and will hang.  Hard-throw immediately.
+            TT_THROW(
+                "configure_fabric: Device {} has {} newly-dead ETH channel(s) (soft reset timed out "
+                "for channels not in pre_dead_channels). Cannot write fabric firmware — all L1 writes "
+                "would hang on the dead ethernet path. Hardware requires a reset to recover.",
+                this->id_,
+                health.newly_dead_channels.size());
+        }
+        // All dead channels were pre-confirmed by terminate_stale_erisc_routers(); continue in
+        // degraded mode.  Firmware will not be loaded on those channels but the remaining
+        // channels are healthy and writes to them are safe.
+        log_warning(
+            tt::LogMetal,
+            "configure_fabric: Device {} running in degraded mode — {} pre-confirmed dead ETH "
+            "channel(s) skipped. Fabric firmware will not be loaded on those channels.",
+            this->id_,
+            pre_dead_channels.size());
     }
+
+    // FIX C (#42429): Build the set of all dead ETH channels (pre-known + any newly found)
+    // so we can skip write_launch_msg_to_core for dead ETH cores.  Attempting to write launch
+    // messages to an ERISC core whose ETH relay is broken causes the NOC write to route through
+    // the dead channel and hang (same failure mode as the l1_barrier above).
+    const auto& all_dead_channels = pre_dead_channels.empty() ? health.newly_dead_channels
+                                                                : pre_dead_channels;
+    // Look up SOC descriptor once for the ETH-core→channel reverse mapping.
+    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+    const auto& soc_desc_for_dead = env_impl.get_cluster().get_soc_desc(this->id_);
 
     fabric_program_->impl().finalize_offsets(this);
 
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
 
-    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
-    env_impl.get_cluster().l1_barrier(this->id());
+    // Only issue l1_barrier if we have no dead ETH channels on this device.  l1_barrier
+    // calls driver_->l1_membar which internally calls wait_for_non_mmio_flush — on a non-MMIO
+    // device with stuck relay commands that call blocks until the relay drains, which can hang
+    // indefinitely if the relay ERISC is dead.
+    if (all_dead_channels.empty()) {
+        env_impl.get_cluster().l1_barrier(this->id());
+    } else {
+        log_warning(
+            tt::LogMetal,
+            "configure_fabric: Device {} skipping l1_barrier (dead ETH channels present — "
+            "l1_membar/wait_for_non_mmio_flush would hang on dead relay path)",
+            this->id_);
+    }
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->impl().logical_cores();
     const auto& hal = env_impl.get_hal();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);
         for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            // FIX C: skip write_launch_msg_to_core for ETH cores whose channel is dead.
+            // write_launch_msg_to_core calls tt_cluster::write_core → WriteToDevice → UMD
+            // write_to_device.  On a non-MMIO device, this routes through the ETH relay;
+            // if the relay ERISC is dead the write hangs indefinitely (no per-write timeout).
+            if (core_type == CoreType::ETH && !all_dead_channels.empty()) {
+                // Get the ETH channel for this logical core and skip if it is dead.
+                try {
+                    auto eth_chan = soc_desc_for_dead.get_eth_channel_for_core(logical_core, CoordSystem::LOGICAL);
+                    if (all_dead_channels.count(eth_chan)) {
+                        log_debug(
+                            tt::LogMetal,
+                            "configure_fabric: Device {} skipping write_launch_msg_to_core for "
+                            "dead ETH core ({},{}) channel {}",
+                            this->id_,
+                            logical_core.x,
+                            logical_core.y,
+                            eth_chan);
+                        continue;
+                    }
+                } catch (const std::exception& e) {
+                    // If we can't resolve the channel, skip the write conservatively.
+                    log_warning(
+                        tt::LogMetal,
+                        "configure_fabric: Device {} cannot resolve ETH channel for logical core "
+                        "({},{}) — skipping write_launch_msg_to_core to avoid potential hang: {}",
+                        this->id_,
+                        logical_core.x,
+                        logical_core.y,
+                        e.what());
+                    continue;
+                }
+            }
+
             auto* kg = fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index);
             dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
             dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();

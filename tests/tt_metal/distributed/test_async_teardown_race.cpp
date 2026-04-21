@@ -2213,38 +2213,52 @@ TEST_F(AsyncTeardownFabric2DFixture, ConfigureFabricCores_SkipsPreKnownDeadChann
         all_chans.size());
 
     // Call configure_fabric_cores() with every channel marked pre-dead.
-    // Expected: returns false immediately (all_channels_healthy = false on first
-    // non-empty check), no assert_risc_reset_at_core called, no L1 writes.
-    const bool result = tt::tt_fabric::configure_fabric_cores(device0, all_chans);
-    EXPECT_FALSE(result)
-        << "[Scenario U] configure_fabric_cores should return false when all channels are pre-known-dead";
+    // Expected: all_channels_healthy = false (pre_known_dead non-empty), newly_dead_channels
+    // is empty (no channel actually attempted soft reset), no assert_risc_reset_at_core called,
+    // no L1 writes.
+    const auto health = tt::tt_fabric::configure_fabric_cores(device0, all_chans);
+    EXPECT_FALSE(health.all_channels_healthy)
+        << "[Scenario U] configure_fabric_cores should report not-all-healthy when all channels are pre-known-dead";
+    EXPECT_TRUE(health.newly_dead_channels.empty())
+        << "[Scenario U] configure_fabric_cores should have NO newly_dead_channels when all were pre-known";
 
     log_info(
         tt::LogTest,
-        "[Scenario U] configure_fabric_cores returned false for {} pre-dead channels — "
+        "[Scenario U] configure_fabric_cores: all_channels_healthy={} newly_dead={} for {} pre-dead channels — "
         "skip logic confirmed, no soft-reset or L1 write attempted",
+        health.all_channels_healthy,
+        health.newly_dead_channels.size(),
         all_chans.size());
 }
 
 // ---------------------------------------------------------------------------
-// Scenario V: DeviceConfigureFabric_ThrowsOnDeadChannels
+// Scenario V: DeviceConfigureFabric_DegradedModeOnAllPreKnownDeadChannels
 //
-// Verifies that Device::configure_fabric() throws when configure_fabric_cores()
-// returns false (i.e., when all ETH channels are pre-known-dead).
+// Verifies that Device::configure_fabric() does NOT throw when all ETH
+// channels are pre-known-dead (passed in pre_dead_channels from
+// terminate_stale_erisc_routers()).  Instead it logs a warning and continues
+// in degraded mode — firmware is not loaded on dead channels but the call
+// returns without throwing.  Newly-discovered dead channels (not in
+// pre_dead_channels) still cause a hard throw.
 //
-// Mechanism: Device::configure_fabric() calls configure_fabric_cores() and
-// TT_THROW()s with "has dead ETH channels" if the result is false.  This is
-// the fail-fast path that prevents the indefinite hang caused by
-// WriteRuntimeArgsToDevice routing through dead ethernet links.
+// FIX B (#42429): before this fix, configure_fabric() always threw when
+// configure_fabric_cores() returned all_channels_healthy=false, even if ALL
+// dead channels were pre-confirmed.  That caused session failure even when the
+// hardware state was expected and well-understood.
 //
-// Safety: same as Scenario U — configure_fabric_cores skips every channel so
-// no hardware state is changed.  The exception is caught by EXPECT_THROW;
-// the device remains properly initialised and teardown succeeds normally.
+// Mechanism: configure_fabric_cores() returns FabricCoresHealth with
+//   all_channels_healthy = false  (pre_known_dead non-empty)
+//   newly_dead_channels  = {}     (no channel attempted soft reset)
+// configure_fabric() sees newly_dead_channels empty → degraded-mode warning,
+// no throw.
 //
-// Pass = throws std::exception containing "has dead ETH channels" in <30s.
-// Fail = does not throw, throws wrong message, or watchdog fires.
+// Safety: configure_fabric_cores skips every channel so no hardware state is
+// changed.  Device remains properly initialised; teardown succeeds normally.
+//
+// Pass = does NOT throw, completes in <30s.
+// Fail = throws, or watchdog fires.
 // ---------------------------------------------------------------------------
-TEST_F(AsyncTeardownFabric2DFixture, DeviceConfigureFabric_ThrowsOnDeadChannels) {
+TEST_F(AsyncTeardownFabric2DFixture, DeviceConfigureFabric_DegradedModeOnAllPreKnownDeadChannels) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     IDevice* device0 = mesh_device_->get_device(MeshCoordinate(0, 0));
@@ -2253,7 +2267,7 @@ TEST_F(AsyncTeardownFabric2DFixture, DeviceConfigureFabric_ThrowsOnDeadChannels)
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device0->id());
     const auto& active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
     ASSERT_FALSE(active_channels.empty())
-        << "[Scenario V] Device 0 has no active fabric ETH channels — cannot exercise throw path";
+        << "[Scenario V] Device 0 has no active fabric ETH channels — cannot exercise degraded-mode path";
 
     std::unordered_set<uint32_t> all_chans;
     for (const auto& [chan_id, _] : active_channels) {
@@ -2271,8 +2285,10 @@ TEST_F(AsyncTeardownFabric2DFixture, DeviceConfigureFabric_ThrowsOnDeadChannels)
     auto* dev_impl = static_cast<tt::tt_metal::Device*>(device0);
     ASSERT_NE(dev_impl, nullptr) << "[Scenario V] static_cast to Device* failed";
 
-    // configure_fabric() calls configure_fabric_cores() which returns false
-    // (pre_known_dead non-empty) → TT_THROW "has dead ETH channels".
+    // configure_fabric() calls configure_fabric_cores() which returns:
+    //   all_channels_healthy = false  (pre_known_dead non-empty)
+    //   newly_dead_channels  = {}     (nothing newly failed)
+    // FIX B: configure_fabric() should NOT throw — log warning and continue.
     // No hardware writes are made — configure_fabric_cores skips all channels.
     bool threw = false;
     std::string caught_what;
@@ -2283,19 +2299,14 @@ TEST_F(AsyncTeardownFabric2DFixture, DeviceConfigureFabric_ThrowsOnDeadChannels)
         caught_what = e.what();
     }
 
-    EXPECT_TRUE(threw) << "[Scenario V] Device::configure_fabric() did not throw with all channels dead";
-    if (threw) {
-        EXPECT_NE(caught_what.find("has dead ETH channels"), std::string::npos)
-            << "[Scenario V] Exception message does not contain 'has dead ETH channels': " << caught_what;
-        log_info(
-            tt::LogTest,
-            "[Scenario V] Device::configure_fabric() threw as expected: {}",
-            caught_what.substr(0, 120));
-    }
+    EXPECT_FALSE(threw)
+        << "[Scenario V] Device::configure_fabric() threw unexpectedly when all channels were pre-known-dead "
+           "(FIX B: should continue in degraded mode, not throw). Exception: " << caught_what;
 
     log_info(
         tt::LogTest,
-        "[Scenario V] TT_THROW fail-fast path confirmed — no indefinite hang when all {} channels are dead",
+        "[Scenario V] Degraded-mode path confirmed — configure_fabric() did not throw for {} "
+        "pre-known-dead channels; fabric firmware not loaded on those channels",
         all_chans.size());
 }
 
