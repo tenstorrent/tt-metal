@@ -102,4 +102,13 @@ def load_policy_ttnn(weights: Path):
     )
     cattn_mod.swap_davit_channel_attns(policy.model.vlm.vision_tower, device)
 
+    # Iter20: WindowAttention on chip (qkv linear + multi-head attention +
+    # proj linear). Pad/window_partition/window_reverse stay on torch
+    # because they are 6D reshape+permute ops; ttnn doesn't support 6D
+    # ergonomically, but the matmul-heavy interior moves on-chip.
+    wattn_mod = _load_module_file(
+        "xvla_ttnn_davit_window_attn", "ttnn_davit_window_attn.py"
+    )
+    wattn_mod.swap_davit_window_attns(policy.model.vlm.vision_tower, device)
+
     return policy
