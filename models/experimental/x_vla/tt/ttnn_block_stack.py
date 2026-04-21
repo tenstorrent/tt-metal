@@ -81,13 +81,10 @@ class TTNNTransformerBlockStack(nn.Module):
         # LayerNorm 1
         ln1_w = bf16(blk.norm1.weight.detach())
         ln1_b = bf16(blk.norm1.bias.detach())
-        # QKV stays bf16 — those are the weights producing scores and any
-        # precision loss here compounds through softmax. The attention
-        # OUTPUT projection runs on post-softmax activations where rounding
-        # is less brittle, so it can take bfp8_b.
+        # Attention — weights stay bf16 (small, accuracy-sensitive for scores)
         qkv_w = bf16(blk.attn.qkv.weight.detach().t().contiguous())
         qkv_b = bf16(blk.attn.qkv.bias.detach())
-        proj_w = bfp8(blk.attn.proj.weight.detach().t().contiguous())
+        proj_w = bf16(blk.attn.proj.weight.detach().t().contiguous())
         proj_b = bf16(blk.attn.proj.bias.detach())
         # LayerNorm 2
         ln2_w = bf16(blk.norm2.weight.detach())
