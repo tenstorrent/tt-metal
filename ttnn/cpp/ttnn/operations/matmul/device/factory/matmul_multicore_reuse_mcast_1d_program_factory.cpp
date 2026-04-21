@@ -2869,7 +2869,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
-    std::optional<CoreRangeSet> restricted_cores) {
+    std::optional<CoreRangeSet> restricted_cores,
+    std::optional<CoreCoord> start_core_override = std::nullopt) {
     const auto& b = b_tensors[0];
     const auto& output = output_tensors[0];
 
@@ -3053,11 +3054,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     //                      Sub-device start core
     ////////////////////////////////////////////////////////////////////////////
     CoreCoord sub_device_start_core = {0, 0};
-    if (sub_device_id.has_value()) {
+    if (start_core_override.has_value()) {
+        sub_device_start_core = start_core_override.value();
+    } else if (sub_device_id.has_value()) {
         auto sub_device_cores =
             device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
-        auto bbox = sub_device_cores.bounding_box();
-        sub_device_start_core = bbox.start_coord;
+        sub_device_start_core = sub_device_cores.bounding_box().start_coord;
     }
 
     if (mcast_in0) {
@@ -3162,9 +3164,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t MatmulMultiCoreReuse
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler = std::nullopt;
 
     auto b_tensors = std::vector<Tensor>{tensor_args.input_tensors.begin() + 1, tensor_args.input_tensors.end()};
-    CoreCoord resolved_grid_size = program_config.allowed_worker_cores.has_value()
-                                       ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
-                                       : tensor_args.input_tensors.at(0).device()->compute_with_storage_grid_size();
+    std::optional<CoreCoord> resolved_start_core;
+    CoreCoord resolved_grid_size;
+    if (program_config.allowed_worker_cores.has_value()) {
+        auto bbox = program_config.allowed_worker_cores.value().bounding_box();
+        resolved_start_core = bbox.start_coord;
+        resolved_grid_size = bbox.grid_size();
+    } else {
+        resolved_grid_size = tensor_args.input_tensors.at(0).device()->compute_with_storage_grid_size();
+    }
     auto shared_vars = matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
         tensor_args.input_tensors.at(0),
@@ -3195,7 +3203,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t MatmulMultiCoreReuse
         program_config.num_global_cb_receivers,
         operation_attributes.sub_device_id,
         tt::CBIndex::c_0,
-        std::nullopt);
+        std::nullopt,
+        resolved_start_core);
 
     return {std::move(program), std::move(shared_vars)};
 }
@@ -3241,9 +3250,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig config =
         std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
-    CoreCoord resolved_grid = config.allowed_worker_cores.has_value()
-                                  ? config.allowed_worker_cores.value().bounding_box().grid_size()
-                                  : a.device()->compute_with_storage_grid_size();
+    std::optional<CoreCoord> resolved_start;
+    CoreCoord resolved_grid;
+    if (config.allowed_worker_cores.has_value()) {
+        auto bbox = config.allowed_worker_cores.value().bounding_box();
+        resolved_start = bbox.start_coord;
+        resolved_grid = bbox.grid_size();
+    } else {
+        resolved_grid = a.device()->compute_with_storage_grid_size();
+    }
     return matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
         a,
@@ -3274,7 +3289,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         config.num_global_cb_receivers,
         sub_device_id,
         start_cb_index,
-        std::move(restricted_cores));
+        std::move(restricted_cores),
+        resolved_start);
 }
 
 MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::cached_mesh_workload_t

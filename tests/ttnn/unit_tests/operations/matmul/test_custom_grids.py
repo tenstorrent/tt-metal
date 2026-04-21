@@ -4,17 +4,16 @@
 
 """Tests for allowed_worker_cores on matmul program configs, with and without sub-devices.
 
-Exercises the two-layer core resolution in all non-DRAM-sharded factories:
-  Layer 1: sub_device_id → base grid
-  Layer 2: allowed_worker_cores → fine constraint
+Exercises core resolution in all non-DRAM-sharded factories:
+  - allowed_worker_cores carries both the start coordinate and the grid size.
+    The factories use bounding_box().start_coord as the base core and
+    bounding_box().grid_size() as the compute grid dimensions.
+  - sub_device_id provides the same offset when allowed_worker_cores is absent.
+    When allowed_worker_cores is set it takes precedence for the start core.
 
-Note on offset grids:
-  The 1D and 2D multicast factories compute NOC multicast coordinates relative
-  to the core grid's start_core.  Offset-from-origin grids are only exercised
-  through the sub-device path (skip_rows >= 1), which is the production use
-  case (e.g. reserving row 0 for CCL while computing on remaining rows).
-  Using allowed_worker_cores offset from (0,0) *without* a sub-device has not
-  been validated for multicast factories and is NOT tested here.
+Both origin-anchored and offset grids are tested directly via allowed_worker_cores,
+and also through the sub-device path (which is the typical production usage when
+reserving rows for CCL traffic).
 """
 
 import pytest
@@ -185,6 +184,18 @@ class TestMcast1D:
 
     @pytest.mark.parametrize("mcast_in0", [True, False])
     @pytest.mark.parametrize("skip_rows", [1, 2])
+    def test_offset_grid_via_allowed_worker_cores(self, device, mcast_in0, skip_rows):
+        """Offset grid purely via allowed_worker_cores — no sub-device."""
+        grid = device.compute_with_storage_grid_size()
+        if grid.y <= skip_rows:
+            pytest.skip(f"Need >{skip_rows} rows, device has {grid.y}")
+        cols, wrows = grid.x, grid.y - skip_rows
+        a, b, ref = _tensors(device, self.M, self.K, self.N)
+        cfg = self._cfg(mcast_in0, cols, wrows, _crs(cols, wrows, start_y=skip_rows))
+        assert_with_pcc(ref, ttnn.to_torch(ttnn.matmul(a, b, program_config=cfg)), 0.999)
+
+    @pytest.mark.parametrize("mcast_in0", [True, False])
+    @pytest.mark.parametrize("skip_rows", [1, 2])
     def test_on_subdevice(self, device, mcast_in0, skip_rows):
         """Offset grid via sub-device — cores start at row `skip_rows`."""
         mgr, sd_id, cols, wrows, sy = _setup_subdevice(device, skip_rows)
@@ -229,6 +240,17 @@ class TestMcast2D:
     @pytest.mark.parametrize("gx, gy", [(4, 4), (4, 2)])
     def test_custom_grid_at_origin(self, device, gx, gy):
         cfg, M, N = self._cfg(gx, gy, _crs(gx, gy))
+        a, b, ref = _tensors(device, M, self.K, N)
+        assert_with_pcc(ref, ttnn.to_torch(ttnn.matmul(a, b, program_config=cfg)), 0.999)
+
+    @pytest.mark.parametrize("skip_rows", [1, 2])
+    def test_offset_grid_via_allowed_worker_cores(self, device, skip_rows):
+        """Offset grid purely via allowed_worker_cores — no sub-device."""
+        grid = device.compute_with_storage_grid_size()
+        if grid.y <= skip_rows:
+            pytest.skip(f"Need >{skip_rows} rows, device has {grid.y}")
+        cols, wrows = grid.x, grid.y - skip_rows
+        cfg, M, N = self._cfg(cols, wrows, _crs(cols, wrows, start_y=skip_rows))
         a, b, ref = _tensors(device, M, self.K, N)
         assert_with_pcc(ref, ttnn.to_torch(ttnn.matmul(a, b, program_config=cfg)), 0.999)
 

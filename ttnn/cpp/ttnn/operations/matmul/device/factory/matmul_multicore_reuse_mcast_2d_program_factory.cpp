@@ -1724,11 +1724,12 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
     //                      Sub-device start core
     ////////////////////////////////////////////////////////////////////////////
     CoreCoord sub_device_start_core = {0, 0};
-    if (operation_attributes.sub_device_id.has_value()) {
+    if (program_config.allowed_worker_cores.has_value()) {
+        sub_device_start_core = program_config.allowed_worker_cores.value().bounding_box().start_coord;
+    } else if (operation_attributes.sub_device_id.has_value()) {
         auto sub_device_cores = device->worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
-        auto bbox = sub_device_cores.bounding_box();
-        sub_device_start_core = bbox.start_coord;
+        sub_device_start_core = sub_device_cores.bounding_box().start_coord;
     }
 
     ////////////////////////////////////////////////////////////////////////////
