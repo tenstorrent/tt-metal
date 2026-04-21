@@ -9,17 +9,126 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
+#include <set>
 #include <sstream>
 
 #include "tt_fabric_test_constants.hpp"
 #include "tt_fabric_test_context.hpp"
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include <board/board.hpp>
+#include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
+
+namespace {
+
+// Cache Boards by board_type so we only call create_board() once per unique board.
+// Provides per-channel port labels and per-link labels that show the *first-hop*
+// physical wire: src chip's port on one end, immediate neighbor chip's port on the
+// other end. Note: for multi-hop fabric routes the "neighbor" here is NOT the
+// configured destination chip — it's whichever chip the wire physically reaches.
+//
+// Neighbor chip identity is derived only from PSD asic descriptors (host/tray/
+// asic_location); we deliberately avoid ControlPlane::get_fabric_node_id_from_asic_id
+// because it is local-host only and TT_FATALs (with noisy critical logs) on
+// cross-host asic ids.
+class PortLabelResolver {
+public:
+    explicit PortLabelResolver(const tt::tt_metal::PhysicalSystemDescriptor& psd) : psd_(psd) {}
+
+    // Returns "QSFP_DD#5" if the chan maps to an external port on the board, or
+    // an empty string if it's an internal/trace channel or the board is unknown.
+    std::string port_label(tt::tt_metal::AsicID asic_id, uint8_t chan) {
+        const auto& descriptors = psd_.get_asic_descriptors();
+        auto desc_it = descriptors.find(asic_id);
+        if (desc_it == descriptors.end()) {
+            return "";
+        }
+        const auto& desc = desc_it->second;
+
+        const auto* board = get_or_create_board(desc.board_type);
+        if (board == nullptr) {
+            return "";
+        }
+
+        try {
+            const auto& port = board->get_port_for_asic_channel(
+                tt::scaleout_tools::AsicChannel{*(desc.asic_location), tt::scaleout_tools::ChanId{chan}});
+            return fmt::format("{}#{}", enchantum::to_string(port.port_type), *port.port_id);
+        } catch (const std::exception&) {
+            return "";
+        }
+    }
+
+    // Returns a one-line description of the physical first-hop link for a given
+    // (src_asic, src_chan), e.g.
+    //     "ch0[QSFP_DD#6] -> bh-glx-c02u08_2/T4/N4 ch0[QSFP_DD#6]"
+    // The neighbor's host prefix is omitted only when the neighbor sits on the
+    // same host as the src chip, so "no prefix" always means intra-host.
+    // If the connection lookup fails (e.g. cross-host info not available locally)
+    // we fall back to just the src side: "ch0[QSFP_DD#6]".
+    std::string link_label(tt::tt_metal::AsicID src_asic, uint8_t src_chan) {
+        std::string src_port = port_label(src_asic, src_chan);
+        std::string src_part = src_port.empty() ? fmt::format("ch{}", static_cast<unsigned>(src_chan))
+                                                : fmt::format("ch{}[{}]", static_cast<unsigned>(src_chan), src_port);
+
+        const auto& descriptors = psd_.get_asic_descriptors();
+        auto src_desc_it = descriptors.find(src_asic);
+        const std::string src_host = (src_desc_it != descriptors.end()) ? src_desc_it->second.host_name : std::string{};
+
+        try {
+            auto [dst_asic, dst_chan] = psd_.get_connected_asic_and_channel(src_asic, src_chan);
+            std::string dst_port = port_label(dst_asic, dst_chan);
+            std::string dst_chip_label = format_neighbor_chip(dst_asic, src_host);
+            std::string dst_chan_part = dst_port.empty()
+                                            ? fmt::format("ch{}", static_cast<unsigned>(dst_chan))
+                                            : fmt::format("ch{}[{}]", static_cast<unsigned>(dst_chan), dst_port);
+            return fmt::format("{} -> {} {}", src_part, dst_chip_label, dst_chan_part);
+        } catch (const std::exception&) {
+            return src_part;
+        }
+    }
+
+private:
+    const tt::scaleout_tools::Board* get_or_create_board(BoardType board_type) {
+        auto it = boards_.find(board_type);
+        if (it != boards_.end()) {
+            return &it->second;
+        }
+        try {
+            auto inserted = boards_.emplace(board_type, tt::scaleout_tools::create_board(board_type));
+            return &inserted.first->second;
+        } catch (const std::exception&) {
+            return nullptr;
+        }
+    }
+
+    // Compact identifier for a neighbor chip. Omits the host prefix only when
+    // the neighbor lives on `reference_host` (i.e. same host as the src chip
+    // for this link), so an unprefixed neighbor always means intra-host.
+    std::string format_neighbor_chip(tt::tt_metal::AsicID asic_id, const std::string& reference_host) {
+        const auto& descriptors = psd_.get_asic_descriptors();
+        auto desc_it = descriptors.find(asic_id);
+        if (desc_it == descriptors.end()) {
+            return "(neighbor)";
+        }
+        const auto& d = desc_it->second;
+        if (!reference_host.empty() && d.host_name == reference_host) {
+            return fmt::format("T{}/N{}", *d.tray_id, *d.asic_location);
+        }
+        return fmt::format("{}/T{}/N{}", d.host_name, *d.tray_id, *d.asic_location);
+    }
+
+    const tt::tt_metal::PhysicalSystemDescriptor& psd_;
+    std::unordered_map<BoardType, tt::scaleout_tools::Board> boards_;
+};
+
+}  // namespace
 
 static std::filesystem::path resolve_report_path(const std::string& filename) {
     std::filesystem::path root =
@@ -317,7 +426,7 @@ void TestProgressMonitor::check_for_hung_endpoints() {
 
         if (!hung.emitted) {
             const char* role_str = (eid.role == EndpointRole::Sender) ? "Sender" : "Receiver";
-            log_warning(
+            log_debug(
                 tt::LogTest,
                 "Endpoint stall detected: {} on {} core ({},{}) config#{} flow_uid={} — "
                 "no progress for {}s (round {}/{}, packets: {}/{})",
@@ -340,7 +449,7 @@ void TestProgressMonitor::check_for_hung_endpoints() {
             confirmed_hung_endpoints_++;
 
             const char* role_str = (eid.role == EndpointRole::Sender) ? "Sender" : "Receiver";
-            log_warning(
+            log_debug(
                 tt::LogTest,
                 "CONFIRMED HUNG: {} on {} core ({},{}) config#{} flow_uid={} — "
                 "stalled for {} consecutive rounds (packets: {}/{})",
@@ -797,16 +906,63 @@ void TestProgressMonitor::write_summary_report(
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& psd = control_plane.get_physical_system_descriptor();
+    PortLabelResolver port_resolver(psd);
 
     std::string timestamp = get_timestamp_string();
     uint32_t total_flows = static_cast<uint32_t>(flow_descriptors.size());
 
-    // Group by flow_uid
-    std::map<uint32_t, std::vector<const HungEndpointWireRecord*>> by_flow;
+    // Aggregate per device-pair (src_node -> dst_node), then group those pairs by source host rank.
+    struct PairAggregate {
+        FabricNodeId src_node{MeshId{0}, 0};
+        FabricNodeId dst_node{MeshId{0}, 0};
+        uint32_t dst_host_rank = 0;
+        std::string dst_host;
+        uint32_t sender_hung = 0;
+        uint32_t receiver_hung = 0;
+        uint64_t min_packets_processed = std::numeric_limits<uint64_t>::max();
+        uint64_t packets_expected = 0;
+        uint32_t max_stall_seconds = 0;
+        std::set<uint32_t> flow_uids;  // distinct flow_uids contributing to this pair
+    };
+
+    using PairKey = std::pair<FabricNodeId, FabricNodeId>;
+    std::map<uint32_t, std::map<PairKey, PairAggregate>> pairs_by_src_rank;
+    std::set<uint32_t> distinct_flow_uids;
+
     for (const auto& rec : all_records) {
-        by_flow[rec.flow_uid].push_back(&rec);
+        FabricNodeId src(MeshId{rec.src_mesh_id}, rec.src_chip_id);
+        FabricNodeId dst(MeshId{rec.dst_mesh_id}, rec.dst_chip_id);
+
+        auto src_asic = control_plane.get_asic_id_from_fabric_node_id(src);
+        auto dst_asic = control_plane.get_asic_id_from_fabric_node_id(dst);
+        auto src_host = psd.get_host_name_for_asic(src_asic);
+        auto dst_host = psd.get_host_name_for_asic(dst_asic);
+        uint32_t src_rank = psd.get_rank_for_hostname(src_host);
+        uint32_t dst_rank = psd.get_rank_for_hostname(dst_host);
+
+        auto& agg = pairs_by_src_rank[src_rank][PairKey{src, dst}];
+        agg.src_node = src;
+        agg.dst_node = dst;
+        agg.dst_host_rank = dst_rank;
+        agg.dst_host = dst_host;
+        if (rec.role == static_cast<uint8_t>(EndpointRole::Sender)) {
+            agg.sender_hung++;
+        } else {
+            agg.receiver_hung++;
+        }
+        agg.min_packets_processed = std::min(agg.min_packets_processed, rec.packets_processed);
+        agg.packets_expected = rec.packets_expected;
+        agg.max_stall_seconds = std::max(agg.max_stall_seconds, rec.stall_seconds);
+        agg.flow_uids.insert(rec.flow_uid);
+        distinct_flow_uids.insert(rec.flow_uid);
     }
-    uint32_t hung_flow_count = static_cast<uint32_t>(by_flow.size());
+
+    uint32_t hung_flow_count = static_cast<uint32_t>(distinct_flow_uids.size());
+    uint32_t hung_pair_count = 0;
+    for (const auto& [rank, pairs] : pairs_by_src_rank) {
+        (void)rank;
+        hung_pair_count += static_cast<uint32_t>(pairs.size());
+    }
 
     ofs << "================================================================\n";
     ofs << " PAIRWISE VALIDATION — LINK HEALTH SUMMARY\n";
@@ -814,42 +970,59 @@ void TestProgressMonitor::write_summary_report(
     if (all_records.empty()) {
         ofs << " Result: PASS — No hung endpoints detected across " << total_flows << " flows\n";
     } else {
-        ofs << " Result: FAIL — " << hung_flow_count << " hung flow(s) out of " << total_flows << "\n";
+        ofs << " Result: FAIL — " << hung_flow_count << " hung flow(s) out of " << total_flows << " ("
+            << hung_pair_count << " unique device pair(s))\n";
     }
-    ofs << "================================================================\n\n";
+    ofs << "================================================================\n";
 
     if (!all_records.empty()) {
-        ofs << "HUNG FLOWS (" << hung_flow_count << "):\n\n";
+        for (const auto& [src_rank, pairs] : pairs_by_src_rank) {
+            std::string hostname = psd.get_hostname_for_rank(src_rank);
 
-        uint32_t flow_idx = 1;
-        for (const auto& [flow_uid, records] : by_flow) {
-            ofs << "  [" << flow_idx++ << "] Flow UID: " << flow_uid << "\n";
-
-            const auto* first_rec = records.front();
-            FabricNodeId src_node_id(MeshId{first_rec->src_mesh_id}, first_rec->src_chip_id);
-            FabricNodeId dst_node_id(MeshId{first_rec->dst_mesh_id}, first_rec->dst_chip_id);
-            ofs << "      Source:      " << format_device_label(src_node_id) << "\n";
-            ofs << "      Destination: " << format_device_label(dst_node_id) << "\n";
-
-            auto src_asic_id = control_plane.get_asic_id_from_fabric_node_id(src_node_id);
-            auto src_host = psd.get_host_name_for_asic(src_asic_id);
-            auto src_tray = psd.get_tray_id(src_asic_id);
-            auto src_loc = psd.get_asic_location(src_asic_id);
-            ofs << "      Src Physical: host=" << src_host << " tray=" << *src_tray << " asic=" << *src_loc << "\n";
-
-            for (const auto* rec : records) {
-                const char* role_str =
-                    (rec->role == static_cast<uint8_t>(EndpointRole::Sender)) ? "Sender" : "Receiver";
-                FabricNodeId node_id(MeshId{rec->mesh_id}, rec->chip_id);
-                ofs << "      " << role_str << ": " << rec->packets_processed << "/" << rec->packets_expected
-                    << " packets | no progress for " << rec->stall_seconds << "s"
-                    << " [" << format_device_label(node_id) << " rank " << rec->host_rank << "]\n";
+            // Tally per-host stats
+            uint32_t host_sender_hung = 0;
+            uint32_t host_receiver_hung = 0;
+            std::set<uint32_t> host_flow_uids;
+            for (const auto& [pair_key, agg] : pairs) {
+                (void)pair_key;
+                host_sender_hung += agg.sender_hung;
+                host_receiver_hung += agg.receiver_hung;
+                host_flow_uids.insert(agg.flow_uids.begin(), agg.flow_uids.end());
             }
-            ofs << "\n";
+
+            ofs << "\n--- Source Host: " << hostname << " (Rank " << src_rank << ") ---\n";
+            ofs << "    " << pairs.size() << " hung device pair(s) | " << host_flow_uids.size()
+                << " flow(s) | senders=" << host_sender_hung << " receivers=" << host_receiver_hung << "\n\n";
+
+            uint32_t pair_idx = 1;
+            for (const auto& [pair_key, agg] : pairs) {
+                (void)pair_key;
+                ofs << "  [" << pair_idx++ << "] " << format_device_label(agg.src_node) << "  ->  "
+                    << format_device_label(agg.dst_node) << "\n";
+                ofs << "      Dst Host: " << agg.dst_host << " (Rank " << agg.dst_host_rank << ")\n";
+
+                auto fwd_chans = control_plane.get_forwarding_eth_chans_to_chip(agg.src_node, agg.dst_node);
+                auto src_asic_id = control_plane.get_asic_id_from_fabric_node_id(agg.src_node);
+                if (fwd_chans.empty()) {
+                    ofs << "      Eth Links (first hop from src): (none reported)\n";
+                } else {
+                    ofs << "      Eth Links (first hop from src):\n";
+                    for (const auto& chan : fwd_chans) {
+                        ofs << "        " << port_resolver.link_label(src_asic_id, chan) << "\n";
+                    }
+                }
+
+                uint64_t shown_packets =
+                    (agg.min_packets_processed == std::numeric_limits<uint64_t>::max()) ? 0 : agg.min_packets_processed;
+                ofs << "      Hung endpoints: senders=" << agg.sender_hung << " receivers=" << agg.receiver_hung
+                    << " | flows=" << agg.flow_uids.size() << " | packets=" << shown_packets << "/"
+                    << agg.packets_expected << " | stalled " << agg.max_stall_seconds << "s\n\n";
+            }
         }
     }
 
-    ofs << "CLUSTER HEALTH: " << hung_flow_count << "/" << total_flows << " flows have hung endpoints\n";
+    ofs << "CLUSTER HEALTH: " << hung_flow_count << "/" << total_flows << " flows have hung endpoints across "
+        << hung_pair_count << " device pair(s)\n";
     ofs << "================================================================\n";
     ofs.close();
     log_info(tt::LogTest, "Summary report written to: {}", summary_report_path_.string());
@@ -869,6 +1042,7 @@ void TestProgressMonitor::write_detailed_report(
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& psd = control_plane.get_physical_system_descriptor();
+    PortLabelResolver port_resolver(psd);
 
     std::string timestamp = get_timestamp_string();
 
@@ -916,16 +1090,11 @@ void TestProgressMonitor::write_detailed_report(
 
             auto fwd_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
             if (!fwd_chans.empty()) {
-                ofs << "      Eth Chans (src->dst): ";
-                bool first = true;
+                auto src_asic_id = control_plane.get_asic_id_from_fabric_node_id(src_node_id);
+                ofs << "      Eth Links (first hop from src):\n";
                 for (const auto& chan : fwd_chans) {
-                    if (!first) {
-                        ofs << ", ";
-                    }
-                    ofs << "ch" << static_cast<unsigned>(chan);
-                    first = false;
+                    ofs << "        " << port_resolver.link_label(src_asic_id, chan) << "\n";
                 }
-                ofs << "\n";
             }
 
             ofs << "      Core: (" << rec->core_x << "," << rec->core_y << ") | config_idx: " << rec->config_idx

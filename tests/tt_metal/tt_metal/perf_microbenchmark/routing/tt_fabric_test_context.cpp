@@ -106,35 +106,37 @@ void TestContext::wait_for_programs_with_progress() {
 
         auto result = monitor.poll_until_complete_or_hung();
 
-        if (result == MonitorResult::HUNG_DETECTED) {
-            const auto& records = monitor.get_hung_records();
-            log_warning(tt::LogTest, "Hang detected: {} endpoint(s) confirmed hung on this host", records.size());
+        // Globally agree on whether ANY rank saw a hang. We can't make this decision
+        // locally because exchange_hung_records() / write_*_report() involve
+        // collective MPI ops that must be entered by every rank. If ranks made the
+        // decision based only on local state, ranks with all-complete endpoints
+        // would skip the collective and the hung ranks would deadlock waiting.
+        using namespace tt::tt_metal::distributed::multihost;
+        const auto& dist_ctx = DistributedContext::get_current_world();
+        int my_rank = *dist_ctx->rank();
+        const auto& records = monitor.get_hung_records();
+        uint32_t local_hung = (result == MonitorResult::HUNG_DETECTED) ? static_cast<uint32_t>(records.size()) : 0;
+        uint32_t global_hung = local_hung;
+        if (*dist_ctx->size() > 1) {
+            dist_ctx->all_reduce(
+                ttsl::Span<uint32_t>(&local_hung, 1), ttsl::Span<uint32_t>(&global_hung, 1), ReduceOp::SUM);
+        }
 
-            for (const auto& rec : records) {
-                const char* role_str =
-                    (rec.endpoint_id.role == tt::tt_fabric::fabric_tests::EndpointRole::Sender) ? "Sender" : "Receiver";
+        if (global_hung > 0) {
+            if (local_hung > 0) {
+                log_warning(tt::LogTest, "Hang detected: {} endpoint(s) confirmed hung on this host", local_hung);
+            } else {
                 log_warning(
                     tt::LogTest,
-                    "  HUNG: {} flow_uid={} on {} core ({},{}) config#{} — "
-                    "packets {}/{}, stalled {}s ({} rounds)",
-                    role_str,
-                    rec.flow_uid,
-                    tt::tt_fabric::fabric_tests::format_device_label(rec.endpoint_id.node_id),
-                    rec.endpoint_id.logical_core.x,
-                    rec.endpoint_id.logical_core.y,
-                    rec.endpoint_id.config_idx,
-                    rec.packets_processed,
-                    rec.packets_expected,
-                    rec.stall_seconds,
-                    rec.confirmation_rounds);
+                    "Hang detected on a peer rank ({} total endpoint(s) confirmed hung); participating in report "
+                    "exchange",
+                    global_hung);
             }
 
-            // Phase 4: MPI exchange and report generation
+            // Phase 4: MPI exchange and report generation. Every rank must call
+            // exchange_hung_records (it gathers per-rank counts internally); ranks
+            // with zero local records simply contribute nothing.
             auto all_wire_records = monitor.exchange_hung_records(flow_descriptors_);
-
-            using namespace tt::tt_metal::distributed::multihost;
-            const auto& dist_ctx = DistributedContext::get_current_world();
-            int my_rank = *dist_ctx->rank();
 
             if (my_rank == 0 && !all_wire_records.empty()) {
                 monitor.write_summary_report(all_wire_records, flow_descriptors_);
@@ -149,9 +151,10 @@ void TestContext::wait_for_programs_with_progress() {
             }
 
             TT_THROW(
-                "Test aborted: {} endpoint(s) confirmed hung. "
+                "Test aborted: {} endpoint(s) confirmed hung cluster-wide ({} on this host). "
                 "Reports written to: {}  {}",
-                records.size(),
+                global_hung,
+                local_hung,
                 monitor.get_summary_report_path().string(),
                 monitor.get_detail_report_path().string());
         }
