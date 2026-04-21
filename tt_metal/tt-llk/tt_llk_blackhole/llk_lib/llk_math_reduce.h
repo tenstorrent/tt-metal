@@ -56,42 +56,36 @@ inline void reduce_row_perform_transpose()
         }
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 
-        // Phase 2: plain MOVD2B(DEST_NORM)+TRNSPSRCB+MOVB2D(DEST_NORM) for each half.
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, HI16_STAGE);
-        TTI_TRNSPSRCB;
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, HI16_STAGE);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE + 4);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE + 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE + 12);
-
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
-        TTI_TRNSPSRCB;
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 4);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 12);
-
-        // Phase 3: write transposed scratch to fp32 DEST face (MATH-only, no SFPU).
-        // Hi16: enable dst_32bit_addr_en=1 so MOVB2D DEST_NORM write_dst16b routes
-        //       through write_dst32b (adj_row), correctly targeting face hi16 rows.
-        // Lo16: MOVB2D DEST_32B_LOW (dest_32b_lo=1) already uses adj_row RMW path;
-        //       keep Fp32_enabled=0 to avoid BH Issue #449 HW bug on that combination.
+        // Phase 2: MOVD2B(scratch)+TRNSPSRCB+MOVB2A→MOVA2D for each half.
+        // MOVB2A captures transposed SrcB into SrcA immediately after TRNSPSRCB
+        // (before second MOVD2B can overwrite SrcB). MOVA2D then writes SrcA to DEST:
+        //   hi16: dst_32bit_addr_en=1 routes MOVA2D write_dst16b → write_dst32b(adj_row).
+        //   lo16: MOVA2D(DEST_32B_LOW, dest_32b_lo=1) uses adj_row RMW natively.
+        // Keep Fp32_enabled=0 to avoid BH Issue #449 HW bug (Fp32+dest_32b_lo on MOV*).
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
         _llk_math_dbg_feature_disable_(); // dst_32bit_addr_en = 1
 
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, HI16_STAGE);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+        TTI_TRNSPSRCB;
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
+        TTI_MOVA2D(p_mov::DEST_NORM, p_mova2d::MOV_8_ROWS, ADDR_MOD_0, 0);
+        TTI_MOVA2D(p_mov::DEST_NORM, p_mova2d::MOV_8_ROWS, ADDR_MOD_0, 4);
+        TTI_MOVA2D(p_mov::DEST_NORM, p_mova2d::MOV_8_ROWS, ADDR_MOD_0, 8);
+        TTI_MOVA2D(p_mov::DEST_NORM, p_mova2d::MOV_8_ROWS, ADDR_MOD_0, 12);
 
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+        TTI_TRNSPSRCB;
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, p_mova2d::MOV_8_ROWS, ADDR_MOD_0, 0);
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, p_mova2d::MOV_8_ROWS, ADDR_MOD_0, 4);
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, p_mova2d::MOV_8_ROWS, ADDR_MOD_0, 8);
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, p_mova2d::MOV_8_ROWS, ADDR_MOD_0, 12);
 
         _llk_math_dbg_feature_enable_(); // dst_32bit_addr_en = 0
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
