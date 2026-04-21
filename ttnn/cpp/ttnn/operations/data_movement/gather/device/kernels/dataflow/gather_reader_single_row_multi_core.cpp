@@ -45,6 +45,9 @@ needed.
 
 This approach enables parallel processing of the gather operation along the Wt_index dimension, maximizing core
 utilization and supporting large tensors.
+
+Memory: TILE buffers may be interleaved or sharded (including ND-sharded); tile page_id is logical in padded 4D layout,
+with physical addresses resolved via TensorAccessor on the NoC path.
 */
 void kernel_main() {
     // Runtime args

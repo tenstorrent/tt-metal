@@ -8,6 +8,9 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+// Interleaved and sharded (including ND-sharded) TILE tensors share this path: TensorAccessorArgs append
+// shard/buffer metadata so kernels resolve logical tile page_id to physical addresses.
+
 namespace ttnn::prim {
 // Single row - single core
 GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySingleRowSingleCore::create(

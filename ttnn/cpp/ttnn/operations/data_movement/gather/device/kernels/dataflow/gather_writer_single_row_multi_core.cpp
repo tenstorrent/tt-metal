@@ -15,6 +15,9 @@
 To improve performance writer kernel performs both writing as well as reading data.
     * Reads input tensor values from DRAM to L1.
     * Write output values from L1 to DRAM.
+
+Sharded buffers (legacy 2D or ND): one tile per page; page_id indexes tiles in padded 4D layout; TensorAccessor maps
+logical page_id to NoC addresses.
 */
 void kernel_main() {
     // Runtime args

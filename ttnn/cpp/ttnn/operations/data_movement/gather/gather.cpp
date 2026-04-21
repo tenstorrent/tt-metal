@@ -39,6 +39,8 @@ namespace CMAKE_UNIQUE_NAMESPACE {
  * @note For scalar tensors (logical shape {1}), the function returns the input tensor unchanged
  * @note Index tensors are padded with zeros, while input tensors are padded with minimum float values
  * @note Input tensors are sliced to match the index tensor dimensions for proper cell mapping
+ * @note Interleaved, legacy-sharded, and ND-sharded layouts are preserved: transpose/slice/fill use the tensor's
+ *       memory_config (see perform_transpose and slice call sites below).
  */
 Tensor pre_gather_transform_tensor(
     const Tensor& input_tensor,
