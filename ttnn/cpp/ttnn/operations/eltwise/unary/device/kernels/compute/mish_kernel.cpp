@@ -37,7 +37,7 @@ void kernel_main() {
         if (use_approx) {
             auto chain = sfpu_chain(
                 Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
-                Load<cb_input, Dst::D1, LoadPolicy::WaitAndPop>{},
+                Load<cb_input, Dst::D1, LoadPolicy::NoWaitPop>{},
                 Exp<Approx::Fast, Approx::Fast, Dst::D0>{},
                 Log1p<Approx::Fast, Dst::D0>{},
                 Tanh<Approx::Exact, Dst::D0>{},
@@ -50,7 +50,7 @@ void kernel_main() {
         } else {
             auto chain = sfpu_chain(
                 Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
-                Load<cb_input, Dst::D1, LoadPolicy::WaitAndPop>{},
+                Load<cb_input, Dst::D1, LoadPolicy::NoWaitPop>{},
                 Exp<Approx::Exact, Approx::Fast, Dst::D0>{},
                 Log1p<Approx::Exact, Dst::D0>{},
                 Tanh<Approx::Exact, Dst::D0>{},
