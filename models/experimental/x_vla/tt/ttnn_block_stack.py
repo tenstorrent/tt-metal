@@ -24,17 +24,11 @@ import torch
 from torch import nn
 
 
-def _to_tile_tensor(ttnn_mod, t: torch.Tensor, device, dtype=None):
-    """Upload a weight/bias to device DRAM as a tiled tensor at `dtype`.
-
-    Default is bfloat16. Weights may be passed as bfloat8_b (block-float
-    8-bit) to halve bandwidth on matmul-heavy layers.
-    """
-    if dtype is None:
-        dtype = ttnn_mod.bfloat16
+def _to_tile_tensor(ttnn_mod, t: torch.Tensor, device):
+    """Upload a 2-D weight/1-D bias to device DRAM as bfloat16 tiled tensor."""
     return ttnn_mod.from_torch(
         t.to(torch.bfloat16).contiguous(),
-        dtype=dtype,
+        dtype=ttnn_mod.bfloat16,
         layout=ttnn_mod.TILE_LAYOUT,
         device=device,
     )
@@ -71,25 +65,23 @@ class TTNNTransformerBlockStack(nn.Module):
     def _bundle_block(self, blk: nn.Module) -> dict:
         ttnn = self._ttnn
         dev = self.device
-        w_dtype = ttnn.bfloat8_b  # 8-bit block-float for matmul weights
-        b_dtype = ttnn.bfloat16   # keep biases at bf16 (they are small)
 
-        # LayerNorm 1 (not matmul-bound; stay bf16)
+        # LayerNorm 1
         ln1_w = _to_tile_tensor(ttnn, blk.norm1.weight.detach(), dev)
         ln1_b = _to_tile_tensor(ttnn, blk.norm1.bias.detach(), dev)
-        # Attention: fused qkv, projection — big matmul weights -> bfp8
-        qkv_w = _to_tile_tensor(ttnn, blk.attn.qkv.weight.detach().t().contiguous(), dev, w_dtype)
-        qkv_b = _to_tile_tensor(ttnn, blk.attn.qkv.bias.detach(), dev, b_dtype)
-        proj_w = _to_tile_tensor(ttnn, blk.attn.proj.weight.detach().t().contiguous(), dev, w_dtype)
-        proj_b = _to_tile_tensor(ttnn, blk.attn.proj.bias.detach(), dev, b_dtype)
+        # Attention: fused qkv
+        qkv_w = _to_tile_tensor(ttnn, blk.attn.qkv.weight.detach().t().contiguous(), dev)
+        qkv_b = _to_tile_tensor(ttnn, blk.attn.qkv.bias.detach(), dev)
+        proj_w = _to_tile_tensor(ttnn, blk.attn.proj.weight.detach().t().contiguous(), dev)
+        proj_b = _to_tile_tensor(ttnn, blk.attn.proj.bias.detach(), dev)
         # LayerNorm 2
         ln2_w = _to_tile_tensor(ttnn, blk.norm2.weight.detach(), dev)
         ln2_b = _to_tile_tensor(ttnn, blk.norm2.bias.detach(), dev)
-        # MLP — largest weights in the block, biggest bfp8 win here
-        fc1_w = _to_tile_tensor(ttnn, blk.mlp.fc1.weight.detach().t().contiguous(), dev, w_dtype)
-        fc1_b = _to_tile_tensor(ttnn, blk.mlp.fc1.bias.detach(), dev, b_dtype)
-        fc2_w = _to_tile_tensor(ttnn, blk.mlp.fc2.weight.detach().t().contiguous(), dev, w_dtype)
-        fc2_b = _to_tile_tensor(ttnn, blk.mlp.fc2.bias.detach(), dev, b_dtype)
+        # MLP
+        fc1_w = _to_tile_tensor(ttnn, blk.mlp.fc1.weight.detach().t().contiguous(), dev)
+        fc1_b = _to_tile_tensor(ttnn, blk.mlp.fc1.bias.detach(), dev)
+        fc2_w = _to_tile_tensor(ttnn, blk.mlp.fc2.weight.detach().t().contiguous(), dev)
+        fc2_b = _to_tile_tensor(ttnn, blk.mlp.fc2.bias.detach(), dev)
 
         return dict(
             ln1_w=ln1_w, ln1_b=ln1_b,
@@ -126,13 +118,11 @@ class TTNNTransformerBlockStack(nn.Module):
         # to shape [B, H, head_dim, S], so q @ k directly gives attention scores.
         scores = ttnn.matmul(q, k)
         ttnn.deallocate(q); ttnn.deallocate(k)
-        # scale_mask_softmax requires a mask; we don't have one, so use the
-        # in-place softmax variant (avoids an extra buffer) and keep scaling
-        # as an in-place multiply.
         scores = ttnn.multiply(scores, head_dim_inv_sqrt)
-        ttnn.softmax_in_place(scores)
-        attn_out = ttnn.matmul(scores, v)
-        ttnn.deallocate(scores); ttnn.deallocate(v)
+        probs = ttnn.softmax(scores, dim=-1)
+        ttnn.deallocate(scores)
+        attn_out = ttnn.matmul(probs, v)
+        ttnn.deallocate(probs); ttnn.deallocate(v)
         # merge heads: [B, H, S, Dh] -> [B, S, H*Dh]
         attn_out = ttnn.transformer.concatenate_heads(attn_out)
         proj = ttnn.linear(attn_out, wb["proj_w"], bias=wb["proj_b"])
