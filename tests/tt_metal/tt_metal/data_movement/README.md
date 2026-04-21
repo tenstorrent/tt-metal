@@ -59,6 +59,8 @@ Both API versions run the same test cases but use different underlying implement
 | Matmul                      | 1000-1025                       | 1D matmul DM tests: in0 multicast + in1 DRAM read across grid shapes, subblock dims, K depths, non-origin starts, and DRAM banks. |
 | NOC API Latency             | 700-706                         | Measures latency (cycles) of NOC API calls using experimental dataflow 2.0 API.         |
 | NOC Estimator               | 800-817                         | Comprehensive bandwidth sweeps for NOC estimation across all patterns and mechanisms.    |
+| Quasar Addrgen              | 900-909                         | Quasar-only: example kernels exercising the hardware address generator (1D/2D/face/interleaved). Requires Quasar simulator. |
+| Quasar IDMA                 | 910-911                         | Quasar-only: example kernels exercising the IDMA engine (basic linear copy and 1D strided). Requires Quasar simulator. |
 
 
 ## Running Tests
