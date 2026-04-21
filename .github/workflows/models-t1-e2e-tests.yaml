@@ -1,4 +1,4 @@
-name: "[Tier 1] Models End-To-End Tests"
+name: "(Tier 1) Models End-To-End Tests"
 
 on:
   schedule:
@@ -64,7 +64,7 @@ permissions:
   packages: write
   contents: write
 
-run-name: "[Tier 1] Models E2E${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
+run-name: "(Tier 1) Models E2E${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
 
 jobs:
   resolve-skus:
