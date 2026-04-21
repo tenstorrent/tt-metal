@@ -147,7 +147,13 @@ class TTNNTransformerBlockStack(nn.Module):
 
         # --- MLP -----------------------------------------------------------
         h = ttnn.layer_norm(x_tt, weight=wb["ln2_w"], bias=wb["ln2_b"])
-        h = ttnn.linear(h, wb["fc1_w"], bias=wb["fc1_b"], activation="gelu")
+        # Put the fat fc1 output in L1 across cores so fc2 can read from
+        # SRAM instead of DRAM. The intermediate is [1, S, 4H] = ~1.9 MB bf16,
+        # which comfortably fits sharded across Blackhole's 110*1.5 MB L1.
+        h = ttnn.linear(
+            h, wb["fc1_w"], bias=wb["fc1_b"], activation="gelu",
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         h = ttnn.linear(h, wb["fc2_w"], bias=wb["fc2_b"])
         x_tt = ttnn.add(x_tt, h)
         ttnn.deallocate(h)
