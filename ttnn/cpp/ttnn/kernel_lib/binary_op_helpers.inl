@@ -138,10 +138,10 @@ struct dst_idx_value<T, true> {
 template <typename T>
 inline constexpr uint32_t dst_idx_value_v = dst_idx_value<T>::value;
 
-// A valid binary_op post-chain element: unary compute op on Dst::D0, not a load.
+// A valid binary_op post-chain element: any non-load compute op (UnaryOp, BinaryOp, TernaryOp).
+// BinaryOp/TernaryOp are allowed; the caller is responsible for pre-loading secondary DEST slots.
 template <typename T>
-inline constexpr bool is_valid_post_op_v =
-    has_dst_idx_v<T> && (dst_idx_value_v<T> == 0u) && !is_load_op_v<T>;
+inline constexpr bool is_valid_post_op_v = !is_load_op_v<T>;
 
 // Retrieve the I-th element of an SfpuChain by instance (preserves runtime fields).
 template <std::size_t I, typename First, typename... Rest>
@@ -159,10 +159,9 @@ template <typename... Ops>
 ALWI constexpr void post_chain_validate() {
     static_assert(
         (is_valid_post_op_v<Ops> && ...),
-        "binary_op post-chain must contain only UnaryOp-derived ops on Dst::D0. "
-        "Forbidden: Load<>/CompactLoad<> (binary helper owns input CBs); "
-        "BinaryOp/TernaryOp (multi-slot addressing is ambiguous here); "
-        "slots other than Dst::D0 (binary helper controls DEST layout).");
+        "binary_op post-chain must not contain Load<> or CompactLoad<> ops. "
+        "The binary helper owns input CB lifecycle. UnaryOp, BinaryOp, and TernaryOp "
+        "are all permitted; for multi-slot ops the caller must pre-load secondary DEST slots.");
 }
 
 // One-init, k-exec over DEST slots [base_dst, base_dst + chunk_size).
@@ -188,7 +187,29 @@ ALWI void apply_post_chain_batched(
     apply_post_chain_batched_impl(chain, base_dst, chunk_size, std::index_sequence_for<Ops...>{});
 }
 
+// post_op_needs_reinit_v<T>: true when PostOp sets T::needs_parent_reinit = true.
+// Signals binary_op to move binary_init inside the tile loop (per-tile) instead of
+// calling it once before the loop. Required when PostOp reconfigures the unpack pipeline
+// (e.g. DestReuseMul, which calls binary_dest_reuse_tiles_init).
+template <typename T, typename = void>
+struct has_needs_parent_reinit : std::false_type {};
+template <typename T>
+struct has_needs_parent_reinit<T, std::void_t<decltype(T::needs_parent_reinit)>>
+    : std::bool_constant<T::needs_parent_reinit> {};
+template <typename T>
+inline constexpr bool post_op_needs_reinit_v = has_needs_parent_reinit<T>::value;
+
 }  // namespace detail
+
+// =============================================================================
+// DestReuseMul PostOp Implementation
+// =============================================================================
+
+template <uint32_t CB>
+ALWI void DestReuseMul<CB>::operator()(uint32_t dst_idx) const {
+    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB);
+    binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB, 0, dst_idx);
+}
 
 // =============================================================================
 // Unified LLK Calls - Single Init and Exec for All Broadcast Modes
@@ -265,10 +286,14 @@ ALWI void binary_op(
         pack_reconfig_data_format(ocb);
     }
 
-    // Initialization
-    if constexpr (init) {
+    // Initialization: done once here unless PostOp modifies the unpack pipeline,
+    // in which case it is re-done per tile (see binary_exec site below).
+    if constexpr (init && !detail::post_op_needs_reinit_v<PostOp>) {
         binary_init<op_type, bcast_dim>(icb_a, icb_b);
     }
+
+    // Same-CB flag: when icb_a == icb_b, skip all duplicate wait/pop for icb_b.
+    const bool same_cb = (!is_square && icb_a == icb_b);
 
     // Upfront waits
     if constexpr (waits_upfront(input_a_policy)) {
@@ -279,10 +304,10 @@ ALWI void binary_op(
     if constexpr (!is_square) {
         if constexpr (bcast_dim == BroadcastDim::ROW || bcast_dim == BroadcastDim::SCALAR) {
             if constexpr (!waits_caller_managed(input_b_policy)) {
-                cb_wait_front(icb_b, b_tile_count);
+                if (!same_cb) cb_wait_front(icb_b, b_tile_count);
             }
         } else if constexpr (waits_upfront(input_b_policy)) {
-            cb_wait_front(icb_b, b_tile_count);
+            if (!same_cb) cb_wait_front(icb_b, b_tile_count);
         }
     }
 
@@ -305,9 +330,9 @@ ALWI void binary_op(
             }
             if constexpr (!is_square && waits_per_chunk(input_b_policy)) {
                 if constexpr (bcast_dim == BroadcastDim::NONE) {
-                    cb_wait_front(icb_b, chunk_size);
+                    if (!same_cb) cb_wait_front(icb_b, chunk_size);
                 } else if constexpr (bcast_dim == BroadcastDim::COL) {
-                    cb_wait_front(icb_b, onetile);
+                    if (!same_cb) cb_wait_front(icb_b, onetile);
                 }
             }
 
@@ -338,7 +363,7 @@ ALWI void binary_op(
                 }
                 if constexpr (!is_square && waits_per_tile(input_b_policy)) {
                     if constexpr (bcast_dim == BroadcastDim::NONE || bcast_dim == BroadcastDim::COL) {
-                        cb_wait_front(icb_b, onetile);
+                        if (!same_cb) cb_wait_front(icb_b, onetile);
                     }
                 }
 
@@ -379,6 +404,11 @@ ALWI void binary_op(
                     tile_regs_acquire();
                 }
 
+                // Per-tile reinit when PostOp modifies the unpack pipeline (e.g. DestReuseMul).
+                if constexpr (init && detail::post_op_needs_reinit_v<PostOp>) {
+                    binary_init<op_type, bcast_dim>(icb_a, icb_b);
+                }
+
                 // Execute (unified LLK call)
                 binary_exec<op_type, bcast_dim>(icb_a, icb_b, tile_a, tile_b, dst_idx);
 
@@ -397,7 +427,7 @@ ALWI void binary_op(
                 // COL broadcast pops once per row (see end of ht loop), not per tile.
                 if constexpr (!is_square && pops_per_tile(input_b_policy)) {
                     if constexpr (bcast_dim == BroadcastDim::NONE) {
-                        cb_pop_front(icb_b, onetile);
+                        if (!same_cb) cb_pop_front(icb_b, onetile);
                     }
                 }
 
@@ -461,9 +491,9 @@ ALWI void binary_op(
             }
             if constexpr (!is_square && pops_per_chunk(input_b_policy)) {
                 if constexpr (bcast_dim == BroadcastDim::NONE) {
-                    cb_pop_front(icb_b, chunk_size);
+                    if (!same_cb) cb_pop_front(icb_b, chunk_size);
                 } else if constexpr (bcast_dim == BroadcastDim::COL) {
-                    cb_pop_front(icb_b, onetile);
+                    if (!same_cb) cb_pop_front(icb_b, onetile);
                 }
             }
 
@@ -476,7 +506,7 @@ ALWI void binary_op(
         // COL broadcast: pop input_b once per row (ht iteration).
         // This is decoupled from input_a's policy - controlled solely by input_b's policy.
         if constexpr (!is_square && bcast_dim == BroadcastDim::COL && pops_per_tile(input_b_policy)) {
-            cb_pop_front(icb_b, onetile);
+            if (!same_cb) cb_pop_front(icb_b, onetile);
         }
     }
 
@@ -490,7 +520,7 @@ ALWI void binary_op(
         cb_pop_front(icb_a, total_tiles_a);
     }
     if constexpr (!is_square && pops_at_end(input_b_policy)) {
-        cb_pop_front(icb_b, b_tile_count);
+        if (!same_cb) cb_pop_front(icb_b, b_tile_count);
     }
 
     // B pop for ROW/SCALAR (unless caller-managed, never, or already popped at end)
@@ -498,7 +528,7 @@ ALWI void binary_op(
         if constexpr (bcast_dim == BroadcastDim::ROW || bcast_dim == BroadcastDim::SCALAR) {
             if constexpr (
                 !pops_caller_managed(input_b_policy) && !pops_never(input_b_policy) && !pops_at_end(input_b_policy)) {
-                cb_pop_front(icb_b, b_tile_count);
+                if (!same_cb) cb_pop_front(icb_b, b_tile_count);
             }
         }
     }

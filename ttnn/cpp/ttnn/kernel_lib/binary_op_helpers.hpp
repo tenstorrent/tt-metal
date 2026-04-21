@@ -331,6 +331,30 @@ template <
     typename AccumT = NoAccumulation>
 ALWI void square(uint32_t icb, uint32_t ocb, BinaryInputBlockShape shape, PostOp post_op = {}, AccumT accum = {});
 
+// =============================================================================
+// Dest-Reuse PostOp
+// =============================================================================
+
+/**
+ * @brief PostOp: fused in-place multiply — dst[dst_idx] *= CB[0].
+ *
+ * Uses binary_dest_reuse_tiles (DEST_TO_SRCA): loads DEST[dst_idx] as SRCA,
+ * unpacks CB[0] as SRCB, multiplies, writes back to DEST[dst_idx].
+ *
+ * Typical use: batch_norm — (x - mean) * rsqrt(var + eps)
+ *   sub(cb_input, cb_mean, cb_out, shape, DestReuseMul<cb_rsqrt>{});
+ *
+ * Sets needs_parent_reinit = true — binary_op re-calls binary_init before each
+ * tile's exec to restore the unpack pipeline after this PostOp reconfigures it.
+ *
+ * @tparam CB  Compile-time CB index supplying the scale tile (SRCB).
+ */
+template <uint32_t CB>
+struct DestReuseMul {
+    static constexpr bool needs_parent_reinit = true;
+    ALWI void operator()(uint32_t dst_idx) const;
+};
+
 }  // namespace compute_kernel_lib
 
 #include "binary_op_helpers.inl"
