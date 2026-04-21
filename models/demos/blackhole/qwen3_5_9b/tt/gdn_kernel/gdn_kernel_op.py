@@ -152,7 +152,7 @@ def _build_prefill_device_program(
         _make_cb(16, Vt, core_ranges),  # cb_out
         _make_cb(17, Kt, core_ranges),  # cb_q (normed)
         _make_cb(18, Kt, core_ranges),  # cb_k_row (normed)
-        _make_cb(21, 1, core_ranges),  # cb_scratch (reader sub-tile extraction)
+        _make_cb(21, 15, core_ranges),  # cb_scratch (whole-tile Q/K/V/a/b + scalars)
         _make_cb(24, 1, core_ranges),  # cb_exp_g
         _make_cb(25, Vt, core_ranges),  # cb_kv_mem
         _make_cb(26, Vt, core_ranges),  # cb_delta
