@@ -767,8 +767,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         sampling_logits = logits
         if logits.shape[2] != sampling_batch_size:
             if enable_trace:
-                raise ValueError(
-                    f"Device sampling trace requires logits batch {sampling_batch_size}, got {logits.shape[2]}"
+                enable_trace = False
+                logger.warning(
+                    f"Sampling tracing is disabled: Device sampling trace requires logits batch {sampling_batch_size}, got {logits.shape[2]}."
                 )
             if logits.shape[2] <= 0 or logits.shape[2] > sampling_batch_size:
                 raise ValueError(
@@ -1854,13 +1855,16 @@ class DeepseekGenerator(WarmupForwardMixin):
                     else:
                         assert prefill_tokens is not None
                         prefill_logits = self._prefill(
-                            tokens_batched[user_id], user_id=user_id, sample_on_device=self.sample_on_device
+                            tokens_batched[user_id],
+                            user_id=user_id,
+                            sample_on_device=self.sample_on_device,
+                            prompt_len=prompt_len,
                         )
                         assert prefill_logits is not None
                         if self.sample_on_device:
-                            prefill_logits = self._slice_last_token_logits(
-                                prefill_logits, prompt_len, expand_to_batch=True
-                            )
+                            # prefill_logits is already sliced to [1,1,1,vocab] (single-ring)
+                            # or [1,1,batch,vocab] (multi-ring via _slice_last_token_logits),
+                            # so no further slicing is needed here.
                             prefill_logits_sampled_device = self._sample_tokens_device(
                                 prefill_logits, user_slots=[user_id]
                             )
@@ -1874,7 +1878,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                             assert isinstance(
                                 prefill_logits, torch.Tensor
                             ), "prefill_logits should be a torch.Tensor on host"
-                            last_token_logits = prefill_logits[0, 0, max(prompt_len - 1, 0), :]
+                            last_token_logits = prefill_logits[
+                                0, 0, min(max(prompt_len - 1, 0), prefill_logits.shape[2] - 1), :
+                            ]
                             pred_token = int(
                                 self._sample_on_host(last_token_logits.unsqueeze(0), start_user_idx=user_id).item()
                             )
@@ -2266,12 +2272,18 @@ class DeepseekGenerator(WarmupForwardMixin):
                 return_hidden=True,
             )
         else:
+            # Pass prompt_len so only the logit at prompt_len-1 is computed,
+            # skipping LMHead for every other transformer chunk.
+            # _forward_prefill now handles multi-row meshes via a post-LMHead
+            # row all-gather, so the shape[0]==1 guard is no longer needed.
+            _prefill_prompt_len = prompt_len if (sample_on_device and prompt_len is not None) else None
             logits_tt = RowBatchedModel.forward_prefill(
                 x=tt_tokens,
                 user_id=user_id,
                 cfg=self.model_run_config_prefill,
                 rope_tensors=rope_tensors,
                 page_tables=page_tables_to_use,
+                prompt_len=_prefill_prompt_len,
             )
             hidden_tt = None
 
@@ -2279,7 +2291,17 @@ class DeepseekGenerator(WarmupForwardMixin):
             raise ValueError("sample_on_device=True and return_last_hidden=True is not supported.")
 
         if sample_on_device:
-            logits = logits_tt
+            if prompt_len is not None:
+                # forward_prefill already returned only the [1,1,1,vocab] logit
+                # (for all ring sizes, via the intra-chunk row all-gather in
+                # _forward_prefill).
+                logits = logits_tt
+                if self.batch_size_per_row > 1:
+                    expanded = ttnn.repeat(logits_tt, (1, 1, self.batch_size_per_row, 1))
+                    ttnn.deallocate(logits_tt)
+                    logits = expanded
+            else:
+                logits = logits_tt
         else:
             logits = ttnn.to_torch(
                 logits_tt,

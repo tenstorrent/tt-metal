@@ -22,7 +22,7 @@ from models.demos.deepseek_v3.tt.mtp import MTP2D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig, ReshardConfig
-from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config, get_prefill_chunk_sizes, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -113,7 +113,9 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         """Create the model configuration for prefill mode."""
+        model_chunk = get_prefill_chunk_sizes(hf_config.max_seq_len, mesh_device.shape[0]).model_chunk
         model_cfg = {
+            "model_chunk": model_chunk,
             "embedding": Embedding2D.prefill_model_config(hf_config, mesh_device),
             "mlp_decoder_block": [
                 DecoderBlock2D.prefill_model_config(
@@ -367,8 +369,109 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         rope_tensors: dict,
         page_tables: Sequence[ttnn.Tensor],
         return_hidden: bool = False,
+        prompt_len: int | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Forward pass for prefill mode."""
+        """Forward pass for prefill mode, optionally returning only the logit at prompt_len-1.
+
+        When ``prompt_len`` is provided the method skips the all_gather + LMHead for
+        every transformer chunk that does not contain token ``prompt_len - 1``, and
+        slices the hidden state to a single row for the chunk that does.  The returned
+        logits tensor therefore has shape ``[1, 1, 1, vocab_size]`` instead of
+        ``[1, 1, seq_len, vocab_size]``.  Works for any ring size: in multi-row meshes
+        ``_forward_prefill`` performs a post-LMHead row all-gather so every device
+        converges on the target token's logits.
+        """
+        CHUNK_SIZE = cfg["model_chunk"]
+        cos_dim = rope_tensors["cos_matrix"].shape[3]
+        sin_dim = rope_tensors["sin_matrix"].shape[3]
+        _decoder_cfgs = cfg["mlp_decoder_block"] or cfg["moe_decoder_block"]
+        block_size = int(_decoder_cfgs[0]["mla"]["mla1d"]["kvpe_cache"].shape[2])
+        logits = []
+        hidden_for_mtp = []
+        for start in range(0, x.shape[2], CHUNK_SIZE):
+            end = min(start + CHUNK_SIZE, x.shape[2])
+            x_chunk = ttnn.slice(x, [0, 0, start], [1, 1, end])
+            rope_chunk = {
+                "cos_matrix": ttnn.slice(rope_tensors["cos_matrix"], [0, 0, start, 0], [1, 1, end, cos_dim]),
+                "sin_matrix": ttnn.slice(rope_tensors["sin_matrix"], [0, 0, start, 0], [1, 1, end, sin_dim]),
+                "trans_matrix": rope_tensors["trans_matrix"],
+            }
+            start_block = start // block_size
+            end_block = (end + block_size - 1) // block_size
+            page_tables_chunk = [ttnn.slice(pt, [0, start_block], [pt.shape[0], end_block]) for pt in page_tables]
+
+            # When prompt_len is set, only compute LMHead for the chunk that
+            # contains the target token; skip it (but still run decoder blocks
+            # for KV-cache population) for all other chunks.
+            lm_head_local_idx: int | None = None
+            skip_lm_head = False
+            if prompt_len is not None:
+                if start <= (prompt_len - 1) < end:
+                    lm_head_local_idx = (prompt_len - 1) - start
+                else:
+                    skip_lm_head = True
+            logger.info(
+                f"{x.shape} of ({start}, {end}) get {prompt_len} -> {lm_head_local_idx} with skip_lm_head={skip_lm_head}"
+            )
+
+            logits_chunk, *hidden_for_mtp_chunk = cls._forward_prefill(
+                x_chunk,
+                user_id,
+                cfg,
+                rope_chunk,
+                page_tables_chunk,
+                return_hidden,
+                lm_head_local_idx=lm_head_local_idx,
+                skip_lm_head=skip_lm_head,
+            )
+            ttnn.deallocate(x_chunk)
+            ttnn.deallocate(rope_chunk["cos_matrix"])
+            ttnn.deallocate(rope_chunk["sin_matrix"])
+            # for pt_chunk in page_tables_chunk:
+            #     ttnn.deallocate(pt_chunk)
+            if logits_chunk is not None:
+                logits.append(logits_chunk)
+            if len(hidden_for_mtp_chunk) > 0:
+                hidden_for_mtp.append(hidden_for_mtp_chunk)
+        logits_chunks = logits
+        logits = ttnn.concat(logits_chunks, dim=2)
+        if len(logits_chunks) > 1:
+            for logits_chunk in logits_chunks:
+                ttnn.deallocate(logits_chunk)
+        if len(hidden_for_mtp) == 0:
+            return logits
+        hidden_for_mtp = ttnn.concat(hidden_for_mtp, dim=2)
+        return logits, hidden_for_mtp
+
+    @classmethod
+    def _forward_prefill(
+        cls,
+        x: ttnn.Tensor,
+        user_id: int,
+        cfg: RunPrefillConfig,
+        rope_tensors: dict,
+        page_tables: Sequence[ttnn.Tensor],
+        return_hidden: bool = False,
+        lm_head_local_idx: int | None = None,
+        skip_lm_head: bool = False,
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Forward pass for one prefill chunk.
+
+        Args:
+            lm_head_local_idx: When set, only the logit for this single
+                chunk-relative token index is computed.  In multi-row meshes
+                the embedding reduce_scatter has already divided the chunk
+                across rows, so the index is translated to a row-local offset
+                and a target row; after the LMHead an all-gather across rows
+                puts the correct logit on every device, producing a
+                ``[1, 1, 1, vocab_size]`` result regardless of ring size.
+            skip_lm_head: When True, the all_gather and LMHead are skipped
+                entirely (decoder blocks still run for KV-cache population).
+                Returns ``(None,)`` / ``(None, hidden)`` so the caller can use
+                the same ``logits_chunk, *hidden = ...`` unpacking pattern.
+            page_tables: Per-layer page tables pre-sliced to exactly the blocks
+                needed for this chunk.
+        """
 
         x = Embedding2D.forward_prefill(x, cfg["embedding"])
 
@@ -389,6 +492,25 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
 
         ccl = cfg["lm_head"]["ccl"]
 
+        if skip_lm_head:
+            ttnn.deallocate(x)
+            if return_hidden:
+                return None, hidden_for_mtp
+            return (None,)
+
+        # After Embedding2D's reduce_scatter the sequence is divided across ring
+        # rows, so x.shape[2] == CHUNK_SIZE // num_rows (e.g. 64 in QUAD).
+        # lm_head_local_idx is chunk-relative (0..CHUNK_SIZE-1); translate it to
+        # a row-local offset and remember which row holds the target token.
+        target_row: int | None = None
+        if lm_head_local_idx is not None:
+            local_seq_len = x.shape[2]
+            row_local_idx = lm_head_local_idx % local_seq_len
+            target_row = lm_head_local_idx // local_seq_len
+            x_sliced = ttnn.slice(x, [0, 0, row_local_idx, 0], [1, 1, row_local_idx + 1, x.shape[-1]])
+            ttnn.deallocate(x)
+            x = x_sliced
+
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
         if return_hidden:
             lm_head_in = ttnn.clone(x)
@@ -397,7 +519,28 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             return logits, hidden_for_mtp
 
         logits = LMHead1D.forward_prefill(x, cfg["lm_head"])
-        return logits
+
+        # In a multi-row mesh every row computed logits for its own local token
+        # (at row_local_idx within its 64-token slice).  All-gather across rows
+        # so every device gets all rows' single-token logits, then slice to the
+        # row that actually holds the target token.
+        if target_row is not None and ccl.mesh_device.shape[0] > 1:
+            row_gather_cfg = ccl.populate_all_gather_runtime_args(
+                {
+                    "cluster_axis": 0,
+                    "dim": 2,
+                    "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                    "topology": ttnn.Topology.Linear,
+                }
+            )
+            logits_gathered = ttnn.experimental.all_gather_async(logits, **row_gather_cfg)
+            ttnn.deallocate(logits)
+            logits = ttnn.slice(
+                logits_gathered, [0, 0, target_row, 0], [1, 1, target_row + 1, logits_gathered.shape[-1]]
+            )
+            ttnn.deallocate(logits_gathered)
+
+        return (logits,)
 
     @classmethod
     def forward_mtp_decode(
