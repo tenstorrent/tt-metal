@@ -180,7 +180,6 @@ void kernel_main() {
 
         // Build lightweight mask context for this ring iteration
         LightweightMaskContext lw_mask;
-        lw_mask.enabled = needs_lightweight_mask;
         lw_mask.is_causal = (ring_iter == 0 ? is_causal : false);
         lw_mask.neginf_tile_idx = neginf_tile_idx;
         lw_mask.causal_diag_tile_idx = causal_diag_tile_idx;
@@ -228,7 +227,8 @@ void kernel_main() {
                 uniform_dataformat,
                 cb_out,  // cb_normalized_out — output goes directly to cb_out
                 cb_sum_out,
-                cb_sum_in>(
+                cb_sum_in,
+                needs_lightweight_mask>(
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,
@@ -248,15 +248,25 @@ void kernel_main() {
                 q_per_core,
                 lw_mask);
         } else {
-            bool causality = (ring_iter == 0 ? is_causal : false);
+            bool is_causal_ring_iter = (ring_iter == 0 ? is_causal : false);
 
             uint32_t iter_num_kv_chunks = num_kv_chunks;
             if (is_causal && is_balanced && ring_index > ring_id) {
                 iter_num_kv_chunks /= 2;
             }
-            bool balancing = (ring_index >= ring_id ? false : is_balanced);
+            bool skip_first_half_q = (ring_index >= ring_id ? false : is_balanced);
 
-            sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, NH, DHt, vDHt, scale_fp32>(
+            sdpa_ring<
+                cb_qk_im,
+                cb_identity_scale_in,
+                cb_scale_in,
+                Sq_chunk_t,
+                Sk_chunk_t,
+                NH,
+                DHt,
+                vDHt,
+                scale_fp32,
+                needs_lightweight_mask>(
                 qk_in0_block_w,
                 qk_subblock_w,
                 qk_subblock_h,
@@ -307,8 +317,8 @@ void kernel_main() {
                 cb_prev_out,
                 cb_out,
                 lw_mask,
-                causality,
-                balancing,
+                is_causal_ring_iter,
+                skip_first_half_q,
                 is_last_ring_iter,
                 use_zigzag_balancing);
         }

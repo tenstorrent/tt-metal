@@ -87,8 +87,7 @@ class ModelPipeline:
 
         self._page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES
         self.model: DeepSeekV3 | None = None
-        if self.pipeline.my_mesh_id == 0:
-            # Initialize host-side model interface for mesh id 0 (first stage)
+        if self.pipeline.my_stage_idx == 0:
             self.model = DeepSeekV3(
                 write_fn=self.pipeline.write_token,
                 read_fn=self.pipeline.read_output,
@@ -99,12 +98,12 @@ class ModelPipeline:
             if io_socket_descriptor_prefix is not None:
                 self.pipeline.export_host_socket_descriptors(io_socket_descriptor_prefix)
 
-        logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
+        logger.info(f"Created ModelPipeline for stage {self.pipeline.my_stage_idx}.")
 
     def prefill_forward(self, tokens: list[int]) -> int:
         """Prefill 1 user's prompt tokens and return the next token id."""
         # Host-side model interface is only invoked on mesh id 0
-        if self.pipeline.my_mesh_id != 0:
+        if self.pipeline.my_stage_idx != 0:
             raise RuntimeError("prefill_forward() should only be called on mesh id 0")
         assert self.model is not None
         logger.debug(f"Prefilling with {len(tokens)} tokens...")
@@ -123,8 +122,7 @@ class ModelPipeline:
 
     def decode_forward(self, input_token: int) -> int:
         """Run 1 decode step and return the next token id."""
-        # Host-side model interface is only invoked on mesh id 0
-        if self.pipeline.my_mesh_id != 0:
+        if self.pipeline.my_stage_idx != 0:
             raise RuntimeError("decode_forward() should only be called on mesh id 0")
         assert self.model is not None
         output = self.model.decode_step(
@@ -145,8 +143,8 @@ class ModelPipeline:
         Calls on_token(token_id) for each generated token (including the first
         one sampled after prefill). Optionally returns the list of all generated token IDs.
         """
-        if self.pipeline.my_mesh_id != 0:
-            raise RuntimeError("run_inference() should only be called on mesh id 0")
+        if self.pipeline.my_stage_idx != 0:
+            raise RuntimeError("run_inference() should only be called on stage 0")
         assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
 
         # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.

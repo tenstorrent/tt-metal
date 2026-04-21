@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_sqrt_custom.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "sfpu/ckernel_sfpu_trigonometry.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -150,7 +151,7 @@ inline void calculate_tangent() {
         if constexpr (is_fp32_dest_acc_en) {
             sfpi::dst_reg[0] = a;
         } else {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(a, 0));
+            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(a, sfpi::RoundMode::NearestEven));
         }
         sfpi::dst_reg++;
     }
@@ -222,7 +223,7 @@ inline void calculate_sine() {
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, 0));
+            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, sfpi::RoundMode::NearestEven));
         }
 
         sfpi::dst_reg++;
@@ -308,7 +309,7 @@ inline void calculate_cosine() {
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, 0));
+            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, sfpi::RoundMode::NearestEven));
         }
 
         sfpi::dst_reg++;
@@ -376,7 +377,7 @@ inline void calculate_atan() {
         sfpi::vFloat result = sfpu_atan<APPROXIMATION_MODE, is_fp32_dest_acc_en>(in);
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
         }
 
         sfpi::dst_reg[0] = result;
@@ -455,7 +456,7 @@ inline void calculate_asin_acos_impl() {
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
         }
 
         sfpi::dst_reg[0] = result;

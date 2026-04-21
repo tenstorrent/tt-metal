@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
@@ -16,6 +17,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
+    experimental::CircularBuffer cb_out0(cb_id_out0);
 
     typedef ShardedInfo<
         get_compile_time_arg_val(2),
@@ -41,12 +43,12 @@ void kernel_main() {
         for (uint32_t k = 0; k < num_shards; k++) {
 #endif
             uint32_t stick_index = i * num_shards + k;
-            cb_wait_front(cb_id_out0, 1);
-            uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+            cb_out0.wait_front(1);
+            uint32_t l1_read_addr = cb_out0.get_read_ptr();
             uint64_t dst_noc_addr = s0.get_noc_addr(stick_index);
             noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
             noc_async_write_barrier();
-            cb_pop_front(cb_id_out0, 1);
+            cb_out0.pop_front(1);
         }
     }
 }
