@@ -778,7 +778,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 // set
                 // tt-sim wormhole ERROR: UndefinedBehavior: tensix_execute_unpacr: unpack_to_dst=0 in_data_format=0
                 // out_data_format=0
-                // use_llk_bcast = false;  // commented out pending real-BH validation
+                use_llk_bcast = false;
             }
         }
     }
