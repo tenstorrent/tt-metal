@@ -1588,6 +1588,9 @@ class Molmo2Generator:
                 kv_caches=self.kv_caches,  # Pass KV cache to fill during prefill
                 rot_mats=rot_mats,
                 page_table=page_table_for_trace,
+                last_token_idx=trace_tensors["hidden_states"].shape[-2] - 1
+                if trace_tensors["hidden_states"].shape[-2] > 8192
+                else None,
             )
 
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -2570,6 +2573,9 @@ class Molmo2Generator:
                 kv_caches=self.kv_caches,  # Pass KV cache to compile fill_cache
                 rot_mats=rot_mats,
                 page_table=effective_page_table,  # Compile paged attention ops
+                last_token_idx=trace_tensors["hidden_states"].shape[-2] - 1
+                if trace_tensors["hidden_states"].shape[-2] > 8192
+                else None,
             )
         else:
             # Non-traced path: use page_table argument if provided, else try trace_tensors
@@ -2681,12 +2687,12 @@ class Molmo2Generator:
 
         prefill_attn_mask_ttnn = self._build_mm_prefill_attn_mask(token_type_ids, hf_attention_mask, seq_len)
 
-        if token_type_ids is not None and (use_trace or use_unified_trace):
-            logger.warning(
-                "Disabling prefill/unified trace: multimodal attention mask (token_type_ids) is incompatible with traced SDPA."
-            )
-            use_trace = False
-            use_unified_trace = False
+        # if token_type_ids is not None and (use_trace or use_unified_trace):
+        #     logger.warning(
+        #         "Disabling prefill/unified trace: multimodal attention mask (token_type_ids) is incompatible with traced SDPA."
+        #     )
+        #     use_trace = False
+        #     use_unified_trace = False
 
         # Initialize page table for paged attention (demo mode)
         # If page_table is provided externally (vLLM), use that instead
