@@ -2409,7 +2409,9 @@ class MLA1D(AbstractModule):
             n=qkv_a_n,
             batch=batch_size,
             mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
-            override_compute_grid=ttnn.CoreGrid(x=6, y=6),
+            override_compute_grid=ttnn.CoreGrid(
+                x=6, y=6
+            ),  # FIXME: optimize this config for prefill, potential DI_DT hang WORKAROUND. See issue #41501.
         )
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 

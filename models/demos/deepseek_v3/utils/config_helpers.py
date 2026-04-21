@@ -71,7 +71,9 @@ def align_prefill_padded_seq_len(seq_len: int, num_mesh_rows: int) -> int:
     rows = int(num_mesh_rows)
     if rows <= 0:
         raise ValueError(f"num_mesh_rows must be > 0, got {num_mesh_rows!r}")
-    alignment = int(ttnn.TILE_SIZE) * rows
+    # for quad mesh, we need to align each seq_len chunk per row to the tile size
+    # for other meshes, we align the entire seq_len to the tile size
+    alignment = int(ttnn.TILE_SIZE) * rows if rows == 16 else int(ttnn.TILE_SIZE)
     return ((seq_len_i + alignment - 1) // alignment) * alignment
 
 
