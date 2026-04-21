@@ -461,16 +461,18 @@ FORCE_INLINE uint32_t read_from_pcie(
 
     *prefetch_q_rd_ptr = 0U;
 
-    // Tell host we read
+    // Tell host we read. Store the cached-form pointer value so host comparisons against
+    // prefetch_q_dev_ptrs (which are cached offsets) match.
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(prefetch_q_rd_ptr_addr) =
-        reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr);
+        reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) - MEM_L1_UNCACHED_BASE;
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(prefetch_q_pcie_rd_ptr_addr) = pcie_read_ptr;
 
     ++prefetch_q_rd_ptr;
 
-    // Wrap prefetch_q
-    if (reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) == prefetch_q_end) {
-        prefetch_q_rd_ptr = reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(prefetch_q_base);
+    // Wrap prefetch_q. prefetch_q_rd_ptr lives in the uncached alias, so compare and reset there.
+    if (reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) == prefetch_q_end + MEM_L1_UNCACHED_BASE) {
+        prefetch_q_rd_ptr =
+            reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(prefetch_q_base + MEM_L1_UNCACHED_BASE);
     }
     return pending_read_size;
 }
@@ -527,8 +529,11 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
     // End of reserved (possibly-not-yet-committed) region in cmddat_q for issued reads.
     // `fence` remains the committed boundary used for cmd_ready checks.
     static uintptr_t issue_fence = cmddat_q_base;
+    // Read via the uncached L1 alias on Quasar so polled host updates bypass the L1/L2 cache
+    // hierarchy. invalidate_l1_cache() alone doesn't flush L2, so cached reads of TL1 locations
+    // written by an external NOC source (host fetch-queue write) can otherwise stall forever.
     static volatile tt_l1_ptr prefetch_q_entry_type* prefetch_q_rd_ptr =
-        (volatile tt_l1_ptr prefetch_q_entry_type*)prefetch_q_base;
+        (volatile tt_l1_ptr prefetch_q_entry_type*)(prefetch_q_base + MEM_L1_UNCACHED_BASE);
     static constexpr uint32_t prefetch_q_msb_mask = 1u << (sizeof(prefetch_q_entry_type) * CHAR_BIT - 1U);
 
     if (stall_state == StallState::STALLED) {
