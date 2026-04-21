@@ -202,12 +202,12 @@ void compile_one(
     args.push_back(target.srcs[src_index]);
     args.push_back("-MF");
     args.push_back(temp_d_path.string());
-    append_tokenized(args, target.defines);
+    args.insert(args.end(), target.defines.begin(), target.defines.end());
 
     fs::path log_path = obj_path;
     log_path.concat(".log");
     tt::jit_build::utils::FileRenamer log_file(log_path);
-    tt::filesystem::safe_remove(log_file.path());
+    fs::remove(log_file.path());
     if (!tt::jit_build::utils::exec_command(args, out_dir, log_file.path())) {
         build_failure(target.target_name, "compile", format_args(args), log_file.path());
     }

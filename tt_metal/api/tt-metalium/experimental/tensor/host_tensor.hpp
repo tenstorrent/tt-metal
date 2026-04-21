@@ -131,7 +131,7 @@ public:
      * The data in the buffer is copied into a tensor with host storage.
      */
     template <typename T>
-    static HostTensor from_span(std::span<T> buffer, const TensorSpec& spec, T pad_value = 0);
+    static HostTensor from_span(std::span<const T> buffer, const TensorSpec& spec, T pad_value = 0);
 
     /**
      * Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.

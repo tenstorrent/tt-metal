@@ -29,6 +29,8 @@ import ttnn
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
 from models.demos.deepseek_v3_b1.weights.cache import (
     CacheConfig,
+    CompressedTensorBuildInputs,
+    CompressedTensorTarget,
     ReplicateMeshMapper,
     Shard2dMeshMapper,
     ShardMeshMapper,
@@ -46,6 +48,7 @@ from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
 
 Q_AB_KV_A_SPEC = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 O_PROJ_GATE_MM_NORMS_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
+MERGED_TP4_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.tp4_merged_fusion_group_spec()
 KV_B12_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 GATE_UP_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
@@ -690,30 +693,7 @@ def prepare_attention_weights(
     kv_norm_key = _key(layer_idx, "self_attn.kv_a_layernorm.weight")
     ffn_norm_key = _key(layer_idx, "post_attention_layernorm.weight")
 
-    def _preprocess_q_ab_kv_a(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        q_a = t[q_a_key].T.contiguous()
-        q_b = deinterleave_q_b_proj(t[q_b_key])
-        kv_a = t[kv_a_key].T.contiguous()
-        if mla_tp == 1 and q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
-            q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
-        return preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
-
-    q_ab_fp = cache_config.context.fingerprint(
-        source=SourceTensorSelection(names=(q_a_key, q_b_key, kv_a_key)),
-        target=Q_AB_KV_A_SPEC,
-    )
-    q_ab_views = cache_config.cache.get_or_create(
-        q_ab_fp,
-        device,
-        preprocess=_preprocess_q_ab_kv_a,
-        raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, q_b_key, kv_a_key)},
-    )
-    if not isinstance(q_ab_views, dict):
-        raise TypeError("expected dict[str, OverlappedTensor] for q_ab_kv_a cache entry")
-    q_a_proj = q_ab_views["q_a_proj"]
-    q_b_proj = q_ab_views["q_b_proj"]
-    kv_a_proj = q_ab_views["kv_a_proj"]
-
+    # -- kv_b12: always a separate fusion group --
     def _preprocess_kv_b12(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         kv_b1, kv_b2 = split_kv_b_proj(t[kv_b_key])
         if mla_tp == 1:
@@ -738,6 +718,142 @@ def prepare_attention_weights(
     kv_b1_proj = kv_views["kv_b1_proj"]
     kv_b2_proj = kv_views["kv_b2_proj"]
 
+    # -- mla_tp == 2: merged buffer (o_proj + gate_mm + norms + q_ab + kv_a) --
+    if mla_tp == 2:
+        q_ab_keys = (q_a_key, q_b_key, kv_a_key)
+
+        def _preprocess_merged(t: dict[str, torch.Tensor], *, include_gate: bool) -> dict[str, torch.Tensor]:
+            o_proj = t[o_proj_key].T.contiguous()
+            o_proj = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.pack_o_proj_weights_tp4_shuffled(o_proj)
+            if include_gate:
+                gate_mm = t[gate_key].T.contiguous()
+            else:
+                gate_mm = torch.zeros(D.HIDDEN_SIZE, D.GATE_NUM_INDICES, dtype=torch.bfloat16, device=o_proj.device)
+            q_a = t[q_a_key].T.contiguous()
+            q_b = deinterleave_q_b_proj(t[q_b_key])
+            kv_a = t[kv_a_key].T.contiguous()
+            q_ab_kv_a = preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
+            return {
+                "o_proj": o_proj,
+                "gate_mm": gate_mm,
+                "attn_norm": t[attn_norm_key].unsqueeze(0),
+                "q_norm": t[q_norm_key].unsqueeze(0),
+                "kv_norm": t[kv_norm_key].unsqueeze(0),
+                "ffn_norm": t[ffn_norm_key].unsqueeze(0),
+                **q_ab_kv_a,
+            }
+
+        if is_moe:
+            gate_key = _key(layer_idx, "mlp.gate.weight")
+            merged_src = (o_proj_key, gate_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key) + q_ab_keys
+            merged_fp = cache_config.context.fingerprint(
+                source=SourceTensorSelection(names=merged_src),
+                target=MERGED_TP4_SPEC,
+            )
+            merged_views = cache_config.cache.get_or_create(
+                merged_fp,
+                device,
+                preprocess=lambda t: _preprocess_merged(t, include_gate=True),
+                raw_tensors=lambda: {k: state_dict[k] for k in merged_src},
+            )
+            if not isinstance(merged_views, dict):
+                raise TypeError("expected dict[str, OverlappedTensor] for merged cache entry")
+
+            _bias_key = _key(layer_idx, "mlp.gate.e_score_correction_bias")
+            target = _gate_bias_target(layer_idx)
+            fingerprint = cache_config.context.fingerprint(
+                source=SourceTensorSelection(names=(_bias_key,)),
+                target=target,
+            )
+            gate_bias_tt = cache_config.cache.get_or_create(
+                fingerprint,
+                device,
+                preprocess=lambda t: {target.name: t[_bias_key].reshape(16, 16).T.contiguous().to(torch.bfloat16)},
+                raw_tensors=lambda: {_bias_key: state_dict[_bias_key]},
+            )
+            if not isinstance(gate_bias_tt, ttnn.Tensor):
+                raise TypeError("expected ttnn.Tensor for gate_bias cache entry")
+
+            logger.debug(
+                "Attention fusion groups (MoE, merged) for layer {} in {:.3f}s",
+                layer_idx,
+                time.perf_counter() - t0,
+            )
+            return AttentionWeights(
+                q_a_proj=merged_views["q_a_proj"],
+                q_b_proj=merged_views["q_b_proj"],
+                kv_a_proj=merged_views["kv_a_proj"],
+                o_proj=merged_views["o_proj"],
+                gate_mm=merged_views["gate_mm"],
+                attn_norm=merged_views["attn_norm"],
+                q_norm=merged_views["q_norm"],
+                kv_norm=merged_views["kv_norm"],
+                ffn_norm=merged_views["ffn_norm"],
+                kv_b1_proj=kv_b1_proj,
+                kv_b2_proj=kv_b2_proj,
+                gate_bias=gate_bias_tt,
+            )
+
+        # Dense merged path
+        merged_src_dense = (o_proj_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key) + q_ab_keys
+        merged_fp_dense = cache_config.context.fingerprint(
+            source=SourceTensorSelection(names=merged_src_dense),
+            target=MERGED_TP4_SPEC,
+        )
+        merged_views = cache_config.cache.get_or_create(
+            merged_fp_dense,
+            device,
+            preprocess=lambda t: _preprocess_merged(t, include_gate=False),
+            raw_tensors=lambda: {k: state_dict[k] for k in merged_src_dense},
+        )
+        if not isinstance(merged_views, dict):
+            raise TypeError("expected dict[str, OverlappedTensor] for merged cache entry")
+
+        logger.debug(
+            "Attention fusion groups (dense, merged) for layer {} in {:.3f}s",
+            layer_idx,
+            time.perf_counter() - t0,
+        )
+        return AttentionWeights(
+            q_a_proj=merged_views["q_a_proj"],
+            q_b_proj=merged_views["q_b_proj"],
+            kv_a_proj=merged_views["kv_a_proj"],
+            o_proj=merged_views["o_proj"],
+            gate_mm=None,
+            attn_norm=merged_views["attn_norm"],
+            q_norm=merged_views["q_norm"],
+            kv_norm=merged_views["kv_norm"],
+            ffn_norm=merged_views["ffn_norm"],
+            kv_b1_proj=kv_b1_proj,
+            kv_b2_proj=kv_b2_proj,
+            gate_bias=None,
+        )
+
+    # -- mla_tp == 1: separate q_ab_kv_a and o_proj fusion groups --
+    def _preprocess_q_ab_kv_a(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        q_a = t[q_a_key].T.contiguous()
+        q_b = deinterleave_q_b_proj(t[q_b_key])
+        kv_a = t[kv_a_key].T.contiguous()
+        if q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
+            q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
+        return preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
+
+    q_ab_fp = cache_config.context.fingerprint(
+        source=SourceTensorSelection(names=(q_a_key, q_b_key, kv_a_key)),
+        target=Q_AB_KV_A_SPEC,
+    )
+    q_ab_views = cache_config.cache.get_or_create(
+        q_ab_fp,
+        device,
+        preprocess=_preprocess_q_ab_kv_a,
+        raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, q_b_key, kv_a_key)},
+    )
+    if not isinstance(q_ab_views, dict):
+        raise TypeError("expected dict[str, OverlappedTensor] for q_ab_kv_a cache entry")
+    q_a_proj = q_ab_views["q_a_proj"]
+    q_b_proj = q_ab_views["q_b_proj"]
+    kv_a_proj = q_ab_views["kv_a_proj"]
+
     if is_moe:
         gate_key = _key(layer_idx, "mlp.gate.weight")
 
@@ -748,9 +864,8 @@ def prepare_attention_weights(
             q_norm = t[q_norm_key].unsqueeze(0)
             kv_norm = t[kv_norm_key].unsqueeze(0)
             ffn_norm = t[ffn_norm_key].unsqueeze(0)
-            if mla_tp == 1:
-                if o_proj.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
-                    o_proj = o_proj[:_MLA_TP1_O_PROJ_HEIGHT, :].contiguous()
+            if o_proj.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
+                o_proj = o_proj[:_MLA_TP1_O_PROJ_HEIGHT, :].contiguous()
             return {
                 "o_proj": o_proj,
                 "gate_mm": gate_mm,
@@ -773,12 +888,6 @@ def prepare_attention_weights(
         )
         if not isinstance(o_views, dict):
             raise TypeError("expected dict[str, OverlappedTensor] for o_proj_gate_mm_norms cache entry")
-        o_proj_ot = o_views["o_proj"]
-        gate_mm_ot = o_views["gate_mm"]
-        attn_norm_ot = o_views["attn_norm"]
-        q_norm_ot = o_views["q_norm"]
-        kv_norm_ot = o_views["kv_norm"]
-        ffn_norm_ot = o_views["ffn_norm"]
 
         _bias_key = _key(layer_idx, "mlp.gate.e_score_correction_bias")
         target = _gate_bias_target(layer_idx)
@@ -804,12 +913,12 @@ def prepare_attention_weights(
             q_a_proj=q_a_proj,
             q_b_proj=q_b_proj,
             kv_a_proj=kv_a_proj,
-            o_proj=o_proj_ot,
-            gate_mm=gate_mm_ot,
-            attn_norm=attn_norm_ot,
-            q_norm=q_norm_ot,
-            kv_norm=kv_norm_ot,
-            ffn_norm=ffn_norm_ot,
+            o_proj=o_views["o_proj"],
+            gate_mm=o_views["gate_mm"],
+            attn_norm=o_views["attn_norm"],
+            q_norm=o_views["q_norm"],
+            kv_norm=o_views["kv_norm"],
+            ffn_norm=o_views["ffn_norm"],
             kv_b1_proj=kv_b1_proj,
             kv_b2_proj=kv_b2_proj,
             gate_bias=gate_bias_tt,
@@ -821,7 +930,7 @@ def prepare_attention_weights(
         q_norm = t[q_norm_key].unsqueeze(0)
         kv_norm = t[kv_norm_key].unsqueeze(0)
         ffn_norm = t[ffn_norm_key].unsqueeze(0)
-        if mla_tp == 1 and o_proj.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
+        if o_proj.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
             o_proj = o_proj[:_MLA_TP1_O_PROJ_HEIGHT, :].contiguous()
         gate_mm = torch.zeros(D.HIDDEN_SIZE, D.GATE_NUM_INDICES, dtype=torch.bfloat16, device=o_proj.device)
         return {
@@ -846,11 +955,6 @@ def prepare_attention_weights(
     )
     if not isinstance(o_views, dict):
         raise TypeError("expected dict[str, OverlappedTensor] for o_proj_gate_mm_norms cache entry")
-    o_proj_ot = o_views["o_proj"]
-    attn_norm_ot = o_views["attn_norm"]
-    q_norm_ot = o_views["q_norm"]
-    kv_norm_ot = o_views["kv_norm"]
-    ffn_norm_ot = o_views["ffn_norm"]
 
     logger.debug(
         "Attention fusion groups (dense) for layer {} in {:.3f}s",
@@ -861,12 +965,12 @@ def prepare_attention_weights(
         q_a_proj=q_a_proj,
         q_b_proj=q_b_proj,
         kv_a_proj=kv_a_proj,
-        o_proj=o_proj_ot,
+        o_proj=o_views["o_proj"],
         gate_mm=None,
-        attn_norm=attn_norm_ot,
-        q_norm=q_norm_ot,
-        kv_norm=kv_norm_ot,
-        ffn_norm=ffn_norm_ot,
+        attn_norm=o_views["attn_norm"],
+        q_norm=o_views["q_norm"],
+        kv_norm=o_views["kv_norm"],
+        ffn_norm=o_views["ffn_norm"],
         kv_b1_proj=kv_b1_proj,
         kv_b2_proj=kv_b2_proj,
         gate_bias=None,
@@ -995,54 +1099,6 @@ def prepare_shared_expert_weights(
     )
 
 
-def _shuffle_dram_assignment(assignment: np.ndarray, num_banks: int) -> np.ndarray:
-    """Apply the same tile permutation as shuffle_dram_tiles to a BSPM assignment."""
-    tiles_h, tiles_w = assignment.shape
-    per_N_tiles = tiles_w // num_banks
-    K_tiles = tiles_h
-    num_tiles_per_shard = K_tiles * per_N_tiles
-
-    i = np.arange(num_tiles_per_shard)
-    source_idx = (i % K_tiles) * per_N_tiles + (i // K_tiles)
-
-    result = np.empty_like(assignment)
-    for b in range(num_banks):
-        shard = assignment[:, b * per_N_tiles : (b + 1) * per_N_tiles].ravel()
-        result[:, b * per_N_tiles : (b + 1) * per_N_tiles] = shard[source_idx].reshape(K_tiles, per_N_tiles)
-    return result
-
-
-def _compute_bspm_max_shard_bytes(
-    assignments: list[np.ndarray],
-    K: int,
-    N_padded: int,
-    num_banks: int,
-    tile_w: int = 32,
-) -> int:
-    """Return the maximum DRAM shard size (bytes) across a list of BSPM assignments.
-
-    Enforces uniform expert sizes so DRAMStreamingMatmul's fixed-stride expert
-    indexing (base_addr + expert_idx * stride_bytes) addresses correctly.
-
-    Tile byte sizes: 0=bfp8: 1088 B, 1=bfp4: 576 B, 2=bfp2: 320 B, 3=bfp0: 0 B
-    """
-    tile_bytes = np.array([1088, 576, 320, 0], dtype=np.int64)
-    tiles_per_bank_col = (N_padded // tile_w) // num_banks
-
-    max_shard = 0
-    for assignment in assignments:
-        tile_sizes = tile_bytes[assignment]
-        for b in range(num_banks):
-            col_start = b * tiles_per_bank_col
-            col_end = (b + 1) * tiles_per_bank_col
-            shard_bytes = int(tile_sizes[:, col_start:col_end].sum())
-            if shard_bytes > max_shard:
-                max_shard = shard_bytes
-
-    dram_align = ttnn._ttnn.bfp_utils.get_dram_alignment()
-    return ((max_shard + dram_align - 1) // dram_align) * dram_align
-
-
 def prepare_moe_routed_experts_bspm(
     device,
     state_dict: dict[str, torch.Tensor],
@@ -1052,11 +1108,21 @@ def prepare_moe_routed_experts_bspm(
     bspm_data: dict,
     *,
     move_to_device: bool,
+    cache_config: "CacheConfig",
+    bspm_variant: str = "B",
+    bspm_budget: float = 3.5,
 ) -> MoERoutedExpertWeights:
-    """Upload MoE routed experts as BSPM-encoded CompressedTensor objects."""
-    tile_w = 32
-    device_for_torch = device if move_to_device else None
+    """Upload MoE routed experts as BSPM-encoded CompressedTensor objects.
 
+    Delegates to TensorCache (or EphemeralTensorCache) via cache_config so that
+    each expert projection is stored as compact tile bytes on disk (variable-length
+    per tile, no DRAM padding) and reloaded without re-reading HF weights.
+
+    BSPM codes are stored in (N/32, K/32) row-major order in the .bspm file.
+    The reshape must be (tiles_w_count, tiles_h).T to get (tiles_h, tiles_w).
+    """
+    tile_w = 32
+    proj_names = ["routed_gate_proj", "routed_up_proj", "routed_down_proj"]
     proj_keys = [
         [_key(layer_idx, f"mlp.experts.{e}.gate_proj.weight") for e in range(num_routed_experts)],
         [_key(layer_idx, f"mlp.experts.{e}.up_proj.weight") for e in range(num_routed_experts)],
@@ -1064,50 +1130,53 @@ def prepare_moe_routed_experts_bspm(
     ]
 
     results: list[list] = [[], [], []]
-    for proj_idx, keys in enumerate(proj_keys):
+    for proj_idx, (proj_name, keys) in enumerate(zip(proj_names, proj_keys)):
         sample_w = state_dict[keys[0]]
         K, N = sample_w.shape[1], sample_w.shape[0]
         N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
-        per_core_N = N_padded // num_banks
-
-        dram_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
-                )
-            }
-        )
-        shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
-        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
         tiles_h = K // tile_w
         tiles_w_count = N_padded // tile_w
+        # BSPM codes are in (N/32, K/32) order — reshape as (tiles_w_count, tiles_h) then transpose.
         all_assignments = [
-            bspm_data["codes"][e, proj_idx].reshape(tiles_h, tiles_w_count) for e in range(num_routed_experts)
+            np.ascontiguousarray(bspm_data["codes"][e, proj_idx].reshape(tiles_w_count, tiles_h).T)
+            for e in range(num_routed_experts)
         ]
-        min_shard_bytes = _compute_bspm_max_shard_bytes(all_assignments, K, N_padded, num_banks, tile_w)
-        logger.debug("  proj_idx={}: uniform DRAM shard = {} B", proj_idx, min_shard_bytes)
+
+        tgt = CompressedTensorTarget(
+            name=proj_name,
+            K=K,
+            N_padded=N_padded,
+            num_banks=num_banks,
+            bspm_variant=bspm_variant,
+            bspm_budget=bspm_budget,
+        )
 
         for e, key in enumerate(keys):
-            w = state_dict[key].T.contiguous()
-            if N_padded != N:
-                w = torch.nn.functional.pad(w, (0, N_padded - N))
-
-            w_shuffled = shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks).squeeze(0)
-            assignment = _shuffle_dram_assignment(all_assignments[e], num_banks)
-
-            ct = CompressedTensor.from_bspm(
-                w_shuffled.float(),
-                assignment,
-                device=device_for_torch,
-                memory_config=mem_config,
-                min_shard_bytes=min_shard_bytes,
+            assignment_logical = all_assignments[e]
+            fp = cache_config.context.fingerprint(
+                source=SourceTensorSelection(names=(key,)),
+                target=tgt,
+            )
+            ct = cache_config.cache.get_or_create(
+                fp,
+                device,
+                preprocess=lambda tensors, _k=key, _a=assignment_logical, _N=N, _N_padded=N_padded: {
+                    proj_name: CompressedTensorBuildInputs(
+                        w_logical=torch.nn.functional.pad(
+                            tensors[_k].T.contiguous().float(), (0, _N_padded - _N)
+                        ).numpy()
+                        if _N_padded != _N
+                        else tensors[_k].T.contiguous().float().numpy(),
+                        assignment_logical=_a,
+                    )
+                },
+                raw_tensors=lambda _k=key: {_k: state_dict[_k]},
             )
             results[proj_idx].append(ct)
 
             if (e + 1) % 32 == 0:
-                logger.info("  proj_idx={}: uploaded {}/{} experts (BSPM)", proj_idx, e + 1, num_routed_experts)
+                logger.info("  proj_idx={}: {}/{} experts (BSPM, cached)", proj_idx, e + 1, num_routed_experts)
 
     routed = MoERoutedExpertWeights(
         routed_gate_proj=results[0],
@@ -1136,19 +1205,18 @@ def prepare_routed_expert_weights(
 
     When ``bspm_dir`` is provided and a BSPM file exists for this layer, routed MoE experts
     are encoded as mixed-precision CompressedTensor objects instead of uniform bfloat4_b.
-    Falls back to uniform bfloat4_b if the file is not found or BSPM support is unavailable.
+    Falls back to uniform bfloat4_b if the file is not found.
 
     ``bspm_dir`` must be the model-specific subdirectory (e.g. ``results/deepseek-r1-0528``),
-    not the results root.
-
-    Note: BSPM experts bypass the TensorCache (disk caching not yet supported for CompressedTensor).
+    not the results root.  CompressedTensor experts are stored in compact format by the
+    TensorCache (variable-length tiles, no DRAM padding).
     """
     if cache_config is None:
         cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
     num_banks = device.dram_grid_size().x
     mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
     if is_moe:
-        # --- BSPM path ---
+        # --- BSPM path (TensorCache-backed via CompressedTensorTarget) ---
         bspm_data = None
         if bspm_dir is not None:
             bspm_path = (
@@ -1165,9 +1233,6 @@ def prepare_routed_expert_weights(
                 logger.debug("BSPM not found for layer {}, using uniform bfloat4_b", layer_idx)
 
         if bspm_data is not None:
-            # TODO: BSPM path bypasses TensorCache — CompressedTensor serialization not yet
-            # implemented (requires CompressedTensorTarget + _store_compressed/_load_compressed
-            # in weights/cache/). Tracked: test_dram_matmul_bspm_cache_roundtrip (SKIP).
             return prepare_moe_routed_experts_bspm(
                 device=device,
                 state_dict=state_dict,
@@ -1176,6 +1241,9 @@ def prepare_routed_expert_weights(
                 num_banks=num_banks,
                 bspm_data=bspm_data,
                 move_to_device=move_to_device,
+                cache_config=cache_config,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
             )
 
         # --- Uniform bfloat4_b path (TensorCache-backed) ---

@@ -4,6 +4,7 @@
 
 #include "jit_build_utils.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cerrno>
 #include <cstdint>
@@ -217,6 +218,46 @@ bool exec_command(
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
+std::vector<std::uint8_t> read_file_bytes(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        throw std::runtime_error("Cannot read file: " + path);
+    }
+    std::streampos pos = file.tellg();
+    if (pos == std::streampos(-1)) {
+        throw std::runtime_error("Cannot determine size of file: " + path);
+    }
+    auto byte_count = static_cast<std::streamsize>(pos);
+    file.seekg(0, std::ios::beg);
+    std::vector<std::uint8_t> data(static_cast<std::size_t>(byte_count));
+    file.read(reinterpret_cast<char*>(data.data()), byte_count);
+    if (file.gcount() != byte_count || (!file && !file.eof())) {
+        throw std::runtime_error(
+            fmt::format("Failed to read file '{}' fully (expected {} bytes, got {})", path, byte_count, file.gcount()));
+    }
+    return data;
+}
+
+std::vector<tt::jit_build::GeneratedFile> read_directory_files(
+    const std::filesystem::path& dir, std::span<const std::string> extensions) {
+    namespace fs = std::filesystem;
+    std::vector<tt::jit_build::GeneratedFile> files;
+    if (!fs::is_directory(dir)) {
+        return files;
+    }
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        if (!extensions.empty() &&
+            std::find(extensions.begin(), extensions.end(), entry.path().extension().string()) == extensions.end()) {
+            continue;
+        }
+        files.push_back({entry.path().filename().string(), read_file_bytes(entry.path().string())});
+    }
+    return files;
+}
+
 bool create_file(const std::filesystem::path& file_path) {
     tt::filesystem::safe_create_directories(file_path.parent_path());
 
@@ -253,9 +294,8 @@ std::filesystem::path FileRenamer::generate_temp_path(const std::filesystem::pat
     // foo -> foo.42
 
     std::filesystem::path filename = target_path.stem();
-    filename += ".";
-    filename += std::to_string(unique_id_);
-    filename += target_path.extension();
+    std::string leaf = "." + std::to_string(unique_id_) + target_path.extension();
+    filename.concat(leaf);
     return target_path.parent_path() / filename;
 }
 

@@ -45,6 +45,6 @@ ALWI void addcmul_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void addcmul_tile_init() { MATH((llk_math_eltwise_ternary_sfpu_addcmul_init<APPROX>())); }
+ALWI void addcmul_tile_init() { MATH((llk_math_eltwise_ternary_sfpu_addcmul_init())); }
 
 }  // namespace ckernel

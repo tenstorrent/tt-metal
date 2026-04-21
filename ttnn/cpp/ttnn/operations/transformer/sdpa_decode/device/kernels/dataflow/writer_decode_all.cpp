@@ -233,7 +233,7 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_intermed_out);
 
-    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
+    const auto out_writer = TensorAccessor(out_args, out_addr);
 
     volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reducer_semaphore_addr);

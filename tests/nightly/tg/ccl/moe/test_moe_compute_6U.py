@@ -10,6 +10,7 @@ import pytest
 import random
 import torch
 import ttnn
+from ttnn.operations.ccl import MoEActivationFunction
 
 from ttnn.experimental.moe_compute_utils import prepare_w0_w1_tensor_for_moe_compute, prepare_w2_tensor_for_moe_compute
 
@@ -40,14 +41,17 @@ def validate_per_expert_tokens(
     # L1 alignment constant (16 bytes)
     l1_alignment = 16
 
-    # Validate shape: [num_devices, aligned_row_elements]
-    # Row is experts_per_device uint32s, aligned to 16 bytes
+    # Validate shape: [num_devices, num_cores, aligned_row_elements]
+    # Row is experts_per_device uint32s, aligned to 16 bytes. Replicated on every core
     per_expert_row_bytes = ((experts_per_device * 4 + l1_alignment - 1) // l1_alignment) * l1_alignment
     per_expert_row_elements = per_expert_row_bytes // 4
-    expected_per_expert_shape = (num_devices, per_expert_row_elements)
+    # Note: the bounding box containing tilize, matmul, combine cores spans the whole grid.
+    core_range = mesh_device.compute_with_storage_grid_size()
+    num_cores = core_range.x * core_range.y
+    expected_per_expert_shape = (num_devices * num_cores, per_expert_row_elements)
 
     # Convert per_expert_total_tokens tensor to torch
-    # Shape per device: [1, aligned_elements] as uint32
+    # Shape per device: [num_cores (70), aligned_elements] as uint32
     per_expert_total_tokens_torch = ttnn.to_torch(
         per_expert_total_tokens_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     )
@@ -58,21 +62,25 @@ def validate_per_expert_tokens(
         f"got {per_expert_total_tokens_torch.shape}"
     )
 
+    per_expert_total_tokens_torch = per_expert_total_tokens_torch.reshape(
+        (num_devices, num_cores, per_expert_row_elements)
+    )
     for device_idx in range(num_devices):
-        device_counts = per_expert_total_tokens_torch[device_idx].flatten()
+        for c in range(num_cores):
+            device_counts = per_expert_total_tokens_torch[device_idx][c]
 
-        for local_exp_idx in range(experts_per_device):
-            expected_count = expert_token_counts[device_idx, local_exp_idx].item()
-            actual_count = device_counts[local_exp_idx].item()
+            for local_exp_idx in range(experts_per_device):
+                expected_count = expert_token_counts[device_idx, local_exp_idx].item()
+                actual_count = device_counts[local_exp_idx].item()
 
-            if actual_count != expected_count:
-                logger.warning(
-                    f"  Device {device_idx}, Expert {local_exp_idx}: "
-                    f"count mismatch - expected {expected_count}, got {actual_count}"
-                )
-                per_expert_tokens_all_passed = False
-            else:
-                logger.info(f"  Device {device_idx}, Expert {local_exp_idx}: count={actual_count} PASSED")
+                if actual_count != expected_count:
+                    logger.warning(
+                        f"  Device {device_idx}, Expert {local_exp_idx}: "
+                        f"count mismatch - expected {expected_count}, got {actual_count}"
+                    )
+                    per_expert_tokens_all_passed = False
+                else:
+                    logger.info(f"  Device {device_idx}, Expert {local_exp_idx}: count={actual_count} PASSED")
 
     return per_expert_tokens_all_passed
 
@@ -305,8 +313,20 @@ def prepare_output_tensor_from_combine_writer(
     return torch_output
 
 
-PCC_THRESHOLD = 0.988
 ATOL_THRESHOLD = 700
+SWIGLU_PCC_THRESHOLD = 0.984
+SILU_PCC_THRESHOLD = 0.988
+
+
+def _get_pcc_threshold(activation_type):
+    # Determine PCC threshold based on activation type
+    # https://github.com/tenstorrent/tt-metal/blob/368efa1f7062704b8e885aa72dae115e91320032/tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_gpt_e2e.py#L438
+    if activation_type == MoEActivationFunction.SWIGLU:
+        return SWIGLU_PCC_THRESHOLD
+    elif activation_type == MoEActivationFunction.SILU:  # SILU
+        return SILU_PCC_THRESHOLD
+    else:
+        raise TypeError("Invalid Activation type")
 
 
 def validate_matmul(
@@ -322,6 +342,7 @@ def validate_matmul(
     torch_output_ref,
     tt_output_tensor,
     mesh_device,
+    pcc_threshold,
 ):
     logger.info(f"\n========== Matmul Output Tensor Validation ==========")
 
@@ -366,7 +387,7 @@ def validate_matmul(
                 else 0.0
             )
 
-            if pcc_val < PCC_THRESHOLD:
+            if pcc_val < pcc_threshold:
                 matmul_all_passed = False
                 logger.warning(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f}")
             else:
@@ -378,7 +399,7 @@ def validate_matmul(
     return matmul_all_passed
 
 
-def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, combine_goldens):
+def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, combine_goldens, pcc_threshold):
     if cluster_axis == 0:
         mesh_shape = tuple(mesh_device.shape)
         # need to roll my own mesh composer here for the transposed ordering
@@ -411,7 +432,7 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
         _, pcc_val = comp_pcc(refs, vals)
         allclose_passed = torch.allclose(refs, vals, atol=ATOL_THRESHOLD)
 
-        if pcc_val < PCC_THRESHOLD or not allclose_passed:
+        if pcc_val < pcc_threshold or not allclose_passed:
             combine_all_passed = False
             logger.warning(f"Layer {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
             if not allclose_passed:
@@ -824,8 +845,15 @@ def compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
     return golden_e_t, experts_per_device
 
 
+# hardcoded for GPT-OSS
+def _swiglu_reference(gate, up, alpha=1.702, clamp_limit=7.0):
+    gate_c = torch.clamp(gate, max=clamp_limit)
+    up_c = torch.clamp(up, min=-clamp_limit, max=clamp_limit)
+    return (up_c + 1.0) * gate_c * torch.sigmoid(alpha * gate_c)
+
+
 def compute_matmul_golden(
-    torch_input_ref, torch_w0, torch_w1, torch_w2, layers, experts, devices, tokens_per_device, hidden
+    torch_input_ref, torch_w0, torch_w1, torch_w2, layers, experts, devices, tokens_per_device, hidden, activation_type
 ):
     tokens = tokens_per_device * devices
 
@@ -843,10 +871,17 @@ def compute_matmul_golden(
     # Compute gate activations for each expert
     # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
     torch_w0_output_ref = torch_input_ref @ torch_w0
-    torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
-    # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
     torch_w1_output_ref = torch_input_ref @ torch_w1
-    torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
+
+    if activation_type == MoEActivationFunction.SILU:
+        # SILU: silu(x @ w0) * (x @ w1)
+        torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
+        # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
+        torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
+    elif activation_type == MoEActivationFunction.SWIGLU:
+        torch_intermediate_ref = _swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)  # (L, E, T, N)
+    else:
+        raise ValueError(f"Unsupported activation type: {activation_type}")
 
     # (L, E, T, N) @ (L, E, N, K) -> (L, E, T, K)
     torch_output_ref = torch_intermediate_ref @ torch_w2
@@ -974,11 +1009,11 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("experts_per_device", [2, 3])
+@pytest.mark.parametrize("experts_per_device", [2, 3, 4])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
-    [(1, 1, 1), (8, 5, 1)],
+    [(1, 1, 5), (8, 5, 3)],
     ids=["perf", "accuracy"],
 )
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
@@ -986,6 +1021,8 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("output_height_shard_dim", [4])
 @pytest.mark.parametrize("output_width_shard_dim", [4])
+@pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
+@torch.no_grad()
 def test_moe_compute(
     mesh_device,
     mesh_shape,
@@ -1001,7 +1038,9 @@ def test_moe_compute(
     output_width_shard_dim,
     dtype,
     enable_trace,
+    activation_type,
     device_params,
+    is_ci_env,
 ):
     """
     This test:
@@ -1011,6 +1050,15 @@ def test_moe_compute(
     4. Runs the moe operation
     5. Verifies the outputs against a golden reference
     """
+    # Skip certain parameter combinations in CI to keep runtime reasonable.
+    if is_ci_env:
+        if experts_per_device == 3:
+            pytest.skip("Skipping experts_per_device=3 in CI to keep runtime reasonable.")
+        if selected_experts_k == 1 and num_layers == 1 and num_iterations == 5:  # perf test
+            pytest.skip("Skipping perf parameter set in CI to keep runtime reasonable.")
+        if not enable_trace:
+            pytest.skip("Skipping enable_trace=False in CI to keep runtime reasonable.")
+
     torch.manual_seed(2003)
     random.seed(2003)
 
@@ -1037,6 +1085,9 @@ def test_moe_compute(
     )
     logger.info(f"  hidden_size: {hidden_size}")
     logger.info(f"  dtype: {dtype}")
+    logger.info(f"  num_iterations: {num_iterations}")
+    logger.info(f"  enable_trace: {enable_trace}")
+    logger.info(f"  activation_type: {activation_type}")
 
     #########################################
     # CREATE TILIZE INPUT TENSORS AND GOLDENS
@@ -1226,6 +1277,7 @@ def test_moe_compute(
         num_devices,
         tokens_per_device,
         hidden_size,
+        activation_type,
     )
 
     # compute goldens for combine
@@ -1317,6 +1369,69 @@ def test_moe_compute(
     ]
 
     #########################################
+    # HELPER FUNCTIONS
+    #########################################
+
+    def prepare_layer_inputs(layer_id):
+        """Prepare inputs for a specific layer by moving from DRAM to L1"""
+        if num_layers == 1:
+            # Already in L1
+            return tt_sparse_buffers[0], tt_expert_indices_buffers[0], tt_expert_scores_buffers[0]
+        else:
+            tt_sparse_buffer = ttnn.to_memory_config(tt_sparse_buffers[layer_id], memory_config=sparse_mem_config)
+            tt_expert_indices = ttnn.to_memory_config(
+                tt_expert_indices_buffers[layer_id], memory_config=expert_indices_mem_config
+            )
+            tt_expert_scores = ttnn.to_memory_config(
+                tt_expert_scores_buffers[layer_id], memory_config=expert_scores_mem_config
+            )
+            return tt_sparse_buffer, tt_expert_indices, tt_expert_scores
+
+    def deallocate_layer_inputs(tt_sparse_buffer, tt_expert_indices, tt_expert_scores):
+        """Deallocate L1 inputs if using multiple layers"""
+        if num_layers != 1:
+            ttnn.deallocate(tt_sparse_buffer)
+            ttnn.deallocate(tt_expert_indices)
+            ttnn.deallocate(tt_expert_scores)
+
+    def convert_outputs_to_dram(outputs):
+        """Convert L1 outputs to DRAM and deallocate L1 versions"""
+        l1_per_expert, l1_activation, l1_e_t, _, l1_matmul, combine = outputs
+
+        # Convert to DRAM
+        dram_per_expert = ttnn.to_memory_config(l1_per_expert, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        dram_activation = ttnn.to_memory_config(l1_activation, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        dram_e_t = ttnn.to_memory_config(l1_e_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        dram_matmul = ttnn.to_memory_config(l1_matmul, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Deallocate L1 versions
+        ttnn.deallocate(l1_per_expert)
+        ttnn.deallocate(l1_activation)
+        ttnn.deallocate(l1_e_t)
+        ttnn.deallocate(l1_matmul)
+
+        return (dram_per_expert, dram_activation, dram_e_t, dram_matmul, combine)
+
+    def run_op_inner(tt_sparse_buffer, tt_expert_indices, tt_expert_scores, layer_id):
+        """Core moe_compute operation"""
+        return ttnn.experimental.moe_compute(
+            tt_sparse_buffer,
+            tt_expert_indices,
+            tt_expert_scores,
+            tt_expert_mapping,
+            tt_w0_w1,
+            tt_w2,
+            layer_id=layer_id,
+            output_height_shard_dim=output_height_shard_dim,
+            output_width_shard_dim=output_width_shard_dim,
+            cluster_axis=cluster_axis,
+            mux_core_range_set=mux_core_range_set,
+            optional_output_tensor=tt_combine_output_tensors[layer_id],
+            optional_cross_device_semaphore=combine_barrier_semaphore,
+            activation_type=activation_type,
+        )
+
+    #########################################
     # RUN OP
     #########################################
 
@@ -1324,85 +1439,25 @@ def test_moe_compute(
         moe_compute_outputs = []
 
         for layer_id in range(num_layers):
-            # if only running a single layer, we can fit the single set of inputs in L1 initially
-            # otherwise with multiple layers, and multiple sets of inputs, we need to move inputs into L1 before a given
-            if num_layers == 1:
-                tt_sparse_buffer = tt_sparse_buffers[0]
-                tt_expert_indices = tt_expert_indices_buffers[0]
-                tt_expert_scores = tt_expert_scores_buffers[0]
-            else:
-                tt_sparse_buffer = ttnn.to_memory_config(tt_sparse_buffers[layer_id], memory_config=sparse_mem_config)
-                tt_expert_indices = ttnn.to_memory_config(
-                    tt_expert_indices_buffers[layer_id], memory_config=expert_indices_mem_config
-                )
-                tt_expert_scores = ttnn.to_memory_config(
-                    tt_expert_scores_buffers[layer_id], memory_config=expert_scores_mem_config
-                )
+            # Prepare layer inputs
+            tt_sparse_buffer, tt_expert_indices, tt_expert_scores = prepare_layer_inputs(layer_id)
 
-            # run the op
-            (
-                l1_per_expert_total_tokens_output_tensor,
-                l1_expert_activation_output_tensor,
-                l1_e_t_output_tensor,
-                _,  # tile layout output of selective tilize (same buffer as output)
-                l1_matmul_output_tensor,
-                combine_output_tensor,
-            ) = ttnn.experimental.moe_compute(
-                tt_sparse_buffer,
-                tt_expert_indices,
-                tt_expert_scores,
-                tt_expert_mapping,
-                tt_w0_w1,
-                tt_w2,
-                layer_id=layer_id,
-                output_height_shard_dim=output_height_shard_dim,
-                output_width_shard_dim=output_width_shard_dim,
-                cluster_axis=cluster_axis,
-                mux_core_range_set=mux_core_range_set,
-                optional_output_tensor=tt_combine_output_tensors[layer_id],
-                optional_cross_device_semaphore=combine_barrier_semaphore,
-            )
+            # Run core moe_compute operation
+            outputs = run_op_inner(tt_sparse_buffer, tt_expert_indices, tt_expert_scores, layer_id)
 
-            # deallocate L1 inputs
-            # if running with multiple layers, we have to deallocate previous inputs to free up L1 space
-            # we still have the DRAM version of the input tensor after deallocating the L1 version
-            if num_layers != 1:
-                ttnn.deallocate(tt_sparse_buffer)
-                ttnn.deallocate(tt_expert_indices)
-                ttnn.deallocate(tt_expert_scores)
+            # Deallocate L1 inputs
+            deallocate_layer_inputs(tt_sparse_buffer, tt_expert_indices, tt_expert_scores)
 
-            # convert outputs to DRAM (we don't have enough L1 space to leave outputs in L1 when running multiple invocations)
-            dram_per_expert_total_tokens_output_tensor = ttnn.to_memory_config(
-                l1_per_expert_total_tokens_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            dram_expert_activation_output_tensor = ttnn.to_memory_config(
-                l1_expert_activation_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            dram_e_t_output_tensor = ttnn.to_memory_config(l1_e_t_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            dram_matmul_output_tensor = ttnn.to_memory_config(
-                l1_matmul_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-
-            # # deallocate L1 outputs
-            ttnn.deallocate(l1_per_expert_total_tokens_output_tensor)
-            ttnn.deallocate(l1_expert_activation_output_tensor)
-            ttnn.deallocate(l1_e_t_output_tensor)
-            ttnn.deallocate(l1_matmul_output_tensor)
-
-            # save outputs to verify later
-            moe_compute_output = (
-                dram_per_expert_total_tokens_output_tensor,
-                dram_expert_activation_output_tensor,
-                dram_e_t_output_tensor,
-                dram_matmul_output_tensor,
-                combine_output_tensor,
-            )
+            # Convert outputs to DRAM and save
+            moe_compute_output = convert_outputs_to_dram(outputs)
             moe_compute_outputs.append(moe_compute_output)
 
         return moe_compute_outputs
 
     logger.info(f"\n========== Running op ==========")
+
     moe_compute_outputs = []
+
     if enable_trace:
         # Compile the op
         for i in range(num_iterations):
@@ -1421,6 +1476,7 @@ def test_moe_compute(
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         logger.info(f"Done executing trace")
     else:
+        # Non-trace execution
         for i in range(num_iterations):
             moe_compute_output = run_op()
             ttnn.synchronize_device(mesh_device)
@@ -1440,6 +1496,8 @@ def test_moe_compute(
             ),
         }
     )
+
+    pcc_threshold = _get_pcc_threshold(activation_type)
 
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(mesh_device)
     per_expert_tokens_all_passed = True
@@ -1500,6 +1558,7 @@ def test_moe_compute(
                     matmul_goldens,
                     matmul_output_tensor,
                     mesh_device,
+                    pcc_threshold,
                 ):
                     matmul_all_passed = False
 
@@ -1509,6 +1568,7 @@ def test_moe_compute(
                 cluster_axis,
                 combine_output_tensor,
                 combine_goldens,
+                pcc_threshold,
             ):
                 combine_all_passed = False
 

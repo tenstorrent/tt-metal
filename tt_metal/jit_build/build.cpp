@@ -8,7 +8,6 @@
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -298,7 +297,7 @@ void JitBuildEnv::init(
 
     if (!rtoptions.get_watcher_enabled() && !rtoptions.get_lightweight_kernel_asserts() &&
         rtoptions.get_llk_asserts()) {
-        this->defines_ += "-DENV_LLK_INFRA ";
+        this->defines_ += "-DENABLE_LLK_ASSERT_ONLY ";
     }
 
     if (rtoptions.get_disable_sfploadmacro()) {
@@ -877,6 +876,69 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_build).count();
     static auto& tok_build = BuildCacheTelemetry::inst().register_metric("JitBuildState::build");
     tok_build.record(elapsed_ms);
+}
+
+tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSettings* settings) const {
+    tt::jit_build::TargetRecipe target;
+    target.target_name = target_name_;
+    target.cflags = cflags_;
+    target.lflags = lflags_;
+    target.linker_script = linker_script_;
+    target.extra_link_objs = extra_link_objs_;
+    target.firmware_is_kernel_object = firmware_is_kernel_object_;
+    target.weakened_firmware_name = fs::path(weakened_firmware_name_).filename().string();
+
+    for (const auto& src : srcs_) {
+        target.srcs.push_back(src);
+    }
+    for (const auto& obj : objs_) {
+        target.objs.push_back(obj);
+    }
+
+    // Optimization levels: use kernel-specified levels if available, else defaults.
+    if (settings) {
+        target.compiler_opt_level = std::string(settings->get_compiler_opt_level());
+        target.linker_opt_level = std::string(settings->get_linker_opt_level());
+    } else {
+        target.compiler_opt_level = default_compile_opt_level_;
+        target.linker_opt_level = default_linker_opt_level_;
+    }
+
+    // Build defines: start with build-state base, then enrich with kernel-specific defines.
+    std::vector<std::string> defines = tt::jit_build::utils::tokenize_flags(defines_);
+    if (settings && process_defines_at_compile_) {
+        settings->process_defines([&defines](const std::string& define, const std::string& value) {
+            defines.push_back(fmt::format("-D{}={}", define, value));
+        });
+    }
+    if (settings) {
+        settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
+            if (!values.empty()) {
+                defines.push_back(fmt::format("-DKERNEL_COMPILE_TIME_ARGS={}", fmt::join(values, ",")));
+            }
+        });
+        settings->process_named_compile_time_args(
+            [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
+                if (!named_args.empty()) {
+                    std::string compile_time_arg_map = "-DKERNEL_COMPILE_TIME_ARG_MAP=";
+                    auto it = std::back_inserter(compile_time_arg_map);
+                    for (const auto& [name, value] : named_args) {
+                        fmt::format_to(it, "{{\"{}\",{}}},", name, value);
+                    }
+                    defines.push_back(std::move(compile_time_arg_map));
+                }
+            });
+    }
+    target.defines = std::move(defines);
+
+    // Build includes: start with build-state base, then add kernel-specific paths.
+    std::string includes = includes_;
+    if (settings) {
+        settings->process_include_paths([&includes](const std::string& path) { includes += "-I" + path + " "; });
+    }
+    target.includes = std::move(includes);
+
+    return target;
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {

@@ -18,6 +18,7 @@
 #include <iostream>
 #include <ostream>
 #include <fstream>
+#include <sstream>
 #include <ranges>
 #include <stdexcept>
 #include <string>
@@ -38,7 +39,7 @@
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "impl/kernels/kernel.hpp"
+#include "impl/kernels/kernel_source.hpp"
 
 namespace tt::tt_metal {
 enum class UnpackToDestMode : uint8_t;
@@ -62,10 +63,11 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
     ttsl::unreachable();
 }
 
-// Generates TRISC prolog: #define + #include for defines_generated.h
+// Generates TRISC prolog: #define + includes for JIT-generated headers and defines_generated.h
 string build_trisc_prolog(const char* trisc_define) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
+    prolog << "#include \"kernel_bindings_generated.h\"\n";
     prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
@@ -104,6 +106,32 @@ void write_file(const std::filesystem::path& path, const std::string& content) {
     }
 }
 
+void write_kernel_bindings_generated_header(const std::filesystem::path& out_dir, const JitBuildSettings& settings) {
+    const fs::path path = out_dir / "kernel_bindings_generated.h";
+    vector<pair<string, uint16_t>> entries;
+    settings.process_dataflow_buffer_local_accessor_handles(
+        [&entries](const string& name, uint16_t id) { entries.emplace_back(name, id); });
+    sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    ostringstream content;
+    content << "// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.\n"
+               "//\n"
+               "// SPDX-License-Identifier: Apache-2.0\n\n"
+               "// AUTO-GENERATED — do not edit.\n\n"
+               "#pragma once\n\n";
+    if (entries.empty()) {
+        content << "// No bindings for this kernel.\n";
+    } else {
+        content << "#include \"experimental/dataflow_buffer.h\"\n\n"
+                   "namespace dfb {\n";
+        for (const auto& [name, id] : entries) {
+            content << "constexpr experimental::DFBAccessor " << name << "{" << id << "};\n";
+        }
+        content << "}  // namespace dfb\n";
+    }
+    write_file(path, content.str());
+}
+
 }  // namespace
 
 void jit_build_genfiles_kernel_include(
@@ -112,10 +140,12 @@ void jit_build_genfiles_kernel_include(
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
     fs::path out_dir = fs::path(env.get_out_kernel_root_path()) / settings.get_full_kernel_name();
+    write_kernel_bindings_generated_header(out_dir, settings);
     fs::path kernel_header = out_dir / "kernel_includes.hpp";
 
     const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
-    write_file(kernel_header, kernel_src_to_include);
+    const string kernel_header_content = string("#include \"kernel_bindings_generated.h\"\n") + kernel_src_to_include;
+    write_file(kernel_header, kernel_header_content);
 }
 
 void jit_build_genfiles_triscs_src(
@@ -124,6 +154,7 @@ void jit_build_genfiles_triscs_src(
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
     const fs::path out_dir = fs::path(env.get_out_kernel_root_path()) / settings.get_full_kernel_name();
+    write_kernel_bindings_generated_header(out_dir, settings);
     const fs::path unpack_cpp = out_dir / "chlkc_unpack.cpp";
     const fs::path math_cpp = out_dir / "chlkc_math.cpp";
     const fs::path pack_cpp = out_dir / "chlkc_pack.cpp";
@@ -180,7 +211,15 @@ void emit_formats_array(
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    auto as_int = [](DataFormat f) { return static_cast<std::underlying_type_t<DataFormat>>(f); };
+    // Remap host-only enum values to HW values for device compilation.
+    // Int16 has a unique host value (13) to avoid colliding with UInt16 (9),
+    // but the Quasar HW expects Int16 = 9 in tensix_types.h.
+    auto as_int = [](DataFormat f) -> std::underlying_type_t<DataFormat> {
+        if (f == DataFormat::Int16) {
+            return 9;  // HW value from tensix_types.h
+        }
+        return static_cast<std::underlying_type_t<DataFormat>>(f);
+    };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
 
