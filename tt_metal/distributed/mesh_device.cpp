@@ -186,7 +186,7 @@ struct RealtimeProfilerEligibility {
 //      (harvesting overlays could in principle produce a stale entry).
 RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* device) {
     auto device_id = device->id();
-    const auto& metal = MetalContext::instance();
+    auto& metal = MetalContext::instance();
     const auto& hal = metal.hal();
     const auto& cluster = metal.get_cluster();
     auto& dispatch_core_manager = metal.get_dispatch_core_manager();
