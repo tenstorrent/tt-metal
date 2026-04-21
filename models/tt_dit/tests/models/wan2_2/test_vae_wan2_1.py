@@ -1518,8 +1518,9 @@ def test_wan_decoder(
     [
         (1, 16, 7, 60, 104, 480, 832, 7, True),
         (1, 16, 21, 90, 160, 720, 1280, 21, False),
+        (1, 16, 21, 90, 40, 720, 320, 21, False),
     ],
-    ids=["480p_t7_cached", "720p_t21_fullT"],
+    ids=["480p_t7_cached", "720p_t21_fullT", "720p_t21_quad_fullT"],
 )
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links",

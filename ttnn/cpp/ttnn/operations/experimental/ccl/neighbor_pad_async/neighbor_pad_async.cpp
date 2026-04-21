@@ -19,7 +19,8 @@ ttnn::Tensor neighbor_pad_async(
     const std::optional<std::vector<size_t>>& num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer) {
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    uint32_t logical_h) {
     TT_FATAL(!dim.empty() && dim.size() <= 2, "dim must have 1 or 2 elements, got {}", dim.size());
     const size_t num_dims = dim.size();
     for (size_t i = 0; i < num_dims; i++) {
@@ -84,7 +85,8 @@ ttnn::Tensor neighbor_pad_async(
         pad2_right,
         pad2_cluster_axis,
         pad2_num_links,
-        persistent_output_buffer);
+        persistent_output_buffer,
+        logical_h);
 }
 
 }  // namespace ttnn::experimental

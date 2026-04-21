@@ -34,6 +34,12 @@ void kernel_main() {
         signal_noc_y[t] = get_common_arg_val<uint32_t>(10 + t * 2 + 1);
     }
 
+    // Masking args: zero interior rows where global_h_index >= logical_h
+    // CRTA[26] = logical_h (0 = masking disabled), CRTA[27] = device_h_offset
+    const uint32_t logical_h = get_common_arg_val<uint32_t>(26);
+    const uint32_t device_h_offset = get_common_arg_val<uint32_t>(27);
+    const bool do_masking = (logical_h > 0);
+
     // Per-core runtime args (only work distribution — truly unique per core)
     uint32_t arg_idx = 0;
     const uint32_t total_rows_start = get_arg_val<uint32_t>(arg_idx++);
@@ -46,13 +52,15 @@ void kernel_main() {
         const uint32_t outer_idx = linear_row / input_halo_dim_size;
         const uint32_t t = linear_row % input_halo_dim_size;
         const uint32_t outer_dim_offset = outer_idx * (num_sticks_per_halo_dim * output_halo_dim_size);
+        const bool masked = do_masking && (device_h_offset + t >= logical_h);
 
         uint32_t dst_stick_id = (t + padding_left) * num_sticks_per_halo_dim + stick_start_id + outer_dim_offset;
         for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
             cb_wait_front(cb_output_id, 1);
             uint32_t l1_read_addr = get_read_ptr(cb_output_id);
             uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
-            noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+            // For masked rows: drain the CB but write zeros to DRAM instead of CB data.
+            noc_async_write(masked ? (uint32_t)MEM_ZEROS_BASE : l1_read_addr, dst_noc_addr, stick_size);
             dst_stick_id++;
             noc_async_write_barrier();
             cb_pop_front(cb_output_id, 1);

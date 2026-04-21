@@ -644,6 +644,12 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     local_writer_crta.push_back(0);
                 }
             }
+            // Masking args: CRTA[26] = logical_h, CRTA[27] = device_h_offset
+            // device_h_offset = device_index * input_halo_dim_size (starting global index for this device's shard)
+            uint32_t mask_device_h_offset =
+                (operation_attributes.logical_h > 0) ? (device_index * input_halo_dim_size) : 0u;
+            local_writer_crta.push_back(operation_attributes.logical_h);  // CRTA[26]
+            local_writer_crta.push_back(mask_device_h_offset);            // CRTA[27]
             SetCommonRuntimeArgs(program, local_writer_kernel_id, local_writer_crta);
 
             // Distribute work evenly across local-copy cores and set per-core runtime args

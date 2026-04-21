@@ -335,6 +335,7 @@ class CCLManager:
         axes: list,
         neighbor_sems: list,
         num_links: list,
+        logical_h: int = 0,
     ) -> ttnn.Tensor:
         """
         Helper function to neighbor-pad a tensor with a persistent output buffer.
@@ -349,6 +350,7 @@ class CCLManager:
             neighbor_sems=neighbor_sems,
             num_links=num_links,
             use_persistent_buffer=True,
+            logical_h=logical_h,
         )
 
     def neighbor_pad(
@@ -364,6 +366,7 @@ class CCLManager:
         neighbor_sems: list,
         num_links: list,
         use_persistent_buffer: bool = False,
+        logical_h: int = 0,
     ) -> ttnn.Tensor:
         barrier_sem = self.get_barrier_semaphore(axes[0])
 
@@ -385,6 +388,7 @@ class CCLManager:
             num_links=num_links,
             topology=self.topology,
             persistent_output_buffer=persistent_buf,
+            logical_h=logical_h,
         )
 
     def reset_global_semaphores(self):

@@ -28,7 +28,7 @@ from ...utils.conv3d import (
     get_conv3d_config,
 )
 from ...utils.substate import pop_substate, rename_substate
-from ...utils.tensor import local_device_to_torch, typed_tensor
+from ...utils.tensor import local_device_to_torch
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -328,8 +328,6 @@ class WanCausalConv3d(Module):
         )
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
-        self.mask_cache = {}
-
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
             weight_tt = ttnn.from_torch(state["weight"], dtype=self.dtype, pad_value=0)
@@ -339,25 +337,6 @@ class WanCausalConv3d(Module):
             state["weight"] = local_device_to_torch(prepared)
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
-
-    def get_cached_mask(self, x_BTHWC, logical_h):
-        sharded_h = x_BTHWC.shape[2]
-        key = (sharded_h, logical_h)
-        if key not in self.mask_cache:
-            padded_h = sharded_h * self.parallel_config.height_parallel.factor
-            mask_shape = (1, 1, padded_h, 1, 1)
-            mask = torch.ones(mask_shape)
-            mask[:, :, logical_h:, :, :] = 0.0
-            mask = typed_tensor(
-                mask,
-                device=self.mesh_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_axis=self.parallel_config.height_parallel.mesh_axis,
-                shard_dim=2,
-                dtype=self.dtype,
-            )
-            self.mask_cache[key] = mask
-        return self.mask_cache[key]
 
     def forward(
         self,
@@ -385,26 +364,12 @@ class WanCausalConv3d(Module):
             x_BTNC = ttnn.pad(x_BTNC, [(0, 0), (t_front_padding, 0), (0, 0), (0, 0)], value=0.0)
             x_BTHWC = ttnn.reshape(x_BTNC, (B, T + t_front_padding, H, W, C))
 
-        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
-        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
-        # (shape[2] * factor < logical_h) which must NOT trigger masking.
-        # There is no post-conv masking to zero the padded rows which contain pad_value + conv_bias.
-        # Every operation between conv outputs is either:
-        # - RMSNorm — normalizes per-position over the C dimension only; padding rows' values do not affect valid rows' statistics
-        # - SiLU — element-wise; no spatial mixing
-        # - Residual add — element-wise; no spatial mixing
-        # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
-        # - Attention — explicitly slices out padding rows before processing (WanAttentionBlock.forward slicing/padding
-        #   when padded_h > logical_h: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
-        # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
-        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or certain LayerNorm configurations
-        #   (which normalize across spatial dimensions), the post-conv mask would become necessary again to prevent
-        #   padding from contaminating normalization statistics.
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
-            mask = self.get_cached_mask(x_BTHWC, logical_h)
-            x_BTHWC = ttnn.mul(x_BTHWC, mask)
-
         # Halo exchange (height and/or width padding)
+        # Masking (zero rows at/beyond logical_h) is fused into neighbor_pad via logical_h parameter,
+        # eliminating a separate mul-mask op. The local-copy kernel writes MEM_ZEROS_BASE for masked rows
+        # while still draining the CB, so the 2-phase pipeline (H then W) correctly propagates zeros.
+        # This is valid for linear H topology: the last device (which has padded rows) is is_last_device
+        # and never sends those rows via H fabric; phase-2 W exchange reads from the already-zeroed output.
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
 
@@ -430,6 +395,11 @@ class WanCausalConv3d(Module):
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
+            fused_logical_h = (
+                logical_h
+                if h_pad_needed and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
+                else 0
+            )
             x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
                 x_BTHWC,
                 dims=dims,
@@ -439,6 +409,7 @@ class WanCausalConv3d(Module):
                 axes=axes,
                 neighbor_sems=neighbor_sems,
                 num_links=links,
+                logical_h=fused_logical_h,
             )
 
         x_BTHWC = ttnn.experimental.conv3d(
@@ -780,8 +751,6 @@ class WanConv2d(Module):
             dtype=dtype,
         )
 
-        self.mask_cache = {}
-
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
             weight_tt = ttnn.from_torch(state["weight"].unsqueeze(2), dtype=self.dtype, pad_value=0)
@@ -792,48 +761,11 @@ class WanConv2d(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
-    def get_cached_mask(self, x_BTHWC, logical_h):
-        sharded_h = x_BTHWC.shape[2]
-        key = (sharded_h, logical_h)
-        if key not in self.mask_cache:
-            padded_h = sharded_h * self.parallel_config.height_parallel.factor
-            mask_shape = (1, 1, padded_h, 1, 1)
-            mask = torch.ones(mask_shape)
-            mask[:, :, logical_h:, :, :] = 0.0
-            mask = typed_tensor(
-                mask,
-                device=self.mesh_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_axis=self.parallel_config.height_parallel.mesh_axis,
-                shard_dim=2,
-                dtype=self.dtype,
-            )
-            self.mask_cache[key] = mask
-        return self.mask_cache[key]
-
     def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanConv2d expects ROW_MAJOR input, got {x_BTHWC.layout}"
 
-        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
-        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
-        # (shape[2] * factor < logical_h) which must NOT trigger masking.
-        # There is no post-conv masking to zero the padded rows which contain pad_value + conv_bias.
-        # Every operation between conv outputs is either:
-        # - RMSNorm — normalizes per-position over the C dimension only; padding rows' values do not affect valid rows' statistics
-        # - SiLU — element-wise; no spatial mixing
-        # - Residual add — element-wise; no spatial mixing
-        # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
-        # - Attention — explicitly slices out padding rows before processing (WanAttentionBlock.forward slicing/padding
-        #   when padded_h > logical_h: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
-        # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
-        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or certain LayerNorm configurations
-        #   (which normalize across spatial dimensions), the post-conv mask would become necessary again to prevent
-        #   padding from contaminating normalization statistics.
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
-            mask = self.get_cached_mask(x_BTHWC, logical_h)
-            x_BTHWC = ttnn.mul(x_BTHWC, mask)
-
         # Halo exchange (height and/or width padding)
+        # Masking fused into neighbor_pad via logical_h (see WanCausalConv3d.forward for details).
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
 
@@ -859,6 +791,11 @@ class WanConv2d(Module):
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
+            fused_logical_h = (
+                logical_h
+                if h_pad_needed and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
+                else 0
+            )
             x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
                 x_BTHWC,
                 dims=dims,
@@ -868,6 +805,7 @@ class WanConv2d(Module):
                 axes=axes,
                 neighbor_sems=neighbor_sems,
                 num_links=links,
+                logical_h=fused_logical_h,
             )
 
         x_BTHWC = ttnn.experimental.conv3d(
