@@ -60,9 +60,12 @@ def main():
         )
         sys.exit(1)
 
+    # Path has been fully validated - safe to use
+    validated_config_path = sku_config_path
+
     # Safely open and parse the validated YAML file
     try:
-        with open(sku_config_path, "r", encoding="utf-8") as f:
+        with open(validated_config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
     except (OSError, IOError) as e:
         print(f"::error::Failed to read SKU config file: {e}", file=sys.stderr)
