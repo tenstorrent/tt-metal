@@ -3169,7 +3169,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t MatmulMultiCoreReuse
     if (program_config.allowed_worker_cores.has_value()) {
         auto bbox = program_config.allowed_worker_cores.value().bounding_box();
         resolved_start_core = bbox.start_coord;
-        resolved_grid_size = bbox.grid_size();
+        // Use full device grid so that num_cores_to_corerangeset receives the correct
+        // total grid dimensions when computing absolute core coordinates. Using
+        // bbox.grid_size() here causes the available-core count to be computed from
+        // the offset start within a smaller-than-full grid, which under-counts cores
+        // and triggers a TT_FATAL when the worker set is large (e.g. HEIGHT_SHARDED
+        // in0 where in0_sender_num_cores == the full shard grid size).
+        resolved_grid_size = tensor_args.input_tensors.at(0).device()->compute_with_storage_grid_size();
     } else {
         resolved_grid_size = tensor_args.input_tensors.at(0).device()->compute_with_storage_grid_size();
     }

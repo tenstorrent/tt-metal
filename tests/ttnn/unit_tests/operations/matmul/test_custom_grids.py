@@ -78,6 +78,9 @@ def _teardown(device, mgr):
 # ---------------------------------------------------------------------------
 
 
+_L1_INTERLEAVED = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+
 class TestAutoConfig:
     def test_basic_matmul(self, device):
         a, b, ref = _tensors(device, 128, 256, 128)
@@ -100,6 +103,22 @@ class TestAutoConfig:
             assert_with_pcc(ref, ttnn.to_torch(ttnn.linear(a, b, sub_device_id=sd_id)), 0.999)
         finally:
             _teardown(device, mgr)
+
+    def test_routes_to_multicore_factory(self, device):
+        """L1-output + K=32 auto-selects MatmulMultiCoreProgramConfig (factory A).
+
+        L1 output makes all_dram_interleaved=False; K=32 gives Kt=1 (odd),
+        so Kt % in0_block_w != 0.  Both conditions together cause
+        create_simple_matmul_program_config to skip all mcast paths and fall
+        through to MatmulMultiCoreProgramConfig{}.
+
+        Note: this factory cannot be combined with a sub-device because the
+        auto-selected config has no allowed_worker_cores and therefore uses the
+        full device grid (spanning both sub-devices), which violates the
+        single-sub-device dispatch constraint.
+        """
+        a, b, ref = _tensors(device, 64, 32, 64)
+        assert_with_pcc(ref, ttnn.to_torch(ttnn.matmul(a, b, memory_config=_L1_INTERLEAVED)), 0.999)
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +315,100 @@ class TestMcast2D:
 
 
 # ---------------------------------------------------------------------------
-# 5) Validation / property tests
+# 5) HEIGHT_SHARDED in0 on offset cores  (Factory C, mcast_in0=False)
+# ---------------------------------------------------------------------------
+
+
+class TestShardedInput:
+    """HEIGHT_SHARDED in0 combined with an offset allowed_worker_cores grid.
+
+    Uses MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=False): in0 is
+    height-sharded across cores, in1 is multicast.  The shard grid and
+    allowed_worker_cores both start at row skip_rows, exercising the path where
+    the factory must respect a non-origin base core for kernel setup and NOC
+    addressing.
+    """
+
+    K, N = 256, 128
+
+    def _shard_mem(self, shard_grid, per_core_M_tiles):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(shard_grid, [32 * per_core_M_tiles, self.K], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    def _cfg(self, shard_grid):
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=1,
+            out_block_w=self.N // 32,
+            per_core_M=1,
+            per_core_N=self.N // 32,
+            fuse_batch=True,
+            mcast_in0=False,
+            allowed_worker_cores=shard_grid,
+        )
+
+    @pytest.mark.parametrize("skip_rows", [1, 2])
+    def test_offset_grid(self, device, skip_rows):
+        """HEIGHT_SHARDED in0 on offset cores — no sub-device."""
+        grid = device.compute_with_storage_grid_size()
+        if grid.y <= skip_rows:
+            pytest.skip(f"Need >{skip_rows} rows, device has {grid.y}")
+        cols, wrows = grid.x, grid.y - skip_rows
+        M = 32 * cols * wrows  # one M-tile per core
+
+        torch.manual_seed(42)
+        ta = torch.randn(1, 1, M, self.K, dtype=torch.bfloat16)
+        tb = torch.randn(self.K, self.N, dtype=torch.bfloat16)
+
+        shard_grid = _crs(cols, wrows, start_y=skip_rows)
+        a = ttnn.from_torch(
+            ta,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self._shard_mem(shard_grid, per_core_M_tiles=1),
+        )
+        b = ttnn.from_torch(tb, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+        assert_with_pcc(ta @ tb, ttnn.to_torch(ttnn.matmul(a, b, program_config=self._cfg(shard_grid))), 0.999)
+
+    @pytest.mark.parametrize("skip_rows", [1, 2])
+    def test_offset_grid_on_subdevice(self, device, skip_rows):
+        """HEIGHT_SHARDED in0 on offset cores with matching worker sub-device."""
+        mgr, sd_id, cols, wrows, sy = _setup_subdevice(device, skip_rows)
+        try:
+            M = 32 * cols * wrows
+
+            torch.manual_seed(42)
+            ta = torch.randn(1, 1, M, self.K, dtype=torch.bfloat16)
+            tb = torch.randn(self.K, self.N, dtype=torch.bfloat16)
+
+            shard_grid = _crs(cols, wrows, start_y=sy)
+            a = ttnn.from_torch(
+                ta,
+                dtype=ttnn.bfloat16,
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self._shard_mem(shard_grid, per_core_M_tiles=1),
+            )
+            b = ttnn.from_torch(tb, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+            assert_with_pcc(
+                ta @ tb,
+                ttnn.to_torch(ttnn.matmul(a, b, program_config=self._cfg(shard_grid), sub_device_id=sd_id)),
+                0.999,
+            )
+        finally:
+            _teardown(device, mgr)
+
+
+# ---------------------------------------------------------------------------
+# 6) Validation / property tests
 # ---------------------------------------------------------------------------
 
 
