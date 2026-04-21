@@ -21,10 +21,10 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "common/tt_backend_api_types.hpp"
 
 #include "test_helpers.hpp"
 
