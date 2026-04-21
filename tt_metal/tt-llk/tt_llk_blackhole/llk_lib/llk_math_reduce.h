@@ -84,10 +84,6 @@ inline void reduce_row_perform_transpose()
         }
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-        // Clear scratch rows so later reduce iterations start from 0.
-        TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 1, 1, ADDR_MOD_0, HI16_STAGE);
-        TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 1, 1, ADDR_MOD_0, LO16_STAGE);
     }
     else
     {
