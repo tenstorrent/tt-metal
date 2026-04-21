@@ -47,8 +47,7 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
     uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
     uint32_t num_blocks = (output.padded_shape()[-1] * output.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
-    // Subtract 1 before dividing so total CB ends strictly before L1_SIZE (packer FIFO end == L1_SIZE is OOB).
-    uint32_t cb_block_size_limit = (max_l1_size - 1) / (input_single_tile_size + output_single_tile_size);
+    uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
 
     auto
         [ncores,
