@@ -74,6 +74,9 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
     const uint32_t NC = a.physical_volume() / HW;
+    // Logical (un-padded) width is used for the normalization scaler so that
+    // non-tile-aligned widths normalise by the true N, not the tile-padded N.
+    const uint32_t logical_W = a.logical_shape()[-1];
 
     const uint32_t Wt = W / tile_width;
     const uint32_t Ht = H / tile_height;
@@ -433,7 +436,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     }
 
     uint32_t curr_row = 0;
-    float winv = 1.0f / (W * num_devices);  // bcast-w scaler
+    float winv = 1.0f / (logical_W * num_devices);  // bcast-w scaler (use logical width)
     auto bfloat_winv_value = bfloat16(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     uint32_t eps = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
