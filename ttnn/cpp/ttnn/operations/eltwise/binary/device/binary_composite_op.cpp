@@ -244,9 +244,7 @@ Tensor div(
             sub_core_grids);
     }
 
-    {
-        TT_FATAL(!has_legacy_only_args, "rounding_mode is not valid when use_legacy parameter is false");
-
+    if (!(use_legacy ? *use_legacy : has_legacy_only_args)) {
         return ttnn::detail::invoke_binary_ng(
             input,
             value,
@@ -378,9 +376,7 @@ Tensor div(
             sub_core_grids);
     }
 
-    {
-        TT_FATAL(!has_legacy_only_args, "rounding_mode is not valid when use_legacy parameter is false");
-
+    if (!(use_legacy ? *use_legacy : has_legacy_only_args)) {
         return ttnn::detail::invoke_binary_ng(
             input_a,
             input_b,
