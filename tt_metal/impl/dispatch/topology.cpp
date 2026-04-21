@@ -782,6 +782,8 @@ void DispatchTopology::create_cq_program(Device* device) {
 void DispatchTopology::compile_cq_programs() {
     command_queue_compile_group_->compile_all(/*force_slow_dispatch=*/true);
 
+    command_queue_compile_group_->finalize_offsets();
+
     // Write runtime args to device
     command_queue_compile_group_->write_runtime_args(/*force_slow_dispatch=*/true);
 }

@@ -2251,6 +2251,15 @@ void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
     sync_build_steps(events);
 }
 
+void detail::ProgramCompileGroup::finalize_offsets() {
+    std::lock_guard lock(mutex_);
+    for (auto& [device, program] : program_device_map_) {
+        if (!program->impl().is_finalized()) {
+            program->impl().finalize_offsets(device);
+        }
+    }
+}
+
 void detail::ProgramCompileGroup::write_runtime_args(bool force_slow_dispatch) {
     std::lock_guard lock(mutex_);
     for (auto& [device, program] : program_device_map_) {
