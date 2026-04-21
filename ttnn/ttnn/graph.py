@@ -502,7 +502,13 @@ def _visualize(
             level -= 1
 
     if graph_stack:
-        raise ValueError("Call stack not empty")
+        logger.warning(
+            f"Graph capture has {len(graph_stack)} unclosed function_start node(s); "
+            "closing them in visualize() to keep rendering."
+        )
+        while graph_stack:
+            context_stack.pop()
+            graphviz_graph = graph_stack.pop()
 
     for node in captured_graph:
         for connection in node["connections"]:
