@@ -63,11 +63,14 @@ class TtnnYoloV11:
     def __call__(self, input, min_channels=8):
         n, c, h, w = input.shape
         channel_padding_needed = min_channels - c
-        input_interleaved = ttnn.to_memory_config(input, ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.pad(input_interleaved, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
-        ttnn.deallocate(input_interleaved)
+        x = ttnn.pad(
+            input,
+            ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)),
+            value=0.0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         ttnn.deallocate(input)
-        x = ttnn.permute(x, (0, 2, 3, 1))
+        x = ttnn.permute(x, (0, 2, 3, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         x = self.conv1(self.device, x)
         x = self.conv2(self.device, x)
