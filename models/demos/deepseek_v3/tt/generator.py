@@ -415,7 +415,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         weight_cache_base = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
         weight_cache_base.mkdir(parents=True, exist_ok=True)
 
-        cache_subdir_name = f"{self.hf_config.num_hidden_layers}_layers_moe_opt"
+        cache_subdir_name = f"{self.hf_config.num_hidden_layers}_layers"
         if self.enable_mtp:
             cache_subdir_name = f"{cache_subdir_name}_mtp"
 
