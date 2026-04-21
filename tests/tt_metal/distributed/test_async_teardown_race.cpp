@@ -53,6 +53,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_impl.hpp"
+#include "fabric/fabric_context.hpp"
 #include "fabric/fabric_init.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -2524,12 +2525,14 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RelayBrokenGuardInvariantAfterCleanTe
     log_info(tt::LogTest, "[Scenario Z] Closing FABRIC_2D mesh device");
     mesh_device_->close();
     log_info(tt::LogTest, "[Scenario Z] Closed — re-opening (terminate_stale_erisc_routers runs here)");
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     mesh_device_ = MeshDevice::create(
         MeshDeviceConfig{mesh_device_->shape()},
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
-        1,
-        tt_fabric::FabricConfig::FABRIC_2D);
+        1);
     log_info(tt::LogTest, "[Scenario Z] Re-open complete — relay_broken guard did not deadlock");
 
     // Phase 3: Verify the relay_broken invariant at the EDMStatus level.
@@ -2574,7 +2577,8 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, RelayBrokenGuardInvariantAfterCleanTe
                     .get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
             std::vector<uint32_t> status_buf(1, 0);
             try {
-                detail::ReadFromDeviceL1(idev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+                ::tt::tt_metal::detail::ReadFromDeviceL1(
+                    idev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
             } catch (const std::exception& e) {
                 log_warning(
                     tt::LogTest,
