@@ -55,6 +55,14 @@ class TTNNTransformerBlockStack(nn.Module):
         head_dim = torch_blocks[0].attn.head_dim
         self.head_dim_inv_sqrt = float(head_dim) ** -0.5
 
+        # Blackhole p150a has an 11x10 compute grid. The default matmul
+        # grid picker can under-utilize on small-batch workloads where
+        # ttnn's heuristics favor safety over throughput; naming the full
+        # grid explicitly for the fat MLP matmuls pushes FLOPs across all
+        # cores. qkv and proj stay on the default picker (their M dim is
+        # small and over-fanning them hurts).
+        self._full_grid = ttnn.CoreGrid(y=10, x=11)
+
         # Per-layer weight bundles, each kept on device DRAM.
         self._layers: List[Any] = []
         for blk in torch_blocks:
@@ -147,8 +155,11 @@ class TTNNTransformerBlockStack(nn.Module):
 
         # --- MLP -----------------------------------------------------------
         h = ttnn.layer_norm(x_tt, weight=wb["ln2_w"], bias=wb["ln2_b"])
-        h = ttnn.linear(h, wb["fc1_w"], bias=wb["fc1_b"], activation="gelu")
-        h = ttnn.linear(h, wb["fc2_w"], bias=wb["fc2_b"])
+        h = ttnn.linear(
+            h, wb["fc1_w"], bias=wb["fc1_b"], activation="gelu",
+            core_grid=self._full_grid,
+        )
+        h = ttnn.linear(h, wb["fc2_w"], bias=wb["fc2_b"], core_grid=self._full_grid)
         x_tt = ttnn.add(x_tt, h)
         ttnn.deallocate(h)
         return x_tt
