@@ -574,8 +574,8 @@ def test_fused_chunked_delta_rule_ttnn(seq_len, chunk_size, batch_size, num_head
             )
 
             # Compare outputs
-            pcc_output = assert_with_pcc(torch_out, ttnn_out, pcc_threshold=0.98)
-            pcc_state = assert_with_pcc(torch_state, ttnn_state, pcc_threshold=0.98)
+            pcc_output = assert_with_pcc(torch_out, ttnn_out, pcc_threshold=0.999)
+            pcc_state = assert_with_pcc(torch_state, ttnn_state, pcc_threshold=0.999)
             print(
                 f"PASS: test_fused_chunked_delta_rule_ttnn T={seq_len} cs={chunk_size} "
                 f"(Output PCC={pcc_output:.6f}, State PCC={pcc_state:.6f})"

@@ -176,26 +176,26 @@ def fused_chunked_delta_rule_ttnn(
     if scale is None:
         scale = K**-0.5
 
-    # Transpose and cast to float32
-    q = ttnn.typecast(
-        ttnn.transpose(q, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG), ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-    k = ttnn.typecast(
-        ttnn.transpose(k, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG), ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-    v = ttnn.typecast(
-        ttnn.transpose(v, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG), ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-    beta = ttnn.typecast(
-        ttnn.transpose(beta, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG),
-        ttnn.float32,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    g = ttnn.typecast(
-        ttnn.transpose(g, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG), ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
+    # # Transpose and cast to float32
+    # q = ttnn.typecast(
+    #     ttnn.transpose(q, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+    # )
+    # k = ttnn.typecast(
+    #     ttnn.transpose(k, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+    # )
+    # v = ttnn.typecast(
+    #     ttnn.transpose(v, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+    # )
+    # beta = ttnn.typecast(
+    #     ttnn.transpose(beta, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG),
+    #     ttnn.bfloat16,
+    #     memory_config=ttnn.L1_MEMORY_CONFIG,
+    # )
+    # g = ttnn.typecast(
+    #     ttnn.transpose(g, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+    # )
 
-    q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # Padding
     pad_len = (chunk_size - (T % chunk_size)) % chunk_size
