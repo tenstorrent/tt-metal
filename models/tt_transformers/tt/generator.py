@@ -24,6 +24,7 @@ from models.common.sampling import (
     chunk_sampling_params,
     format_sampling_params,
 )
+from models.common.sampling.generator import _scatter_sampling_params_to_slots
 from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
 from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
@@ -681,6 +682,7 @@ class Generator(WarmupForwardMixin):
                     assert sampling_module is not None
                     assert sampling_batch is not None
                     combined_params = format_sampling_params(sampling_params, sampling_batch)
+                    slot_aligned_params = _scatter_sampling_params_to_slots(combined_params, empty_slots, sampling_batch)
                     max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
                     combined_prompt_tokens = torch.zeros(sampling_batch, max_prompt_len, dtype=torch.long)
                     for local_idx, slot in enumerate(empty_slots):
@@ -688,7 +690,7 @@ class Generator(WarmupForwardMixin):
                         combined_prompt_tokens[slot, :plen] = prefill_ids[slot, :plen]
 
                     sampling_module.apply_prefill_state(
-                        sampling_params=combined_params,
+                        sampling_params=slot_aligned_params,
                         prompt_tokens=combined_prompt_tokens,
                         empty_slots=empty_slots,
                         replicate_seeds=False,
