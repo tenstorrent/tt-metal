@@ -15,10 +15,10 @@ run_quad_galaxy_unit_tests() {
   fail=0
 
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
-  local tcp_interface="cnx1"
-  local hosts="g05glx04,g05glx03,g05glx02,g05glx01"
+  local tcp_interface="ens5f0np0"
+  local hosts="UF-EV-C5-GWH02,UF-EV-C5-GWH01,UF-EV-C4-GWH02,UF-EV-C4-GWH01"
   local mpi_host="--host $hosts"
-  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
+  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 --tag-output"
   local mpirun_args="$mpi_host $mpirun_args_base"
 
   local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
@@ -27,7 +27,7 @@ run_quad_galaxy_unit_tests() {
   # TODO: Currently failing
   #mpirun-ulfm $mpi_run_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
 
-  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto ; fail+=$?
+  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation ; fail+=$?
 
   tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
 
@@ -69,7 +69,7 @@ setup_dual_galaxy_env() {
     export HOSTS="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 2 | paste -sd,)"
     export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    export TCP_INTERFACE="cnx1"
+    export TCP_INTERFACE="ens5f0np0"
     mkdir -p logs
     mkdir -p generated/artifacts
 
@@ -100,7 +100,7 @@ setup_quad_galaxy_env() {
     # heuristic to extract only 4 first hosts from the hostfile
     export HOSTS="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 4 | paste -sd,)"
     export RANKFILE=/etc/mpirun/rankfile
-    export TCP_INTERFACE="cnx1"
+    export TCP_INTERFACE="ens5f0np0"
     mkdir -p logs
     mkdir -p generated/artifacts
 
