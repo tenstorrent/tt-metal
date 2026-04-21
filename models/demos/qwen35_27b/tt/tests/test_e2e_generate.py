@@ -29,7 +29,8 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
-from models.demos.qwen35_27b.tt.model import create_qwen35_model
+from models.demos.qwen35_27b.tt.model import allocate_paged_kv_caches, create_qwen35_model
+from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 def _get_model_path():
@@ -364,6 +365,7 @@ def test_e2e_generate_device_sampling(mesh_device, reset_seeds, ensure_gc):
 
 
 @torch.no_grad()
+@pytest.mark.parametrize("use_paged", [False, True], ids=["nonpaged", "paged"])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -386,6 +388,12 @@ def test_e2e_generate_device_sampling(mesh_device, reset_seeds, ensure_gc):
         "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_256.json",
         "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_1k.json",
         "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_2k.json",
+        "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",
+        "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",
+        "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",
+        "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_32k.json",
+        "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_64k.json",
+        "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_128k.json",
     ],
     ids=[
         "default",
@@ -393,9 +401,15 @@ def test_e2e_generate_device_sampling(mesh_device, reset_seeds, ensure_gc):
         "prefill-256",
         "long-1k",
         "long-2k",
+        "long-4k",
+        "long-8k",
+        "long-16k",
+        "long-32k",
+        "long-64k",
+        "long-128k",
     ],
 )
-def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts):
+def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts, use_paged):
     """Generate text with traced decode + on-device sampling.
 
     Captures the full decode graph (including GDN fused kernel) as a trace,
@@ -405,7 +419,12 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
 
     model_path = _get_model_path()
     batch_size = 32
-    max_seq_len = 4096
+    # Paged runs need a RoPE table that spans the longest ISL we support; the model's
+    # prepare_inputs_prefill asserts `rope_cos_matrix.shape[2] >= seq_len`. Set it to
+    # the paged capacity when use_paged; keep 4096 for the unchanged non-paged path
+    # (which allocates a static [B, 1, max_seq_len, HD] KV cache per layer and cannot
+    # afford the 131k-wide allocation).
+    max_seq_len = 131072 if use_paged else 4096
     max_gen_tokens = 128
 
     if mesh_device.get_num_devices() < 4:
@@ -417,6 +436,8 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
     logger.info("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
+    paged_attention_config = PagedAttentionConfig(block_size=64, max_num_blocks=2048) if use_paged else None
+
     logger.info("Creating Qwen3.5 model (all layers)...")
     t0 = time.time()
     model = create_qwen35_model(
@@ -425,11 +446,45 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
         max_batch_size=batch_size,
         max_seq_len=max_seq_len,
         dtype=ttnn.bfloat8_b,
+        paged_attention_config=paged_attention_config,
+        use_paged_kv_cache=use_paged,
     )
     load_time = time.time() - t0
     logger.info(f"Model created in {load_time:.1f}s")
 
     args = model.args
+
+    kv_caches = None
+    page_table_torch = None
+    page_table_tt = None
+    page_table_decode_torch = None
+    page_table_decode_tt = None
+    if use_paged:
+        kv_caches = allocate_paged_kv_caches(args, paged_attention_config, mesh_device)
+        # Two page tables are needed because prefill and decode have different batch
+        # semantics:
+        #   - Prefill SDPA asserts page_table.shape[0] == Q.shape[0] = 1 (single user).
+        #   - Decode's paged_update_cache + paged SDPA decode assert page_table.shape[0]
+        #     == input.shape[1] = max_batch_size (32 here).
+        # We run one real user at slot 0; the other 31 decode slots share the same
+        # block mapping, mirroring `replicate_kv_cache_to_batch()` on the non-paged path.
+        page_table_row = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32)
+        page_table_torch = page_table_row.unsqueeze(0)  # [1, max_num_blocks] for prefill
+        page_table_tt = ttnn.from_torch(
+            page_table_torch,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        page_table_decode_torch = page_table_row.unsqueeze(0).repeat(batch_size, 1)  # [B, max_num_blocks]
+        page_table_decode_tt = ttnn.from_torch(
+            page_table_decode_torch,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
     assert model._supports_on_device_sampling, "On-device sampling not supported"
     assert model.sampling is not None, "SamplingGenerator not initialized"
@@ -443,10 +498,20 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
 
     # === HELPER: reset prefill states ===
     def _reset_prefill_states():
-        """Reset all layer states and init B=1 prefill states for GDN layers."""
-        for layer in model.layers:
+        """Reset all layer states and init B=1 prefill states for GDN layers.
+
+        Under use_paged=True we skip `reset_state()` for full_attention layers
+        because their KV now lives in the external paged caches from
+        allocate_paged_kv_caches(); calling reset_state() would allocate
+        [B, 1, max_seq_len, HD] static tensors per layer (~4 GB per layer at
+        max_seq_len=131072) that are never read by the paged forward path.
+        GDN layers still reset — they use reset_state() for conv-state init.
+        """
+        for layer_idx, layer in enumerate(model.layers):
             attn = layer.attention
-            if hasattr(attn, "reset_state"):
+            layer_type = args.layer_types[layer_idx]
+            is_paged_attn = use_paged and layer_type == "full_attention"
+            if hasattr(attn, "reset_state") and not is_paged_attn:
                 attn.reset_state()
             if hasattr(attn, "_init_prefill_states"):
                 attn._init_prefill_states()
@@ -464,7 +529,7 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
     seq_len = len(prompt_tokens)
     tokens_tensor = torch.tensor([prompt_tokens], dtype=torch.long)  # [1, seq_len]
     last_token_idx = ((seq_len - 1) // 32) * 32
-    use_chunked = seq_len > args.prefill_len_cutoff or os.environ.get("FORCE_CHUNKED_PREFILL")
+    use_chunked = use_paged or seq_len > args.prefill_len_cutoff or os.environ.get("FORCE_CHUNKED_PREFILL")
 
     # === PREFILL (compile run) ===
     logger.info(f"Prefilling {len(prompt_tokens)} tokens ({'chunked' if use_chunked else 'batched'}, compile run)...")
@@ -472,7 +537,15 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
 
     t_prefill = time.time()
     if use_chunked:
-        tt_out = model.prefill_layer_chunked(tokens_tensor)
+        tt_out = model.prefill_layer_chunked(
+            tokens_tensor,
+            use_paged=use_paged,
+            page_table=page_table_tt,
+            page_table_torch=page_table_torch,
+            kv_caches=kv_caches,
+            paged_attention_config=paged_attention_config,
+            user_id=0,
+        )
     else:
         prefill_inputs = model.prepare_inputs_prefill(tokens_tensor)
         tt_embeds = prefill_inputs[0]
@@ -497,6 +570,8 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
         tt_tokens,
         tt_current_pos,
         rot_mat_idxs=tt_rot_idxs,
+        page_table=page_table_decode_tt if use_paged else None,
+        kv_cache=kv_caches if use_paged else None,
         sampling_on_device=True,
     )
     tt_toks = result[0] if isinstance(result, tuple) else result
@@ -510,7 +585,15 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
 
     t_prefill_trace = time.time()
     if use_chunked:
-        tt_out = model.prefill_layer_chunked(tokens_tensor)
+        tt_out = model.prefill_layer_chunked(
+            tokens_tensor,
+            use_paged=use_paged,
+            page_table=page_table_tt,
+            page_table_torch=page_table_torch,
+            kv_caches=kv_caches,
+            paged_attention_config=paged_attention_config,
+            user_id=0,
+        )
     else:
         prefill_inputs = model.prepare_inputs_prefill(tokens_tensor)
         tt_embeds = prefill_inputs[0]
@@ -533,13 +616,18 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
     tok_batch = torch.full((batch_size,), prompt_tokens[-1], dtype=torch.long)
     current_pos_torch = torch.full((batch_size,), trace_pos, dtype=torch.long)
 
-    host_inputs = model.prepare_decode_inputs_host(tok_batch, current_pos_torch)
+    host_inputs = model.prepare_decode_inputs_host(
+        tok_batch,
+        current_pos_torch,
+        page_table=page_table_decode_torch if use_paged else None,
+    )
     device_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
     # device_inputs = (tt_tokens, tt_current_pos, tt_rot_idxs, tt_page_table)
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     trace_output = model.ttnn_decode_forward(
         *device_inputs,
+        kv_cache=kv_caches if use_paged else None,
         sampling_on_device=True,
     )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
@@ -565,7 +653,11 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
         current_pos_torch = torch.full((batch_size,), pos, dtype=torch.long)
 
         # Update device inputs in-place
-        host_inputs = model.prepare_decode_inputs_host(tok_batch, current_pos_torch)
+        host_inputs = model.prepare_decode_inputs_host(
+            tok_batch,
+            current_pos_torch,
+            page_table=page_table_decode_torch if use_paged else None,
+        )
         copy_host_to_device(host_tensors=host_inputs, device_tensors=device_inputs)
 
         # Execute trace

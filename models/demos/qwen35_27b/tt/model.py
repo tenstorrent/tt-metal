@@ -14,6 +14,7 @@ The framework handles: embedding, RMSNorm (with offset), MLP, LM head, decoder b
 
 import os
 from pathlib import Path
+from typing import List, Optional, Tuple
 
 import torch
 from loguru import logger
@@ -22,6 +23,8 @@ import ttnn
 from models.demos.qwen35_27b.tt.attention import Qwen35Attention
 from models.demos.qwen35_27b.tt.gdn import TtGatedDeltaNet
 from models.demos.qwen35_27b.tt.model_config import (
+    ATTN_CHUNK_SIZE,
+    GDN_CHUNK_SIZE,
     GDN_CONV_KERNEL_SIZE,
     Qwen35ModelArgs,
     _replicate,
@@ -399,38 +402,78 @@ class Transformer(TTTransformer):
 
         return result
 
-    def prefill_layer_chunked(self, tokens_tensor, chunk_size=None):
+    def prefill_layer_chunked(
+        self,
+        tokens_tensor,
+        chunk_size=None,
+        *,
+        use_paged=False,
+        page_table=None,
+        page_table_torch=None,
+        kv_caches=None,
+        paged_attention_config=None,
+        user_id=0,
+    ):
         """Prefill long sequences using layer-at-a-time chunked processing.
 
         Args:
             tokens_tensor: [1, seq_len] torch tensor of token IDs
-            chunk_size: base chunk size (default: prefill_len_cutoff, 512 on BH)
-
-        Returns:
-            x_normed: last-token output after final norm, ready for LM head
+            chunk_size: GDN chunk size. Default: args.prefill_len_cutoff (when
+              use_paged=False) or GDN_CHUNK_SIZE (when use_paged=True).
+            use_paged: enable paged KV cache path.
+            page_table: full ttnn int32 page table (shape [B, max_num_blocks]),
+              persistent on device. Required when use_paged=True.
+            page_table_torch: the same page table as a torch.int32 tensor. Used
+              to slice per-chunk views cheaply on host. Required when use_paged=True.
+            kv_caches: List[Optional[(k_paged, v_paged)]], one entry per layer,
+              from allocate_paged_kv_caches(). Required when use_paged=True.
+            paged_attention_config: PagedAttentionConfig. Required when use_paged=True.
+            user_id: int batch row for paged fill. Default 0.
         """
-        if chunk_size is None:
-            chunk_size = self.args.prefill_len_cutoff  # 512 on BH, 1024 on WH
+        if use_paged:
+            assert page_table is not None, "use_paged=True requires page_table (ttnn tensor)"
+            assert page_table_torch is not None, "use_paged=True requires page_table_torch"
+            assert kv_caches is not None, "use_paged=True requires kv_caches list"
+            assert paged_attention_config is not None, "use_paged=True requires paged_attention_config"
+            if chunk_size is None:
+                chunk_size = GDN_CHUNK_SIZE
+        else:
+            if chunk_size is None:
+                chunk_size = self.args.prefill_len_cutoff
+
         seq_len = tokens_tensor.shape[-1]
 
-        # ── Step 1: Embed tokens + RoPE via framework ────────────────
-        # Use the framework's prepare_inputs_prefill to handle embedding
-        # and RoPE correctly (mesh sharding, tile layout, etc.)
+        if use_paged:
+            max_supported = paged_attention_config.block_size * paged_attention_config.max_num_blocks
+            assert seq_len <= max_supported, (
+                f"seq_len {seq_len} exceeds paged capacity "
+                f"({paged_attention_config.block_size} x {paged_attention_config.max_num_blocks} "
+                f"= {max_supported})"
+            )
+
+        # -- Step 1: Embed tokens + RoPE via framework --
         prefill_inputs = self.prepare_inputs_prefill(tokens_tensor)
-        x = prefill_inputs[0]  # [1, 1, seq_len, dim] (mesh-sharded embedding)
-        rot_mats_full = prefill_inputs[1]  # [cos, sin] each [1, 1, seq_len, rope_dim]
+        x = prefill_inputs[0]
+        rot_mats_full = prefill_inputs[1]
         cos_full = rot_mats_full[0]
         sin_full = rot_mats_full[1]
 
-        # ── Step 3: Init GDN prefill states ──────────────────────────
-        for layer in self.layers:
+        # -- Step 2: Init prefill states --
+        # For paged attention layers we skip the static [B, 1, max_seq_len, HD]
+        # KV allocation (reset_state) -- their KV lives in the external kv_caches.
+        # GDN layers still reset (they use reset_state for conv-state init).
+        for layer_idx, layer in enumerate(self.layers):
             attn = layer.attention
-            if hasattr(attn, "reset_state"):
+            layer_type = self.args.layer_types[layer_idx]
+            is_paged_attn = use_paged and layer_type == "full_attention"
+            if hasattr(attn, "reset_state") and not is_paged_attn:
                 attn.reset_state()
             if hasattr(attn, "_init_prefill_states"):
                 attn._init_prefill_states()
 
-        # ── Step 4: Layer loop with chunking ─────────────────────────
+        block_size = paged_attention_config.block_size if use_paged else None
+
+        # -- Step 3: Layer loop with chunking --
         n_layers = len(self.layers)
         for layer_idx in range(n_layers):
             layer = self.layers[layer_idx]
@@ -438,16 +481,19 @@ class Transformer(TTTransformer):
             is_last_layer = layer_idx == n_layers - 1
             is_attention = layer_type == "full_attention"
 
-            # Attention layers process full sequence (need full KV context for causal SDPA).
-            # GDN layers chunk (recurrent state carries over between chunks).
-            layer_chunk_size = seq_len if is_attention else chunk_size
+            # Attention: full-seq (non-paged) or ATTN_CHUNK_SIZE (paged).
+            # GDN: always chunk_size (existing behavior, orthogonal to paging).
+            if is_attention:
+                layer_chunk_size = ATTN_CHUNK_SIZE if use_paged else seq_len
+            else:
+                layer_chunk_size = chunk_size
 
             chunk_outputs = []
+            x_last = None
             for chunk_start in range(0, seq_len, layer_chunk_size):
                 chunk_end = min(chunk_start + layer_chunk_size, seq_len)
 
                 if chunk_end == seq_len and len(chunk_outputs) == 0:
-                    # Single chunk covers full sequence — no slice needed
                     x_chunk = x
                 else:
                     x_chunk = ttnn.slice(
@@ -456,7 +502,7 @@ class Transformer(TTTransformer):
                         (1, 1, chunk_end, x.shape[-1]),
                     )
 
-                # Prepare rot_mats for this chunk
+                # RoPE chunk slice (attention only -- GDN doesn't use RoPE).
                 if is_attention:
                     cos_chunk = cos_full[:, :, chunk_start:chunk_end, :]
                     sin_chunk = sin_full[:, :, chunk_start:chunk_end, :]
@@ -464,16 +510,39 @@ class Transformer(TTTransformer):
                 else:
                     rot_mats = None
 
-                # Run layer on chunk
+                # Paged attention args (attention + paged only).
+                if use_paged and is_attention:
+                    chunk_block_start = chunk_start // block_size
+                    chunk_block_end = (chunk_end + block_size - 1) // block_size
+                    chunk_page_table_torch = page_table_torch[:, chunk_block_start:chunk_block_end]
+                    chunk_page_table_tt = ttnn.from_torch(
+                        chunk_page_table_torch,
+                        device=self.mesh_device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    )
+                    kv_cache_for_layer = kv_caches[layer_idx]
+                    assert (
+                        kv_cache_for_layer is not None
+                    ), f"use_paged=True: layer {layer_idx} is attention but kv_caches[{layer_idx}] is None"
+                else:
+                    chunk_page_table_tt = None
+                    kv_cache_for_layer = None
+
                 logger.info(f"    Chunk [{chunk_start}:{chunk_end}] x_chunk.shape={x_chunk.shape}")
                 out_chunk = layer(
                     x_chunk,
                     current_pos=None,
                     rot_mats_global=rot_mats,
                     mode=Mode.PREFILL,
+                    page_table=page_table if (use_paged and is_attention) else None,
+                    chunk_page_table=chunk_page_table_tt,
+                    chunk_start_idx=chunk_start if (use_paged and is_attention) else None,
+                    kv_cache=kv_cache_for_layer,
+                    user_id=user_id,
                 )
 
-                # On last layer, extract last token from last chunk before concat
                 if is_last_layer and chunk_end == seq_len:
                     last_tok_in_chunk = chunk_end - chunk_start - 1
                     get_last = (last_tok_in_chunk // 32) * 32
@@ -485,7 +554,6 @@ class Transformer(TTTransformer):
 
                 chunk_outputs.append(out_chunk)
 
-            # Concatenate chunks back to full sequence
             if len(chunk_outputs) == 1:
                 x_new = chunk_outputs[0]
             else:
@@ -498,7 +566,7 @@ class Transformer(TTTransformer):
 
             logger.info(f"  Layer {layer_idx}/{n_layers} ({layer_type}) done, x.shape={x.shape}")
 
-        # ── Step 5: Replicate prefill states to batch ────────────────
+        # -- Step 4: Replicate prefill states to batch --
         for layer in self.layers:
             attn = layer.attention
             if hasattr(attn, "replicate_kv_cache_to_batch"):
@@ -506,11 +574,60 @@ class Transformer(TTTransformer):
             if hasattr(attn, "replicate_prefill_state_to_batch"):
                 attn.replicate_prefill_state_to_batch()
 
-        # ── Step 6: Final norm on last token ─────────────────────────
+        # -- Step 5: Final norm on last token --
         ttnn.deallocate(x)
         x_normed = self.norm(x_last, mode=Mode.PREFILL)
 
         return x_normed
+
+
+def allocate_paged_kv_caches(
+    model_args,
+    paged_attention_config,
+    mesh_device,
+) -> List[Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
+    """Allocate paged KV caches, one per layer.
+
+    Returns a list with len == n_layers. GDN ("linear_attention") layers get
+    None (they have no KV cache); full_attention layers get a (k_cache, v_cache)
+    tuple, each shape (max_num_blocks, n_local_kv_heads, block_size, head_dim),
+    dtype bfloat16, DRAM interleaved, replicated across the mesh.
+    """
+    block_size = paged_attention_config.block_size
+    max_num_blocks = paged_attention_config.max_num_blocks
+    n_local_kv_heads = model_args.n_local_kv_heads
+    head_dim = model_args.head_dim
+
+    kv_caches: List[Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]] = []
+    for layer_idx, layer_type in enumerate(model_args.layer_types):
+        if layer_type == "linear_attention":
+            kv_caches.append(None)
+            continue
+
+        assert layer_type == "full_attention", f"Unexpected layer type {layer_type!r} at layer {layer_idx}"
+
+        def _alloc():
+            return ttnn.from_torch(
+                torch.zeros(
+                    max_num_blocks,
+                    n_local_kv_heads,
+                    block_size,
+                    head_dim,
+                    dtype=torch.bfloat16,
+                ),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
+        kv_caches.append((_alloc(), _alloc()))
+
+    assert len(kv_caches) == len(
+        model_args.layer_types
+    ), f"kv_caches length {len(kv_caches)} != layer count {len(model_args.layer_types)}"
+    return kv_caches
 
 
 def create_qwen35_model(

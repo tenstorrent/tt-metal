@@ -129,7 +129,18 @@ class Qwen35Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
-        if mode == "prefill" or (hasattr(mode, "value") and mode.value == "prefill"):
+        is_prefill = mode == "prefill" or (hasattr(mode, "value") and mode.value == "prefill")
+        if is_prefill:
+            if kv_cache is not None:
+                return self.forward_prefill_paged(
+                    x,
+                    rot_mats=rot_mats,
+                    page_table=page_table,
+                    chunk_page_table=chunk_page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    kv_cache=kv_cache,
+                    user_id=user_id,
+                )
             return self.forward_prefill(x, current_pos, rot_mats)
         return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
 
@@ -179,10 +190,22 @@ class Qwen35Attention(LightweightModule):
             keys = kv_cache[0]
             values = kv_cache[1]
 
-            ttnn.experimental.paged_update_cache(keys, k, update_idxs_tensor=cur_pos_tt, page_table=page_table)
-            ttnn.experimental.paged_update_cache(values, v, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+            # paged_update_cache requires a sharded input tensor. Mirror the non-paged
+            # branch: pad the head dim from NKV (1 on 4x P150) to 32 for tile alignment,
+            # then convert to the L1-sharded layout the op expects.
+            k_padded = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+            v_padded = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
+            k_sh = ttnn.to_memory_config(k_padded, self._kv_update_shard_cfg)
+            v_sh = ttnn.to_memory_config(v_padded, self._kv_update_shard_cfg)
+            ttnn.deallocate(k_padded)
+            ttnn.deallocate(v_padded)
+
+            ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+            ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+            ttnn.deallocate(k_sh)
+            ttnn.deallocate(v_sh)
 
             attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q,
@@ -555,4 +578,248 @@ class Qwen35Attention(LightweightModule):
         ttnn.deallocate(gated_flat)
 
         # ---- All-reduce ----
+        return self._all_reduce(wo_out)
+
+    def forward_prefill_paged(
+        self,
+        x,
+        *,
+        rot_mats,
+        page_table,
+        chunk_page_table,
+        chunk_start_idx,
+        kv_cache,
+        user_id=0,
+    ):
+        """Prefill with paged KV cache for one chunk of a long sequence.
+
+        Called once per attention chunk from model.prefill_layer_chunked. The
+        caller provides:
+          - x: chunk input [1, 1, chunk_len, dim]
+          - rot_mats: [cos_chunk, sin_chunk], each sliced to the chunk's token range
+          - page_table: FULL page table (ttnn int32, ROW_MAJOR), passed to
+            chunked_scaled_dot_product_attention so it can attend to prior chunks.
+          - chunk_page_table: slice of page_table covering only this chunk's blocks;
+            passed to paged_fill_cache so it writes only this chunk's positions.
+          - chunk_start_idx: absolute token offset of this chunk within the sequence.
+          - kv_cache: (k_paged, v_paged) tuple allocated by allocate_paged_kv_caches;
+            both shape (max_num_blocks, n_local_kv_heads, block_size, head_dim).
+          - user_id: int batch row index in the page table.
+        """
+        assert kv_cache is not None, "forward_prefill_paged requires kv_cache"
+        assert page_table is not None, "forward_prefill_paged requires page_table"
+        assert chunk_start_idx is not None, "forward_prefill_paged requires chunk_start_idx"
+        assert rot_mats is not None and len(rot_mats) == 2, "forward_prefill_paged requires rot_mats=[cos, sin]"
+
+        tw = self.tw
+        NH = self.n_local_heads
+        NKV = self.n_local_kv_heads
+        HD = self.head_dim
+        dim = self.args.dim
+
+        # Ensure 4D: [1, 1, chunk_len, dim]
+        if len(x.shape) == 3:
+            x = ttnn.reshape(x, (1, 1, x.shape[1], x.shape[2]))
+        seq_len = x.shape[2]
+
+        # ---- QKV Projections (verbatim from forward_prefill) ----
+        x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
+        qg_progcfg = create_prefill_matmul_program_config(seq_len, dim, NH * HD * 2)
+        qg_tt = ttnn.linear(
+            x_dram,
+            tw["wqkv"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=qg_progcfg,
+            compute_kernel_config=self.compute_cfg,
+        )
+
+        k_progcfg = create_prefill_matmul_program_config(seq_len, dim, NKV * HD)
+        kp_tt = ttnn.linear(
+            x_dram,
+            tw["wk"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=k_progcfg,
+            compute_kernel_config=self.compute_cfg,
+        )
+        vp_tt = ttnn.linear(
+            x_dram,
+            tw["wv"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=k_progcfg,
+            compute_kernel_config=self.compute_cfg,
+        )
+        ttnn.deallocate(x_dram)
+
+        # ---- CPU reshape to head-major (verbatim structure from forward_prefill) ----
+        mesh = self.mesh_device
+        num_devices = mesh.get_num_devices()
+
+        kp_cpu = ttnn.to_torch(kp_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+        vp_cpu = ttnn.to_torch(vp_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+        ttnn.deallocate(kp_tt)
+        ttnn.deallocate(vp_tt)
+
+        k_parts, v_parts = [], []
+        for d in range(num_devices):
+            kd = kp_cpu[d].squeeze(0).float().reshape(seq_len, NKV, HD).permute(1, 0, 2)
+            vd = vp_cpu[d].squeeze(0).float().reshape(seq_len, NKV, HD).permute(1, 0, 2)
+            k_parts.append(kd.unsqueeze(0))
+            v_parts.append(vd.unsqueeze(0))
+        k_stacked = torch.cat(k_parts, dim=0).to(torch.bfloat16).contiguous()
+        v_stacked = torch.cat(v_parts, dim=0).to(torch.bfloat16).contiguous()
+        del kp_cpu, vp_cpu, k_parts, v_parts
+
+        k = ttnn.from_torch(
+            k_stacked,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        )
+        v = ttnn.from_torch(
+            v_stacked,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        )
+        del k_stacked, v_stacked
+
+        qg_cpu = ttnn.to_torch(qg_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+        ttnn.deallocate(qg_tt)
+
+        q_parts, gate_parts = [], []
+        for d in range(num_devices):
+            qgd = qg_cpu[d].squeeze(0).float().reshape(seq_len, NH, HD * 2).permute(1, 0, 2)
+            q_parts.append(qgd[:, :, :HD].unsqueeze(0))
+            gate_parts.append(qgd[:, :, HD:].unsqueeze(0))
+        q_stacked = torch.cat(q_parts, dim=0).to(torch.bfloat16).contiguous()
+        gate_stacked = torch.cat(gate_parts, dim=0).to(torch.bfloat16).contiguous()
+        del qg_cpu, q_parts, gate_parts
+
+        q = ttnn.from_torch(
+            q_stacked,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        )
+        gate = ttnn.from_torch(
+            gate_stacked,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        )
+        del q_stacked, gate_stacked
+
+        # ---- QK L2 norm with learned scale ----
+        q = ttnn.multiply(_rms_norm_dev(q), tw["q_norm"])
+        k = ttnn.multiply(_rms_norm_dev(k), tw["k_norm"])
+
+        # ---- Partial RoPE using caller-provided chunk-sliced cos/sin ----
+        cos_tt, sin_tt = rot_mats[0], rot_mats[1]
+        q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH)
+        k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV)
+
+        # ---- Paged KV cache fill ----
+        k_paged, v_paged = kv_cache
+        block_size = k_paged.shape[2]
+        fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+        page_len = fill_page_table.shape[1] * block_size
+
+        # Slice K/V down to page_len if this chunk overhangs its allocated blocks.
+        if page_len < seq_len:
+            k_fill = ttnn.slice(k, (0, 0, 0, 0), (1, NKV, page_len, HD))
+            v_fill = ttnn.slice(v, (0, 0, 0, 0), (1, NKV, page_len, HD))
+        else:
+            k_fill = k
+            v_fill = v
+
+        ttnn.experimental.paged_fill_cache(k_paged, k_fill, fill_page_table, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(v_paged, v_fill, fill_page_table, batch_idx=user_id)
+
+        if page_len < seq_len:
+            ttnn.deallocate(k_fill)
+            ttnn.deallocate(v_fill)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+
+        # ---- Chunked SDPA over paged cache ----
+        # bfloat8_b cast to match the dtype used by tt_transformers' chunked SDPA path.
+        q_8b = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(q)
+
+        # SDPA has a hard requirement: chunk_start_idx % q_chunk_size == 0.
+        # For chunk_start_idx=0 any q_chunk divides; for chunk_start_idx > 0
+        # the highest power of 2 dividing it is `chunk_start_idx & -chunk_start_idx`.
+        # Formulation lifted from tt_transformers/tt/model_config.py:1452-1470 so the
+        # rule holds at every chunk boundary across 8k-128k ISL. (Also tracks the
+        # k_chunk workaround for tt-metal#35225.)
+        def _pick_chunk_size(seq_len_inner, chunk_start):
+            if chunk_start is None or chunk_start == 0:
+                return 256 if seq_len_inner >= 2048 else 64
+            cap = 256 if seq_len_inner >= 2048 else 64
+            return min(cap, chunk_start & -chunk_start)
+
+        q_chunk = _pick_chunk_size(seq_len, chunk_start_idx)
+        k_chunk = _pick_chunk_size(seq_len, chunk_start_idx)
+
+        # Blackhole P150 has a 13x10 (130-core) worker grid vs WH's 8x8. Pulling the
+        # grid from the device avoids the WH-era 64-core cap that would pin SDPA at
+        # ~49% utilization on BH. Existing helper idiom (see rope.py:472).
+        sdpa_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            exp_approx_mode=False,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+        )
+
+        attn_out = ttnn.transformer.chunked_scaled_dot_product_attention(
+            input_tensor_q=q_8b,
+            input_tensor_k=k_paged,
+            input_tensor_v=v_paged,
+            page_table_tensor=page_table,
+            chunk_start_idx=chunk_start_idx,
+            compute_kernel_config=self.compute_cfg,
+            program_config=sdpa_config,
+        )
+        ttnn.deallocate(q_8b)
+
+        # ---- Sigmoid gating (verbatim) ----
+        gate_val = ttnn.sigmoid(gate)
+        ttnn.deallocate(gate)
+        gated = ttnn.multiply(attn_out, gate_val)
+        ttnn.deallocate(attn_out)
+        ttnn.deallocate(gate_val)
+
+        # ---- Output projection + all-reduce (verbatim from forward_prefill) ----
+        gated_cpu = ttnn.to_torch(gated, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+        ttnn.deallocate(gated)
+        flat_parts = []
+        for d in range(num_devices):
+            gd = gated_cpu[d].float()
+            flat_parts.append(gd.permute(1, 0, 2).reshape(1, seq_len, NH * HD).unsqueeze(0))
+        gated_flat_cpu = torch.cat(flat_parts, dim=0).to(torch.bfloat16).contiguous()
+        del gated_cpu, flat_parts
+        gated_flat = ttnn.from_torch(
+            gated_flat_cpu,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        )
+        del gated_flat_cpu
+
+        wo_progcfg = create_prefill_matmul_program_config(seq_len, NH * HD, dim)
+        wo_out = ttnn.linear(
+            gated_flat,
+            tw["wo"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=wo_progcfg,
+            compute_kernel_config=self.compute_cfg,
+        )
+        ttnn.deallocate(gated_flat)
+
         return self._all_reduce(wo_out)

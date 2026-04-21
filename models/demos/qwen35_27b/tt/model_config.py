@@ -39,6 +39,15 @@ GDN_VALUE_DIM = GDN_Nv * GDN_Dv  # 6144
 # Partial RoPE: only 64 of 256 head dims are rotated
 ROPE_DIM = 64
 
+# ── Paged-attention chunk sizes (consumed when use_paged=True) ──────────────
+# ATTN_CHUNK_SIZE: tokens per chunk when calling chunked_scaled_dot_product_attention.
+#   Must be a multiple of block_size (64). 4096 = 64 blocks; matches 9B reference.
+# GDN_CHUNK_SIZE: tokens per chunk when GDN layers are processed under paged mode.
+#   Kept small so create_prefill_matmul_program_config produces CBs that fit L1
+#   (at 4096 the QKVZ projection overflows L1 at 2 MB vs 1.5 MB budget).
+ATTN_CHUNK_SIZE = int(os.environ.get("QWEN35_ATTN_CHUNK_SIZE", "4096"))
+GDN_CHUNK_SIZE = int(os.environ.get("QWEN35_GDN_CHUNK_SIZE", "256"))
+
 
 # ── Hardware Constants ──────────────────────────────────────────────────────
 
