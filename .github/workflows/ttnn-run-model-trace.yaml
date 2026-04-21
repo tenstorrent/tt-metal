@@ -341,6 +341,13 @@ jobs:
           EXTRA_ARGS: ${{ matrix.extra_args }}
           LFC_AVAILABLE: ${{ steps.lfc-probe.outputs.lfc_available || 'true' }}
         run: |
+          # When model is not in LFC, unset the restricted proxy so
+          # HuggingFace transformers can download weights directly.
+          if [[ "$LFC_AVAILABLE" != "true" ]]; then
+            echo "::notice::Model not in LFC — unsetting proxy for direct HF download"
+            unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
+          fi
+
           TRACER_OUTPUT_DIR="model_tracer/traced_operations"
 
           # Reject extra_args that override output directory
