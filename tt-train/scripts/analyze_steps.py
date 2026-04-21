@@ -30,24 +30,27 @@ def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
     step_pattern = r"Step:\s*(\d+)"
     loss_pattern = r"Loss:\s*([\d.]+)"
     step_time_pattern = r"Time:\s+([\d.]+)\s*ms"
+    mfu_pattern = r"MFU:\s+([\d.]+)\s*%"
 
     step_matches = re.findall(step_pattern, content, re.DOTALL)
     loss_matches = re.findall(loss_pattern, content, re.DOTALL)
     step_time_matches = re.findall(step_time_pattern, content, re.DOTALL)
+    mfu_matches = re.findall(mfu_pattern, content, re.DOTALL)
 
-    step_len, loss_len, step_time_len = (
+    step_len, loss_len, step_time_len, mfu_len = (
         len(step_matches),
         len(loss_matches),
         len(step_time_matches),
+        len(mfu_matches),
     )
-    if not (step_len == loss_len == step_time_len):
+    if not (step_len == loss_len == step_time_len == mfu_len):
         raise ValueError(
-            f"Length of pattern matches not equal. step: {step_len}, loss: {loss_len}, step_time: {step_time_len}"
+            f"Length of pattern matches not equal. step: {step_len}, loss: {loss_len}, step_time: {step_time_len}, mfu: {mfu_len}"
         )
 
     step_summary = []
-    for step, loss, step_time in zip(step_matches, loss_matches, step_time_matches):
-        step_summary.append({"step": int(step), "loss": float(loss), "step_time": float(step_time)})
+    for step, loss, step_time, mfu in zip(step_matches, loss_matches, step_time_matches, mfu_matches):
+        step_summary.append({"step": int(step), "loss": float(loss), "step_time": float(step_time), "mfu": float(mfu)})
 
     return step_summary
 
@@ -97,6 +100,9 @@ def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, flo
     step_time_p95 = np.percentile(step_times, 95)
     step_time_p99 = np.percentile(step_times, 99)
 
+    # Get last MFU value
+    mfu = summary[-1]["mfu"]
+
     print("\n--- Step Information ---")
     print(f"  Total steps:   {num_steps}")
     print(f"  {last_loss_msg}:   {last_loss:,.2f}")
@@ -105,6 +111,7 @@ def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, flo
     print(f"  Median step time:   {step_time_p50:,.2f} ms")
     print(f"  Step time at P95:   {step_time_p95:,.2f} ms")
     print(f"  Step time at P99:   {step_time_p99:,.2f} ms")
+    print(f"  MFU:                {mfu:,.2f}%")
 
     breakdown = {
         "last_loss": last_loss,
@@ -114,6 +121,7 @@ def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, flo
         "step_time_p50": step_time_p50,
         "step_time_p95": step_time_p95,
         "step_time_p99": step_time_p99,
+        "mfu": mfu,
     }
 
     return breakdown

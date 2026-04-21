@@ -46,11 +46,12 @@ def get_git_commit_hash() -> str:
     return sha
 
 
-def run_and_save_log(args: list[str], log_path: Path):
+def run_and_save_log(cmd: list[str], log_path: Path):
     """Run a command, writing stdout to log_path and to this process's stdout. Return exit code."""
+    print(f"Running: {' '.join(cmd)}")
     with open(log_path, "w") as log_file:
         proc = subprocess.Popen(
-            args,
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -152,6 +153,19 @@ def main() -> int:
         log_basename = _verify_path(f"{model_filename}_memory_analysis_{current_time}", tt_metal_runtime_root)
         log_path = output_dir / f"{log_basename}.log"
 
+        # Check if tokenization is needed
+        tokenize = model.get("tokenize")
+        if tokenize is not None:
+            tokenizer_args = (
+                [f"--text_file {tokenize['text_file']}"]
+                + [f"--hf_tokenizer {tokenize['hf_tokenizer']}"]
+                + [f"--output_file {tokenize['output_file']}"]
+            )
+            cmd = process_binary_path(
+                str(tt_metal_runtime_root / "tt-train/tools/dataset_to_tokens.py")
+            ) + process_args(tokenizer_args)
+            ret_code = run_and_save_log(cmd, os.devnull)
+
         cmd = process_binary_path(binary, tt_metal_runtime_root) + args
         print(f"Running {model_filename}: {' '.join(cmd)}")
         cmd_start = time.time()
@@ -201,6 +215,7 @@ def main() -> int:
             step_time_p50=step_data["step_time_p50"],
             step_time_p95=step_data["step_time_p95"],
             step_time_p99=step_data["step_time_p99"],
+            mfu=step_data["mfu"],
             arch_name=arch_name,
             ci_runner_label=ci_runner_label,
         )
