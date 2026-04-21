@@ -139,6 +139,35 @@ class TestReuse:
         finally:
             _teardown(device, mgr)
 
+    @pytest.mark.parametrize("skip_rows", [1, 2])
+    def test_offset_grid_via_allowed_worker_cores(self, device, skip_rows):
+        """Multi-core offset grid via allowed_worker_cores — no sub-device.
+
+        MatmulMultiCoreReuse distributes only in M; per_core_N must equal N_tiles.
+        Uses per_core_M=1 with M=32*cols*wrows so all cols*wrows cores are used,
+        proving the start coordinate is honoured and not silently reset to (0,0).
+        """
+        grid = device.compute_with_storage_grid_size()
+        if grid.y <= skip_rows:
+            pytest.skip(f"Need >{skip_rows} rows, device has {grid.y}")
+        cols, wrows = grid.x, grid.y - skip_rows
+        N = self.N
+        M = 32 * cols * wrows  # one M-tile per core, all cols*wrows cores used
+        torch.manual_seed(42)
+        ta = torch.randn(1, 1, M, self.K, dtype=torch.bfloat16)
+        tb = torch.randn(1, 1, self.K, N, dtype=torch.bfloat16)
+        a = ttnn.from_torch(ta, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        b = ttnn.from_torch(tb, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+            in0_block_w=self.K // 32,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=N // 32,  # must equal N_tiles; distribution is M-only
+            allowed_worker_cores=_crs(cols, wrows, start_y=skip_rows),
+        )
+        assert_with_pcc(ta @ tb, ttnn.to_torch(ttnn.matmul(a, b, program_config=cfg)), 0.999)
+
 
 # ---------------------------------------------------------------------------
 # 3) MatmulMultiCoreReuseMultiCast1DProgramConfig  (Factory C)
@@ -267,7 +296,47 @@ class TestMcast2D:
 
 
 # ---------------------------------------------------------------------------
-# 5) Validation / property tests
+# 5) MatmulMultiCoreProgramConfig  (Factory A — split-work fallback)
+# ---------------------------------------------------------------------------
+
+
+class TestMultiCore:
+    """MatmulMultiCoreProgramConfig: distributes output tiles across the grid."""
+
+    def test_default_grid(self, device):
+        a, b, ref = _tensors(device, 256, 256, 256)
+        cfg = ttnn.MatmulMultiCoreProgramConfig()
+        assert_with_pcc(ref, ttnn.to_torch(ttnn.matmul(a, b, program_config=cfg)), 0.999)
+
+    @pytest.mark.parametrize("skip_rows", [1, 2])
+    def test_offset_grid_via_allowed_worker_cores(self, device, skip_rows):
+        """Offset grid via allowed_worker_cores — no sub-device."""
+        grid = device.compute_with_storage_grid_size()
+        if grid.y <= skip_rows:
+            pytest.skip(f"Need >{skip_rows} rows, device has {grid.y}")
+        cols, wrows = grid.x, grid.y - skip_rows
+        cfg = ttnn.MatmulMultiCoreProgramConfig(
+            allowed_worker_cores=_crs(cols, wrows, start_y=skip_rows),
+        )
+        a, b, ref = _tensors(device, 256, 256, 256)
+        assert_with_pcc(ref, ttnn.to_torch(ttnn.matmul(a, b, program_config=cfg)), 0.999)
+
+    @pytest.mark.parametrize("skip_rows", [1, 2])
+    def test_on_subdevice(self, device, skip_rows):
+        """Offset grid via sub-device."""
+        mgr, sd_id, cols, wrows, sy = _setup_subdevice(device, skip_rows)
+        try:
+            cfg = ttnn.MatmulMultiCoreProgramConfig(
+                allowed_worker_cores=_crs(cols, wrows, start_y=sy),
+            )
+            a, b, ref = _tensors(device, 256, 256, 256)
+            assert_with_pcc(ref, ttnn.to_torch(ttnn.matmul(a, b, program_config=cfg, sub_device_id=sd_id)), 0.999)
+        finally:
+            _teardown(device, mgr)
+
+
+# ---------------------------------------------------------------------------
+# 6) Validation / property tests
 # ---------------------------------------------------------------------------
 
 

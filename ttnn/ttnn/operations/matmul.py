@@ -10,6 +10,7 @@ from ttnn.decorators import get_golden_function
 from ttnn.operations.activations import get_golden_function_for_activation
 
 MatmulProgramConfig = ttnn._ttnn.operations.matmul.MatmulProgramConfig
+MatmulMultiCoreProgramConfig = ttnn._ttnn.operations.matmul.MatmulMultiCoreProgramConfig
 MatmulMultiCoreReuseProgramConfig = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig
 MatmulMultiCoreReuseMultiCastProgramConfig = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastProgramConfig
 MatmulMultiCoreReuseMultiCast1DProgramConfig = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig
