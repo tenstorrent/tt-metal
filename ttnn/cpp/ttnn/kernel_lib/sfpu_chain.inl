@@ -5,7 +5,7 @@
 
 /**
  * @file sfpu_chain.inl
- * @brief Out-of-line implementations for CompactLoad, sfpu_pipeline, and sfpu_op.
+ * @brief Out-of-line implementations for Load, sfpu_pipeline, and sfpu_op.
  * Should only be included by sfpu_chain.hpp.
  */
 
@@ -14,22 +14,22 @@ namespace compute_kernel_lib {
 using namespace ckernel;
 
 // =============================================================================
-// CompactLoad Implementations
+// Load Implementation
 // =============================================================================
 
-template <uint32_t CB, bool DoWait, bool DoPop, Dst... Slots>
-ALWI void CompactLoad<CB, DoWait, DoPop, Slots...>::init() const {
+template <uint32_t CB, Dst Slot, LoadPolicy Policy>
+ALWI void Load<CB, Slot, Policy>::init() const {
     // No-op: copy_tile_to_dst_init is handled once by the pipeline before the tile loop.
     // This keeps init() uniform with compute ops but avoids redundant re-initialization.
 }
 
-template <uint32_t CB, bool DoWait, bool DoPop, Dst... Slots>
-ALWI void CompactLoad<CB, DoWait, DoPop, Slots...>::exec(uint32_t offset) const {
-    if constexpr (DoWait) {
+template <uint32_t CB, Dst Slot, LoadPolicy Policy>
+ALWI void Load<CB, Slot, Policy>::exec(uint32_t offset) const {
+    if constexpr (do_wait) {
         cb_wait_front(CB, 1);
     }
-    ((copy_tile(CB, 0, static_cast<uint32_t>(Slots) + offset)), ...);
-    if constexpr (DoPop) {
+    copy_tile(CB, 0, static_cast<uint32_t>(Slot) + offset);
+    if constexpr (do_pop) {
         cb_pop_front(CB, 1);
     }
 }
@@ -48,17 +48,19 @@ constexpr bool sfpu_reconfig_output(SfpuDataFormatReconfig mode) {
     return mode == SfpuDataFormatReconfig::OUTPUT || mode == SfpuDataFormatReconfig::INPUT_AND_OUTPUT;
 }
 
-/** @brief Get the CB of the first CompactLoad in a chain (for input reconfig) */
+/** @brief Get the CB of the first Load in a chain (for input reconfig) */
 template <typename Chain>
-struct FirstLoadCB { static constexpr uint32_t value = 0; };
+struct FirstLoadCB {
+    static constexpr uint32_t value = 0;
+};
 // Non-load first element: recurse
 template <typename First, typename... Rest>
 struct FirstLoadCB<SfpuChain<First, Rest...>> {
     static constexpr uint32_t value = FirstLoadCB<SfpuChain<Rest...>>::value;
 };
-// CompactLoad first element: found it
-template <uint32_t CB, bool W, bool P, Dst... S, typename... Rest>
-struct FirstLoadCB<SfpuChain<CompactLoad<CB, W, P, S...>, Rest...>> {
+// Load first element: found it
+template <uint32_t CB, Dst Slot, LoadPolicy Policy, typename... Rest>
+struct FirstLoadCB<SfpuChain<Load<CB, Slot, Policy>, Rest...>> {
     static constexpr uint32_t value = CB;
 };
 

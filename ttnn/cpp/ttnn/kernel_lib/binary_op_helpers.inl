@@ -113,31 +113,6 @@ template <typename T>
 inline constexpr bool is_sfpu_chain_v =
     is_sfpu_chain<std::remove_cv_t<std::remove_reference_t<T>>>::value;
 
-// has_dst_idx_v<T>: SFINAE probe. UnaryOp CRTP and Load expose dst_idx;
-// BinaryOp, TernaryOp, and CompactLoad do not.
-template <typename, typename = void>
-struct has_dst_idx : std::false_type {};
-template <typename T>
-struct has_dst_idx<T, std::void_t<decltype(T::dst_idx)>> : std::true_type {};
-template <typename T>
-inline constexpr bool has_dst_idx_v = has_dst_idx<T>::value;
-
-// dst_idx_value_v<T>: value-fetch with fallback. Needed because
-// `has_dst_idx_v<T> && (T::dst_idx == 0u)` in a constexpr expression does NOT
-// short-circuit for SFINAE purposes: the subexpression T::dst_idx is evaluated
-// even when has_dst_idx_v<T> is false, yielding a hard error for types that
-// lack dst_idx (e.g. CompactLoad). This indirection guards the member access.
-template <typename T, bool HasIdx = has_dst_idx_v<T>>
-struct dst_idx_value {
-    static constexpr uint32_t value = static_cast<uint32_t>(-1);
-};
-template <typename T>
-struct dst_idx_value<T, true> {
-    static constexpr uint32_t value = T::dst_idx;
-};
-template <typename T>
-inline constexpr uint32_t dst_idx_value_v = dst_idx_value<T>::value;
-
 // clashes_with_fpu_v<T>: does this op touch FPU state that the originating
 // binary_op needs (unpack MOP, math MOP, ADDR_MOD, unpacker x-end counter)?
 // Default: is_load_op_v<T> — Loads call copy_tile_to_dst_init_short which

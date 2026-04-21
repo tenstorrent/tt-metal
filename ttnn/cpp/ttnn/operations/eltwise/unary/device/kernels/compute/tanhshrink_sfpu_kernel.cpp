@@ -17,8 +17,8 @@ void kernel_main() {
 
     // tanhshrink(x) = x - tanh(x)
     auto chain = sfpu_chain(
-        Load<cb_input, Dst::D0>{},
-        Load<cb_input, Dst::D1>{},
+        Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+        Load<cb_input, Dst::D1, LoadPolicy::WaitAndPop>{},
         Tanh<Approx::Exact, Dst::D1>{},
         SfpuSub<Dst::D0, Dst::D1, Dst::D0>{});
 
