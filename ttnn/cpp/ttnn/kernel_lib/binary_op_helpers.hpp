@@ -336,6 +336,18 @@ ALWI void square(uint32_t icb, uint32_t ocb, BinaryInputBlockShape shape, PostOp
 // =============================================================================
 
 /**
+ * @brief Data-format reconfig mode for DestReuseOp.
+ *
+ * - None:   no reconfig; CB format must already match binary_op's setup.
+ * - CbSide: reconfig the SRC that receives CB — srcb when DEST_TO_SRCA,
+ *           srca when DEST_TO_SRCB.
+ */
+enum class DestReuseReconfig {
+    None,
+    CbSide,
+};
+
+/**
  * @brief PostOp: fused in-place binary op using DEST register as one operand.
  *
  * Uses binary_dest_reuse_tiles. Operand routing is controlled by ReuseType:
@@ -349,9 +361,7 @@ ALWI void square(uint32_t icb, uint32_t ocb, BinaryInputBlockShape shape, PostOp
  *   WaitNoPop:   cb_wait_front(CB, cb_tile_idx + 1) only (persistent tile, reused)
  *   NoWaitNoPop: neither (caller owns CB lifecycle externally)
  *
- * Optional data-format reconfig for the CB side, controlled by Reconfig:
- *   false: no reconfig (CB format matches binary_op's icb_a/icb_b setup)
- *   true:  reconfig the SRC that receives CB — srcb when DEST_TO_SRCA, srca when DEST_TO_SRCB
+ * Data-format reconfig for the CB side is controlled by Reconfig (see DestReuseReconfig).
  *
  * Typical uses:
  *   // batch_norm stage 2: (x - mean) *= rsqrt(var + eps).
@@ -382,7 +392,7 @@ ALWI void square(uint32_t icb, uint32_t ocb, BinaryInputBlockShape shape, PostOp
  * @tparam ReuseType Which SRC gets DEST (default: DEST_TO_SRCA).
  * @tparam Slot      DEST slot holding the first operand (default: D0).
  * @tparam Policy    CB wait/pop lifecycle (default: WaitNoPop — safe for persistent tile).
- * @tparam Reconfig  Reconfig the CB-side SRC data format (default: false).
+ * @tparam Reconfig  CB-side data-format reconfig (default: None).
  */
 template <
     uint32_t CB,
@@ -390,7 +400,7 @@ template <
     EltwiseBinaryReuseDestType ReuseType = EltwiseBinaryReuseDestType::DEST_TO_SRCA,
     Dst Slot = Dst::D0,
     LoadPolicy Policy = LoadPolicy::WaitNoPop,
-    bool Reconfig = false>
+    DestReuseReconfig Reconfig = DestReuseReconfig::None>
 struct DestReuseOp {
     static constexpr bool needs_parent_reinit = true;
     static constexpr bool do_wait = load_does_wait(Policy);
@@ -402,7 +412,11 @@ struct DestReuseOp {
 };
 
 /** @brief Alias: DestReuseOp specialised to ELWMUL + DEST_TO_SRCA. */
-template <uint32_t CB, Dst Slot = Dst::D0, LoadPolicy Policy = LoadPolicy::WaitNoPop, bool Reconfig = false>
+template <
+    uint32_t CB,
+    Dst Slot = Dst::D0,
+    LoadPolicy Policy = LoadPolicy::WaitNoPop,
+    DestReuseReconfig Reconfig = DestReuseReconfig::None>
 using DestReuseMul =
     DestReuseOp<CB, EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA, Slot, Policy, Reconfig>;
 

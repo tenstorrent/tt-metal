@@ -211,13 +211,13 @@ template <
     EltwiseBinaryReuseDestType ReuseType,
     Dst Slot,
     LoadPolicy Policy,
-    bool Reconfig>
+    DestReuseReconfig Reconfig>
 ALWI void DestReuseOp<CB, OpType, ReuseType, Slot, Policy, Reconfig>::operator()(uint32_t dst_idx) const {
     if constexpr (do_wait) {
         // Wait for enough tiles to cover cb_tile_idx (minimum 1 tile for index 0).
         cb_wait_front(CB, cb_tile_idx + 1);
     }
-    if constexpr (Reconfig) {
+    if constexpr (Reconfig == DestReuseReconfig::CbSide) {
         // DEST_TO_SRCA: CB feeds SRCB, so reconfig srcb. Inverse for DEST_TO_SRCB.
         if constexpr (ReuseType == EltwiseBinaryReuseDestType::DEST_TO_SRCA) {
             reconfig_data_format_srcb(CB);
