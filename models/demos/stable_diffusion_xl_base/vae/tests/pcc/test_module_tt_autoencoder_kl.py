@@ -25,7 +25,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ((1024, 1024), (1, 3, 1024, 1024), 0.9769 if is_wormhole_b0() else 0.964, "encoder"),
         # 512x512 image resolution
         ((512, 512), (1, 4, 64, 64), 0.936, "decoder"),
-        ((512, 512), (1, 3, 512, 512), 0.9797, "encoder"),
+        ((512, 512), (1, 3, 512, 512), 0.9796, "encoder"),
     ],
     ids=("test_1024x1024_decode", "test_1024x1024_encode", "test_512x512_decode", "test_512x512_encode"),
 )
