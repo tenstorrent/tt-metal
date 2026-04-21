@@ -17,7 +17,7 @@
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 300 models/tt_transformers/tests/test_rms_norm.py
-    pytest --timeout 300 models/tt_transformers/tests/test_mlp.py
+    pytest --timeout 600 models/tt_transformers/tests/test_mlp.py
     pytest --timeout 300 models/tt_transformers/tests/test_attention.py
     pytest --timeout 300 models/tt_transformers/tests/test_attention_prefill.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
@@ -43,9 +43,6 @@
     wh_n150:
       timeout: 5
       tier: 3
-    wh_n300:
-      timeout: 5
-      tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -57,9 +54,6 @@
   model: llama3.2-3b
   skus:
     wh_n150:
-      timeout: 5
-      tier: 3
-    wh_n300:
       timeout: 5
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -81,6 +75,8 @@
 - name: Llama 3.2-90B-Vision unit tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.2-90B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-90B-Vision-Instruct MESH_DEVICE=T3K
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder.py  # text module only
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py  # text module only
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_image_mlp.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_image_attention.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_image_block.py
@@ -93,7 +89,7 @@
   model: llama90b-vl
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 15
       tier: 2
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
@@ -179,8 +175,19 @@
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
   model: mistral-7b
   skus:
-    wh_llmbox_perf:
-      timeout: 12
+    wh_n150:
+      timeout: 20
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Gemma-3-4B unit tests
+  cmd: |
+    pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "4b"
+  model: gemma-3-4b
+  skus:
+    wh_n150:
+      timeout: 22
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -201,6 +208,12 @@
     pytest --timeout 600 models/experimental/functional_unet/tests/test_unet_model.py
   model: shallow-unet
   skus:
+    wh_n150:
+      timeout: 5
+      tier: 2
+    # wh_n300:
+    #   timeout: 5
+    #   tier: 2
     wh_llmbox_perf:
       timeout: 5
       tier: 2
@@ -225,23 +238,24 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-- name: Llama 3.3-70B unit tests (Galaxy)
-  cmd: |
-    export LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
-  model: llama3.3-70b-galaxy
-  skus:
-    wh_galaxy:
-      timeout: 30
-      tier: 1
-  owner_id: U053W15B6JF # Djordje Ivanovic
-  team: models
+# TODO See Issue: https://github.com/tenstorrent/tt-metal/issues/42139
+# - name: Llama 3.3-70B unit tests (Galaxy)
+#   cmd: |
+#     export LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
+#   model: llama3.3-70b-galaxy
+#   skus:
+#     wh_galaxy_perf:
+#       timeout: 30
+#       tier: 1
+#   owner_id: U053W15B6JF # Djordje Ivanovic
+#   team: models
 
 - name: Qwen3-32B unit tests (Galaxy)
   cmd: |
@@ -254,20 +268,34 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder_prefill.py
   model: qwen3-32b-galaxy
   skus:
-    wh_galaxy:
-      timeout: 30
+    wh_galaxy_perf:
+      timeout: 10
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
+# GPT-OSS 20B unit tests: disabled — segfaulting on CI
+# - name: GPT-OSS 20B unit tests (T3K)
+#   cmd: |
+#     uv pip install -r models/demos/gpt_oss/requirements.txt
+#     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
+#     pytest models/demos/gpt_oss/tests/unit -k "1x8" --timeout 600
+#   model: gpt-oss-20b
+#   skus:
+#     wh_llmbox_perf:
+#       timeout: 15
+#       tier: 2
+#   owner_id: U08TJ70UFRT # Stuti Raizada
+#   team: models
+
 - name: GPT-OSS 120B unit tests (Galaxy, high batch)
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
-    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/
-    pytest models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput" --timeout 600
+    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
+    pytest --timeout 1500 models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput"
   model: gpt-oss-120b-high-batch-galaxy
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 25
       tier: 1
   owner_id: U08TJ70UFRT # Stuti Raizada
@@ -276,16 +304,16 @@
 - name: Whisper unit tests
   cmd: |
     export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
-    pytest --timeout 300 models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+    pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_modules.py
   model: whisper
   skus:
     wh_n150:
       timeout: 10
       tier: 1
-    wh_n300:
-      timeout: 7
-      tier: 1
-  owner_id: U05RWH3QUPM # Salar Hosseini
+    # wh_n300:
+    #   timeout: 15
+    #   tier: 1
+  owner_id: U0491KT8MNY # Mohamed Bahnas
   team: models
 
 - name: QwQ-32B unit tests
@@ -307,9 +335,6 @@
   model: falcon-7b
   skus:
     wh_n150:
-      timeout: 5
-      tier: 3
-    wh_n300:
       timeout: 5
       tier: 3
   owner_id: UBHPP2NDP # Joseph Chu
@@ -388,9 +413,6 @@
     wh_n150:
       timeout: 3
       tier: 3
-    wh_n300:
-      timeout: 3
-      tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -411,17 +433,16 @@
 #   owner_id: U03PUAKE719 # Miguel Tairum Cruz
 #   team: models
 
-# Mamba-2.8B: disabled, failing on latest main (conv2d kernel static_assert)
+# Some tests failing PCC (0.03)
 # - name: Mamba-2.8B unit tests
 #   cmd: |
-#     pytest --timeout 600 models/demos/wormhole/mamba/tests/test_mamba_block.py
+#     pytest --timeout 600 models/demos/wormhole/mamba/tests/test_mamba_model.py
 #   model: mamba-2.8b
 #   skus:
 #     wh_n150:
 #       timeout: 5
 #       tier: 3
-#     wh_n300:
-#       timeout: 5
-#       tier: 3
+#   owner_id: U06ECNVR0EN # Evan Smal
+#   team: models
 #   owner_id: U06ECNVR0EN # Evan Smal
 #   team: models

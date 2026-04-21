@@ -128,17 +128,16 @@ models:
   sanity:
     wh_galaxy_perf: 10
   e2e:
-    wh_llmbox: 198
-    wh_llmbox_perf: 90
-    wh_n150: 30
-    wh_n300: 30
-    wh_galaxy: 30
+    wh_llmbox_perf: 300
+    wh_n150: 70
+    wh_n300: 15
+    wh_galaxy_perf: 120
   unit:
-    wh_llmbox: 370
-    wh_llmbox_perf: 60
-    wh_n150: 30
-    wh_n300: 30
-    wh_galaxy: 30
+    wh_llmbox: 150
+    wh_llmbox_perf: 230
+    wh_n150: 120
+    wh_n300: 15
+    wh_galaxy_perf: 45
   integration:
     wh_llmbox: 422
   perf:
@@ -146,15 +145,15 @@ models:
     wh_galaxy: 280
     wh_galaxy_perf: 150
   device_perf:
-    wh_n150: 100
-    bh_p150: 100
-    bh_p300: 100
+    wh_n150: 10
+    bh_p150: 10
+    bh_p300: 10
 
   demo:
-    wh_llmbox_perf: 1090
+    wh_llmbox_perf: 200
     wh_llmbox_perf_release: 1090
     wh_galaxy: 0
-    wh_galaxy_perf: 279
+    wh_galaxy_perf: 150
     wh_galaxy_release: 345
     bh_galaxy: 30
     wh_n150: 500
@@ -173,6 +172,6 @@ models:
     bh_p300: 800
     bh_quietbox_2: 250
   sweep:
-    wh_n150: 15
+    wh_n150: 10
     wh_llmbox_perf: 30
     wh_galaxy: 30
