@@ -1536,11 +1536,11 @@ def _run_slice_k(
     sram_n_parallel,
     pcc_threshold,
     dram_fuse_silu,
-    num_loop_iters=1,
     tp_expert=True,
     fmt_distribution="random",
     fmt_ratios=None,
     k_parallel_per_bank=1,
+    num_loop_iters=1,
 ):
     """K-sliced path: HEIGHT_SHARDED SRAM, separate output grids."""
     cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
@@ -2087,6 +2087,7 @@ def test_hybrid_expert_irregular_sram_gate_grid(device):
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
         fmt_ratios={"bfp4": 3, "bfp0": 1},
+        num_loop_iters=100,
     )
 
 
@@ -2112,6 +2113,7 @@ def test_hybrid_expert_irregular_sram_up_grid(device):
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
         fmt_ratios={"bfp4": 3, "bfp0": 1},
+        num_loop_iters=100,
     )
 
 
@@ -2136,6 +2138,7 @@ def test_hybrid_expert_irregular_sram_down_grid(device):
         k_parallel_per_bank=1,
         fmt_distribution="uniform",
         fmt_ratios={"bfp4": 3, "bfp0": 1},
+        num_loop_iters=100,
     )
 
 
@@ -2175,6 +2178,7 @@ def test_hybrid_expert_irregular_sram_gate_grid_multi_device(bh_2d_mesh_device):
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
         fmt_ratios={"bfp4": 3, "bfp0": 1},
+        num_loop_iters=100,
     )
 
 
@@ -2213,6 +2217,7 @@ def test_hybrid_expert_irregular_sram_up_grid_multi_device(bh_2d_mesh_device):
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
         fmt_ratios={"bfp4": 3, "bfp0": 1},
+        num_loop_iters=100,
     )
 
 
@@ -2250,6 +2255,7 @@ def test_hybrid_expert_irregular_sram_down_grid_multi_device(bh_2d_mesh_device):
         k_parallel_per_bank=1,
         fmt_distribution="uniform",
         fmt_ratios={"bfp4": 3, "bfp0": 1},
+        num_loop_iters=100,
     )
 
 
