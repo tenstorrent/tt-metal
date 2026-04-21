@@ -1,0 +1,5 @@
+# Sub-context id -> rank-binding overlay (same idea as rank_to_cluster_mock_cluster_desc).
+# Paths are relative to this file unless absolute.
+subcontext_id_to_rank_bindings:
+  0: blitz_decode_pipeline_rank_binding_superpod.yaml
+  1: single_bh_galaxy_one_rank_rank_bindings.yaml
