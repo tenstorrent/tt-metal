@@ -94,7 +94,6 @@ def _transport_named_ct_schema(
     num_chunks=0,
     chunk_size_bytes=0,
     last_chunk_bytes=0,
-    num_links=0,
     recv_sem_bits_per_slot=RECV_SEM_BITS_PER_SLOT,
     r2_active=0,
 ):
@@ -103,7 +102,7 @@ def _transport_named_ct_schema(
         ("allgather_num_chunks", int(num_chunks)),
         ("allgather_chunk_size_bytes", int(chunk_size_bytes)),
         ("allgather_last_chunk_bytes", int(last_chunk_bytes)),
-        ("allgather_num_links", int(num_links)),
+        ("allgather_num_links", MAX_NUM_LINKS),
         ("allgather_recv_sem_bits_per_slot", int(recv_sem_bits_per_slot)),
         ("allgather_r2_active", int(r2_active)),
     ]
@@ -233,7 +232,7 @@ class AllGatherConfig:
     ):
         self.mesh_device = mesh_device
         self.cluster_axis = int(cluster_axis)
-        self.num_links = int(num_links)
+        requested_num_links = int(num_links)
 
         self._resolve_role_assignment()
 
@@ -241,8 +240,9 @@ class AllGatherConfig:
         ring_size = mesh_shape[self.cluster_axis]
         if ring_size != RING_SIZE:
             raise ValueError(f"All-gather requires ring size {RING_SIZE}, got {ring_size}")
-        if self.num_links < 1 or self.num_links > MAX_NUM_LINKS:
-            raise ValueError(f"num_links must be in [1, {MAX_NUM_LINKS}], got {self.num_links}")
+        if requested_num_links != MAX_NUM_LINKS:
+            raise ValueError(f"All-gather transport is single-link only, got num_links={requested_num_links}")
+        self.num_links = MAX_NUM_LINKS
 
         self._owns_tensors = input_tensor_mesh is not None
         if self._owns_tensors:
@@ -420,7 +420,6 @@ class AllGatherConfig:
             num_chunks=self.chunk.num_chunks,
             chunk_size_bytes=self.chunk.chunk_size_bytes,
             last_chunk_bytes=self.chunk.last_chunk_bytes,
-            num_links=self.num_links,
             r2_active=info["ncrisc_r2_active"],
         )
         gather_ct = _gather_named_ct_schema(
@@ -436,7 +435,6 @@ class AllGatherConfig:
             num_chunks=self.chunk.num_chunks,
             chunk_size_bytes=self.chunk.chunk_size_bytes,
             last_chunk_bytes=self.chunk.last_chunk_bytes,
-            num_links=self.num_links,
             r2_active=info["brisc_r2_active"],
         )
 
@@ -564,7 +562,7 @@ class AllGatherConfig:
         )
 
     # ======================================================================
-    # Per-core runtime args (fabric connections, one per link)
+    # Per-core runtime args (single fabric connection per direction)
     # ======================================================================
 
     def _build_transport_per_core_rt_args(self, coord, program, core, dst_fabric_node_id):
@@ -579,16 +577,15 @@ class AllGatherConfig:
             int(dst_fabric_node_id.mesh_id),
             int(dst_fabric_node_id.chip_id),
         ]
-        for link_idx in range(self.num_links):
-            out.extend(
-                ttnn.setup_fabric_connection(
-                    src_fabric_node_id=info["fabric_node_id"],
-                    dst_fabric_node_id=dst_fabric_node_id,
-                    link_idx=link_idx,
-                    program_descriptor=program,
-                    worker_core=core,
-                )
+        out.extend(
+            ttnn.setup_fabric_connection(
+                src_fabric_node_id=info["fabric_node_id"],
+                dst_fabric_node_id=dst_fabric_node_id,
+                link_idx=0,
+                program_descriptor=program,
+                worker_core=core,
             )
+        )
         return out
 
     def get_transport_brisc_per_core_rt_args(self, coord, program, core):
@@ -705,7 +702,7 @@ class DeepseekMinimalAllGather:
                 program.kernels[transport_group.ncrisc_kernel_index].common_runtime_args = transport_common_rt
                 program.kernels[transport_group.trisc_kernel_index].common_runtime_args = []
 
-                # Append fabric per-core RT args (one connection per link per direction)
+                # Append fabric per-core RT args (single connection per direction)
                 brisc_per_core = program.kernels[transport_group.brisc_kernel_index].runtime_args[transport_core.x][
                     transport_core.y
                 ]

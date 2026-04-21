@@ -13,53 +13,31 @@ This test validates all-reduce on a 1D mesh (2 devices) where:
 4. Optionally, a residual tensor is added to the final result to fuse the next residual add block
 """
 
-import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
 import pytest
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
-from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    create_fabric_router_config,
+    get_env_int,
+    get_num_links_env_params,
+    run_trace_benchmark,
+)
 
 TEST_SENDER_CORE = ttnn.CoreCoord(0, 0)
 TEST_RECEIVER_CORE = ttnn.CoreCoord(0, 1)
-from models.perf.benchmarking_utils import BenchmarkProfiler
 
 ENV_NUM_LINKS = "CCL_ALL_REDUCE_NUM_LINKS"
 ENV_MAX_PAYLOAD_SIZE = "CCL_ALL_REDUCE_MAX_PAYLOAD_SIZE_BYTES"
 ALL_REDUCE_OUTPUT_WIDTH = 2048
 ALL_REDUCE_OUTPUT_SHAPE = [1, ALL_REDUCE_OUTPUT_WIDTH]
 ALL_REDUCE_INPUT_SHARD_SHAPE = (1, ALL_REDUCE_OUTPUT_WIDTH)
-
-
-def _parse_env_int(name: str, value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
-    if parsed <= 0:
-        raise ValueError(f"{name} must be > 0, got {parsed}")
-    return parsed
-
-
-def _get_env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    if value is None or value.strip() == "":
-        return default
-    return _parse_env_int(name, value)
-
-
-def _get_num_links_params(defaults: list[int]) -> list[int]:
-    value = os.getenv(ENV_NUM_LINKS)
-    if value is None or value.strip() == "":
-        return defaults
-    return [_parse_env_int(ENV_NUM_LINKS, value)]
 
 
 def _get_intermediate_shape(input_shard_shape: tuple[int, int]) -> list[int]:
@@ -70,7 +48,7 @@ def _get_intermediate_shape(input_shard_shape: tuple[int, int]) -> list[int]:
     return [32, input_shard_shape[1] // 32]
 
 
-MAX_PAYLOAD_SIZE = _get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
+MAX_PAYLOAD_SIZE = get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
 
 
 @dataclass(frozen=True)
@@ -218,7 +196,7 @@ def build_all_reduce_test_inputs(
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("num_links", _get_num_links_params([2]))
+@pytest.mark.parametrize("num_links", get_num_links_env_params(ENV_NUM_LINKS, [2]))
 @pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
@@ -270,67 +248,25 @@ def test_ccl_all_reduce(
         f"Running CCL all-reduce: num_devices={num_devices}, num_links={num_links}, "
         f"max_payload_size_bytes={MAX_PAYLOAD_SIZE}"
     )
-    profiler = BenchmarkProfiler()
 
-    logger.info("Compiling model")
-    ttnn_result = DeepseekMinimalAllReduce.op(
-        inputs.input_tensor_mesh,
-        inputs.intermediate_tensor_mesh,
-        cluster_axis=cluster_axis,
-        persistent_output_tensor=inputs.output_tensor_mesh,
-        residual_tensor_mesh=inputs.residual_tensor_mesh,
-        semaphores=inputs.semaphores[: num_links + 1],
-        num_links=num_links,
+    def run_all_reduce():
+        return DeepseekMinimalAllReduce.op(
+            inputs.input_tensor_mesh,
+            inputs.intermediate_tensor_mesh,
+            cluster_axis=cluster_axis,
+            persistent_output_tensor=inputs.output_tensor_mesh,
+            residual_tensor_mesh=inputs.residual_tensor_mesh,
+            semaphores=inputs.semaphores[: num_links + 1],
+            num_links=num_links,
+        )
+
+    ttnn_result = run_trace_benchmark(
+        submesh,
+        run_all_reduce,
+        num_warmup_iter=num_warmup_iter,
+        num_iter=num_iter,
+        profiler_name="deepseek-all-reduce",
     )
-    ttnn.synchronize_device(submesh)
-
-    logger.info("Capturing warmup trace")
-    trace_id_warmup = ttnn.begin_trace_capture(submesh, cq_id=0)
-    for i in range(num_warmup_iter):
-        ttnn_result = DeepseekMinimalAllReduce.op(
-            inputs.input_tensor_mesh,
-            inputs.intermediate_tensor_mesh,
-            cluster_axis=cluster_axis,
-            persistent_output_tensor=inputs.output_tensor_mesh,
-            residual_tensor_mesh=inputs.residual_tensor_mesh,
-            semaphores=inputs.semaphores[: num_links + 1],
-            num_links=num_links,
-        )
-    ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
-    ttnn.synchronize_device(submesh)
-
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
-    for i in range(num_iter):
-        ttnn_result = DeepseekMinimalAllReduce.op(
-            inputs.input_tensor_mesh,
-            inputs.intermediate_tensor_mesh,
-            cluster_axis=cluster_axis,
-            persistent_output_tensor=inputs.output_tensor_mesh,
-            residual_tensor_mesh=inputs.residual_tensor_mesh,
-            semaphores=inputs.semaphores[: num_links + 1],
-            num_links=num_links,
-        )
-    ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
-    ttnn.synchronize_device(submesh)
-
-    logger.info("Executing warmup trace...")
-    profiler.start("deepseek-all-reduce-warmup")
-    ttnn.execute_trace(submesh, trace_id_warmup, blocking=False)
-    ttnn.release_trace(submesh, trace_id_warmup)
-    ttnn.synchronize_device(submesh)
-    profiler.end("deepseek-all-reduce-warmup")
-
-    logger.info("Starting Trace perf test...")
-    signpost("start")
-    profiler.start("deepseek-all-reduce-trace")
-
-    ttnn.execute_trace(submesh, trace_id, blocking=False)
-    ttnn.release_trace(submesh, trace_id)
-    ttnn.synchronize_device(submesh)
-
-    profiler.end("deepseek-all-reduce-trace")
-    signpost("stop")
 
     logger.info("Verifying all-reduce results...")
     output_tensor_torch = ttnn.to_torch(
