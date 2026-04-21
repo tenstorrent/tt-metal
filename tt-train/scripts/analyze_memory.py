@@ -100,7 +100,7 @@ def find_memory_summaries(
         section_name = "Unknown"
         for line in reversed(lines):
             line = line.strip()
-            if line and not line.startswith("#") and "Number of parameters" not in line:
+            if line and not line.startswith("#") and "Total parameters" not in line:
                 section_name = line
                 break
 
