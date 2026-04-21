@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <bitset>
+#include <filesystem>
 #include <span>
 #include <tt_stl/aligned_allocator.hpp>
 #include <functional>
@@ -65,19 +66,19 @@ public:
     tt::ARCH get_arch() const { return arch_; }
     uint32_t get_max_cbs() const { return max_cbs_; };
     const tt::llrt::RunTimeOptions& get_rtoptions() const { return *rtoptions_; }
-    const std::string& get_root_path() const { return root_; }
-    const std::string& get_out_root_path() const { return out_root_; }
-    const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
+    const std::filesystem::path& get_root_path() const { return root_; }
+    const std::filesystem::path& get_out_root_path() const { return out_root_; }
+    const std::filesystem::path& get_out_kernel_root_path() const { return out_kernel_root_; }
     const std::string& get_gpp() const { return gpp_; }
-    const std::string& get_out_firmware_root_path() const {
+    const std::filesystem::path& get_out_firmware_root_path() const {
         return out_firmware_root_;
     }  // Path to the firmware directory for this device
     uint64_t get_build_key() const { return build_key_; }
 
     // Where firmware binaries are loaded/linked from. Defaults to out_firmware_root_.
     // May differ when binaries are provided from an external source.
-    const std::string& get_firmware_binary_root() const { return firmware_binary_root_; }
-    void set_firmware_binary_root(const std::string& path) { firmware_binary_root_ = path; }
+    const std::filesystem::path& get_firmware_binary_root() const { return firmware_binary_root_; }
+    void set_firmware_binary_root(const std::filesystem::path& path) { firmware_binary_root_ = path; }
 
 private:
     const tt::llrt::RunTimeOptions* rtoptions_{nullptr};
@@ -86,15 +87,15 @@ private:
     uint32_t max_cbs_{};
 
     // Paths
-    std::string root_;
-    std::string out_root_;
-    std::string out_firmware_root_;
-    std::string out_kernel_root_;
-    std::string firmware_binary_root_;
+    std::filesystem::path root_;
+    std::filesystem::path out_root_;
+    std::filesystem::path out_firmware_root_;
+    std::filesystem::path out_kernel_root_;
+    std::filesystem::path firmware_binary_root_;
 
     // Tools
     std::string gpp_;
-    std::string gpp_include_dir_;
+    std::filesystem::path gpp_include_dir_;
 
     // Compilation options
     std::string cflags_;
@@ -115,22 +116,22 @@ protected:
     bool process_defines_at_compile_{};
     bool firmware_is_kernel_object_{};
 
-    std::string out_path_;
+    std::filesystem::path out_path_;
     std::string target_name_;
-    std::string target_full_path_;
+    std::filesystem::path target_full_path_;
 
     std::string cflags_;
     std::string defines_;
     std::string includes_;
     std::string lflags_;
-    std::string linker_script_;
+    std::filesystem::path linker_script_;
 
-    vector_cache_aligned<std::string> srcs_;
-    vector_cache_aligned<std::string> objs_;
-    vector_cache_aligned<std::string> temp_objs_;
+    vector_cache_aligned<std::filesystem::path> srcs_;
+    vector_cache_aligned<std::filesystem::path> objs_;
+    vector_cache_aligned<std::filesystem::path> temp_objs_;
 
     std::string extra_link_objs_;
-    std::string weakened_firmware_name_;
+    std::filesystem::path weakened_firmware_name_;
 
     // Default compiler optimization setting
     // Used when JitBuildSettings is not provided
@@ -149,35 +150,36 @@ protected:
     // Current max obj count is 2 -- very sufficient for now.
     static constexpr size_t kMaxBuildBitset = 64;
 
-    bool build_state_matches(const std::string& out_dir) const;
-    void write_build_state_hash(const std::string& out_dir) const;
+    bool build_state_matches(const std::filesystem::path& out_dir) const;
+    void write_build_state_hash(const std::filesystem::path& out_dir) const;
 
-    bool need_compile(const std::string& out_dir, const std::string& obj) const;
+    bool need_compile(const std::filesystem::path& out_dir, const std::filesystem::path& obj) const;
     std::bitset<kMaxBuildBitset> compile(
-        const std::string& out_dir, const JitBuildSettings* settings, bool state_changed) const;
-    void compile_one(const std::string& out_dir, const JitBuildSettings* settings, size_t src_index) const;
-    bool need_link(const std::string& out_dir) const;
-    void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
-    void weaken(const std::string& out_dir) const;
-    void extract_zone_src_locations(const std::string& out_dir) const;
+        const std::filesystem::path& out_dir, const JitBuildSettings* settings, bool state_changed) const;
+    void compile_one(const std::filesystem::path& out_dir, const JitBuildSettings* settings, size_t src_index) const;
+    bool need_link(const std::filesystem::path& out_dir) const;
+    void link(
+        const std::filesystem::path& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
+    void weaken(const std::filesystem::path& out_dir) const;
+    void extract_zone_src_locations(const std::filesystem::path& out_dir) const;
 
 public:
     JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config, const Hal& hal);
 
     void build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets = {}) const;
 
-    const std::string& get_out_path() const { return this->out_path_; }
+    const std::filesystem::path& get_out_path() const { return this->out_path_; }
     const std::string& get_target_name() const { return this->target_name_; }
-    const std::string& get_target_full_path() const { return this->target_full_path_; }
-    std::string get_target_out_path(const std::string& kernel_name) const {
-        return this->out_path_ + kernel_name + target_full_path_;
+    const std::filesystem::path& get_target_full_path() const { return this->target_full_path_; }
+    std::filesystem::path get_target_out_path(const std::string& kernel_name) const {
+        return this->out_path_ / kernel_name / target_full_path_;
     }
 
     // Build a transport-ready target recipe from this build state and
     // kernel-specific settings.  Replaces the PoC pattern of exposing
     // individual getters for every internal field.
     tt::jit_build::TargetRecipe export_target_recipe(const JitBuildSettings* settings) const;
-    const std::string& get_weakened_firmware_name() const { return weakened_firmware_name_; }
+    const std::filesystem::path& get_weakened_firmware_name() const { return weakened_firmware_name_; }
     bool get_firmware_is_kernel_object() const { return firmware_is_kernel_object_; }
 };
 
