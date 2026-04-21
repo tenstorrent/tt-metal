@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from .fuser_config import GlobalConfig
 
 from helpers.chip_architecture import ChipArchitecture
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import GoldenType, PerfRunType
 
 from .block_data import BlockData
 from .compute_node import ComputeNode
@@ -457,15 +457,30 @@ class ComputePipeline:
 
     def golden(
         self,
-        input_tensor_a: torch.Tensor,
-        input_tensor_b: torch.Tensor,
         operation: "FusedOperation",
         config: "GlobalConfig",
+        golden_type: GoldenType,
     ) -> torch.Tensor:
         tensor_a = torch.zeros(operation.math.operations[0].src_a.dimensions)
         tensor_b = torch.zeros(operation.math.operations[0].src_b.dimensions)
         tensor_dst = torch.zeros(operation.max_output_dimensions)
         for op in self.operations:
+            if op.src_a is not None:
+                input_tensor_a = (
+                    op.src_a.raw_data
+                    if golden_type == GoldenType.L1_GOLDEN
+                    else op.src_a.master_golden
+                )
+            else:
+                input_tensor_a = None
+            if op.src_a is not None:
+                input_tensor_b = (
+                    op.src_b.raw_data
+                    if golden_type == GoldenType.MASTER_GOLDEN
+                    else op.src_b.master_golden
+                )
+            else:
+                input_tensor_b = None
             tensor_a, tensor_b, tensor_dst = op.golden(
                 input_tensor_a,
                 input_tensor_b,
