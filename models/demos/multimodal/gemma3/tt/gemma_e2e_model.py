@@ -58,61 +58,86 @@ class TtGemmaModel(Transformer):
             weight_cache_path=weight_cache_path,
         )
 
-    def prepare_inputs_prefill(self, pt_tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
+    def prepare_inputs_prefill(
+        self,
+        pt_tokens,
+        start_pos=0,
+        page_table=None,
+        chunk_page_table=None,
+        trace_enabled=False,
+        **kwargs,
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
-        tensors on device.
-        TODO: Debate whether this function is responsible for padding
+        tensors on device (trace_enabled=False) or on host (trace_enabled=True).
+
+        When trace_enabled=True, the embedding step is deferred to
+        `transform_and_embed_prefill_inputs_device` (inherited from the base
+        Transformer) so that it becomes part of the captured trace. Vision
+        token scatter is not part of the trace because image features vary per
+        request; trace prefill is therefore text-only (e.g. vLLM v1 flow where
+        the vision tower is invoked separately).
         """
+
+        # If trace is enabled, keep tensors on host so they can later be
+        # copied into the trace input buffers via `copy_host_to_device`.
+        device = None if trace_enabled else self.mesh_device
 
         S = pt_tokens.shape[-1]
         tokens = ttnn.from_torch(
             pt_tokens.reshape(1, 1, 1, -1),
-            device=self.mesh_device,
+            device=device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        # self.embed_scale = self.args.dim**0.5
-        tokens_embd = self.embd(tokens)
-        tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
 
-        if "pixel_values" in kwargs and kwargs.get("pixel_values", None) is not None:
-            vision_output = self.compute_vision_token(kwargs.get("pixel_values", None))
-            comp_vision_output = ttnn.to_torch(
-                vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-            )[: vision_output.shape[0], :]
+        if not trace_enabled:
+            tokens_embd = self.embd(tokens)
+            tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
 
-            image_features = comp_vision_output.squeeze(0)
-            special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
-            special_image_mask = special_image_mask.expand_as(tokens_embd)
-            image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
-            tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
+            if "pixel_values" in kwargs and kwargs.get("pixel_values", None) is not None:
+                vision_output = self.compute_vision_token(kwargs.get("pixel_values", None))
+                comp_vision_output = ttnn.to_torch(
+                    vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+                )[: vision_output.shape[0], :]
 
-        tokens_embd = self.args.prepare_residual_tensor_prefill(
-            tokens_embd,
-        )
+                image_features = comp_vision_output.squeeze(0)
+                special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
+                special_image_mask = special_image_mask.expand_as(tokens_embd)
+                image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
+                tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
 
-        tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
-        # Slice the rot mats to the prefill seqlen
-        assert (
-            self.rope_setup.cos_matrix_prefill.shape[2] >= start_pos + S
-        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix_prefill.shape[2]}"
+            tokens_embd = self.args.prepare_residual_tensor_prefill(
+                tokens_embd,
+            )
+            tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+        else:
+            tokens_embd = tokens
+
+        mat_len = self.rope_setup.cos_matrix_prefill.shape[2]
+        assert mat_len >= start_pos + S, f"Padded prefill end idx {start_pos + S} exceeds max seq len {mat_len}"
+
+        # For trace, reference the full rope matrices (already on device) so that
+        # the same trace works for any start_pos / seq_len combination supported.
+        prefill_start_pos = 0 if trace_enabled else start_pos
+        slice_end = self.args.max_seq_len if trace_enabled else start_pos + S
 
         tt_rot_mats_prefill_global = [
-            self.rope_setup.cos_matrix_prefill[:, :, start_pos : start_pos + S, :],
-            self.rope_setup.sin_matrix_prefill[:, :, start_pos : start_pos + S, :],
+            self.rope_setup.cos_matrix_prefill[:, :, prefill_start_pos:slice_end, :],
+            self.rope_setup.sin_matrix_prefill[:, :, prefill_start_pos:slice_end, :],
         ]
 
+        local_slice_end = self.args.max_seq_len if trace_enabled else start_pos + S
         tt_rot_mats_prefill_local = [
-            self.rope_local_setup.cos_matrix_prefill[:, :, start_pos : start_pos + S, :],
-            self.rope_local_setup.sin_matrix_prefill[:, :, start_pos : start_pos + S, :],
+            self.rope_local_setup.cos_matrix_prefill[:, :, prefill_start_pos:local_slice_end, :],
+            self.rope_local_setup.sin_matrix_prefill[:, :, prefill_start_pos:local_slice_end, :],
         ]
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
                 page_table,
-                device=self.mesh_device,
+                device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -123,7 +148,7 @@ class TtGemmaModel(Transformer):
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
-                device=self.mesh_device,
+                device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
