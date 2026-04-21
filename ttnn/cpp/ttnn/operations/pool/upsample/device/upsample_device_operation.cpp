@@ -10,6 +10,7 @@
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_nearest_float_program_factory.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_bicubic_program_factory.hpp"
 #include "upsample/device/upsample_device_operation_types.hpp"
 
 #include <cmath>
@@ -30,6 +31,10 @@ UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
     const operation_attributes_t& args, const Tensor& input) {
     if (args.mode == "bilinear") {
         return UpsampleBilinearProgramFactory{};
+    }
+
+    if (args.mode == "bicubic") {
+        return UpsampleBicubicProgramFactory{};
     }
 
     operations::pool::upsample::UpsamplePath path =
@@ -55,7 +60,18 @@ void UpsampleOperation::validate_on_program_cache_miss(const operation_attribute
     TT_FATAL(args.scale_factor_w > 0.0f, "scale_factor_w must be positive, got {}", args.scale_factor_w);
 
     // Mode validation
-    TT_FATAL(args.mode == "bilinear" || args.mode == "nearest", "mode must be 'nearest' or 'bilinear'");
+    TT_FATAL(
+        args.mode == "bilinear" || args.mode == "nearest" || args.mode == "bicubic",
+        "mode must be 'nearest', 'bilinear', or 'bicubic'");
+
+    // Bicubic-specific requirements
+    if (args.mode == "bicubic") {
+        TT_FATAL(input.dtype() == tt::tt_metal::DataType::BFLOAT16, "Bicubic upsample requires BFLOAT16 input");
+        TT_FATAL(input.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Bicubic upsample requires ROW_MAJOR layout");
+        TT_FATAL(
+            input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            "Bicubic upsample requires INTERLEAVED (DRAM) memory layout");
+    }
 
     // Bilinear-specific requirements
     if (args.mode == "bilinear") {
@@ -78,14 +94,16 @@ void UpsampleOperation::validate_on_program_cache_miss(const operation_attribute
             input.padded_shape() == input.logical_shape(), "Tiled input must be tile-aligned (no padding difference)");
     }
 
-    // Path validation with detailed error message
-    operations::pool::upsample::UpsamplePath path =
-        operations::pool::upsample::select_upsample_path(input, args.scale_factor_h, args.scale_factor_w, args.mode);
-    TT_FATAL(
-        path != operations::pool::upsample::UpsamplePath::UNSUPPORTED,
-        "{}",
-        operations::pool::upsample::generate_unsupported_config_message(
-            input, args.scale_factor_h, args.scale_factor_w, args.mode));
+    // Path validation with detailed error message (bicubic has its own factory, skip path check)
+    if (args.mode != "bicubic") {
+        operations::pool::upsample::UpsamplePath path = operations::pool::upsample::select_upsample_path(
+            input, args.scale_factor_h, args.scale_factor_w, args.mode);
+        TT_FATAL(
+            path != operations::pool::upsample::UpsamplePath::UNSUPPORTED,
+            "{}",
+            operations::pool::upsample::generate_unsupported_config_message(
+                input, args.scale_factor_h, args.scale_factor_w, args.mode));
+    }
 }
 
 UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(

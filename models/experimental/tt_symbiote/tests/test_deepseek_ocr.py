@@ -85,7 +85,6 @@ def _install_vision_cache(model):
     bit-identical across runs.
     """
     from models.experimental.tt_symbiote.modules.conv import _unwrap_ttnn as _uw
-    import torch.nn.functional as F
 
     sam = getattr(model.model, "sam_model", None)
     if sam is not None and isinstance(sam, TTNNModule):
@@ -120,21 +119,26 @@ def _install_vision_cache(model):
                     pos = sam.torch_layer.pos_embed
                     src_size = pos.shape[1]
                     if src_size != H:
-                        pos_nchw = pos.permute(0, 3, 1, 2).float()
-                        pos_resized = F.interpolate(
-                            pos_nchw,
-                            size=(H, W),
-                            mode="bicubic",
-                            antialias=True,
-                            align_corners=False,
-                        ).to(pos.dtype)
-                        pos = pos_resized.permute(0, 2, 3, 1)
-                    sam._pos_cache[cache_key] = ttnn.from_torch(
-                        pos.expand(B, -1, -1, -1),
-                        device=sam.device,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                    )
+                        pos_nhwc = ttnn.from_torch(
+                            pos,
+                            device=sam.device,
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                        scale_h = H / src_size
+                        scale_w = W / pos.shape[2]
+                        pos_nhwc = ttnn.upsample(pos_nhwc, scale_factor=[scale_h, scale_w], mode="bicubic")
+                        pos_nhwc = ttnn.to_layout(pos_nhwc, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                        pos_nhwc = ttnn.repeat(pos_nhwc, (B, 1, 1, 1))
+                        sam._pos_cache[cache_key] = pos_nhwc
+                    else:
+                        sam._pos_cache[cache_key] = ttnn.from_torch(
+                            pos.expand(B, -1, -1, -1),
+                            device=sam.device,
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                        )
                 x_conv = ttnn.add(x_conv, sam._pos_cache[cache_key])
 
             for blk in sam.blocks:

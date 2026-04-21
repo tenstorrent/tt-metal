@@ -8,7 +8,6 @@ import math
 
 import torch
 from torch import nn
-from torch.nn import functional as F
 from typing import Optional
 
 import ttnn
@@ -771,7 +770,8 @@ class TTNNUpsampleNHWC(TTNNModule):
         assert upsample.mode in [
             "nearest",
             "bilinear",
-        ], "Only 'nearest' and 'bilinear' modes are supported in TTNNUpsampleNHWC."
+            "bicubic",
+        ], "Only 'nearest', 'bilinear', and 'bicubic' modes are supported in TTNNUpsampleNHWC."
         new_upsample._fallback_torch_layer = NHWCUpsamplePytorch(upsample)
         return new_upsample
 
@@ -976,14 +976,23 @@ class TTNNImageEncoderViT(TTNNModule):
                 pos = self.torch_layer.pos_embed
                 src_size = pos.shape[1]
                 if src_size != H:
-                    pos_nchw = pos.permute(0, 3, 1, 2).float()
-                    pos_resized = F.interpolate(
-                        pos_nchw, size=(H, W), mode="bicubic", antialias=True, align_corners=False
-                    ).to(pos.dtype)
-                    pos = pos_resized.permute(0, 2, 3, 1)
-                self._pos_cache[cache_key] = ttnn.from_torch(
-                    pos.expand(B, -1, -1, -1), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-                )
+                    pos_nhwc = ttnn.from_torch(
+                        pos,
+                        device=self.device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    scale_h = H / src_size
+                    scale_w = W / pos.shape[2]
+                    pos_nhwc = ttnn.upsample(pos_nhwc, scale_factor=[scale_h, scale_w], mode="bicubic")
+                    pos_nhwc = ttnn.to_layout(pos_nhwc, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    pos_nhwc = ttnn.repeat(pos_nhwc, (B, 1, 1, 1))
+                    self._pos_cache[cache_key] = pos_nhwc
+                else:
+                    self._pos_cache[cache_key] = ttnn.from_torch(
+                        pos.expand(B, -1, -1, -1), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                    )
             x = ttnn.add(x, self._pos_cache[cache_key])
 
         for blk in self.blocks:
@@ -1093,23 +1102,29 @@ class TTNNClipVisionEmbeddings(TTNNModule):
         if tgt_size in self._abs_pos_cache:
             return self._abs_pos_cache[tgt_size]
         abs_pos_torch = ttnn.to_torch(abs_pos)
-        cls_token = abs_pos_torch[:, :1, :]
-        old_pos_embed = abs_pos_torch[:, 1:, :]
-        src_size = int(math.sqrt(old_pos_embed.shape[1]))
+        src_total = abs_pos_torch.shape[1] - 1
+        src_size = int(math.sqrt(src_total))
         tgt_size_sqrt = int(math.sqrt(tgt_size))
+
         if src_size != tgt_size_sqrt:
-            old_pos_embed_2d = old_pos_embed.view(1, src_size, src_size, -1).permute(0, 3, 1, 2).contiguous().float()
-            new_pos_embed_2d = torch.nn.functional.interpolate(
-                old_pos_embed_2d,
-                size=(tgt_size_sqrt, tgt_size_sqrt),
-                mode="bicubic",
-                antialias=True,
-                align_corners=False,
-            ).to(old_pos_embed.dtype)
-            new_pos_embed = new_pos_embed_2d.permute(0, 2, 3, 1).contiguous().view(1, tgt_size, -1)
-            vision_pos_embed = torch.cat([cls_token, new_pos_embed], dim=1)
+            cls_token_torch = abs_pos_torch[:, :1, :]
+            old_pos_embed = abs_pos_torch[:, 1:, :]
+            old_pos_nhwc = old_pos_embed.view(1, src_size, src_size, -1)
+
+            old_pos_ttnn = ttnn.from_torch(
+                old_pos_nhwc,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            scale = tgt_size_sqrt / src_size
+            new_pos_ttnn = ttnn.upsample(old_pos_ttnn, scale_factor=scale, mode="bicubic")
+            new_pos_torch = ttnn.to_torch(new_pos_ttnn).reshape(1, tgt_size, -1)
+            vision_pos_embed = torch.cat([cls_token_torch, new_pos_torch], dim=1)
         else:
             vision_pos_embed = abs_pos_torch
+
         result = ttnn.from_torch(
             vision_pos_embed,
             dtype=ttnn.bfloat16,

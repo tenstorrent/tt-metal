@@ -120,8 +120,8 @@ std::string generate_unsupported_config_message(
         return msg;
     }
 
-    if (mode != "nearest" && mode != "bilinear") {
-        msg += " mode must be 'nearest' or 'bilinear' (got '" + mode + "')";
+    if (mode != "nearest" && mode != "bilinear" && mode != "bicubic") {
+        msg += " mode must be 'nearest', 'bilinear', or 'bicubic' (got '" + mode + "')";
         return msg;
     }
 
@@ -145,6 +145,7 @@ std::string generate_unsupported_config_message(
     msg += "\n  - Integer scales + nearest + TILE + INTERLEAVED";
     msg += "\n  - Float scales + nearest + ROW_MAJOR + any memory layout";
     msg += "\n  - Integer scales + bilinear + HEIGHT_SHARDED or INTERLEAVED)";
+    msg += "\n  - Any scales + bicubic + ROW_MAJOR + INTERLEAVED";
 
     return msg;
 }
