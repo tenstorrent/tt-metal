@@ -684,7 +684,7 @@ jobs:
           config-path: .github/ai-summary/vllm-nightly.yaml
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
-          matrix-manifest-artifact: vllm_matrix_manifest
+          matrix-manifest: vllm_matrix_manifest
       - name: Show report
         if: always() && steps.summary.outputs.report-file != ''
         run: cat "${{ steps.summary.outputs.report-file }}"
