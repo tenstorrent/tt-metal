@@ -1,6 +1,5 @@
 transformer_config:
   model_type: "deepseek"
-  vocab_size: 32000
   embedding_dim: 1536
   num_blocks: 16
   num_heads: 12
