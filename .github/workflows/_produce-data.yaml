@@ -34,6 +34,8 @@ on:
         type: boolean
   workflow_run:
     workflows:
+      # WARNING: workflows added here must not have square brackets in the name!
+      # See: https://github.com/tenstorrent/tt-metal/pull/42798
       - "Sanity tests"
       - "PR - Sanity tests"
       - "Sanity tests nightly debug run"
