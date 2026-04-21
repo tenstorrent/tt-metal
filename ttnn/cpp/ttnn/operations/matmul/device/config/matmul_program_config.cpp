@@ -803,7 +803,6 @@ MatmulProgramConfig get_matmul_program_config(
             "Input A memory layout must not be WIDTH_SHARDED, got: {}",
             input_tensor_a.memory_config().memory_layout());
 
-        bool per_core_N_equals_subblock_w_constraint = false;
         if (output_mem_config.is_sharded()) {
             TT_FATAL(
                 input_tensor_a.memory_config().buffer_type() == output_mem_config.buffer_type(),
@@ -815,7 +814,6 @@ MatmulProgramConfig get_matmul_program_config(
                 "Input A and output memory layouts must match, got input: {} vs output: {}",
                 input_tensor_a.memory_config().memory_layout(),
                 output_mem_config.memory_layout());
-            per_core_N_equals_subblock_w_constraint = true;
         }
 
         const auto N = utilities::get_N_dim(b_shape_padded, in1_tile);
@@ -825,8 +823,8 @@ MatmulProgramConfig get_matmul_program_config(
         uint32_t per_core_N = N;
         uint32_t in0_block_w = in0_shard_shape[1] / in0_tile.get_width();
 
-        auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
-            per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
+        auto subblock_hw =
+            bmm_op_utils::get_matmul_subblock_params(per_core_M, per_core_N, false, false, fp32_dest_acc_en);
         auto out_subblock_h = std::get<0>(subblock_hw);
         auto out_subblock_w = std::get<1>(subblock_hw);
 
