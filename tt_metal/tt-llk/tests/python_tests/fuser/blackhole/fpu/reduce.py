@@ -39,7 +39,7 @@ class ReduceFpu(Fpu):
         output_format = operation.output.data_format
         dimensions = operation.max_output_dimensions
         tile_cnt = (dimensions[0] * dimensions[1]) // 1024
-        num_faces = operation.num_faces
+        num_faces = operation.output.tile_shape.total_num_faces()
 
         reduce_dim = compute_unit.reduce_dim
         pool_type = compute_unit.reduce_pool

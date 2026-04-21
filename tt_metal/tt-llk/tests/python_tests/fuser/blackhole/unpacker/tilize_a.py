@@ -55,7 +55,7 @@ class UnpackerTilizeA(Unpacker):
             tensor_a,
             operation.src_a.dimensions,
             operation.src_a.data_format,
-            operation.num_faces,
+            operation.src_a.tile_shape.total_num_faces(),
         )
 
         return tilized_a, None
@@ -68,8 +68,8 @@ class UnpackerTilizeA(Unpacker):
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
-        face_r_dim = operation.face_r_dim
-        block_ct_dim = operation.output.tile_count_x
+        face_r_dim = operation.src_a.tile_shape.face_r_dim
+        block_ct_dim = operation.src_a.tile_count_x
 
         return f"    _llk_unpack_tilize_init_(unpack_a_src_format{stage}, unpack_a_dst_format{stage}, {block_ct_dim}, {face_r_dim}, false);\n"
 
@@ -81,7 +81,7 @@ class UnpackerTilizeA(Unpacker):
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
-        block_ct_dim = operation.output.tile_count_x
+        block_ct_dim = operation.src_a.tile_count_x
 
         return (
             f"{{\n"
@@ -99,7 +99,7 @@ class UnpackerTilizeA(Unpacker):
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
-        face_r_dim = operation.face_r_dim
-        num_faces = operation.num_faces
+        face_r_dim = operation.src_a.tile_shape.face_r_dim
+        num_faces = operation.src_a.tile_shape.total_num_faces()
 
         return f"    _llk_unpack_tilize_uninit_(unpack_a_dst_format{stage}, {num_faces}, {face_r_dim});\n"

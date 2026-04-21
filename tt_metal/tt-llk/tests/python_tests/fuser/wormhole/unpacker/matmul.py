@@ -85,7 +85,7 @@ class MatmulUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        face_r_dim = operation.face_r_dim
+        face_r_dim = operation.src_a.tile_shape.face_r_dim
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
         kt_dim = operation.kt_dim
@@ -107,7 +107,7 @@ class MatmulUnpacker(Unpacker):
         unpack_tile_size_a = operation.tile_size_unpack_a
         unpack_tile_size_b = operation.tile_size_unpack_b
         full_ct_dim = operation.src_b.dimensions[1] // 32
-        output_ct_dim = operation.output.tile_count_x
+        output_ct_dim = operation.src_a.tile_count_x
         src_a_partial_face = operation.src_a.partial_face.cpp_enum_value
         src_b_partial_face = operation.src_b.partial_face.cpp_enum_value
 

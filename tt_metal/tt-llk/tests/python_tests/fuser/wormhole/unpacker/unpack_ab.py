@@ -47,9 +47,9 @@ class UnpackerAB(Unpacker):
                 compute_unit.broadcast_type,
                 tilized_b,
                 operation.src_b.data_format,
-                operation.num_faces,
+                operation.src_a.tile_shape.total_num_faces(),
                 operation.src_b.tile_count,
-                operation.face_r_dim,
+                operation.src_a.tile_shape.face_r_dim,
             )
             tensor_b = untilize_block(
                 broadcast_result,
@@ -86,7 +86,7 @@ class UnpackerAB(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        num_faces = operation.num_faces
+        num_faces = operation.src_a.tile_shape.total_num_faces()
         if compute_unit.broadcast_type == BroadcastType.Scalar:
             return (
                 f"_perf_unpack_loop_set_valid<false, true>(1);\n"
@@ -109,7 +109,7 @@ class UnpackerAB(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        num_faces = operation.num_faces
+        num_faces = operation.src_a.tile_shape.total_num_faces()
         if compute_unit.broadcast_type == BroadcastType.Scalar:
             return (
                 f"_perf_math_loop_clear_valid<false, true>(1);\n"

@@ -39,8 +39,8 @@ class Packer(BasePacker):
     ) -> str:
         stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
-        face_r_dim = operation.face_r_dim
-        num_faces = operation.num_faces
+        face_r_dim = operation.output.tile_shape.face_r_dim
+        num_faces = operation.output.tile_shape.total_num_faces()
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         return (
             f"    _llk_pack_init_<false, false>(\n"

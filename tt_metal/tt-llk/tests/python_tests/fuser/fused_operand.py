@@ -424,3 +424,6 @@ class OperandRegistry:
                 raw_tensor = tilized_tensor
 
             output._raw_data = raw_tensor
+
+
+operand_registry: OperandRegistry = OperandRegistry()

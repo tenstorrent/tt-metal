@@ -51,9 +51,9 @@ class UnpackerA(Unpacker):
                 compute_unit.broadcast_type,
                 tensor_b,
                 operation.src_a.data_format,
-                operation.num_faces,
+                operation.src_a.tile_shape.total_num_faces(),
                 operation.src_a.tile_count,
-                operation.face_r_dim,
+                operation.src_a.tile_shape.face_r_dim,
             )
             tensor_b = untilize_block(
                 tensor_b,
@@ -101,7 +101,7 @@ class UnpackerA(Unpacker):
         elif compute_unit.broadcast_type == BroadcastType.Row:
             return "_perf_unpack_loop_set_valid<false, true>(4);\n"
         else:
-            num_faces = operation.num_faces
+            num_faces = operation.src_a.tile_shape.total_num_faces()
             return f"_perf_unpack_loop_set_valid<true, true>({num_faces});\n"
 
     def perf_clear_valid(
@@ -121,7 +121,7 @@ class UnpackerA(Unpacker):
         elif compute_unit.broadcast_type == BroadcastType.Row:
             return "_perf_math_loop_clear_valid<false, true>(4);\n"
         else:
-            num_faces = operation.num_faces
+            num_faces = operation.src_a.tile_shape.total_num_faces()
             return f"_perf_math_loop_clear_valid<true, true>({num_faces});\n"
 
     def init(
@@ -135,8 +135,8 @@ class UnpackerA(Unpacker):
         unpack_to_dest = "true" if operation.unpack_to_dest else "false"
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
-        face_r_dim = operation.face_r_dim
-        num_faces = operation.num_faces
+        face_r_dim = operation.src_a.tile_shape.face_r_dim
+        num_faces = operation.src_a.tile_shape.total_num_faces()
         transpose_faces = compute_unit.unpack_transpose_faces.cpp_enum_value
         transpose_within_face = compute_unit.unpack_transpose_within_face.cpp_enum_value
 
