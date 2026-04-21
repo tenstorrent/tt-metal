@@ -405,6 +405,153 @@ def _install_ttnn_mlp(model, device):
 
 # ---------- install orchestration ----------
 
+def _install_ttnn_dpt_output_conv2(model, device):
+    """Port DPTHead.scratch.output_conv2 (3x3 conv -> relu -> 1x1 conv at
+    518x518) to ttnn.conv2d. This chain is the biggest single DPT chunk
+    (~227 ms per head). output_conv1 + scratch_forward + interpolate still
+    run on host for now; this port isolates the final conv stack.
+    """
+    import ttnn
+    import torch.nn as nn
+    from vggt.heads.dpt_head import DPTHead, custom_interpolate  # type: ignore
+    from vggt.heads.head_act import activate_head  # type: ignore
+
+    for h in model.modules():
+        if isinstance(h, DPTHead) and not getattr(h, "_tt_oc2_ready", False):
+            # track_head.feature_extractor is a feature_only DPTHead without
+            # output_conv2 — skip.
+            if getattr(h, "feature_only", False):
+                continue
+            if not hasattr(h.scratch, "output_conv2"):
+                continue
+            if not isinstance(h.scratch.output_conv2, nn.Sequential):
+                continue
+            seq = h.scratch.output_conv2
+            c3x3 = seq[0]  # Conv2d 128 -> 32 k=3 s=1 p=1
+            c1x1 = seq[2]  # Conv2d 32 -> output_dim k=1
+            if not (isinstance(c3x3, nn.Conv2d) and isinstance(c1x1, nn.Conv2d)):
+                continue
+
+            # ttnn.conv2d wants weights as (out, in, kH, kW) in bf16.
+            h._tt_oc2_w0 = ttnn.from_torch(
+                c3x3.weight.detach().to(torch.bfloat16), dtype=ttnn.bfloat16,
+            )
+            h._tt_oc2_b0 = ttnn.from_torch(
+                c3x3.bias.detach().reshape(1, 1, 1, -1).to(torch.bfloat16), dtype=ttnn.bfloat16,
+            )
+            h._tt_oc2_w1 = ttnn.from_torch(
+                c1x1.weight.detach().to(torch.bfloat16), dtype=ttnn.bfloat16,
+            )
+            h._tt_oc2_b1 = ttnn.from_torch(
+                c1x1.bias.detach().reshape(1, 1, 1, -1).to(torch.bfloat16), dtype=ttnn.bfloat16,
+            )
+            h._tt_oc2_in_c = c3x3.in_channels
+            h._tt_oc2_mid_c = c3x3.out_channels
+            h._tt_oc2_out_c = c1x1.out_channels
+            h._tt_device = device
+            h._tt_oc2_ready = True
+
+    if getattr(DPTHead, "_tt_oc2_patched", False):
+        return
+
+    _DPT_KCFG = None
+
+    def _dpt_kcfg(dev):
+        nonlocal _DPT_KCFG
+        if _DPT_KCFG is None:
+            _DPT_KCFG = ttnn.init_device_compute_kernel_config(
+                dev.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+        return _DPT_KCFG
+
+    def tt_forward_impl(self, aggregated_tokens_list, images,
+                        patch_start_idx, frames_start_idx=None,
+                        frames_end_idx=None):
+        if not getattr(self, "_tt_oc2_ready", False):
+            return self._orig_forward_impl(
+                aggregated_tokens_list, images, patch_start_idx,
+                frames_start_idx, frames_end_idx,
+            )
+        if frames_start_idx is not None and frames_end_idx is not None:
+            images = images[:, frames_start_idx:frames_end_idx].contiguous()
+
+        B, S, _, H, W = images.shape
+        patch_h, patch_w = H // self.patch_size, W // self.patch_size
+
+        out = []
+        dpt_idx = 0
+        for layer_idx in self.intermediate_layer_idx:
+            x = aggregated_tokens_list[layer_idx][:, :, patch_start_idx:]
+            if frames_start_idx is not None and frames_end_idx is not None:
+                x = x[:, frames_start_idx:frames_end_idx]
+            x = x.reshape(B * S, -1, x.shape[-1])
+            x = self.norm(x)
+            x = x.permute(0, 2, 1).reshape((x.shape[0], x.shape[-1], patch_h, patch_w))
+            x = self.projects[dpt_idx](x)
+            if self.pos_embed:
+                x = self._apply_pos_embed(x, W, H)
+            x = self.resize_layers[dpt_idx](x)
+            out.append(x)
+            dpt_idx += 1
+
+        fused = self.scratch_forward(out)
+        fused = custom_interpolate(
+            fused,
+            (int(patch_h * self.patch_size / self.down_ratio),
+             int(patch_w * self.patch_size / self.down_ratio)),
+            mode="bilinear", align_corners=True,
+        )
+        if self.pos_embed:
+            fused = self._apply_pos_embed(fused, W, H)
+
+        if self.feature_only:
+            return fused.view(B, S, *fused.shape[1:])
+
+        # ---- output_conv2 on device ----
+        # fused is (BS, 128, 518, 518) fp32 on host. Permute to NHWC flat and upload.
+        Bf, Cin, Hf, Wf = fused.shape
+        x_nhwc = fused.permute(0, 2, 3, 1).contiguous().to(torch.bfloat16)  # (BS, Hf, Wf, Cin)
+        x_flat = x_nhwc.reshape(1, 1, Bf * Hf * Wf, Cin)
+        tt_x = ttnn.from_torch(
+            x_flat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self._tt_device,
+        )
+        tt_x = ttnn.conv2d(
+            input_tensor=tt_x, weight_tensor=self._tt_oc2_w0, bias_tensor=self._tt_oc2_b0,
+            device=self._tt_device,
+            in_channels=self._tt_oc2_in_c, out_channels=self._tt_oc2_mid_c,
+            batch_size=Bf, input_height=Hf, input_width=Wf,
+            kernel_size=(3, 3), stride=(1, 1), padding=(1, 1),
+            compute_config=_dpt_kcfg(self._tt_device),
+        )
+        tt_x = ttnn.relu(tt_x)
+        tt_x = ttnn.conv2d(
+            input_tensor=tt_x, weight_tensor=self._tt_oc2_w1, bias_tensor=self._tt_oc2_b1,
+            device=self._tt_device,
+            in_channels=self._tt_oc2_mid_c, out_channels=self._tt_oc2_out_c,
+            batch_size=Bf, input_height=Hf, input_width=Wf,
+            kernel_size=(1, 1), stride=(1, 1), padding=(0, 0),
+            compute_config=_dpt_kcfg(self._tt_device),
+        )
+        out_host = ttnn.to_torch(tt_x).to(torch.float32)
+        # Conv2d output comes back as (1, 1, BS*Hf*Wf, out_c). Reshape to NHWC then NCHW.
+        out_host = out_host.reshape(Bf, Hf, Wf, self._tt_oc2_out_c).permute(0, 3, 1, 2).contiguous()
+
+        preds, conf = activate_head(
+            out_host, activation=self.activation, conf_activation=self.conf_activation,
+        )
+        preds = preds.view(B, S, *preds.shape[1:])
+        conf = conf.view(B, S, *conf.shape[1:])
+        return preds, conf
+
+    DPTHead._orig_forward_impl = DPTHead._forward_impl
+    DPTHead._forward_impl = tt_forward_impl
+    DPTHead._tt_oc2_patched = True
+
+
 def _ensure_installed(device):
     if _INSTALL_DONE.get(id(device)):
         return
@@ -413,6 +560,7 @@ def _ensure_installed(device):
     _install_ttnn_rope_tables(model, device)
     _install_ttnn_block(model, device)
     _install_ttnn_mlp(model, device)
+    _install_ttnn_dpt_output_conv2(model, device)
     _INSTALL_DONE[id(device)] = True
 
 
