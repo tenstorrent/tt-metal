@@ -235,13 +235,14 @@ extern "C" uint32_t _start1() {
             // ensures that the unicast data will also have been received.
             DPRINT << "DM0-FW: waiting for GO message" << ENDL();
             DEVICE_PRINT("DM0-FW: waiting for GO message\n");
-            DPRINT << "DM0-FW: go message index: " << mailboxes->go_message_index << ENDL();
-            DPRINT << "DM0-FW: go messages offset: " << offsetof(mailboxes_t, go_messages) << ENDL();
-            DPRINT << "DM0-FW: go messages address: " << (uintptr_t)(&(mailboxes->go_messages)) << ENDL();
+            // DPRINT << "DM0-FW: go message index: " << mailboxes->go_message_index << ENDL();
+            // DPRINT << "DM0-FW: go messages offset: " << offsetof(mailboxes_t, go_messages) << ENDL();
+            DPRINT << "DM0-FW: go messages address: "
+                   << (uintptr_t)(&(mailboxes->go_messages[mailboxes->go_message_index])) << ENDL();
             while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {
-                DPRINT << "DM0-FW: Received GO message signal: " << go_message_signal << ENDL();
+                // DPRINT << "DM0-FW: Received GO message signal: " << go_message_signal << ENDL();
                 invalidate_l1_cache();
                 // While the go signal for kernel execution is not sent, check if the worker was signalled
                 // to reset its launch message read pointer.

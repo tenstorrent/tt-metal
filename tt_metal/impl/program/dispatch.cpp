@@ -2667,6 +2667,16 @@ void write_program_command_sequence(
     bool one_shot = one_shot_fetch_size <=
                     MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
 
+    log_info(
+        tt::LogMetal,
+        "TRACE: write_program_command_sequence ENTRY cq={} one_shot={} one_shot_fetch_size={} stall_first={} "
+        "stall_before_program={} send_binary={}",
+        command_queue_id,
+        one_shot,
+        one_shot_fetch_size,
+        stall_first,
+        stall_before_program,
+        send_binary);
     LOG_TRACE_LAZY(tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", one_shot, one_shot_fetch_size);
     if (one_shot) {
         manager.issue_queue_reserve(one_shot_fetch_size, command_queue_id);
@@ -2674,6 +2684,7 @@ void write_program_command_sequence(
     uint32_t one_shot_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
 
     auto write_data_to_cq = [&](void* data, uint32_t size_bytes) {
+        log_info(tt::LogMetal, "TRACE: write_data_to_cq size_bytes={} one_shot={}", size_bytes, one_shot);
         if (!size_bytes) {
             return;
         }
@@ -2687,6 +2698,7 @@ void write_program_command_sequence(
             manager.cq_write(data, size_bytes, manager.get_issue_queue_write_ptr(command_queue_id));
             manager.issue_queue_push_back(size_bytes, command_queue_id);
             manager.fetch_queue_reserve_back(command_queue_id);
+            log_info(tt::LogMetal, "TRACE: non-one-shot calling fetch_queue_write size={}", size_bytes);
             manager.fetch_queue_write(size_bytes, command_queue_id);
         }
     };
@@ -2750,10 +2762,12 @@ void write_program_command_sequence(
         program_command_sequence.go_msg_command_sequence.size_bytes());
 
     if (one_shot) {
+        log_info(tt::LogMetal, "TRACE: one-shot calling fetch_queue_write size={}", one_shot_fetch_size);
         manager.issue_queue_push_back(one_shot_fetch_size, command_queue_id);
         manager.fetch_queue_reserve_back(command_queue_id);
         manager.fetch_queue_write(one_shot_fetch_size, command_queue_id);
     }
+    log_info(tt::LogMetal, "TRACE: write_program_command_sequence EXIT cq={}", command_queue_id);
 
     LOG_TRACE_LAZY(tt::LogDispatch, "========== Finished Writing Program Command Sequence ==========");
     LOG_TRACE_LAZY(tt::LogDispatch, "");

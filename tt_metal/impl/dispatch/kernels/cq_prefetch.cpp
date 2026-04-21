@@ -785,12 +785,16 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 continue;
             } else {
                 // Nothing to fetch, nothing pending, nothing available, stall on host
+                DPRINT << "prefetch_q_rd_ptr=" << HEX() << (uintptr_t)prefetch_q_rd_ptr << " val=" << *prefetch_q_rd_ptr
+                       << ENDL();
                 WAYPOINT("HQW");
                 uint32_t heartbeat = 0U;
                 while ((fetch_size = *prefetch_q_rd_ptr) == 0U) {
                     invalidate_l1_cache();
                     IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
                 }
+                DPRINT << "fetch_size=" << fetch_size << ENDL();
+                WAYPOINT("HQD");
                 // Host has work now; restart without recursion.
                 continue;
             }
@@ -2015,6 +2019,7 @@ bool process_cmd(
     volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
     bool done = false;
 
+    DPRINT << "process_cmd: cmd_id=" << (uint32_t)cmd->base.cmd_id << " cmd_ptr=" << cmd_ptr << ENDL();
     switch (cmd->base.cmd_id) {
         case CQ_PREFETCH_CMD_RELAY_LINEAR:
             // DPRINT << "relay linear: " << cmd_ptr << ENDL();
@@ -2157,13 +2162,13 @@ bool process_cmd(
             break;
 
         default:
-            // DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " "
-            //        << cmddat_q_base << ENDL();
-            // DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
-            // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 1) << ENDL();
-            // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 2) << ENDL();
-            // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 3) << ENDL();
-            // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 4) << ENDL();
+            DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " "
+                   << cmddat_q_base << ENDL();
+            DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 1) << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 2) << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 3) << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 4) << ENDL();
             // DEVICE_PRINT("prefetch invalid_command:{} {} {}\n", (uint32_t)cmd->base.cmd_id, cmd_ptr, cmddat_q_base);
             // DEVICE_PRINT("0x{:08x}\n0x{:08x}\n0x{:08x}\n0x{:08x}\n0x{:08x}\n", *(uint32_t*)cmd_ptr,
             // *((uint32_t*)cmd_ptr + 1), *((uint32_t*)cmd_ptr + 2), *((uint32_t*)cmd_ptr + 3), *((uint32_t*)cmd_ptr +
@@ -2717,10 +2722,17 @@ void kernel_main_hd() {
     uint32_t l1_cache[l1_cache_elements_rounded];
     PrefetchExecBufState exec_buf_state;
 
+    DPRINT << "prefetch: init_state downstream dst=" << HEX()
+           << get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr) << " downstream_noc_xy=" << HEX()
+           << downstream_noc_xy << " downstream_data_ptr=" << HEX() << downstream_data_ptr << ENDL();
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0);
+    DPRINT << "prefetch: init_state dispatch_s dst=" << HEX()
+           << get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s) << " dispatch_s_noc_xy=" << HEX()
+           << dispatch_s_noc_xy << " downstream_data_ptr_s=" << HEX() << downstream_data_ptr_s << ENDL();
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0);
+    DPRINT << "prefetch: entered main dispatch loop" << ENDL();
 
     while (!done) {
         DeviceZoneScopedN("CQ-PREFETCH");
@@ -2746,6 +2758,20 @@ void kernel_main() {
 #else
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
     DEVICE_PRINT("prefetcher_{}{}: start\n", is_h_variant, is_d_variant);
+#endif
+
+    DPRINT << "prefetch: running on core NOC xy=" << HEX() << (uintptr_t)NOC_XY_ENCODING(my_x[0], my_y[0]) << ENDL();
+    DPRINT << "prefetch constants: downstream_noc_xy=" << HEX() << downstream_noc_xy << " dispatch_s_noc_xy=" << HEX()
+           << dispatch_s_noc_xy << " pcie_base=" << HEX() << pcie_base << ENDL();
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+    DPRINT << "prefetch constants: IS_CQ_DRAM_BACKED=1 DRAM_BACKED_CQ_BANK_ID=" << (uint32_t)DRAM_BACKED_CQ_BANK_ID
+           << " dram_bank_to_noc_xy[0][bank]=" << HEX() << (uint32_t)dram_bank_to_noc_xy[0][DRAM_BACKED_CQ_BANK_ID]
+           << " bank_to_dram_offset[bank]=" << HEX() << (uint32_t)bank_to_dram_offset[DRAM_BACKED_CQ_BANK_ID]
+           << " pcie_noc_xy=" << HEX() << get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0) << ENDL();
+    // Also dump bank 0 and bank 1 entries so we can see if the table was populated at all.
+    DPRINT << "prefetch bank table: dram[0][0]=" << HEX() << (uint32_t)dram_bank_to_noc_xy[0][0]
+           << " dram[0][1]=" << HEX() << (uint32_t)dram_bank_to_noc_xy[0][1] << " dram_offset[0]=" << HEX()
+           << (uint32_t)bank_to_dram_offset[0] << ENDL();
 #endif
 
     // Get runtime args

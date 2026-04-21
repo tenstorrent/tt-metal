@@ -149,8 +149,11 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
 
 template <bool flush_write = false>
 FORCE_INLINE void update_worker_completion_count_on_dispatch_d() {
+    // DPRINT << "dispatch_s: Updating worker completion count on dispatch_d" << ENDL();
     if constexpr (distributed_dispatcher) {
         bool write = false;
+        DPRINT << "dispatch_s: Updating worker completion count on dispatch_d: num_worker_sems: " << num_worker_sems
+               << ENDL();
         for (uint32_t i = 0; i < num_worker_sems; i++) {
             uint32_t num_workers_signalling_completion =
                 NOC_STREAM_READ_REG(i + first_stream_used, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
@@ -174,8 +177,10 @@ FORCE_INLINE void update_worker_completion_count_on_dispatch_d() {
 
 template <uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
+    DPRINT << "dispatch_s: Acquiring pages: " << n << ENDL();
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+    DPRINT << "dispatch_s: sem_addr: " << (uintptr_t)sem_addr << "sem id: " << sem_id << ENDL();
 
     WAYPOINT("DAPW");
     uint32_t heartbeat = 0;
@@ -188,6 +193,7 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
     }
     WAYPOINT("DAPD");
     num_pages_acquired += n;
+    DPRINT << "dispatch_s: Acquired pages: " << num_pages_acquired << ENDL();
 }
 
 template <uint32_t noc_xy, uint32_t sem_id>
@@ -335,6 +341,7 @@ void kernel_main() {
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
     dispatch_s_atomic_cmd_buf_init();
+    DPRINT << "Finished initializing command buffers" << ENDL();
     if constexpr (distributed_dispatcher) {
         for (size_t i = 0; i < max_num_worker_sems; i++) {
             uint32_t index = i + first_stream_used;
@@ -350,12 +357,14 @@ void kernel_main() {
     cmd_ptr = cb_base;
     bool done = false;
     uint32_t total_pages_acquired = 0;
+    DPRINT << "Starting dispatch loop in dispatch_s" << ENDL();
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
+        DPRINT << "dispatch_s: Processing command: " << (uint32_t)cmd->base.cmd_id << ENDL();
         switch (cmd->base.cmd_id) {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(); break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;

@@ -1426,6 +1426,11 @@ void kernel_main() {
     DEVICE_PRINT("dispatch_{}{}: start\n", is_h_variant, is_d_variant);
 #endif
     // Get runtime args
+    DPRINT << "rta_l1_base address: " << (uintptr_t)rta_l1_base << ENDL();
+    DPRINT << "rta_l1_base[0]: " << rta_l1_base[0] << ENDL();
+    DPRINT << "rta_l1_base[1]: " << rta_l1_base[1] << ENDL();
+    DPRINT << "rta_l1_base[2]: " << rta_l1_base[2] << ENDL();
+    DPRINT << "rta_l1_base[3]: " << rta_l1_base[3] << ENDL();
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
@@ -1438,6 +1443,7 @@ void kernel_main() {
         noc_local_state_init(upstream_noc_index);
     }
 
+    DPRINT << "Initializing worker streams. num worker sems: " << max_num_worker_sems << ENDL();
     for (size_t i = 0; i < max_num_worker_sems; i++) {
         uint32_t index = i + first_stream_used;
 
@@ -1494,6 +1500,7 @@ void kernel_main() {
     // Initialize progress counter in L1 memory
     *get_dispatch_progress_ptr() = dispatch_progress;
 
+    DPRINT << "Starting dispatch loop" << ENDL();
     while (!done) {
         dispatch_cb_reader.wait_for_available_data_and_release_old_pages(cmd_ptr);
 
