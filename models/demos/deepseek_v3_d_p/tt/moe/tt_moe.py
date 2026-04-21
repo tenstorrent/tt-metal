@@ -227,6 +227,7 @@ class TtMoe(LightweightModule):
             gate_config,
             mesh_device,
             dispatch_table=expert_dispatch_table,
+            experts_per_chip=experts_per_chip,
             weight=gate_weight,
             bias=gate_bias,
             fallback_mode=gate_fallback_mode,
@@ -276,6 +277,8 @@ class TtMoe(LightweightModule):
 
         # Build (group, chip, local_expert) -> global expert id table, sharded
         # across the EP mesh so each device holds (1, 1, experts_per_chip).
+        # Then squeeze the two leading singleton dims so each device has a 1D
+        # (experts_per_chip,) lookup vector (required by extract/insert validators).
         global_expert_idx_tt = ttnn.from_torch(
             ExpertMapping.create_global_expert_idx_table(
                 experts_per_chip=experts_per_chip,
@@ -287,6 +290,8 @@ class TtMoe(LightweightModule):
             device=mesh_device,
             dtype=ttnn.uint32,
         )
+        global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+        global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
         # Initialize routed expert
         self.routed_expert = TtRoutedExpert(

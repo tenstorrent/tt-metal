@@ -15,7 +15,6 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -72,17 +71,17 @@ def test_single_routed_expert(
     # Create torch reference
     torch_expert = TorchExpert(emb_dim, hidden_dim, weights)
 
-    # Create random input: (experts_per_chip, num_tokens, emb_dim)
-    torch_input = torch.randn(experts_per_chip, num_tokens, emb_dim, dtype=torch.float32)
+    # 2D input (num_tokens, emb_dim) — the single expert's dispatch buffer.
+    torch_input = torch.randn(num_tokens, emb_dim, dtype=torch.float32)
     logger.debug(f"Input shape: {torch_input.shape}")
 
     # Run torch reference
     logger.debug("Running torch reference...")
     with torch.no_grad():
-        torch_output = torch_expert(torch_input[0])  # Process first (only) expert's tokens
+        torch_output = torch_expert(torch_input)
     logger.debug(f"Torch output shape: {torch_output.shape}")
 
-    # Create TTNN input
+    # Create TTNN input: 2D (num_tokens, emb_dim), replicated across the 1-device mesh.
     tt_input = ttnn.from_torch(
         torch_input,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -92,19 +91,21 @@ def test_single_routed_expert(
     )
     logger.debug(f"TTNN input shape: {tt_input.shape}")
 
-    # Single-chip, single-expert: build a trivial (1, 1, 1) table with expert id 0,
-    # sharded across the (1, 1) EP mesh.
-    global_expert_idx_tt = ttnn.from_torch(
-        ExpertMapping.create_global_expert_idx_table(
-            experts_per_chip=experts_per_chip,
-            dispatch_group_size=1,
-            num_dispatch_groups=1,
-        ),
-        mesh_mapper=get_ep_mesh_mapper(mesh_device),
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        dtype=ttnn.uint32,
-    )
+    # Single-expert auxiliaries (1D, length 1, UINT32 ROW_MAJOR DRAM):
+    #   - global_expert_idx_table[0] = 0   (local 0 -> global 0)
+    #   - expert_token_counts[0]     = num_tokens
+    #   - expert_region_offsets[0]   = 0   (expert's slice starts at row 0)
+    def _make_idx_tensor(values):
+        return ttnn.from_torch(
+            torch.tensor(values, dtype=torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+        )
+
+    global_expert_idx_tt = _make_idx_tensor([0])
+    expert_token_counts_tt = _make_idx_tensor([num_tokens])
+    expert_region_offsets_tt = _make_idx_tensor([0])
 
     # Create TtRoutedExpert
     logger.debug("Creating TtRoutedExpert...")
@@ -122,20 +123,19 @@ def test_single_routed_expert(
 
     # Run TTNN forward
     logger.debug("Running TTNN forward...")
-    tt_output = tt_expert(tt_input)
+    tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
     logger.debug(f"TTNN output shape: {tt_output.shape}")
 
-    # Convert back to torch for comparison
+    # Convert back to torch for comparison. For a 1-device replicated tensor,
+    # ConcatMeshToTensor(dim=0) with 1 slice is a no-op that returns the tensor.
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
     )
-    # Extract the single expert output: (experts_per_chip, num_tokens, emb_dim) -> (num_tokens, emb_dim)
-    tt_output_single = tt_output_torch[0]
-    logger.debug(f"TTNN output (torch) shape: {tt_output_single.shape}")
+    logger.debug(f"TTNN output (torch) shape: {tt_output_torch.shape}")
 
     # Compare PCC
-    _, pcc = comp_pcc(torch_output, tt_output_single)
+    _, pcc = comp_pcc(torch_output, tt_output_torch)
     logger.debug(f"PCC: {pcc:.6f}")
 
     # Validate

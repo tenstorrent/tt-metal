@@ -279,7 +279,11 @@ class TorchMoe(nn.Module):
         # Step 2: Dispatch tokens to expert buffers
         dispatched_buffer, metadata = self.dispatch_module(x, weights, indices, expert_offsets)
 
-        # Step 3: Run routed experts on dispatch buffer slices
+        # Step 3: Run routed experts on dispatch buffer slices.
+        # dispatched_buffer is 4D: (num_dispatch_groups, dispatch_group_size,
+        # experts_per_chip * max_dispatched_tokens_per_expert, emb_dim). Each expert's
+        # token region lives at expert_region_offsets[group, chip, global_expert] within
+        # the flat token dim (TILE_SIZE-aligned), matching the real dispatch kernel layout.
         expert_outputs = torch.zeros_like(dispatched_buffer)
         for group in range(self.num_dispatch_groups):
             for chip in range(self.dispatch_group_size):
@@ -297,10 +301,11 @@ class TorchMoe(nn.Module):
                     token_count = expert_token_counts[group, 0, global_expert].item()
 
                     if token_count > 0:
-                        expert_input = dispatched_buffer[group, chip, local_expert, :token_count, :]
+                        start = int(expert_region_offsets[group, chip, global_expert].item())
+                        expert_input = dispatched_buffer[group, chip, start : start + token_count, :]
                         with torch.no_grad():
                             expert_output = self.routed_experts[global_expert](expert_input.float())
-                        expert_outputs[group, chip, local_expert, :token_count, :] = expert_output
+                        expert_outputs[group, chip, start : start + token_count, :] = expert_output
 
         # Step 4: Combine routed expert outputs
         # TorchDispatchModule now outputs linearized mesh coords directly in metadata field 0,
