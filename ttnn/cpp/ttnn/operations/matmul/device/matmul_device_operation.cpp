@@ -1088,12 +1088,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         attributes.output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
                         "Output memory layout must not be WIDTH_SHARDED, got: {}",
                         attributes.output_mem_config.memory_layout());
-                    TT_FATAL(
-                        program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
-                        "Either out_subblock_w ({}) must equal per_core_N ({}) or out_subblock_h ({}) must be 1",
-                        program_config.out_subblock_w,
-                        per_core_N,
-                        program_config.out_subblock_h);
                 }
             } else {
                 TT_FATAL(
