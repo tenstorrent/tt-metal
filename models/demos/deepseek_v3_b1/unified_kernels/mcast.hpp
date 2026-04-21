@@ -348,6 +348,14 @@ struct Mcast {
             if constexpr (IsSenderCore) {
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
+                uint32_t residual_src_l1_addr = get_read_ptr(args.src_cb);
+                volatile tt_l1_ptr uint16_t* residual_src_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(residual_src_l1_addr);
+                DPRINT << "MOE_INPUT_DBG (post-Forward sync): cb_id=" << args.src_cb << " l1_addr=" << HEX()
+                       << residual_src_l1_addr << " first8 bf16 (raw u16): " << residual_src_ptr[0] << " "
+                       << residual_src_ptr[1] << " " << residual_src_ptr[2] << " " << residual_src_ptr[3] << " "
+                       << residual_src_ptr[4] << " " << residual_src_ptr[5] << " " << residual_src_ptr[6] << " "
+                       << residual_src_ptr[7] << DEC() << "\n";
 
                 // Send data with state
                 mcast_send_with_state<

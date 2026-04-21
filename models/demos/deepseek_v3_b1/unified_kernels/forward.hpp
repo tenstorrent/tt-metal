@@ -146,8 +146,21 @@ struct Forward {
                 const uint32_t src = get_read_ptr(CTArgs::cb0_id);
                 constexpr uint32_t tensor_size_bytes = CTArgs::tensor_page_size * CTArgs::num_pages_to_read;
                 const uint64_t dst = get_noc_addr(args.my_noc_x, args.my_noc_y, args.tensor_address, 0);
+                DPRINT << "FWD_NCRISC_DBG (entry): src_cb=" << CTArgs::cb0_id << " src_l1_addr=" << HEX() << src
+                       << " tensor_address=" << args.tensor_address << " bytes=" << DEC() << tensor_size_bytes
+                       << " noc=(" << args.my_noc_x << "," << args.my_noc_y << ")\n";
                 noc_async_write(src, dst, tensor_size_bytes);
                 noc_async_write_barrier();
+                // After write+barrier, dump first 8 u16 from the tensor L1 region to confirm
+                // the embedding actually landed at tensor_address (vs. e.g. wrong NOC route).
+                {
+                    invalidate_l1_cache();
+                    volatile tt_l1_ptr uint16_t* ptr =
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(args.tensor_address);
+                    DPRINT << "FWD_NCRISC_DBG: post-write tensor[0..8] (raw u16): " << HEX() << ptr[0] << " " << ptr[1]
+                           << " " << ptr[2] << " " << ptr[3] << " " << ptr[4] << " " << ptr[5] << " " << ptr[6] << " "
+                           << ptr[7] << DEC() << "\n";
+                }
 
                 if constexpr (CTArgs::enable_cross_column) {
                     DPRINT << "forward: sending cross-column via fabric\n";
@@ -179,6 +192,9 @@ struct Forward {
                         hdr->to_noc_fused_unicast_write_atomic_inc(
                             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dest_noc, sem_noc, 1, false},
                             chunk_size);
+                        DPRINT << "FWD_NCRISC_DBG: cross-col pkt "
+                               << " dest_noc=" << (uint32_t)dest_noc << " sem_noc=" << (uint32_t)sem_noc
+                               << " chunk_size=" << (uint32_t)chunk_size << "\n";
 
                         noc_async_write(
                             args.tensor_address + bytes_sent,
@@ -199,13 +215,22 @@ struct Forward {
                 cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                 DPRINT << "end of forward op NCRISC (entry)\n";
             } else if constexpr (IsWorkerCore && !CTArgs::is_entry_column) {
-                DPRINT << "start of forward op NCRISC (non-entry): waiting for fabric\n";
+                DPRINT << "start of forward op NCRISC (non-entry): waiting for fabric"
+                       << " tensor_address=" << HEX() << args.tensor_address << DEC() << "\n";
                 volatile tt_l1_ptr uint32_t* sem =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.cross_col_sem_addr);
                 while (*sem < CTArgs::num_fabric_packets) {
                     invalidate_l1_cache();
                 }
                 noc_semaphore_set(sem, 0);
+                {
+                    invalidate_l1_cache();
+                    volatile tt_l1_ptr uint16_t* ptr =
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(args.tensor_address);
+                    DPRINT << "FWD_NCRISC_DBG (non-entry): post-fabric tensor[0..8] (raw u16): " << HEX() << ptr[0]
+                           << " " << ptr[1] << " " << ptr[2] << " " << ptr[3] << " " << ptr[4] << " " << ptr[5] << " "
+                           << ptr[6] << " " << ptr[7] << DEC() << "\n";
+                }
                 DPRINT << "end of forward op NCRISC (non-entry): data received\n";
             }
 

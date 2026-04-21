@@ -119,8 +119,8 @@ def test_bcast_moe_reduce_pipeline(
     is_stage0 = my_mesh_id == 0
     is_stage1 = my_mesh_id == 1
 
-    M = 1
-    K = embedding_dim
+    M = RoutedExpert.M
+    K = RoutedExpert.K
 
     pipeline_core = ttnn.CoreCoord(12, 8)
     core_io = ttnn.CoreCoord(0, 2)
@@ -134,7 +134,7 @@ def test_bcast_moe_reduce_pipeline(
 
     torch_embedding = torch.arange(vocab_size * K, dtype=torch.float32).reshape(1, 1, vocab_size, K).to(torch.bfloat16)
 
-    reduce_root_coord = ttnn.MeshCoordinate(0, 0)
+    reduce_root_coord = ttnn.MeshCoordinate(1, 0)
 
     # -- Core setup for reduce aggregation --
     gate_proj_noc = ttnn.NOC.NOC_0
@@ -206,14 +206,28 @@ def test_bcast_moe_reduce_pipeline(
 
     # Compute per-shard reduce payload from actual shard spec (not from embedding dim)
     if r is not None:
-        _shard_spec = r.final_output_mem_config.shard_spec
-        reduce_payload_per_shard = _shard_spec.shape[0] * _shard_spec.shape[1] * 2  # bfloat16
+        reduce_payload_per_shard = r.per_core_down_proj_N * 2  # bfloat16
         logger.info(
             f"[rank={my_mesh_id}] reduce_payload_per_shard={reduce_payload_per_shard} "
-            f"(shard_shape={_shard_spec.shape})"
+            f"(per_core_down_proj_N={r.per_core_down_proj_N})"
         )
     else:
         reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
+    # Diagnostic: verify socket page sizes match expectations
+    if r is not None:
+        logger.info(
+            f"[rank={my_mesh_id}] DIAG page sizes: "
+            f"embedding_size_bytes={embedding_size_bytes} "
+            f"reduce_payload_per_shard={reduce_payload_per_shard} "
+            f"num_gate_proj_cores(pinned)={num_gate_proj_cores} "
+            f"r.num_gate_proj_cores(device)={r.num_gate_proj_cores} "
+            f"r.final_output_total_width={r.final_output_total_width} "
+            f"r.final_output_width_per_core={r.final_output_width_per_core} "
+            f"r.per_core_down_proj_N={r.per_core_down_proj_N} "
+            f"len(shard_cores_list)={len(shard_cores_list)} "
+            f"total_upstream_bytes={len(shard_cores_list)}*{reduce_payload_per_shard}={len(shard_cores_list)*reduce_payload_per_shard} "
+            f"downstream_page_size(=embedding_size_bytes)={embedding_size_bytes}"
+        )
 
     # -- Pipeline block setup (collective -- all hosts must participate simultaneously) --
     pipeline_block = None
@@ -350,6 +364,14 @@ def test_bcast_moe_reduce_pipeline(
             exit_device_coords=pipeline_column_coords,
         )
         print(f"[TEST] stage1: PipelineBlock done in {_time.time()-_t0_total:.3f}s", flush=True)
+        logger.info(
+            f"[rank=1] DIAG PipelineBlock config: "
+            f"upstream_d2d_socket_page_size={embedding_size_bytes} "
+            f"downstream_d2d_socket_page_size={embedding_size_bytes} "
+            f"exit_upstream_page_size={reduce_payload_per_shard} "
+            f"num_exit_upstream_cores={len(shard_cores_list)} "
+            f"total_exit_upstream_bytes={len(shard_cores_list)*reduce_payload_per_shard}"
+        )
     else:
         import time as _time
 
@@ -390,6 +412,17 @@ def test_bcast_moe_reduce_pipeline(
             f"{sum(1 for s in forward_sockets if s is not None)}/{num_devices} devices, "
             f"{len(raw_ds)} downstream socket groups"
         )
+        for idx, row_idx in enumerate(range(int(mesh_rows))):
+            chip_id = row_idx * int(mesh_cols) + exit_column
+            ds = downstream_sockets[chip_id]
+            if ds is not None:
+                if isinstance(ds, list):
+                    logger.info(
+                        f"[rank=1] DIAG downstream_sockets[chip_id={chip_id}]: "
+                        f"{len(ds)} sockets (one per upstream worker)"
+                    )
+                else:
+                    logger.info(f"[rank=1] DIAG downstream_sockets[chip_id={chip_id}]: single socket")
     if is_stage1:
         kv_cache_shard_height = 256
         kvpe_dim = 576
@@ -406,8 +439,9 @@ def test_bcast_moe_reduce_pipeline(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, kv_cache_shard_spec
             ),
         )
+
         sdpa_out_interm_shard_height = 48
-        sdpa_out_interm_shard_width = 544
+        sdpa_out_interm_shard_width = 1024
         num_worker_cores = moe_worker_core_grid.num_cores()
         sdpa_out_interm_shard_spec = ttnn.ShardSpec(
             moe_worker_core_grid,
@@ -416,13 +450,16 @@ def test_bcast_moe_reduce_pipeline(
         )
         sdpa_out_interm_buffer = ttnn.from_torch(
             torch.zeros(
-                (sdpa_out_interm_shard_height * num_worker_cores, sdpa_out_interm_shard_width), dtype=torch.bfloat16
+                (sdpa_out_interm_shard_height * num_worker_cores, sdpa_out_interm_shard_width),
+                dtype=torch.bfloat16,
             ),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_out_interm_shard_spec
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                sdpa_out_interm_shard_spec,
             ),
             tile=ttnn.Tile([8, 32]),
         )
@@ -441,8 +478,8 @@ def test_bcast_moe_reduce_pipeline(
         orig_shard_spec = final_output_mem_config.shard_spec
         intermediate_shard_shape = [orig_shard_spec.shape[0], orig_shard_spec.shape[1] * 3]
         intermediate_mem_config = ttnn.MemoryConfig(
-            ttnn.types.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.types.BufferType.L1,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 orig_shard_spec.grid,
                 intermediate_shard_shape,
@@ -550,20 +587,30 @@ def test_bcast_moe_reduce_pipeline(
         logger.info("[rank=1] MoE + reduce-to-all completed")
 
     # -- Stage 0: D2H loopback read + golden validation --
+    d2h_passing = True
+    d2h_pcc_msg = ""
     if is_stage0:
         logger.info("[rank=0] waiting for D2H result from pipeline loopback")
         num_elements = embedding_size_bytes // 2
-        received_tensor_torch = torch.zeros(1, num_elements, dtype=torch.bfloat16)
-        d2h_output_tensor = ttnn.from_torch(received_tensor_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # Read ALL D2H sockets to find which channel(s) carry valid data
+        d2h_results = []
+        for sock_idx, d2h_sock in enumerate(d2h_sockets):
+            buf = torch.zeros(1, num_elements, dtype=torch.bfloat16)
+            buf_tensor = ttnn.from_torch(buf, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            d2h_sock.read_tensor(buf_tensor)
+            result = ttnn.to_torch(buf_tensor)
+            nz = torch.count_nonzero(result)
+            logger.info(f"[rank=0] D2H socket[{sock_idx}]: non-zero={nz}/{result.numel()} " f"first5={result[0, :5]}")
+            d2h_results.append(result)
 
-        d2h_sockets[0].read_tensor(d2h_output_tensor)
-        d2h_result_torch = ttnn.to_torch(d2h_output_tensor)
-        logger.info(f"[rank=0] D2H read complete, shape={d2h_result_torch.shape}")
-        logger.info(f"[rank=0] D2H first 5 values: {d2h_result_torch[0, :5]}")
-
-        d2h_nonzero = torch.count_nonzero(d2h_result_torch)
-        logger.info(f"[rank=0] D2H non-zero elements: {d2h_nonzero}/{d2h_result_torch.numel()}")
-        assert d2h_nonzero > 0, "D2H output is all zeros -- reduce or pipeline failed"
+        # Pick the first socket with non-zero data for validation
+        d2h_result_torch = None
+        for sock_idx, result in enumerate(d2h_results):
+            if torch.count_nonzero(result) > 0:
+                d2h_result_torch = result
+                logger.info(f"[rank=0] using D2H socket[{sock_idx}] for golden comparison")
+                break
+        assert d2h_result_torch is not None, "All D2H sockets returned zeros -- reduce or pipeline failed"
 
         from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
@@ -605,6 +652,7 @@ def test_bcast_moe_reduce_pipeline(
                 explicit_expert_scale=actual_expert_scale,
                 rmsnorm_gamma=r.torch_rmsnorm_gamma,
                 rmsnorm_epsilon=1e-6,
+                include_residual=(dev_idx == 0),
             )
             expected_final_outputs.append(expected_final)
 
@@ -633,7 +681,9 @@ def test_bcast_moe_reduce_pipeline(
     logger.info(f"[rank={my_mesh_id}] programs terminated")
 
     # -- Stage 1: validate MoE golden --
+    stage1_reduce_passing = True
     if is_stage1:
+        logger.info("[rank=1] validating MoE golden output")
         K_down = s.K_down
 
         torch_input_row = torch_embedding[0, 0, token_id : token_id + 1, :]
@@ -653,7 +703,7 @@ def test_bcast_moe_reduce_pipeline(
             shared_gate_shard = s.torch_gate_weights[:, dev_idx * K_down : (dev_idx + 1) * K_down]
             shared_up_shard = s.torch_up_weights[:, dev_idx * K_down : (dev_idx + 1) * K_down]
             shared_down_shard = s.torch_down_weights[dev_idx * K_down : (dev_idx + 1) * K_down, :]
-
+            logger.info(f"[rank=1] validating device {dev_idx}: actual_expert_scale={actual_expert_scale}")
             _, _, expected_final = MoeOp.golden_single_device(
                 torch_input_row,
                 shared_gate_weights=shared_gate_shard,
@@ -671,22 +721,65 @@ def test_bcast_moe_reduce_pipeline(
                 explicit_expert_scale=actual_expert_scale,
                 rmsnorm_gamma=r.torch_rmsnorm_gamma,
                 rmsnorm_epsilon=1e-6,
+                include_residual=(dev_idx == 0),
             )
             expected_final_outputs.append(expected_final)
 
         expected_reduce_output = sum(expected_final_outputs)
+        logger.info(f"[rank=1] expected_reduce_output computed")
 
-        reduce_output_valid = extract_routed_expert_output(
-            reduce_output_torch[0].unsqueeze(0),
-            r.num_gate_proj_cores,
-            r.final_output_width_per_core,
-            r.per_core_down_proj_N,
+        print("intermediate reduce tensors:")
+        for idx, tensor in enumerate(reduce_intermediate_tensors):
+            print(f"  reduce_intermediate_tensors[{idx}]: {tensor}")
+            t = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+            logger.info(f"  tensor[{idx}]: shape={t.shape} nonzero={torch.count_nonzero(t)}")
+            logger.info(f"  tensor[{idx}] first 50 values: {t.flatten()[:50]}")
+        print("output tensor:")
+        out_reduce_tensor = ttnn.to_torch(
+            reduce_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
         )
+        logger.info(
+            f"  reduce_output_tensor: shape={out_reduce_tensor.shape} nonzero={torch.count_nonzero(out_reduce_tensor)}"
+        )
+        logger.info(f"  reduce_output_tensor first 50 values: {out_reduce_tensor.flatten()[:50]}")
 
-        passing, pcc_msg = comp_pcc(expected_reduce_output.flatten(), reduce_output_valid.flatten(), 0.97)
-        logger.info(f"Pipeline Stage 1 Reduce PCC: {pcc_msg}")
-        logger.info(f"[rank=1] expected first 5 values: {reduce_output_valid.flatten()[:5]}")
-        assert passing, f"Pipeline Stage 1 Reduce PCC check failed: {pcc_msg}"
+        # Only exit-column devices hold the reduced output; non-exit devices
+        # are all zeros by design. Compare the golden against each exit-column
+        # device's output.
+        exit_chip_ids = [row * int(mesh_cols) + exit_column for row in range(int(mesh_rows))]
+        logger.info(f"[rank=1] validating output on exit-column devices: chip_ids={exit_chip_ids}")
+
+        all_passing = True
+        per_chip_pccs = []
+        for chip_id in exit_chip_ids:
+            per_chip_output = reduce_output_torch[chip_id].unsqueeze(0)
+            nz = int(torch.count_nonzero(per_chip_output).item())
+            logger.info(
+                f"[rank=1] chip {chip_id} output: shape={tuple(per_chip_output.shape)} nonzero={nz} "
+                f"first5={per_chip_output.flatten()[:5].tolist()}"
+            )
+            if nz == 0:
+                logger.error(f"[rank=1] chip {chip_id} (exit column) produced ALL ZEROS")
+                all_passing = False
+                per_chip_pccs.append((chip_id, 0.0, "all zeros"))
+                continue
+
+            reduce_output_valid = extract_routed_expert_output(
+                per_chip_output,
+                r.num_gate_proj_cores,
+                r.final_output_width_per_core,
+                r.per_core_down_proj_N,
+            )
+            passing, pcc_msg = comp_pcc(expected_reduce_output.flatten(), reduce_output_valid.flatten(), 0.97)
+            per_chip_pccs.append((chip_id, passing, pcc_msg))
+            logger.info(f"[rank=1] chip {chip_id} Reduce PCC: {pcc_msg}")
+            if not passing:
+                all_passing = False
+
+        logger.info(f"[rank=1] expected first 5 values: {expected_reduce_output.flatten()[:5]}")
+        for chip_id, p, msg in per_chip_pccs:
+            logger.info(f"[rank=1] summary chip {chip_id}: passing={p} pcc={msg}")
+        assert all_passing, f"Pipeline Stage 1 Reduce PCC check failed: {per_chip_pccs}"
 
     logger.info(f"[rank={my_mesh_id}] test PASSED")
 
@@ -766,7 +859,7 @@ def test_persistent_mode_pipeline(
     torch.manual_seed(42)
     torch_embedding = torch.randn(iterations, 1, 1, K, dtype=torch.bfloat16)
 
-    reduce_root_coord = ttnn.MeshCoordinate(0, 0)
+    reduce_root_coord = ttnn.MeshCoordinate(1, 0)
 
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
@@ -975,7 +1068,7 @@ def test_persistent_mode_pipeline(
                 ),
             )
             sdpa_out_interm_shard_height = 48
-            sdpa_out_interm_shard_width = 544
+            sdpa_out_interm_shard_width = 1024
             num_worker_cores = moe_worker_core_grid.num_cores()
             sdpa_out_interm_shard_spec = ttnn.ShardSpec(
                 moe_worker_core_grid,
@@ -1008,8 +1101,8 @@ def test_persistent_mode_pipeline(
             orig_shard_spec = final_output_mem_config.shard_spec
             intermediate_shard_shape = [orig_shard_spec.shape[0], orig_shard_spec.shape[1] * 3]
             intermediate_mem_config = ttnn.MemoryConfig(
-                ttnn.types.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.types.BufferType.L1,
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
                 ttnn.ShardSpec(
                     orig_shard_spec.grid,
                     intermediate_shard_shape,

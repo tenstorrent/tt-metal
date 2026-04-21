@@ -3997,6 +3997,39 @@ class MoeOp:
         shared_ctx.output_gather_params["receiver_data_addr"] = out_addr + cb38_offset
         out_offset += cb38_total_size
 
+        # ── Forward staging CB (bcast_pkt_cb / CB 46) → sdpa_out_interm_buffer ──
+        # Sender-core only. Must NOT alias the residual_mcast_src tensor: Forward
+        # NCRISC writes a fabric packet header into staging_addr=get_read_ptr(cb46)
+        # before sending; if that aliases the residual tensor, the header overwrites
+        # the embedding's leading bytes, corrupting MoE's input on every device.
+        if routed_ctx.enable_forward and routed_ctx.bcast_pkt_cb is not None:
+            cb46_offset = out_offset
+            cb46_cb_id = routed_ctx.bcast_pkt_cb
+            cb46_total_size = routed_ctx.forward_params["payload_size_bytes"]
+            rmsnorm_fmt = routed_ctx.rmsnorm_output_cb_descriptor.format_descriptors[0]
+            cb46_page_size = rmsnorm_fmt.page_size
+            cb46_tile = rmsnorm_fmt.tile
+            print(
+                f"[overlap] bcast_pkt_cb (forward staging): cb_id={cb46_cb_id} "
+                f"offset={cb46_offset} size={cb46_total_size} page_size={cb46_page_size}",
+                flush=True,
+            )
+            cb46_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                cb46_cb_id,
+                out_buf,
+                address_offset=cb46_offset,
+                total_size=cb46_total_size,
+            )
+            cb46_fmt = ttnn.CBFormatDescriptor(
+                buffer_index=cb46_cb_id,
+                data_format=routed_ctx.data_format,
+                page_size=cb46_page_size,
+                tile=cb46_tile,
+            )
+            cb46_desc.format_descriptors = [cb46_fmt]
+            routed_ctx.bcast_pkt_cb_descriptor = cb46_desc
+            out_offset += cb46_total_size
+
         # ── Reduce: CB 24 (add_cb_out / reduce_local_cb) → sdpa_out_interm_buffer ──
         # When reduce is enabled, CB 24 is a working buffer (not final output).
         # Placed after CB 38 on DRAM bank cores; CB 30/31/38 are on sender core (disjoint).
@@ -5389,6 +5422,30 @@ class MoeOp:
         # ==================================================================
         # Setup
         # ==================================================================
+        # DIAG: log per-device buffer addresses of the residual mcast src.
+        # Pure metadata read (no D2H, no kernel dispatch) — safe even after
+        # distributed barriers and while persistent pipeline programs run.
+        # If pipeline forward writes to (12,9) on entry-column devices, those
+        # devices' addresses must equal the addresses MoE will read from via
+        # the residual_mcast_src CB. Mismatches across devices indicate
+        # ReplicateTensorToMesh allocation or CB-rebinding issues.
+        try:
+            _per_dev = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)
+            print(
+                f"[MoeOp.op DIAG] residual_mcast_src has {len(_per_dev)} device shards",
+                flush=True,
+            )
+            for _i, _t in enumerate(_per_dev):
+                _addr = _t.buffer_address() if hasattr(_t, "buffer_address") else None
+                _addr_str = f"0x{_addr:x}" if isinstance(_addr, int) else "?"
+                _dev_id = _t.device().id() if hasattr(_t.device(), "id") else "?"
+                print(
+                    f"[MoeOp.op DIAG] residual_mcast_src[{_i}] dev_id={_dev_id} l1_addr={_addr_str}",
+                    flush=True,
+                )
+        except Exception as _e:
+            print(f"[MoeOp.op DIAG] residual_mcast_src address inspection failed: {_e}", flush=True)
+
         moe = MoeOp(
             shared_residual_mcast_src_tensor,
             gate_mm_weights_tensor=gate_mm_weights_tensor,
