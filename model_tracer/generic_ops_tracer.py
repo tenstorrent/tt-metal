@@ -814,7 +814,8 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         if extra_args:
             print(f"📎 Passing additional arguments: {' '.join(extra_args)}")
 
-        cmd = [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--trace-params"] + extra_args
+        junit_xml_path = os.path.join(trace_dir, "pytest_results.xml")
+        cmd = [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--trace-params", f"--junit-xml={junit_xml_path}"] + extra_args
     else:
         print(f"✅ No pytest cases detected, running as standalone Python script...")
         cmd = [python_cmd, test_path, "--trace-params"] + extra_args
