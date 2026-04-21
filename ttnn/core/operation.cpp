@@ -6,6 +6,29 @@
 #include <array>
 #include <tuple>
 
+#include <tt-metalium/experimental/noc_estimator/noc_estimator.hpp>
+
+namespace {
+float get_estimator_peak_dram_bw_gbps(tt::ARCH arch) {
+    using namespace tt::tt_metal::experimental::noc_estimator;
+    try {
+        NocEstimatorParams params;
+        params.arch = (arch == tt::ARCH::BLACKHOLE) ? Architecture::BLACKHOLE : Architecture::WORMHOLE_B0;
+        params.mechanism = NocMechanism::UNICAST;
+        params.pattern = NocPattern::ONE_FROM_ONE;
+        params.memory = MemoryType::DRAM_INTERLEAVED;
+        params.transaction_size_bytes = 65536;
+        params.num_transactions = 64;
+
+        auto estimate = estimate_noc_performance(params);
+        float freq_ghz = (arch == tt::ARCH::BLACKHOLE) ? 1.2f : 1.0f;
+        return static_cast<float>(estimate.bandwidth_bytes_per_cycle) * freq_ghz;
+    } catch (const std::runtime_error&) {
+        return 0.0f;  // Signal caller to use fallback
+    }
+}
+}  // namespace
+
 namespace tt::tt_metal::operation {
 
 template <typename OutputTensorsT>
@@ -26,19 +49,16 @@ OpPerformanceModelGeneral<OutputTensorsT>::OpPerformanceModelGeneral(
     }
     this->ideal_compute_ns = std::ceil(ideal_compute_cycles / clock_rate_ghz);
 
-    // WH L1 Bisection bandwidth: 512 B/cycle = sqrt(64) * 32 B/cycle * 2
-    // 512 * 1.0 GHz = 512 GB/s
-    // WH DRAM bandwidth: 258 GB/s = 21.5 GB/s * 6 channels * 2 banks
-
-    // BH DRAM bandwidth: 512 GB/s (32GB GDDR6 @ 16 GT/sec)
-
-    float peak_dram_bw;
-    if (arch == ARCH::WORMHOLE_B0) {
-        peak_dram_bw = 6 * 2 * 21.5;  // 258 GB/s
-    } else if (arch == ARCH::BLACKHOLE) {
-        peak_dram_bw = 512.0;  // 512 GB/s
-    } else {
-        TT_THROW("Unsupported architecture for OpPerformanceModel");
+    float peak_dram_bw = get_estimator_peak_dram_bw_gbps(arch);
+    if (peak_dram_bw <= 0.0f) {
+        // Fallback to theoretical peak values
+        if (arch == ARCH::WORMHOLE_B0) {
+            peak_dram_bw = 6 * 2 * 21.5;  // 258 GB/s
+        } else if (arch == ARCH::BLACKHOLE) {
+            peak_dram_bw = 512.0;  // 512 GB/s
+        } else {
+            TT_THROW("Unsupported architecture for OpPerformanceModel");
+        }
     }
 
     auto tensor_ns = [peak_dram_bw](const Tensor& t) {
