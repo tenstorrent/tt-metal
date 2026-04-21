@@ -39,17 +39,14 @@ def load_policy_ttnn(weights: Path):
     Iter3: cut num_denoising_steps 10->5. PCC dropped only 0.0004% so the
         ODE was wildly over-integrated. Try a more aggressive step count.
     Iter4: num_denoising_steps -> 2. Kept: 85 fps, PCC 99.9946.
-    Iter5: num_denoising_steps -> 1. Kept: 100 fps, PCC 99.98.
-    Iter6 (current): torch.set_num_threads(16). Zen 5 has 8 physical cores
-        with 2 threads each; torch defaults to physical-only (8). Trying
-        hyperthreading to see if the big matmul workloads hide L1-miss
-        latency well enough to benefit.
+    Iter5 (current): num_denoising_steps -> 1. One-shot flow-matching
+        (same as a single-pass action head). Almost certainly too
+        aggressive; the oracle will tell.
     """
     from lerobot.configs.policies import PreTrainedConfig
     from lerobot.policies.xvla.modeling_xvla import XVLAPolicy
 
     torch.set_grad_enabled(False)
-    torch.set_num_threads(16)
     config = PreTrainedConfig.from_pretrained(str(weights))
     config.dtype = "bfloat16"
     config.num_denoising_steps = 1
