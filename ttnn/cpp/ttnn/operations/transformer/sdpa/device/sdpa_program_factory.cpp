@@ -908,53 +908,101 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     std::vector<std::vector<HeadSegmentRef>> head_segments;
     uint32_t mcast_chains = 0;
 
-    if (!is_causal && !is_chunked && !flatten_work) {
+    if (!is_causal && !is_chunked) {
         head_segments.resize(total_heads);
+
+        // DOWN proxy maps only the heavy Q half; decompose against the effective size so that
+        // (nb, nq) agree with the reader/writer/compute decomposition (see reader_interleaved.cpp
+        // _proxy_q_num_effective).  UP proxy and non-proxy use full q_num_chunks.
+        const uint32_t q_num_effective = is_proxy_down ? (q_num_chunks / 2) : q_num_chunks;
 
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");
         log_debug(tt::LogOp, "Total heads (B * NQH): {}", total_heads);
-        log_debug(tt::LogOp, "Q chunks per head: {}", q_num_chunks);
+        log_debug(tt::LogOp, "Q chunks per head (effective): {}", q_num_effective);
         log_debug(tt::LogOp, "Grid size: {}x{} = {} cores", grid_size.x, grid_size.y, num_cores);
 
         // First pass: Record work distribution for each core
         for (uint32_t i = 0; i < num_cores; ++i) {
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-            uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
-            uint32_t local_batch_end = local_batch_start + batch_per_core;
-            uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
-            uint32_t local_nh_end = local_nh_start + nh_per_core;
-            uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
-            uint32_t local_q_end = local_q_start + q_per_core;
-
-            // Clamp to max values
-            local_batch_start = std::min(local_batch_start, B);
-            local_batch_end = std::min(local_batch_end, B);
-            local_nh_start = std::min(local_nh_start, NQH);
-            local_nh_end = std::min(local_nh_end, NQH);
-            local_q_start = std::min(local_q_start, q_num_chunks);
-            local_q_end = std::min(local_q_end, q_num_chunks);
-
             auto& work = core_work[i];
             work.logical_core = core;
             work.physical_core = device->worker_core_from_logical_core(core);
 
-            // Track each (batch, head, q_chunk_range) this core handles
-            for (uint32_t b = local_batch_start; b < local_batch_end; ++b) {
-                for (uint32_t h = local_nh_start; h < local_nh_end; ++h) {
-                    uint32_t q_count = local_q_end - local_q_start;
-                    if (q_count > 0) {
-                        work.head_work.push_back(CoreHeadWork{
-                            .batch = b,
-                            .head = h,
-                            .q_chunk_start = local_q_start,
-                            .q_chunk_count = q_count,
-                        });
+            if (flatten_work) {
+                // Flat distribution: each core owns [global_q_start, global_q_start + global_q_count)
+                // in B*NQH*q_num_effective space.  Decompose into per-(batch, head) segments matching
+                // the reader's decompose_flat_q_index(_, q_num_effective, NQH, flat_use_zigzag=false).
+                uint32_t core_flat_start =
+                    i * base_chunks_per_core + std::min(i, cores_doing_extra) * extra_chunks_per_core;
+                uint32_t core_flat_count =
+                    base_chunks_per_core + ((i < cores_doing_extra) ? extra_chunks_per_core : 0u);
+                if (core_flat_start >= total_q_chunks) {
+                    core_flat_start = total_q_chunks;
+                    core_flat_count = 0;
+                } else if (core_flat_start + core_flat_count > total_q_chunks) {
+                    core_flat_count = total_q_chunks - core_flat_start;
+                }
 
-                        uint32_t head_id = (b * NQH) + h;
-                        if (head_id < head_segments.size()) {
-                            head_segments[head_id].push_back(HeadSegmentRef{
-                                .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                uint32_t remaining = core_flat_count;
+                uint32_t flat_chunk = core_flat_start;
+                while (remaining > 0) {
+                    const uint32_t nb = flat_chunk / (NQH * q_num_effective);
+                    const uint32_t nq = (flat_chunk / q_num_effective) % NQH;
+                    const uint32_t q_chunk_idx = flat_chunk % q_num_effective;
+                    const uint32_t chunk_capacity_in_head = q_num_effective - q_chunk_idx;
+                    const uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
+
+                    work.head_work.push_back(CoreHeadWork{
+                        .batch = nb,
+                        .head = nq,
+                        .q_chunk_start = q_chunk_idx,
+                        .q_chunk_count = chunk_take,
+                    });
+
+                    const uint32_t head_id = (nb * NQH) + nq;
+                    if (head_id < head_segments.size()) {
+                        head_segments[head_id].push_back(HeadSegmentRef{
+                            .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                    }
+
+                    remaining -= chunk_take;
+                    flat_chunk += chunk_take;
+                }
+            } else {
+                uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
+                uint32_t local_batch_end = local_batch_start + batch_per_core;
+                uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
+                uint32_t local_nh_end = local_nh_start + nh_per_core;
+                uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
+                uint32_t local_q_end = local_q_start + q_per_core;
+
+                // Clamp to max values
+                local_batch_start = std::min(local_batch_start, B);
+                local_batch_end = std::min(local_batch_end, B);
+                local_nh_start = std::min(local_nh_start, NQH);
+                local_nh_end = std::min(local_nh_end, NQH);
+                local_q_start = std::min(local_q_start, q_num_chunks);
+                local_q_end = std::min(local_q_end, q_num_chunks);
+
+                // Track each (batch, head, q_chunk_range) this core handles
+                for (uint32_t b = local_batch_start; b < local_batch_end; ++b) {
+                    for (uint32_t h = local_nh_start; h < local_nh_end; ++h) {
+                        uint32_t q_count = local_q_end - local_q_start;
+                        if (q_count > 0) {
+                            work.head_work.push_back(CoreHeadWork{
+                                .batch = b,
+                                .head = h,
+                                .q_chunk_start = local_q_start,
+                                .q_chunk_count = q_count,
+                            });
+
+                            uint32_t head_id = (b * NQH) + h;
+                            if (head_id < head_segments.size()) {
+                                head_segments[head_id].push_back(HeadSegmentRef{
+                                    .core_idx = i,
+                                    .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                            }
                         }
                     }
                 }

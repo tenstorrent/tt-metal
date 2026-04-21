@@ -311,12 +311,25 @@ void kernel_main() {
 #endif
         uint32_t prev_nb_flat = static_cast<uint32_t>(-1);
         uint32_t mask_batch_offset = 0;
+        // q_iter_local resets at every (batch, head) transition so chain forwarding/receive
+        // guards (`q_iter_local < next_core_q_chunks`) count slots within the current head only.
+        // For straddling cores whose range spans multiple heads, this is off from _gq.
+        uint32_t q_iter_local_counter = 0;
+        uint32_t prev_head_id_flat = static_cast<uint32_t>(-1);
         for (uint32_t _gq = 0; _gq < global_q_count; ++_gq) {
             const auto _decoded =
                 decompose_flat_q_index(global_q_start + _gq, _proxy_q_num_effective, NQH, flat_use_zigzag);
             const uint32_t nb = _decoded.nb;
             const uint32_t nq = _decoded.nq;
-            const uint32_t q_iter = _gq;  // used only by non-causal chain forwarding (disabled under flat mode)
+            const uint32_t q_iter = _gq;
+            const uint32_t _cur_head_id = nb * NQH + nq;
+            if (_cur_head_id != prev_head_id_flat) {
+                q_iter_local_counter = 0;
+                prev_head_id_flat = _cur_head_id;
+            } else {
+                q_iter_local_counter++;
+            }
+            const uint32_t q_iter_local = q_iter_local_counter;
             if (nb != prev_nb_flat) {
                 prev_nb_flat = nb;
                 if constexpr (!broadcast_provided_mask_batch) {
@@ -393,6 +406,9 @@ void kernel_main() {
 #else
                     q_chunk = local_q_start + q_iter;
 #endif
+                    // Non-flat mode: one (nb, nq) pair per q_iter loop, so q_iter already counts
+                    // slots within the current head.  Flat mode declares q_iter_local above.
+                    const uint32_t q_iter_local = q_iter;
 #endif
                     /*
                     Determine how many rows of Q will be read. Both start and end rows are
@@ -430,12 +446,15 @@ void kernel_main() {
                     const uint32_t k_head = nq / q_heads_per_k;
                     const uint32_t v_head = nq / q_heads_per_v;
 
-                    // Chain forwarding conditions are loop-invariant — compute once
+                    // Chain forwarding conditions are loop-invariant — compute once.
+                    // q_iter_local counts slots within the current (batch, head) so that straddling
+                    // cores in flat mode (whose range spans multiple heads) gate forwards on the
+                    // per-head slot count rather than the whole-range _gq.
                     bool should_forward = false;
                     bool should_receive = false;
                     if constexpr (!is_causal) {
                         should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
-                                         (q_iter < next_core_q_chunks);
+                                         (q_iter_local < next_core_q_chunks);
                         should_receive =
                             is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
                     }
