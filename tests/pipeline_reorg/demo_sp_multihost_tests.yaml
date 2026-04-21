@@ -96,10 +96,10 @@
       --hostfile /ci/ttrun/hostfile \
       --worker-tt-metal-home /home/user/tt-metal \
       --output-dir $PIPELINE_DIR \
-      /home/user/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod.yaml
+      /home/user/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod_ci.yaml
     TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --skip-executable-check \
-      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
-      --rank-binding blitz_decode_pipeline_rank_binding_superpod.yaml \
+      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
+      --rank-binding blitz_decode_pipeline_rank_binding_superpod_ci.yaml \
       /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
   skus:
     bh_sp4:
