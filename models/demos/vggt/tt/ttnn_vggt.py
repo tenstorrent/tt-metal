@@ -160,7 +160,7 @@ def _install_ttnn_attention(model, device):
         if self._tt_fused_ln:
             tt_in = ttnn.layer_norm(tt_in, weight=self._tt_ln_g, bias=self._tt_ln_b, epsilon=self._tt_ln_eps)
         tt_qkv = ttnn.linear(tt_in, self._tt_qkv_w, bias=self._tt_qkv_b)
-        qkv = ttnn.to_torch(tt_qkv).to(x.dtype)
+        qkv = ttnn.to_torch(tt_qkv)  # bf16
         qkv = qkv.reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
@@ -174,11 +174,11 @@ def _install_ttnn_attention(model, device):
         dh = self.head_dim
         dev = self._tt_device
         kcfg = _hifi_kconfig(dev)
-        tt_q = ttnn.from_torch(q.to(torch.bfloat16).contiguous(),
+        tt_q = ttnn.from_torch(q.contiguous(),
                                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
-        tt_kt = ttnn.from_torch(k.transpose(-2, -1).to(torch.bfloat16).contiguous(),
+        tt_kt = ttnn.from_torch(k.transpose(-2, -1).contiguous(),
                                 dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
-        tt_v = ttnn.from_torch(v.to(torch.bfloat16).contiguous(),
+        tt_v = ttnn.from_torch(v.contiguous(),
                                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
         tt_scores = ttnn.matmul(tt_q, tt_kt, compute_kernel_config=kcfg, dtype=ttnn.float32)
         tt_scores = ttnn.multiply(tt_scores, 1.0 / math.sqrt(dh))
