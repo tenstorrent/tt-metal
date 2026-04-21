@@ -126,6 +126,10 @@ declare -A DEBUG_CYCLES_OF          # int
 declare -A TESTS_TOTAL_OF           # int
 declare -A TESTS_PASSED_OF          # int
 declare -A AGENTS_USED_JSON_OF      # JSON array per arch
+declare -A CHANGED_FILES_OF         # newline-separated paths (populated in Step 6a,
+                                    # consumed by Step 6c — single source of truth so
+                                    # run.json.changed_files and the flat-named
+                                    # snapshots on disk never drift)
 
 for arch in "${ARCHES[@]}"; do
   COMPILATION_ATTEMPTS_OF[$arch]=0
@@ -569,7 +573,28 @@ case "${STATUS_OF[$arch]}" in
 esac
 
 END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-CHANGED_FILES=$(git -C "$WORKTREE_DIR" diff --name-only origin/main...HEAD -- "${LLK_DIR_OF[$arch]}/" 2>/dev/null || echo "")
+
+# Capture the per-arch changed-files list ONCE, from a single git invocation,
+# and reuse the exact same strings for both run.json's changed_files and the
+# snapshot filenames in Step 6c. If we re-derive the list later (by re-running
+# git diff, by re-filtering with a different pathspec, or by cd'ing elsewhere)
+# the two can drift — which breaks the dashboard's changed-file diff view
+# because it locates snapshots by replacing / with _ in the recorded path.
+#
+# Filter matches `${LLK_DIR_OF[$arch]}/` at the start or anywhere after a slash,
+# so it works whether $WORKTREE_DIR is the tt-llk repo root or the tt-metal
+# worktree (where the same files live under tt_metal/tt-llk/).
+CHANGED_FILES_OF[$arch]=""
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  case "$f" in
+    "${LLK_DIR_OF[$arch]}"/*|*"/${LLK_DIR_OF[$arch]}"/*) ;;
+    *) continue ;;
+  esac
+  CHANGED_FILES_OF[$arch]+="${f}"$'\n'
+done < <(git -C "$WORKTREE_DIR" diff --name-only origin/main...HEAD 2>/dev/null)
+
+CHANGED_FILES="${CHANGED_FILES_OF[$arch]}"
 CHANGED_FILES_JSON=$(python -c "import json,sys; print(json.dumps('''$CHANGED_FILES'''.splitlines()))" | tr -d '\n')
 
 python codegen/scripts/run_json_writer.py finalize \
@@ -613,20 +638,20 @@ Mirror the single-arch orchestrator's artifact-copy block, run once per arch:
 for arch in "${ARCHES[@]}"; do
   cp codegen/artifacts/issue_${ISSUE_NUMBER}_*.md "${LOG_DIR_OF[$arch]}/" 2>/dev/null || true
 
-  # Per-arch pre/post-fix snapshots for the dashboard's file-diff view, using only
-  # files that belong to this arch's LLK_DIR.
+  # Per-arch pre/post-fix snapshots for the dashboard's file-diff view. We
+  # iterate the SAME CHANGED_FILES_OF[$arch] list captured in Step 6a so the
+  # flat-named snapshots on disk match run.json.changed_files by construction.
+  # The dashboard's run_detail.py locates snapshots via
+  # `log_dir / fpath.replace("/", "_")` — any drift here leaves the "Changed
+  # Files" code-viewer buttons empty.
   while IFS= read -r f; do
     [ -z "$f" ] && continue
-    case "$f" in
-      "${LLK_DIR_OF[$arch]}"/*) ;;
-      *) continue ;;
-    esac
     flat=$(echo "$f" | tr '/' '_')
     [ -f "$WORKTREE_DIR/$f" ] && cp "$WORKTREE_DIR/$f" "${LOG_DIR_OF[$arch]}/$flat" 2>/dev/null || true
     git -C "$WORKTREE_DIR" show "origin/main:$f" > "${LOG_DIR_OF[$arch]}/base_$flat" 2>/dev/null || true
     [ -s "${LOG_DIR_OF[$arch]}/base_$flat" ] || rm -f "${LOG_DIR_OF[$arch]}/base_$flat"
   done <<EOF
-$(git -C "$WORKTREE_DIR" diff --name-only origin/main...HEAD 2>/dev/null)
+${CHANGED_FILES_OF[$arch]}
 EOF
 done
 ```
