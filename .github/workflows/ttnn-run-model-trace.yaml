@@ -46,10 +46,6 @@ permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   validate-inputs:
     name: Validate inputs & derive arch
