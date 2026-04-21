@@ -70,6 +70,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             cache_dir=Path(cache_dir),
             tokenizer=tokenizer,
             max_seq_len=max_seq_len,
+            vllm_context=True,
         )
 
         return model
@@ -112,7 +113,11 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         )
         num_of_users = tokens.shape[0]
         if sample_on_device:
-            self._validate_and_initialize_sampling(sampling_params, sample_on_device)
+            self._validate_and_initialize_sampling(
+                sampling_params,
+                sample_on_device,
+                enable_trace=False,
+            )
 
         user_outputs = []
         for i in range(num_of_users):
@@ -181,13 +186,18 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         read_from_device = kwargs.get("read_from_device", True)
         sampling_params = kwargs.get("sampling_params", None)
         sample_on_device = bool(sampling_params is not None)
+
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
             self.set_kv_cache(kv_cache)
 
         tokens_step = kwargs["tokens"].squeeze(1)
         if sample_on_device:
-            self._validate_and_initialize_sampling(sampling_params, sample_on_device, enable_trace=enable_trace)
+            self._validate_and_initialize_sampling(
+                sampling_params,
+                sample_on_device,
+                enable_trace=enable_trace,
+            )
         decode_step_output = super().decode_forward(
             tokens=tokens_step,
             start_pos=kwargs["start_pos"],
@@ -197,7 +207,10 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         )
 
         if sample_on_device:
-            decode_output = self._sample_tokens_device(decode_step_output, enable_trace=enable_trace)
+            decode_output = self._sample_tokens_device(
+                decode_step_output,
+                enable_trace=enable_trace,
+            )
             if read_from_device:
                 decode_output = self._tokens_from_device(
                     decode_output, self.mesh_device, batch_size_per_row=self.batch_size_per_row
