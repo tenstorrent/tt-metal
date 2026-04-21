@@ -66,22 +66,37 @@ class TTNNTransformerBlockStack(nn.Module):
         ttnn = self._ttnn
         dev = self.device
 
+        def bf16(t):
+            return _to_tile_tensor(ttnn, t, dev)
+
+        def bfp8(t):
+            # Per-block 8-bit exponent-sharing float — half the bytes of bf16.
+            # Fine for over-parameterized transformer MLP weights (GPT-3-class
+            # accuracy studies show <0.5% drop).
+            return ttnn.from_torch(
+                t.to(torch.bfloat16).contiguous(),
+                dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev,
+            )
+
         # LayerNorm 1
-        ln1_w = _to_tile_tensor(ttnn, blk.norm1.weight.detach(), dev)
-        ln1_b = _to_tile_tensor(ttnn, blk.norm1.bias.detach(), dev)
-        # Attention: fused qkv
-        qkv_w = _to_tile_tensor(ttnn, blk.attn.qkv.weight.detach().t().contiguous(), dev)
-        qkv_b = _to_tile_tensor(ttnn, blk.attn.qkv.bias.detach(), dev)
-        proj_w = _to_tile_tensor(ttnn, blk.attn.proj.weight.detach().t().contiguous(), dev)
-        proj_b = _to_tile_tensor(ttnn, blk.attn.proj.bias.detach(), dev)
+        ln1_w = bf16(blk.norm1.weight.detach())
+        ln1_b = bf16(blk.norm1.bias.detach())
+        # Attention — weights stay bf16 (small, accuracy-sensitive for scores)
+        qkv_w = bf16(blk.attn.qkv.weight.detach().t().contiguous())
+        qkv_b = bf16(blk.attn.qkv.bias.detach())
+        proj_w = bf16(blk.attn.proj.weight.detach().t().contiguous())
+        proj_b = bf16(blk.attn.proj.bias.detach())
         # LayerNorm 2
-        ln2_w = _to_tile_tensor(ttnn, blk.norm2.weight.detach(), dev)
-        ln2_b = _to_tile_tensor(ttnn, blk.norm2.bias.detach(), dev)
-        # MLP
-        fc1_w = _to_tile_tensor(ttnn, blk.mlp.fc1.weight.detach().t().contiguous(), dev)
-        fc1_b = _to_tile_tensor(ttnn, blk.mlp.fc1.bias.detach(), dev)
-        fc2_w = _to_tile_tensor(ttnn, blk.mlp.fc2.weight.detach().t().contiguous(), dev)
-        fc2_b = _to_tile_tensor(ttnn, blk.mlp.fc2.bias.detach(), dev)
+        ln2_w = bf16(blk.norm2.weight.detach())
+        ln2_b = bf16(blk.norm2.bias.detach())
+        # MLP — by far the biggest weights (H*4H each way). bfp8 here halves
+        # their DRAM footprint (for 24 layers: 24 * 2 * 1024*4096 * 2B =
+        # 384MB -> 192MB), and matmul FLOPs are typically memory-bound on
+        # this shape/batch so it should translate to throughput.
+        fc1_w = bfp8(blk.mlp.fc1.weight.detach().t().contiguous())
+        fc1_b = bf16(blk.mlp.fc1.bias.detach())
+        fc2_w = bfp8(blk.mlp.fc2.weight.detach().t().contiguous())
+        fc2_b = bf16(blk.mlp.fc2.bias.detach())
 
         return dict(
             ln1_w=ln1_w, ln1_b=ln1_b,
