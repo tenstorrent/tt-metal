@@ -149,7 +149,7 @@ inline void DataflowBuffer::finish_impl() {
 #elif !defined(COMPILE_FOR_TRISC)
             uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
             all_acked &=
-                (overlay::overlay::fast_llk_intf_read_acked(tensix_id, tc_id) == overlay::overlay::fast_llk_intf_read_posted(tensix_id, tc_id));
+                (overlay::fast_llk_intf_read_acked(tensix_id, tc_id) == overlay::fast_llk_intf_read_posted(tensix_id, tc_id));
 #endif
         }
     }
