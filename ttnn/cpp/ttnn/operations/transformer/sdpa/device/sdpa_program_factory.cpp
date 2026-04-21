@@ -84,7 +84,13 @@ bool can_use_streaming_compute(
     uint32_t dst_size,
     uint32_t padded_Sk,
     uint32_t Sk,
-    uint32_t Sq_chunk_t) {
+    uint32_t Sq_chunk_t,
+    bool flatten_work) {
+    // Streaming branch doesn't honor SDPA_FLAT_WORK; falling into its hierarchical loops would
+    // silently break the flat-work proxy. Revisit once SDPA_FLAT_WORK is threaded through streaming.
+    if (flatten_work) {
+        return false;
+    }
     if (is_causal || use_provided_mask || use_attention_sink) {
         return false;
     }
@@ -362,10 +368,35 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // its local Q/K/V with this same flat distribution, so flatten_work=true makes a single-chip SDPA
     // an equivalent perf proxy for that iteration.
     const bool flatten_work = program_config.has_value() && program_config->flatten_work;
+    const ttnn::operations::transformer::RingProxyCase proxy_case =
+        program_config.has_value() ? program_config->ring_proxy_case
+                                   : ttnn::operations::transformer::RingProxyCase::None;
+    const bool is_proxy_up = (proxy_case == ttnn::operations::transformer::RingProxyCase::Up);
+    const bool is_proxy_down = (proxy_case == ttnn::operations::transformer::RingProxyCase::Down);
+    const bool is_proxy = is_proxy_up || is_proxy_down;
     if (flatten_work) {
-        TT_FATAL(is_causal, "SDPAProgramConfig::flatten_work currently requires is_causal=true");
         TT_FATAL(!is_chunked, "SDPAProgramConfig::flatten_work does not support chunked prefill");
         TT_FATAL(!use_attention_sink, "SDPAProgramConfig::flatten_work does not support attention_sink");
+    }
+    if (is_proxy) {
+        TT_FATAL(flatten_work, "ring_proxy_case requires flatten_work=true");
+        TT_FATAL(
+            !is_causal,
+            "ring_proxy_case requires is_causal=false (proxy simulates non-diag ring iters, where causality is off)");
+        TT_FATAL(!is_chunked, "ring_proxy_case incompatible with chunked prefill");
+        TT_FATAL(!use_attention_sink, "ring_proxy_case incompatible with attention_sink");
+        TT_FATAL(!use_provided_mask, "ring_proxy_case incompatible with user-provided attn mask");
+        TT_FATAL(q_num_chunks % 2 == 0, "ring_proxy_case requires even q_num_chunks");
+        if (is_proxy_up) {
+            TT_FATAL(
+                k_num_chunks % 2 == 0,
+                "ring_proxy_case=up requires even k_num_chunks (the kernel caps K loop at k_num_chunks/2)");
+        }
+    } else if (flatten_work) {
+        TT_FATAL(
+            is_causal,
+            "SDPAProgramConfig::flatten_work currently requires is_causal=true (use ring_proxy_case for non-causal "
+            "flat work)");
     }
 
     // Parallelization scheme
@@ -393,7 +424,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // Flat-distribution per-core assignments (only used when flatten_work is true).
     // Evenly split total_q_chunks across cores. With zigzag sub-mode (causal + even num_q_chunks),
     // distribute in pairs so every core gets balanced light/heavy work after linear_to_zigzag remap.
-    const uint32_t total_q_chunks = B * NQH * q_num_chunks;
+    // DOWN proxy: only the heavy Q half is assigned to cores; UP / none: all Q chunks assigned.
+    const uint32_t total_q_chunks = B * NQH * (is_proxy_down ? (q_num_chunks / 2) : q_num_chunks);
     const bool flat_zigzag = flatten_work && is_causal && (q_num_chunks % 2 == 0);
     uint32_t base_chunks_per_core = 0;
     uint32_t cores_doing_extra = 0;
@@ -437,7 +469,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         dst_size,
         padded_Sk,
         Sk,
-        Sq_chunk_t);
+        Sq_chunk_t,
+        flatten_work);
 
     const bool lightweight_causal = is_causal && !use_provided_mask && sliding_window_size.value_or(0) == 0;
     const bool lightweight_mask = (use_streaming_compute && use_padded_mask) || lightweight_causal;
@@ -686,12 +719,18 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     if (flatten_work) {
         defines["SDPA_FLAT_WORK"] = "1";
     }
+    if (is_proxy_up) {
+        defines["SDPA_RING_PROXY_UP"] = "1";
+    } else if (is_proxy_down) {
+        defines["SDPA_RING_PROXY_DOWN"] = "1";
+    }
 
     log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
     log_debug(
         tt::LogOp,
         "SDPA_FLAT_WORK: {}",
         flatten_work ? (flat_zigzag ? "1 (zigzag)" : "1 (linear)") : "0 (hierarchical)");
+    log_debug(tt::LogOp, "SDPA_RING_PROXY: {}", is_proxy_up ? "up" : is_proxy_down ? "down" : "none");
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
@@ -869,7 +908,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     std::vector<std::vector<HeadSegmentRef>> head_segments;
     uint32_t mcast_chains = 0;
 
-    if (!is_causal && !is_chunked) {
+    if (!is_causal && !is_chunked && !flatten_work) {
         head_segments.resize(total_heads);
 
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");

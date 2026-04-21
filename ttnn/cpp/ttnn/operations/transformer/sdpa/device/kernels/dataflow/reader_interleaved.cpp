@@ -295,12 +295,25 @@ void kernel_main() {
 
 #if defined(SDPA_FLAT_WORK)
         // Flat iteration over a linear range of B*NQH*q_num_chunks chunks. Restrictions enforced on host:
-        // is_causal=true, !is_chunked, !use_attention_sink, so chunked page_table and attention_sink reads
+        // is_causal=true, !is_chunked, !use_attention_sink (or ring_proxy_case={up,down} which forces
+        // is_causal=false but keeps the same restrictions), so chunked page_table and attention_sink reads
         // are skipped, and mask_batch_offset is recomputed per (nb) change below.
+        //
+        // Ring proxy (single-chip): DOWN assigns only the heavy Q half by decomposing against
+        // q_num_chunks/2 and shifting q_chunk up by q_num_chunks/2. UP keeps all Q chunks but caps
+        // the K loop further below. None: identity.
+#if defined(SDPA_RING_PROXY_DOWN)
+        constexpr uint32_t _proxy_q_num_effective = q_num_chunks / 2;
+        constexpr uint32_t _proxy_q_chunk_offset = q_num_chunks / 2;
+#else
+        constexpr uint32_t _proxy_q_num_effective = q_num_chunks;
+        constexpr uint32_t _proxy_q_chunk_offset = 0;
+#endif
         uint32_t prev_nb_flat = static_cast<uint32_t>(-1);
         uint32_t mask_batch_offset = 0;
         for (uint32_t _gq = 0; _gq < global_q_count; ++_gq) {
-            const auto _decoded = decompose_flat_q_index(global_q_start + _gq, q_num_chunks, NQH, flat_use_zigzag);
+            const auto _decoded =
+                decompose_flat_q_index(global_q_start + _gq, _proxy_q_num_effective, NQH, flat_use_zigzag);
             const uint32_t nb = _decoded.nb;
             const uint32_t nq = _decoded.nq;
             const uint32_t q_iter = _gq;  // used only by non-causal chain forwarding (disabled under flat mode)
@@ -316,7 +329,7 @@ void kernel_main() {
             }
             {
                 {
-                    uint32_t q_chunk = _decoded.q_chunk;
+                    uint32_t q_chunk = _decoded.q_chunk + _proxy_q_chunk_offset;
 #else
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             if constexpr (is_chunked) {
@@ -427,8 +440,14 @@ void kernel_main() {
                             is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
                     }
 
-                    // loop while k_low < q_high
-                    for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+                    // loop while k_low < q_high. Ring proxy UP caps K loop at k_num_chunks/2 to
+                    // mirror the ring_joint non-diag iter that sees only half of K per Q.
+#if defined(SDPA_RING_PROXY_UP)
+                    const uint32_t k_chunk_end = k_num_chunks / 2;
+#else
+                    const uint32_t k_chunk_end = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
+#endif
+                    for (uint32_t k_chunk = 0; k_chunk < k_chunk_end; ++k_chunk) {
                         const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
                         const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                         const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;

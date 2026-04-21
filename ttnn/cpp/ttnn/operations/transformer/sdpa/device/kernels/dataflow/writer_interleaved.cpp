@@ -129,15 +129,24 @@ void kernel_main() {
             write_offset = write_offset_phase_2;
         }
 #if defined(SDPA_FLAT_WORK)
+        // Ring proxy (single-chip): DOWN shifts q_chunk to the heavy Q half. UP / none: identity.
+#if defined(SDPA_RING_PROXY_DOWN)
+        constexpr uint32_t _proxy_q_num_effective = q_num_chunks / 2;
+        constexpr uint32_t _proxy_q_chunk_offset = q_num_chunks / 2;
+#else
+        constexpr uint32_t _proxy_q_num_effective = q_num_chunks;
+        constexpr uint32_t _proxy_q_chunk_offset = 0;
+#endif
         for (uint32_t _gq = 0; _gq < global_q_count; ++_gq) {
-            const auto _decoded = decompose_flat_q_index(global_q_start + _gq, q_num_chunks, NQH, flat_use_zigzag);
+            const auto _decoded =
+                decompose_flat_q_index(global_q_start + _gq, _proxy_q_num_effective, NQH, flat_use_zigzag);
             const uint32_t nb = _decoded.nb;
             const uint32_t nq = _decoded.nq;
             const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;  // preserved for parity with hierarchical path
             (void)q_batch_offset;
             {
                 {
-                    uint32_t q_chunk = _decoded.q_chunk;
+                    uint32_t q_chunk = _decoded.q_chunk + _proxy_q_chunk_offset;
 #else
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;

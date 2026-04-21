@@ -1743,8 +1743,19 @@ void sdpa_inner_loop(
             // is needed by compute (reader/writer do the full (nb, nq, q_chunk) decomposition to
             // fetch the right Q/K/V). Mirrors the RING branch's internal remap pattern.
             // Zigzag sub-mode is carried as compile-time arg 33 (see program factory).
+            //
+            // Ring proxy DOWN: decompose against q_num_chunks/2 and shift into the heavy Q half.
+            // Keeps compute's q_chunk aligned with reader/writer under the same proxy case.
             constexpr bool _flat_use_zigzag = get_compile_time_arg_val(33) == 1;
-            q_chunk = remap_q_index(q_iter, q_num_chunks, _flat_use_zigzag) % q_num_chunks;
+#if defined(SDPA_RING_PROXY_DOWN)
+            const uint32_t _proxy_q_num_effective = q_num_chunks / 2;
+            const uint32_t _proxy_q_chunk_offset = q_num_chunks / 2;
+#else
+            const uint32_t _proxy_q_num_effective = q_num_chunks;
+            const uint32_t _proxy_q_chunk_offset = 0;
+#endif
+            q_chunk = remap_q_index(q_iter, _proxy_q_num_effective, _flat_use_zigzag) % _proxy_q_num_effective +
+                      _proxy_q_chunk_offset;
 #elif defined BALANCED_Q_PARALLEL
             uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
             if (q_iter < q_chunk_div_2) {             // bottom half
@@ -1788,8 +1799,15 @@ void sdpa_inner_loop(
 
         uint32_t k_chunk_end;
         if constexpr (sdpa_type == STANDARD) {
+#if defined(SDPA_RING_PROXY_UP)
+            // Ring proxy UP (single-chip): cap K loop at k_num_chunks/2 to mirror the ring_joint
+            // non-diag iter that sees only half of K per Q. For STANDARD path sdpa_standard passes
+            // iter_k_chunk_end == k_num_chunks, so iter_k_chunk_end / 2 == k_num_chunks / 2.
+            k_chunk_end = iter_k_chunk_end / 2;
+#else
             // loop while k_low < q_high => (k_chunk * Sk_chunk_t) < q_high_tile.
             k_chunk_end = (q_high_tile + Sk_chunk_t - 1) / Sk_chunk_t;
+#endif
         } else {  // RING or JOINT.
             k_chunk_end = iter_k_chunk_end;
         }
