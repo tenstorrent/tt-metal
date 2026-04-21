@@ -34,6 +34,12 @@ public:
     void post_teardown() override;
     bool is_initialized() const override;
 
+    // FIX E (#42429): Return the set of non-MMIO device IDs whose ETH relay path was confirmed
+    // broken during fabric init (relay_broken=true in terminate_stale_erisc_routers).
+    // DeviceManager uses this to skip dispatch kernel initialization for unreachable devices —
+    // dispatch writes to non-MMIO devices go through the same dead ETH relay and hang.
+    const std::unordered_set<ChipId>& get_dead_relay_devices() const { return dead_relay_devices_; }
+
 private:
     // Compile fabric on all devices, parallelized via async.
     // Configure fabric sequentially (Galaxy hangs if parallelized).
@@ -65,12 +71,6 @@ private:
     //   Callers use this to skip dispatch kernel initialization for unreachable non-MMIO devices.
     std::pair<std::unordered_set<uint32_t>, bool> terminate_stale_erisc_routers(
         Device* dev, const tt_fabric::FabricBuilderContext& builder_context) const;
-
-    // FIX E (#42429): Return the set of non-MMIO device IDs whose ETH relay path was confirmed
-    // broken during fabric init (relay_broken=true in terminate_stale_erisc_routers).
-    // DeviceManager uses this to skip dispatch kernel initialization for unreachable devices —
-    // dispatch writes to non-MMIO devices go through the same dead ETH relay and hang.
-    const std::unordered_set<ChipId>& get_dead_relay_devices() const { return dead_relay_devices_; }
 
     tt::tt_fabric::ControlPlane& control_plane_;
     std::vector<Device*> devices_;
