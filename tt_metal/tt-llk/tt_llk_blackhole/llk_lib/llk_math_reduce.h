@@ -73,17 +73,28 @@ inline void reduce_row_perform_transpose()
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 12);
 
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+        // Phase 3: write transposed scratch to fp32 DEST face (MATH-only, no SFPU).
+        // Hi16: enable dst_32bit_addr_en=1 so MOVB2D DEST_NORM write_dst16b routes
+        //       through write_dst32b (adj_row), correctly targeting face hi16 rows.
+        // Lo16: MOVB2D DEST_32B_LOW (dest_32b_lo=1) already uses adj_row RMW path;
+        //       keep Fp32_enabled=0 to avoid BH Issue #449 HW bug on that combination.
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
+        _llk_math_dbg_feature_disable_(); // dst_32bit_addr_en = 1
 
-        // Phase 3: replay from slot 0 (body recorded once in _llk_math_reduce_init_).
-        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-#pragma GCC unroll 8
-        for (std::uint32_t i = 0; i < 8; i++)
-        {
-            lltt::replay(0, 3);
-        }
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, HI16_STAGE);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
+        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+
+        _llk_math_dbg_feature_enable_(); // dst_32bit_addr_en = 0
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
     }
     else
     {
@@ -334,24 +345,7 @@ inline void _llk_math_reduce_init_()
     if constexpr (enforce_fp32_accumulation)
     {
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
-
-        // ADDR_MOD_7: dest.incr=2 for Phase 3 replay advancing SFPU DstRWC by 2 per iter.
-        addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 2},
-        }
-            .set(ADDR_MOD_7);
-
-        // Record Phase 3 recombine body once; reduce_row_perform_transpose replays it x8.
-        // LO16_STAGE=144, HI16_STAGE=128: load lo16 then hi16 (HI16_ONLY preserves lo16),
-        // store as INT32. ADDR_MOD_7 on STORE advances SFPU DstRWC +2 per replay iter.
-        constexpr std::uint32_t HI16_STAGE = 128;
-        constexpr std::uint32_t LO16_STAGE = 144;
-        lltt::record<lltt::NoExec>(0, 3);
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_0, LO16_STAGE);
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, HI16_STAGE);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        // Phase 3 is now MATH-only (MOVB2D hi16+lo16): no SFPU replay body to record.
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
