@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     // X = output width
@@ -178,8 +179,9 @@ void kernel_main() {
         }
 
         // Reserve a slot in the circular buffer, get L1 pointer
-        cb_reserve_back(tt::CBIndex::c_0, 1);
-        uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
+        experimental::CircularBuffer cb(tt::CBIndex::c_0);
+        cb.reserve_back(1);
+        uint32_t src_buffer_l1_addr = cb.get_write_ptr();
 
         // --------------------------------------------------------------------
         // 5.1) Async read for [x_start..x_end)
@@ -261,7 +263,7 @@ void kernel_main() {
 
         // Wait for reads to complete, push the tile
         noc_async_read_barrier();
-        cb_push_back(tt::CBIndex::c_0, 1);
+        cb.push_back(1);
     }
 
     // ------------------------------------------------------------------------
@@ -269,9 +271,10 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     if constexpr (needs_y_padding) {
         // We store one chunk of padding in c_3
-        cb_reserve_back(tt::CBIndex::c_3, 1);
-        uint32_t l1_write_addr = get_write_ptr(tt::CBIndex::c_3);
+        experimental::CircularBuffer cb3(tt::CBIndex::c_3);
+        cb3.reserve_back(1);
+        uint32_t l1_write_addr = cb3.get_write_ptr();
         tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);
-        cb_push_back(tt::CBIndex::c_3, 1);
+        cb3.push_back(1);
     }
 }
