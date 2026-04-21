@@ -344,7 +344,7 @@ void kernel_main() {
                             neighbor_sem_noc0_x, neighbor_sem_noc0_y, recv_buf_base + l1_buf_offset, 0);
                         l1_buf_offset += stick_size;
                     } else {
-                        dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor, 0, 0);
+                        dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id, 0, 0);
                     }
 
                     pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, stick_size);

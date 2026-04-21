@@ -192,7 +192,7 @@ void kernel_main() {
                 cb_wait_front(cb_output_id, 1);
                 uint32_t l1_read_addr = get_read_ptr(cb_output_id);
 
-                uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
+                uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id);
                 noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
 
                 dst_stick_id++;
