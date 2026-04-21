@@ -41,8 +41,8 @@ class ReduceUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        num_faces = operation.num_faces
-        face_r_dim = operation.face_r_dim
+        num_faces = operation.src_a.tile_shape.total_num_faces()
+        face_r_dim = operation.src_a.tile_shape.face_r_dim
         return (
             f"_perf_unpack_loop_set_valid<false, true>(1);\n"
             f"_perf_unpack_loop_set_valid<true, false>({face_r_dim * num_faces});\n"
@@ -55,8 +55,8 @@ class ReduceUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        num_faces = operation.num_faces
-        face_r_dim = operation.face_r_dim
+        num_faces = operation.src_a.tile_shape.total_num_faces()
+        face_r_dim = operation.src_a.tile_shape.face_r_dim
         return (
             f"_perf_math_loop_clear_valid<false, true>(1);\n"
             f"_perf_math_loop_clear_valid<true, false>({face_r_dim * num_faces});\n"

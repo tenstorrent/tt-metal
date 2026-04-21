@@ -28,6 +28,7 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 
 from .block_data import BlockData
 from .fused_fpu import Fpu
+from .fused_operand import Operand
 from .fused_sfpu import Sfpu
 from .fused_unpacker import Unpacker
 
@@ -38,6 +39,8 @@ class ComputeNode:
         unpacker: Unpacker = None,
         fpu: Fpu = None,
         sfpu: Sfpu = None,
+        src_a: Operand = None,
+        src_b: Operand = None,
         unpack_transpose_faces: Transpose = Transpose.No,
         unpack_transpose_within_face: Transpose = Transpose.No,
         broadcast_type: BroadcastType = BroadcastType.None_,
@@ -72,6 +75,8 @@ class ComputeNode:
         self.clear_fp32_dst_acc = clear_fp32_dst_acc
         self.acc_to_dest = acc_to_dest
         self.unpack_to_dest = unpack_to_dest
+        self.src_a = src_a
+        self.src_b = src_b
 
         if (
             self.broadcast_type != BroadcastType.None_

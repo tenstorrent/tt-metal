@@ -33,7 +33,6 @@ class FusedOperation:
     partial_face_B: bool = False
     partial_face: bool = False
     dest_sync: DestSync = DestSync.Half
-    dst_index: int = 0
     srca_reuse_count: int = 4
     block_size: Tuple[int, int] = (32, 32)
     bh_tilize: Tilize = Tilize.No
@@ -46,18 +45,6 @@ class FusedOperation:
         src_b = registry.get(mapping.src_b)
         output = registry.get(mapping.output)
 
-        self.in0_tile_r_dim = src_a.tile_shape.total_row_dim()
-        self.in0_tile_c_dim = src_a.tile_shape.total_col_dim()
-        self.num_faces_A = src_a.tile_shape.total_num_faces()
-
-        self.in1_tile_r_dim = src_b.tile_shape.total_row_dim()
-        self.in1_tile_c_dim = src_b.tile_shape.total_col_dim()
-        self.num_faces_B = src_b.tile_shape.total_num_faces()
-
-        self.face_r_dim = output.tile_shape.face_r_dim
-        self.face_c_dim = output.tile_shape.face_c_dim
-        self.num_faces = output.tile_shape.total_num_faces()
-
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
             DataFormat.Float32: 256,
@@ -68,18 +55,19 @@ class FusedOperation:
         unpack_size_b = TILE_SIZES.get(src_b.data_format, 128)
 
         if self.tiny_tiles:
-            pack_size = (pack_size // self.num_faces) * (
-                self.in0_tile_r_dim // self.face_r_dim
+            pack_size = (pack_size // self.output.tile_shape.total_num_faces()) * (
+                self.in0_tile_r_dim // self.output.tile_shape.face_r_dim
             )
-            unpack_size_a = (unpack_size_a // self.num_faces_A) * (
-                self.in0_tile_r_dim // self.face_r_dim
-            )
+            unpack_size_a = (
+                unpack_size_a // self.src_a.tile_shape.total_num_faces()
+            ) * (self.in0_tile_r_dim // self.src_a.tile_shape.face_r_dim)
+            unpack_size_b = (
+                unpack_size_a // self.src_a.tile_shape.total_num_faces()
+            ) * (self.in0_tile_r_dim // self.src_b.tile_shape.face_r_dim)
 
         self.tile_size_pack = pack_size
         self.tile_size_unpack_a = unpack_size_a
         self.tile_size_unpack_b = unpack_size_b
-
-        self.tile_size = 16 * 16 * self.num_faces
 
         self.buffer_A_tile_size = format_tile_sizes[self.src_a.data_format]
         self.buffer_B_tile_size = format_tile_sizes[self.src_b.data_format]

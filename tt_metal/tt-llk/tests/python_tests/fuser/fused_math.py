@@ -152,10 +152,10 @@ class ComputePipeline:
         unpa_tile_size = operation.tile_size_unpack_a
         unpb_tile_size = operation.tile_size_unpack_b
         dest_acc = config.dest_acc.cpp_enum_value
-        unpa_face_r_dim = operation.face_r_dim
-        unpb_face_r_dim = operation.face_r_dim
-        unpa_num_faces = operation.num_faces_A
-        unpb_num_faces = operation.num_faces_B
+        unpa_face_r_dim = operation.src_a.tile_shape.face_r_dim
+        unpb_face_r_dim = operation.src_b.tile_shape.face_r_dim
+        unpa_num_faces = operation.src_a.tile_shape.total_num_faces()
+        unpb_num_faces = operation.src_b.tile_shape.total_num_faces()
 
         if stage == 1:
             code = (
@@ -364,8 +364,8 @@ class ComputePipeline:
         bh_tilize = operation.bh_tilize.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         pack_size = operation.tile_size_pack
-        face_r_dim = operation.face_r_dim
-        num_faces = operation.num_faces
+        face_r_dim = operation.output.tile_shape.face_r_dim
+        num_faces = operation.output.tile_shape.total_num_faces()
 
         if stage == 1:
             if config.architecture == ChipArchitecture.BLACKHOLE:

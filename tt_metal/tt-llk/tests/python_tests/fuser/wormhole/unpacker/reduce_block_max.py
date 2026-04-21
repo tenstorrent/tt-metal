@@ -51,7 +51,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         compute_unit: "ComputeNode",
         block: "BlockData",
     ) -> str:
-        face_r_dim = operation.face_r_dim
+        face_r_dim = operation.src_a.tile_shape.face_r_dim
         return f"_llk_unpack_AB_reduce_block_max_row_uninit_({face_r_dim}, {face_r_dim});\n"
 
     def perf_set_valid(
