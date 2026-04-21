@@ -145,9 +145,18 @@ void write_launch_msg_to_core(
     uint64_t go_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
     cluster.write_core_immediate(msg.data(), msg.size(), {static_cast<size_t>(chip), core}, launch_addr);
+
     tt_driver_atomics::sfence();
     if (send_go) {
+        log_info(
+            tt::LogMetal,
+            "Writing GO message to core {} at address {} signal={:#04x} size={}",
+            core.str(),
+            go_addr,
+            go_msg.signal(),
+            go_msg.size());
         cluster.write_core_immediate(go_msg.data(), go_msg.size(), {static_cast<size_t>(chip), core}, go_addr);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 }
 

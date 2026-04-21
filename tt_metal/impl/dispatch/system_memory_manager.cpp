@@ -764,6 +764,14 @@ void SystemMemoryManager::completion_queue_pop_front(uint32_t num_pages_read, co
 }
 
 void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id, bool stall_prefetcher) {
+    log_info(
+        tt::LogMetal,
+        "TRACE: fetch_queue_write ENTRY cq={} size={} stall={} bypass={} mock={}",
+        cq_id,
+        command_size_B,
+        stall_prefetcher,
+        this->bypass_enable,
+        is_mock_device());
     if (is_mock_device()) {
         return;
     }
@@ -778,6 +786,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         (command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
     TT_ASSERT(command_size_B > 0, "Command size must be greater than 0");
     if (this->bypass_enable) {
+        log_info(tt::LogMetal, "TRACE: fetch_queue_write BYPASS early return");
         return;
     }
     tt_driver_atomics::sfence();
@@ -792,8 +801,32 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         command_size_16B |= (1 << ((sizeof(DispatchSettings::prefetch_q_entry_type) * 8) - 1));
     }
     auto& ctx = tt::tt_metal::MetalContext::instance(this->context_id);
+    uint32_t command_size_padded = command_size_16B;
     ctx.get_cluster().write_core(
-        &command_size_16B, sizeof(command_size_16B), this->prefetcher_cores[cq_id], this->prefetch_q_dev_ptrs[cq_id]);
+        &command_size_padded,
+        sizeof(command_size_padded),
+        this->prefetcher_cores[cq_id],
+        this->prefetch_q_dev_ptrs[cq_id]);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // READBACK
+    uint32_t readback = 0xDEADBEEF;
+    ctx.get_cluster().read_core(
+        &readback, sizeof(readback), this->prefetcher_cores[cq_id], this->prefetch_q_dev_ptrs[cq_id]);
+    log_info(
+        tt::LogMetal,
+        "TRACE: fetch_queue_write wrote 0x{:x} to core {} addr 0x{:x}; readback=0x{:x}",
+        command_size_padded,
+        this->prefetcher_cores[cq_id].str(),
+        this->prefetch_q_dev_ptrs[cq_id],
+        readback);
+    // readback the value of the prefetch_q_dev_ptrs[cq_id]
+    //  uint32_t prefetch_q_dev_ptrs_value;
+    //  ctx.get_cluster().read_core(
+    //      &prefetch_q_dev_ptrs_value,
+    //      sizeof(command_size_16B),
+    //      this->prefetcher_cores[cq_id],
+    //      this->prefetch_q_dev_ptrs[cq_id] + 4194304);
+    //  log_info(LogMetal,"prefetch_q_dev_ptrs_value: {}", prefetch_q_dev_ptrs_value);
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
 }
 

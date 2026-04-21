@@ -56,6 +56,7 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     // Below relies on taking the diff first then the compare to move the wrap
     // to 2^31 away
     int32_t diff = a - b;
+    // DPRINT << "wrap_gt: a: " << a << " b: " << b << " diff: " << diff << ENDL();
     return diff > 0;
 }
 
@@ -100,9 +101,9 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
     uint32_t ndests = 1,
     uint8_t noc = noc_index) {
     if constexpr (wait) {
-        WAYPOINT("CNSW");
+        WAYPOINT("CMSW");
         while (!noc_cmd_buf_ready(noc, cmd_buf));
-        WAYPOINT("CNSD");
+        WAYPOINT("CMSD");
     }
     noc_wwrite_with_state<DM_DEDICATED_NOC, cmd_buf, flags, CQ_NOC_send, CQ_NOC_wait, false>(
         noc, src_addr, dst_noc_addr, dst_addr, size, ndests);
@@ -349,6 +350,8 @@ public:
             }
         }
 #endif
+        DPRINT << "release_pages: sem_addr: " << (uintptr_t)get_semaphore<fd_core_type>(downstream_sem_id)
+               << "sem id: " << downstream_sem_id << ENDL();
         noc_semaphore_inc(
             get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
     }
@@ -426,6 +429,7 @@ protected:
     FORCE_INLINE uint32_t acquire_pages() {
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+        DPRINT << "acquire_pages: sem_addr: " << (uintptr_t)sem_addr << "sem id: " << my_sem_id << ENDL();
 
         if (local_count_ == upstream_count_) {
             WAYPOINT("UAPW");
