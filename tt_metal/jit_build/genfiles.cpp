@@ -77,26 +77,7 @@ void write_file(const std::filesystem::path& path, const std::string& content) {
     {
         std::ifstream existing;
         std::error_code open_ec;
-        const bool existing_is_open = tt::filesystem::retry_on_estale_ec(
-            [&](std::error_code& ec) {
-                existing.clear();
-                if (existing.is_open()) {
-                    existing.close();
-                }
-
-                errno = 0;
-                existing.open(path, std::ios::binary);
-                if (!existing.is_open()) {
-                    if (errno != 0) {
-                        ec.assign(errno, std::system_category());
-                    } else {
-                        ec = std::make_error_code(std::errc::io_error);
-                    }
-                    return false;
-                }
-                return true;
-            },
-            open_ec);
+        const bool existing_is_open = tt::filesystem::safe_open(existing, path, std::ios::binary, open_ec);
 
         if (existing_is_open) {
             std::string old_content((std::istreambuf_iterator<char>(existing)), std::istreambuf_iterator<char>());

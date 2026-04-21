@@ -122,25 +122,7 @@ public:
 
         std::ifstream dep_file;
         std::error_code open_ec;
-        const bool dep_file_opened = tt::filesystem::retry_on_estale_ec(
-            [&](std::error_code& ec) {
-                if (dep_file.is_open()) {
-                    dep_file.close();
-                }
-                dep_file.clear();
-                errno = 0;
-                dep_file.open(path, std::ios::binary);
-                if (!dep_file.is_open()) {
-                    if (errno != 0) {
-                        ec.assign(errno, std::system_category());
-                    } else {
-                        ec = std::make_error_code(std::errc::io_error);
-                    }
-                    return false;
-                }
-                return true;
-            },
-            open_ec);
+        const bool dep_file_opened = tt::filesystem::safe_open(dep_file, path, std::ios::binary, open_ec);
 
         if (!dep_file_opened) {
             return {0, false};
@@ -239,46 +221,14 @@ void write_dependency_hashes(
 
     std::ofstream hash_file;
     std::error_code open_ec;
-    const bool hash_file_opened = tt::filesystem::retry_on_estale_ec(
-        [&](std::error_code& ec) {
-            if (hash_file.is_open()) {
-                hash_file.close();
-            }
-            hash_file.clear();
-            errno = 0;
-            hash_file.open(hash_path);
-            if (!hash_file.is_open()) {
-                const int open_errno = errno;
-                ec.assign(open_errno != 0 ? open_errno : EIO, std::system_category());
-                return false;
-            }
-            ec.clear();
-            return true;
-        },
-        open_ec);
+    const bool hash_file_opened = tt::filesystem::safe_open(hash_file, hash_path, open_ec);
     if (!hash_file_opened) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for writing.", hash_path);
         return;
     }
 
     std::ifstream dep_file;
-    const bool dep_file_opened = tt::filesystem::retry_on_estale_ec(
-        [&](std::error_code& ec) {
-            if (dep_file.is_open()) {
-                dep_file.close();
-            }
-            dep_file.clear();
-            errno = 0;
-            dep_file.open(dep_path);
-            if (!dep_file.is_open()) {
-                const int open_errno = errno;
-                ec.assign(open_errno != 0 ? open_errno : EIO, std::system_category());
-                return false;
-            }
-            ec.clear();
-            return true;
-        },
-        open_ec);
+    const bool dep_file_opened = tt::filesystem::safe_open(dep_file, dep_path, open_ec);
     if (!dep_file_opened) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for reading.", dep_path);
         hash_file.setstate(std::ios::badbit);
@@ -339,16 +289,7 @@ bool dependencies_up_to_date(const std::filesystem::path& out_dir, const std::fi
 
     std::ifstream hash_file;
     std::error_code open_ec;
-    const bool hash_file_is_open = tt::filesystem::retry_on_estale_ec(
-        [&](std::error_code& ec) {
-            hash_file.open(hash_path);
-            if (!hash_file.is_open()) {
-                ec.assign(errno, std::system_category());
-                return false;
-            }
-            return true;
-        },
-        open_ec);
+    const bool hash_file_is_open = tt::filesystem::safe_open(hash_file, hash_path, open_ec);
 
     if (!hash_file_is_open) {
         log_debug(tt::LogBuildKernels, "Dependency hash file {} does not exist.", hash_path.string());

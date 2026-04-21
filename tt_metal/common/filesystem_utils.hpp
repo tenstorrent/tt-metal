@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <system_error>
 #include <thread>
@@ -210,6 +211,66 @@ bool retry_on_estale_ec(Operation operation, std::error_code& ec) {
         }
     }
     return false;
+}
+
+// Safe fstream open with ESTALE retry.
+//
+// Before each attempt the stream is closed (if open) and cleared so it can be
+// reopened cleanly.  errno is zeroed immediately before the open call; if the
+// open fails, ec is populated from errno (falling back to EIO when errno is 0).
+//
+// Returns true when the stream is successfully opened; on failure ec holds the
+// error from the last attempt.
+//
+// Overload with explicit open mode:
+template <typename Stream>
+bool safe_open(Stream& stream, const std::filesystem::path& path, std::ios::openmode mode, std::error_code& ec) {
+    return retry_on_estale_ec(
+        [&](std::error_code& inner_ec) {
+            if (stream.is_open()) {
+                stream.close();
+            }
+            stream.clear();
+            errno = 0;
+            stream.open(path, mode);
+            if (!stream.is_open()) {
+                const int open_errno = errno;
+                if (open_errno != 0) {
+                    inner_ec.assign(open_errno, std::system_category());
+                } else {
+                    inner_ec = std::make_error_code(std::errc::io_error);
+                }
+                return false;
+            }
+            return true;
+        },
+        ec);
+}
+
+// Overload that uses the stream's own default open mode (std::ios::in for
+// ifstream, std::ios::out for ofstream, etc.).
+template <typename Stream>
+bool safe_open(Stream& stream, const std::filesystem::path& path, std::error_code& ec) {
+    return retry_on_estale_ec(
+        [&](std::error_code& inner_ec) {
+            if (stream.is_open()) {
+                stream.close();
+            }
+            stream.clear();
+            errno = 0;
+            stream.open(path);
+            if (!stream.is_open()) {
+                const int open_errno = errno;
+                if (open_errno != 0) {
+                    inner_ec.assign(open_errno, std::system_category());
+                } else {
+                    inner_ec = std::make_error_code(std::errc::io_error);
+                }
+                return false;
+            }
+            return true;
+        },
+        ec);
 }
 
 // Flush all pending writes on the filesystem containing `path` to stable storage.
