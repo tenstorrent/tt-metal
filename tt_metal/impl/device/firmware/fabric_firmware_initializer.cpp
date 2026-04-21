@@ -956,14 +956,23 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
             //   indicating the non-MMIO device's ETH relay path is fully broken.
             //   FIX E: track these devices so DeviceManager can skip dispatch kernel init
             //   for them (dispatch writes also route through the dead ETH relay and hang).
+            // FIX E2 (#42429): also mark as dead-relay when probe_dead_channels is non-empty
+            //   even if relay_broken is false (relay_timeout_count < kMaxRelayTimeouts=3).
+            //   With N probe-read timeouts, the relay has N stuck commands in its 4-slot queue.
+            //   Dispatch firmware initialization writes to non-ETH cores via the same relay and
+            //   can fill the remaining (4-N) slots → hang.  Any probe timeout means the relay
+            //   is compromised for subsequent writes.
             auto [probe_dead_channels, relay_broken] = terminate_stale_erisc_routers(dev, builder_context);
-            if (relay_broken) {
+            if (relay_broken || !probe_dead_channels.empty()) {
                 dead_relay_devices_.insert(dev->id());
                 log_warning(
                     tt::LogMetal,
-                    "compile_and_configure_fabric: Device {} ETH relay broken — marking as dead-relay device. "
-                    "Dispatch kernel initialization will be skipped for this device (#42429 FIX E).",
-                    dev->id());
+                    "compile_and_configure_fabric: Device {} ETH relay compromised (relay_broken={}, "
+                    "probe_dead_channels={}) — marking as dead-relay device. "
+                    "Dispatch kernel initialization will be skipped (#42429 FIX E2).",
+                    dev->id(),
+                    relay_broken,
+                    probe_dead_channels.size());
             }
 
             dev->configure_fabric(probe_dead_channels);
