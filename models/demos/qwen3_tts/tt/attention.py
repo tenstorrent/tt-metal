@@ -344,7 +344,7 @@ class Attention(LightweightModule):
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
         # HiFi3 + fp32 accumulation for float32 attention matmuls (Wormhole: HiFi4 + fp32 acc has a
@@ -354,7 +354,7 @@ class Attention(LightweightModule):
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
         # Pre-compute HEIGHT_SHARDED memory config for paged_update_cache input.
@@ -450,25 +450,19 @@ class Attention(LightweightModule):
         """
         batch_size = x.shape[0]
         is_decode = mode == "decode"
+        _d = ttnn.DRAM_MEMORY_CONFIG
 
-        # Use DRAM for attention linear ops - L1 showed no benefit and adds overhead
-        # linear_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-
-        # QKV projection
-        xqkv = ttnn.linear(
-            x, self.wqkv, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        xqkv = ttnn.linear(x, self.wqkv, compute_kernel_config=self.compute_kernel_config, memory_config=_d)
 
         # Split: Q [b, num_heads, seq, head_dim], K/V [b, num_kv_heads, seq, head_dim]
         # Note: Unlike Qwen VL, we can't use nlp_create_qkv_heads_decode because Qwen3-TTS
         # has QK-norm (rms_norm) which requires interleaved memory, breaking the sharded flow.
-        # Keep in DRAM to preserve precision for QK-norm.
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=self.num_heads,
             num_kv_heads=self.num_kv_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=_d,
         )
         ttnn.deallocate(xqkv)
 
@@ -707,27 +701,25 @@ class Attention(LightweightModule):
 
         # Float32 scaled dot-product attention via ttnn.matmul + ttnn.softmax
         q_seq = q_f32.shape[2]
-        k_t = ttnn.transpose(k_exp, -2, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        scores = ttnn.matmul(
-            q_f32, k_t, compute_kernel_config=self.sdpa_compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        k_t = ttnn.transpose(k_exp, -2, -1, memory_config=_d)
+        scores = ttnn.matmul(q_f32, k_t, compute_kernel_config=self.sdpa_compute_kernel_config, memory_config=_d)
         ttnn.deallocate(k_t)
         ttnn.deallocate(q_f32)
-        scores = ttnn.mul(scores, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+        scores = ttnn.mul(scores, self.scale, memory_config=_d)
 
         if decode_attn_mask is not None:
             # Trace-compatible decode mask: pre-allocated float32 [1,1,1,max_seq] device tensor.
             # Broadcast over num_heads dim: [1,1,1,max_seq] → [1,num_heads,1,max_seq].
-            scores = ttnn.add(scores, decode_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+            scores = ttnn.add(scores, decode_attn_mask, memory_config=_d)
         elif cp_prefill_mask is not None:
             # Trace-compatible CP prefill mask: pre-allocated float32 [1,1,seq,max_seq].
             # Encodes causal masking over the full cache (positions beyond seq are -inf).
-            scores = ttnn.add(scores, cp_prefill_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+            scores = ttnn.add(scores, cp_prefill_mask, memory_config=_d)
         elif prefill_attn_mask is not None:
             # Trace-compatible Talker prefill mask: [1, num_heads, padded_seq, max_seq].
             # Encodes causal + padding masking: real positions attend only to prior real
             # positions; padding query rows and empty cache columns are -inf.
-            scores = ttnn.add(scores, prefill_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+            scores = ttnn.add(scores, prefill_attn_mask, memory_config=_d)
         elif q_seq == k_seq and q_seq > 1:
             # Causal mask for standard prefill (full sequence self-attention)
             # Torch reference:
@@ -741,7 +733,7 @@ class Attention(LightweightModule):
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=_d,
             )
             _cm_upper = ttnn.triu(_cm_ones, diagonal=1)
             ttnn.deallocate(_cm_ones)
@@ -750,7 +742,7 @@ class Attention(LightweightModule):
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=_d,
             )
             _cm_neg_inf = ttnn.full(
                 _cm_shape,
@@ -758,23 +750,23 @@ class Attention(LightweightModule):
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=_d,
             )
             mask_tt = ttnn.where(_cm_upper, _cm_neg_inf, _cm_zeros)
             ttnn.deallocate(_cm_upper)
             ttnn.deallocate(_cm_zeros)
             ttnn.deallocate(_cm_neg_inf)
-            scores = ttnn.add(scores, mask_tt, memory_config=ttnn.L1_MEMORY_CONFIG)
+            scores = ttnn.add(scores, mask_tt, memory_config=_d)
             ttnn.deallocate(mask_tt)
 
-        attn_weights = ttnn.softmax(scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn_weights = ttnn.softmax(scores, dim=-1, memory_config=_d)
         ttnn.deallocate(scores)
 
         attn_output_f32 = ttnn.matmul(
             attn_weights,
             v_exp,
             compute_kernel_config=self.sdpa_compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=_d,
         )
         ttnn.deallocate(attn_weights)
         ttnn.deallocate(v_exp)
@@ -784,7 +776,7 @@ class Attention(LightweightModule):
         ttnn.deallocate(attn_output_f32)
 
         # Reshape: [b, num_heads, seq, head_dim] → [b, 1, seq, hidden_size]
-        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=_d)
 
         # Pad M rows (tile-aligned) so Mt grows → schedulers use ~gy×gx blocks (~104+) vs ~4×13 (~52).
         # Pad comes from self._oproj_pad_bank (allocated in __init__), not ttnn.zeros in forward.

@@ -164,7 +164,7 @@ class CodePredictor(LightweightModule):
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
     def get_codec_embedding(self, code_idx: int, token_ids_tt: ttnn.Tensor) -> ttnn.Tensor:

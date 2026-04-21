@@ -143,7 +143,7 @@ class MLP(LightweightModule):
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
         cg = device.compute_with_storage_grid_size()

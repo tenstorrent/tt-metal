@@ -85,7 +85,7 @@ class Talker(LightweightModule):
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=_dram,
             cache_file_name=get_cache_name("codec_embedding"),
             mesh_mapper=_mesh_mapper,
         )
@@ -219,7 +219,7 @@ class Talker(LightweightModule):
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
     def forward(
@@ -267,7 +267,7 @@ class Talker(LightweightModule):
             input_ids,
             embedding_weight,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         return self._forward_layers(
