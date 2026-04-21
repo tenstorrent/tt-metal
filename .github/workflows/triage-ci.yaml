@@ -57,6 +57,14 @@ on:
         description: "Detection mode: only include escapes whose fix transition happened in the last N days (0 = no filter)"
         type: string
         default: "0"
+      auto-verify:
+        description: "Detection mode: if 'true', run autonomous verification after detection"
+        type: string
+        default: "false"
+      verify-budget-hours:
+        description: "Detection mode: max hours to spend dispatching verification runs (auto-verify=true only)"
+        type: string
+        default: "6"
 
 permissions:
   contents: write
@@ -72,6 +80,8 @@ jobs:
       consecutive-runs: ${{ inputs.consecutive-runs }}
       lookback-days: ${{ inputs.lookback-days }}
       incremental-days: ${{ inputs.incremental-days }}
+      auto-verify: ${{ inputs.auto-verify }}
+      verify-budget-hours: ${{ inputs.verify-budget-hours }}
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
