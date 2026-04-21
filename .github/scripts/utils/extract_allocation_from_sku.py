@@ -18,11 +18,32 @@ def main():
     sku_config_path = sys.argv[2]
 
     # Sanitize file path to prevent path traversal attacks
-    # Resolve to absolute canonical path and verify it exists
+    # Resolve to absolute canonical path
     try:
         sku_config_path = os.path.realpath(sku_config_path)
     except (OSError, ValueError) as e:
         print(f"::error::Invalid SKU config path: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Determine the repository root (script is in .github/scripts/utils/)
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    repo_root = os.path.realpath(os.path.join(script_dir, "..", "..", ".."))
+
+    # Verify the resolved path is within the repository to prevent path traversal
+    try:
+        os.path.commonpath([repo_root, sku_config_path])
+        if not sku_config_path.startswith(repo_root + os.sep):
+            print(
+                f"::error::SKU config path is outside repository: {sku_config_path}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    except ValueError:
+        # Paths are on different drives (Windows)
+        print(
+            f"::error::SKU config path is outside repository: {sku_config_path}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if not os.path.exists(sku_config_path):
