@@ -12,7 +12,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> e2e)
 
 # ============================================================================
-# BH SP1 Multihost Pipeline Tests
+# BH SP1 Multihost Pipeline Tests (4 connected galaxies)
 # ============================================================================
 
 - name: "Physical Discovery Test"
