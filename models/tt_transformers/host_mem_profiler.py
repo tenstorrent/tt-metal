@@ -17,17 +17,16 @@ OUTPUT_ROOT = Path("profiling_results")
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────
-def make_runner(model_cfg):
+def make_runner(model_cfg, k_filter=None):
     """Return a zero-arg callable that runs a model's test suite."""
 
     def run():
         env = os.environ.copy()
         env.update(model_cfg["env"])
-        result = subprocess.run(
-            [sys.executable, "-m", "pytest", model_cfg["test"], *PYTEST_EXTRA_ARGS],
-            capture_output=False,
-            env=env,
-        )
+        cmd = [sys.executable, "-m", "pytest", model_cfg["test"], *PYTEST_EXTRA_ARGS]
+        if k_filter:
+            cmd += ["-k", k_filter]
+        result = subprocess.run(cmd, capture_output=False, env=env)
         return result.returncode
 
     return run
@@ -52,10 +51,11 @@ def plot_results(name, elapsed, mib, out_dir):
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Profile host-side memory usage of a model test")
-    parser.add_argument("--name", required=True, help="Model display name (e.g. Llama-3.1-8B)")
-    parser.add_argument("--mesh-device", required=True, help="MESH_DEVICE value (e.g. N150, T3K)")
-    parser.add_argument("--hf-model", required=True, help="Hugging Face model ID")
-    parser.add_argument("--test", required=True, help="Pytest target path")
+    parser.add_argument("--name", default="Llama-3.2-1B-Instruct", help="Model display name (e.g. Llama-3.1-8B)")
+    parser.add_argument("--mesh-device", default="N150", help="MESH_DEVICE value (e.g. N150, T3K)")
+    parser.add_argument("--hf-model", default="meta-llama/Llama-3.2-1B-Instruct", help="Hugging Face model ID")
+    parser.add_argument("--test", default="models/tt_transformers/demo/simple_text_demo.py", help="Pytest target path")
+    parser.add_argument("-k", default=None, help="pytest -k filter expression")
     args = parser.parse_args()
 
     model = {
@@ -70,7 +70,7 @@ if __name__ == "__main__":
     logger.info(f"\n{'='*60}\nProfiling: {model['name']}\n{'='*60}")
 
     mem_ts, _ = memory_usage(
-        (make_runner(model), [], {}),
+        (make_runner(model, args.k), [], {}),
         interval=0.1,
         retval=True,
         timestamps=True,
