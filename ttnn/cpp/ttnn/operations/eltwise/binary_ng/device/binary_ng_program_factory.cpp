@@ -332,7 +332,10 @@ bool is_llk_bcast(
         }
         if (all_match(DataType::FLOAT32) || all_match(DataType::INT32) || all_match(DataType::UINT32) ||
             all_match(DataType::UINT16)) {
-            return true;
+            tt::ARCH arch = tt::tt_metal::hal::get_arch();
+            if (arch == tt::ARCH::WORMHOLE_B0) {
+                return true;
+            }
         }
     }
 
@@ -769,15 +772,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                  sbt == SubtileBroadcastType::ROW_A || sbt == SubtileBroadcastType::ROW_B ||
                  sbt == SubtileBroadcastType::ROW_A_COL_B || sbt == SubtileBroadcastType::ROW_B_COL_A);
             if (uses_movb2d) {
-                // blackhole
-                // tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py::test_binary_w_typecast[layout=Layout.TILE-out_dtype=bfloat16-in_dtype=DataType.FLOAT32-ttnn_fn=ge-input_shapes=(torch.Size([5,
-                // 1, 64, 1]), torch.Size([1, 3, 1, 128]))]
-                // device hang
-                // tt-sim blackhole ERROR: UnsupportedFunctionality:
-                // tensix_execute_zeroacc: clear 32b 16 rows: clear_zero_flags=1 dst=0 row=1 dst_row_valid not already
-                // set
-                // tt-sim wormhole ERROR: UndefinedBehavior: tensix_execute_unpacr: unpack_to_dst=0 in_data_format=0
-                // out_data_format=0
                 use_llk_bcast = false;
             }
         }
