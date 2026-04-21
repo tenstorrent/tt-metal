@@ -184,6 +184,13 @@ struct RealtimeProfilerEligibility {
 //      cores, which cannot run the RT profiler's BRISC worker kernel.
 //   4. Defensive: the reserved coordinate lives inside the logical TENSIX grid
 //      (harvesting overlays could in principle produce a stale entry).
+//   5. Kernels are not nullified (DEBUG_NULL_KERNELS / TT_METAL_NULL_KERNELS).
+//      When active, the JIT replaces every non-dispatch kernel body — including
+//      the RT profiler BRISC/NCRISC — with a stub that returns immediately
+//      after wait_for_go_message(). The RT profiler state machine would never
+//      run, so every host sync would time out (~40s wasted per MeshDevice).
+//      Both host and device profiling are meaningless in this mode anyway
+//      because the user kernels being timed are themselves stubs.
 RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* device) {
     auto device_id = device->id();
     auto& metal = MetalContext::instance();
@@ -240,6 +247,20 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
             core.y,
             tensix_grid.x,
             tensix_grid.y);
+        return {};
+    }
+
+    // 5. Null-kernels mode: the RT profiler's BRISC/NCRISC bodies would be
+    //    stubbed out by -DDEBUG_NULL_KERNELS, so the on-device state machine
+    //    never runs and every host sync would time out. Skip cleanly.
+    if (metal.rtoptions().get_kernels_nullified()) {
+        log_info(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: null-kernels mode is active "
+            "(TT_METAL_NULL_KERNELS / set_kernels_nullified). The RT profiler kernel "
+            "would be replaced with a stub and could not respond to host syncs, and "
+            "there are no real user kernels to profile in this mode.",
+            device_id);
         return {};
     }
 
