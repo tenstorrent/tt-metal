@@ -24,7 +24,8 @@ bool exec_command(
 // Split a whitespace-delimited string into tokens (no shell quoting support).
 std::vector<std::string> tokenize_flags(const std::string& flags);
 
-void create_file(const std::filesystem::path& file_path_str);
+// Creates an empty file (and parent directories). Returns false if the file could not be created.
+bool create_file(const std::filesystem::path& file_path_str);
 
 // An RAII wrapper that generates a temporary filename and renames the file on destruction.
 // This is to allow multiple processes to write to the same target file without clobbering each other.

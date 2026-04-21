@@ -217,12 +217,11 @@ bool exec_command(
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
-void create_file(const std::filesystem::path& file_path) {
+bool create_file(const std::filesystem::path& file_path) {
     tt::filesystem::safe_create_directories(file_path.parent_path());
 
-    // just making sure the file is there. Don't need to worry about the state
-    [[maybe_unused]] std::error_code open_ec;
-    [[maybe_unused]] auto _ = tt::filesystem::retry_on_estale_ec(
+    std::error_code open_ec;
+    return tt::filesystem::retry_on_estale_ec(
         [&](std::error_code& ec) {
             errno = 0;
             std::ofstream file(file_path);

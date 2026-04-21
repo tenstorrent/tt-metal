@@ -79,9 +79,7 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
     }
 
     fs::path tmp_path = jit_build::utils::FileRenamer::generate_temp_path(marker_path);
-    std::ofstream file(tmp_path);
-    file.close();
-    if (!file.fail()) {
+    if (jit_build::utils::create_file(tmp_path)) {
         if (!tt::filesystem::safe_rename(tmp_path, marker_path, false)) {
             tt::filesystem::safe_remove(tmp_path);
             TT_THROW(
