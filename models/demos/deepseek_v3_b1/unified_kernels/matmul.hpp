@@ -139,6 +139,7 @@ struct Matmul {
             } else {
                 cb_wait_front(args.in1, args.k_num_tiles * out_w);
             }
+
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
@@ -194,17 +195,16 @@ struct Matmul {
             }
 
             custom_mm_block_uninit<dense_packing>();
+
             // Pop inputs
             if constexpr (pop_in0) {
                 cb_pop_front(args.in0, args.k_num_tiles);
             }
-
             if constexpr (pop_in1) {
                 cb_pop_front(args.in1, args.k_num_tiles * out_w);
             }
 
             cb_push_back(args.out, out_w);
-
 #endif
         }
     };  // class Op

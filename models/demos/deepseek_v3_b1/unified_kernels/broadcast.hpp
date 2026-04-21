@@ -117,9 +117,7 @@ struct Broadcast {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
-                        DEVICE_PRINT("Started\n");
                         socket_wait_for_pages(recv, args.socket_num_pages);
-                        DEVICE_PRINT("Ended\n");
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         invalidate_l1_cache();
                         noc_async_read(

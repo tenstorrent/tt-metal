@@ -187,7 +187,7 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores(num_links_bcast=1, num_links_allreduce=1):
-        # Pipeline semaphores: mcast (4) + gather (2) + rope (1) + MLA (6) + post-SDPA fused (10) + SDPA (2) + ccl_sync (1) + ccl_sync2 (1) = 26
+        # Pipeline semaphores: mcast (4) + gather (2) + rope (1) + MLA (6) + post-SDPA fused (10) + SDPA (2) + ccl_sync (1) + ccl_sync2 (1) = 27
         # Post-SDPA fused (10): gather2 noc0/noc1 (2) + mcast3 receiver (1) + gather3 noc0/noc1 (2)
         #                       + scatter_arrival (1) + sdpa fwd r1/r2 (2) + sdpa bwd r1/r2 (2)
         pipeline_num_semaphores = 27

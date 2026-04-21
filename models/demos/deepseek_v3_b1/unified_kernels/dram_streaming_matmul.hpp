@@ -202,6 +202,7 @@ struct DRAMStreamingMatmul {
 
             cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
             l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
+
             // CB base for boundary wrapping: compile-time addr when looping, runtime addr otherwise
             uint32_t cb_in1_base;
             if constexpr (ResetCBIn1) {
@@ -245,10 +246,12 @@ struct DRAMStreamingMatmul {
                 cb_push_back(CTArgs::cb_in1, CTArgs::subblock_k);
                 block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
             }
+
             // Pop index CB after the last consumer is done reading
             if constexpr (PopIndex && CTArgs::enable_indexing) {
                 cb_pop_front(CTArgs::cb_index, 1);
             }
+
             // Optionally wait for compute to finish writing output
             if constexpr (WaitForOutput) {
                 cb_wait_front(CTArgs::cb_out, CTArgs::out_num_tiles);
@@ -279,7 +282,9 @@ struct DRAMStreamingMatmul {
             } else {
                 pack_block_contiguous_init(CTArgs::cb_out);
             }
+
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
+
             for (uint32_t sb_n = 0; sb_n < num_subblocks_n; sb_n++) {
                 cb_reserve_back(CTArgs::cb_out, CTArgs::subblock_w);
 
@@ -358,6 +363,7 @@ struct DRAMStreamingMatmul {
                     pack_block_contiguous(0, CTArgs::cb_out, CTArgs::subblock_w);
                     tile_regs_release();
                 }
+
                 cb_push_back(CTArgs::cb_out, CTArgs::subblock_w);
             }
             custom_mm_block_uninit<dense_packing>();
@@ -365,6 +371,7 @@ struct DRAMStreamingMatmul {
             if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
                 deepseek_compute_kernel_hw_startup<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             }
+
             if constexpr (PopIn0) {
                 cb_pop_front(CTArgs::cb_in0, num_tiles_k);
             }
