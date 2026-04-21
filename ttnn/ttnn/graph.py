@@ -50,9 +50,12 @@ from ttnn.graph_report import (
 _python_io_data: list = []
 _python_io_recording_enabled: bool = False
 _python_stack_traces_enabled: bool = False
+# Sentinel meaning "no saved value" for _saved_python_stack_traces_before_outer_capture.
+# Using a distinct object (not None / True / False) lets us save any bool without ambiguity.
+_UNSET_STACK_TRACE_STATE = object()
 # When begin_graph_capture starts the outermost session, we force stack traces on for
 # graph_report / tensor_lifetime source columns and restore this value when capture ends.
-_saved_python_stack_traces_before_outer_capture = None
+_saved_python_stack_traces_before_outer_capture = _UNSET_STACK_TRACE_STATE
 
 # Glob patterns for frames to strip from stack traces (pathlib-style).
 # Matches ttnn internals (decorators/graph), pytest, pluggy, and the pytest entry script.
@@ -114,9 +117,9 @@ def is_python_stack_trace_enabled() -> bool:
 def _restore_python_stack_traces_after_outer_capture_if_saved():
     """Restore :data:`_python_stack_traces_enabled` after the outermost capture ends."""
     global _python_stack_traces_enabled, _saved_python_stack_traces_before_outer_capture
-    if _saved_python_stack_traces_before_outer_capture is not None:
+    if _saved_python_stack_traces_before_outer_capture is not _UNSET_STACK_TRACE_STATE:
         _python_stack_traces_enabled = _saved_python_stack_traces_before_outer_capture
-        _saved_python_stack_traces_before_outer_capture = None
+        _saved_python_stack_traces_before_outer_capture = _UNSET_STACK_TRACE_STATE
 
 
 def _capture_python_stack_trace() -> list[str]:
