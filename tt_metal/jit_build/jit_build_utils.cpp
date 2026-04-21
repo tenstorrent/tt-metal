@@ -278,10 +278,8 @@ std::filesystem::path FileRenamer::generate_temp_path(const std::filesystem::pat
     // foo.txt -> foo.42.txt
     // foo -> foo.42
 
-    std::filesystem::path filename = target_path.stem();
-    filename.concat(".");
-    filename.concat(std::to_string(unique_id_));
-    filename.concat(target_path.extension());
+    std::filesystem::path filename =
+        target_path.stem().string() + "." + std::to_string(unique_id_) + target_path.extension().string();
     return target_path.parent_path() / filename;
 }
 
