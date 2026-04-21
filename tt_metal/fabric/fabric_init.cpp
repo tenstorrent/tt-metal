@@ -75,7 +75,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_
     return nullptr;
 }
 
-bool configure_fabric_cores(
+FabricCoresHealth configure_fabric_cores(
     tt::tt_metal::IDevice* device, const std::unordered_set<uint32_t>& pre_known_dead_channels) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto soc_desc = cluster.get_soc_desc(device->id());
@@ -123,6 +123,10 @@ bool configure_fabric_cores(
     // the relay path works, so assert_risc_reset_at_core() should also succeed.  Those
     // channels proceed through normal soft reset here.
     std::unordered_set<uint32_t> dead_channels = pre_known_dead_channels;
+    // Track channels that NEWLY failed in this call (not pre-known).
+    // This lets the caller (configure_fabric) distinguish "expected degraded mode" from
+    // "unexpected new failure" — the former warrants a warning, the latter a hard throw.
+    std::unordered_set<uint32_t> newly_dead_channels;
     if (!pre_known_dead_channels.empty()) {
         all_channels_healthy = false;
         log_warning(
@@ -176,6 +180,7 @@ bool configure_fabric_cores(
                 // through ethernet and will hang indefinitely on a dead channel.
                 all_channels_healthy = false;
                 dead_channels.insert(router_chan);
+                newly_dead_channels.insert(router_chan);
                 log_warning(
                     tt::LogMetal,
                     "configure_fabric_cores: Failed ERISC0 soft reset on device {} channel {}: {}. "
@@ -186,6 +191,7 @@ bool configure_fabric_cores(
             } catch (...) {
                 all_channels_healthy = false;
                 dead_channels.insert(router_chan);
+                newly_dead_channels.insert(router_chan);
                 log_warning(
                     tt::LogMetal,
                     "configure_fabric_cores: Failed ERISC0 soft reset on device {} channel {} "
@@ -216,7 +222,7 @@ bool configure_fabric_cores(
         }
     }
 
-    return all_channels_healthy;
+    return FabricCoresHealth{all_channels_healthy, std::move(newly_dead_channels)};
 }
 
 }  // namespace tt::tt_fabric

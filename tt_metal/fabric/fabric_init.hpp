@@ -14,11 +14,21 @@ namespace tt::tt_fabric {
 // Compile fabric kernels needed to support scaleout systems.
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_metal::IDevice* device);
 
+// Result returned by configure_fabric_cores().
+// all_channels_healthy: true iff every active ETH channel completed its soft reset.
+// newly_dead_channels:  channels that NEWLY failed soft reset in this call — i.e. not in
+//                       pre_known_dead_channels.  Empty when the only dead channels were
+//                       already known before configure_fabric_cores() was called.
+struct FabricCoresHealth {
+    bool all_channels_healthy;
+    std::unordered_set<uint32_t> newly_dead_channels;
+};
+
 // Perform additional configuration (writing to specific L1 addresses, etc.) for fabric kernels on this device.
-// Returns true if all active ETH channels completed their soft reset successfully; false if any channel's
-// assert/deassert_risc_reset_at_core threw (e.g. timeout on a dead remote chip).  The caller should skip
-// operations that require reads from the device (e.g. l1_barrier) when this returns false, because those
-// reads will also hang/timeout on the same dead channels.
+// Returns FabricCoresHealth describing per-channel health.  When all_channels_healthy is false:
+//   - newly_dead_channels is non-empty → unexpected new failure; caller should TT_THROW.
+//   - newly_dead_channels is empty     → all failures were pre-confirmed in pre_known_dead_channels;
+//                                        caller may continue in degraded mode with a warning.
 //
 // pre_known_dead_channels: ETH channel IDs confirmed problematic by terminate_stale_erisc_routers()
 // — either the probe read timed out (physically dead link) or the L1 status word was corrupt (not a
@@ -27,7 +37,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_
 // read times out and leaves a stuck command in the relay ETH core's 4-slot queue (CMD_BUF_SIZE=4).
 // With 4 dead channels the queue fills and the last channel's read_non_mmio enters a no-timeout
 // while(full) loop → indefinite hang.  See #42429.
-bool configure_fabric_cores(
+FabricCoresHealth configure_fabric_cores(
     tt::tt_metal::IDevice* device,
     const std::unordered_set<uint32_t>& pre_known_dead_channels = {});
 
