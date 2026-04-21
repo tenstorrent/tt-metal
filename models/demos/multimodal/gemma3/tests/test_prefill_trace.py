@@ -11,11 +11,16 @@ Verifies:
      pixel_values is accidentally forwarded in kwargs.
   3. prepare_inputs_prefill(trace_enabled=False) behaves as before (device
      tensors, vision path still works when pixel_values is provided).
+
+Run with visible verification lines (loguru emits [gemma3_prefill_trace_test] on stderr)::
+
+    pytest -s models/demos/multimodal/gemma3/tests/test_prefill_trace.py -v
 """
 import os
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
@@ -43,8 +48,22 @@ def _mesh_device_param():
 def test_gemma3_27b_prefill_trace_inputs(mesh_device, seq_len, reset_seeds):
     args = ModelArgs(mesh_device, max_batch_size=1, max_seq_len=max(1024, seq_len))
 
+    mesh_n = mesh_device.get_num_devices()
+    can_trace = args.can_enable_trace(prefill_seq_len=seq_len, num_cached_tokens=0)
+    logger.info(
+        "[gemma3_prefill_trace_test] setup seq_len={} mesh_devices={} device_name={} "
+        "MESH_DEVICE={} can_enable_trace(seq_len={}, cached=0)={} trace_prefill_supported_seq_lens={}",
+        seq_len,
+        mesh_n,
+        args.device_name,
+        os.environ.get("MESH_DEVICE"),
+        seq_len,
+        can_trace,
+        args.trace_prefill_supported_seq_lens,
+    )
+
     # (1) gating
-    assert args.can_enable_trace(prefill_seq_len=seq_len, num_cached_tokens=0), (
+    assert can_trace, (
         f"can_enable_trace should be True for gemma-3-27b at seq_len={seq_len}; "
         f"supported={args.trace_prefill_supported_seq_lens}"
     )
@@ -82,6 +101,19 @@ def test_gemma3_27b_prefill_trace_inputs(mesh_device, seq_len, reset_seeds):
     assert rot_global[0].shape[2] == args.max_seq_len
     assert rot_local[0].shape[2] == args.max_seq_len
 
+    logger.info(
+        "[gemma3_prefill_trace_test] trace_enabled=True (for Generator trace path): "
+        "tokens.storage_type={} page_table.storage_type={} chunk_page_table={} "
+        "rope_global_cos.dim2={} rope_local_cos.dim2={} max_seq_len={} "
+        "(expect HOST tokens/page_table; rope dim2 == max_seq_len for trace reuse)",
+        tokens_host.storage_type(),
+        pt_host.storage_type(),
+        chunk_pt_host,
+        rot_global[0].shape[2],
+        rot_local[0].shape[2],
+        args.max_seq_len,
+    )
+
     # (3) trace_enabled=False (existing behavior): tensors on device.
     device_inputs = model.prepare_inputs_prefill(
         pt_tokens,
@@ -92,3 +124,13 @@ def test_gemma3_27b_prefill_trace_inputs(mesh_device, seq_len, reset_seeds):
     tokens_dev, _, _, pt_dev, _ = device_inputs
     assert tokens_dev.storage_type() == ttnn.StorageType.DEVICE
     assert pt_dev.storage_type() == ttnn.StorageType.DEVICE
+
+    logger.info(
+        "[gemma3_prefill_trace_test] trace_enabled=False (normal prefill): "
+        "tokens.storage_type={} page_table.storage_type={} "
+        "(expect DEVICE — embeddings prepared on device before forward)",
+        tokens_dev.storage_type(),
+        pt_dev.storage_type(),
+    )
+
+    logger.info("[gemma3_prefill_trace_test] OK seq_len={} — assertions passed", seq_len)
