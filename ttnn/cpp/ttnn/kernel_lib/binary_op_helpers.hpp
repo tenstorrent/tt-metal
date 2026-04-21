@@ -336,24 +336,42 @@ ALWI void square(uint32_t icb, uint32_t ocb, BinaryInputBlockShape shape, PostOp
 // =============================================================================
 
 /**
- * @brief PostOp: fused in-place multiply — dst[dst_idx] *= CB[0].
+ * @brief PostOp: fused in-place binary op using DEST register as one operand.
  *
- * Uses binary_dest_reuse_tiles (DEST_TO_SRCA): loads DEST[dst_idx] as SRCA,
- * unpacks CB[0] as SRCB, multiplies, writes back to DEST[dst_idx].
+ * Uses binary_dest_reuse_tiles: loads DEST[Slot + dst_idx] into one SRC register
+ * (SRCA when ReuseType=DEST_TO_SRCA, SRCB when ReuseType=DEST_TO_SRCB), unpacks
+ * CB[0] into the other SRC register, executes OpType, writes back to DEST[Slot + dst_idx].
  *
- * Typical use: batch_norm — (x - mean) * rsqrt(var + eps)
+ * CB[0] is always tile index 0 — the caller is responsible for waiting on the CB
+ * upfront (e.g. WaitUpfrontNoPop or manual cb_wait_front before binary_op).
+ *
+ * Typical use: batch_norm normalisation stage 2 — (x - mean) *= rsqrt(var + eps)
+ *   sub(cb_input, cb_mean, cb_out, shape,
+ *       DestReuseOp<cb_rsqrt, EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>{});
+ *   // or using the alias:
  *   sub(cb_input, cb_mean, cb_out, shape, DestReuseMul<cb_rsqrt>{});
  *
  * Sets needs_parent_reinit = true — binary_op re-calls binary_init before each
  * tile's exec to restore the unpack pipeline after this PostOp reconfigures it.
  *
- * @tparam CB  Compile-time CB index supplying the scale tile (SRCB).
+ * @tparam CB        Compile-time CB index for the second operand.
+ * @tparam OpType    Binary op to apply (default: ELWMUL).
+ * @tparam ReuseType Which SRC gets DEST (default: DEST_TO_SRCA).
+ * @tparam Slot      DEST slot holding the first operand (default: D0).
  */
-template <uint32_t CB>
-struct DestReuseMul {
+template <
+    uint32_t CB,
+    EltwiseBinaryType OpType = EltwiseBinaryType::ELWMUL,
+    EltwiseBinaryReuseDestType ReuseType = EltwiseBinaryReuseDestType::DEST_TO_SRCA,
+    Dst Slot = Dst::D0>
+struct DestReuseOp {
     static constexpr bool needs_parent_reinit = true;
     ALWI void operator()(uint32_t dst_idx) const;
 };
+
+/** @brief Alias: DestReuseOp specialised to ELWMUL + DEST_TO_SRCA. */
+template <uint32_t CB, Dst Slot = Dst::D0>
+using DestReuseMul = DestReuseOp<CB, EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA, Slot>;
 
 }  // namespace compute_kernel_lib
 

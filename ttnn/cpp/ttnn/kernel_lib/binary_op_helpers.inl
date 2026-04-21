@@ -138,10 +138,14 @@ struct dst_idx_value<T, true> {
 template <typename T>
 inline constexpr uint32_t dst_idx_value_v = dst_idx_value<T>::value;
 
-// A valid binary_op post-chain element: any non-load compute op (UnaryOp, BinaryOp, TernaryOp).
-// BinaryOp/TernaryOp are allowed; the caller is responsible for pre-loading secondary DEST slots.
+// chain_has_loads_v<T>: true when T is an SfpuChain that contains at least one Load op.
 template <typename T>
-inline constexpr bool is_valid_post_op_v = !is_load_op_v<T>;
+struct chain_has_loads : std::false_type {};
+template <typename... Ops>
+struct chain_has_loads<SfpuChain<Ops...>> : std::bool_constant<(is_load_op_v<Ops> || ...)> {};
+template <typename T>
+inline constexpr bool chain_has_loads_v =
+    chain_has_loads<std::remove_cv_t<std::remove_reference_t<T>>>::value;
 
 // Retrieve the I-th element of an SfpuChain by instance (preserves runtime fields).
 template <std::size_t I, typename First, typename... Rest>
@@ -153,18 +157,8 @@ ALWI constexpr auto& chain_get(const SfpuChain<First, Rest...>& c) {
     }
 }
 
-// Strict compile-time validation for binary_op post-chains. Called from the chain
-// branch only; non-chain PostOp types never reach here.
-template <typename... Ops>
-ALWI constexpr void post_chain_validate() {
-    static_assert(
-        (is_valid_post_op_v<Ops> && ...),
-        "binary_op post-chain must not contain Load<> or CompactLoad<> ops. "
-        "The binary helper owns input CB lifecycle. UnaryOp, BinaryOp, and TernaryOp "
-        "are all permitted; for multi-slot ops the caller must pre-load secondary DEST slots.");
-}
-
 // One-init, k-exec over DEST slots [base_dst, base_dst + chunk_size).
+// Load ops in the chain manage their own CB lifecycle via exec() (wait/pop/copy).
 template <typename... Ops, std::size_t... I>
 ALWI void apply_post_chain_batched_impl(
     const SfpuChain<Ops...>& chain,
@@ -183,32 +177,41 @@ ALWI void apply_post_chain_batched_impl(
 template <typename... Ops>
 ALWI void apply_post_chain_batched(
     const SfpuChain<Ops...>& chain, uint32_t base_dst, uint32_t chunk_size) {
-    post_chain_validate<Ops...>();
+    // If the chain has Load ops, init the unpacker for copy_tile before running.
+    if constexpr ((is_load_op_v<Ops> || ...)) {
+        copy_tile_to_dst_init_short(FirstLoadCB<SfpuChain<Ops...>>::value);
+    }
     apply_post_chain_batched_impl(chain, base_dst, chunk_size, std::index_sequence_for<Ops...>{});
 }
 
-// post_op_needs_reinit_v<T>: true when PostOp sets T::needs_parent_reinit = true.
-// Signals binary_op to move binary_init inside the tile loop (per-tile) instead of
-// calling it once before the loop. Required when PostOp reconfigures the unpack pipeline
-// (e.g. DestReuseMul, which calls binary_dest_reuse_tiles_init).
+// post_op_needs_reinit_v<T>: true when binary_op must re-call binary_init before each
+// tile's exec (instead of once before the tile loop). Two triggers:
+//   1. PostOp sets T::needs_parent_reinit = true (e.g. DestReuseOp, which calls
+//      binary_dest_reuse_tiles_init and thus clobbers the unpack pipeline).
+//   2. PostOp is an SfpuChain containing Load ops (Load calls copy_tile_to_dst_init_short
+//      which also clobbers the unpack pipeline).
 template <typename T, typename = void>
 struct has_needs_parent_reinit : std::false_type {};
 template <typename T>
 struct has_needs_parent_reinit<T, std::void_t<decltype(T::needs_parent_reinit)>>
     : std::bool_constant<T::needs_parent_reinit> {};
 template <typename T>
-inline constexpr bool post_op_needs_reinit_v = has_needs_parent_reinit<T>::value;
+inline constexpr bool post_op_needs_reinit_v =
+    has_needs_parent_reinit<T>::value || (is_sfpu_chain_v<T> && chain_has_loads_v<T>);
 
 }  // namespace detail
 
 // =============================================================================
-// DestReuseMul PostOp Implementation
+// DestReuseOp PostOp Implementation
 // =============================================================================
 
-template <uint32_t CB>
-ALWI void DestReuseMul<CB>::operator()(uint32_t dst_idx) const {
-    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB);
-    binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB, 0, dst_idx);
+template <uint32_t CB, EltwiseBinaryType OpType, EltwiseBinaryReuseDestType ReuseType, Dst Slot>
+ALWI void DestReuseOp<CB, OpType, ReuseType, Slot>::operator()(uint32_t dst_idx) const {
+    binary_dest_reuse_tiles_init<OpType, ReuseType>(CB);
+    // CB tile index is always 0: the caller pre-waits the CB upfront (persistent tile).
+    // DEST slot is Slot + dst_idx to handle both per-tile (dst_idx=0) and
+    // per-chunk (dst_idx=k) policies correctly.
+    binary_dest_reuse_tiles<OpType, ReuseType>(CB, 0, static_cast<uint32_t>(Slot) + dst_idx);
 }
 
 // =============================================================================
