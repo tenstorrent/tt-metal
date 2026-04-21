@@ -33,6 +33,18 @@ Run HF reference only:
 HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_ocr.demo.demo --image path/to/image.png --backend hf
 ```
 
+Run HF reference OCR demo (image → text):
+
+```bash
+PYTHONPATH=$(pwd) python3 -m models.demos.dots_ocr.demo.reference_demo \
+  --input models/demos/dots_ocr/demo/test12.png \
+  --dtype fp32 \
+  --use-slow-processor \
+  --ocr-preset en \
+  --num-beams 1 \
+  --max-new-tokens 64
+```
+
 ### Supported Wormhole topologies
 
 `dots.mocr` is GQA with `num_attention_heads=12` and `num_key_value_heads=2`.
@@ -44,15 +56,16 @@ that divide `gcd(12, 2) = 2` are supported: **1 or 2**.
 |---|---|---|---|
 | `N150` | 1x1 | 1 | fully supported |
 | `N300` | 1x2 | 2 | fully supported |
-| `T3K` (on T3K hardware) | 1x1 (default) or 1x2 submesh | 1 or 2 | default TP=1; set `DOTS_T3K_TP=2` to use 2 chips |
+| `T3K` (8-device Wormhole LLMBox) | physical `1×8`; dots.mocr runs on logical `1×1` or `1×2` | 1 or 2 | Default: open full 8-device mesh then submesh (`DOTS_T3K_OPEN_FULL_MESH=1`). Set `DOTS_T3K_TP=2` for TP across 2 chips. |
 | `TG` / Galaxy | — | — | not supported (needs DP, not implemented) |
 
-Use `models.demos.dots_ocr.tt.mesh.open_mesh_device()` in new code — it reads
-`MESH_DEVICE` and clamps unsupported shapes. On T3K it defaults to `1x1` unless
-`DOTS_T3K_TP=2` is set.
+Use `models.demos.dots_ocr.tt.mesh.open_mesh_device()` — it reads `MESH_DEVICE` and,
+on T3K-class systems, can open the full **8-device** mesh then `create_submesh` to the
+supported logical shape (see `DOTS_T3K_OPEN_FULL_MESH`). Close with `close_dots_mesh_device`
+when using that path. Logical mesh defaults to `1×1` unless `DOTS_T3K_TP=2` (then `1×2`).
 
 ```bash
-export MESH_DEVICE=N150        # or N300, or T3K (defaults to 1x1; set DOTS_T3K_TP=2 for 1x2)
+export MESH_DEVICE=N150        # or N300, or T3K (8-device; logical 1x1 default, DOTS_T3K_TP=2 for 1x2)
 export HF_MODEL=rednote-hilab/dots.mocr
 # Optional: cap prefill/KV length to fit DRAM
 export DOTS_MAX_SEQ_LEN=8192   # legacy name DOTS_MAX_SEQ_LEN_WH_LB still honored

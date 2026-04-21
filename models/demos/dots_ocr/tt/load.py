@@ -8,8 +8,6 @@ and full TTNN vision transformer weights from real dots.mocr checkpoints.
 
 from __future__ import annotations
 
-import os
-
 from loguru import logger
 
 from models.tt_transformers.tt.load_checkpoints import (
@@ -19,7 +17,9 @@ from models.tt_transformers.tt.load_checkpoints import (
 )
 
 
-def load_dots_text_state_dict(hf_model_id_or_dir: str, *, head_dim: int, n_heads: int, n_kv_heads: int):
+def load_dots_text_state_dict(
+    hf_model_id_or_dir: str, *, head_dim: int, n_heads: int, n_kv_heads: int, qkv_permute: bool = False
+):
     """
     Load and convert the *text* (decoder) weights for Dots OCR.
 
@@ -73,9 +73,8 @@ def load_dots_text_state_dict(hf_model_id_or_dir: str, *, head_dim: int, n_heads
             stripped[k] = v
 
     # Dots runs with `use_hf_rope=True`. Some stacks want HF-layout Q/K (no permute), others want Meta-layout
-    # (permute). Provide an A/B switch so we can converge on the correct setting for dots.mocr.
-    permute = os.environ.get("DOTS_TEXT_QKV_PERMUTE", "0").strip() in ("1", "true", "yes", "y")
-    if permute:
+    # (permute). Keep an explicit A/B switch (no env dependency).
+    if qkv_permute:
         logger.info("Dots text weight conversion: using convert_hf_to_meta (Q/K permute enabled)")
         converted = convert_hf_to_meta(stripped, head_dim, n_heads=n_heads, n_kv_heads=n_kv_heads)
     else:
@@ -169,7 +168,9 @@ def load_dots_vision_state_dict(hf_model_id_or_dir: str) -> dict:
     return vision_weights
 
 
-def load_dots_full_state_dict(hf_model_id_or_dir: str, *, head_dim: int, n_heads: int, n_kv_heads: int):
+def load_dots_full_state_dict(
+    hf_model_id_or_dir: str, *, head_dim: int, n_heads: int, n_kv_heads: int, qkv_permute: bool = False
+):
     """
     Load both text and vision weights for the complete Dots OCR model.
 
@@ -183,6 +184,7 @@ def load_dots_full_state_dict(hf_model_id_or_dir: str, *, head_dim: int, n_heads
         head_dim=head_dim,
         n_heads=n_heads,
         n_kv_heads=n_kv_heads,
+        qkv_permute=qkv_permute,
     )
 
     vision_weights = load_dots_vision_state_dict(hf_model_id_or_dir)

@@ -27,6 +27,10 @@ Environment variables consumed here:
 
 - ``MESH_DEVICE``             — topology selector (see table above). Same knob as
                                 ``tt_transformers``, ``qwen25_vl``, Llama demos, etc.
+- ``DOTS_T3K_OPEN_FULL_MESH`` — T3K / ``T3K_1X8`` / ``T3K_2X4``: open the **physical**
+                                multi-device mesh (8 WH devices on T3K), then ``create_submesh``
+                                to the logical 1×1 or 1×2 shape dots.mocr can use (default ``1``).
+                                Set to ``0`` to open only the small logical mesh (legacy).
 - ``DOTS_MAX_SEQ_LEN``        — canonical cap on prefill / KV length (optional).
 - ``DOTS_MAX_SEQ_LEN_WH_LB``  — legacy alias; still honored for back-compat.
 """
@@ -118,6 +122,16 @@ def resolve_mesh_shape(name: Optional[str] = None) -> Tuple[int, int]:
     return _MESH_SHAPES[canonical]
 
 
+def resolve_physical_mesh_shape(name: Optional[str] = None) -> Tuple[int, int]:
+    """
+    Physical device grid for ``MESH_DEVICE`` (e.g. **T3K → (1, 8)** for the 8-chip Wormhole LLMBox).
+
+    Same values as :func:`resolve_mesh_shape`; provided as a clearer name when contrasting with
+    :func:`resolve_supported_mesh_shape` (logical / model submesh).
+    """
+    return resolve_mesh_shape(name)
+
+
 def resolve_supported_mesh_shape(name: Optional[str] = None) -> Tuple[int, int]:
     """
     Like ``resolve_mesh_shape`` but clamps the result to what dots.mocr can
@@ -175,28 +189,84 @@ def default_mesh_shape():
 
 def open_mesh_device(mesh_shape=None):
     """
-    Open a ``ttnn`` mesh device using the resolved (and TP-clamped) topology.
+    Open a ``ttnn`` mesh device for dots.mocr.
 
-    Returns the opened device. Callers are responsible for closing it via
-    ``ttnn.close_mesh_device(device)``.
+    **T3K (8-device Wormhole LLMBox):** by default (``DOTS_T3K_OPEN_FULL_MESH=1``), opens the
+    **physical** mesh (e.g. ``1×8``), then ``create_submesh`` to the **logical** shape
+    (``1×1`` or ``1×2`` from :func:`resolve_supported_mesh_shape`) so the full system is
+    initialized while the model still runs at TP≤2. Use :func:`close_dots_mesh_device` to
+    close both the submesh and parent mesh.
 
-    If ``MESH_DEVICE`` exceeds dots.mocr's supported TP ceiling (e.g. T3K 1x8),
-    this opens a 1x2 submesh and logs a warning — the rest of the physical
-    chips stay idle. See ``_DOTS_TP_NOTE``.
+    If ``mesh_shape`` is passed explicitly, behavior is unchanged: that shape is opened directly.
+
+    Legacy path (``DOTS_T3K_OPEN_FULL_MESH=0``): open only the logical small mesh (no parent).
     """
     ttnn = get_ttnn()
     if ttnn is None:
         raise RuntimeError("ttnn is not available")
-    if mesh_shape is None:
-        mesh_shape = default_mesh_shape()
-    device = ttnn.open_mesh_device(mesh_shape)
-    try:
-        logger.info(
-            f"dots_ocr.mesh: opened mesh device shape={tuple(device.shape)} " f"num_devices={device.get_num_devices()}"
+    if mesh_shape is not None:
+        device = ttnn.open_mesh_device(mesh_shape)
+    else:
+        selector = os.environ.get("MESH_DEVICE")
+        canonical = _canonicalize(selector)
+        logical = resolve_supported_mesh_shape(selector)
+        physical = resolve_physical_mesh_shape(selector)
+        open_full = os.environ.get("DOTS_T3K_OPEN_FULL_MESH", "1").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "y",
         )
+        t3k_family = canonical in ("T3K", "T3K_1X8", "T3K_2X4")
+        device = None
+        if open_full and t3k_family and physical != logical and hasattr(ttnn, "MeshShape"):
+            try:
+                full = ttnn.open_mesh_device(ttnn.MeshShape(physical[0], physical[1]))
+                sub = full.create_submesh(ttnn.MeshShape(logical[0], logical[1]))
+                setattr(sub, "_dots_parent_mesh_device", full)
+                device = sub
+                logger.info(
+                    f"dots_ocr.mesh: T3K-class system — opened physical mesh {physical} "
+                    f"({full.get_num_devices()} devices), running dots.mocr on submesh {logical} "
+                    f"({sub.get_num_devices()} devices). Set DOTS_T3K_OPEN_FULL_MESH=0 to open {logical} only."
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"dots_ocr.mesh: full mesh {physical} + submesh {logical} failed ({exc!r}); "
+                    f"falling back to logical mesh only."
+                )
+                device = None
+        if device is None:
+            device = ttnn.open_mesh_device(ttnn.MeshShape(logical[0], logical[1]))
+            try:
+                if physical != logical and t3k_family:
+                    logger.info(
+                        f"dots_ocr.mesh: opened logical mesh {logical} only "
+                        f"(physical system would be {physical}; enable DOTS_T3K_OPEN_FULL_MESH=1 for 8-device init)."
+                    )
+            except Exception:
+                pass
+    try:
+        logger.info(f"dots_ocr.mesh: mesh device shape={tuple(device.shape)} num_devices={device.get_num_devices()}")
     except Exception:
         pass
     return device
+
+
+def close_dots_mesh_device(device) -> None:
+    """
+    Close a mesh opened via :func:`open_mesh_device`.
+
+    If the device was created as a **submesh** of a full T3K (etc.) mesh, closes the submesh
+    first, then the parent. Otherwise calls ``ttnn.close_mesh_device`` once.
+    """
+    ttnn = get_ttnn()
+    if ttnn is None:
+        return
+    parent = getattr(device, "_dots_parent_mesh_device", None)
+    ttnn.close_mesh_device(device)
+    if parent is not None:
+        ttnn.close_mesh_device(parent)
 
 
 def assert_supported_topology(mesh_device) -> None:
@@ -205,8 +275,8 @@ def assert_supported_topology(mesh_device) -> None:
     on (TP <= ``DOTS_MAX_TP_COLS``, DP == 1 for now).
 
     Raises ``AssertionError`` with a clear message otherwise. Callers that open
-    a mesh via ``open_mesh_device`` here don't need this — it's meant for code
-    paths that open a mesh externally (e.g. tt_transformers fixtures).
+    a mesh via :func:`open_mesh_device` already get a logical TP≤2 mesh; this is
+    for code paths that open a mesh externally (e.g. tt_transformers fixtures).
     """
     shape = tuple(mesh_device.shape)
     rows, cols = shape if len(shape) == 2 else (1, shape[0])

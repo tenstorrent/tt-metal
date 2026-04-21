@@ -38,18 +38,35 @@ from models.demos.dots_ocr.reference.model import DotsOCRReference
 # ---------------------------------------------------------------------------
 
 
-def run_hf_backend(model_id: str, image_path: str, prompt: str, max_new_tokens: int) -> str:
+def run_hf_backend(
+    model_id: str,
+    image_path: str,
+    prompt: str,
+    max_new_tokens: int,
+    *,
+    repetition_penalty: float | None = None,
+    use_slow_processor: bool = False,
+) -> str:
     logger.info(f"[HF] Loading {model_id}")
-    ref = DotsOCRReference(HFLoadSpec(model_id=model_id))
+    ref = DotsOCRReference(HFLoadSpec(model_id=model_id, use_fast_processor=not use_slow_processor))
     image = Image.open(image_path).convert("RGB") if os.path.exists(image_path) else None
     inputs = ref.preprocess_image_and_prompt(image, prompt)
 
+    gen_extras: dict = {}
+    rpen = repetition_penalty
+    if rpen is None:
+        env_r = os.environ.get("DOTS_HF_REPETITION_PENALTY", "").strip()
+        if env_r:
+            rpen = float(env_r)
+    if rpen is not None:
+        gen_extras["repetition_penalty"] = rpen
+
     t0 = time.perf_counter()
-    out = ref.forward(inputs, max_new_tokens=max_new_tokens)
+    out = ref.forward(inputs, max_new_tokens=max_new_tokens, **gen_extras)
     elapsed = time.perf_counter() - t0
 
-    generated_ids = out["generated_ids"]
-    text = ref.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+    # ``generate`` returns prompt + new tokens; decode only the continuation (not the instruction).
+    text = ref.decode_generated_suffix(out["generated_ids"], inputs.input_ids)
     print("\n=== HF ===")
     print(f"Backend:   hf")
     print(f"Latency:   {elapsed:.2f}s for up to {max_new_tokens} tokens")
@@ -62,19 +79,90 @@ def run_hf_backend(model_id: str, image_path: str, prompt: str, max_new_tokens: 
 # ---------------------------------------------------------------------------
 
 
-def _load_state_dict_with_real_weights_fallback(model_args, dummy_only: bool):
-    """Try real HF weights first; fall back to dummy on any failure so bring-up stays runnable."""
+def _load_state_dict_with_real_weights_fallback(
+    model_args, dummy_only: bool, *, require_real: bool = False, text_qkv_permute: bool = True
+):
+    """
+    Try real HF weights first; optionally fall back to dummy.
+
+    When `require_real=True`, any real-weight load failure raises to avoid producing nonsense output
+    from dummy weights in end-to-end demos.
+    """
     if dummy_only:
         logger.info("[TTNN] Using dummy state_dict (--dummy-weights).")
         return model_args.load_state_dict()
     try:
-        logger.info("[TTNN] Attempting to load real Dots weights via DotsModelArgs.load_real_state_dict()")
-        real_sd = model_args.load_real_state_dict()
+        logger.info(f"[TTNN] Attempting to load real Dots weights (text_qkv_permute={int(text_qkv_permute)})")
+        from models.demos.dots_ocr.tt.load import load_dots_full_state_dict
+
+        real_sd = load_dots_full_state_dict(
+            model_args.CKPT_DIR,
+            head_dim=model_args.head_dim,
+            n_heads=model_args.n_heads,
+            n_kv_heads=model_args.n_kv_heads,
+            qkv_permute=text_qkv_permute,
+        )
+        # Quick sanity: if key tensors are missing, output will be garbage even if load succeeded.
+        required_keys = ("tok_embeddings.weight", "output.weight")
+        missing = [k for k in required_keys if k not in real_sd]
+        if missing:
+            raise KeyError(f"Real state_dict missing required keys: {missing}")
         logger.info(f"[TTNN] Loaded real Dots state_dict with {len(real_sd)} tensors.")
         return real_sd
     except Exception as exc:
+        if require_real:
+            raise RuntimeError(
+                "TTNN demo requires real weights but load_real_state_dict() failed. "
+                "Fix HF access/cache or provide the checkpoint so TT output is meaningful."
+            ) from exc
         logger.warning(f"[TTNN] Real weight load failed ({exc!r}); falling back to dummy state_dict.")
         return model_args.load_state_dict()
+
+
+def _build_tt_stack(model_id: str, mesh_device, *, load_real_weights: bool, max_seq_len: int):
+    """
+    Shared TT stack builder for demos + perf benchmark (mirrors qwen25_vl structure).
+
+    Returns: (ref, model_args, tt_model, generator, visual)
+    """
+    import ttnn
+    from models.demos.dots_ocr.tt.generator import Generator
+    from models.demos.dots_ocr.tt.model import DotsTransformer, DropInVisionTransformer
+    from models.demos.dots_ocr.tt.model_config import DotsModelArgs
+    from models.demos.dots_ocr.tt.vision_model_config import DotsVisionModelArgs
+
+    os.environ.setdefault("HF_MODEL", model_id)
+    ref = DotsOCRReference(HFLoadSpec(model_id=model_id))
+
+    model_args = DotsModelArgs(
+        mesh_device=mesh_device,
+        hf_config=ref.model.config,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+        dummy_weights=not load_real_weights,
+    )
+    state_dict = _load_state_dict_with_real_weights_fallback(model_args, dummy_only=not load_real_weights)
+
+    # Dense KV cache (max_seq_len along seq dim). Paged KV + prefill without page_table uses
+    # fill_cache, which requires cache seq >= padded prefill; paged tensors only expose
+    # block_size (e.g. 32) on that axis — use paged attention only when wiring page_table
+    # like qwen25_vl/demo (create_tt_page_table + paged_fill_cache).
+    tt_model = DotsTransformer(
+        args=model_args,
+        dtype=ttnn.bfloat8_b,
+        mesh_device=mesh_device,
+        state_dict=state_dict,
+        weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
+        paged_attention_config=None,
+    )
+    generator = Generator(tt_model, model_args, mesh_device, processor=ref.processor, tokenizer=ref.tokenizer)
+
+    visual = None
+    if hasattr(ref.model, "vision_tower") or hasattr(ref.model, "visual"):
+        vision_model_args = DotsVisionModelArgs(mesh_device=mesh_device, hf_config=ref.model.config)
+        visual = DropInVisionTransformer(ref.model, vision_model_args, debug=False)
+
+    return ref, model_args, tt_model, generator, visual
 
 
 def _decode_loop(
@@ -160,6 +248,13 @@ def run_ttnn_backend(
     *,
     dummy_weights: bool = False,
     stop_at_eos: bool = True,
+    use_slow_processor: bool = False,
+    require_real_weights: bool = True,
+    ttnn_dtype: str = "bf16",
+    vision_backend: str = "hf",
+    text_qkv_permute: bool = True,
+    use_host_rope: bool = False,
+    sanity_text_only: bool = False,
 ) -> str:
     logger.info(
         f"[TTNN] Loading {model_id} and building Dots TT stack (MESH_DEVICE={os.environ.get('MESH_DEVICE', 'N150')})"
@@ -170,24 +265,24 @@ def run_ttnn_backend(
         print(f"ttnn not importable: {exc}")
         return ""
 
-    from models.demos.dots_ocr.tt.common import (
-        PagedAttentionConfig,
-        merge_vision_tokens,
-        preprocess_inputs_prefill,
-        text_rope_from_hf,
-    )
+    from models.demos.dots_ocr.tt.common import merge_vision_tokens, preprocess_inputs_prefill, text_rope_from_hf
     from models.demos.dots_ocr.tt.generator import Generator
-    from models.demos.dots_ocr.tt.mesh import get_max_seq_len_cap, open_mesh_device
+    from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, get_max_seq_len_cap, open_mesh_device
     from models.demos.dots_ocr.tt.model import DotsTransformer, DropInVisionTransformer
     from models.demos.dots_ocr.tt.model_config import DotsModelArgs
     from models.demos.dots_ocr.tt.vision_model_config import DotsVisionModelArgs
 
     mesh_device = open_mesh_device()
+    # Ensure objects holding TT resources are released before closing the mesh device.
+    generator = None
+    tt_model = None
+    visual = None
+    ref = None
     try:
         os.environ.setdefault("HF_MODEL", model_id)
 
         # HF reference for processor + token embeddings + RoPE helper + vision drop-in parent.
-        ref = DotsOCRReference(HFLoadSpec(model_id=model_id))
+        ref = DotsOCRReference(HFLoadSpec(model_id=model_id, use_fast_processor=not use_slow_processor))
 
         model_args = DotsModelArgs(
             mesh_device=mesh_device,
@@ -195,22 +290,34 @@ def run_ttnn_backend(
             max_seq_len=get_max_seq_len_cap() or 4096,
             dummy_weights=dummy_weights,
         )
-        state_dict = _load_state_dict_with_real_weights_fallback(model_args, dummy_weights)
-        paged_cfg = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
+        # For meaningful text output, avoid LM head output quantization.
+        model_args.lm_head_dtype = ttnn.bfloat16
+        state_dict = _load_state_dict_with_real_weights_fallback(
+            model_args,
+            dummy_only=dummy_weights,
+            require_real=require_real_weights and (not dummy_weights),
+            text_qkv_permute=text_qkv_permute,
+        )
 
+        # Prefer bf16 for correctness. bf8 is faster but can be much less stable for text quality.
+        tt_dtype = ttnn.bfloat16 if ttnn_dtype == "bf16" else ttnn.bfloat8_b
+
+        # See _build_tt_stack: dense KV for prefill/decode without page_table.
         tt_model = DotsTransformer(
             args=model_args,
-            dtype=ttnn.bfloat8_b,
+            dtype=tt_dtype,
             mesh_device=mesh_device,
             state_dict=state_dict,
-            weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
-            paged_attention_config=paged_cfg,
+            weight_cache_path=model_args.weight_cache_path(tt_dtype),
+            paged_attention_config=None,
         )
         generator = Generator(tt_model, model_args, mesh_device, processor=ref.processor, tokenizer=ref.tokenizer)
 
-        # Vision drop-in wrapping the HF reference's vision tower (same contract as qwen25_vl).
+        # Vision embeddings:
+        # - `hf`: match the working reference demo exactly (torch vision_tower)
+        # - `ttnn`: run the TT vision stack (bring-up; may not match HF yet)
         visual = None
-        if hasattr(ref.model, "vision_tower") or hasattr(ref.model, "visual"):
+        if vision_backend == "ttnn" and (hasattr(ref.model, "vision_tower") or hasattr(ref.model, "visual")):
             vision_model_args = DotsVisionModelArgs(mesh_device=mesh_device, hf_config=ref.model.config)
             visual = DropInVisionTransformer(ref.model, vision_model_args, debug=False)
 
@@ -218,13 +325,24 @@ def run_ttnn_backend(
         image = Image.open(image_path).convert("RGB") if os.path.exists(image_path) else None
         inputs = ref.preprocess_image_and_prompt(image, prompt)
 
-        # Vision prefill (host fusion, same as qwen25_vl demo)
-        if visual is not None and getattr(inputs, "pixel_values", None) is not None:
+        if sanity_text_only:
+            logger.info("[TTNN] Sanity run: text-only (no image) using token-id prefill")
+            inputs = ref.preprocess_image_and_prompt(None, prompt)
+
+        # Vision forward
+        image_embeds = torch.tensor([], dtype=torch.bfloat16)
+        if not sanity_text_only and getattr(inputs, "pixel_values", None) is not None:
             t0 = time.perf_counter()
-            image_embeds = visual(inputs.pixel_values, getattr(inputs, "image_grid_thw", None))
-            logger.info(f"[TTNN] Vision forward: {time.perf_counter() - t0:.2f}s, {image_embeds.shape} tokens")
-        else:
-            image_embeds = torch.tensor([], dtype=torch.bfloat16)
+            if vision_backend == "hf":
+                image_embeds = ref.vision_forward(inputs.pixel_values, getattr(inputs, "image_grid_thw", None))
+            else:
+                if visual is None:
+                    raise RuntimeError("vision_backend=ttnn requested but TT vision stack was not constructed")
+                image_embeds = visual(inputs.pixel_values, getattr(inputs, "image_grid_thw", None))
+            logger.info(
+                f"[TTNN] Vision forward ({vision_backend}): {time.perf_counter() - t0:.2f}s, {tuple(image_embeds.shape)}"
+            )
+            image_embeds = image_embeds.to(torch.bfloat16)
 
         text_embeds = ref.model.get_input_embeddings()(inputs.input_ids)
         input_embeds = (
@@ -243,15 +361,18 @@ def run_ttnn_backend(
             pad_embedding,
         )
 
-        cos, sin = text_rope_from_hf(inputs, input_embeds, ref.model, model_args, pad_token_id)
+        rot_mats = None
+        if use_host_rope:
+            cos, sin = text_rope_from_hf(inputs, input_embeds, ref.model, model_args, pad_token_id)
+            rot_mats = (cos, sin)
+        else:
+            logger.info("[TTNN] Using device-side RoPE caches (no host rot_mats)")
 
         # --- Prefill ---------------------------------------------------------
         logger.info(f"[TTNN] Prefill: seq_len={prefill_lens[0]}")
         t0 = time.perf_counter()
         logits = generator.prefill_forward_text(
-            input_prefill,
-            rot_mats=(cos, sin),
-            prompt_lens=torch.tensor(decoding_pos),
+            input_prefill, rot_mats=rot_mats, prompt_lens=torch.tensor(decoding_pos)
         )
         ttft = time.perf_counter() - t0
 
@@ -280,7 +401,25 @@ def run_ttnn_backend(
         print(f"Output:           {decoded}")
         return decoded
     finally:
-        ttnn.close_mesh_device(mesh_device)
+        # Explicitly drop objects that may hold MeshDevice references.
+        try:
+            if generator is not None:
+                del generator
+            if visual is not None:
+                del visual
+            if tt_model is not None:
+                del tt_model
+            if ref is not None:
+                del ref
+        except Exception:
+            pass
+        try:
+            import gc
+
+            gc.collect()
+        except Exception:
+            pass
+        close_dots_mesh_device(mesh_device)
 
 
 # ---------------------------------------------------------------------------
@@ -308,13 +447,31 @@ def main() -> None:
     parser.add_argument("--image", type=str, default=None, help="Path to an input image (optional for text-only)")
     parser.add_argument("--prompt", type=str, default="Read the text in this document.", help="OCR prompt")
     parser.add_argument(
+        "--ocr-preset",
+        type=str,
+        default=None,
+        choices=["en", "zh"],
+        help="Override --prompt with a known-good OCR prompt style (English or Chinese).",
+    )
+    parser.add_argument(
         "--prompts-json",
         type=str,
         default=None,
         help="JSON file with `[{image, prompt}, ...]`; overrides --image/--prompt when set.",
     )
     parser.add_argument("--max-new-tokens", type=int, default=64)
+    parser.add_argument(
+        "--hf-repetition-penalty",
+        type=float,
+        default=None,
+        help="HF reference only: passed to generate() to reduce repeated tokens (also DOTS_HF_REPETITION_PENALTY).",
+    )
     parser.add_argument("--hf-model", type=str, default=None, help="Override HF model id")
+    parser.add_argument(
+        "--use-slow-processor",
+        action="store_true",
+        help="Force the slow processor (`use_fast=False`). Can improve OCR tokenization/preprocessing stability.",
+    )
     parser.add_argument(
         "--backend",
         type=str,
@@ -323,21 +480,75 @@ def main() -> None:
         help="'hf', 'ttnn', or 'both' (runs hf then ttnn).",
     )
     parser.add_argument("--dummy-weights", action="store_true", help="Force dummy weights in the TTNN backend.")
+    parser.add_argument(
+        "--allow-dummy-fallback",
+        action="store_true",
+        help="Allow TTNN demo to fall back to dummy weights if real weights fail to load (output will be garbage).",
+    )
+    parser.add_argument(
+        "--ttnn-dtype",
+        type=str,
+        default="bf16",
+        choices=["bf16", "bf8"],
+        help="TTNN dtype for text decoder weights/activations. bf16 is recommended for correctness.",
+    )
+    parser.add_argument(
+        "--vision-backend",
+        type=str,
+        default="hf",
+        choices=["hf", "ttnn"],
+        help="Vision embedding backend for TTNN demo. Use 'hf' to match reference demo; 'ttnn' for bring-up.",
+    )
+    parser.add_argument(
+        "--text-qkv-permute",
+        action="store_true",
+        default=True,
+        help="Use HF->Meta Q/K permute in text weight conversion (improves correctness for dots.mocr).",
+    )
+    parser.add_argument(
+        "--no-text-qkv-permute",
+        dest="text_qkv_permute",
+        action="store_false",
+        help="Disable HF->Meta Q/K permute for text weight conversion.",
+    )
+    parser.add_argument(
+        "--use-host-rope",
+        action="store_true",
+        help="Use HF-derived host RoPE cos/sin (default is device-side RoPE caches).",
+    )
+    parser.add_argument(
+        "--sanity-text-only",
+        action="store_true",
+        help="Sanity check TTNN text stack using text-only token-id prefill (no image).",
+    )
     parser.add_argument("--no-eos", action="store_true", help="Disable EOS stopping in the TTNN decode loop.")
     args = parser.parse_args()
 
     model_id = args.hf_model or get_hf_model_id()
+    preset = args.ocr_preset
 
     # Resolve prompt set
     if args.prompts_json:
         entries = _load_prompts_from_json(args.prompts_json)
     else:
-        entries = [(args.image or "", args.prompt)]
+        prompt = args.prompt
+        if preset == "en":
+            prompt = "OCR: transcribe the text in the image exactly. Output only the transcription."
+        elif preset == "zh":
+            prompt = "请识别图片中的文字，逐字输出，不要解释，不要重复题目。"
+        entries = [(args.image or "", prompt)]
 
     for image_path, prompt in entries:
         image_path = image_path or ""
         if args.backend in ("hf", "both"):
-            run_hf_backend(model_id, image_path, prompt, args.max_new_tokens)
+            run_hf_backend(
+                model_id,
+                image_path,
+                prompt,
+                args.max_new_tokens,
+                repetition_penalty=args.hf_repetition_penalty,
+                use_slow_processor=args.use_slow_processor,
+            )
         if args.backend in ("ttnn", "both"):
             run_ttnn_backend(
                 model_id,
@@ -346,6 +557,13 @@ def main() -> None:
                 args.max_new_tokens,
                 dummy_weights=args.dummy_weights,
                 stop_at_eos=not args.no_eos,
+                use_slow_processor=args.use_slow_processor,
+                require_real_weights=not args.allow_dummy_fallback,
+                ttnn_dtype=args.ttnn_dtype,
+                vision_backend=args.vision_backend,
+                text_qkv_permute=args.text_qkv_permute,
+                use_host_rope=args.use_host_rope,
+                sanity_text_only=args.sanity_text_only,
             )
 
 

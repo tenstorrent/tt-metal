@@ -86,13 +86,21 @@ class VisionTransformerTT(LightweightModule):
         # Use existing PatchMerger (already implemented)
         from models.demos.dots_ocr.tt.patch_merger import PatchMerger as PatchMergerTT
 
+        # Dots HF checkpoints have used both `vision_tower.merger.*` and `vision_tower.patch_merger.*`
+        # naming schemes. Select the prefix that exists in the provided state_dict.
+        patch_merger_prefix = "vision_tower.patch_merger"
+        if not any(k.startswith(patch_merger_prefix + ".") for k in state_dict.keys()):
+            alt = "vision_tower.merger"
+            if any(k.startswith(alt + ".") for k in state_dict.keys()):
+                patch_merger_prefix = alt
+
         self.patch_merger = PatchMergerTT(
             mesh_device=mesh_device,
             hidden_size=model_args.vision_dim,
             out_hidden_size=model_args.vision_dim,  # Usually same size
             spatial_merge_size=model_args.spatial_merge_size,
             state_dict=state_dict,
-            state_dict_prefix="vision_tower.patch_merger",
+            state_dict_prefix=patch_merger_prefix,
             weight_cache_path=weight_cache_path,
             dtype=dtype,
         )

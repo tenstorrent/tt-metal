@@ -27,7 +27,7 @@ def test_dots_vision_model_args(tmp_path):
     if not hasattr(ttnn, "open_mesh_device"):
         pytest.skip("TTNN runtime has no open_mesh_device (mesh API missing)")
 
-    from models.demos.dots_ocr.tt.mesh import open_mesh_device
+    from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, open_mesh_device
     from models.demos.dots_ocr.tt.vision_model_config import create_dots_vision_args
 
     device = open_mesh_device()
@@ -57,7 +57,7 @@ def test_dots_vision_model_args(tmp_path):
 
     finally:
         if device is not None:
-            ttnn.close_mesh_device(device)
+            close_dots_mesh_device(device)
 
 
 def test_patch_embed_smoke():
@@ -89,7 +89,7 @@ def test_patch_embed_with_device(tmp_path):
     if not hasattr(ttnn, "open_mesh_device"):
         pytest.skip("TTNN runtime has no open_mesh_device (mesh API missing)")
 
-    from models.demos.dots_ocr.tt.mesh import open_mesh_device
+    from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, open_mesh_device
     from models.demos.dots_ocr.tt.vision_patch_embed import PatchEmbedTT
 
     device = open_mesh_device()
@@ -122,7 +122,7 @@ def test_patch_embed_with_device(tmp_path):
 
     finally:
         if device is not None:
-            ttnn.close_mesh_device(device)
+            close_dots_mesh_device(device)
 
 
 def test_vision_config_defaults():
@@ -155,7 +155,7 @@ def test_full_vision_transformer_smoke():
     if not hasattr(ttnn, "open_mesh_device"):
         pytest.skip("TTNN runtime has no open_mesh_device (mesh API missing)")
 
-    from models.demos.dots_ocr.tt.mesh import open_mesh_device
+    from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, open_mesh_device
     from models.demos.dots_ocr.tt.vision_transformer import create_dots_vision_transformer
 
     device = open_mesh_device()
@@ -184,7 +184,7 @@ def test_full_vision_transformer_smoke():
         print("✅ Full VisionTransformerTT smoke test passed")
     finally:
         if device is not None:
-            ttnn.close_mesh_device(device)
+            close_dots_mesh_device(device)
 
 
 if __name__ == "__main__":

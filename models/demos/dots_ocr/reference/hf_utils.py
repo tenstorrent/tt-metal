@@ -36,6 +36,7 @@ class HFLoadSpec:
     cache_dir: Optional[Path] = None
     dtype: torch.dtype = torch.bfloat16
     trust_remote_code: bool = True
+    use_fast_processor: Optional[bool] = None
 
 
 def get_hf_model_id(default: str = "rednote-hilab/dots.mocr") -> str:
@@ -65,18 +66,37 @@ def load_processor_and_model(spec: HFLoadSpec):
         revision=spec.revision,
         cache_dir=str(spec.cache_dir) if spec.cache_dir else None,
         trust_remote_code=spec.trust_remote_code,
+        use_fast=spec.use_fast_processor if spec.use_fast_processor is not None else True,
     )
 
-    model = AutoModelForCausalLM.from_pretrained(
-        spec.model_id,
-        revision=spec.revision,
-        cache_dir=str(spec.cache_dir) if spec.cache_dir else None,
-        dtype=spec.dtype,
-        trust_remote_code=spec.trust_remote_code,
-        _attn_implementation="eager",
-        use_safetensors=True,
-    )
+    # Transformers kwargs around dtype have changed across versions:
+    # - some accept `torch_dtype=...`
+    # - some accept (or prefer) `dtype=...`
+    # Try `dtype` first (newer warning suggests this), fall back to `torch_dtype`.
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            spec.model_id,
+            revision=spec.revision,
+            cache_dir=str(spec.cache_dir) if spec.cache_dir else None,
+            dtype=spec.dtype,
+            trust_remote_code=spec.trust_remote_code,
+            _attn_implementation="eager",
+            use_safetensors=True,
+        )
+    except TypeError:
+        model = AutoModelForCausalLM.from_pretrained(
+            spec.model_id,
+            revision=spec.revision,
+            cache_dir=str(spec.cache_dir) if spec.cache_dir else None,
+            torch_dtype=spec.dtype,
+            trust_remote_code=spec.trust_remote_code,
+            _attn_implementation="eager",
+            use_safetensors=True,
+        )
     model.eval()
+    from models.demos.dots_ocr.reference._dots_hub_generation_patch import patch_dots_ocr_prepare_inputs_for_generation
+
+    patch_dots_ocr_prepare_inputs_for_generation(model)
     return processor, model
 
 

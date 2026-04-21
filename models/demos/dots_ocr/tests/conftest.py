@@ -13,7 +13,15 @@ Tests can still be run in isolation without pulling the repo-wide ``tt-metal/con
   pytest models/demos/dots_ocr/tests --confcutdir=models/demos/dots_ocr/tests
 """
 
-from models.tt_transformers.conftest import device_params  # noqa: F401
+try:
+    # TT-backed tests need the real fixture; importing it pulls in ``ttnn``.
+    from models.tt_transformers.conftest import device_params  # noqa: F401
+except ImportError:  # pragma: no cover — CPU-only / no Tenstorrent wheel
+    import pytest
+
+    @pytest.fixture
+    def device_params(request):
+        pytest.skip("ttnn is not installed; run TT tests in an environment with tt-metal + ttnn.")
 
 
 def pytest_configure(config):

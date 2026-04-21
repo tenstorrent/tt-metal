@@ -11,18 +11,15 @@ This implements Step 2 of the implementation plan.
 """
 
 import gc
-import os
 
 import pytest
 import torch
 from loguru import logger
 
-from models.common.utility_functions import comp_pcc
 from models.demos.dots_ocr.reference.hf_utils import HFLoadSpec
 from models.demos.dots_ocr.reference.model import DotsOCRReference
 from models.demos.dots_ocr.reference.rope import get_hf_rot_mats_from_model
-from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta_no_qkv_permute
-from models.tt_transformers.tt.model_config import parse_optimizations
+from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_hf_to_meta_no_qkv_permute
 
 try:
     import ttnn  # type: ignore
@@ -35,10 +32,25 @@ except Exception:
 if not _HAS_TTNN_RUNTIME:
     pytest.skip("TTNN runtime not available (skipping TTNN PCC tests)", allow_module_level=True)
 
+from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device
 from models.demos.dots_ocr.tt.model import DotsTransformer
 from models.demos.dots_ocr.tt.model_config import DotsModelArgs
 
 _TINY_TEXT_MODEL = "hf-internal-testing/tiny-random-LlamaForCausalLM"
+
+
+def _comp_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+    """
+    Pearson correlation coefficient between two same-shaped tensors.
+
+    Local helper to keep this test importable even when TTNN runtime is absent.
+    """
+    a = a.reshape(-1).float()
+    b = b.reshape(-1).float()
+    a = a - a.mean()
+    b = b - b.mean()
+    denom = (a.norm() * b.norm()).clamp(min=1e-12)
+    return float((a @ b) / denom)
 
 
 def _load_dots_reference(model_id: str, *, dtype=torch.bfloat16):
@@ -50,44 +62,39 @@ def _load_dots_reference(model_id: str, *, dtype=torch.bfloat16):
 
 
 def _open_mesh_device():
-    """Open a mesh per ``MESH_DEVICE`` (N150/N300/T3K); ``None`` if unset."""
-    if os.environ.get("MESH_DEVICE") is None:
-        return None
+    """Open the default single-device mesh (skips if unavailable)."""
+    from models.demos.dots_ocr.tt._ttnn_import import get_ttnn
     from models.demos.dots_ocr.tt.mesh import open_mesh_device as _open
 
-    return _open()
+    try:
+        ttnn = get_ttnn()
+        if ttnn is None:
+            raise RuntimeError("ttnn is not available")
+        return _open(mesh_shape=ttnn.MeshShape(1, 1))
+    except Exception as e:
+        pytest.skip(f"Requires TT device runtime (could not open mesh device): {e!r}")
 
 
-@pytest.mark.skipif(os.environ.get("MESH_DEVICE") is None, reason="Requires TT device (set MESH_DEVICE)")
-def test_text_only_prefill_pcc_gt_0_99(tmp_path):
+def run_text_decoder_prefill_pcc_check(tmp_path):
     """
-    Test that TTNN text-only prefill with proper RoPE alignment
-    achieves PCC > 0.99 vs HF reference logits.
+    Run TT ``DotsTransformer`` text-only prefill and compare last-token logits to HF (``comp_pcc``).
+
+    Shared by ``test_text_only_prefill_pcc_gt_0_99`` and ``test_decoder_smoke.test_dots_decoder_prefill_pcc``.
     """
     torch.manual_seed(0)
 
     device = _open_mesh_device()
-    _orig_hf_model_env = None
     try:
         # Use real dots.mocr model by default (HF reference uses eager attention).
-        model_id = os.environ.get("HF_MODEL", "rednote-hilab/dots.mocr")
+        model_id = "rednote-hilab/dots.mocr"
         ref, spec = _load_dots_reference(model_id, dtype=torch.bfloat16)
-
-        # IMPORTANT: `DotsModelArgs.load_state_dict()` uses `HF_MODEL` / `CKPT_DIR` to pick a config source
-        # even when `dummy_weights=True`.
-        _orig_hf_model_env = os.environ.get("HF_MODEL")
-        os.environ["HF_MODEL"] = spec.model_id
 
         # Get test inputs (text-only)
         prompt = "Hello, how are you today?"
         inputs = ref.preprocess_image_and_prompt(None, prompt)  # None image = text-only
 
-        # Cap TT context length for this test (smaller allocations; override with DOTS_PREFILL_TEST_MAX_SEQ).
         # Prefill kernels require seq_len padded to a multiple of 128, so the minimum usable max_seq_len is 128.
-        prefill_max_seq = int(os.environ.get("DOTS_PREFILL_TEST_MAX_SEQ", "128"))
-        if prefill_max_seq < 128:
-            logger.info(f"Prefill test: raising max_seq_len {prefill_max_seq} -> 128 (prefill requires 128-multiple)")
-            prefill_max_seq = 128
+        prefill_max_seq = 128
 
         # All HF-derived tensors first, then drop the reference model before TTNN + dummy weights.
         # Peak host RAM otherwise stacks HF weights + large dummy state_dict + device buffers → OOM kill.
@@ -151,133 +158,94 @@ def test_text_only_prefill_pcc_gt_0_99(tmp_path):
                 else None
             )
 
-            # For real-weight PCC, default to host RoPE mats derived from the HF model config.
-            # This removes any possibility that TT's internal rope cache generation differs.
-            use_host_rope = os.environ.get("DOTS_USE_HOST_ROPE", "1").strip() not in ("0", "false", "no", "n")
-            if os.environ.get("DOTS_USE_REAL_WEIGHTS") == "1" and use_host_rope:
-                rot_mats = get_hf_rot_mats_from_model(ref.model, inputs.input_ids)
-            else:
-                rot_mats = get_hf_rot_mats_from_model(ref.model, inputs.input_ids)
-            # For PCC bringup, we can either feed token-ids (TT does embedding) or feed embeddings directly.
-            # Using embeddings avoids any token-id embedding path differences and lets us inject host RoPE mats.
-            use_embeds_in_tight = os.environ.get("DOTS_TIGHT_USE_EMBEDS", "1").strip() not in ("0", "false", "no", "n")
-            if os.environ.get("DOTS_USE_REAL_WEIGHTS") == "1" and use_embeds_in_tight:
-                embeds = _text_model.get_input_embeddings()(inputs.input_ids)
-            else:
-                embeds = ref.build_inputs_embeds(inputs) if os.environ.get("DOTS_USE_REAL_WEIGHTS") != "1" else None
+            # Use host RoPE mats derived from the HF model config. This removes any possibility that TT's
+            # internal rope cache generation differs.
+            rot_mats = get_hf_rot_mats_from_model(ref.model, inputs.input_ids)
+
+            # Feed embeddings directly to avoid token-id embedding path differences.
+            embeds = _text_model.get_input_embeddings()(inputs.input_ids)
 
         del ref
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        tight_mode = os.environ.get("DOTS_USE_REAL_WEIGHTS") == "1"
-
-        # Force high-accuracy TT settings in tight mode (dots.mocr is not covered by tt_transformers' model-specific tables).
+        # High-fidelity settings help push PCC over 0.99 on real hardware.
+        # Import lazily so the module still imports in environments that module-skip TTNN tests.
         optimizations = None
-        if tight_mode:
+        try:
+            from models.tt_transformers.tt.model_config import parse_optimizations
+
             optimizations = parse_optimizations(
                 # NOTE: parse_optimizations expects *Enum values* (lowercase), not Enum member names.
                 "precision_cfg{activation:bf16,wqkv:bf16,wo:bf16,kv_cache:bf16,ff1_3:bf16,ff2:bf16} "
                 "fidelity_cfg{accuracy:hifi4fp32,li_qkv_prefill:hifi4fp32,sdpa_prefill:hifi4fp32,li_o_prefill:hifi4fp32,"
                 "li_qkv_decode:hifi4fp32,sdpa_decode:hifi4fp32,li_o_decode:hifi4fp32,li_ff1_3:hifi4fp32,li_ff2:hifi4fp32}"
             )
+        except Exception as e:
+            logger.warning(f"Prefill test: could not set high-fidelity optimizations ({e!r}); continuing with defaults")
 
         def _run_once(*, qkv_permute: bool):
-            # Control the text QKV conversion path for this attempt.
-            os.environ["DOTS_TEXT_QKV_PERMUTE"] = "1" if qkv_permute else "0"
-
             model_args = DotsModelArgs(
                 mesh_device=device,
                 max_batch_size=1,
                 max_seq_len=prefill_max_seq,
-                dummy_weights=not tight_mode,
+                dummy_weights=False,
+                hf_config=torch_text_model_cfg,
                 optimizations=optimizations,
             )
-            if tight_mode:
-                # For meaningful PCC vs HF, avoid bfloat8 LM head output quantization.
-                model_args.lm_head_dtype = ttnn.bfloat16
-                # Ensure TT model depth matches HF text model depth.
-                # Some remote-code configs don't populate `num_hidden_layers` reliably, so infer from weights too.
-                hf_layers_cfg = getattr(torch_text_model_cfg, "num_hidden_layers", None)
+            # For meaningful PCC vs HF, avoid bfloat8 LM head output quantization.
+            model_args.lm_head_dtype = ttnn.bfloat16
+
+            # Ensure TT model depth matches HF text model depth.
+            # Some remote-code configs don't populate `num_hidden_layers` reliably, so infer from weights too.
+            hf_layers_cfg = getattr(torch_text_model_cfg, "num_hidden_layers", None)
+            hf_layers_sd = None
+            try:
+                layer_idxs = []
+                for k in _text_model.state_dict().keys():
+                    if ".layers." in k:
+                        # e.g. "model.layers.0.self_attn.q_proj.weight" or "layers.0...."
+                        tail = k.split(".layers.", 1)[1]
+                        idx = int(tail.split(".", 1)[0])
+                        layer_idxs.append(idx)
+                if layer_idxs:
+                    hf_layers_sd = max(layer_idxs) + 1
+            except Exception:
                 hf_layers_sd = None
-                try:
-                    layer_idxs = []
-                    for k in _text_model.state_dict().keys():
-                        if ".layers." in k:
-                            # e.g. "model.layers.0.self_attn.q_proj.weight" or "layers.0...."
-                            tail = k.split(".layers.", 1)[1]
-                            idx = int(tail.split(".", 1)[0])
-                            layer_idxs.append(idx)
-                    if layer_idxs:
-                        hf_layers_sd = max(layer_idxs) + 1
-                except Exception:
-                    hf_layers_sd = None
 
-                hf_layers = int(hf_layers_sd or hf_layers_cfg or model_args.n_layers)
-                logger.info(
-                    f"Prefill test: HF layers inferred cfg={hf_layers_cfg} sd={hf_layers_sd} -> using {hf_layers}"
-                )
-                if model_args.n_layers != hf_layers:
-                    logger.warning(f"Prefill test: forcing n_layers {model_args.n_layers} -> {hf_layers} to match HF")
-                    model_args.n_layers = hf_layers
-                    model_args.full_model_n_layers = hf_layers
+            hf_layers = int(hf_layers_sd or hf_layers_cfg or model_args.n_layers)
+            logger.info(f"Prefill test: HF layers inferred cfg={hf_layers_cfg} sd={hf_layers_sd} -> using {hf_layers}")
+            if model_args.n_layers != hf_layers:
+                logger.warning(f"Prefill test: forcing n_layers {model_args.n_layers} -> {hf_layers} to match HF")
+                model_args.n_layers = hf_layers
+                model_args.full_model_n_layers = hf_layers
 
-            # IMPORTANT: In real-weight PCC mode we must run the full layer stack; otherwise we'll compare
-            # a partial TT model against a full HF model and PCC will be very low (~0.0x).
-            # Keep the layer override only for dummy-weight bringup (or if explicitly enabled).
-            allow_partial_real = os.environ.get("DOTS_ALLOW_PARTIAL_LAYERS_REAL", "0").strip() in (
-                "1",
-                "true",
-                "yes",
-                "y",
+            # Build the TT state_dict directly from the already-loaded HF text model.
+            raw_sd = _text_model.state_dict()
+            stripped = {}
+            for k, v in raw_sd.items():
+                k2 = k[len("model.") :] if k.startswith("model.") else k
+                stripped[k2] = v
+            # Ensure embeddings + lm_head are present under standard HF key names so the Meta conversion
+            # yields `tok_embeddings.weight` and `output.weight`.
+            stripped.setdefault("embed_tokens.weight", torch_embed_weight)
+            if torch_lm_head_weight is not None:
+                stripped.setdefault("lm_head.weight", torch_lm_head_weight)
+
+            # A/B: some stacks want HF-layout Q/K (no permute), others want Meta-layout (permute).
+            convert = convert_hf_to_meta if qkv_permute else convert_hf_to_meta_no_qkv_permute
+            state_dict = convert(
+                stripped,
+                model_args.head_dim,
+                n_heads=model_args.n_heads,
+                n_kv_heads=model_args.n_kv_heads,
             )
-            if (not tight_mode) or allow_partial_real:
-                # In dummy-weight mode, compiling all 28 layers on device can take a long time and look like a hang.
-                # Default to 1 layer for fast interface validation; override as needed.
-                default_layers = str(model_args.n_layers if tight_mode else 1)
-                num_layers = int(os.environ.get("DOTS_PREFILL_TEST_NUM_LAYERS", default_layers))
-                if num_layers <= 0:
-                    num_layers = 1
-                if num_layers != model_args.n_layers:
-                    model_args.n_layers = num_layers
-                    model_args.full_model_n_layers = num_layers
-                    logger.info(f"Prefill test: overriding n_layers -> {num_layers} (DOTS_PREFILL_TEST_NUM_LAYERS)")
-            else:
-                if os.environ.get("DOTS_PREFILL_TEST_NUM_LAYERS") is not None:
-                    logger.warning(
-                        "Prefill test: ignoring DOTS_PREFILL_TEST_NUM_LAYERS in real-weight mode "
-                        "(set DOTS_ALLOW_PARTIAL_LAYERS_REAL=1 to override)."
-                    )
-
-            if tight_mode:
-                # Mirror qwen25_vl: build the TT state_dict directly from the already-loaded HF text model.
-                # This avoids any checkpoint prefix/filtering issues and guarantees we match the exact reference weights.
-                # NOTE: we captured `_text_model` earlier; use its state_dict.
-                # The keys may be prefixed with "model." depending on the HF module; strip it for conversion.
-                raw_sd = _text_model.state_dict()
-                stripped = {}
-                for k, v in raw_sd.items():
-                    k2 = k[len("model.") :] if k.startswith("model.") else k
-                    stripped[k2] = v
-                # Ensure embeddings + lm_head are present under standard HF key names so the Meta conversion
-                # yields `tok_embeddings.weight` and `output.weight`.
-                stripped.setdefault("embed_tokens.weight", torch_embed_weight)
-                if torch_lm_head_weight is not None:
-                    stripped.setdefault("lm_head.weight", torch_lm_head_weight)
-                state_dict = convert_hf_to_meta_no_qkv_permute(
-                    stripped,
-                    model_args.head_dim,
-                    n_heads=model_args.n_heads,
-                    n_kv_heads=model_args.n_kv_heads,
-                )
-                # Belt-and-braces: alias expected TT keys if conversion didn't create them.
-                if "tok_embeddings.weight" not in state_dict and "embed_tokens.weight" in state_dict:
-                    state_dict["tok_embeddings.weight"] = state_dict["embed_tokens.weight"]
-                if "output.weight" not in state_dict and "lm_head.weight" in state_dict:
-                    state_dict["output.weight"] = state_dict["lm_head.weight"]
-            else:
-                state_dict = model_args.load_state_dict()
+            # Belt-and-braces: alias expected TT keys if conversion didn't create them.
+            if "tok_embeddings.weight" not in state_dict and "embed_tokens.weight" in state_dict:
+                state_dict["tok_embeddings.weight"] = state_dict["embed_tokens.weight"]
+            if "output.weight" not in state_dict and "lm_head.weight" in state_dict:
+                state_dict["output.weight"] = state_dict["lm_head.weight"]
 
             # Create TTNN transformer
             weight_cache_path = tmp_path / ("weights_perm" if qkv_permute else "weights_noperm")
@@ -292,13 +260,9 @@ def test_text_only_prefill_pcc_gt_0_99(tmp_path):
             from models.demos.dots_ocr.tt.generator import Generator
 
             generator = Generator(tt_model, model_args, device)
-            if tight_mode:
-                if embeds is not None:
-                    tt_logits = generator.prefill_forward_embeddings(embeds.float(), rot_mats=rot_mats)
-                else:
-                    tt_logits = generator.prefill_forward_text(inputs.input_ids, rot_mats=rot_mats)
-            else:
-                tt_logits = generator.prefill_forward_embeddings(embeds.float(), rot_mats=rot_mats)
+            # Keep inputs in bf16 to better match HF numerics and avoid fp32->bf16 quantization differences
+            # happening inside the TT path.
+            tt_logits = generator.prefill_forward_embeddings(embeds.to(torch.bfloat16), rot_mats=rot_mats)
 
             hf_last = hf_logits[:, -1:, :]
             # Use the shared comp_pcc helper (same as qwen25_vl) instead of raw corrcoef on a flattened vector.
@@ -309,35 +273,32 @@ def test_text_only_prefill_pcc_gt_0_99(tmp_path):
             min_vocab = min(hf_cmp.shape[-1], tt_cmp.shape[-1])
             hf_cmp = hf_cmp[..., :min_vocab]
             tt_cmp = tt_cmp[..., :min_vocab]
-            _, pcc = comp_pcc(hf_cmp, tt_cmp, 0.0)
-            logger.info(f"Text-only prefill PCC (DOTS_TEXT_QKV_PERMUTE={int(qkv_permute)}): {pcc:.4f}")
+            pcc = _comp_pcc(hf_cmp, tt_cmp)
+            logger.info(f"Text-only prefill PCC (qkv_permute={int(qkv_permute)}): {pcc:.4f}")
             return pcc
 
-        # Run TT PCC. In tight mode, automatically try both QKV conversion variants and take the best.
+        # Run TT PCC: try both QKV conversion variants and take the best (requires real weights; see gate above).
         try:
-            if tight_mode:
-                pcc0 = _run_once(qkv_permute=False)
-                pcc1 = _run_once(qkv_permute=True)
-                pcc = max(pcc0, pcc1)
-                logger.info(f"Best Text-only prefill PCC: {pcc:.4f} (max of permute={pcc1:.4f}, noperm={pcc0:.4f})")
-                assert pcc > 0.99, f"PCC too low: {pcc:.4f} (expected > 0.99)"
-            else:
-                pcc = _run_once(qkv_permute=False)
-                assert pcc > 0.85, f"PCC too low: {pcc:.4f} (expected > 0.85)"
+            pcc0 = _run_once(qkv_permute=False)
+            pcc1 = _run_once(qkv_permute=True)
+            pcc = max(pcc0, pcc1)
+            logger.info(f"Best Text-only prefill PCC: {pcc:.4f} (max of permute={pcc1:.4f}, noperm={pcc0:.4f})")
+            assert pcc > 0.99, f"PCC too low: {pcc:.4f} (expected > 0.99)"
         except Exception as e:
             logger.exception("Prefill/PCC path raised: {}", e)
-            if tight_mode:
-                raise
-            pytest.skip(f"Prefill/PCC skipped (dummy weights): {type(e).__name__}: {e}")
+            raise
 
     finally:
-        # Restore env var even if the test fails/skips
-        if _orig_hf_model_env is None:
-            os.environ.pop("HF_MODEL", None)
-        else:
-            os.environ["HF_MODEL"] = _orig_hf_model_env
         if device is not None:
-            ttnn.close_mesh_device(device)
+            close_dots_mesh_device(device)
+
+
+def test_text_only_prefill_pcc_gt_0_99(tmp_path):
+    """
+    Test that TTNN text-only prefill with proper RoPE alignment
+    achieves PCC > 0.99 vs HF reference logits.
+    """
+    run_text_decoder_prefill_pcc_check(tmp_path)
 
 
 def test_rope_helper_alignment():
@@ -362,4 +323,4 @@ def test_rope_helper_alignment():
 if __name__ == "__main__":
     test_rope_helper_alignment()
     print("✅ RoPE helper test passed")
-    print("Run with MESH_DEVICE set for full prefill PCC test")
+    print("Prefill PCC: requires TT device runtime")
