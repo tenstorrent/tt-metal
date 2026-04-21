@@ -1,13 +1,26 @@
-"""ttnn port of VGGT, built up operator-by-operator.
+"""ttnn port of VGGT on a single Tenstorrent p150a Blackhole chip.
 
 Strategy: keep the torch reference structure intact and monkey-patch
 specific sub-modules to route their compute through ttnn. Each port lifts
 one op class off CPU; weights are uploaded once at install time and then
 re-used for every subsequent forward call.
 
-Stage 1 (this file): MLP blocks — all 72 Mlp instances in the reference
-(24 DINOv2 patch_embed + 24 frame + 24 global aggregator blocks) route
-their fc1 + gelu + fc2 through ttnn.
+Ports applied:
+  - Every Mlp (72 instances: 24 DINOv2 patch_embed + 24 frame + 24 global)
+    runs fc1 + gelu + fc2 on device in bf16 LoFi.
+  - Every Attention (72 instances) runs qkv + scores + softmax + context
+    + proj on device. qkv is bf16 LoFi; attention scores / softmax are
+    held in fp32 with HiFi4 so the 1374-long softmax row doesn't collapse
+    world_points_conf; proj is bf16 HiFi4 + fp32 dest for the same reason.
+  - Block.norm1 is fused into the attention's device call (upload x,
+    LN + qkv on device, download qkv). Block.norm1 becomes Identity on host.
+
+Ports NOT applied (tested and discarded — see results.tsv):
+  - Block.norm1/norm2 as standalone device LN: LN compute < host round-trip.
+  - Full sdpa on device (LoFi or HiFi4 fused kernel): PCC collapse.
+  - All nn.Linear generically: head Linears are precision-sensitive and
+    overhead-bound; ported only the ones inside Attention/Mlp.
+  - bf16 autocast over aggregator: head confidence channels need fp32.
 """
 from __future__ import annotations
 
