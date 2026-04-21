@@ -68,13 +68,9 @@
 #include "ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
-<<<<<<< rmillerTT/par_seq_opts
 #include "ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.hpp"
-=======
 #include "ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
-#include "ttnn/operations/experimental/generic/patchable_generic_op_nanobind.hpp"
->>>>>>> main
 
 namespace ttnn::operations::experimental {
 
