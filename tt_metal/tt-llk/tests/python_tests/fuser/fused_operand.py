@@ -202,86 +202,49 @@ class Operand:
         return f"UNUSED const Operand {self.cpp_name}({hex(self.l1_address)}, {buffer_size});\n"
 
 
-class OperandMapping:
-    def __init__(
-        self,
-        src_a: str,
-        src_b: str,
-        output: str,
-        operand_registry: "OperandRegistry" = None,
-    ):
-        self.src_a = src_a
-        self.src_b = src_b
-        self.output = output
-        self.operand_registry = operand_registry
-
-    def create_output_operand(
-        self,
-        operand_registry: "OperandRegistry",
-        output_format: DataFormat,
-        output_dims: Tuple[int, int],
-    ):
-        if self.output in operand_registry.operands:
-            return
-
-        max_output_dims = self.resolve_output_dimensions(operand_registry)
-
-        if output_dims[0] > max_output_dims[0] or output_dims[1] > max_output_dims[1]:
-            raise ValueError(f"Max output dimensions are {max_output_dims}")
-
-        operand_registry.add_output(
-            name=self.output,
-            dimensions=output_dims,
-            data_format=output_format,
-        )
-
-    def resolve_output_dimensions(
-        self, operand_registry: "OperandRegistry"
-    ) -> Tuple[int, int]:
-        src_a_op = operand_registry.get(self.src_a)
-        src_b_op = operand_registry.get(self.src_b)
-
-        M = src_a_op.dimensions[0]
-        N = src_b_op.dimensions[1]
-
-        return (M, N)
-
-
 class OperandRegistry:
     def __init__(self):
         self.operands: dict[str, Operand] = {}
 
-    def add_input(
+    def get_input(
         self,
         name: str,
         dimensions: Tuple[int, int],
         data_format: DataFormat,
-        address: int = None,
-        sfpu: bool = True,
         const_value: Optional[float] = None,
     ) -> Operand:
+        if name is None:
+            return
+
         if name in self.operands:
-            raise ValueError(f"Operand '{name}' already exists")
+            operand = self.operands[name]
+            if (dimensions is not None and dimensions != operand.dimensions) or (
+                data_format is not None and data_format != operand.data_format
+            ):
+                print(dimensions, data_format)
+                raise ValueError(f"Operand '{name}' exists with different parameters")
+            return operand
 
         operand = Operand(
             name=name,
             dimensions=dimensions,
             data_format=data_format,
-            l1_address=address,
             is_output=False,
-            sfpu=sfpu,
             const_value=const_value,
         )
         self.operands[name] = operand
         return operand
 
-    def add_output(
+    def get_output(
         self,
         name: str,
         dimensions: Tuple[int, int],
         data_format: DataFormat,
         address: int = None,
     ) -> Operand:
+        if name is None:
+            return
+
         if name in self.operands:
             raise ValueError(f"Output operand '{name}' already exists")
 
@@ -305,66 +268,6 @@ class OperandRegistry:
 
     def get_all_outputs(self) -> list[Operand]:
         return [op for op in self.operands.values() if op.is_output]
-
-    def create_mapping(
-        self,
-        src_a: str,
-        src_b: str,
-        output: str,
-        src_a_dims: Tuple[int, int] = (32, 32),
-        src_b_dims: Tuple[int, int] = (32, 32),
-        output_dims: Tuple[int, int] = (64, 64),
-        input_format: DataFormat = DataFormat.Float16_b,
-        output_format: DataFormat = DataFormat.Float16_b,
-        src_a_tensor: torch.Tensor = None,
-        src_b_tensor: torch.Tensor = None,
-        src_a_const_value: Optional[float] = None,
-        src_b_const_value: Optional[float] = None,
-    ) -> OperandMapping:
-        if src_a not in self.operands:
-            self.add_input(
-                src_a,
-                dimensions=src_a_dims,
-                data_format=input_format,
-                const_value=src_a_const_value,
-            )
-        else:
-            existing = self.operands[src_a]
-            if list(existing.dimensions) != list(src_a_dims):
-                raise ValueError(
-                    f"Operand '{src_a}' already exists with dimensions {existing.dimensions}, got {src_a_dims}"
-                )
-
-        if src_b not in self.operands:
-            self.add_input(
-                src_b,
-                dimensions=src_b_dims,
-                data_format=input_format,
-                const_value=src_b_const_value,
-            )
-        else:
-            existing = self.operands[src_b]
-            if list(existing.dimensions) != list(src_b_dims):
-                raise ValueError(
-                    f"Operand '{src_b}' already exists with dimensions {existing.dimensions}, got {src_b_dims}"
-                )
-
-        if src_a_tensor is not None:
-            self.operands[src_a].set_data(src_a_tensor)
-
-        if src_b_tensor is not None:
-            self.operands[src_b].set_data(src_b_tensor)
-
-        mapping = OperandMapping(
-            src_a=src_a,
-            src_b=src_b,
-            output=output,
-            operand_registry=self,
-        )
-
-        mapping.create_output_operand(self, output_format, output_dims)
-
-        return mapping
 
     DEFAULT_L1_START_ADDRESS = 0x00021000
     DEFAULT_L1_END_ADDRESS = 0x00169FFF

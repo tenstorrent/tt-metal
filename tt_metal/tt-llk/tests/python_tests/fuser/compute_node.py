@@ -276,8 +276,8 @@ class ComputeNode:
             ).reshape(operation.max_output_dimensions)
 
         return (
-            tensor_a.reshape(operation.src_a.dimensions),
-            tensor_b.reshape(operation.src_b.dimensions),
+            tensor_a,
+            tensor_b,
             tensor_dst.reshape(operation.max_output_dimensions),
         )
 

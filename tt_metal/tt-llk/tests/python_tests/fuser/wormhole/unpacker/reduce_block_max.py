@@ -37,8 +37,8 @@ class ReduceBlockMaxUnpacker(Unpacker):
         ct_dim = block.block_tiles_x
         tile_x_abs = f"(({block.tile_id_global}) % {block.tile_count_x})"
         tile_x_in_block = f"({tile_x_abs} - {block.block_x})"
-        buffer_a = operation.src_a.cpp_name
-        buffer_b = operation.src_b.cpp_name
+        buffer_a = compute_unit.src_a.cpp_name
+        buffer_b = compute_unit.src_b.cpp_name
         return (
             f"if (({tile_x_in_block}) % {ct_dim} == 0 ) {{\n"
             f"_llk_unpack_AB_reduce_block_max_row_(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"
@@ -52,7 +52,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         compute_unit: "ComputeNode",
         block: "BlockData",
     ) -> str:
-        face_r_dim = operation.src_a.tile_shape.face_r_dim
+        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
         return f"_llk_unpack_AB_reduce_block_max_row_uninit_({face_r_dim}, {face_r_dim});\n"
 
     def perf_set_valid(

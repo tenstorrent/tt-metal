@@ -41,8 +41,8 @@ class ReduceUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        num_faces = operation.src_a.tile_shape.total_num_faces()
-        face_r_dim = operation.src_a.tile_shape.face_r_dim
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
         return (
             f"_perf_unpack_loop_set_valid<false, true>(1);\n"
             f"_perf_unpack_loop_set_valid<true, false>({face_r_dim * num_faces});\n"
@@ -55,8 +55,8 @@ class ReduceUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        num_faces = operation.src_a.tile_shape.total_num_faces()
-        face_r_dim = operation.src_a.tile_shape.face_r_dim
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
         return (
             f"_perf_math_loop_clear_valid<false, true>(1);\n"
             f"_perf_math_loop_clear_valid<true, false>({face_r_dim * num_faces});\n"
@@ -75,7 +75,7 @@ class ReduceUnpacker(Unpacker):
             compute_unit.enforce_fp32_accumulation.cpp_enum_value
         )
 
-        tile_shape = operation.src_a.tile_shape
+        tile_shape = compute_unit.src_a.tile_shape
         tensor_shape_instantiation: str = (
             f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
         )
@@ -92,8 +92,8 @@ class ReduceUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        buffer_a = operation.src_a.cpp_name
-        buffer_b = operation.src_b.cpp_name
+        buffer_a = compute_unit.src_a.cpp_name
+        buffer_b = compute_unit.src_b.cpp_name
         reduce_dim = compute_unit.reduce_dim.cpp_enum_value
         pool_type = compute_unit.reduce_pool.cpp_enum_value
         return f"_llk_unpack_AB_reduce_<{pool_type}, {reduce_dim}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"

@@ -43,7 +43,7 @@ class DatacopyFpu(Fpu):
             source_tensor,
             operation.output.data_format,
             num_faces=operation.output.tile_shape.total_num_faces(),
-            input_dimensions=operation.src_a.dimensions,
+            input_dimensions=compute_unit.src_a.dimensions,
             face_r_dim=operation.output.tile_shape.face_r_dim,
         )
 

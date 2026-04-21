@@ -122,7 +122,7 @@ class ReduceFpu(Fpu):
         is_int_fpu_en = "false"
 
         # Create a temporary TensorShape object with Src_A tile dimensions
-        tile_shape = operation.src_a.tile_shape
+        tile_shape = compute_unit.src_a.tile_shape
         tensor_shape_instantiation: str = (
             f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
         )
