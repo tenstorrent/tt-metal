@@ -179,7 +179,6 @@ tests/tt_metal/tt_metal/debug_tools/inspector @tenstorrent/metalium-developers-t
 tests/tt_metal/tt_metal/debug_tools/device_print @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/test_kernels/device_print @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
 
-
 # misc tests
 tests/didt/ @rdjogoTT @ttmtrajkovic @tenstorrent/codeowner-bypass
 
