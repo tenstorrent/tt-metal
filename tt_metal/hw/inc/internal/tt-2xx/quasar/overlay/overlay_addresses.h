@@ -39,10 +39,6 @@
 #define L2_CACHE_LINE_SIZE 64
 #define L2_CACHE_SIZE (128 * 1024)
 
-// L2 cache geometry: 128KB, 4-way associative, 64B lines
-#define L2_CACHE_LINE_SIZE 64
-#define L2_CACHE_SIZE (128 * 1024)
-
 #define WRITE_REG32(addr, val) ((*((volatile uint32_t*)(uintptr_t)(addr))) = (val))
 #define READ_REG32(addr) (*((volatile uint32_t*)(uintptr_t)(addr)))
 
