@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from enum import Enum
-from typing import Annotated, List, Literal, Optional, Type, Union
+from typing import Annotated, List, Literal, Optional, Tuple, Type, Union
 
 from fuser.fused_math import ComputeNode, ComputePipeline
 from fuser.fused_operation import FusedOperation
@@ -147,6 +147,15 @@ class FpuMathSchema(BaseModel):
     unpack_transpose_faces: Transpose = Transpose.No
     math_fidelity: MathFidelity = MathFidelity.LoFi
 
+    src_a: str = Field(..., min_length=1)
+    src_b: str = Field(..., min_length=1)
+    src_a_dims: Optional[Tuple[int, int]] = None
+    src_b_dims: Optional[Tuple[int, int]] = None
+    src_a_format: Optional[DataFormat] = None
+    src_b_format: Optional[DataFormat] = None
+    src_a_const_value: Optional[float] = None
+    src_b_const_value: Optional[float] = None
+
     @field_validator("unpacker", mode="before")
     @classmethod
     def parse_unpacker(cls, v):
@@ -164,6 +173,28 @@ class FpuMathSchema(BaseModel):
         if isinstance(v, str):
             try:
                 return MathFidelity[v]
+            except KeyError:
+                pass
+        return v
+
+    @field_validator("src_a_dims", "src_b_dims")
+    @classmethod
+    def validate_dimensions(cls, v: List[int]) -> List[int]:
+        for dim in v:
+            if dim <= 0:
+                raise ValueError(f"must be positive, got {dim}")
+            if dim % 32 != 0:
+                raise ValueError(f"must be multiple of 32, got {dim}")
+        return v
+
+    @field_validator("src_a_format", "src_b_format", mode="before")
+    @classmethod
+    def parse_data_format(cls, v):
+        if isinstance(v, DataFormat):
+            return v
+        if isinstance(v, str):
+            try:
+                return DataFormat[v]
             except KeyError:
                 pass
         return v
@@ -270,7 +301,7 @@ class FpuMathSchema(BaseModel):
 
         return self
 
-    def to_compute_node(self):
+    def to_compute_node(self, operands):
         if self.operation.is_eltwise():
             fpu = EltwiseFpu(self.operation.to_math_operation())
         elif self.operation == FpuOperationEnum.Reduce:
@@ -283,6 +314,19 @@ class FpuMathSchema(BaseModel):
             fpu = ReduceBlockMaxFpu()
         else:
             raise ValueError(f"Unknown FPU operation: {self.operation}")
+
+        src_a = operands.get_input(
+            name=self.src_a,
+            dimensions=self.src_a_dims,
+            data_format=self.src_a_format,
+            const_value=self.src_a_const_value,
+        )
+        src_b = operands.get_input(
+            name=self.src_b,
+            dimensions=self.src_b_dims,
+            data_format=self.src_b_format,
+            const_value=self.src_b_const_value,
+        )
 
         kwargs = {}
         if self.unpacker:
@@ -308,7 +352,7 @@ class FpuMathSchema(BaseModel):
         if self.acc_to_dest:
             kwargs["acc_to_dest"] = self.acc_to_dest
 
-        return ComputeNode(fpu=fpu, sfpu=None, **kwargs)
+        return ComputeNode(fpu=fpu, src_a=src_a, src_b=src_b, sfpu=None, **kwargs)
 
 
 class UnarySfpuMathSchema(BaseModel):
@@ -321,7 +365,7 @@ class UnarySfpuMathSchema(BaseModel):
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     fill_const_value: float = 1.0
 
-    def to_compute_node(self):
+    def to_compute_node(self, operands):
 
         sfpu = UnarySfpu(
             self.operation.to_math_operation(),
@@ -344,7 +388,7 @@ class BinarySfpuMathSchema(BaseModel):
     src2_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
 
-    def to_compute_node(self):
+    def to_compute_node(self, operands):
 
         sfpu = BinarySfpu(
             self.operation.to_math_operation(),
@@ -366,27 +410,17 @@ MathSchema = Annotated[
 class OperationSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    src_a: str = Field(..., min_length=1)
-    src_b: str = Field(..., min_length=1)
     output: str = Field(..., min_length=1)
-
-    src_a_dims: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
-    src_b_dims: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
     output_dims: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
-
-    input_format: DataFormat = Field(default_factory=lambda: DataFormat.Float16_b)
     output_format: DataFormat = Field(default_factory=lambda: DataFormat.Float16_b)
 
-    src_a_const_value: Optional[float] = None
-    src_b_const_value: Optional[float] = None
-
     math: List[MathSchema] = Field(..., min_length=1)
-
     packer: PackerEnum = PackerEnum.Packer
+
     dest_sync: Optional[DestSync] = None
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
-    @field_validator("src_a_dims", "src_b_dims", "output_dims", "block_size")
+    @field_validator("output_dims", "block_size")
     @classmethod
     def validate_dimensions(cls, v: List[int]) -> List[int]:
         for dim in v:
@@ -396,7 +430,7 @@ class OperationSchema(BaseModel):
                 raise ValueError(f"must be multiple of 32, got {dim}")
         return v
 
-    @field_validator("input_format", "output_format", mode="before")
+    @field_validator("output_format", mode="before")
     @classmethod
     def parse_data_format(cls, v):
         if isinstance(v, DataFormat):
@@ -441,20 +475,25 @@ class OperationSchema(BaseModel):
         return self
 
     def to_fused_operation(self, operands):
-        operand_mapping = operands.create_mapping(
-            src_a=self.src_a,
-            src_b=self.src_b,
-            output=self.output,
-            src_a_dims=self.src_a_dims,
-            src_b_dims=self.src_b_dims,
-            output_dims=self.output_dims,
-            input_format=self.input_format,
-            output_format=self.output_format,
-            src_a_const_value=self.src_a_const_value,
-            src_b_const_value=self.src_b_const_value,
+        # operand_mapping = operands.create_mapping(
+        #     src_a=self.src_a,
+        #     src_b=self.src_b,
+        #     output=self.output,
+        #     src_a_dims=self.src_a_dims,
+        #     src_b_dims=self.src_b_dims,
+        #     output_dims=self.output_dims,
+        #     input_format=self.input_format,
+        #     output_format=self.output_format,
+        #     src_a_const_value=self.src_a_const_value,
+        #     src_b_const_value=self.src_b_const_value,
+        # )
+        output = operands.get_output(
+            name=self.output,
+            dimensions=self.output_dims,
+            data_format=self.output_format,
         )
 
-        math_ops = [m.to_compute_node() for m in self.math]
+        math_ops = [m.to_compute_node(operands) for m in self.math]
 
         kwargs = {}
         if self.dest_sync:
@@ -463,7 +502,7 @@ class OperationSchema(BaseModel):
             kwargs["block_size"] = self.block_size
 
         return FusedOperation(
-            operand_mapping=operand_mapping,
             math=ComputePipeline(math_ops, self.packer.to_runtime()),
+            output=output,
             **kwargs,
         )

@@ -77,8 +77,8 @@ class EltwiseFpu(Fpu):
         op = self.operation.cpp_enum_value
         face_r_dim = operation.output.tile_shape.face_r_dim
         face_c_dim = operation.output.tile_shape.face_c_dim
-        num_faces_r_dim = operation.src_a.tile_shape.total_row_dim() // face_r_dim
-        num_faces_c_dim = operation.src_a.tile_shape.total_col_dim() // face_c_dim
+        num_faces_r_dim = compute_unit.src_a.tile_shape.total_row_dim() // face_r_dim
+        num_faces_c_dim = compute_unit.src_a.tile_shape.total_col_dim() // face_c_dim
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
 
@@ -101,8 +101,8 @@ class EltwiseFpu(Fpu):
         op = self.operation.cpp_enum_value
         face_r_dim = operation.output.tile_shape.face_r_dim
         face_c_dim = operation.output.tile_shape.face_c_dim
-        num_faces_r_dim = operation.src_a.tile_shape.total_row_dim() // face_r_dim
-        num_faces_c_dim = operation.src_a.tile_shape.total_col_dim() // face_c_dim
+        num_faces_r_dim = compute_unit.src_a.tile_shape.total_row_dim() // face_r_dim
+        num_faces_c_dim = compute_unit.src_a.tile_shape.total_col_dim() // face_c_dim
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
 

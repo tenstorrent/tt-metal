@@ -55,19 +55,19 @@ class FuserConfig(TestConfig):
 
         for operation in self.pipeline:
             if is_format_combination_outlier(
-                operation.src_a.data_format,
+                operation.math.operations[0].src_a.data_format,
                 operation.output.data_format,
                 self.global_config.dest_acc,
             ):
                 raise ValueError(
-                    f"Dest Accumulation must be enabled for {operation.src_a.data_format} input and {operation.output.data_format} output"
+                    f"Dest Accumulation must be enabled for {operation.math.operations[0].src_a.data_format} input and {operation.output.data_format} output"
                 )
 
         num_stages = len(self.pipeline)
 
         for i, operation in enumerate(self.pipeline, start=1):
             formats_config = data_formats(
-                input_format=operation.src_a.data_format,
+                input_format=operation.math.operations[0].src_a.data_format,
                 output_format=operation.output.data_format,
                 is_fp32_dest_acc_en=self.global_config.dest_acc,
                 num_iterations=1,

@@ -13,13 +13,13 @@ from helpers.llk_params import (
 )
 
 from .fused_math import ComputePipeline
-from .fused_operand import Operand, OperandMapping
+from .fused_operand import Operand
 
 
 @dataclass
 class FusedOperation:
     math: ComputePipeline
-    operand_mapping: OperandMapping
+    output: Operand
     stage_id: int = 0
     num_stages: int = 1
     unpack_to_dest: bool = False
@@ -37,27 +37,15 @@ class FusedOperation:
         self.block_tiles_x = self.block_size[1] // num_cols
         self.block_tiles_y = self.block_size[0] // num_rows
 
-        self.kt_dim = self.src_a.dimensions[1] // num_cols
-
-    @property
-    def src_a(self) -> Operand:
-        mapping = self.operand_mapping
-        return mapping.operand_registry.get(mapping.src_a)
-
-    @property
-    def src_b(self) -> Operand:
-        mapping = self.operand_mapping
-        return mapping.operand_registry.get(mapping.src_b)
-
-    @property
-    def output(self) -> Operand:
-        mapping = self.operand_mapping
-        return mapping.operand_registry.get(mapping.output)
-
-    @property
-    def max_output_dimensions(self) -> Tuple[int, int]:
-        mapping = self.operand_mapping
-        return mapping.resolve_output_dimensions(mapping.operand_registry)
+        dimensions = [0, 0]
+        for op in self.math.operations:
+            if op.src_a is not None:
+                dimensions[0] = max(dimensions[0], op.src_a.dimensions[0])
+                dimensions[1] = max(dimensions[1], op.src_a.dimensions[1])
+            if op.src_b is not None:
+                dimensions[0] = max(dimensions[0], op.src_b.dimensions[0])
+                dimensions[1] = max(dimensions[1], op.src_b.dimensions[1])
+        self.max_output_dimensions = dimensions
 
     def unpack(self, config) -> str:
         return self.math.unpack_body(self, config)
@@ -70,11 +58,11 @@ class FusedOperation:
 
     def golden(self, config) -> torch.Tensor:
         # calculate l1 golden
-        src_a_dims = self.src_a.dimensions
-        src_b_dims = self.src_b.dimensions
+        src_a_dims = self.math.operations[0].src_a.dimensions
+        src_b_dims = self.math.operations[0].src_b.dimensions
 
-        tensor_a = self.src_a.raw_data.view(src_a_dims)
-        tensor_b = self.src_b.raw_data.view(src_b_dims)
+        tensor_a = self.math.operations[0].src_a.raw_data.view(src_a_dims)
+        tensor_b = self.math.operations[0].src_b.raw_data.view(src_b_dims)
 
         l1_golden_tensor = self.math.golden(tensor_a, tensor_b, self, config)
         l1_golden_tensor = self.math.packer().golden(l1_golden_tensor, self, config)
@@ -82,8 +70,8 @@ class FusedOperation:
         self.output.l1_golden = l1_golden_tensor.flatten()
 
         # calculate master golden
-        golden_tensor_a = self.src_a.master_golden.view(src_a_dims)
-        golden_tensor_b = self.src_b.master_golden.view(src_b_dims)
+        golden_tensor_a = self.math.operations[0].src_a.master_golden.view(src_a_dims)
+        golden_tensor_b = self.math.operations[0].src_b.master_golden.view(src_b_dims)
 
         master_golden_tensor = self.math.golden(
             golden_tensor_a, golden_tensor_b, self, config
@@ -98,14 +86,11 @@ class FusedOperation:
 
     def __str__(self):
         return (
-            f"{'='*60}\n"
+            f"\n{'='*60}\n"
             f"Operation {self.stage_id}\n"
             f"{'='*60}\n"
             f"  {self.math}\n"
-            f"  Src_A: {self.src_a}\n"
-            f"  Src_B: {self.src_b}\n"
             f"  Output: {self.output}\n"
             f"  Block Size: {self.block_size}\n"
             f"  Dest Sync: {self.dest_sync}\n"
-            f"  Tile Shape: {self.output.tile_shape}\n"
         )

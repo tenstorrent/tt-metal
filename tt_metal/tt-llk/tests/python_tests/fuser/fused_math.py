@@ -140,16 +140,19 @@ class ComputePipeline:
         return code
 
     def unpack_hw_configure(
-        self, operation: "FusedOperation", config: "GlobalConfig"
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "ComputeNode",
     ) -> str:
         stage = operation.stage_id
-        unpa_tile_size = operation.src_a.tile_size
-        unpb_tile_size = operation.src_b.tile_size
+        unpa_tile_size = compute_unit.src_a.tile_size
+        unpb_tile_size = compute_unit.src_b.tile_size
         dest_acc = config.dest_acc.cpp_enum_value
-        unpa_face_r_dim = operation.src_a.tile_shape.face_r_dim
-        unpb_face_r_dim = operation.src_b.tile_shape.face_r_dim
-        unpa_num_faces = operation.src_a.tile_shape.total_num_faces()
-        unpb_num_faces = operation.src_b.tile_shape.total_num_faces()
+        unpa_face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
+        unpb_face_r_dim = compute_unit.src_b.tile_shape.face_r_dim
+        unpa_num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        unpb_num_faces = compute_unit.src_b.tile_shape.total_num_faces()
 
         if stage == 1:
             code = (
@@ -189,7 +192,7 @@ class ComputePipeline:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += self.unpack_hw_configure(operation, config)
+        code += self.unpack_hw_configure(operation, config, self.operations[0])
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
@@ -459,8 +462,8 @@ class ComputePipeline:
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> torch.Tensor:
-        tensor_a = torch.zeros(operation.src_a.dimensions)
-        tensor_b = torch.zeros(operation.src_b.dimensions)
+        tensor_a = torch.zeros(operation.math.operations[0].src_a.dimensions)
+        tensor_b = torch.zeros(operation.math.operations[0].src_b.dimensions)
         tensor_dst = torch.zeros(operation.max_output_dimensions)
         for op in self.operations:
             tensor_a, tensor_b, tensor_dst = op.golden(

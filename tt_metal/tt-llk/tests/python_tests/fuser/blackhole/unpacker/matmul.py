@@ -61,19 +61,19 @@ class MatmulUnpacker(Unpacker):
         if compute_unit.unpack_transpose_faces == Transpose.Yes:
             tensor_b = t_matrix.transpose_faces_multi_tile(
                 tensor_b,
-                operation.src_b.data_format,
-                operation.src_b.tile_count,
+                compute_unit.src_b.data_format,
+                compute_unit.src_b.tile_count,
                 tilize=True,
-                input_dimensions=operation.src_b.dimensions,
+                input_dimensions=compute_unit.src_b.dimensions,
             )
 
         if compute_unit.unpack_transpose_within_face == Transpose.Yes:
             tensor_b = t_matrix.transpose_within_faces_multi_tile(
                 tensor_b,
-                operation.src_b.data_format,
-                operation.src_b.tile_count,
+                compute_unit.src_b.data_format,
+                compute_unit.src_b.tile_count,
                 untilize=True,
-                input_dimensions=operation.src_b.dimensions,
+                input_dimensions=compute_unit.src_b.dimensions,
             )
 
         return tensor_a, tensor_b
@@ -85,7 +85,7 @@ class MatmulUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        face_r_dim = operation.src_a.tile_shape.face_r_dim
+        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
         kt_dim = operation.kt_dim
@@ -103,12 +103,12 @@ class MatmulUnpacker(Unpacker):
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
         kt_dim = operation.kt_dim
-        unpack_tile_size_a = operation.src_a.tile_size
-        unpack_tile_size_b = operation.src_b.tile_size
-        full_ct_dim = operation.src_b.dimensions[1] // 32
-        output_ct_dim = operation.src_a.tile_count_x
-        buffer_a = operation.src_a.cpp_name
-        buffer_b = operation.src_b.cpp_name
+        unpack_tile_size_a = compute_unit.src_a.tile_size
+        unpack_tile_size_b = compute_unit.src_b.tile_size
+        full_ct_dim = compute_unit.src_b.dimensions[1] // 32
+        output_ct_dim = compute_unit.src_a.tile_count_x
+        buffer_a = compute_unit.src_a.cpp_name
+        buffer_b = compute_unit.src_b.cpp_name
 
         return (
             f"    {{\n"

@@ -57,7 +57,8 @@ class UnarySfpu(Sfpu):
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
-        format_input = operation.src_a.data_format
+        # when fused data format inference is finished this should be changed to src format
+        format_input = operation.output.data_format
         format_output = operation.output.data_format
         dest_acc = config.dest_acc
 
