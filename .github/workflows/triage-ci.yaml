@@ -35,6 +35,28 @@ on:
         required: false
         type: boolean
         default: true
+      reassign-to-someone-else:
+        description: >-
+          Re-resolve and exclude the prior owner(s); requires the skip flag
+          above to be false. Mutually exclusive with refresh-owner-recommendation.
+        required: false
+        type: boolean
+        default: false
+      refresh-owner-recommendation:
+        description: >-
+          Re-resolve without excluding prior owners; requires the skip flag
+          above to be false. Mutually exclusive with reassign-to-someone-else.
+        required: false
+        type: boolean
+        default: false
+      extra-context-for-agent:
+        description: >-
+          Optional dev hint appended to the agent prompt under EXTRA INPUT FROM
+          DEVS. When set, the pipeline_reorg fast path is bypassed. Requires the
+          skip flag above to be false.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -61,6 +83,9 @@ jobs:
       target-repo: tenstorrent/tt-metal
       issue-numbers: ${{ inputs.issue-numbers }}
       skip-assigning-for-issues-that-already-have-owners: ${{ inputs.skip-assigning-for-issues-that-already-have-owners }}
+      reassign-to-someone-else: ${{ inputs.reassign-to-someone-else }}
+      refresh-owner-recommendation: ${{ inputs.refresh-owner-recommendation }}
+      extra-context-for-agent: ${{ inputs.extra-context-for-agent }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.AUTO_TRIAGE_TOKEN }}
