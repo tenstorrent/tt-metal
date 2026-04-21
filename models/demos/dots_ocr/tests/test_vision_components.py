@@ -30,7 +30,10 @@ def test_dots_vision_model_args(tmp_path):
     from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, open_mesh_device
     from models.demos.dots_ocr.tt.vision_model_config import create_dots_vision_args
 
-    device = open_mesh_device()
+    try:
+        device = open_mesh_device()
+    except Exception as e:
+        pytest.skip(f"TT device unavailable ({type(e).__name__}): {e}")
     try:
         # Create vision args
         args = create_dots_vision_args(
@@ -92,7 +95,10 @@ def test_patch_embed_with_device(tmp_path):
     from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, open_mesh_device
     from models.demos.dots_ocr.tt.vision_patch_embed import PatchEmbedTT
 
-    device = open_mesh_device()
+    try:
+        device = open_mesh_device()
+    except Exception as e:
+        pytest.skip(f"TT device unavailable ({type(e).__name__}): {e}")
     try:
         # Create dummy state dict for testing
         state_dict = {
@@ -158,7 +164,10 @@ def test_full_vision_transformer_smoke():
     from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, open_mesh_device
     from models.demos.dots_ocr.tt.vision_transformer import create_dots_vision_transformer
 
-    device = open_mesh_device()
+    try:
+        device = open_mesh_device()
+    except Exception as e:
+        pytest.skip(f"TT device unavailable ({type(e).__name__}): {e}")
     try:
         try:
             vision_transformer = create_dots_vision_transformer(

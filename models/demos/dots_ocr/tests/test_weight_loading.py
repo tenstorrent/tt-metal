@@ -19,7 +19,18 @@ from models.demos.dots_ocr.tt.load import (
     load_dots_vision_state_dict,
     validate_dots_weight_loading,
 )
-from models.demos.dots_ocr.tt.qwen2_dummy_config import DOTS_DUMMY_QWEN2_CONFIG_DROP_KEYS
+
+# Keys dropped when mapping DotsOCRConfig JSON into a pure Qwen2Config (contract test only).
+_QWEN2_STRIP_KEYS_FROM_DOTS = (
+    "vision_config",
+    "image_token_id",
+    "video_token_id",
+    "model_type",
+    "architectures",
+    "auto_map",
+    "transformers_version",
+    "_name_or_path",
+)
 
 
 def test_weight_loading_functions_exist():
@@ -140,7 +151,7 @@ def test_qwen2_meta_from_dots_config_has_no_vision_keys():
         raise
 
     d = full.to_dict()
-    for k in DOTS_DUMMY_QWEN2_CONFIG_DROP_KEYS:
+    for k in _QWEN2_STRIP_KEYS_FROM_DOTS:
         d.pop(k, None)
     d["model_type"] = "qwen2"
     d["architectures"] = ["Qwen2ForCausalLM"]
@@ -152,42 +163,6 @@ def test_qwen2_meta_from_dots_config_has_no_vision_keys():
     keys = list(m.state_dict().keys())
     assert not any("vision_tower" in k.lower() for k in keys)
     assert any("model.layers.0." in k for k in keys)
-
-
-def test_dots_dummy_load_state_dict_qwen2_text_only():
-    """
-    Dummy TT weights should match the Qwen2 text backbone only (like qwen25_vl vision-only refs).
-
-    ``DotsOCRForCausalLM`` subclasses ``Qwen2ForCausalLM`` and adds ``vision_tower``; building the
-    full HF VLM for dummy tensors OOMs hosts. ``DotsModelArgs.load_state_dict`` must use
-    ``Qwen2ForCausalLM`` + stripped ``Qwen2Config`` so state_dict keys have no ViT tensors.
-    """
-    pytest.importorskip("ttnn.device")
-
-    from models.demos.dots_ocr.reference._flash_attn_shim import install as _install_flash_shim
-
-    _install_flash_shim()
-
-    from models.demos.dots_ocr.tt.model_config import DotsModelArgs
-
-    model_id = os.environ.get("HF_MODEL", "rednote-hilab/dots.mocr")
-    prev = os.environ.get("HF_MODEL")
-    os.environ["HF_MODEL"] = model_id
-    try:
-        args = DotsModelArgs(mesh_device=None, dummy_weights=True, max_seq_len=64)
-        sd = args.load_state_dict()
-        assert len(sd) > 0
-        assert not any("vision_tower" in k.lower() or "dots_vit" in k.lower() for k in sd)
-        assert any("model.layers.0." in k for k in sd), "Expected Qwen2-style layer keys"
-    except Exception as exc:
-        if _hub_unreachable(exc):
-            pytest.skip(f"Hub unreachable ({type(exc).__name__}): {exc}")
-        raise
-    finally:
-        if prev is None:
-            os.environ.pop("HF_MODEL", None)
-        else:
-            os.environ["HF_MODEL"] = prev
 
 
 if __name__ == "__main__":

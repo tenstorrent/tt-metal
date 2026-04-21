@@ -35,18 +35,33 @@ def test_vision_encoder_pcc_gt_0_99(tmp_path):
         """Open a mesh per ``MESH_DEVICE`` (N150/N300/T3K); ``None`` if unset."""
         if os.environ.get("MESH_DEVICE") is None:
             return None
-        return open_mesh_device()
+        try:
+            return open_mesh_device()
+        except Exception as e:
+            pytest.skip(f"TT device unavailable ({type(e).__name__}): {e}")
 
     device = _open_device()
     try:
-        # Create hybrid TTNN vision encoder (uses dummy weights for test)
+        state_dict = None
+        if device is not None:
+            from models.demos.dots_ocr.reference.hf_utils import get_hf_model_id
+            from models.demos.dots_ocr.tt.vision_qwenstyle import _dots_merger_state_dict_for_patch_merger_tt
+            from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+
+            model_id = os.environ.get("HF_MODEL", get_hf_model_id())
+            try:
+                hf_sd = load_hf_state_dict_filtered(model_id, ("vision_tower.", "model.vision_tower."))
+                state_dict = _dots_merger_state_dict_for_patch_merger_tt(hf_sd)
+            except Exception as exc:
+                pytest.skip(f"Real vision weights required for device test: {exc}")
+
         encoder = VisionEncoder(
             mesh_device=device,
-            hf_model=None,  # Use synthetic path for test
-            state_dict=None,  # will use dummy weights
+            hf_model=None,
+            state_dict=state_dict,
             weight_cache_path=tmp_path,
-            hidden_size=16,  # small for test speed
-            out_hidden_size=16,
+            hidden_size=1536,
+            out_hidden_size=1536,
             spatial_merge_size=2,
         )
 
@@ -60,7 +75,7 @@ def test_vision_encoder_pcc_gt_0_99(tmp_path):
 
         assert isinstance(tt_vision_tokens, torch.Tensor)
         assert tt_vision_tokens.dim() == 2, f"Expected 2D tensor, got {tt_vision_tokens.dim()}D"
-        assert tt_vision_tokens.shape[1] == 16, f"Expected hidden_size=16, got {tt_vision_tokens.shape[1]}"
+        assert tt_vision_tokens.shape[1] == 1536, f"Expected hidden_size=1536, got {tt_vision_tokens.shape[1]}"
         assert tt_vision_tokens.shape[0] > 0, "Should produce at least one vision token"
 
         # Basic sanity check - values should be reasonable

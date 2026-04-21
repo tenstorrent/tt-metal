@@ -6,7 +6,7 @@ import pytest
 
 def test_dots_decoder_import_smoke():
     """
-    Smoke test: decoder modules import and basic classes construct (dummy weights).
+    Smoke test: decoder modules import and ``DotsTransformer`` constructs with real checkpoint tensors.
 
     For **prefill PCC** against HF logits on the same ``DotsTransformer`` stack, use
     ``test_dots_decoder_prefill_pcc`` or ``test_text_prefill_pcc.py::test_text_only_prefill_pcc_gt_0_99``.
@@ -31,9 +31,11 @@ def test_dots_decoder_import_smoke():
     except Exception as e:
         pytest.skip(f"Requires TT device runtime (could not open mesh device): {e!r}")
     try:
-        args = DotsModelArgs(device, hf_config=cfg, dummy_weights=True, max_batch_size=1, max_seq_len=2048)
-        # ``Embedding`` reads ``tok_embeddings.weight`` from ``state_dict``; an empty dict raises KeyError.
-        state_dict = args.load_state_dict()
+        args = DotsModelArgs(device, hf_config=cfg, max_batch_size=1, max_seq_len=2048)
+        try:
+            state_dict = args.load_real_state_dict(qkv_permute=True)
+        except Exception as exc:
+            pytest.skip(f"Real Dots weights required for smoke test: {exc}")
         model = DotsTransformer(
             args,
             dtype=ttnn.bfloat16,

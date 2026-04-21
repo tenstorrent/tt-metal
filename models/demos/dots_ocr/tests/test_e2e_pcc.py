@@ -9,8 +9,8 @@ Mirrors the qwen25_vl demo's end-to-end shape: builds the HF reference model + t
 vision path, and — when a device is available and weights are present — verifies the logits
 are shape-compatible with the HF reference.
 
-The test intentionally stays skippable so it runs both on CI (no device) and on single-chip
-Wormhole (N150/N300) without requiring the real ``rednote-hilab/dots.mocr`` checkpoint.
+The test stays skippable on CI (no device). When a mesh is available, it loads **real** Dots
+checkpoint tensors via ``load_real_state_dict`` (requires HF cache / network unless skipped).
 """
 
 from __future__ import annotations
@@ -77,32 +77,24 @@ def test_e2e_structural_pcc(tmp_path):
         if hidden_size is not None and (hidden_size < 32 or hidden_size % 32 != 0):
             pytest.skip(f"HF model hidden_size={hidden_size} is incompatible with TT tiling (needs multiple of 32)")
 
-        # Build TT args + transformer. Prefer real weights when DOTS_USE_REAL_WEIGHTS=1 and the HF
-        # checkpoint is available, otherwise fall back to the dummy state_dict so CI stays runnable.
-        use_real = os.environ.get("DOTS_USE_REAL_WEIGHTS") == "1"
+        # Build TT args + transformer (real checkpoint tensors only).
         model_args = DotsModelArgs(
             mesh_device=device,
             hf_config=ref.model.config,
             max_batch_size=1,
             max_seq_len=128,
-            dummy_weights=not use_real,
         )
-        if use_real:
-            try:
-                state_dict = model_args.load_real_state_dict()
-                logger.info(f"Loaded real Dots state_dict with {len(state_dict)} tensors")
-            except Exception as exc:
-                logger.warning(f"Real weight load failed: {exc}. Falling back to dummy state_dict.")
-                state_dict = model_args.load_state_dict()
-        else:
-            state_dict = model_args.load_state_dict()
+        try:
+            state_dict = model_args.load_real_state_dict()
+            logger.info(f"Loaded real Dots state_dict with {len(state_dict)} tensors")
+        except Exception as exc:
+            pytest.skip(f"Real Dots weights unavailable: {exc}")
         tt_model = DotsTransformer(
             args=model_args,
             dtype=ttnn.bfloat16,
             mesh_device=device,
             state_dict=state_dict,
-            # tt_transformers expects a Path-like cache dir when dummy_weights=False OR when
-            # modules attempt to form cache filenames. Use tmp_path to keep the test hermetic.
+            # tt_transformers expects a Path-like cache dir when modules form cache filenames.
             weight_cache_path=tmp_path / "weights",
         )
 

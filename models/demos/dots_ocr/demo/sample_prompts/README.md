@@ -17,6 +17,5 @@ python models/demos/dots_ocr/demo/demo.py \
 # Full TTNN stack (requires MESH_DEVICE)
 MESH_DEVICE=N150 python models/demos/dots_ocr/demo/demo.py \
     --prompts-json models/demos/dots_ocr/demo/sample_prompts/demo.json \
-    --backend ttnn \
-    --dummy-weights
+    --backend ttnn
 ```

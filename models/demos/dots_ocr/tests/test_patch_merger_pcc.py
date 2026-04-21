@@ -19,6 +19,7 @@ except Exception:
 if not _HAS_TTNN_RUNTIME:
     pytest.skip("TTNN runtime not available (skipping TTNN PCC tests)", allow_module_level=True)
 
+from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device
 from models.demos.dots_ocr.tt.patch_merger import PatchMerger as PatchMergerTT
 
 
@@ -27,7 +28,10 @@ def _open_device():
         return None
     from models.demos.dots_ocr.tt.mesh import open_mesh_device as _open
 
-    return _open()
+    try:
+        return _open()
+    except Exception as e:
+        pytest.skip(f"Could not open mesh device ({type(e).__name__}): {e}")
 
 
 def _tt_to_torch(device, y_tt):

@@ -83,9 +83,9 @@ class VisionMLPTT(LightweightModule):
                 else:
                     self.weights[weight_name] = weight.clone() if hasattr(weight, "clone") else weight
 
-        # If no weights found, use dummy for testing
+        # If no weights found, keep an empty stub (bring-up path; prefer real checkpoint keys).
         if not self.weights:
-            self.weights = {"dummy": None}
+            self.weights = {"_missing": None}
 
     def forward(self, x):
         """
