@@ -55,7 +55,10 @@ std::vector<std::string> parse_endpoint_list(std::string_view endpoints) {
 void fill_target_recipe(rpc::TargetRecipe::Builder& builder, const TargetRecipe& target) {
     builder.setTargetName(target.target_name);
     builder.setCflags(target.cflags);
-    builder.setDefines(target.defines);
+    auto defines = builder.initDefines(target.defines.size());
+    for (std::size_t i = 0; i < target.defines.size(); ++i) {
+        defines.set(i, target.defines[i]);
+    }
     builder.setIncludes(target.includes);
     builder.setCompilerOptLevel(target.compiler_opt_level);
     auto srcs = builder.initSrcs(target.srcs.size());

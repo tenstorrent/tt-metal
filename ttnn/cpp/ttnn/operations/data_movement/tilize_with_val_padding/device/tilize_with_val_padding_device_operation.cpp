@@ -180,12 +180,8 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
 
     return TensorSpec(
         input_shape,
-        TensorLayout::fromPaddedShape(
-            operation_attributes.output_dtype,
-            PageConfig(Layout::TILE),
-            operation_attributes.output_mem_config,
-            input_shape,
-            operation_attributes.output_padded_shape));
+        TensorLayout(
+            operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config));
 }
 
 Tensor TilizeWithValPaddingDeviceOperation::create_output_tensors(
