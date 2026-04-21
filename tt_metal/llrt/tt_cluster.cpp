@@ -723,7 +723,7 @@ std::optional<int> Cluster::get_physical_slot(ChipId chip) const {
         log_warning(tt::LogDevice, "get_physical_slot is not supported for non-silicon devices");
         return std::nullopt;
     }
-    auto pci_device = this->driver_->get_tt_device(chip)->get_pci_device();
+    umd::PCIDevice* pci_device = this->driver_->get_tt_device(chip)->get_pci_device();
     if (pci_device == nullptr) {
         return std::nullopt;
     }
