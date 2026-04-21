@@ -874,54 +874,6 @@ TEST_F(MeshTensorDataMovementTest, NonUniformCopyToDevice_CopyToHost_Roundtrip) 
     expect_host_tensors_eq(host_tensor, result);
 }
 
-// Verifies that for non-uniform writes, both filters apply: the mesh-coord set restricts which
-// devices receive the write, and the CoreRangeSet restricts which logical rows on those devices
-// are touched. Asserted purely on the logical view; mesh coords outside the write set must
-// retain the prior sentinel.
-TEST_F(MeshTensorDataMovementTest, NonUniformCopyToDevice_WithCoreFilter_RespectsBothFilters) {
-    constexpr uint32_t kRowsPerShard = 32;
-    constexpr uint32_t kCols = 32;
-    constexpr uint32_t kSentinel = 0x11u;
-    constexpr uint32_t kNew = 0x22u;
-    const ttnn::Shape shape{1, 1, 2 * kRowsPerShard, kCols};
-    CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
-    ShardSpec shard_spec(shard_grid, {kRowsPerShard, kCols});
-    MemoryConfig mem_cfg(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec);
-    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, mem_cfg));
-    const std::vector<distributed::MeshCoordinate> written_coords = {{0, 0}, {1, 0}};
-    auto host_sentinel_full =
-        make_full_coverage_host_tensor(shape, mesh_device_->shape(), {kSentinel, kSentinel, kSentinel, kSentinel});
-    auto host_new_partial =
-        make_partial_coverage_host_tensor(shape, mesh_device_->shape(), written_coords, {kNew, kNew});
-
-    auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor =
-        MeshTensor::allocate_on_device(*mesh_device_, spec, host_sentinel_full.tensor_topology());
-    // Seed all coords with sentinel so we can detect any spurious touches on non-written coords.
-    enqueue_write_tensor(cq, host_sentinel_full, device_tensor);
-    CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor_non_uniform(
-        cq, host_new_partial, device_tensor, filter);
-
-    HostTensor result = enqueue_read_tensor(cq, device_tensor);
-    std::set<distributed::MeshCoordinate> written_set(written_coords.begin(), written_coords.end());
-    for (const auto& coord : result.buffer().shard_coords()) {
-        auto shard = result.buffer().get_shard(coord);
-        ASSERT_TRUE(shard.has_value());
-        auto span = shard->view_as<uint32_t>();
-        std::vector<uint32_t> data(span.begin(), span.end());
-        const bool first_filtered = written_set.count(coord) > 0;
-        expect_height_sharded_filter_applied(
-            data,
-            kCols,
-            kRowsPerShard,
-            /*first_shard_was_filtered=*/first_filtered,
-            /*second_shard_was_filtered=*/false,
-            kSentinel,
-            kNew);
-    }
-}
-
 // ---------------------------------------------------------------------------
 //  Non-uniform to_device with single shard (replicate)
 // ---------------------------------------------------------------------------

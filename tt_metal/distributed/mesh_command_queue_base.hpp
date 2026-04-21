@@ -6,6 +6,8 @@
 
 #include "mesh_command_queue.hpp"
 
+#include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
+
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_target_device.hpp"
 

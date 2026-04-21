@@ -659,7 +659,14 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
 void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
     ZoneScoped;
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED) {
-        TT_FATAL(logical_core_filter == nullptr, "logical_core_filter is only supported for sharded buffer layouts");
+        if (logical_core_filter != nullptr) {
+            TT_FATAL(
+                logical_core_filter->empty(),
+                "logical_core_filter is only supported for sharded buffer layouts (interleaved layout does not support "
+                "per-core filtering)");
+            // Empty filter -> no-op (consistent with sharded path).
+            return;
+        }
         WriteToDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
         WriteToDeviceSharded(buffer, host_buffer, logical_core_filter);
@@ -668,22 +675,18 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, con
     }
 }
 
-void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
+void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
         case BufferType::L1_SMALL: {
-            WriteToDevice(buffer, host_buffer, logical_core_filter);
+            WriteToDevice(buffer, host_buffer, /*logical_core_filter=*/nullptr);
         } break;
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Writing to host memory is unsupported!");
         } break;
         default: TT_THROW("Unsupported buffer type!");
     }
-}
-
-void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
-    WriteToBuffer(buffer, host_buffer, nullptr);
 }
 
 void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buffer) {
@@ -1108,6 +1111,24 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
 }
 
 }  // namespace detail
+
+namespace experimental::core_subset_write {
+
+void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter) {
+    switch (buffer.buffer_type()) {
+        case BufferType::DRAM:  // fallthrough
+        case BufferType::L1:    // fallthrough
+        case BufferType::L1_SMALL: {
+            detail::WriteToDevice(buffer, host_buffer, &logical_core_filter);
+        } break;
+        case BufferType::SYSTEM_MEMORY: {
+            TT_THROW("Writing to host memory is unsupported!");
+        } break;
+        default: TT_THROW("Unsupported buffer type!");
+    }
+}
+
+}  // namespace experimental::core_subset_write
 
 size_t GetNumAvailableDevices() { return MetalContext::instance().get_cluster().number_of_user_devices(); }
 

@@ -24,14 +24,11 @@ void copy_to_device_filtered(
     tt::tt_metal::GraphTracker::instance().track_function_start(
         "ttnn::experimental::core_subset_write::copy_to_device_filtered", host_tensor, device_tensor, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(tt::tt_metal::raw_optional(cq_id));
-    if (tt::tt_metal::is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {
-        tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor(
-            cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor(), logical_core_filter);
-    } else {
-        auto coords = tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor_non_uniform(
-            cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor(), logical_core_filter);
-        device_tensor.device_storage() = tt::tt_metal::DeviceStorage(device_tensor.device_storage(), std::move(coords));
-    }
+    TT_FATAL(
+        tt::tt_metal::is_uniform_write(host_tensor.host_tensor(), *device_tensor.device()),
+        "copy_to_device_filtered does not support non-uniform host->device writes.");
+    tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor(
+        cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor(), logical_core_filter);
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     tt::tt_metal::GraphTracker::instance().track_function_end(device_tensor);
 }

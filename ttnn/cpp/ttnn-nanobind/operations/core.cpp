@@ -322,8 +322,11 @@ void py_module(nb::module_& mod) {
         nb::arg("logical_core_filter"),
         nb::arg("cq_id") = nb::none(),
         R"doc(
-        Copies host tensor data to the pre-allocated device tensor, writing only shards mapped to cores in
-        ``logical_core_filter`` (for sharded device buffers). Interleaved buffers are not supported with a non-empty filter.
+        Copies host tensor data into the pre-allocated device tensor, writing only shards mapped to
+        cores in ``logical_core_filter``. The device tensor must use a sharded buffer layout.
+
+        - Empty ``logical_core_filter`` is a no-op (no shards are written).
+        - Non-empty ``logical_core_filter`` with an interleaved device buffer raises an error.
         )doc");
 
     mod.def(

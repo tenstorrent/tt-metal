@@ -9,6 +9,7 @@
 
 namespace tt::tt_metal {
 class CoreRangeSet;
+class Tensor;
 }
 
 namespace ttnn::experimental::core_subset_write {

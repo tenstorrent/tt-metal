@@ -9,6 +9,7 @@
 #include "tt_metal/impl/program/program_impl.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -94,10 +95,13 @@ bool SDMeshCommandQueue::write_shard_to_device(
         return false;
     }
 
-    tt::tt_metal::detail::WriteToBuffer(
-        *shard_view,
-        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size),
-        logical_core_filter);
+    auto payload =
+        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    if (logical_core_filter != nullptr) {
+        tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
+    } else {
+        tt::tt_metal::detail::WriteToBuffer(*shard_view, payload);
+    }
     return false;  // Slow dispatch doesn't support pinned memory
 }
 

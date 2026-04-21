@@ -44,20 +44,6 @@ class ShardDataTransferHelper;
 }  // namespace experimental
 }  // namespace tt::tt_metal
 
-namespace tt::tt_metal {
-namespace distributed {
-class MeshCommandQueue;
-}
-namespace experimental::core_subset_write {
-void enqueue_write(
-    distributed::MeshCommandQueue& cq,
-    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
-    const DistributedHostBuffer& host_buffer,
-    bool blocking,
-    const CoreRangeSet& logical_core_filter);
-}
-}  // namespace tt::tt_metal
-
 namespace tt::tt_metal::distributed {
 
 class MeshEvent;

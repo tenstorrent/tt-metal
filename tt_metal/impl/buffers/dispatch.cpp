@@ -1288,11 +1288,13 @@ bool write_to_device_buffer(
             remote_chip);
         const std::vector<CoreCoord>& cores = dispatch_params.buffer_page_mapping->all_cores;
 
+        bool any_core_written = false;
         //  Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
             if (logical_core_filter != nullptr && !logical_core_filter->contains(cores[core_id])) {
                 continue;
             }
+            any_core_written = true;
             for (const BufferCorePageMapping& core_page_mapping :
                  dispatch_params.buffer_page_mapping->core_page_mappings[core_id]) {
                 write_sharded_buffer_to_core(
@@ -1307,12 +1309,17 @@ bool write_to_device_buffer(
                     dispatch_core_type);
             }
         }
+        // If the filter excluded every core, no DMA was issued, so callers must not treat the
+        // pinned transfer as in-flight (which would add spurious barrier events).
+        return use_pinned_transfer && any_core_written;
     } else {
-        if (logical_core_filter != nullptr && !logical_core_filter->empty()) {
+        if (logical_core_filter != nullptr) {
             TT_FATAL(
-                false,
+                logical_core_filter->empty(),
                 "logical_core_filter is only supported for sharded buffer layouts (interleaved layout does not support "
                 "per-core filtering)");
+            // Empty filter -> no-op (consistent with the sharded path); nothing was actually written.
+            return false;
         }
         auto root_buffer = buffer.root_buffer();
         auto region = buffer.root_buffer_region();
