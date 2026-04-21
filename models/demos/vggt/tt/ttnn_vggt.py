@@ -1,26 +1,43 @@
 """ttnn port of VGGT on a single Tenstorrent p150a Blackhole chip.
 
-Strategy: keep the torch reference structure intact and monkey-patch
-specific sub-modules to route their compute through ttnn. Each port lifts
-one op class off CPU; weights are uploaded once at install time and then
-re-used for every subsequent forward call.
+Every op the aggregator depends on, plus the final DPT conv stack, runs
+on the p150a. Weights upload once per install; forward passes only move
+input images down and outputs back.
 
-Ports applied (all on the p150a device):
-  - Every transformer Block (72 aggregator + 24 DINOv2 + 4 camera-head
-    trunk = 100) runs its full residual path on device: norm1 + qkv +
-    (optional qk_norm) + attention scores/softmax/context + merge_heads
-    + proj + ls1 + residual_add + norm2 + fc1 + gelu + fc2 + ls2 +
-    residual_add. Only RoPE still drops to host (2D position handling
-    needs a separate port).
-  - Every standalone Mlp (notably camera_head.pose_branch) runs on device
-    as a fallback when no owning Block is present.
+Ports on device:
+  - Full transformer Block (100 instances: 24 DINOv2 + 24 frame + 24
+    global + 4 camera-head trunk + extras): norm1, qkv, nlp_create_qkv_
+    heads, q_norm/k_norm, attention scores/softmax/context, merge_heads,
+    proj, ls1, residual add, norm2, fc1, gelu, fc2, ls2, residual add.
+    One upload and one download per block.
+  - 2D RoPE: cos/sin lookup tables precomputed at install for VGGT's
+    fixed 518x518 layout; applied on chip via slice + rotate_half +
+    multiply + add.
+  - DPTHead.scratch.output_conv2 (3x3 128->32 conv + relu + 1x1
+    32->output_dim conv at full 518x518 spatial resolution): the largest
+    single DPT chunk runs via ttnn.conv2d HiFi4.
+  - Standalone Mlp fallback for camera_head.pose_branch.
+
+Still on CPU (incremental device ports attempted and discarded — see
+results.tsv):
+  - DPT scratch_forward refinenets: per-conv ttnn wrapper added +255 ms
+    because 120 individual upload/download round trips outweigh the
+    compute. Needs a device-native scratch_forward that keeps
+    intermediates on chip (big rewrite; next logical step).
+  - DPT prelude (norm + projects + pos_embed + resize_layers): tiny
+    compute, overhead-bound per-op.
+  - custom_interpolate bilinear at 518x518: ~13 ms, small chunk.
+  - activate_head (exp / expm1 / norm): tiny and precision-sensitive.
+  - Image normalization and token concats in Aggregator.forward.
 
 Precision profile:
   - Weights + matmul inputs: bfloat16.
-  - Attention scores + softmax + context: fp32 intermediate via HiFi4 +
-    dtype=float32. Bf16 softmax over 1374-long rows collapsed the
-    world_points_conf PCC; fp32 keeps it above 0.99.
-  - proj and mlp matmuls: HiFi4 + fp32 dest accumulation.
+  - Residual accumulator in the Block: fp32 via proj/fc2 dtype=float32.
+    bf16 residuals over 48 aggregator blocks collapsed PCC to 0.978.
+  - Attention scores + softmax + context intermediate: fp32 via HiFi4 +
+    dtype=float32. bf16 softmax over 1374-long rows dropped conf PCC
+    below 0.99.
+  - proj, fc2, DPT output_conv2: HiFi4 + fp32 dest acc.
 """
 from __future__ import annotations
 
