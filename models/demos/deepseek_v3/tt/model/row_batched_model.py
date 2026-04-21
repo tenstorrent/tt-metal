@@ -384,17 +384,21 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         CHUNK_SIZE = cfg["model_chunk"]
         cos_dim = rope_tensors["cos_matrix"].shape[3]
         sin_dim = rope_tensors["sin_matrix"].shape[3]
+        _decoder_cfgs = cfg["mlp_decoder_block"] or cfg["moe_decoder_block"]
+        block_size = int(_decoder_cfgs[0]["mla"]["mla1d"]["kvpe_cache"].shape[2])
         logits = []
         hidden_for_mtp = []
-        for i in range(0, x.shape[2], CHUNK_SIZE):
-            start = i
-            end = min(i + CHUNK_SIZE, x.shape[2])
+        for start in range(0, x.shape[2], CHUNK_SIZE):
+            end = min(start + CHUNK_SIZE, x.shape[2])
             x_chunk = ttnn.slice(x, [0, 0, start], [1, 1, end])
             rope_chunk = {
                 "cos_matrix": ttnn.slice(rope_tensors["cos_matrix"], [0, 0, start, 0], [1, 1, end, cos_dim]),
                 "sin_matrix": ttnn.slice(rope_tensors["sin_matrix"], [0, 0, start, 0], [1, 1, end, sin_dim]),
                 "trans_matrix": rope_tensors["trans_matrix"],
             }
+            start_block = start // block_size
+            end_block = (end + block_size - 1) // block_size
+            page_tables_chunk = [ttnn.slice(pt, [0, start_block], [pt.shape[0], end_block]) for pt in page_tables]
 
             # When prompt_len is set, only compute LMHead for the chunk that
             # contains the target token; skip it (but still run decoder blocks
@@ -415,7 +419,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 user_id,
                 cfg,
                 rope_chunk,
-                page_tables,
+                page_tables_chunk,
                 return_hidden,
                 lm_head_local_idx=lm_head_local_idx,
                 skip_lm_head=skip_lm_head,
@@ -423,6 +427,8 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             ttnn.deallocate(x_chunk)
             ttnn.deallocate(rope_chunk["cos_matrix"])
             ttnn.deallocate(rope_chunk["sin_matrix"])
+            # for pt_chunk in page_tables_chunk:
+            #     ttnn.deallocate(pt_chunk)
             if logits_chunk is not None:
                 logits.append(logits_chunk)
             if len(hidden_for_mtp_chunk) > 0:
@@ -449,7 +455,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         lm_head_local_idx: int | None = None,
         skip_lm_head: bool = False,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Forward pass for prefill mode.
+        """Forward pass for one prefill chunk.
 
         Args:
             lm_head_local_idx: When set, only the logit for this single
@@ -463,6 +469,8 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 entirely (decoder blocks still run for KV-cache population).
                 Returns ``(None,)`` / ``(None, hidden)`` so the caller can use
                 the same ``logits_chunk, *hidden = ...`` unpacking pattern.
+            page_tables: Per-layer page tables pre-sliced to exactly the blocks
+                needed for this chunk.
         """
 
         x = Embedding2D.forward_prefill(x, cfg["embedding"])

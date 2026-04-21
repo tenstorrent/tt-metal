@@ -174,7 +174,7 @@ class MLA2D(MLA1D):
             cfg: RunConfig containing weights and op configurations
             batch_idx: Batch index for cache updates (wrt to global batch size)
             rope_tensors: Dictionary containing RoPE tensors
-            page_table: Page table tensor for paged attention
+            page_table: Page table tensor pre-sliced to this chunk's blocks
 
         Returns:
             Output tensor after MLP computation
