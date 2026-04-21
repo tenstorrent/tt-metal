@@ -5,13 +5,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import lcm
 from typing import Optional
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, Embedding, ModuleList, LinearLayer, ColumnParallelLinear
+from ttml.modules import (
+    AbstractModuleBase,
+    ColumnParallelLinear,
+    Embedding,
+    LinearLayer,
+    ModuleList,
+    VocabParallelEmbedding,
+)
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
+from .autograd_ops import SliceLastDim
 from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
 
 
@@ -31,7 +40,11 @@ class LlamaConfig:
 
     When ``use_tp=True`` the mesh must already be open and the ``"tp"`` axis
     size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
-    and ``intermediate_size`` — this is validated in ``__post_init__``.
+    and ``intermediate_size`` — this is validated in ``__post_init__``.  The
+    vocab does *not* need to be TP-divisible: the embedding and LM-head
+    weights are padded internally to ``lcm(32, tp_size)`` and the padded logit
+    columns are sliced away before returning.  The effective pre-slice width
+    is exposed as ``Llama.padded_vocab_size``.
     """
 
     hidden_size: int = 384
@@ -82,7 +95,7 @@ class LlamaConfig:
                 f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
             )
         if self.use_tp:
-            tp_size = ttml.current_mesh().axis_size("tp")
+            tp_size = ttml.mesh().axis_size("tp")
             if self.num_attention_heads % tp_size != 0:
                 raise ValueError(
                     "Number of attention heads must be divisible by TP size. "
@@ -111,37 +124,47 @@ class Llama(AbstractModuleBase):
 
         self.config = config
 
-        if config.use_tp and config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            raise ValueError(
-                "Weight tying is not supported with tensor parallelism (use_tp=True). "
-                "Set weight_tying=WeightTyingType.Disabled when using TP."
-            )
-
         if config.use_tp:
-            # gather_output=True: the LM head must produce full-vocab logits on
-            # every device so that the loss can be computed without further CCL.
+            # Pad the vocab up so each TP shard is tile-aligned: both the
+            # embedding rows and the LM-head columns need to be divisible by
+            # the TP size (for sharding) and by 32 (for tile layout).  Forward
+            # slices the padded logit columns away before returning, so
+            # ``config.vocab_size`` is free to be arbitrary.
+            tp_size = ttml.mesh().axis_size("tp")
+            align = lcm(32, tp_size)
+            self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
+            # Under TP the embedding and LM head share the vocab (dim-2)
+            # sharding, so weight tying reuses a single shard on each device.
+            # gather_output=True: the LM head must produce full-vocab logits
+            # on every device so the loss can be computed without further CCL.
             self.fc = ColumnParallelLinear(
                 config.hidden_size,
-                config.vocab_size,
+                self.padded_vocab_size,
                 has_bias=False,
                 weight_init=ttml.init.normal(0.0, 0.02),
                 gather_output=True,
                 axis_name="tp",
             )
+            self.tok_emb = VocabParallelEmbedding(
+                self.padded_vocab_size,
+                config.hidden_size,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                axis_name="tp",
+            )
         else:
+            self.padded_vocab_size = config.vocab_size
             self.fc = LinearLayer(
                 config.hidden_size,
                 config.vocab_size,
                 False,
                 weight_init=ttml.init.normal(0.0, 0.02),
             )
-
-        vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
-        self.tok_emb = Embedding(
-            vocab_size_divisible_by_32,
-            config.hidden_size,
-            weight_init=ttml.init.normal(0.0, 0.02),
-        )
+            vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
+            self.tok_emb = Embedding(
+                vocab_size_divisible_by_32,
+                config.hidden_size,
+                weight_init=ttml.init.normal(0.0, 0.02),
+            )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight.tensor
@@ -228,6 +251,8 @@ class Llama(AbstractModuleBase):
 
         out = self.ln_fc(out)
         logits = self.fc(out)
+        if self.padded_vocab_size != self.config.vocab_size:
+            logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
 
 
