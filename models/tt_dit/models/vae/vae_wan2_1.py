@@ -314,6 +314,7 @@ class WanCausalConv3d(Module):
         self._use_fused = use_fused and self._needs_halo
         if self._use_fused:
             self.conv_config.use_h_halo_buffer = True
+            self.conv_config.input_progress_t_batch_size = self.conv_config.T_out_block
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -661,6 +662,7 @@ class WanMidBlock(Module):
         dtype: ttnn.DataType = ttnn.bfloat16,
         sdpa_t_fracture_w_only: bool = False,
         conv_dims: ConvDims = ConvDims(),
+        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -678,6 +680,7 @@ class WanMidBlock(Module):
                 parallel_config=parallel_config,
                 dtype=dtype,
                 conv_dims=conv_dims,
+                use_fused=use_fused,
             )
         )
 
@@ -701,6 +704,7 @@ class WanMidBlock(Module):
                     parallel_config=parallel_config,
                     dtype=dtype,
                     conv_dims=conv_dims,
+                    use_fused=use_fused,
                 )
             )
 
@@ -741,6 +745,7 @@ class WanConv2d(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         conv_dims: ConvDims = ConvDims(),
+        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -785,6 +790,10 @@ class WanConv2d(Module):
         self._needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
             self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
         )
+        self._use_fused = use_fused and self._needs_halo
+        if self._use_fused:
+            self.conv_config.use_h_halo_buffer = True
+            self.conv_config.input_progress_t_batch_size = self.conv_config.T_out_block
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -866,24 +875,47 @@ class WanConv2d(Module):
         if self._needs_halo:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
+            sem_getter = (
+                self.ccl_manager.get_np_fused_ping_pong_semaphore
+                if self._use_fused
+                else self.ccl_manager.get_np_ping_pong_semaphore
+            )
             if self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1:
                 dims.append(2)
                 pad_left.append(self.external_padding[1])
                 pad_right.append(self.external_padding[1])
                 axes.append(self.parallel_config.height_parallel.mesh_axis)
-                neighbor_sems.append(
-                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)
-                )
+                neighbor_sems.append(sem_getter(self.parallel_config.height_parallel.mesh_axis))
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2))
             if self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1:
                 dims.append(3)
                 pad_left.append(self.external_padding[2])
                 pad_right.append(self.external_padding[2])
                 axes.append(self.parallel_config.width_parallel.mesh_axis)
-                neighbor_sems.append(
-                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)
-                )
+                neighbor_sems.append(sem_getter(self.parallel_config.width_parallel.mesh_axis))
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
+
+            if self._use_fused:
+                return self.ccl_manager.neighbor_pad_conv3d_fused(
+                    x_BTHWC,
+                    self.weight.data,
+                    self.bias.data,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    conv_config=self.conv_config,
+                    output_channels=self.out_channels,
+                    kernel_size=self.kernel_size,
+                    stride=self.stride,
+                    padding=self.internal_padding,
+                    dilation=(1, 1, 1),
+                    padding_mode="zeros",
+                    dtype=self.dtype,
+                    compute_kernel_config=self.compute_kernel_config,
+                )
 
             x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
                 x_BTHWC,
@@ -927,6 +959,7 @@ class WanResample(Module):
         dtype: ttnn.DataType = ttnn.bfloat16,
         tconv_dims: ConvDims = ConvDims(),
         spatial_dims: ConvDims = ConvDims(),
+        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -948,6 +981,7 @@ class WanResample(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             conv_dims=spatial_dims,
+            use_fused=use_fused,
         )
 
         self.is_upsample = "upsample" in mode
@@ -1143,6 +1177,7 @@ class WanUpBlock(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 dtype=dtype,
+                use_fused=use_fused,
                 tconv_dims=tconv_dims,
                 spatial_dims=spatial_dims,
             )
@@ -1231,6 +1266,7 @@ class WanDecoder3d(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             conv_dims=lat_dims,
+            use_fused=True,  # DIAG: only this layer is fused
         )
 
         # middle blocks
@@ -1243,6 +1279,7 @@ class WanDecoder3d(Module):
             dtype=dtype,
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
             conv_dims=lat_dims,
+            use_fused=True,  # DIAG: testing mid_block
         )
 
         # upsample blocks
@@ -1280,7 +1317,7 @@ class WanDecoder3d(Module):
                 res_dims=ConvDims(T_res, stage_h, stage_w),
                 tconv_dims=ConvDims(T_tconv, stage_h, stage_w),
                 spatial_dims=ConvDims(T_spatial, next_h, next_w),
-                use_fused=(i == 3),
+                use_fused=False,  # DIAG: disabled
             )
             self.up_blocks.append(up_block)
 
@@ -1305,6 +1342,7 @@ class WanDecoder3d(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             conv_dims=ConvDims(stage_t[-1].T_res, full_h, full_w),
+            use_fused=False,  # DIAG: disabled
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
