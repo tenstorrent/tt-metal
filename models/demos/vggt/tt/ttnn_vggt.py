@@ -1,18 +1,23 @@
-"""ttnn port scaffolding for VGGT.
+"""ttnn port of VGGT, built up operator-by-operator.
 
-Stage 0 (this file): passthrough that opens a ttnn device and runs the
-torch reference. This gives us a working baseline benchmark to iterate
-against. Later stages will replace individual operators with ttnn kernels,
-commit by commit, measured against PCC >= 0.99.
+Strategy: keep the torch reference structure intact and monkey-patch
+specific sub-modules to route their compute through ttnn. Each port lifts
+one op class off CPU; weights are uploaded once at install time and then
+re-used for every subsequent forward call.
+
+Stage 1 (this file): MLP blocks — all 72 Mlp instances in the reference
+(24 DINOv2 patch_embed + 24 frame + 24 global aggregator blocks) route
+their fc1 + gelu + fc2 through ttnn.
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import torch
 
 
 _CACHED_MODEL = None
+_INSTALL_DONE: dict = {}
 
 
 def _get_model():
@@ -23,18 +28,64 @@ def _get_model():
     return _CACHED_MODEL
 
 
-def vggt_forward(images: torch.Tensor, device: Any = None, query_points: torch.Tensor = None) -> Dict[str, torch.Tensor]:
-    """Run VGGT on the given images. Currently CPU-only passthrough.
+# ---------- ttnn MLP port ----------
 
-    Args:
-        images: [B, S, 3, H, W] in [0, 1].
-        device: ttnn device handle (unused in stage 0).
-        query_points: optional [B, N, 2] tracking queries.
+def _install_ttnn_mlp(model, device):
+    """Attach ttnn-resident weights to every Mlp and swap in a ttnn forward."""
+    import ttnn
+    from vggt.layers.mlp import Mlp  # type: ignore
 
-    Returns:
-        dict matching the VGGT forward output, minus the track branch
-        unless query_points is provided.
-    """
+    # Preload weights for each Mlp instance.
+    for m in model.modules():
+        if isinstance(m, Mlp) and not getattr(m, "_tt_ready", False):
+            w1 = m.fc1.weight.detach().t().contiguous().to(torch.bfloat16)
+            b1 = m.fc1.bias.detach().reshape(1, 1, -1).to(torch.bfloat16)
+            w2 = m.fc2.weight.detach().t().contiguous().to(torch.bfloat16)
+            b2 = m.fc2.bias.detach().reshape(1, 1, -1).to(torch.bfloat16)
+            m._tt_w1 = ttnn.from_torch(w1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            m._tt_b1 = ttnn.from_torch(b1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            m._tt_w2 = ttnn.from_torch(w2, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            m._tt_b2 = ttnn.from_torch(b2, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            m._tt_device = device
+            m._tt_ready = True
+
+    # Patch Mlp.forward once.
+    if getattr(Mlp, "_tt_patched", False):
+        return
+
+    def ttnn_forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not getattr(self, "_tt_ready", False):
+            # Unported instance (e.g., not pre-loaded) — fall back to torch.
+            return self._orig_forward(x)
+        x_bf16 = x.to(torch.bfloat16) if x.dtype != torch.bfloat16 else x
+        tt_in = ttnn.from_torch(
+            x_bf16, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self._tt_device
+        )
+        tt_mid = ttnn.linear(tt_in, self._tt_w1, bias=self._tt_b1)
+        tt_mid = ttnn.gelu(tt_mid)
+        tt_out = ttnn.linear(tt_mid, self._tt_w2, bias=self._tt_b2)
+        out = ttnn.to_torch(tt_out).to(x.dtype)
+        return out
+
+    Mlp._orig_forward = Mlp.forward
+    Mlp.forward = ttnn_forward
+    Mlp._tt_patched = True
+
+
+def _ensure_installed(device):
+    if _INSTALL_DONE.get(id(device)):
+        return
+    model = _get_model()
+    _install_ttnn_mlp(model, device)
+    _INSTALL_DONE[id(device)] = True
+
+
+def vggt_forward(images: torch.Tensor, device: Any = None,
+                 query_points: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+    """Run VGGT end-to-end. MLP blocks run on ttnn; everything else is torch."""
+    if device is None:
+        raise RuntimeError("ttnn device handle required")
+    _ensure_installed(device)
     model = _get_model()
     with torch.no_grad():
         return model(images, query_points=query_points)
