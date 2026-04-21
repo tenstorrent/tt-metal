@@ -7,9 +7,9 @@ End-to-end workflow for creating or updating `compute_kernel_lib` helpers. Orche
 ```
 Phase 0: Understand ──> Phase 1: Design [checkpoint] ──> Phase 2: Validate ──> Phase 3: Implement
                                ^                                  ^                      |
-                               └──────────── L1: validate fail ──┘                      |
+                               └── L1: [human checkpoint] ────── ┘                      |
                                ^                                  ^                      |
-                               └──────── L3: scope gap ──────────┘                      |
+                               └── L3: [human checkpoint] ────────┘                     |
                                                                   ^                     |
                                                                   └──── L2: regression ─┘
 ```
@@ -51,6 +51,27 @@ All agents log to a per-category subdirectory `agent_logs/{category_slug}/`. Con
 | `agent_logs/{category_slug}/{phase}_breadcrumbs.jsonl` | Per-phase breadcrumb stream (JSONL) |
 | `agent_logs/{category_slug}/{phase}_execution_log.md` | Per-phase execution log (Markdown summary) |
 | `agent_logs/{category_slug}/{group_slug}_investigation.md` | Per-group investigation output (Phase 0 step 2) |
+| `agent_logs/{category_slug}/l1_trigger_{n}.md` | L1 trigger payload + human decision; `n` increments per trigger in this run |
+| `agent_logs/{category_slug}/l3_trigger_{n}.md` | L3 trigger payload + human decision; `n` increments per trigger in this run |
+
+**L1/L3 trigger file format** (both files use the same structure):
+```
+## Trigger
+- Loop: L1 | L3
+- Sequence: <n> (1-based, within this pipeline run)
+- Phase emitted from: <phase + sub-stage>
+- Timestamp: <ISO-8601>
+
+## Payload
+<structured payload — see L1/L3 payload definitions below>
+
+## Human Decision
+- Status: PENDING | APPROVED | MODIFIED | REJECTED
+- Notes: <human annotations, if any>
+- Recorded at: <ISO-8601>
+```
+
+The orchestrator writes the file with `Status: PENDING` before pausing for human review, then updates `Status` and `Notes` once the human responds.
 
 Top-level consolidated outputs live at the repo root (or workspace cwd), not under `agent_logs/`:
 `{category}_investigation.md`, `{category}_delta_scope.md`, `{category}_helper_proposal.md`, `{category}_validation.md`, `{category}_report.md`.
@@ -214,6 +235,15 @@ Thresholds: <2% OK, 2-5% REVIEW, >5% → **internal fix**: optimize `.hpp`/`.inl
 
 **L1 trigger payload**: sub-stage, op name, LLK sequence or param combo, error details, what specifically needs to change in the proposal.
 
+**L1 human checkpoint** (before routing to Phase 1):
+1. Write `agent_logs/{category_slug}/l1_trigger_{n}.md` with `Status: PENDING` and the full payload
+2. Present to human: which sub-stage failed, what the proposed fix is, which parts of the proposal will change
+3. Human options:
+   - **Approve** — proceed to Phase 1 with payload as-is
+   - **Modify** — human amends the payload (e.g., narrows or redirects the fix); update file, proceed
+   - **Reject** — human overrides the failure (marks it UNSUPPORTED or out of scope); do not route to Phase 1, record decision and continue
+4. Update `Status` in the trigger file before proceeding
+
 **Output**: `{category}_validation.md` — per-sub-stage results, parameter support matrix, performance table, generated test files
 
 ---
@@ -263,7 +293,17 @@ Trigger when, during implementation (file edits or call site migration), you dis
 
 **L3 payload**: newly discovered file paths, op names, or symbols outside the current proposal scope; description of why they're affected.
 
-**L3 action**: suspend implementation (do not commit partial changes), send payload to Phase 1. Phase 1 amends the design to cover the expanded scope. Phase 2 then validates the new/changed parts before implementation resumes. Do not skip Phase 2 for the expanded scope — that is how the gap was missed in the first place.
+**L3 human checkpoint** (before routing to Phase 1):
+1. Suspend implementation immediately — do not commit partial changes
+2. Write `agent_logs/{category_slug}/l3_trigger_{n}.md` with `Status: PENDING` and the full payload
+3. Present to human: what was discovered, which files/ops are affected, what expanding scope would mean
+4. Human options:
+   - **Approve** — expand scope; route payload to Phase 1 to amend the proposal
+   - **Modify** — human redefines the boundary (e.g., the discovered dependency is out of scope by design); update payload, proceed with narrowed scope
+   - **Reject** — human decides the gap is acceptable (e.g., shared file is owner's problem); record decision, resume implementation without scope expansion
+5. Update `Status` in the trigger file before proceeding
+
+If approved or modified: Phase 1 amends the design to cover the expanded scope. Phase 2 then validates the new/changed parts before implementation resumes. Do not skip Phase 2 for the expanded scope — that is how the gap was missed in the first place.
 
 ### Report
 
@@ -278,11 +318,11 @@ After L2 passes, generate `{category}_report.md` inline:
 
 ## Feedback Loop Reference
 
-| Loop | From | To | Trigger | Payload |
-|------|------|----|---------|---------|
-| **L1** | Phase 2 (2a/2b fail, or 2c/2d fix needs API change) | Phase 1 | Raw LLK sequence invalid; observed param combo unsupported; API change required | Sub-stage, op, sequence/combo, error details |
-| **L2** | Phase 3 (always, post-write) | Phase 2 (2c + 2d only) | Files written or edited | Actual `.hpp`/`.inl` paths |
-| **L3** | Phase 3 (scope gap discovered) | Phase 1 → Phase 2 → Phase 3 | Shared file / CB / LLK dependency outside proposal scope | Newly discovered file paths, op names, symbols, why they're affected |
+| Loop | From | To | Trigger | Human checkpoint | Payload |
+|------|------|----|---------|-----------------|---------|
+| **L1** | Phase 2 (2a/2b fail, or 2c/2d fix needs API change) | Phase 1 | Raw LLK sequence invalid; observed param combo unsupported; API change required | **Yes** — approve/modify/reject before Phase 1 runs | Sub-stage, op, sequence/combo, error details |
+| **L2** | Phase 3 (always, post-write) | Phase 2 (2c + 2d only) | Files written or edited | No | Actual `.hpp`/`.inl` paths |
+| **L3** | Phase 3 (scope gap discovered) | Phase 1 → Phase 2 → Phase 3 | Shared file / CB / LLK dependency outside proposal scope | **Yes** — approve/modify/reject before Phase 1 runs | Newly discovered file paths, op names, symbols, why they're affected |
 
 ---
 
@@ -304,9 +344,9 @@ Deprecated (do not invoke): `llk_verification_agent.md` — inline CONFIRMED/UNC
 ```
 Understand ──> Design [checkpoint] ──> Validate ──> Implement
                     ^                      ^              |
-                    └──── L1 (fail) ───────┘              |
+                    └── L1 [human] ─────── ┘              |
                     ^                      ^              |
-                    └── L3 (scope gap) ────┘              |
+                    └── L3 [human] ──────── ┘             |
                                            ^              |
                                            └── L2 (always)┘
 ```
