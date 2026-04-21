@@ -985,8 +985,7 @@ TEST_F(ProgramSpecTestQuasar, SourceCodeKernelSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Change to inline source code
-    spec.kernels[0].source = "void kernel_main() {}";
-    spec.kernels[0].source_type = KernelSpec::SourceType::SOURCE_CODE;
+    spec.kernels[0].source = KernelSpec::SourceCode{"void kernel_main() {}"};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
@@ -1269,8 +1268,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
     // Demonstrates constructing KernelSpec with designated initializers
     KernelSpec dm_kernel{
         .unique_id = "my_dm_kernel",
-        .source = "void kernel_main() {}",
-        .source_type = KernelSpec::SourceType::SOURCE_CODE,
+        .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .target_nodes = NodeCoord{0, 0},
         .num_threads = 2,
         .config_spec =
@@ -1285,8 +1283,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
 
     KernelSpec compute_kernel{
         .unique_id = "my_compute_kernel",
-        .source = "void kernel_main() {}",
-        .source_type = KernelSpec::SourceType::SOURCE_CODE,
+        .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .target_nodes = NodeRange{{0, 0}, {1, 1}},
         .num_threads = 4,
         .compiler_options =
@@ -1369,8 +1366,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
             {
                 KernelSpec{
                     .unique_id = "producer",
-                    .source = "void kernel_main() {}",
-                    .source_type = KernelSpec::SourceType::SOURCE_CODE,
+                    .source = KernelSpec::SourceCode{"void kernel_main() {}"},
                     .target_nodes = NodeCoord{0, 0},
                     .dfb_bindings =
                         {
@@ -1388,8 +1384,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                 },
                 KernelSpec{
                     .unique_id = "consumer",
-                    .source = "void kernel_main() {}",
-                    .source_type = KernelSpec::SourceType::SOURCE_CODE,
+                    .source = KernelSpec::SourceCode{"void kernel_main() {}"},
                     .target_nodes = NodeCoord{0, 0},
                     .dfb_bindings =
                         {

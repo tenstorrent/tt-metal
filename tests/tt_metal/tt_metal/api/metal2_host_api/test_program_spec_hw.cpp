@@ -97,14 +97,14 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
 
     // Producer: BRISC reads from DRAM → DFB
     auto producer = MakeMinimalGen1DMKernel("producer", node, DataMovementProcessor::RISCV_0);
-    producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_producer.cpp";
-    producer.source_type = KernelSpec::SourceType::FILE_PATH;
+    producer.source =
+        KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_producer.cpp"};
     producer.runtime_arguments_schema.num_runtime_args_per_node = {{node, 3}};
 
     // Consumer: NCRISC reads DFB → DRAM
     auto consumer = MakeMinimalGen1DMKernel("consumer", node, DataMovementProcessor::RISCV_1);
-    consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
-    consumer.source_type = KernelSpec::SourceType::FILE_PATH;
+    consumer.source =
+        KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp"};
     consumer.runtime_arguments_schema.num_runtime_args_per_node = {{node, 3}};
 
     // DFB: both kernels bind it, with different local accessor names
