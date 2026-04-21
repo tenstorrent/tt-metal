@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -337,6 +337,11 @@ public:
 
     tt::TargetDevice get_target_device_type() const { return this->target_type_; }
 
+    /// Returns true if target device is Mock or Emulated (both skip firmware/dispatch).
+    bool is_mock_or_emulated() const {
+        return this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emule;
+    }
+
     bool is_base_routing_fw_enabled() const;
 
     // Get all fabric ethernet cores
@@ -348,6 +353,7 @@ public:
 
     bool is_worker_core(const CoreCoord& core, ChipId chip_id) const;
     bool is_ethernet_core(const CoreCoord& core, ChipId chip_id) const;
+    bool is_dram_core(const CoreCoord& core, ChipId chip_id) const;
     CoreCoord get_logical_ethernet_core_from_virtual(ChipId chip, CoreCoord core) const;
 
     // These two functions should be removed in favor of direct translation.
@@ -424,6 +430,7 @@ private:
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_worker_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_eth_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_dram_cores_;
+    std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_dram_hw_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_pcie_cores_;
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> frequent_retrain_cores_;

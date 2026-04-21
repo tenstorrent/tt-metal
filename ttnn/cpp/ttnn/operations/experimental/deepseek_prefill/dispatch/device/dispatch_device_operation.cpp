@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,8 +44,9 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         "Indices tensor must be INT32 or UINT32, got {}",
         tensor_args.indices_tensor.dtype());
     TT_FATAL(
-        tensor_args.expert_offsets_tensor.dtype() == DataType::INT32,
-        "Expert offsets tensor must be INT32, got {}",
+        tensor_args.expert_offsets_tensor.dtype() == DataType::INT32 ||
+            tensor_args.expert_offsets_tensor.dtype() == DataType::UINT32,
+        "Expert offsets tensor must be INT32 or UINT32, got {}",
         tensor_args.expert_offsets_tensor.dtype());
     TT_FATAL(
         tensor_args.expert_dispatch_table_tensor.dtype() == DataType::INT32,
@@ -141,7 +142,8 @@ prefill_dispatch(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    const CoreRangeSet& worker_core_range_set) {
+    const CoreRangeSet& worker_core_range_set,
+    bool use_l1_small_for_semaphores) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -155,7 +157,8 @@ prefill_dispatch(
             .num_links = num_links,
             .topology = topology,
             .output_mem_config = memory_config,
-            .worker_core_range_set = worker_core_range_set},
+            .worker_core_range_set = worker_core_range_set,
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weights_tensor = weights_tensor,

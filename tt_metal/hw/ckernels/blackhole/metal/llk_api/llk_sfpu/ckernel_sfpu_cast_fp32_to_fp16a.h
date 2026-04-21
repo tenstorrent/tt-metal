@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ inline void cast_fp32_to_fp16a() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         // vFloat val = dst_reg[0];
-        // dst_reg[0] = float_to_fp16a(val, 0);
+        // dst_reg[0] = float_to_fp16a(val, sfpi::RoundMode::NearestEven);
         TTI_SFPLOAD(0, 0, 3, 0);
         TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, 8);
         TTI_SFPSTORE(0, 1, 3, 0);

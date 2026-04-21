@@ -1,11 +1,9 @@
 name: 🌙 Nightly Tests
 
 on:
-  # TODO(llk-ci-wire-up): Restore these triggers when wiring up to automation:
-  # schedule:
-  #   # Run every night at 1AM UTC
-  #   - cron: '0 1 * * *'
-  #
+  schedule:
+    # Run every night at 1AM UTC
+    - cron: '0 1 * * *'
   workflow_dispatch:
     inputs:
       pytest_markers:
@@ -37,7 +35,6 @@ jobs:
       random_order: false
       timeout_minutes: 360
       coverage: true
-      use_durations: false
 
   nightly-test-blackhole:
     name: "🕳️ Nightly Tests (Blackhole)"
@@ -52,7 +49,6 @@ jobs:
       random_order: false
       timeout_minutes: 360
       coverage: true
-      use_durations: false
 
   nightly-summary:
     name: "📊 Nightly Summary"

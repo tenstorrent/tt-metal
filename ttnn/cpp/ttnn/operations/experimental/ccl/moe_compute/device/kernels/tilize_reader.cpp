@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -56,7 +56,9 @@ void print_tile_rows(
     uint8_t start_col = 0,
     uint8_t end_col = 32) {
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DEVICE_PRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
     DPRINT << "======" << ENDL();
+    DEVICE_PRINT("======\n");
     for (uint16_t r = start_row; r < end_row; ++r) {
         DPRINT << (uint)r << " : "
                << TileSlice(
@@ -72,8 +74,24 @@ void print_tile_rows(
                       true,
                       untilize)
                << ENDL();
+        DEVICE_PRINT(
+            "{} : {}\n",
+            r,
+            TileSlice(
+                cb_idx,
+                tile_idx,
+                SliceRange{
+                    .h0 = (uint8_t)r,
+                    .h1 = (uint8_t)(r + 1),
+                    .hs = (uint8_t)1,
+                    .w0 = (uint8_t)start_col,
+                    .w1 = (uint8_t)end_col,
+                    .ws = (uint8_t)1},
+                true,
+                untilize));
     }
     DPRINT << "++++++" << ENDL();
+    DEVICE_PRINT("++++++\n");
 }
 
 // Initialize the expert activation buffer with default values:
@@ -184,8 +202,13 @@ FORCE_INLINE void print_expert_activation_buffer(
     volatile tt_l1_ptr uint32_t* buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id));
 
     DPRINT << "=== Expert Activation Buffer ===" << ENDL();
+    DEVICE_PRINT("=== Expert Activation Buffer ===\n");
     DPRINT << "Row format: [token_id | act_0..act_" << (experts_per_device - 1) << " | score_0..score_"
            << (experts_per_device - 1) << "]" << ENDL();
+    DEVICE_PRINT(
+        "Row format: [token_id | act_0..act_{} | score_0...score_{}]\n",
+        experts_per_device - 1,
+        experts_per_device - 1);
 
     for (uint32_t t = start_token; t < end_token; t++) {
         uint32_t base = t * aligned_row_elements;
@@ -193,26 +216,35 @@ FORCE_INLINE void print_expert_activation_buffer(
         // Token ID (stored as uint32_t, but -1 means unset)
         uint32_t token_id = buffer[base];
         DPRINT << "T" << t << ": [";
+        DEVICE_PRINT("T{}: [", t);
         if (token_id == static_cast<uint32_t>(-1)) {
             DPRINT << "-1";
+            DEVICE_PRINT("-1");
         } else {
             DPRINT << token_id;
+            DEVICE_PRINT("{}", token_id);
         }
         DPRINT << " |";
+        DEVICE_PRINT(" |");
 
         // Expert activations (k+1 means not activated, 0..k-1 means activated with that k-index)
         for (uint32_t e = 0; e < experts_per_device; e++) {
             DPRINT << " " << buffer[base + 1 + e];
+            DEVICE_PRINT(" {}", buffer[base + 1 + e]);
         }
         DPRINT << " |";
+        DEVICE_PRINT(" |");
 
         // Scores
         for (uint32_t e = 0; e < experts_per_device; e++) {
             DPRINT << " " << BF16(static_cast<uint16_t>(buffer[base + 1 + experts_per_device + e]));
+            DEVICE_PRINT(" {}", bf16_t(static_cast<uint16_t>(buffer[base + 1 + experts_per_device + e])));
         }
         DPRINT << "]" << ENDL();
+        DEVICE_PRINT("]\n");
     }
     DPRINT << "================================" << ENDL();
+    DEVICE_PRINT("================================\n");
 }
 
 // Print the E-T buffer (Expert-Token buffer)
@@ -222,24 +254,30 @@ void print_e_t_buffer(uint32_t cb_id) {
     uint32_t buffer_base = get_read_ptr(cb_id);
 
     DPRINT << "=== E-T Buffer (Expert -> Tokens) ===" << ENDL();
+    DEVICE_PRINT("=== E-T Buffer (Expert -> Tokens) ===\n");
     for (uint32_t e = 0; e < experts_per_device; e++) {
         DPRINT << "Expert " << e << ": [";
+        DEVICE_PRINT("Expert {}: [", e);
         uint32_t expert_base = buffer_base + e * tokens * entry_size;
         bool first = true;
         for (uint32_t i = 0; i < tokens; i++) {
             uint32_t token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(expert_base + i * entry_size);
             if (token_id == static_cast<uint32_t>(-1)) {
                 DPRINT << " -1]" << ENDL();
+                DEVICE_PRINT(" -1]\n");
                 break;
             }
             if (!first) {
                 DPRINT << ", ";
+                DEVICE_PRINT(", ");
             }
             DPRINT << token_id;
+            DEVICE_PRINT("{}", token_id);
             first = false;
         }
     }
     DPRINT << "======================================" << ENDL();
+    DEVICE_PRINT("======================================\n");
 }
 
 void kernel_main() {
@@ -268,9 +306,7 @@ void kernel_main() {
     constexpr uint32_t mapping_pages = get_named_compile_time_arg_val("mapping_pages");
 
     // Page sizes
-    constexpr uint32_t input_page_size = get_named_compile_time_arg_val("input_page_size");
     constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
-    constexpr uint32_t mapping_page_size = get_named_compile_time_arg_val("mapping_page_size");
     constexpr uint32_t per_expert_total_tokens_output_page_size =
         get_named_compile_time_arg_val("per_expert_total_tokens_output_page_size");
     constexpr uint32_t expert_activation_output_page_size =
@@ -320,16 +356,32 @@ void kernel_main() {
     constexpr uint32_t matmul_mcast_end_y = get_named_compile_time_arg_val("matmul_mcast_end_y");
     constexpr uint32_t matmul_bounding_box_num_cores = get_named_compile_time_arg_val("matmul_bounding_box_num_cores");
 
+    // All worker cores multicast coordinates
+    constexpr uint32_t all_worker_cores_mcast_start_x =
+        get_named_compile_time_arg_val("all_worker_cores_mcast_start_x");
+    constexpr uint32_t all_worker_cores_mcast_start_y =
+        get_named_compile_time_arg_val("all_worker_cores_mcast_start_y");
+    constexpr uint32_t all_worker_cores_mcast_end_x = get_named_compile_time_arg_val("all_worker_cores_mcast_end_x");
+    constexpr uint32_t all_worker_cores_mcast_end_y = get_named_compile_time_arg_val("all_worker_cores_mcast_end_y");
+    constexpr uint32_t all_worker_cores_bounding_box_num_cores =
+        get_named_compile_time_arg_val("all_worker_cores_bounding_box_num_cores");
+
+    // Coordinates for combine signalling seminc
+    constexpr uint32_t combine_sync_noc_x = get_named_compile_time_arg_val("combine_sync_noc_x");
+    constexpr uint32_t combine_sync_noc_y = get_named_compile_time_arg_val("combine_sync_noc_y");
+
     // Semaphores
     constexpr uint32_t partial_metadata_ready_semaphore_id =
         get_named_compile_time_arg_val("partial_metadata_ready_semaphore_id");
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
     constexpr uint32_t previous_chunk_sent_semaphore_id =
         get_named_compile_time_arg_val("previous_chunk_sent_semaphore_id");
+    constexpr uint32_t combine_sync_semaphore_id = get_named_compile_time_arg_val("combine_sync_semaphore_id");
 
     uint32_t partial_metadata_ready_semaphore_addr = get_semaphore(partial_metadata_ready_semaphore_id);
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     uint32_t previous_chunk_sent_semaphore_addr = get_semaphore(previous_chunk_sent_semaphore_id);
+    const uint32_t combine_sync_addr = get_semaphore(combine_sync_semaphore_id);
 
     // Runtime arguments
     uint32_t rt_args_idx = 0;
@@ -369,17 +421,15 @@ void kernel_main() {
         TensorAccessorArgs<expert_activation_output_args.next_compile_time_args_offset()>();
 
     // TensorAccessors
-    const auto input_tensor_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
+    const auto input_tensor_addr_gen = TensorAccessor(input_args, input_tensor_address);
     // indices not used by reader
     // scores not used by reader
-    const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
-    const auto per_expert_total_tokens_output_tensor_addr_gen = TensorAccessor(
-        per_expert_total_tokens_output_args,
-        per_expert_total_tokens_output_tensor_address,
-        per_expert_total_tokens_output_page_size);
-    const auto expert_activation_output_tensor_addr_gen = TensorAccessor(
-        expert_activation_output_args, expert_activation_output_address, expert_activation_output_page_size);
-    const auto e_t_output_tensor_addr_gen = TensorAccessor(e_t_output_args, e_t_output_address, e_t_output_page_size);
+    const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address);
+    const auto per_expert_total_tokens_output_tensor_addr_gen =
+        TensorAccessor(per_expert_total_tokens_output_args, per_expert_total_tokens_output_tensor_address);
+    const auto expert_activation_output_tensor_addr_gen =
+        TensorAccessor(expert_activation_output_args, expert_activation_output_address);
+    const auto e_t_output_tensor_addr_gen = TensorAccessor(e_t_output_args, e_t_output_address);
 
     // Constants
     constexpr uint32_t one_page = 1;
@@ -433,7 +483,7 @@ void kernel_main() {
 
         // Get local CB addresses (same relative address as drain core)
         uint32_t local_indices_addr = get_read_ptr(indices_tensor_cb_id) + token_byte_offset_indices;
-        uint32_t local_scores_addr = get_read_ptr(scores_tensor_cb_id) + token_byte_offset_scores;
+        uint32_t local_scores_addr = get_write_ptr(scores_tensor_cb_id) + token_byte_offset_scores;
 
         // Calculate drain core's source addresses
         // Note: CB addresses are allocated at same L1 offset on all cores, so we use local get_read_ptr
@@ -470,10 +520,13 @@ void kernel_main() {
             if (local_expert_count >= experts_per_device) {
                 // DEBUG: DPRINT << "Error: more than " << experts_per_device << " experts on device " <<
                 // linearized_mesh_coord << ENDL();
+                // DEBUG: DEVICE_PRINT("Error: more than {} experts on device {}\n", experts_per_device,
+                // linearized_mesh_coord);
                 ASSERT(false);
             }
             // DEBUG: DPRINT << "Device " << linearized_mesh_coord << " : Local expert " << local_expert_count << " is "
             // << i << ENDL();
+            // DEBUG: DEVICE_PRINT("Device {} : Local expert {} is {}\n", linearized_mesh_coord, local_expert_count, i);
 
             local_expert_ids[local_expert_count] = i;
             local_expert_count++;
@@ -793,46 +846,40 @@ void kernel_main() {
                 tilize_mcast_end_y,
                 metadata_ready_semaphore_addr);
 
-            // Multicast the value 1 to all non-drain tilize cores
-            noc_semaphore_set_multicast(
-                metadata_ready_semaphore_addr, semaphore_mcast_addr, tilize_bounding_box_num_cores - 1);
-
             // Flush writes since we change the local value of metadata_ready_semaphore when signalling
             // to the matmul cores (vs here where we signal to the non-drain-sync tilize cores )
             noc_async_writes_flushed();
+
+            // Multicast the value 1 to all non-drain tilize cores
+            noc_semaphore_set_multicast(
+                metadata_ready_semaphore_addr, semaphore_mcast_addr, tilize_bounding_box_num_cores - 1);
         }
 
-        /*
-         * Send metadata to MM cores (repeat for both bounding boxes):
-         * 1) Encode number of tokens per expert into the semaphore (plus a valid bit)
-         * 2) Signal the metadata via semaphore to MM cores
-         */
-
-        // == 1 ==
-
-        // Determine encoded value
-        // NOTE: can handle up to 3 experts:
-        // - 1 valid bit
-        // - 10 bits per expert, valid num_tokens is [0, 512]
-        // - 32 bits available in semaphore (4 Bytes), 0 value reserved as init value
         volatile tt_l1_ptr uint32_t* num_tokens_per_expert =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
 
-        constexpr uint32_t bits_per_expert = 10;
-        constexpr uint32_t expert_mask = 0x3FFu;
-        uint32_t encoded_value = 1u;  // flag bit
-        for (uint32_t e = 0; e < experts_per_device; ++e) {
-            encoded_value |= (num_tokens_per_expert[e] & expert_mask) << (1 + bits_per_expert * e);
-        }
+        // Multicast the per-expert token counts to ALL worker cores (tilize + matmul + combine)
+        // this might be overkill, only matmul and combine need this right now but we can just do one big MC
+        uint64_t all_worker_cores_expert_counts_mcast_addr = get_safe_multicast_noc_addr(
+            all_worker_cores_mcast_start_x,
+            all_worker_cores_mcast_start_y,
+            all_worker_cores_mcast_end_x,
+            all_worker_cores_mcast_end_y,
+            get_read_ptr(per_expert_total_tokens_cb_id));
 
-        // set local semaphore value
-        volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
-        *metadata_ready_semaphore_ptr = encoded_value;
+        noc_async_write_multicast(
+            get_read_ptr(per_expert_total_tokens_cb_id),
+            all_worker_cores_expert_counts_mcast_addr,
+            per_expert_total_tokens_output_page_size,
+            all_worker_cores_bounding_box_num_cores - 1);  // Exclude self
 
-        // == 2 ==
+        // Ensure multicast completes before signaling semaphore
+        noc_async_write_barrier();
 
-        // get mcast address
+        // Signal readiness via semaphore
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
+
+        // get mcast address for semaphore
         uint64_t matmul_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
             matmul_mcast_start_x,
             matmul_mcast_start_y,
@@ -895,6 +942,25 @@ void kernel_main() {
         cb_push_back(total_chunks_cb_id, one_page);
     }
 
+    if (is_drain_tilize_core) {
+        // write out e_t_output_tensor
+        uint32_t l1_read_addr = get_read_ptr(e_t_cb_id);
+        for (uint32_t e = 0; e < experts_per_device; ++e) {
+            noc_async_write_page(e, e_t_output_tensor_addr_gen, l1_read_addr);
+            l1_read_addr += e_t_output_page_size;
+        }
+
+        noc_async_write_barrier();
+
+        // signal to A2A combine that metadata is available. Separate signal from matmul because e_t write is also
+        // needed.
+        const uint64_t combine_sync_noc_addr =
+            safe_get_noc_addr(combine_sync_noc_x, combine_sync_noc_y, combine_sync_addr, 1);
+        noc_semaphore_inc(combine_sync_noc_addr, 1);
+
+        noc_async_atomic_barrier();
+    }
+
     // DEBUG
     // print_e_t_buffer<experts_per_device, tokens, e_t_entry_size>(e_t_cb_id);
     // print_expert_activation_buffer<experts_per_device, l1_alignment>(expert_activation_cb_id, 0,
@@ -937,25 +1003,4 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(previous_chunk_sent_semaphore_addr), num_chunks_sent);
         }
     }
-
-    // write out e_t_output_tensor
-    if (is_drain_tilize_core) {
-        uint32_t l1_read_addr = get_read_ptr(e_t_cb_id);
-        for (uint32_t e = 0; e < experts_per_device; ++e) {
-            noc_async_write_page(e, e_t_output_tensor_addr_gen, l1_read_addr);
-            l1_read_addr += e_t_output_page_size;
-        }
-    }
-
-    // write out per_expert_total_tokens_output_tensor
-    if (is_drain_tilize_core) {
-        // tensor is a single page
-        uint32_t l1_read_addr = get_read_ptr(per_expert_total_tokens_cb_id);
-        noc_async_write_page(0, per_expert_total_tokens_output_tensor_addr_gen, l1_read_addr);
-    }
-
-    // Explicit write barrier for expert_activation DRAM write, e_t L1 write, and per_expert_total_tokens L1 write
-    // (drain core only issued these writes)
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
 }

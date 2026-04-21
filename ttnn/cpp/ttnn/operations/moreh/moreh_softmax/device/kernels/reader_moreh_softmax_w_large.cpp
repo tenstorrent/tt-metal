@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,12 +22,11 @@ void kernel_main() {
 
     // Ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    uint32_t src_in_tile_bytes = get_tile_size(cb_in);
 
     // Input tensor
     constexpr bool is_fp32 = get_compile_time_arg_val(0) == 1;
     constexpr auto in_args = TensorAccessorArgs<1>();
-    const auto src_in = TensorAccessor(in_args, src_addr, src_in_tile_bytes);
+    const auto src_in = TensorAccessor(in_args, src_addr);
 
     // Generate scaler and mask tiles
     if (is_fp32) {

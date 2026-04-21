@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/hal_types.hpp>
+#include "jit_build/types.hpp"
 #include "jit_build_options.hpp"
 #include <umd/device/types/arch.hpp>
 
@@ -67,6 +68,7 @@ public:
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
+    const std::string& get_gpp() const { return gpp_; }
     const std::string& get_out_firmware_root_path() const {
         return out_firmware_root_;
     }  // Path to the firmware directory for this device
@@ -170,6 +172,13 @@ public:
     std::string get_target_out_path(const std::string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
+
+    // Build a transport-ready target recipe from this build state and
+    // kernel-specific settings.  Replaces the PoC pattern of exposing
+    // individual getters for every internal field.
+    tt::jit_build::TargetRecipe export_target_recipe(const JitBuildSettings* settings) const;
+    const std::string& get_weakened_firmware_name() const { return weakened_firmware_name_; }
+    bool get_firmware_is_kernel_object() const { return firmware_is_kernel_object_; }
 };
 
 // Extracts a slice of builds from JitBuildStates

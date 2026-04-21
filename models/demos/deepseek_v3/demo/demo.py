@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -6,15 +6,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 from glob import glob
 from pathlib import Path
 
+import torch
 from loguru import logger
 
 import ttnn
 from models.common.sampling.sampling_params import SamplingParams
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
 from models.demos.deepseek_v3.utils.config_helpers import (
+    DEFAULT_MAX_SEQ_LEN,
     DEFAULT_SAMPLING_TEMPERATURE,
     DEFAULT_SAMPLING_TOP_K,
     DEFAULT_SAMPLING_TOP_P,
@@ -84,6 +87,35 @@ def _write_json_output(path: Path, payload: dict, label: str) -> None:
         raise SystemExit(f"Failed to write {label.lower()} '{path}': {e}")
 
 
+def _resolve_tt_metal_commit() -> str:
+    """Resolve the tt-metal commit used for this run."""
+    repo_root = Path(__file__).resolve().parents[4]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        commit = result.stdout.strip()
+    except Exception:
+        commit = ""
+
+    return commit or "unknown"
+
+
+def _is_primary_artifact_writer() -> bool:
+    for rank_env in ("TT_MESH_HOST_RANK", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
+
+
 def _print_performance_metrics(results: dict) -> None:
     """Print performance metrics from results if available."""
     if "statistics" in results and results["statistics"]:
@@ -100,6 +132,9 @@ def _print_performance_metrics(results: dict) -> None:
         trace_str = f"{trace_metric:.2f}" if trace_metric is not None else "N/A (requires --max-new-tokens >= 128)"
         logger.info(f"Trace execution tokens/sec/user @128th token: {trace_str}")
         logger.info(f"Full demo runtime: {statistics['Full demo runtime']:.2f}s")
+        tt_metal_commit = statistics.get("tt-metal_commit")
+        if tt_metal_commit:
+            logger.info(f"tt-metal commit: {tt_metal_commit}")
 
 
 def _format_model_params_for_reporting(model_params: dict, summarize_sampling: bool = True) -> dict:
@@ -177,6 +212,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to local HF DeepSeek-V3 model (safetensors)",
     )
     p.add_argument("--max-new-tokens", type=int, default=32, help="Number of tokens to generate")
+    p.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=DEFAULT_MAX_SEQ_LEN,
+        help=f"Maximum configured sequence length for the demo runtime (default: {DEFAULT_MAX_SEQ_LEN}).",
+    )
     p.add_argument(
         "--sampling-temperature",
         type=float,
@@ -303,6 +344,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Always record max-new-tokens even after EOS.",
     )
     p.set_defaults(stop_at_eos=True)
+    p.add_argument(
+        "--max-users-per-row",
+        type=int,
+        default=USERS_PER_ROW,
+        help=f"Maximum number of active users per row for demo decode (default: {USERS_PER_ROW}).",
+    )
     return p
 
 
@@ -405,6 +452,8 @@ def run_demo(
     *,
     model_path: str | Path | None = None,
     max_new_tokens: int = 32,
+    max_seq_len: int = DEFAULT_MAX_SEQ_LEN,
+    max_users_per_row: int = USERS_PER_ROW,
     cache_dir: str | Path | None = None,
     random_weights: bool = False,
     single_layer: str | None = None,
@@ -470,6 +519,8 @@ def run_demo(
     fabric_config = get_fabric_config()
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
     ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
+    dispatch_core_config = ttnn.DispatchCoreConfig(type=ttnn.DispatchCoreType.WORKER, axis=ttnn.DispatchCoreAxis.COL)
+    logger.info("Setting dispatch core axis to ttnn.DispatchCoreAxis.COL")
 
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
@@ -489,9 +540,18 @@ def run_demo(
         if enable_mtp:
             trace_region_size = max(trace_region_size, 134_217_728)
         logger.info(f"Trace region size set to {trace_region_size}")
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=mesh_shape, trace_region_size=trace_region_size, dispatch_core_config=dispatch_core_config
+        )
     else:
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, dispatch_core_config=dispatch_core_config)
+
+    # MPI_Init_thread (triggered by open_mesh_device in multi-host configs) sets OpenMP threads to 1,
+    # torch inherits this setting, which makes CPU-side computations extremely slow.
+    if requested_system_name.upper() in ("DUAL", "QUAD"):
+        num_torch_threads = max(1, os.cpu_count())
+        logger.info(f"Restoring torch num_threads to {num_torch_threads}")
+        torch.set_num_threads(num_torch_threads)
 
     # Load tokenizer only for full-model mode; in random-weights mode we synthesize token ids
     tokenizer = None
@@ -504,7 +564,7 @@ def run_demo(
             )
             raise
 
-    batch_size_per_row = USERS_PER_ROW
+    batch_size_per_row = max_users_per_row
     batch_size = batch_size_per_row * mesh_device.shape[0]
 
     # Configure sampling
@@ -551,11 +611,13 @@ def run_demo(
                 enable_trace=enable_trace,
                 enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
+                max_seq_len=max_seq_len,
                 prefill_max_tokens=prefill_max_tokens,
                 force_recalculate=force_recalculate,
                 profile_decode=profile_decode,
                 sample_on_device=sample_on_device,
                 enable_mtp=enable_mtp,
+                batch_size_per_row=max_users_per_row,
                 sampling_params=sampling_params,
             )
         else:
@@ -737,6 +799,7 @@ def run_demo(
                 checkpoint_fh.flush()
                 os.fsync(checkpoint_fh.fileno())
 
+            statistics["tt-metal_commit"] = _resolve_tt_metal_commit()
             return {"generations": results, "statistics": statistics, "model_params": model_params}
         finally:
             if checkpoint_fh is not None:
@@ -780,6 +843,8 @@ def main() -> None:
         args.prompts,
         model_path=args.model_path,
         max_new_tokens=args.max_new_tokens,
+        max_seq_len=args.max_seq_len,
+        max_users_per_row=args.max_users_per_row,
         cache_dir=args.cache_dir,
         random_weights=bool(args.random_weights),
         single_layer=args.single_layer,
@@ -802,6 +867,7 @@ def main() -> None:
         stop_at_eos=bool(args.stop_at_eos),
         checkpoint_jsonl=args.checkpoint_jsonl,
         enable_mtp=(args.mtp == "on"),
+        repeat_batches=args.repeat_batches,
     )
 
     saved_output_path = _resolve_saved_output_path(prompts_file_path, args.output_path)
@@ -818,7 +884,7 @@ def main() -> None:
             ),
             random_weights=bool(args.random_weights),
         )
-        if int(os.getenv("TT_MESH_HOST_RANK", "0")) == 0:
+        if _is_primary_artifact_writer():
             _write_json_output(saved_output_path, output_data, "Results")
     else:
         # Print to terminal as before

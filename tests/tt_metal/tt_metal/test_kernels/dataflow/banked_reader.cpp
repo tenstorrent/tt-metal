@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 
 void kernel_main() {
     constexpr std::uint32_t cb_id = get_compile_time_arg_val(0);
-    constexpr std::uint32_t page_size = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
 
     std::uint32_t src_addr_base = get_arg_val<uint32_t>(0);
@@ -21,7 +20,7 @@ void kernel_main() {
 
     const uint32_t ublock_size_tiles = 1;
     uint32_t tile_bytes = cb.get_tile_size();
-    const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, page_size);
+    const auto tensor_accessor = TensorAccessor(src_args, src_addr_base);
 
     // read tiles from src to CB
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {

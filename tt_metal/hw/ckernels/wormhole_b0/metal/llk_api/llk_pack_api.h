@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,8 +25,8 @@
  *************************************************************************/
 
 // TODO NC: Remove as the part of tt-metal#34499
-template <bool untilize = false, bool zero_output = false>
-inline void llk_pack_mop_config(const uint32_t output) {
+template <bool untilize = false, bool zero_output = false, bool tilize = false /*unused*/>
+inline void llk_pack_mop_config(const uint32_t output, std::uint32_t num_tiles = 1) {
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -34,7 +34,7 @@ inline void llk_pack_mop_config(const uint32_t output) {
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     _llk_pack_mop_config_<untilize, zero_output>(
-        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
+        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
 
 inline void llk_pack_set_fp32_dest_acc(bool enable) { _llk_pack_set_fp32_dest_acc_(enable); }
@@ -99,7 +99,7 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
 }
 
 template <bool untilize = false, bool zero_output = false, bool tilize = false /*unused*/>
-inline void llk_pack_init(const std::uint32_t pack_output = 16) {
+inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
@@ -112,7 +112,13 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
         "");
 
     _llk_pack_init_<untilize, zero_output>(
-        pack_dst_format[output_id], pack_src_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
+        pack_dst_format[output_id],
+        pack_src_format[output_id],
+        face_r_dim,
+        num_faces,
+        partial_face,
+        narrow_tile,
+        num_tiles);
 }
 
 template <bool out_of_order_output, bool untilize>
@@ -152,7 +158,9 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
 
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, bool untilize = false>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
-    LLK_ASSERT((tile_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+    LLK_ASSERT(
+        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     std::uint8_t output_id = get_output_id(output);
 
@@ -240,7 +248,9 @@ inline void llk_matmul_pack(
         (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
             pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output))),
         "");
-    LLK_ASSERT(((start_tile_index + ntiles - 1) < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+    LLK_ASSERT(
+        ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         std::uint32_t pack_tile_addr =
@@ -279,7 +289,9 @@ inline void llk_pack_rows_init(const std::uint32_t num_rows) { _llk_pack_rows_in
  */
 inline void llk_pack_rows(
     const std::uint32_t dst_index, const std::uint32_t output, const std::uint32_t output_index = 0) {
-    LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+    LLK_ASSERT(
+        (dst_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t pack_addr = get_output_tile_address<true, false>(output_id, output_index);
@@ -341,7 +353,9 @@ inline void llk_pack_fast_tilize_block(
     const std::uint32_t output_tile_index,
     const std::uint32_t unit_dim,
     const std::uint32_t num_units) {
-    LLK_ASSERT((tile_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+    LLK_ASSERT(
+        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);

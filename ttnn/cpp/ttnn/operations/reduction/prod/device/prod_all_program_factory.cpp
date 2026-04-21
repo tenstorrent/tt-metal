@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prod_all_program_factory.hpp"
@@ -75,7 +75,7 @@ ProdAllProgramFactory::cached_program_t ProdAllProgramFactory::create(
         "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_all.cpp",
         core,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args});

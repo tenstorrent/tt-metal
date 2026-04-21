@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,11 +20,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
-from models.demos.deepseek_v3_b1.prepare_weights import (
+from models.demos.deepseek_v3_b1.weights.prepare import (
     create_gate_bias_tensor,
     create_gate_indices_tensor,
     prepare_attention_weights,
@@ -86,28 +85,7 @@ class RoutedExpertTensors(NamedTuple):
 # ============================================================================
 # Constants (namespaced by usage)
 # ============================================================================
-class RoutedExpert:
-    M = 1
-    K = 7168
-    N_PER_CORE = 32  # routing matmul width per core
-    NUM_CORES = 8  # routing matmul cores
-    GATE_PROJ_N = 2048
-    GATE_EPS = 1e-20
-    GATE_SCALING_FACTOR = 2.5
-    TILE_W = 32  # for padding math
-    FINAL_OUTPUT_WIDTH_PER_CORE = 32 * 32  # 1024
-    INPUT_CORE_Y = 9  # for ttnn.CoreCoord(device_grid_size.x - 1, INPUT_CORE_Y)
-    SEED = 0
-    GATE_PROJ_EXPERT_SEED = 0
-    UP_PROJ_EXPERT_SEED = 256
-    DOWN_PROJ_EXPERT_SEED = 512
-
-
-class SharedExpert:
-    K_PARALLEL = 8
-    N_PARALLEL = 8
-    N_PER_CORE = 64  # N = N_PER_CORE * DownProj.NUM_MATMUL_CORES in helper
-    SEED = 100
+from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert, SharedExpert
 
 
 class SDPA:
@@ -172,8 +150,7 @@ def create_shared_expert_tensors(
     mcast_gather_core = DownProj.MCAST_GATHER_CORE
     sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_gather_core, mcast_gather_core)])
 
-    bdw = BlitzDecodeWeights(device)
-    moe_tp = bdw.moe_tp
+    moe_tp = device.shape[0] * device.shape[1] if hasattr(device, "shape") else 1
     K_down_full = K_down * moe_tp
 
     assert layer_idx is not None, "layer_idx must be provided"
@@ -232,7 +209,7 @@ def create_shared_expert_tensors(
     torch_bias = torch.randn((M, N), dtype=torch.bfloat16)
 
     shared_weights = prepare_shared_expert_weights(
-        bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True
+        device, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True
     )
 
     return SharedExpertTensors(
@@ -314,8 +291,6 @@ def create_routed_expert_tensors(
     gate_eps = RoutedExpert.GATE_EPS
     gate_scaling_factor = RoutedExpert.GATE_SCALING_FACTOR
 
-    # ── Use provided state dict (gate weight/bias/rmsnorm_gamma all from state dict) ──
-    bdw = BlitzDecodeWeights(device)
     if layer_idx is None:
         layer_idx = ROUTED_EXPERT_LAYER_IDX if is_moe else DENSE_LAYER_IDX
     layer_key = f"model.layers.{layer_idx}"
@@ -361,7 +336,7 @@ def create_routed_expert_tensors(
     num_gate_proj_cores = len(gate_proj_worker_cores)
 
     # Build attention-side overlapped tensors from state dict via prepare_weights.
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
+    attn = prepare_attention_weights(device, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
     ttnn_gate_mm_weights = attn.gate_mm
     ttnn_rmsnorm_gamma = attn.ffn_norm
     if ttnn_gate_mm_weights is not None:
@@ -410,7 +385,7 @@ def create_routed_expert_tensors(
             down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
 
         routed_weights = prepare_routed_expert_weights(
-            bdw,
+            device,
             state_dict,
             layer_idx=layer_idx,
             is_moe=True,
@@ -442,7 +417,7 @@ def create_routed_expert_tensors(
             down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
 
         routed_weights = prepare_routed_expert_weights(
-            bdw,
+            device,
             state_dict,
             layer_idx=layer_idx,
             is_moe=False,

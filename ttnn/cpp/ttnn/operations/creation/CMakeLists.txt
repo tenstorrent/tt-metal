@@ -19,14 +19,10 @@ target_sources(
         BASE_DIRS ${FixmeOpAPIDir}
         FILES creation.hpp
     PRIVATE
+        creation.cpp
 )
 
 target_include_directories(ttnn_op_creation PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_creation
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_creation PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(TARGETS ttnn_op_creation LIBRARY COMPONENT tar)

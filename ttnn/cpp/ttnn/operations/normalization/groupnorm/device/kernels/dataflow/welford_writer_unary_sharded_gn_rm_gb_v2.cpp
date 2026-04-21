@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,8 +30,6 @@ void kernel_main() {
     constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(8);
     constexpr uint32_t block_w = get_compile_time_arg_val(9);
 
-    constexpr uint32_t size = get_compile_time_arg_val(10);
-
     constexpr auto gamma_args = TensorAccessorArgs<11>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto input_mask_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
@@ -58,7 +56,7 @@ void kernel_main() {
     const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma_id);
     const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask_id);
 
-    const auto mask = TensorAccessor(input_mask_args, input_mask_addr, input_mask_single_tile_size_bytes);
+    const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
     constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
     const uint32_t eps = get_arg_val<uint32_t>(2);
@@ -87,7 +85,7 @@ void kernel_main() {
         constexpr uint32_t gamma_element_bytes = gamma_tile_bytes / TILE_HW;
         constexpr uint32_t gamma_face_bytes = gamma_element_bytes * tt::constants::FACE_HW;
         constexpr uint32_t gamma_face_w_bytes = gamma_element_bytes * tt::constants::FACE_WIDTH;
-        const auto gamma = TensorAccessor(gamma_args, gamma_addr, size);
+        const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
         cb_gamma.reserve_back(num_cols_tile_gamma_beta);
         auto l1_write_addr_gamma = cb_gamma.get_write_ptr();
@@ -147,7 +145,7 @@ void kernel_main() {
         constexpr uint32_t beta_element_bytes = beta_tile_bytes / TILE_HW;
         constexpr uint32_t beta_face_bytes = beta_element_bytes * tt::constants::FACE_HW;
         constexpr uint32_t beta_face_w_bytes = beta_element_bytes * tt::constants::FACE_WIDTH;
-        const auto beta = TensorAccessor(beta_args, beta_addr, size);
+        const auto beta = TensorAccessor(beta_args, beta_addr);
 
         cb_beta.reserve_back(num_cols_tile_gamma_beta);
         auto l1_write_addr_beta = cb_beta.get_write_ptr();

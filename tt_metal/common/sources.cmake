@@ -8,7 +8,6 @@ set(COMMON_SOURCES
     shape_base.cpp
     tt_backend_api_types.cpp
     work_split.cpp
-    thread_pool.cpp
     host_buffer.cpp
     memory_pin.cpp
 )

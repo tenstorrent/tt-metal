@@ -19,7 +19,7 @@ on:
         required: true
         type: string
         default: "in-service"
-      galaxy-quick:
+      galaxy-sanity:
         required: false
         type: boolean
         default: false
@@ -100,6 +100,33 @@ on:
           - mochi
           - qwenimage
         default: 'disabled'
+      galaxy-e2e:
+        description: 'Galaxy e2e tests: all, one suite (see tests/pipeline_reorg/galaxy_e2e_tests.yaml ids), or disabled'
+        required: false
+        type: choice
+        options:
+          - disabled
+          - all
+          - galaxy-ccl
+          - galaxy-moe
+          - galaxy-fabric-unit
+          - galaxy-fabric-2d-torus-nightly
+          - galaxy-fabric-multi-mesh-4x4-2x4s
+          - galaxy-fabric-multi-mesh-2x8-2x4s
+          - bh-galaxy-ccl
+          - bh-galaxy-fabric-torus-stability
+          - bh-galaxy-socket-pipeline
+        default: 'disabled'
+      galaxy-e2e-wormhole:
+        description: 'E2e: include wh_galaxy SKUs (matches standalone Galaxy e2e wormhole checkbox)'
+        required: false
+        type: boolean
+        default: true
+      galaxy-e2e-blackhole:
+        description: 'E2e: include bh_galaxy SKUs (matches standalone Galaxy e2e blackhole checkbox)'
+        required: false
+        type: boolean
+        default: false
       platform:
         required: false
         type: choice
@@ -129,65 +156,80 @@ jobs:
   determine-tests:
     runs-on: ubuntu-latest
     outputs:
-      run-quick: ${{ steps.logic.outputs.run-quick }}
+      run-sanity: ${{ steps.logic.outputs.run-sanity }}
       run-unit: ${{ steps.logic.outputs.run-unit }}
       run-integration: ${{ steps.logic.outputs.run-integration }}
       run-demo: ${{ steps.logic.outputs.run-demo }}
       run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
+      run-e2e: ${{ steps.logic.outputs.run-e2e }}
     steps:
+      - name: Validate e2e SKU selection
+        if: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-e2e != 'disabled' }}
+        run: |
+          if [ "${{ inputs.galaxy-e2e-wormhole }}" = "false" ] && [ "${{ inputs.galaxy-e2e-blackhole }}" = "false" ]; then
+            echo "::error::Galaxy e2e tests are enabled (galaxy-e2e='${{ inputs.galaxy-e2e }}') but no SKUs are selected. Enable at least one of 'galaxy-e2e-wormhole' or 'galaxy-e2e-blackhole'."
+            exit 1
+          fi
       - name: Determine test execution
         id: logic
-        # Skip all but galaxy-quick if trigger-type is not manual
+        # Skip all but galaxy-sanity if trigger-type is not manual
         run: |
           case "${{ inputs.trigger_type }}" in
             "manual")
-              echo "run-quick=${{ inputs.galaxy-quick }}" >> $GITHUB_OUTPUT
+              echo "run-sanity=${{ inputs.galaxy-sanity }}" >> $GITHUB_OUTPUT
               echo "run-unit=${{ inputs.galaxy-unit != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-integration=${{ inputs.galaxy-integration != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-demo=${{ inputs.galaxy-demo != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-model-perf=${{ inputs.galaxy-perf != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-e2e=${{ inputs.galaxy-e2e != 'disabled' }}" >> $GITHUB_OUTPUT
               ;;
             "models-mandatory")
-              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-sanity=true" >> $GITHUB_OUTPUT
               echo "run-unit=false" >> $GITHUB_OUTPUT
               echo "run-integration=false" >> $GITHUB_OUTPUT
               echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-e2e=false" >> $GITHUB_OUTPUT
               ;;
             "models-extended")
-              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-sanity=true" >> $GITHUB_OUTPUT
               echo "run-unit=false" >> $GITHUB_OUTPUT
               echo "run-integration=false" >> $GITHUB_OUTPUT
               echo "run-demo=true" >> $GITHUB_OUTPUT
               echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              echo "run-e2e=false" >> $GITHUB_OUTPUT
               ;;
             "op-pr")
-              echo "run-quick=false" >> $GITHUB_OUTPUT
+              echo "run-sanity=false" >> $GITHUB_OUTPUT
               echo "run-unit=true" >> $GITHUB_OUTPUT
               echo "run-integration=false" >> $GITHUB_OUTPUT
               echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-e2e=false" >> $GITHUB_OUTPUT
               ;;
             "nightly")
-              echo "run-quick=false" >> $GITHUB_OUTPUT
+              echo "run-sanity=false" >> $GITHUB_OUTPUT
               echo "run-unit=true" >> $GITHUB_OUTPUT
               echo "run-integration=true" >> $GITHUB_OUTPUT
               echo "run-demo=true" >> $GITHUB_OUTPUT
               echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              echo "run-e2e=false" >> $GITHUB_OUTPUT
               ;;
             "hw-self-test")
-              echo "run-quick=false" >> $GITHUB_OUTPUT
+              echo "run-sanity=false" >> $GITHUB_OUTPUT
               echo "run-unit=false" >> $GITHUB_OUTPUT
               echo "run-integration=true" >> $GITHUB_OUTPUT
               echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              echo "run-e2e=false" >> $GITHUB_OUTPUT
               ;;
             *)
-              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-sanity=true" >> $GITHUB_OUTPUT
               echo "run-unit=false" >> $GITHUB_OUTPUT
               echo "run-integration=false" >> $GITHUB_OUTPUT
               echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-e2e=false" >> $GITHUB_OUTPUT
               ;;
           esac
   build-artifact:
@@ -203,13 +245,12 @@ jobs:
       build-wheel: true
       build-umd-tests: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-  galaxy-quick:
-    if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
+  galaxy-sanity:
+    if: ${{ needs.determine-tests.outputs.run-sanity == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/galaxy-quick-impl.yaml
+    uses: ./.github/workflows/galaxy-sanity-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -234,7 +275,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: wh_galaxy
+      enabled-skus: wh_galaxy_perf
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-integration || 'all' }}
   galaxy-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
@@ -255,5 +296,29 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: wh_galaxy
+      enabled-skus: wh_galaxy_perf
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-perf || 'all' }}
+  galaxy-e2e-tests:
+    if: ${{ needs.determine-tests.outputs.run-e2e == 'true' }}
+    needs: [build-artifact, determine-tests]
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-e2e-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: >-
+        ${{
+          inputs.galaxy-e2e-wormhole && inputs.galaxy-e2e-blackhole
+            && 'wh_galaxy,bh_galaxy'
+            || (
+              inputs.galaxy-e2e-wormhole
+                && 'wh_galaxy'
+                || (
+                  inputs.galaxy-e2e-blackhole
+                    && 'bh_galaxy'
+                    || ''
+                )
+            )
+        }}
+      test-selection: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-e2e || 'all' }}
