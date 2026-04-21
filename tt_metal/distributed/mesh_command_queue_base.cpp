@@ -229,7 +229,7 @@ void MeshCommandQueueBase::enqueue_read_mesh_buffer(
 }
 
 void MeshCommandQueueBase::enqueue_write_shards_nolock(
-    const std::shared_ptr<MeshBuffer>& buffer,
+    MeshBuffer& buffer,
     const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
     bool blocking,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
@@ -243,7 +243,7 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
         [&shard_data_transfers, &buffer, &any_pinned_used, logical_core_filter, this](uint32_t shard_idx) {
             const auto& shard_data_transfer = shard_data_transfers[shard_idx];
             bool pinned_used = this->write_shard_to_device(
-                *buffer,
+                buffer,
                 shard_data_transfer.shard_coord(),
                 shard_data_transfer.host_data(),
                 shard_data_transfer.region(),
@@ -286,16 +286,16 @@ void MeshCommandQueueBase::enqueue_write_shards(
     const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
     bool blocking) {
     auto lock = lock_api_function_();
-    this->enqueue_write_shards_nolock(mesh_buffer, shard_data_transfers, blocking, nullptr);
+    this->enqueue_write_shards_nolock(*mesh_buffer, shard_data_transfers, blocking, nullptr);
 }
 
 void MeshCommandQueueBase::enqueue_write(
     const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) {
-    this->enqueue_write_with_core_filter(mesh_buffer, host_buffer, blocking, nullptr);
+    this->enqueue_write_with_core_filter(*mesh_buffer, host_buffer, blocking, nullptr);
 }
 
 void MeshCommandQueueBase::enqueue_write_with_core_filter(
-    const std::shared_ptr<MeshBuffer>& mesh_buffer,
+    MeshBuffer& mesh_buffer,
     const DistributedHostBuffer& host_buffer,
     bool blocking,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {

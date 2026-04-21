@@ -16,7 +16,7 @@ namespace tt::tt_metal::experimental::core_subset_write {
 void enqueue_write_tensor(
     distributed::MeshCommandQueue& cq,
     const HostTensor& host_tensor,
-    MeshTensor& device_tensor,
+    const MeshTensor& device_tensor,
     const CoreRangeSet& logical_core_filter);
 
 }  // namespace tt::tt_metal::experimental::core_subset_write

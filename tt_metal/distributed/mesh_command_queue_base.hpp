@@ -61,20 +61,20 @@ private:
         bool blocking);
     // Must be called with lock_api_function_() held.
     void enqueue_write_shards_nolock(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        MeshBuffer& mesh_buffer,
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         bool blocking,
         const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr);
 
     void enqueue_write_with_core_filter(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        MeshBuffer& mesh_buffer,
         const DistributedHostBuffer& host_buffer,
         bool blocking,
         const tt::tt_metal::CoreRangeSet* logical_core_filter);
 
     friend void tt::tt_metal::experimental::core_subset_write::enqueue_write(
         MeshCommandQueue& cq,
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        MeshBuffer& mesh_buffer,
         const DistributedHostBuffer& host_buffer,
         bool blocking,
         const tt::tt_metal::CoreRangeSet& logical_core_filter);

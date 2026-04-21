@@ -11,7 +11,7 @@ namespace tt::tt_metal::experimental::core_subset_write {
 
 void enqueue_write(
     distributed::MeshCommandQueue& cq,
-    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
+    distributed::MeshBuffer& mesh_buffer,
     const tt::tt_metal::DistributedHostBuffer& host_buffer,
     bool blocking,
     const CoreRangeSet& logical_core_filter) {

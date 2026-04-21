@@ -1270,7 +1270,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithCoreFilter) 
     DistributedHostBuffer distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
     distributed_host_buffer.emplace_shard(coord, [newest]() { return HostBuffer(newest); });
     tt::tt_metal::experimental::core_subset_write::enqueue_write(
-        mesh_device_->mesh_command_queue(), buf, distributed_host_buffer, /*blocking=*/true, filter);
+        mesh_device_->mesh_command_queue(), *buf, distributed_host_buffer, /*blocking=*/true, filter);
 
     std::vector<uint32_t> dst_vec;
     ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, coord);
