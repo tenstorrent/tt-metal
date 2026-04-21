@@ -83,7 +83,7 @@ static bool run_test_bandwidth(
     return pass;
 }
 
-TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetBandwidth) {
+TEST_F(MeshDispatchFixture, TensixDeploymentEthernetBandwidth) {
     const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     bool pass = true;

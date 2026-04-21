@@ -78,7 +78,7 @@ static bool run_test(
     return pass;
 }
 
-TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetLinkUp) {
+TEST_F(MeshDispatchFixture, TensixDeploymentEthernetLinkUp) {
     const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     bool pass = true;

@@ -196,7 +196,7 @@ static bool run_test_integrity_dram(
     return pass;
 }
 
-TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetDataIntegrityDram) {
+TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDataIntegrityDram) {
     const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     bool pass = true;
