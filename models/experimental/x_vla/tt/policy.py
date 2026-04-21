@@ -94,4 +94,11 @@ def load_policy_ttnn(weights: Path):
     davit_mod = _load_module_file("xvla_ttnn_davit_ffn", "ttnn_davit_ffn.py")
     davit_mod.swap_davit_ffns(policy.model.vlm.vision_tower, device)
 
+    # Iter19: replace ChannelAttention (one per dual-block) with the
+    # on-device variant.
+    cattn_mod = _load_module_file(
+        "xvla_ttnn_davit_channel_attn", "ttnn_davit_channel_attn.py"
+    )
+    cattn_mod.swap_davit_channel_attns(policy.model.vlm.vision_tower, device)
+
     return policy
