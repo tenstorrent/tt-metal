@@ -267,6 +267,7 @@ class TtDistributedRmsNorm(LightweightModule):
             "cluster_axis": self.cluster_axis,
             "num_links": self.num_links,
             "topology": self.topology,
+            "use_l1_small_for_semaphores": True,
         }
         if self.stats_memcfg is not None:
             all_gather_kwargs["memory_config"] = self.stats_memcfg

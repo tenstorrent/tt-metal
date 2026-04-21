@@ -53,7 +53,7 @@ def create_gate_input(config, mesh_device):
     [
         pytest.param(
             (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 2048},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
             id="linear-2x2",
         ),
