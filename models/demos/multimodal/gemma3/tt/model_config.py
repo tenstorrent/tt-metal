@@ -111,9 +111,16 @@ class ModelArgs(TTModelArgs):
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
         # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed
         model_specific_supported_seq_lens = {
-            # EXAMPLE: "gemma-3-4b": {
-            #     "N150": [128, 1024, 2048],
-            # }
+            # gemma-3-27b: text-only prefill tracing (vLLM v1 flow).
+            # Vision prefill cannot be traced because image features vary per request;
+            # TtGemmaModel.prepare_inputs_prefill skips the vision/scatter path when
+            # trace_enabled=True.
+            "gemma-3-27b": {
+                "N150": [128, 1024],
+                "N300": [128, 1024],
+                "T3K": [128, 1024],
+                "TG": [128, 1024],
+            },
         }
 
         model_name = self.base_model_name
