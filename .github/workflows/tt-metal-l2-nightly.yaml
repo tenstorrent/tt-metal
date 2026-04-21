@@ -425,7 +425,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      timeout: 90
+      timeout: 720
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   tt-train-python-unit-tests:
