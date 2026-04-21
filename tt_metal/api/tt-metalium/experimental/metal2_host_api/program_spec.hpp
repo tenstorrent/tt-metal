@@ -58,9 +58,12 @@ struct ProgramSpec {
     std::vector<DataflowBufferSpec> dataflow_buffers;
     std::vector<SemaphoreSpec> semaphores;
 
-    // Worker specifications (optional on Gen1, required on Gen2+)
-    // This info is redundant, but improves clarity and messaging.
-    // (Done to simplify porting from ProgramDescriptor.)
+    // (Optional) Worker specifications.
+    // If std::nullopt, workers are inferred automatically from kernel/DFB/semaphore
+    // target_nodes fields (nodes with identical coverage become one inferred WorkerSpec,
+    // named "inferred_worker@<node_range_set>").
+    // User-supplied workers let you assign readable names, and act as a redundant sanity
+    // check on which nodes each entity covers.
     std::optional<std::vector<WorkerSpec>> workers = std::nullopt;
 };
 
