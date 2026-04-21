@@ -57,21 +57,13 @@ def _load_module_file(name: str, filename: str):
 def load_policy_ttnn(weights: Path):
     """Load X-VLA with the optimized backend.
 
-    Iter1: dtype=bfloat16.                          (3.4x, PCC 99.9991)
-    Iter2 (reverted): torch.compile reduce-overhead — slower on CPU.
-    Iter3: num_denoising_steps 10->5.               (PCC 99.9987)
-    Iter4: num_denoising_steps 5->2.                (PCC 99.9946)
-    Iter5: num_denoising_steps 2->1.                (100 fps, PCC 99.98)
-    Iter6 (reverted): torch.set_num_threads(16)     — SMT contention.
-    Iter7 (reverted): action_decoder on TT-NN       — -1.8% (too small).
-    Iter8 (current): all 24 TransformerBlock layers inside
-        SoftPromptedTransformer are offloaded to the Blackhole p150a at
-        device_id=3. The transformer runs as: torch -> ttnn (upload) ->
-        24x (LayerNorm, fused-QKV linear, SDPA, proj, residual, LayerNorm,
-        MLP, residual) -> torch (download). One round-trip per inference
-        regardless of layer count, so PCIe cost is amortized. With 308M
-        params and 24 layers the on-chip compute vastly exceeds the
-        transfer cost; expected to beat iter5's 100 fps.
+    Iter1-iter16: see results.tsv. Best so far: iter10 = 118.4 fps, PCC 99.98%
+        (24 SoftPromptedTransformer blocks on chip, MLP weights bfp8_b).
+    Iter17 (current): also offload Florence-2's 12-layer BART encoder to
+        the Blackhole device. This is ~75% of the remaining torch CPU
+        time. Each layer is post-LN BART (fused QKV, attention with
+        additive mask, output proj, FFN). Embedding lookups stay on
+        torch (small integer-indexed tables).
     """
     from lerobot.configs.policies import PreTrainedConfig
     from lerobot.policies.xvla.modeling_xvla import XVLAPolicy
@@ -89,5 +81,10 @@ def load_policy_ttnn(weights: Path):
     transformer.blocks = stack_mod.TTNNTransformerBlockStack(
         transformer.blocks, device, num_heads=transformer.blocks[0].attn.num_heads
     )
+
+    # Replace Florence-2 BART encoder with on-device version.
+    bart_mod = _load_module_file("xvla_ttnn_bart_encoder", "ttnn_bart_encoder.py")
+    lm = policy.model.vlm.language_model
+    lm.model.encoder = bart_mod.TTNNBartEncoder(lm.model.encoder, device).to(torch.bfloat16)
 
     return policy
