@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/device.hpp"
-#include <impl/dispatch/dispatch_core_common.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 
 namespace ttnn {
 

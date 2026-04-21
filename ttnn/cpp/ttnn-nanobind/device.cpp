@@ -40,7 +40,7 @@
 #include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <impl/dispatch/dispatch_core_common.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 
 using namespace tt::tt_metal;
 namespace nb = nanobind;

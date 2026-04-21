@@ -41,7 +41,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn-nanobind/pipeline_module_nanobind.hpp"
-#include <impl/dispatch/dispatch_core_common.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 
 // note from nanobind docs:
 // We strongly recommend that you replace all use of std::unique_ptr<T> by

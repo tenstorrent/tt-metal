@@ -40,6 +40,11 @@ public:
     bool operator==(const DispatchCoreConfig& other) const = default;
 };
 
+// Returns a cluster-aware default DispatchCoreConfig matching Python behavior:
+// - Default type: ETH for N300, T3K, N300_2x2 clusters; else WORKER
+// - Default axis: Blackhole + fabric tensix MUX -> ROW; Blackhole without MUX -> COL; otherwise ROW
+DispatchCoreConfig get_default_dispatch_core_config();
+
 }  // namespace tt::tt_metal
 
 namespace std {

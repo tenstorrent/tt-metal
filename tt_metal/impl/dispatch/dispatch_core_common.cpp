@@ -160,7 +160,7 @@ DispatchCoreConfig get_default_dispatch_core_config() {
             // Determine axis from architecture
             // Get arch from any chip's soc descriptor
             for (const auto& chip_id : cluster_desc->get_all_chips()) {
-                auto arch = cluster_desc->get_chip_arch(chip_id);
+                auto arch = cluster_desc->get_arch(chip_id);
                 if (arch == tt::ARCH::BLACKHOLE) {
                     // For Blackhole without MetalContext, we can't determine fabric tensix config
                     // Default to COL (safer default without MUX)
