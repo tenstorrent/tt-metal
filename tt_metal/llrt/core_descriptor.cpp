@@ -237,7 +237,7 @@ const core_descriptor_t& get_core_descriptor_config(
     CoreCoord grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     // For mock devices, control plane doesn't exist, use empty set
     std::unordered_set<CoreCoord> logical_active_eth_cores;
-    if (env.get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+    if (!env.get_cluster().is_mock_or_emulated()) {
         logical_active_eth_cores = env.get_control_plane().get_active_ethernet_cores(device_id);
     }
 
