@@ -162,21 +162,20 @@ class MoE(AbstractModuleBase):
                 ttnn.typecast(group_scores, ttnn.DataType.BFLOAT16), self.n_limited_groups, dim=-1
             )
 
-            # Workaround for ttnn.eq with uint16 bug
+            # Build group mask [B, 1, S, num_experts] via scatter + repeat_interleave.
+            # Scatter needs UINT32 indices in ROW_MAJOR layout.
+            b, _, s, _ = list(biased.shape)
             top_group_indices_u32 = ttnn.typecast(top_group_indices, ttnn.DataType.UINT32)
-
-            # Build group mask [B, 1, S, num_experts]
-            group_mask_parts = []
-            for g in range(self.n_groups):
-                match = ttnn.eq(top_group_indices_u32, float(g))
-                match_f = ttnn.typecast(match, ttnn.DataType.BFLOAT16)
-                match_any = ttnn.sum(match_f, dim=-1, keepdim=True)
-                group_selected = ttnn.gt(match_any, 0.0)
-                group_selected = ttnn.typecast(group_selected, ttnn.DataType.BFLOAT16)
-                group_expert_mask = ttnn.repeat(group_selected, ttnn.Shape([1, 1, 1, experts_per_group]))
-                group_mask_parts.append(group_expert_mask)
-
-            group_mask = ttnn.concat(group_mask_parts, dim=-1)
+            top_group_indices_u32 = ttnn.to_layout(top_group_indices_u32, ttnn.ROW_MAJOR_LAYOUT)
+            group_mask = ttnn.zeros(
+                [b, 1, s, self.n_groups], ttnn.DataType.BFLOAT16, ttnn.Layout.ROW_MAJOR, biased.device()
+            )
+            group_src = ttnn.ones(
+                [b, 1, s, self.n_limited_groups], ttnn.DataType.BFLOAT16, ttnn.Layout.ROW_MAJOR, biased.device()
+            )
+            group_mask = ttnn.scatter(group_mask, -1, top_group_indices_u32, group_src)
+            group_mask = ttnn.to_layout(group_mask, ttnn.TILE_LAYOUT)
+            group_mask = ttnn.repeat_interleave(group_mask, experts_per_group, dim=-1)
             neg_inf = ttnn.multiply(ttnn.subtract(group_mask, 1.0), 1e9)
             biased_masked = ttnn.add(biased, neg_inf)
 
@@ -196,20 +195,17 @@ class MoE(AbstractModuleBase):
 
         scores, _topk_values, topk_indices = self.compute_routing(x)
 
-        # ── 3. Build per-expert routing masks [B, 1, S, 1] ──
-        # Workaround for ttnn.eq with uint16 bug
+        # ── 3. Build dense per-token expert mask via scatter ──
+        # Scatter ones at topk indices into a zero tensor to produce a
+        # one-hot-per-selected-expert mask [B, 1, S, num_experts] in a single
+        # op instead of num_experts independent eq/sum/gt/typecast chains.
+        device = x.get_value().device()
         topk_indices_u32 = ttnn.typecast(topk_indices, ttnn.DataType.UINT32)
-
-        expert_masks = {}
-        mask_parts = []  # for the full [B, 1, S, num_experts] mask
-        for expert_idx in range(self.num_experts):
-            match = ttnn.eq(topk_indices_u32, float(expert_idx))
-            match_f = ttnn.typecast(match, ttnn.DataType.BFLOAT16)
-            match_any = ttnn.sum(match_f, dim=-1, keepdim=True)  # [B, 1, S, 1]
-            mask_narrow = ttnn.gt(match_any, 0.0)
-            mask_narrow = ttnn.typecast(mask_narrow, ttnn.DataType.BFLOAT16)
-            expert_masks[expert_idx] = mask_narrow
-            mask_parts.append(mask_narrow)
+        topk_indices_u32 = ttnn.to_layout(topk_indices_u32, ttnn.ROW_MAJOR_LAYOUT)
+        expert_mask_all = ttnn.zeros([B, 1, S, self.num_experts], ttnn.DataType.BFLOAT16, ttnn.Layout.ROW_MAJOR, device)
+        expert_src = ttnn.ones([B, 1, S, self.n_activated], ttnn.DataType.BFLOAT16, ttnn.Layout.ROW_MAJOR, device)
+        expert_mask_all = ttnn.scatter(expert_mask_all, -1, topk_indices_u32, expert_src)
+        expert_mask_all = ttnn.to_layout(expert_mask_all, ttnn.TILE_LAYOUT)
 
         # ── 4. Routing weights ──
         # For sigmoid: use MoERoutingNormalize which has the full Jacobian
@@ -217,21 +213,14 @@ class MoE(AbstractModuleBase):
         # softmax: selected scores are used directly (no renorm), so we fall
         # back to the per-expert multiply with a detached mask.
         if self.score_func == "sigmoid":
-            full_mask = ttnn.concat(mask_parts, dim=-1)  # [B, 1, S, num_experts]
-            routing_weights = moe_routing_normalize(scores, full_mask, self.route_scale, 1e-20)
+            routing_weights = moe_routing_normalize(scores, expert_mask_all, self.route_scale, 1e-20)
         else:
             routing_weights = None  # softmax path uses score_i directly below
 
-        # Accumulate token counts on device (unchanged):
-        # Stack all expert mask sums into [1, 1, 1, num_experts]
-        expert_count_scalars = []
-        for expert_idx in range(self.num_experts):
-            # Sum mask [B,1,S,1] -> scalar, reshape to [1,1,1,1]
-            count = ttnn.sum(expert_masks[expert_idx])  # scalar-ish tensor
-            count = ttnn.reshape(count, [1, 1, 1, 1])
-            expert_count_scalars.append(count)
-        batch_counts = ttnn.concat(expert_count_scalars, dim=-1)  # [1, 1, 1, num_experts]
-        # Add to running accumulator
+        # Accumulate token counts on device via a single reduction:
+        # expert_mask_all [B, 1, S, num_experts] -> [1, 1, 1, num_experts].
+        mask_bs_flat = ttnn.reshape(expert_mask_all, [1, 1, B * S, self.num_experts])
+        batch_counts = ttnn.sum(mask_bs_flat, dim=-2, keepdim=True)  # [1, 1, 1, num_experts]
         new_counts = ttnn.add(self._token_counts.tensor.get_value(), batch_counts)
         self._token_counts.tensor.set_value(new_counts)
 
@@ -251,7 +240,7 @@ class MoE(AbstractModuleBase):
                 )
                 weighted = ttml.ops.binary.mul(expert_out, rw_i)
             else:
-                mask_narrow = expert_masks[expert_idx]
+                mask_narrow = ttnn.slice(expert_mask_all, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])
                 expert_mask = ttnn.repeat(mask_narrow, ttnn.Shape([1, 1, 1, dim]))
                 mask_tt = ttml.autograd.Tensor(expert_mask, False)
                 score_i = autograd_slice(scores, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])
