@@ -37,9 +37,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case GT:
         case LT:
         case GE:
-        case LE:
-            return (a == b) && ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) ||
-                                (a == UINT16 && b == UINT16) || (a == UINT32 && b == UINT32));
+        case LE: return a == b && (a == FLOAT32 || a == INT32 || a == UINT16 || a == UINT32);
         case LCM:
         case GCD: return (a == INT32 && b == INT32);
         case LEFT_SHIFT:

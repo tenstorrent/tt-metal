@@ -56,7 +56,9 @@ ALWI void ge_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 }
 
 /**
- * Please refer to documentation for lt_int_tile/gt_int_tile/le_int_tile/ge_int_tile.
+ * The following functions initialize the relational operations. They should be invoked prior to calling the execution
+ * API. Please refer to execution API documentation (lt_int_tile/gt_int_tile/le_int_tile/ge_int_tile) to find out more
+ * about the relational operations.
  */
 template <DataFormat data_format>
 ALWI void lt_int_tile_init() {
