@@ -60,8 +60,22 @@ def main():
         )
         sys.exit(1)
 
-    with open(sku_config_path) as f:
-        config = yaml.safe_load(f)
+    # Safely open and parse the validated YAML file
+    try:
+        with open(sku_config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+    except (OSError, IOError) as e:
+        print(f"::error::Failed to read SKU config file: {e}", file=sys.stderr)
+        sys.exit(1)
+    except yaml.YAMLError as e:
+        print(f"::error::Invalid YAML in SKU config file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not isinstance(config, dict):
+        print(
+            f"::error::SKU config file must contain a YAML dictionary", file=sys.stderr
+        )
+        sys.exit(1)
 
     skus = config.get("skus", {})
     if sku_name not in skus:
