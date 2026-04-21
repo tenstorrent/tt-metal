@@ -502,7 +502,7 @@ def test_attention_block(
 
     ttnn_trans_mat = ttnn.from_torch(
         trans_mat_replicated,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=trans_mem_config,
@@ -1111,7 +1111,10 @@ def test_attention_block(
     for device_idx in range(mesh_rows * mesh_cols):
         received = output_torch[device_idx : device_idx + 1, :]
 
-        passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
+        # Low position_ids exercise a nearly-empty KV cache, which amplifies bfp4 q-matmul
+        # quantization error; PCC recovers to >= 0.997 by position 511.
+        pcc_threshold = 0.99 if position_id < 511 else 0.997
+        passing, pcc = comp_pcc(torch_output_expected, received, pcc_threshold)
         max_diff = torch.max(torch.abs(torch_output_expected - received)).item()
         logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc} Max Diff: {max_diff}")
         if not passing:
