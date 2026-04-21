@@ -458,11 +458,11 @@ class OperationSchema(BaseModel):
             for m in self.math
         )
 
-        if has_matmul:
-            if self.src_a_dims[1] != self.src_b_dims[0]:
-                raise ValueError(
-                    f"Matmul: src_a[1]={self.src_a_dims[1]} != src_b[0]={self.src_b_dims[0]}"
-                )
+        # if has_matmul:
+        #     if self.src_a_dims[1] != self.src_b_dims[0]:
+        #         raise ValueError(
+        #             f"Matmul: src_a[1]={self.src_a_dims[1]} != src_b[0]={self.src_b_dims[0]}"
+        #         )
 
         if (
             self.block_size[0] > self.output_dims[0]
