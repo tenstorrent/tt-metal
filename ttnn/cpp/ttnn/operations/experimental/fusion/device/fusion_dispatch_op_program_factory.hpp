@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
-#include "patchable_generic_op_types.hpp"
+#include "fusion_dispatch_op_types.hpp"
 
 #include <tt-metalium/core_coord.hpp>
 
@@ -13,9 +13,9 @@
 #include <optional>
 #include <vector>
 
-namespace ttnn::operations::experimental::generic::program {
+namespace ttnn::operations::experimental::fusion::program {
 
-struct PatchableGenericMeshProgramFactory {
+struct FusionDispatchMeshProgramFactory {
     /// Per-core runtime arg whose value is a tensor buffer address (PR 39972-style patching).
     struct PerCoreRuntimeArgSlot {
         std::uint32_t kernel_idx{};
@@ -53,22 +53,22 @@ struct PatchableGenericMeshProgramFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<mesh_shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const patchable_operation_attributes_t& operation_attributes,
+        const fusion_dispatch_operation_attributes_t& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const patchable_tensor_args_t& tensor_args,
-        patchable_tensor_return_value_t& tensor_return_value);
+        const fusion_dispatch_tensor_args_t& tensor_args,
+        fusion_dispatch_tensor_return_value_t& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_mesh_workload,
-        const patchable_operation_attributes_t& operation_attributes,
-        const patchable_tensor_args_t& tensor_args,
-        patchable_tensor_return_value_t& tensor_return_value);
+        const fusion_dispatch_operation_attributes_t& operation_attributes,
+        const fusion_dispatch_tensor_args_t& tensor_args,
+        fusion_dispatch_tensor_return_value_t& tensor_return_value);
 
 private:
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create_at(
-        const tt::tt_metal::ProgramDescriptor& program_descriptor, const patchable_tensor_args_t& tensor_args);
+        const tt::tt_metal::ProgramDescriptor& program_descriptor, const fusion_dispatch_tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::experimental::generic::program
+}  // namespace ttnn::operations::experimental::fusion::program
