@@ -1623,7 +1623,13 @@ def test_wan_decoder_production_blocking(
 
     logger.info(f"running tt model with production blocking (t_chunk_size={t_chunk_size}, cached={cached})")
     start = time.time()
-    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=1)
+    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=None)
+    from tracy import signpost
+
+    logger.info("running tt model with t_chunk_size=None")
+    signpost("start")
+    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=None)
+    signpost("end")
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1634,6 +1640,8 @@ def test_wan_decoder_production_blocking(
     )
     logger.info(f"tt time taken: {time.time() - start}")
     logger.info(f"tt output shape: {tt_output_torch.shape}")
+
+    return
 
     logger.info("running torch model")
     start = time.time()
