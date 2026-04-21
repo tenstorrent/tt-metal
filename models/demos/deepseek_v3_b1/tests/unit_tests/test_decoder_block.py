@@ -15,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.demo.decoder_stage import create_decoder_block_tensors
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
@@ -305,6 +306,7 @@ def create_decoder_golden_tensors(
     ids=["validate_standalone_moe", "just_decoder_moe"],
 )
 @pytest.mark.requires_grid_size((13, 10))
+@requires_hybrid_allocator
 def test_decoder(
     bh_2d_mesh_device,
     device_params,
@@ -823,6 +825,7 @@ def test_decoder(
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
 @pytest.mark.requires_grid_size((13, 10))
+@requires_hybrid_allocator
 def test_decoder_mlp(
     bh_2d_mesh_device,
     device_params,

@@ -17,6 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, bfp4_tile_byte_count
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
@@ -400,6 +401,7 @@ def _add_global_weights(state: dict[str, torch.Tensor], seed: int = 42) -> None:
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+@requires_hybrid_allocator
 def test_prepare_attention_weights_dense_4x2(bh_2d_mesh_device):
     """Prepare attention weights only for a dense layer on 4x2 mesh; verify shapes and fusion group sharing."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
@@ -423,6 +425,7 @@ def test_prepare_attention_weights_dense_4x2(bh_2d_mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+@requires_hybrid_allocator
 def test_prepare_attention_weights_moe_4x2(bh_2d_mesh_device):
     """Prepare attention weights only for an MoE layer on 4x2 mesh; verify shapes and gate_mm present."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
@@ -528,6 +531,7 @@ def test_prepare_routed_expert_weights_moe_4x2(bh_2d_mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+@requires_hybrid_allocator
 def test_prepare_dense_layer_single_layer_4x2(bh_2d_mesh_device):
     """Build one dense layer on 4x2 mesh; verify type and shapes (MLA TP=2)."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
@@ -562,6 +566,7 @@ def test_prepare_dense_layer_single_layer_4x2(bh_2d_mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+@requires_hybrid_allocator
 def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     """Build one MoE layer on 4x2 mesh; verify type and shapes (MLA TP=2, MoE TP=8)."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
@@ -751,6 +756,7 @@ def test_prepare_lm_head_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+@requires_hybrid_allocator
 def test_prepare_attention_weights_with_cache_dense_4x2(bh_2d_mesh_device, tmp_path):
     """Attention fusion groups (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms) via TensorCache: miss then hit."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
@@ -781,6 +787,7 @@ def test_prepare_attention_weights_with_cache_dense_4x2(bh_2d_mesh_device, tmp_p
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+@requires_hybrid_allocator
 def test_prepare_attention_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp_path):
     """Attention fusion groups + gate_bias via TensorCache on MoE layer: miss then hit."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
@@ -943,6 +950,7 @@ def test_prepare_routed_expert_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+@requires_hybrid_allocator
 def test_prepare_dense_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     """Full dense layer via TensorCache: attention + gate_up + shared_down + routed; miss then hit."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
@@ -975,6 +983,7 @@ def test_prepare_dense_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path)
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+@requires_hybrid_allocator
 def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     """Prepare MoE layer via TensorCache: fusion + gate_bias + gate_up + shared_down + routed experts."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
