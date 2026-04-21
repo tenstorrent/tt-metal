@@ -84,10 +84,8 @@ class OperationRuntimeMap:
         entry = self._map.get(host_assigned_id)
         if entry is not None:
             return entry
-        decoded = _decode_base_program_id(host_assigned_id)
-        if decoded != host_assigned_id:
-            return self._map.get(decoded)
-        return None
+
+        return self._map.get(_decode_base_program_id(host_assigned_id))
 
 
 @triage_singleton
