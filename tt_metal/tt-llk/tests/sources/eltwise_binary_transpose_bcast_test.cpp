@@ -9,6 +9,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "tensor_shape.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -34,10 +35,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Initialize unpack with column broadcast on srcB and transpose on srcA
     _llk_unpack_AB_init_<BROADCAST_TYPE>(
-        FACE_R_DIM,
-        4 /* num_faces */,
-        false,                          // narrow_tile
-        params.UNPACK_TRANSPOSE_FACES); // Enable face rearrangement for srcA
+        DEFAULT_TENSOR_SHAPE,
+        params.UNPACK_TRANSPOSE_FACES, // transpose_of_faces
+        0);                            // within_face_16x16_transpose (not exercised here)
 
     // Unpack tiles: srcA will be transposed, srcB will be column broadcasted
     for (int i = 0; i < params.TILE_CNT; ++i)

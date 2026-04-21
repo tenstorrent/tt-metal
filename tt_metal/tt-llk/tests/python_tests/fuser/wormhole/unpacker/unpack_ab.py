@@ -134,13 +134,14 @@ class UnpackerAB(Unpacker):
     ) -> str:
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         tile_shape = operation.src_a.tile_shape
-        transpose_value = "1" if compute_unit.unpack_transpose_faces.value else "0"
+        tf_value = "1" if compute_unit.unpack_transpose_faces.value else "0"
+        twf_value = "1" if compute_unit.unpack_transpose_within_face.value else "0"
 
         shape_var = f"tensor_shape_stage_{operation.stage_id}"
         return (
             f"const ckernel::TensorShape {shape_var} = "
             f"{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}};\n"
-            f"_llk_unpack_AB_init_<{broadcast_type}>({shape_var}, {transpose_value});\n"
+            f"_llk_unpack_AB_init_<{broadcast_type}>({shape_var}, {tf_value}, {twf_value});\n"
         )
 
     def unpack(
