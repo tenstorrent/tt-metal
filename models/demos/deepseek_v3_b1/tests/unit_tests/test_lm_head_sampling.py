@@ -53,6 +53,11 @@ from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSamp
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import StageMetadata
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    build_broadcast_test_inputs,
+    create_fabric_router_config,
+)
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 from models.demos.deepseek_v3_b1.weights.prepare import (
     _MTP_LAYER_IDX,
     DeepSeekV3EmbeddingLayerWeights,
@@ -60,12 +65,6 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3MTPWeights,
     prepare_lm_head_weights,
 )
-from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
-    build_broadcast_test_inputs,
-    create_fabric_router_config,
-)
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
-from models.demos.deepseek_v3_b1.weights.prepare import prepare_lm_head_weights
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
@@ -1046,16 +1045,15 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
         _spec_rmsnorm_out = _mtp_f * torch.rsqrt(_spec_var + _eps) * torch_gamma.float()
         _spec_rms_chunks = [_spec_rmsnorm_out[0, _i].item() for _i in range(0, K, chunk_size)]
 
-        print(
+        logger.debug(
             f"[SYNTH_GOLDEN] iter {iteration} spec_rmsnorm "
             f"[0]={_spec_rmsnorm_out[0, 0].item():.6f} "
             f"[{K // 2}]={_spec_rmsnorm_out[0, K // 2].item():.6f} "
             f"[{K - 1}]={_spec_rmsnorm_out[0, K - 1].item():.6f} "
             f"absmax={_spec_rmsnorm_out.abs().max().item():.6f}",
-            flush=True,
         )
         _spec_chunk_str = " ".join(f"[{i * chunk_size}]={v:.6f}" for i, v in enumerate(_spec_rms_chunks))
-        print(f"[SYNTH_GOLDEN] iter {iteration} spec_rmsnorm chunks: {_spec_chunk_str}", flush=True)
+        logger.debug(f"[SYNTH_GOLDEN] iter {iteration} spec_rmsnorm chunks: {_spec_chunk_str}")
 
         debug_info.append(
             {
@@ -4507,7 +4505,7 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
         SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,
     )
-    print(f"[TEST] config created, building pipeline", flush=True)
+    logger.debug(f"[TEST] config created, building pipeline")
     # Propagate an identical, explicit pipeline_config and stages_metadata to
     # every rank. Without this, each rank independently calls
     # generate_blitz_decode_pipeline() and the submesh-aware code paths added
@@ -4522,22 +4520,22 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
         pipeline_config=pipeline_config,
     )
     pid = pipeline.my_mesh_id
-    print(f"[TEST P{pid}] pipeline built, calling setup_and_run", flush=True)
+    logger.debug(f"[TEST P{pid}] pipeline built, calling setup_and_run")
     try:
         pipeline.setup_and_run()
-        print(f"[TEST P{pid}] setup_and_run complete", flush=True)
+        logger.debug(f"[TEST P{pid}] setup_and_run complete")
 
         token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
 
         if pipeline.my_mesh_id == 0:
             if run_golden:
-                print(f"[TEST] computing golden...", flush=True)
+                logger.debug(f"[TEST] computing golden...")
                 golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
-                print(f"[TEST] golden computed, creating config", flush=True)
+                logger.debug(f"[TEST] golden computed, creating config")
             else:
-                print(f"[TEST] skipping golden computation", flush=True)
+                logger.debug(f"[TEST] skipping golden computation")
             for iteration in range(iterations):
-                print(f"[TEST P{pid}] iter {iteration} write_token", flush=True)
+                logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
                 torch_token[0, 0] = iteration
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -4547,9 +4545,9 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
                 pipeline.write_token(token_tensor)
-                print(f"[TEST P{pid}] iter {iteration} read_output", flush=True)
+                logger.debug(f"[TEST P{pid}] iter {iteration} read_output")
                 pipeline.read_output(output_tensor)
-                print(f"[TEST P{pid}] iter {iteration} to_torch", flush=True)
+                logger.debug(f"[TEST P{pid}] iter {iteration} to_torch")
                 raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
 
                 num_tokens = raw[0].item()
@@ -4572,35 +4570,32 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
                     expected_spec = None
 
                 type_name = {0: "BASE", 1: "SPEC"}
-                print(
+                logger.debug(
                     f"[TEST P{pid}] iter {iteration} "
                     f"ntok={num_tokens} t0={tok0_id}/{type_name.get(tok0_type,'?')} "
                     f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
                     f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
                     f"golden base token={expected_base} golden spec token={expected_spec}",
-                    flush=True,
                 )
                 if run_golden:
-                    print(
+                    logger.debug(
                         f"[TEST P{pid}] iter {iteration} "
                         f"golden concat[0]={dbg['concat_0']:.6f} concat[7168]={dbg['concat_7168']:.6f} "
                         f"mtp_logits: {chunk_strs}",
-                        flush=True,
                     )
-                    print(
+                    logger.debug(
                         f"[TEST P{pid}] iter {iteration} "
                         f"golden spec_rmsnorm[0]={dbg['spec_rmsnorm_0']:.6f} "
                         f"[mid]={dbg['spec_rmsnorm_mid']:.6f} [last]={dbg['spec_rmsnorm_last']:.6f} "
                         f"absmax={dbg['spec_rmsnorm_absmax']:.6f} chunks: {spec_rms_chunk_strs}",
-                        flush=True,
                     )
-        print(f"[TEST P{pid}] all iterations done, barrier", flush=True)
+        logger.debug(f"[TEST P{pid}] all iterations done, barrier")
         pipeline.barrier()
-        print(f"[TEST P{pid}] barrier done, terminate", flush=True)
+        logger.debug(f"[TEST P{pid}] barrier done, terminate")
         pipeline.terminate()
-        print(f"[TEST P{pid}] terminate done, final barrier", flush=True)
+        logger.debug(f"[TEST P{pid}] terminate done, final barrier")
         pipeline.barrier()
-        print(f"[TEST P{pid}] final barrier done", flush=True)
+        logger.debug(f"[TEST P{pid}] final barrier done")
     finally:
         pass
 
@@ -4924,7 +4919,7 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
         SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,
     )
-    print(f"[TEST] config created, building pipeline", flush=True)
+    logger.debug(f"[TEST] config created, building pipeline")
     pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
     stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
     pipeline = config.build_pipeline(
@@ -4933,24 +4928,24 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
         pipeline_config=pipeline_config,
     )
     pid = pipeline.my_mesh_id
-    print(f"[TEST P{pid}] pipeline built, calling setup_and_run", flush=True)
+    logger.debug(f"[TEST P{pid}] pipeline built, calling setup_and_run")
 
     pos_id = 0
     slot_id = 23
 
     try:
         pipeline.setup_and_run()
-        print(f"[TEST P{pid}] setup_and_run complete", flush=True)
+        logger.debug(f"[TEST P{pid}] setup_and_run complete")
 
         token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
 
         if pipeline.my_mesh_id == 0:
             if run_golden:
-                print(f"[TEST] computing golden...", flush=True)
+                logger.debug(f"[TEST] computing golden...")
                 golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
-                print(f"[TEST] golden computed, creating config", flush=True)
+                logger.debug(f"[TEST] golden computed, creating config")
             else:
-                print(f"[TEST] skipping golden computation", flush=True)
+                logger.debug(f"[TEST] skipping golden computation")
 
             tok0_id = 0
             tok0_type = 0
@@ -4960,7 +4955,7 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
             tok1_pos = 0
 
             for iteration in range(iterations):
-                print(f"[TEST P{pid}] iter {iteration} write_token", flush=True)
+                logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
                 torch_token[0, 6] = slot_id
                 torch_token[0, 7] = iteration
@@ -4972,9 +4967,9 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
                 pipeline.write_token(token_tensor)
-                print(f"[TEST P{pid}] iter {iteration} read_output", flush=True)
+                logger.debug(f"[TEST P{pid}] iter {iteration} read_output")
                 pipeline.read_output(output_tensor)
-                print(f"[TEST P{pid}] iter {iteration} to_torch", flush=True)
+                logger.debug(f"[TEST P{pid}] iter {iteration} to_torch")
                 raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
 
                 tok0_id = raw[0].item()
@@ -4996,34 +4991,31 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
                     expected_spec = None
 
                 type_name = {0: "BASE", 1: "SPEC"}
-                print(
+                logger.debug(
                     f"[TEST P{pid}] iter {iteration} "
                     f"t0={tok0_id}/{type_name.get(tok0_type,'?')} "
                     f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
                     f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
                     f"golden base token={expected_base} golden spec token={expected_spec}",
-                    flush=True,
                 )
                 if run_golden:
-                    print(
+                    logger.debug(
                         f"[TEST P{pid}] iter {iteration} "
                         f"golden concat[0]={dbg['concat_0']:.6f} concat[7168]={dbg['concat_7168']:.6f} "
                         f"mtp_logits: {chunk_strs}",
-                        flush=True,
                     )
-                    print(
+                    logger.debug(
                         f"[TEST P{pid}] iter {iteration} "
                         f"golden spec_rmsnorm[0]={dbg['spec_rmsnorm_0']:.6f} "
                         f"[mid]={dbg['spec_rmsnorm_mid']:.6f} [last]={dbg['spec_rmsnorm_last']:.6f} "
                         f"absmax={dbg['spec_rmsnorm_absmax']:.6f} chunks: {spec_rms_chunk_strs}",
-                        flush=True,
                     )
-        print(f"[TEST P{pid}] all iterations done, barrier", flush=True)
+        logger.debug(f"[TEST P{pid}] all iterations done, barrier")
         pipeline.barrier()
-        print(f"[TEST P{pid}] barrier done, terminate", flush=True)
+        logger.debug(f"[TEST P{pid}] barrier done, terminate")
         pipeline.terminate()
-        print(f"[TEST P{pid}] terminate done, final barrier", flush=True)
+        logger.debug(f"[TEST P{pid}] terminate done, final barrier")
         pipeline.barrier()
-        print(f"[TEST P{pid}] final barrier done", flush=True)
+        logger.debug(f"[TEST P{pid}] final barrier done")
     finally:
         pass
