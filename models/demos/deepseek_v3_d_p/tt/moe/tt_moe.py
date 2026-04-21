@@ -313,7 +313,16 @@ class TtMoe(LightweightModule):
             topology=self.col_topology,
         )
 
+        # Per-layer peak expert token counts, captured each forward for overflow monitoring.
+        # Lives in DRAM; owned by this TtMoe; reset by reset_peak_expert_counts().
+        self.peak_expert_counts: Optional[ttnn.Tensor] = None
+
         logger.debug("TtMoe initialization complete")
+
+    def reset_peak_expert_counts(self) -> None:
+        if self.peak_expert_counts is not None:
+            ttnn.deallocate(self.peak_expert_counts)
+            self.peak_expert_counts = None
 
     def forward(
         self,
@@ -352,12 +361,11 @@ class TtMoe(LightweightModule):
             else ttnn.deallocate(gate_logits)
         )  # gate_logits is only used for debugging/intermediates, move to DRAM or deallocate immediately
 
-        # DEBUG
-        # Print full token counts per expert for monitoring
-        _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
-        _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
-        _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
-        logger.info(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
+        # Capture this layer's expert token counts into a DRAM buffer that outlives the forward,
+        # for end-of-pipeline overflow monitoring by TtPrefillTransformer.
+        if self.peak_expert_counts is not None:
+            ttnn.deallocate(self.peak_expert_counts)
+        self.peak_expert_counts = ttnn.to_memory_config(tt_expert_token_counts, ttnn.DRAM_MEMORY_CONFIG)
 
         # Gate outputs uint16 indices; dispatch requires int32.
         # this should be aligned in the further PR.
@@ -495,21 +503,6 @@ class TtMoe(LightweightModule):
         # Build intermediates if requested
         intermediates = None
         if return_intermediates:
-            # Check for buffer overflow (dispatch kernel silently drops overflow tokens)
-            _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
-            _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
-            _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
-            max_token_count = int(_counts_host.to(torch.int64).max().item())
-            max_capacity = self.dispatch_module.max_dispatched_tokens_per_expert
-            if max_token_count > max_capacity:
-                logger.error(
-                    f"[TtMoe.forward] expert token count ({max_token_count}) exceeds "
-                    f"max_dispatched_tokens_per_expert ({max_capacity}). "
-                    f"Overflow tokens were dropped - output data is corrupted. "
-                    f"Increase capacity_factor or reduce sequence length."
-                )
-                logger.debug(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
-
             intermediates = TtMoEIntermediates(
                 gate_scores=scores,
                 gate_indices=indices,

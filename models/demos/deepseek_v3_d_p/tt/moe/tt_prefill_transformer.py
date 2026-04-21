@@ -210,6 +210,7 @@ class TtPrefillTransformer(LightweightModule):
         kvpe_cache: ttnn.Tensor,
         return_intermediates: bool = False,
         read_profiler: bool = False,
+        monitor_expert_overflow: bool = True,
     ):
         """
         Forward pass: embed -> [block x N] -> norm.
@@ -220,6 +221,9 @@ class TtPrefillTransformer(LightweightModule):
                         each layer writes to its own slot via cache_layer_idx
             return_intermediates: if True, sync + snapshot to host after each stage
             read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
+            monitor_expert_overflow: if True, capture per-layer expert token counts during the
+                        forward pass and check for dispatch-buffer overflow at the end. Reset
+                        at the start of each call so the monitor is scoped to this forward.
 
         Returns:
             If return_intermediates=False:
@@ -229,6 +233,11 @@ class TtPrefillTransformer(LightweightModule):
         """
         rope_tensors = self.rope_setup.get_rope_tensors(self.seq_len)
         intermediates = [] if return_intermediates else None
+
+        if monitor_expert_overflow:
+            for layer in self.layers:
+                if layer.is_moe:
+                    layer.ffn.reset_peak_expert_counts()
 
         h = self.embed(token_ids)  # [1, seq_per_chip, emb_dim/tp]
         h = ttnn.unsqueeze_to_4D(h)  # [1, 1, seq_per_chip, emb_dim/tp]
@@ -249,8 +258,58 @@ class TtPrefillTransformer(LightweightModule):
 
         h = self.norm(h)
 
+        if monitor_expert_overflow:
+            self._check_expert_overflow()
+
         if return_intermediates:
             ttnn.synchronize_device(self.mesh_device)
             intermediates.append(("norm", self._to_host(h)))
             return h, intermediates
         return h
+
+    def _check_expert_overflow(self) -> None:
+        """
+        Stack every MoE layer's peak expert token counts on device into one tensor,
+        pull it to host in a single DMA, and log an error for any (layer, expert)
+        pair that exceeded max_dispatched_tokens_per_expert. The dispatch kernel
+        silently drops overflow tokens, so any overflow here means the outputs of
+        this forward are corrupted for that layer.
+        """
+        entries = [
+            (i, layer.ffn)
+            for i, layer in enumerate(self.layers)
+            if layer.is_moe and layer.ffn.peak_expert_counts is not None
+        ]
+        if not entries:
+            return
+
+        capacities = {moe.dispatch_module.max_dispatched_tokens_per_expert for _, moe in entries}
+        assert len(capacities) == 1, f"MoE layers have inconsistent capacities: {capacities}"
+        capacity = capacities.pop()
+
+        # Stack on device. Each peak is [1, n_routed_experts] (see offset_cumsum nanobind doc),
+        # so a plain concat along dim 0 yields [N, n_routed_experts] — no per-layer unsqueeze needed.
+        stacked = ttnn.concat([moe.peak_expert_counts for _, moe in entries], dim=0)
+
+        # Single device sync + single DMA readback.
+        ttnn.synchronize_device(self.mesh_device)
+        stacked_4d = ttnn.unsqueeze_to_4D(stacked)
+        composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
+        gathered = ttnn.to_torch(stacked_4d, mesh_composer=composer)
+        # Mesh composer places the replicated mesh axes on the leading tensor dims (0 and 1);
+        # de-replicate by slicing [0, 0] to get [num_moe_layers, num_routed_experts].
+        counts_host = gathered[0, 0].to(torch.int64)
+
+        layer_indices = [layer_idx for layer_idx, _ in entries]
+        for layer_idx, layer_counts in zip(layer_indices, counts_host):
+            peak = int(layer_counts.max().item())
+            if peak > capacity:
+                over = [(idx, int(c.item())) for idx, c in enumerate(layer_counts) if int(c.item()) > capacity]
+                logger.error(
+                    f"[TtPrefillTransformer] layer {layer_idx}: expert token count overflow — "
+                    f"peak={peak} > max_dispatched_tokens_per_expert={capacity}. "
+                    f"Overflow tokens were dropped; this layer's output is corrupted. "
+                    f"Overflowing (expert_idx, count): {over}"
+                )
+            else:
+                logger.debug(f"[TtPrefillTransformer] layer {layer_idx}: peak expert count={peak} (cap={capacity})")
