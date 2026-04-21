@@ -11,6 +11,8 @@ Uses HF DeepseekV3Model layer as the reference: creates a model with random weig
 extracts those weights into our TT state_dict format, and compares forward passes.
 """
 
+import json
+
 import pytest
 import torch
 from loguru import logger
@@ -21,6 +23,11 @@ from models.common.utility_functions import profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.mla.utils import (
+    create_balanced_chunk_order,
+    reorder_tensor_chunks,
+    reverse_reorder_tensor_chunks,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
@@ -28,6 +35,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
     create_hf_model,
+    download_infinitebench_subset,
     extract_layer_state_dict,
     get_4d_causal_mask,
     tokenize_prompt_to_isl,
@@ -41,12 +49,19 @@ PCC_THRESHOLD_KVPE = 0.999
 
 
 @pytest.mark.parametrize(
+    "is_balanced",
+    [False, True],
+    ids=["unbalanced", "balanced"],
+)
+@pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total",
     [
         ("random", False, 1024),
         ("abc_1k", True, 1024),
+        ("random", False, 25600),
+        ("infinitebench_longbook", True, 25600),
     ],
-    ids=["smoke-random", "pcc-abc_1k"],
+    ids=["smoke-random", "pcc-abc_1k", "smoke-random-25k", "pcc-infinitebench-25k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
@@ -96,6 +111,7 @@ def test_prefill_block(
     topology,
     pcc_validation,
     input_source,
+    is_balanced,
     request,
 ):
     profiler.clear()
@@ -118,7 +134,7 @@ def test_prefill_block(
     logger.info(
         f"isl_total={isl_total}, isl_per_chip={isl_per_chip}, "
         f"layer_type={layer_type}, layer_idx={layer_idx}, gate_fallback_mode={gate_fallback_mode}, "
-        f"input_source={input_source}"
+        f"input_source={input_source}, is_balanced={is_balanced}"
     )
 
     # --- Build HF reference model and extract weights ---
@@ -131,15 +147,22 @@ def test_prefill_block(
     profiler.end("weights_creation")
 
     # --- Create input ---
-    if input_source == "abc_1k":
+    if input_source in ("abc_1k", "infinitebench_longbook"):
         profiler.start("tokenization")
         tok = request.getfixturevalue("tokenizer")
-        prompts = load_prompts_from_json(str(ABC_1K_PATH))
-        prompt_text = prompts[0] if isinstance(prompts, list) else prompts
+        if input_source == "abc_1k":
+            prompts = load_prompts_from_json(str(ABC_1K_PATH))
+            prompt_text = prompts[0] if isinstance(prompts, list) else prompts
+        else:  # infinitebench_longbook
+            cached_path = download_infinitebench_subset("longbook_qa_eng")
+            with open(cached_path) as f:
+                prompt_text = json.load(f)["prompt"]
         token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
         attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=True)
         profiler.end("tokenization")
-        logger.info(f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
+        logger.info(
+            f"Tokenized {input_source} input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}"
+        )
         with torch.no_grad():
             torch_input = hf_model.embed_tokens(token_ids).to(torch.bfloat16)
         logger.info(f"Embedded input shape: {torch_input.shape}")
@@ -183,6 +206,7 @@ def test_prefill_block(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        is_balanced=is_balanced,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -193,6 +217,12 @@ def test_prefill_block(
 
     # Shard input to device: [1, 1, isl_total, emb_dim] → [1, 1, isl_per_chip, emb_dim/tp]
     tt_input_4d = torch_input.unsqueeze(0)  # [1, 1, isl_total, emb_dim]
+    if is_balanced:
+        # Reorder into zigzag layout so each SP chip receives its balanced chunk pair.
+        # create_balanced_chunk_order produces e.g. [0,7,1,6,2,5,3,4] for sp_factor=4.
+        # After this reorder, a plain SP split along seq gives chip k chunks [k, 2*sp-1-k].
+        balanced_chunk_order = create_balanced_chunk_order(sp_factor)
+        tt_input_4d = reorder_tensor_chunks(tt_input_4d, balanced_chunk_order, seq_dim=2)
     tt_input = ttnn.from_torch(
         tt_input_4d,
         device=mesh_device,
@@ -202,7 +232,7 @@ def test_prefill_block(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(-2, -1)),
     )
 
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
 
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
@@ -237,6 +267,9 @@ def test_prefill_block(
             tt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)
+        # Balanced output is in zigzag order; reverse to natural token order before comparing.
+        if is_balanced:
+            tt_output_host = reverse_reorder_tensor_chunks(tt_output_host, balanced_chunk_order, seq_dim=2)
         # Remove leading batch dim: [1, 1, isl_total, emb_dim] → [1, isl_total, emb_dim]
         tt_output_host = tt_output_host.squeeze(0)
 
@@ -256,8 +289,16 @@ def test_prefill_block(
         # --- KVPE cache validation ---
         if ref_kvpe is not None and tt_kvpe is not None:
             kv_lora_rank = config.kv_lora_rank
-            _, kv_pcc = comp_pcc(ref_kvpe[:, :, :, :kv_lora_rank].float(), tt_kvpe[:, :, :, :kv_lora_rank].float())
-            _, pe_pcc = comp_pcc(ref_kvpe[:, :, :, kv_lora_rank:].float(), tt_kvpe[:, :, :, kv_lora_rank:].float())
+            # KVPE cache is written in balanced order; reverse to natural order before comparing.
+            tt_kvpe_ordered = (
+                reverse_reorder_tensor_chunks(tt_kvpe, balanced_chunk_order, seq_dim=2) if is_balanced else tt_kvpe
+            )
+            _, kv_pcc = comp_pcc(
+                ref_kvpe[:, :, :, :kv_lora_rank].float(), tt_kvpe_ordered[:, :, :, :kv_lora_rank].float()
+            )
+            _, pe_pcc = comp_pcc(
+                ref_kvpe[:, :, :, kv_lora_rank:].float(), tt_kvpe_ordered[:, :, :, kv_lora_rank:].float()
+            )
             logger.info(f"KVPE cache KV part PCC: {kv_pcc:.6f} (threshold: {PCC_THRESHOLD_KVPE})")
             logger.info(f"KVPE cache PE part PCC: {pe_pcc:.6f} (threshold: {PCC_THRESHOLD_KVPE})")
             assert kv_pcc > PCC_THRESHOLD_KVPE, f"KVPE KV PCC {kv_pcc:.6f} below threshold {PCC_THRESHOLD_KVPE}"
