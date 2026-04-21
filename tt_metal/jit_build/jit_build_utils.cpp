@@ -219,13 +219,14 @@ bool exec_command(
 }
 
 std::vector<std::uint8_t> read_file_bytes(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        throw std::runtime_error("Cannot read file: " + path);
+    std::ifstream file;
+    [[maybe_unused]] std::error_code ec;
+    if (!tt::filesystem::safe_open(file, path, std::ios::binary | std::ios::ate, ec)) {
+        throw std::runtime_error(fmt::format("Cannot read file '{}': {}", path, ec.message()));
     }
     std::streampos pos = file.tellg();
     if (pos == std::streampos(-1)) {
-        throw std::runtime_error("Cannot determine size of file: " + path);
+        throw std::runtime_error("Cannot determine size of file: " + path.string());
     }
     auto byte_count = static_cast<std::streamsize>(pos);
     file.seekg(0, std::ios::beg);
@@ -240,20 +241,19 @@ std::vector<std::uint8_t> read_file_bytes(const std::filesystem::path& path) {
 
 std::vector<tt::jit_build::GeneratedFile> read_directory_files(
     const std::filesystem::path& dir, std::span<const std::string> extensions) {
-    namespace fs = std::filesystem;
     std::vector<tt::jit_build::GeneratedFile> files;
-    if (!fs::is_directory(dir)) {
+    if (!tt::filesystem::safe_is_directory(dir).value_or(false)) {
         return files;
     }
-    for (const auto& entry : fs::directory_iterator(dir)) {
-        if (!entry.is_regular_file()) {
+    for (const auto& entry : tt::filesystem::safe_directory_entries(dir)) {
+        if (!tt::filesystem::safe_is_regular_file(entry.path()).value_or(false)) {
             continue;
         }
         if (!extensions.empty() &&
             std::find(extensions.begin(), extensions.end(), entry.path().extension().string()) == extensions.end()) {
             continue;
         }
-        files.push_back({entry.path().filename().string(), read_file_bytes(entry.path().string())});
+        files.push_back({entry.path().filename().string(), read_file_bytes(entry.path())});
     }
     return files;
 }
@@ -261,24 +261,9 @@ std::vector<tt::jit_build::GeneratedFile> read_directory_files(
 bool create_file(const std::filesystem::path& file_path) {
     tt::filesystem::safe_create_directories(file_path.parent_path());
 
-    std::error_code open_ec;
-    return tt::filesystem::retry_on_estale_ec(
-        [&](std::error_code& ec) {
-            errno = 0;
-            std::ofstream file(file_path);
-            if (!file.is_open() || file.fail()) {
-                const int open_errno = errno;
-                if (open_errno != 0) {
-                    ec.assign(open_errno, std::system_category());
-                } else {
-                    ec = std::make_error_code(std::errc::io_error);
-                }
-                return false;
-            }
-            file.close();
-            return true;
-        },
-        open_ec);
+    std::ofstream file;
+    [[maybe_unused]] std::error_code ec;
+    return tt::filesystem::safe_open(file, file_path, ec);
 }
 
 uint64_t FileRenamer::unique_id_ = []() {
@@ -294,7 +279,7 @@ std::filesystem::path FileRenamer::generate_temp_path(const std::filesystem::pat
     // foo -> foo.42
 
     std::filesystem::path filename = target_path.stem();
-    std::string leaf = "." + std::to_string(unique_id_) + target_path.extension();
+    std::string leaf = std::string{"."} + std::to_string(unique_id_) + target_path.extension();
     filename.concat(leaf);
     return target_path.parent_path() / filename;
 }
