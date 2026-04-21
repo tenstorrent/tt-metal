@@ -53,6 +53,10 @@ on:
         description: "Detection mode: days to look back for failures"
         type: string
         default: "14"
+      incremental-days:
+        description: "Detection mode: only include escapes whose fix transition happened in the last N days (0 = no filter)"
+        type: string
+        default: "0"
 
 permissions:
   contents: write
@@ -67,6 +71,7 @@ jobs:
       test-workflows: ${{ inputs.test-workflows }}
       consecutive-runs: ${{ inputs.consecutive-runs }}
       lookback-days: ${{ inputs.lookback-days }}
+      incremental-days: ${{ inputs.incremental-days }}
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
