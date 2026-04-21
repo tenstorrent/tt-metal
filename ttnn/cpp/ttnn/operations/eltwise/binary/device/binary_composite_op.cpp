@@ -244,10 +244,7 @@ Tensor div(
             sub_core_grids);
     }
 
-    if (!(use_legacy ? *use_legacy
-                     : (has_legacy_only_args ||
-                        binary::is_legacy_only(
-                            input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
+    {
         TT_FATAL(!has_legacy_only_args, "rounding_mode is not valid when use_legacy parameter is false");
 
         return ttnn::detail::invoke_binary_ng(
@@ -381,10 +378,7 @@ Tensor div(
             sub_core_grids);
     }
 
-    if (!(use_legacy ? *use_legacy
-                     : (has_legacy_only_args ||
-                        binary::is_legacy_only(
-                            input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
+    {
         TT_FATAL(!has_legacy_only_args, "rounding_mode is not valid when use_legacy parameter is false");
 
         return ttnn::detail::invoke_binary_ng(
@@ -816,28 +810,17 @@ Tensor rsub(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return ttnn::detail::invoke_binary_ng(
-            input_tensor_a,
-            input_b,
-            binary::BinaryOpType::RSUB,
-            output_dtype,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
-    }
-
-    return ttnn::rsub_sfpu(input_tensor_a, input_b, memory_config, optional_output_tensor);
+    return ttnn::detail::invoke_binary_ng(
+        input_tensor_a,
+        input_b,
+        binary::BinaryOpType::RSUB,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
 }
 
 Tensor bias_gelu(
