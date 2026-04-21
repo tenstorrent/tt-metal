@@ -211,6 +211,61 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
     )
 
 
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype",
+    [
+        (ttnn.bfloat16, ttnn.bfloat16),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b),
+    ],
+    ids=["BFLOAT16", "BFLOAT8_B"],
+)
+@pytest.mark.parametrize(
+    "inp_shape",
+    [
+        # Non-tile-aligned last dim (W % 32 != 0). The per-device chunk must
+        # also be non-tile-aligned to exercise the winv fix.
+        (1, 1, 32, 34),  # n_devices=1, per-device W=34  (padded 64)
+        (1, 1, 32, 63),  # n_devices=1, per-device W=63  (padded 64)
+        (1, 1, 32, 66),  # n_devices=2, per-device W=33  (padded 64)
+        (1, 1, 32, 68),  # n_devices=4, per-device W=17  (padded 32)
+    ],
+)
+@pytest.mark.parametrize(
+    "n_devices",
+    [1, 2, 4],
+)
+@pytest.mark.parametrize(
+    "is_rmsnorm",
+    [True, False],
+    ids=["rmsnorm", "layernorm"],
+)
+@pytest.mark.parametrize(
+    "fp32_enabled",
+    [True, False],
+    ids=["fp32_enabled", "fp32_disabled"],
+)
+def test_layernorm_part_2_non_tile_aligned_width(
+    inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, fp32_enabled, device
+):
+    """Regression test for #<issue>: winv must use logical (un-padded) width.
+
+    The kernel previously computed winv = 1 / (padded_W * num_devices), so any
+    non-tile-aligned logical width normalised by the wrong N.  The per-device
+    chunk width must itself not be a multiple of 32 for the bug to manifest.
+    """
+    # Skip configurations where inp_shape[-1] is not divisible by n_devices or
+    # where chunking would produce a tile-aligned per-device width (which would
+    # silently pass even with the bug).
+    W = inp_shape[-1]
+    if W % n_devices != 0:
+        pytest.skip(f"W={W} not divisible by n_devices={n_devices}")
+    per_device_w = W // n_devices
+    if per_device_w % 32 == 0:
+        pytest.skip(f"Per-device width {per_device_w} is tile-aligned; not a regression case")
+
+    run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled)
+
+
 def _layernorm_stats_tiles_single_chunk(canon_inp: torch.Tensor) -> torch.Tensor:
     """Stats layout for layer_norm post_all_gather with a single full-width chunk (matches run_layernorm_part_2)."""
     inp_chunked = canon_inp.chunk(1, dim=-1)
