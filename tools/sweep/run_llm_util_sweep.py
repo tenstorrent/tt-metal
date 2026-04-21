@@ -52,7 +52,7 @@ from sweep_common import (
 def main() -> None:
     parser = argparse.ArgumentParser(description="LLM util-report sweep via gen_util_report + simple_text_demo")
     parser.add_argument("--experiment-dir", type=Path, required=True, help="Root output directory for all points")
-    parser.add_argument("--mode", choices=("prefill", "decode"), required=True)
+    parser.add_argument("--mode", choices=("prefill", "decode", "full"), required=True)
     parser.add_argument("--seqlens", type=str, required=True, help="Comma list of presets (1k,256,…) or json paths")
     parser.add_argument("--batch-sizes", type=str, default="1", help="Comma-separated batch sizes (default: 1)")
     parser.add_argument("--num-layers", type=int, default=1, help="pytest --num_layers (default: 1)")
@@ -107,7 +107,7 @@ def main() -> None:
     batches = parse_comma_ints(args.batch_sizes)
     extra = shlex.split(args.pytest_args) if args.pytest_args.strip() else []
 
-    if args.mode == "decode":
+    if args.mode in ("decode", "full"):
         mgt = args.max_generated_tokens if args.max_generated_tokens is not None else 128
     else:
         mgt = args.max_generated_tokens if args.max_generated_tokens is not None else 2
