@@ -38,7 +38,8 @@ void bind_experimental_offset_cumsum_operation(nb::module_& mod) {
         nb::arg("input_tensor").noconvert(),
         nb::arg("cluster_axis"),
         nb::arg("num_links"),
-        nb::arg("memory_config"));
+        nb::arg("memory_config"),
+        nb::arg("num_dispatch_subgroups") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum::detail

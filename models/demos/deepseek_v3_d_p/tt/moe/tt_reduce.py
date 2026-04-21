@@ -35,6 +35,7 @@ class TtReduceModule(LightweightModule):
         cluster_axis: int = 1,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
+        num_dispatch_subgroups: int = 1,
     ):
         """
         Initialize reduce module.
@@ -47,6 +48,9 @@ class TtReduceModule(LightweightModule):
             cluster_axis: Mesh dimension to reduce across (0=rows, 1=columns)
             num_links: Number of ethernet links to use for collective
             topology: Ring or Linear topology for reduce_scatter
+            num_dispatch_subgroups: When > 1, the mesh row axis is partitioned into
+                subgroups. The reduce-scatter's cluster_axis must be orthogonal to the
+                subgroup axis (=0) so the collective stays inside a subgroup.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -54,6 +58,13 @@ class TtReduceModule(LightweightModule):
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.topology = topology
+        self.num_dispatch_subgroups = num_dispatch_subgroups
+
+        if num_dispatch_subgroups > 1:
+            assert cluster_axis != 0, (
+                f"TtReduceModule cluster_axis ({cluster_axis}) must differ from the subgroup "
+                f"partition axis (0) when num_dispatch_subgroups ({num_dispatch_subgroups}) > 1."
+            )
 
     def forward(
         self,

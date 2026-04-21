@@ -224,15 +224,30 @@ class TtMoEGatePrefill(LightweightModule):
         fallback_mode: GateComputeMode = GateComputeMode.DEVICE,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        num_dispatch_subgroups: int = 1,
     ):
         """
         Args:
             weight: Gate weight in HF convention: (n_routed_experts, dim).
                     Transposed internally to (dim, n_routed_experts) for the TTNN matmul path.
+            num_dispatch_subgroups: When > 1, the mesh row axis is partitioned into
+                subgroups that each carry a full expert replica. Gate's TP all-reduce
+                on cluster_axis=TP_AXIS (=1 by default) must be orthogonal to the
+                subgroup axis (=0) so that no subgroup boundary is crossed.
         """
         self.config = config
         self.mesh_device = mesh_device
         self.fallback_mode = fallback_mode
+        self.num_dispatch_subgroups = num_dispatch_subgroups
+
+        # Invariant: subgroups partition axis 0; gate's TP all-reduce must be on a different axis.
+        if num_dispatch_subgroups > 1:
+            tp_axis = config.ccl_config.get("TP_AXIS", 1)
+            assert tp_axis != 0, (
+                f"Gate's TP_AXIS ({tp_axis}) must differ from the subgroup partition axis (0) "
+                f"when num_dispatch_subgroups ({num_dispatch_subgroups}) > 1. Otherwise the "
+                f"all-reduce would cross subgroup boundaries."
+            )
 
         if weight is not None and bias is not None:
             weights = self._convert_and_cache_gate_weights(
@@ -270,7 +285,12 @@ class TtMoEGatePrefill(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
         )
 
-        self.routing_setup = TtMoERoutingSetup(mesh_device, dispatch_table, num_links=config.ccl_config["NUM_LINKS"])
+        self.routing_setup = TtMoERoutingSetup(
+            mesh_device,
+            dispatch_table,
+            num_links=config.ccl_config["NUM_LINKS"],
+            num_dispatch_subgroups=num_dispatch_subgroups,
+        )
 
         # Torch copies for host fallback paths — keep in HF convention (n_experts, dim)
         if fallback_mode != GateComputeMode.DEVICE:

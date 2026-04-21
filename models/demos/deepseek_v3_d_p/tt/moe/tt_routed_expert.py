@@ -58,6 +58,7 @@ class TtRoutedExpert(LightweightModule):
         *,
         emb_dim: int | None = None,
         hidden_dim: int | None = None,
+        num_dispatch_subgroups: int = 1,
     ):
         """
         Shared logic for converting expert weights to ttnn with caching.
@@ -91,7 +92,12 @@ class TtRoutedExpert(LightweightModule):
         for local_expert_idx in tqdm(range(experts_per_chip), desc=f"Expert weights ({mode})"):
             if torch_weights is not None:
                 gate_weights, up_weights, down_weights = ExpertMapping.gather_weights_for_mesh_distribution(
-                    torch_weights, local_expert_idx, mesh_rows, mesh_cols, experts_per_chip
+                    torch_weights,
+                    local_expert_idx,
+                    mesh_rows,
+                    mesh_cols,
+                    experts_per_chip,
+                    num_dispatch_subgroups=num_dispatch_subgroups,
                 )
 
                 stacked_gate = torch.stack([w.T.contiguous() for w in gate_weights], dim=0)
@@ -112,7 +118,7 @@ class TtRoutedExpert(LightweightModule):
                 stacked_down = torch.empty(mesh_rows, mesh_cols, hidden_dim, emb_dim)
 
             mem = ttnn.DRAM_MEMORY_CONFIG if device else None
-            mapper = ExpertMapping.get_weights_mesh_mapper(mesh_device)
+            mapper = ExpertMapping.get_weights_mesh_mapper(mesh_device, num_dispatch_subgroups=num_dispatch_subgroups)
 
             gate_tt = ttnn.as_tensor(
                 stacked_gate,
@@ -162,10 +168,18 @@ class TtRoutedExpert(LightweightModule):
         weights_dtype: ttnn.DataType,
         cache_path: Path,
         cache_name_prefix: str,
+        num_dispatch_subgroups: int = 1,
     ):
         """Build TTNN cache for routed experts without device copy."""
         TtRoutedExpert._convert_and_cache_expert_weights(
-            torch_weights, experts_per_chip, mesh_device, weights_dtype, cache_path, cache_name_prefix, device=None
+            torch_weights,
+            experts_per_chip,
+            mesh_device,
+            weights_dtype,
+            cache_path,
+            cache_name_prefix,
+            device=None,
+            num_dispatch_subgroups=num_dispatch_subgroups,
         )
 
     """
@@ -200,6 +214,7 @@ class TtRoutedExpert(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        num_dispatch_subgroups: int = 1,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -231,11 +246,20 @@ class TtRoutedExpert(LightweightModule):
         self.compute_kernel_config = compute_kernel_config
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
+        self.num_dispatch_subgroups = num_dispatch_subgroups
 
-        total_experts = self.num_devices * experts_per_chip
+        assert (
+            self.num_devices % num_dispatch_subgroups == 0
+        ), f"num_devices ({self.num_devices}) must be divisible by num_dispatch_subgroups ({num_dispatch_subgroups})"
+        # With subgroups, chips 0..(n/N-1) and siblings share the same expert replica,
+        # so the unique expert count is num_devices * experts_per_chip / num_dispatch_subgroups.
+        total_experts = (self.num_devices * experts_per_chip) // num_dispatch_subgroups
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
         logger.debug(f"emb_dim={emb_dim}, hidden_dim={hidden_dim}")
-        logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}, total_experts={total_experts}")
+        logger.debug(
+            f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}, "
+            f"num_dispatch_subgroups={num_dispatch_subgroups}, total_experts={total_experts}"
+        )
 
         # Store weights for each local expert
         # Each expert has (gate_proj, up_proj, down_proj)
@@ -250,7 +274,8 @@ class TtRoutedExpert(LightweightModule):
         if torch_weights is not None:
             assert len(torch_weights) == total_experts, (
                 f"Expected {total_experts} expert weights (num_devices={self.num_devices} * "
-                f"experts_per_chip={experts_per_chip}), got {len(torch_weights)}"
+                f"experts_per_chip={experts_per_chip} / num_dispatch_subgroups={num_dispatch_subgroups}), "
+                f"got {len(torch_weights)}"
             )
             logger.debug(f"Creating weights from provided torch tensors ({total_experts} experts)")
             result = self._convert_and_cache_expert_weights(
@@ -261,6 +286,7 @@ class TtRoutedExpert(LightweightModule):
                 self.weight_cache_path,
                 self.cache_name_prefix,
                 device=self.mesh_device,
+                num_dispatch_subgroups=num_dispatch_subgroups,
             )
         elif weight_cache_path is not None:
             logger.debug(f"Loading weights from cache ({experts_per_chip} local experts)")
@@ -274,6 +300,7 @@ class TtRoutedExpert(LightweightModule):
                 device=self.mesh_device,
                 emb_dim=emb_dim,
                 hidden_dim=hidden_dim,
+                num_dispatch_subgroups=num_dispatch_subgroups,
             )
         else:
             logger.debug(f"Creating dummy tensors for testing ({total_experts} experts)")
@@ -294,6 +321,7 @@ class TtRoutedExpert(LightweightModule):
                 None,
                 None,
                 device=self.mesh_device,
+                num_dispatch_subgroups=num_dispatch_subgroups,
             )
         self.gate_projs, self.up_projs, self.down_projs = result
 

@@ -147,6 +147,7 @@ class ExpertMapping:
         mesh_cols: int,
         experts_per_chip: int,
         is_col_major: bool = True,
+        num_dispatch_subgroups: int = 1,
     ) -> tuple[list, list, list]:
         """
         Gather gate/up/down weights for a local expert, ordered for mesh distribution.
@@ -156,30 +157,45 @@ class ExpertMapping:
         (mesh_rows, mesh_cols, ...), position [row, col] contains weights for the device
         at mesh position (row, col).
 
+        When `num_dispatch_subgroups > 1`, the row axis is partitioned into
+        `num_dispatch_subgroups` equal contiguous slices and each slice gets a full
+        replica of the expert set. Mesh row `row` maps to the same expert as row
+        `row % dispatch_group_size` in subgroup 0.
+
         Args:
             torch_weights: List of weight dicts indexed by global expert ID
             local_expert_idx: Local expert index on each chip (0 to experts_per_chip-1)
-            mesh_rows: Number of mesh rows (= dispatch_group_size = chips per group)
+            mesh_rows: Number of mesh rows
             mesh_cols: Number of mesh cols (= num_dispatch_groups)
-            experts_per_chip: Number of experts per chip
+            experts_per_chip: Number of experts per chip within a dispatch group
             is_col_major: Expert ordering (True=column-major, False=row-major)
+            num_dispatch_subgroups: When > 1, replicate the expert set across
+                contiguous chunks of size mesh_rows / num_dispatch_subgroups.
 
         Returns:
             (gate_weights, up_weights, down_weights) - each a list of tensors in mesh order
         """
+        assert (
+            mesh_rows % num_dispatch_subgroups == 0
+        ), f"mesh_rows ({mesh_rows}) must be divisible by num_dispatch_subgroups ({num_dispatch_subgroups})"
+        dispatch_group_size = mesh_rows // num_dispatch_subgroups
+
         gate_weights = []
         up_weights = []
         down_weights = []
 
-        # Row-major iteration matches mesh mapper dims=(0, 1)
+        # Row-major iteration matches mesh mapper dims=(0, 1).
+        # With subgroups, every row past dispatch_group_size wraps back to the subgroup-0 slot,
+        # so each subgroup carries an identical replica of the expert set.
         for row in range(mesh_rows):
+            subgroup_row = row % dispatch_group_size
             for col in range(mesh_cols):
                 global_idx = ExpertMapping.get_global_expert_idx(
                     group=col,
-                    chip=row,
+                    chip=subgroup_row,
                     local_expert=local_expert_idx,
                     experts_per_chip=experts_per_chip,
-                    dispatch_group_size=mesh_rows,
+                    dispatch_group_size=dispatch_group_size,
                     num_dispatch_groups=mesh_cols,
                     is_col_major=is_col_major,
                 )
@@ -241,7 +257,7 @@ class ExpertMapping:
         return table
 
     @staticmethod
-    def get_weights_mesh_mapper(mesh_device):
+    def get_weights_mesh_mapper(mesh_device, num_dispatch_subgroups: int = 1):
         """
         Create mesh mapper for routed expert weight tensors.
 
@@ -253,8 +269,15 @@ class ExpertMapping:
         - Tensor dim 1 is sharded across mesh cols
         - Device at mesh[row, col] receives tensor[row, col, :, :]
 
+        When `num_dispatch_subgroups > 1`, the caller must have arranged the input tensor
+        (via `gather_weights_for_mesh_distribution(..., num_dispatch_subgroups=N)`) so that
+        contiguous row slices of size `mesh_rows / N` carry identical expert replicas.
+        The mapper itself is unchanged — replication is baked into the data layout.
+
         Args:
             mesh_device: TTNN mesh device
+            num_dispatch_subgroups: Accepted for API consistency. Does not change the
+                returned mapper; see `gather_weights_for_mesh_distribution`.
 
         Returns:
             ShardTensor2dMesh mapper configured for routed expert weights

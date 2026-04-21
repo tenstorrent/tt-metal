@@ -80,6 +80,7 @@ class TtMoe(LightweightModule):
         shared_expert_weights_dtype: ttnn.DataType,
         cache_path: Path,
         layer_idx: int,
+        num_dispatch_subgroups: int = 1,
     ):
         """Build TTNN cache for MoE (gate + routed experts + shared expert) without device copy."""
         # Build gate cache (delegate to TtMoEGatePrefill)
@@ -109,6 +110,7 @@ class TtMoe(LightweightModule):
                 routed_expert_weights_dtype,
                 cache_path,
                 f"layer_{layer_idx}.routed_expert",
+                num_dispatch_subgroups=num_dispatch_subgroups,
             )
 
         # Build shared expert cache
@@ -148,6 +150,7 @@ class TtMoe(LightweightModule):
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
+        num_dispatch_subgroups: int = 1,
     ):
         """
         Initialize TtMoe module.
@@ -189,6 +192,14 @@ class TtMoe(LightweightModule):
         self.seq_len_per_chip = seq_len_per_chip
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
+        self.num_dispatch_subgroups = num_dispatch_subgroups
+
+        # Subgroups partition mesh row axis; validate the split.
+        assert num_dispatch_subgroups >= 1, f"num_dispatch_subgroups must be >= 1 (got {num_dispatch_subgroups})"
+        assert mesh_device.shape[0] == dispatch_group_size * num_dispatch_subgroups, (
+            f"mesh row axis ({mesh_device.shape[0]}) must equal "
+            f"dispatch_group_size ({dispatch_group_size}) * num_dispatch_subgroups ({num_dispatch_subgroups})"
+        )
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -232,6 +243,7 @@ class TtMoe(LightweightModule):
             fallback_mode=gate_fallback_mode,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.gate",
+            num_dispatch_subgroups=num_dispatch_subgroups,
         )
         logger.debug(f"Initializing TtMoe")
         logger.debug(f"  mesh_device.shape={mesh_device.shape}")
@@ -258,6 +270,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
+            num_dispatch_subgroups=num_dispatch_subgroups,
         )
 
         # Initialize combine module (row axis: axis 0)
@@ -272,6 +285,7 @@ class TtMoe(LightweightModule):
             num_links=self.row_num_links,
             topology=self.row_topology,
             init_zeros=True,
+            num_dispatch_subgroups=num_dispatch_subgroups,
         )
 
         # Initialize routed expert
@@ -286,6 +300,7 @@ class TtMoe(LightweightModule):
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
+            num_dispatch_subgroups=num_dispatch_subgroups,
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -300,6 +315,7 @@ class TtMoe(LightweightModule):
             weights_dtype=shared_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.shared_expert",
+            num_dispatch_subgroups=num_dispatch_subgroups,
         )
 
         # Initialize reduce module for post-combine reduction (col axis: axis 1)
@@ -311,6 +327,7 @@ class TtMoe(LightweightModule):
             cluster_axis=1,  # TP axis for reduce-scatter
             num_links=self.col_num_links,
             topology=self.col_topology,
+            num_dispatch_subgroups=num_dispatch_subgroups,
         )
 
         logger.debug("TtMoe initialization complete")
@@ -319,6 +336,7 @@ class TtMoe(LightweightModule):
         self,
         x: ttnn.Tensor,
         return_intermediates: bool = False,
+        skip_experts: bool = False,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -440,7 +458,11 @@ class TtMoe(LightweightModule):
         dispatched_buffer_tiled = ttnn.to_layout(dispatched_buffer_squeezed, ttnn.TILE_LAYOUT)
         logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
 
-        expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts)
+        if skip_experts:
+            logger.info("[TtMoe.forward] skip_experts=True — passing dispatched_buffer through as expert_outputs")
+            expert_outputs = dispatched_buffer_tiled
+        else:
+            expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts)
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
         # Add back the batch dimensions for combine

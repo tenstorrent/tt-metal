@@ -13,9 +13,10 @@ from models.common.lightweightmodule import LightweightModule
 class TtMoERoutingSetup(LightweightModule):
     """Prepares routing metadata (offsets, token counts) for MoE dispatch."""
 
-    def __init__(self, mesh_device, expert_dispatch_table, num_links=1):
+    def __init__(self, mesh_device, expert_dispatch_table, num_links=1, num_dispatch_subgroups: int = 1):
         self.mesh_device = mesh_device
         self.num_links = num_links
+        self.num_dispatch_subgroups = num_dispatch_subgroups
 
         self.experts_in_dispatch_group = ttnn.from_torch(
             expert_dispatch_table,
@@ -104,6 +105,7 @@ class TtMoERoutingSetup(LightweightModule):
             cluster_axis=0,
             num_links=self.num_links,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            num_dispatch_subgroups=self.num_dispatch_subgroups,
         )
         signpost(header="moe_gate_calculate_dispatch_offsets")
 
