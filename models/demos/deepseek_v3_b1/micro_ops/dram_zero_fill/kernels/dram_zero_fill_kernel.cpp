@@ -26,7 +26,7 @@ void kernel_main() {
 
     uint32_t buffer_addr = get_common_arg_val<uint32_t>(0);
     constexpr auto ta_args = TensorAccessorArgs<0>();
-    auto accessor = TensorAccessor(ta_args, buffer_addr, page_size);
+    auto accessor = TensorAccessor(ta_args, buffer_addr);
 
     cb_reserve_back(output_cb, 1);
     uint32_t l1_addr = get_write_ptr(output_cb);

@@ -178,6 +178,75 @@ class SplitHeads(ttml.autograd.Function):
         return reshaped
 
 
+class MoERoutingNormalize(ttml.autograd.Function):
+    """Autograd-aware routing weight normalization for sigmoid-gated MoE.
+
+    Forward computes, per token:
+
+        weights[i] = mask[i] * route_scale * scores[i] / (sum_j scores[j] * mask[j] + eps)
+
+    This mirrors DeepSeek's ``weights = scores.gather(indices); weights /=
+    weights.sum(...); weights *= route_scale`` except we represent the
+    selection as a dense 0/1 ``mask`` over all experts (ttml's MoE uses a
+    dense-masking execution strategy).
+
+    The key reason this op exists is gradient correctness: letting autograd
+    flow through a detached ``ttnn.reciprocal(denom)`` loses the
+    cross-expert terms of ∂w_i/∂s_k (where ``i ≠ k`` and both are selected),
+    which shows up as cos_sim ≪ 1 on ``gate.weight`` gradients. Here we
+    return the closed-form Jacobian directly.
+
+    Backward: for upstream gradient ``G``,
+        D = Σ_j s_j * m_j + eps                          (per token)
+        T = Σ_i G_i * s_i * m_i / D                      (per token, scalar)
+        dL/ds_k = m_k * route_scale * (G_k - T) / D
+
+    Inputs:
+      scores: autograd tensor [..., n_experts] (sigmoid scores, bf16)
+      mask: raw ttnn tensor [..., n_experts] (bf16 0/1, no grad)
+      route_scale: float
+      eps: float
+    Output: autograd tensor [..., n_experts] (the normalized routing weights)
+    """
+
+    @staticmethod
+    def forward(ctx, scores, mask, route_scale, eps):
+        scores_val = scores.get_value()
+        scaled = ttnn.multiply(scores_val, mask)  # [..., n]
+        denom = ttnn.sum(scaled, dim=-1, keepdim=True)  # [..., 1]
+        denom = ttnn.add(denom, eps)
+        inv_denom = ttnn.reciprocal(denom)  # [..., 1]
+        scaled_inv = ttnn.multiply(inv_denom, route_scale)
+        weights = ttnn.multiply(scaled, scaled_inv)  # [..., n]
+
+        ctx.scores_val = scores_val
+        ctx.mask = mask
+        ctx.inv_denom = inv_denom
+        ctx.route_scale = route_scale
+        return weights
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        scores_val = ctx.scores_val
+        mask = ctx.mask
+        inv_denom = ctx.inv_denom
+        route_scale = ctx.route_scale
+
+        # T = (Σ_i G_i * s_i * m_i) / D
+        g_s = ttnn.multiply(grad_output, scores_val)
+        g_s_m = ttnn.multiply(g_s, mask)
+        t = ttnn.sum(g_s_m, dim=-1, keepdim=True)  # [..., 1]
+        t = ttnn.multiply(t, inv_denom)  # [..., 1]
+
+        # dL/ds_k = mask_k * route_scale * (G_k - T) / D
+        g_minus_t = ttnn.subtract(grad_output, t)  # broadcast T
+        grad_scores = ttnn.multiply(g_minus_t, inv_denom)
+        grad_scores = ttnn.multiply(grad_scores, mask)
+        grad_scores = ttnn.multiply(grad_scores, route_scale)
+
+        return grad_scores
+
+
 def autograd_slice(tensor, start, end):
     """Slice with autograd backward."""
     return Slice.apply(tensor, start, end)
@@ -201,3 +270,11 @@ def autograd_softmax(tensor):
 def split_heads(tensor, num_heads):
     """(B, 1, S, H*D) -> (B, H, S, D) with proper transpose."""
     return SplitHeads.apply(tensor, num_heads)
+
+
+def moe_routing_normalize(scores, mask, route_scale, eps=1e-20):
+    """Masked + renormalized routing weights with full autograd support.
+
+    See :class:`MoERoutingNormalize` for math and motivation.
+    """
+    return MoERoutingNormalize.apply(scores, mask, route_scale, eps)

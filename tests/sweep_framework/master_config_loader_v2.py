@@ -610,7 +610,9 @@ def dict_to_memory_config(mem_cfg):
         return ttnn.MemoryConfig(layout, buffer_type_ttnn)
 
     shard_grid = ttnn.CoreRangeSet(core_ranges)
-    orientation = ttnn.ShardOrientation.COL_MAJOR if orientation_str == "COL_MAJOR" else ttnn.ShardOrientation.ROW_MAJOR
+    orientation = (
+        ttnn.ShardOrientation.COL_MAJOR if orientation_str in ("COL_MAJOR", "1") else ttnn.ShardOrientation.ROW_MAJOR
+    )
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
 
     return ttnn.MemoryConfig(layout, buffer_type_ttnn, shard_spec)
@@ -1139,6 +1141,10 @@ class MasterConfigLoader:
         if not memory_config or not isinstance(memory_config, dict):
             return ttnn.DRAM_MEMORY_CONFIG
 
+        # Unwrap {"type": "...", "data": {...}} wrapper produced by some vector generators
+        if "data" in memory_config and isinstance(memory_config["data"], dict) and "buffer_type" not in memory_config:
+            memory_config = memory_config["data"]
+
         buffer_type = memory_config.get("buffer_type")
         memory_layout = memory_config.get("memory_layout")
 
@@ -1182,15 +1188,16 @@ class MasterConfigLoader:
             # Extract grid, shape, and orientation from shard_spec
             grid_list = shard_spec_dict.get("grid")
             shard_shape = shard_spec_dict.get("shape")
-            orientation_str = shard_spec_dict.get("orientation")
+            orientation_raw = shard_spec_dict.get("orientation")
 
             # Validate required shard_spec fields
             if not grid_list:
                 raise ValueError(f"Missing 'grid' in shard_spec: {shard_spec_dict}")
             if not shard_shape:
                 raise ValueError(f"Missing 'shape' in shard_spec: {shard_spec_dict}")
-            if not orientation_str:
+            if orientation_raw is None:
                 raise ValueError(f"Missing 'orientation' in shard_spec: {shard_spec_dict}")
+            orientation_str = str(orientation_raw)
 
             # Create CoreRangeSet from grid
             # grid is a list of ranges like [{"start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}]
@@ -1211,10 +1218,10 @@ class MasterConfigLoader:
 
             shard_grid = ttnn.CoreRangeSet(core_ranges)
 
-            # Map orientation
-            if orientation_str == "COL_MAJOR":
+            # Map orientation (supports both string names and integer enum values)
+            if orientation_str in ("COL_MAJOR", "1"):
                 orientation = ttnn.ShardOrientation.COL_MAJOR
-            elif orientation_str == "ROW_MAJOR":
+            elif orientation_str in ("ROW_MAJOR", "0"):
                 orientation = ttnn.ShardOrientation.ROW_MAJOR
             else:
                 raise ValueError(f"Unknown orientation: {orientation_str}")

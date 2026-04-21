@@ -29,7 +29,12 @@ import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, Buffer, ModuleList
 
 from .transformer import DeepSeekMLP
-from .autograd_ops import autograd_slice, autograd_sigmoid, autograd_softmax
+from .autograd_ops import (
+    autograd_slice,
+    autograd_sigmoid,
+    autograd_softmax,
+    moe_routing_normalize,
+)
 
 
 class Expert(AbstractModuleBase):
@@ -113,8 +118,21 @@ class MoE(AbstractModuleBase):
             )
         )
 
-    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        B, _, S, dim = list(x.get_value().shape)
+    def compute_routing(self, x: ttml.autograd.Tensor):
+        """Compute per-token expert routing decisions.
+
+        Runs: gate -> score (sigmoid/softmax) -> optional group masking -> top-k.
+
+        Exposed as a standalone method so tests can inspect routing without
+        triggering the full MoE forward (experts + shared). The return value
+        is a tuple ``(scores, topk_values, topk_indices)`` where:
+          - ``scores`` is the autograd tensor of per-expert scores (used
+            downstream by ``forward`` to build routing weights),
+          - ``topk_values`` and ``topk_indices`` are ttnn tensors of shape
+            ``[B, 1, S, n_activated]`` describing which experts each token
+            was routed to.
+        """
+        B, _, S, _ = list(x.get_value().shape)
 
         # ── 1. Compute scores on device (autograd -> gate weights) ──
         logits = self.gate(x)  # autograd [B, 1, S, num_experts]
@@ -135,17 +153,22 @@ class MoE(AbstractModuleBase):
             biased_grouped = ttnn.reshape(biased, [B, 1, S * self.n_groups, experts_per_group])
 
             # Score each group by its top-2 experts
-            top2_vals, _top2_idx = ttnn.topk(biased_grouped, 2, dim=-1)
+            top2_vals, _top2_idx = ttnn.topk(ttnn.typecast(biased_grouped, ttnn.DataType.BFLOAT16), 2, dim=-1)
             group_scores = ttnn.sum(top2_vals, dim=-1, keepdim=True)
             group_scores = ttnn.reshape(group_scores, [B, 1, S, self.n_groups])
 
             # Select top n_limited_groups groups
-            _gv, top_group_indices = ttnn.topk(group_scores, self.n_limited_groups, dim=-1)
+            _gv, top_group_indices = ttnn.topk(
+                ttnn.typecast(group_scores, ttnn.DataType.BFLOAT16), self.n_limited_groups, dim=-1
+            )
+
+            # Workaround for ttnn.eq with uint16 bug
+            top_group_indices_u32 = ttnn.typecast(top_group_indices, ttnn.DataType.UINT32)
 
             # Build group mask [B, 1, S, num_experts]
             group_mask_parts = []
             for g in range(self.n_groups):
-                match = ttnn.eq(top_group_indices, float(g))
+                match = ttnn.eq(top_group_indices_u32, float(g))
                 match_f = ttnn.typecast(match, ttnn.DataType.BFLOAT16)
                 match_any = ttnn.sum(match_f, dim=-1, keepdim=True)
                 group_selected = ttnn.gt(match_any, 0.0)
@@ -157,35 +180,49 @@ class MoE(AbstractModuleBase):
             neg_inf = ttnn.multiply(ttnn.subtract(group_mask, 1.0), 1e9)
             biased_masked = ttnn.add(biased, neg_inf)
 
-            _topk_values, topk_indices = ttnn.topk(biased_masked, self.n_activated, dim=-1)
+            topk_values, topk_indices = ttnn.topk(
+                ttnn.typecast(biased_masked, ttnn.DataType.BFLOAT16), self.n_activated, dim=-1
+            )
         else:
-            _topk_values, topk_indices = ttnn.topk(biased, self.n_activated, dim=-1)
+            topk_values, topk_indices = ttnn.topk(
+                ttnn.typecast(biased, ttnn.DataType.BFLOAT16), self.n_activated, dim=-1
+            )
         # topk_indices: [B, 1, S, n_activated]
 
-        # ── 3. Build per-expert masks and denom ──
-        expert_masks = {}
-        denom = None
+        return scores, topk_values, topk_indices
 
+    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        B, _, S, dim = list(x.get_value().shape)
+
+        scores, _topk_values, topk_indices = self.compute_routing(x)
+
+        # ── 3. Build per-expert routing masks [B, 1, S, 1] ──
+        # Workaround for ttnn.eq with uint16 bug
+        topk_indices_u32 = ttnn.typecast(topk_indices, ttnn.DataType.UINT32)
+
+        expert_masks = {}
+        mask_parts = []  # for the full [B, 1, S, num_experts] mask
         for expert_idx in range(self.num_experts):
-            match = ttnn.eq(topk_indices, float(expert_idx))
+            match = ttnn.eq(topk_indices_u32, float(expert_idx))
             match_f = ttnn.typecast(match, ttnn.DataType.BFLOAT16)
             match_any = ttnn.sum(match_f, dim=-1, keepdim=True)  # [B, 1, S, 1]
             mask_narrow = ttnn.gt(match_any, 0.0)
             mask_narrow = ttnn.typecast(mask_narrow, ttnn.DataType.BFLOAT16)
             expert_masks[expert_idx] = mask_narrow
+            mask_parts.append(mask_narrow)
 
-            if self.score_func == "sigmoid":
-                score_i_raw = ttnn.slice(scores_val, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])
-                selected_score = ttnn.multiply(score_i_raw, mask_narrow)
-                if denom is None:
-                    denom = selected_score
-                else:
-                    denom = ttnn.add(denom, selected_score)
+        # ── 4. Routing weights ──
+        # For sigmoid: use MoERoutingNormalize which has the full Jacobian
+        # (including cross-expert terms via the shared denominator). For
+        # softmax: selected scores are used directly (no renorm), so we fall
+        # back to the per-expert multiply with a detached mask.
+        if self.score_func == "sigmoid":
+            full_mask = ttnn.concat(mask_parts, dim=-1)  # [B, 1, S, num_experts]
+            routing_weights = moe_routing_normalize(scores, full_mask, self.route_scale, 1e-20)
+        else:
+            routing_weights = None  # softmax path uses score_i directly below
 
-        if denom is not None:
-            denom = ttnn.add(denom, 1e-20)
-
-        # Accumulate token counts on device:
+        # Accumulate token counts on device (unchanged):
         # Stack all expert mask sums into [1, 1, 1, num_experts]
         expert_count_scalars = []
         for expert_idx in range(self.num_experts):
@@ -198,31 +235,32 @@ class MoE(AbstractModuleBase):
         new_counts = ttnn.add(self._token_counts.tensor.get_value(), batch_counts)
         self._token_counts.tensor.set_value(new_counts)
 
-        # ── 4. Per-expert computation with normalized scores ──
+        # ── 5. Per-expert weighted outputs ──
         output = None
 
         for expert_idx in range(self.num_experts):
-            mask_narrow = expert_masks[expert_idx]
+            expert_out = self.experts[expert_idx](x)
 
-            expert_mask = ttnn.repeat(mask_narrow, ttnn.Shape([1, 1, 1, dim]))
-            mask_tt = ttml.autograd.Tensor(expert_mask, False)
-
-            score_i = autograd_slice(scores, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])
-
-            if self.score_func == "sigmoid" and denom is not None:
-                norm_factor = ttnn.reciprocal(denom)
-                norm_factor = ttnn.multiply(norm_factor, self.route_scale)
-                norm_tt = ttml.autograd.Tensor(norm_factor, False)
-                routing_weight = ttml.ops.binary.mul(score_i, norm_tt)
+            if self.score_func == "sigmoid":
+                # routing_weights is already mask-zero'd for unselected
+                # experts, so no separate mask multiply needed.
+                rw_i = autograd_slice(
+                    routing_weights,
+                    [0, 0, 0, expert_idx],
+                    [B, 1, S, expert_idx + 1],
+                )
+                weighted = ttml.ops.binary.mul(expert_out, rw_i)
             else:
+                mask_narrow = expert_masks[expert_idx]
+                expert_mask = ttnn.repeat(mask_narrow, ttnn.Shape([1, 1, 1, dim]))
+                mask_tt = ttml.autograd.Tensor(expert_mask, False)
+                score_i = autograd_slice(scores, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])
                 if self.route_scale != 1.0:
                     routing_weight = ttml.ops.binary.mul(score_i, self.route_scale)
                 else:
                     routing_weight = score_i
-
-            expert_out = self.experts[expert_idx](x)
-            weighted = ttml.ops.binary.mul(expert_out, routing_weight)
-            weighted = ttml.ops.binary.mul(weighted, mask_tt)
+                weighted = ttml.ops.binary.mul(expert_out, routing_weight)
+                weighted = ttml.ops.binary.mul(weighted, mask_tt)
 
             if output is None:
                 output = weighted
