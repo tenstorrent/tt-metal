@@ -12,6 +12,8 @@ TT hardware at each step. Generates a PCC-vs-iteration plot per layer.
 This is observational/diagnostic — no PCC threshold assertions.
 """
 
+import math
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -29,6 +31,11 @@ from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.mla.utils import (
+    create_balanced_chunk_order,
+    reorder_tensor_chunks,
+    reverse_reorder_tensor_chunks,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
@@ -67,8 +74,10 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
         "layer8",
     ],
 )
-@pytest.mark.parametrize("num_iters", [30])
-@pytest.mark.parametrize("isl_total", [1024])
+@pytest.mark.parametrize("run_torch_reference", [False, True], ids=["no_ref", "with_ref"])
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["unbalanced", "balanced"])
+@pytest.mark.parametrize("num_iters", [5, 30], ids=["iters5", "iters30"])
+@pytest.mark.parametrize("isl_total", [1024, 25600], ids=["isl1k", "isl25k"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -114,6 +123,8 @@ def test_prefill_block_loop(
     gate_fallback_mode,
     num_links,
     topology,
+    is_balanced,
+    run_torch_reference,
     model_path,
     hf_config,
     state_dict,
@@ -171,9 +182,17 @@ def test_prefill_block_loop(
     if layer_idx in (-1, -4, -5, -6) and gate_fallback_mode != GateComputeMode.DEVICE:
         pytest.skip("uniform/zero experts: DEVICE=HOST (proven), skipping HOST")
 
+    if run_torch_reference and isl_total > 4096:
+        logger.warning(
+            f"run_torch_reference=True with isl_total={isl_total}: "
+            f"eager MLA attention needs ~{isl_total**2 * 128 * 2 // 1024**3}GB — expect slow runtime or OOM"
+        )
+    balanced_chunk_order = create_balanced_chunk_order(sp_factor) if is_balanced else None
+
     logger.info(
         f"=== Iterative PCC test: layer {layer_idx} ({layer_type}), "
-        f"{num_iters} iterations, gate_mode={gate_mode_name} ==="
+        f"{num_iters} iterations, gate_mode={gate_mode_name}, "
+        f"is_balanced={is_balanced}, run_torch_reference={run_torch_reference} ==="
     )
     logger.info(f"mesh_shape={mesh_shape}, sp_factor={sp_factor}, tp_factor={tp_factor}, isl_total={isl_total}")
 
@@ -354,7 +373,8 @@ def test_prefill_block_loop(
     prompts = load_prompts_from_json(str(PROMPTS_PATH))
     prompt_text = prompts[0] if isinstance(prompts, list) else prompts
     token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
-    attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=True)
+    if run_torch_reference:
+        attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=True)
 
     logger.info(f"Token IDs shape: {token_ids.shape}, first 10: {token_ids[0, :10].tolist()}")
 
@@ -375,6 +395,7 @@ def test_prefill_block_loop(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        is_balanced=is_balanced,
     )
     if not is_dense:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -388,14 +409,17 @@ def test_prefill_block_loop(
     block = TtPrefillBlock(**block_kwargs)
     ttnn.synchronize_device(mesh_device)
 
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
     position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
 
-    # Shard initial input to device
+    # Shard initial input to device; reorder into balanced (zigzag) layout first if needed.
+    h0_4d = h0.unsqueeze(0)  # [1, 1, isl_total, emb_dim]
+    if is_balanced:
+        h0_4d = reorder_tensor_chunks(h0_4d, balanced_chunk_order, seq_dim=2)
     h_tt = ttnn.from_torch(
-        h0.unsqueeze(0),  # [1, 1, 1024, 7168]
+        h0_4d,
         device=mesh_device,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -454,36 +478,49 @@ def test_prefill_block_loop(
             num_kvpe_cache_layers=1,
         )
 
-        # --- Torch reference ---
-        ref_cache = DynamicCache()
-        with torch.no_grad():
-            layer_out = hf_model.layers[real_layer_idx](
-                h_torch,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=ref_cache,
-                use_cache=True,
-            )
-            h_torch_next = layer_out[0]
+        # --- Torch reference (skipped for large ISL — O(seq²) attention too expensive) ---
+        h_torch_next = None
+        ref_cache = None
+        if run_torch_reference:
+            ref_cache = DynamicCache()
+            with torch.no_grad():
+                layer_out = hf_model.layers[real_layer_idx](
+                    h_torch,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_value=ref_cache,
+                    use_cache=True,
+                )
+                h_torch_next = layer_out[0]
 
         # --- TT forward ---
         h_tt_next, _ = block(h_tt, rope_tensors, tt_kvpe_cache)
         ttnn.synchronize_device(mesh_device)
 
-        # --- PCC ---
+        # --- Read back TT output; reverse zigzag reorder before comparison ---
         tt_out_host = ttnn.to_torch(
             h_tt_next,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)
+        if is_balanced:
+            tt_out_host = reverse_reorder_tensor_chunks(tt_out_host, balanced_chunk_order, seq_dim=2)
         tt_out_host = tt_out_host.squeeze(0)  # [1, 1, isl, emb] -> [1, isl, emb]
 
-        _, pcc = comp_pcc(h_torch_next.float(), tt_out_host.float())
+        # --- PCC ---
+        if h_torch_next is not None:
+            _, pcc = comp_pcc(h_torch_next.float(), tt_out_host.float())
+        else:
+            pcc = float("nan")
         pcc_values.append(pcc)
 
         # --- Track norms (H1) ---
-        h_torch_out_norm = torch.norm(h_torch_next.float()).item()
         h_tt_out_norm = torch.norm(tt_out_host.float()).item()
-        diff_norm = torch.norm((h_torch_next.float() - tt_out_host.float())).item()
+        if h_torch_next is not None:
+            h_torch_out_norm = torch.norm(h_torch_next.float()).item()
+            diff_norm = torch.norm((h_torch_next.float() - tt_out_host.float())).item()
+        else:
+            h_torch_out_norm = float("nan")
+            diff_norm = float("nan")
         norm_torch_values.append(h_torch_out_norm)
         norm_tt_values.append(h_tt_out_norm)
         norm_diff_values.append(diff_norm)
@@ -492,29 +529,39 @@ def test_prefill_block_loop(
         tt_kvpe_host = ttMLA.kv_cache_to_host(
             tt_kvpe_cache, mesh_device, sp_axis=sp_axis
         )  # [1, 1, seq_total, head_dim]
+        if is_balanced:
+            tt_kvpe_host = reverse_reorder_tensor_chunks(tt_kvpe_host, balanced_chunk_order, seq_dim=2)
         tt_kvpe_host = tt_kvpe_host.squeeze(0).float()  # [1, seq_total, head_dim]
-        torch_kvpe = ref_cache.key_cache[real_layer_idx].float()  # [1, 1, seq, head_dim]
-        torch_kvpe = torch_kvpe.squeeze(1)  # [1, seq, head_dim]
 
-        # Split into KV (nope) and PE (rope)
-        torch_kv = torch_kvpe[:, :, :kv_lora_rank]
-        torch_pe = torch_kvpe[:, :, kv_lora_rank:]
-        tt_kv = tt_kvpe_host[:, :, :kv_lora_rank]
-        tt_pe = tt_kvpe_host[:, :, kv_lora_rank:]
-
-        _, kv_pcc = comp_pcc(torch_kv, tt_kv)
-        _, pe_pcc = comp_pcc(torch_pe, tt_pe)
+        if ref_cache is not None:
+            torch_kvpe = ref_cache.key_cache[real_layer_idx].float()  # [1, 1, seq, head_dim]
+            torch_kvpe = torch_kvpe.squeeze(1)  # [1, seq, head_dim]
+            torch_kv = torch_kvpe[:, :, :kv_lora_rank]
+            torch_pe = torch_kvpe[:, :, kv_lora_rank:]
+            tt_kv = tt_kvpe_host[:, :, :kv_lora_rank]
+            tt_pe = tt_kvpe_host[:, :, kv_lora_rank:]
+            _, kv_pcc = comp_pcc(torch_kv, tt_kv)
+            _, pe_pcc = comp_pcc(torch_pe, tt_pe)
+        else:
+            kv_pcc = float("nan")
+            pe_pcc = float("nan")
         kv_pcc_values.append(kv_pcc)
         pe_pcc_values.append(pe_pcc)
 
+        pcc_str = f"{pcc:.6f}" if not math.isnan(pcc) else "N/A"
+        kv_str = f"{kv_pcc:.6f}" if not math.isnan(kv_pcc) else "N/A"
+        pe_str = f"{pe_pcc:.6f}" if not math.isnan(pe_pcc) else "N/A"
+        torch_norm_str = f"{h_torch_out_norm:.1f}" if not math.isnan(h_torch_out_norm) else "N/A"
+        diff_str = f"{diff_norm:.1f}" if not math.isnan(diff_norm) else "N/A"
         logger.info(
-            f"  Iter {iteration:>3d}/{num_iters}  PCC={pcc:.6f}  KV_PCC={kv_pcc:.6f}  PE_PCC={pe_pcc:.6f}  "
-            f"||h_torch||={h_torch_out_norm:.1f}  ||h_tt||={h_tt_out_norm:.1f}  "
-            f"||diff||={diff_norm:.1f}"
+            f"  Iter {iteration:>3d}/{num_iters}  PCC={pcc_str}  KV_PCC={kv_str}  PE_PCC={pe_str}  "
+            f"||h_torch||={torch_norm_str}  ||h_tt||={h_tt_out_norm:.1f}  "
+            f"||diff||={diff_str}"
         )
 
         # --- Feed back ---
-        h_torch = h_torch_next
+        if h_torch_next is not None:
+            h_torch = h_torch_next
         h_tt = h_tt_next
 
         # --- Cleanup KV cache ---
@@ -526,12 +573,17 @@ def test_prefill_block_loop(
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     iterations = list(range(1, num_iters + 1))
     gate_label = f", gate={gate_mode_name}" if not is_dense else ""
+    bal_label = ", balanced" if is_balanced else ""
+
+    # Filter out NaN for plotting (matplotlib leaves gaps at NaN automatically)
+    def _to_float_list(vals):
+        return [v if not math.isnan(v) else float("nan") for v in vals]
 
     # PCC plot (hidden state)
-    axes[0, 0].plot(iterations, pcc_values, marker="o", markersize=3, linewidth=1.5, color="tab:blue")
+    axes[0, 0].plot(iterations, _to_float_list(pcc_values), marker="o", markersize=3, linewidth=1.5, color="tab:blue")
     axes[0, 0].set_xlabel("Iteration")
     axes[0, 0].set_ylabel("PCC")
-    axes[0, 0].set_title("Hidden State PCC")
+    axes[0, 0].set_title("Hidden State PCC" + ("" if run_torch_reference else " (no ref)"))
     axes[0, 0].grid(True, alpha=0.3)
     axes[0, 0].set_xlim(1, num_iters)
     axes[0, 0].set_ylim(top=1.0)
@@ -539,14 +591,26 @@ def test_prefill_block_loop(
 
     # KVPE cache PCC (KV nope + PE rope)
     axes[0, 1].plot(
-        iterations, kv_pcc_values, marker="o", markersize=3, linewidth=1.5, label="KV (nope)", color="tab:green"
+        iterations,
+        _to_float_list(kv_pcc_values),
+        marker="o",
+        markersize=3,
+        linewidth=1.5,
+        label="KV (nope)",
+        color="tab:green",
     )
     axes[0, 1].plot(
-        iterations, pe_pcc_values, marker="s", markersize=3, linewidth=1.5, label="PE (rope)", color="tab:orange"
+        iterations,
+        _to_float_list(pe_pcc_values),
+        marker="s",
+        markersize=3,
+        linewidth=1.5,
+        label="PE (rope)",
+        color="tab:orange",
     )
     axes[0, 1].set_xlabel("Iteration")
     axes[0, 1].set_ylabel("PCC")
-    axes[0, 1].set_title("KVPE Cache PCC")
+    axes[0, 1].set_title("KVPE Cache PCC" + ("" if run_torch_reference else " (no ref)"))
     axes[0, 1].legend()
     axes[0, 1].grid(True, alpha=0.3)
     axes[0, 1].set_xlim(1, num_iters)
@@ -554,11 +618,24 @@ def test_prefill_block_loop(
     axes[0, 1].ticklabel_format(useOffset=False, style="plain", axis="y")
 
     # Norm plot (H1: residual growth)
+    if run_torch_reference:
+        axes[1, 0].plot(
+            iterations,
+            _to_float_list(norm_torch_values),
+            marker="o",
+            markersize=3,
+            linewidth=1.5,
+            label="||h_torch||",
+            color="tab:green",
+        )
     axes[1, 0].plot(
-        iterations, norm_torch_values, marker="o", markersize=3, linewidth=1.5, label="||h_torch||", color="tab:green"
-    )
-    axes[1, 0].plot(
-        iterations, norm_tt_values, marker="s", markersize=3, linewidth=1.5, label="||h_tt||", color="tab:orange"
+        iterations,
+        _to_float_list(norm_tt_values),
+        marker="s",
+        markersize=3,
+        linewidth=1.5,
+        label="||h_tt||",
+        color="tab:orange",
     )
     axes[1, 0].set_xlabel("Iteration")
     axes[1, 0].set_ylabel("||h|| (L2 norm)")
@@ -568,18 +645,21 @@ def test_prefill_block_loop(
     axes[1, 0].set_xlim(1, num_iters)
 
     # Diff norm plot
-    axes[1, 1].plot(iterations, norm_diff_values, marker="^", markersize=3, linewidth=1.5, color="tab:red")
+    axes[1, 1].plot(
+        iterations, _to_float_list(norm_diff_values), marker="^", markersize=3, linewidth=1.5, color="tab:red"
+    )
     axes[1, 1].set_xlabel("Iteration")
     axes[1, 1].set_ylabel("||h_torch - h_tt|| (L2)")
-    axes[1, 1].set_title("Absolute Error Growth")
+    axes[1, 1].set_title("Absolute Error Growth" + ("" if run_torch_reference else " (no ref)"))
     axes[1, 1].grid(True, alpha=0.3)
     axes[1, 1].set_xlim(1, num_iters)
 
-    fig.suptitle(f"Layer {layer_idx} ({layer_type}{gate_label})", fontsize=14)
+    fig.suptitle(f"Layer {layer_idx} ({layer_type}{gate_label}{bal_label}, isl={isl_total})", fontsize=14)
     fig.tight_layout()
 
+    bal_suffix = "_balanced" if is_balanced else ""
     gate_suffix = f"_{gate_mode_name}" if not is_dense else ""
-    plot_path = f"{PLOT_DIR}/pcc_loop_layer_{layer_idx}{gate_suffix}.png"
+    plot_path = f"{PLOT_DIR}/pcc_loop_layer_{layer_idx}{gate_suffix}{bal_suffix}_isl{isl_total}.png"
     fig.savefig(plot_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     logger.info(f"Plot saved to {plot_path}")
@@ -587,12 +667,15 @@ def test_prefill_block_loop(
     # ------------------------------------------------------------------
     # 6. Summary
     # ------------------------------------------------------------------
-    min_pcc = min(pcc_values)
-    max_pcc = max(pcc_values)
+    valid_pcc = [v for v in pcc_values if not math.isnan(v)]
+    min_pcc = min(valid_pcc) if valid_pcc else float("nan")
+    max_pcc = max(valid_pcc) if valid_pcc else float("nan")
     final_pcc = pcc_values[-1]
 
     logger.info(f"\n{'='*120}")
-    logger.info(f"Layer {layer_idx} ({layer_type}{gate_label}) — {num_iters} iterations summary")
+    logger.info(
+        f"Layer {layer_idx} ({layer_type}{gate_label}{bal_label}, isl={isl_total}) — {num_iters} iterations summary"
+    )
     logger.info(f"{'='*120}")
     logger.info(
         f"  {'Iter':<6s}  {'PCC':>10s}  {'KV_PCC':>10s}  {'PE_PCC':>10s}  {'||h_torch||':>14s}  {'||h_tt||':>14s}  {'||diff||':>14s}  {'rel_err':>10s}"
@@ -601,16 +684,26 @@ def test_prefill_block_loop(
     for i, (pcc, kv_p, pe_p, nt, ntt, nd) in enumerate(
         zip(pcc_values, kv_pcc_values, pe_pcc_values, norm_torch_values, norm_tt_values, norm_diff_values), 1
     ):
-        rel_err = nd / max(nt, 1e-12)
-        logger.info(
-            f"  {i:<6d}  {pcc:>10.6f}  {kv_p:>10.6f}  {pe_p:>10.6f}  {nt:>14.1f}  {ntt:>14.1f}  {nd:>14.1f}  {rel_err:>10.6f}"
-        )
+        rel_err = nd / max(nt, 1e-12) if not math.isnan(nd) and not math.isnan(nt) else float("nan")
+        pcc_s = f"{pcc:>10.6f}" if not math.isnan(pcc) else f"{'N/A':>10s}"
+        kv_s = f"{kv_p:>10.6f}" if not math.isnan(kv_p) else f"{'N/A':>10s}"
+        pe_s = f"{pe_p:>10.6f}" if not math.isnan(pe_p) else f"{'N/A':>10s}"
+        nt_s = f"{nt:>14.1f}" if not math.isnan(nt) else f"{'N/A':>14s}"
+        nd_s = f"{nd:>14.1f}" if not math.isnan(nd) else f"{'N/A':>14s}"
+        re_s = f"{rel_err:>10.6f}" if not math.isnan(rel_err) else f"{'N/A':>10s}"
+        logger.info(f"  {i:<6d}  {pcc_s}  {kv_s}  {pe_s}  {nt_s}  {ntt:>14.1f}  {nd_s}  {re_s}")
     logger.info(f"  {'-'*80}")
-    logger.info(f"  Min PCC:   {min_pcc:.6f}")
-    logger.info(f"  Max PCC:   {max_pcc:.6f}")
-    logger.info(f"  Final PCC: {final_pcc:.6f}")
-    norm_growth = norm_torch_values[-1] / max(norm_torch_values[0], 1e-12)
-    diff_growth = norm_diff_values[-1] / max(norm_diff_values[0], 1e-12)
-    logger.info(f"  Norm growth (torch): {norm_growth:.2f}x ({norm_torch_values[0]:.1f} → {norm_torch_values[-1]:.1f})")
-    logger.info(f"  Diff growth:         {diff_growth:.2f}x ({norm_diff_values[0]:.1f} → {norm_diff_values[-1]:.1f})")
+    if not math.isnan(min_pcc):
+        logger.info(f"  Min PCC:   {min_pcc:.6f}")
+        logger.info(f"  Max PCC:   {max_pcc:.6f}")
+        logger.info(f"  Final PCC: {final_pcc:.6f}")
+    else:
+        logger.info("  PCC:       N/A (torch reference skipped for large ISL)")
+    norm_growth = norm_tt_values[-1] / max(norm_tt_values[0], 1e-12)
+    logger.info(f"  Norm growth (TT):    {norm_growth:.2f}x ({norm_tt_values[0]:.1f} → {norm_tt_values[-1]:.1f})")
+    if run_torch_reference and not math.isnan(norm_diff_values[-1]):
+        diff_growth = norm_diff_values[-1] / max(norm_diff_values[0], 1e-12)
+        logger.info(
+            f"  Diff growth:         {diff_growth:.2f}x ({norm_diff_values[0]:.1f} → {norm_diff_values[-1]:.1f})"
+        )
     logger.info(f"{'='*100}")
