@@ -24,6 +24,8 @@ using on-device token count accumulation.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import ttnn
 import ttml
@@ -31,6 +33,16 @@ from ttml.modules import AbstractModuleBase, LinearLayer, Buffer, ModuleList
 
 from .transformer import DeepSeekMLP
 from .autograd_ops import autograd_slice, autograd_sigmoid, autograd_softmax
+
+
+# Set ``MOE_DEBUG_EQ=1`` in the environment to compare two evaluations of
+# ``ttnn.eq(topk_indices, float(expert_idx))`` per expert per forward:
+# one read on the host (used to populate ``activated_experts``) versus the
+# downstream device chain that feeds ``_token_counts`` and ``mask_narrow``.
+# Any disagreement is printed on its own line and points at non-deterministic
+# / re-execution behaviour of ``ttnn.eq`` on UINT16 + non-zero float scalars
+# at the production tile shape.
+_MOE_DEBUG_EQ = os.environ.get("MOE_DEBUG_EQ", "0") == "1"
 
 
 class Expert(AbstractModuleBase):
@@ -135,10 +147,13 @@ class MoE(AbstractModuleBase):
             # Select top n_limited_groups groups
             _gv, top_group_indices = ttnn.topk(group_scores, self.n_limited_groups, dim=-1)
 
+            # Workaround for ttnn.eq with uint16 bug
+            top_group_indices_u32 = ttnn.typecast(top_group_indices, ttnn.DataType.UINT32)
+
             # Build group mask [B, 1, S, num_experts]
             group_mask_parts = []
             for g in range(self.n_groups):
-                match = ttnn.eq(top_group_indices, float(g))
+                match = ttnn.eq(top_group_indices_u32, float(g))
                 match_f = ttnn.typecast(match, ttnn.DataType.BFLOAT16)
                 match_any = ttnn.sum(match_f, dim=-1, keepdim=True)
                 group_selected = ttnn.gt(match_any, 0.0)
@@ -159,13 +174,40 @@ class MoE(AbstractModuleBase):
         expert_masks = {}
         denom = None
 
+        # Workaround for ttnn.eq with uint16 bug
+        topk_indices_u32 = ttnn.typecast(topk_indices, ttnn.DataType.UINT32)
+
+        activated_experts = []
         for expert_idx in range(self.num_experts):
-            match = ttnn.eq(topk_indices, float(expert_idx))
+            match = ttnn.eq(topk_indices_u32, float(expert_idx))
+
+            # If match is not all zero then add to activaed expert list
+            torch_match = ttnn.to_torch(match)
+            host_match_any = bool(torch_match.any())
+            if host_match_any:
+                activated_experts.append(expert_idx)
+
             match_f = ttnn.typecast(match, ttnn.DataType.BFLOAT16)
             match_any = ttnn.sum(match_f, dim=-1, keepdim=True)  # [B, 1, S, 1]
             mask_narrow = ttnn.gt(match_any, 0.0)
             mask_narrow = ttnn.typecast(mask_narrow, ttnn.DataType.BFLOAT16)
             expert_masks[expert_idx] = mask_narrow
+
+            # Diagnostic: re-read the same ``match`` via the device chain
+            # (typecast -> sum -> gt) and check whether *any* token survives.
+            # If this disagrees with ``host_match_any`` (computed from the
+            # host materialisation a few lines above) it proves ttnn.eq is
+            # producing different results for the two consumers of ``match``.
+            if _MOE_DEBUG_EQ:
+                device_mask_any = bool(ttnn.to_torch(mask_narrow).any())
+                if host_match_any != device_mask_any:
+                    print(
+                        f"[MoE eq DISAGREE] expert={expert_idx} "
+                        f"host_match_any={host_match_any} "
+                        f"device_mask_any={device_mask_any}"
+                    )
+                else:
+                    print(f"[MoE eq OK] expert={expert_idx} host_match_any={host_match_any}")
 
             if self.score_func == "sigmoid":
                 score_i_raw = ttnn.slice(scores_val, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])
@@ -177,6 +219,8 @@ class MoE(AbstractModuleBase):
 
         if denom is not None:
             denom = ttnn.add(denom, 1e-20)
+
+        print(f"Activated experts: {activated_experts}")
 
         # Accumulate token counts on device:
         # Stack all expert mask sums into [1, 1, 1, num_experts]
@@ -190,6 +234,10 @@ class MoE(AbstractModuleBase):
         # Add to running accumulator
         new_counts = ttnn.add(self._token_counts.tensor.get_value(), batch_counts)
         self._token_counts.tensor.set_value(new_counts)
+
+        probs = self.read_activation_probabilities()
+        prob_mean, prob_std = np.mean(probs), np.std(probs)
+        print(f"[MoE] Step: Mean: {prob_mean}, Std: {prob_std}")
 
         # ── 4. Per-expert computation with normalized scores ──
         output = None
@@ -230,6 +278,25 @@ class MoE(AbstractModuleBase):
             output = ttml.ops.binary.add(output, self.shared_experts(x))
 
         return output
+
+    def read_activation_probabilities(self) -> np.ndarray:
+        """Non-destructive read of the current per-expert activation probabilities.
+
+        Returns the fraction of tokens for which each expert was selected,
+        accumulated across all forward passes since the last
+        ``update_expert_bias`` (which resets ``_token_counts``). Shape:
+        ``(num_experts,)``, dtype ``float32``, values in ``[0, 1]``.
+
+        Uses the self-normalising identity
+        ``sum(counts) == n_activated * total_tokens`` so no batch-size /
+        grad-accum bookkeeping is required at the call site.
+        """
+        counts = ttnn.to_torch(self._token_counts.tensor.get_value())
+        counts_np = counts.float().cpu().numpy().flatten()
+        total = float(counts_np.sum())
+        if total <= 0.0:
+            return np.zeros_like(counts_np, dtype=np.float32)
+        return (counts_np * float(self.n_activated) / total).astype(np.float32)
 
     def update_expert_bias(self, coeff: float = 0.001) -> None:
         """Auxiliary-loss-free load balancing (DeepSeek-V3 style).

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ttml
+from ttml.common.profiler_utils import profiler_marker
 from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
 
@@ -56,6 +57,16 @@ class DeepSeekBlock(AbstractModuleBase):
         self.ffn_norm = RMSNormLayer(config.dim)
 
     def forward(self, x: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        x = ttml.ops.binary.add(x, self.attn(self.attn_norm(x), mask))
-        x = ttml.ops.binary.add(x, self.ffn(self.ffn_norm(x)))
+        h = self.attn_norm(x)
+        h = profiler_marker(h, "[START] [Block] Attn")
+        h = self.attn(h, mask)
+        h = profiler_marker(h, "[END] [Block] Attn")
+        x = ttml.ops.binary.add(x, h)
+
+        h = self.ffn_norm(x)
+        h = profiler_marker(h, "[START] [Block] FFN")
+        h = self.ffn(h)
+        h = profiler_marker(h, "[END] [Block] FFN")
+        x = ttml.ops.binary.add(x, h)
+
         return x

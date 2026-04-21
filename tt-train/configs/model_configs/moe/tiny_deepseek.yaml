@@ -2,7 +2,7 @@ transformer_config:
   model_type: "deepseek"
   vocab_size: 32000
   embedding_dim: 1536
-  num_blocks: 16
+  num_blocks: 8
   num_heads: 12
   max_sequence_length: 512
   dropout_prob: 0.0

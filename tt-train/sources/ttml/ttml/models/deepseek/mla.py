@@ -16,6 +16,7 @@ Key features:
 from __future__ import annotations
 
 import ttml
+from ttml.common.profiler_utils import profiler_marker
 from ttml.modules import AbstractModuleBase, LinearLayer
 
 from .transformer import RMSNormLayer
@@ -78,19 +79,25 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         qk_head = self.qk_head_dim
         v_dim = self.v_head_dim
 
+        # Q and KV branch from x independently so their backward markers
+        # fire in separate zones (chaining would make KV START depend on Q START).
+
         # ── Q path ──
+        x_q = profiler_marker(x, "[START] [MLA] Q")
         if self.q_lora_rank == 0:
-            q = self.wq(x)  # [B, 1, S, n_heads * qk_head]
+            q = self.wq(x_q)  # [B, 1, S, n_heads * qk_head]
         else:
-            q = self.wq_b(self.q_norm(self.wq_a(x)))  # [B, 1, S, n_heads * qk_head]
+            q = self.wq_b(self.q_norm(self.wq_a(x_q)))  # [B, 1, S, n_heads * qk_head]
         q = split_heads(q, n_heads)  # [B, n_heads, S, qk_head]
 
         q_nope = autograd_slice(q, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
         q_pe = autograd_slice(q, [0, 0, 0, qk_nope], [B, n_heads, S, qk_head])
         q_pe = ttml.ops.rope.rope(q_pe, self.rope_params)
+        q_pe = profiler_marker(q_pe, "[END] [MLA] Q")
 
         # ── KV path ──
-        kv_full = self.wkv_a(x)  # [B, 1, S, kv_lora_rank + qk_rope]
+        x_kv = profiler_marker(x, "[START] [MLA] KV")
+        kv_full = self.wkv_a(x_kv)  # [B, 1, S, kv_lora_rank + qk_rope]
         kv_lora = self.kv_lora_rank
 
         kv = autograd_slice(kv_full, [0, 0, 0, 0], [B, 1, S, kv_lora])
@@ -108,14 +115,20 @@ class MultiHeadLatentAttention(AbstractModuleBase):
 
         k_nope = autograd_slice(kv_up, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
         v = autograd_slice(kv_up, [0, 0, 0, qk_nope], [B, n_heads, S, qk_nope + v_dim])
+        v = profiler_marker(v, "[END] [MLA] KV")
 
         # Assemble full Q and K
         q_full = autograd_concat([q_nope, q_pe], dim=3)  # [B, H, S, qk_head]
         k_full = autograd_concat([k_nope, k_pe], dim=3)  # [B, H, S, qk_head]
 
         # ── Attention (composite path supports v_dim != qk_head) ──
+        q_full = profiler_marker(q_full, "[START] [MLA] SDPA")
         attn = ttml.ops.attention.scaled_dot_product_attention_composite(q_full, k_full, v, mask)
+        attn = profiler_marker(attn, "[END] [MLA] SDPA")
 
         # ── Output ──
+        attn = profiler_marker(attn, "[START] [MLA] Out")
         attn = ttml.ops.multi_head_utils.heads_fusion(attn)  # [B, 1, S, n_heads * v_dim]
-        return self.wo(attn)
+        attn = self.wo(attn)
+        attn = profiler_marker(attn, "[END] [MLA] Out")
+        return attn

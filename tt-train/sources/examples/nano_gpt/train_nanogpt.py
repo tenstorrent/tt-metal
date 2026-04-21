@@ -55,6 +55,8 @@ from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 from ttml.common.profiler_utils import profiler_marker
 
+import moe_activation_logger
+
 # Union type for models that share the same forward(input, mask) interface
 Model = Union[NanoGPT, Llama, DeepSeek]
 
@@ -1137,6 +1139,16 @@ def main():
         action="store_true",
         help="Print model layer-by-layer summary after creation",
     )
+    parser.add_argument(
+        "--moe_activation_log",
+        type=str,
+        default=None,
+        help=(
+            "If set, append per-step per-expert activation probabilities to this "
+            "CSV file (DeepSeek-only). Sparse schedule: steps 1..10 and every 100th "
+            "step thereafter. Columns: step,layer,expert,prob."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1512,7 +1524,12 @@ def main():
 
                     # Update MoE expert bias for load balancing (DeepSeek only)
                     if model_config.model_type == "deepseek" and hasattr(model, "get_moe_layers"):
-                        for moe_layer in model.get_moe_layers():
+                        moe_layers = model.get_moe_layers()
+                        # Read activation probabilities BEFORE update_expert_bias
+                        # (which resets the underlying _token_counts buffer).
+                        if args.moe_activation_log and moe_activation_logger.should_log_step(global_step):
+                            moe_activation_logger.log_step(args.moe_activation_log, global_step, moe_layers)
+                        for moe_layer in moe_layers:
                             moe_layer.update_expert_bias()
 
                     # Print memory usage after first iteration

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import ttml
+from ttml.common.profiler_utils import profiler_marker
 from ttml.modules import AbstractModuleBase, Embedding, LinearLayer, ModuleList
 
 from .. import RunnerType, memory_efficient_runner
@@ -99,14 +100,23 @@ class DeepSeek(AbstractModuleBase):
 
         x = self.tok_emb(tokens)
 
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
+            x = profiler_marker(x, f"[START] [DeepSeek] Block")
             if self.config.runner_type == RunnerType.MemoryEfficient:
                 x = memory_efficient_runner(block, x, mask)
             else:
                 x = block(x, mask)
+            x = profiler_marker(x, f"[END] [DeepSeek] Block", dump_results=True)
 
+        x = profiler_marker(x, "[START] [DeepSeek] final_norm")
         x = self.norm(x)
-        return self.head(x)
+        x = profiler_marker(x, "[END] [DeepSeek] final_norm")
+
+        x = profiler_marker(x, "[START] [DeepSeek] lm_head")
+        x = self.head(x)
+        x = profiler_marker(x, "[END] [DeepSeek] lm_head")
+
+        return x
 
     def get_moe_layers(self):
         """Get all MoE layers for external load balance updates."""
