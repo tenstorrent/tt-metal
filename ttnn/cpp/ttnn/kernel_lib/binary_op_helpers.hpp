@@ -92,12 +92,11 @@
  *       BinaryDataFormatReconfig::NONE>(
  *       cb_a, cb_b, cb_out, BinaryInputBlockShape::of(Ht, Wt));
  *
- *   // 9. Post-operation callback — apply rsqrt after multiply
+ *   // 9. Post-operation chain — apply rsqrt after multiply
  *   mul(cb_in, cb_in, cb_out, BinaryInputBlockShape::of(Ht, Wt),
- *       [](uint32_t dst_idx) {
- *           rsqrt_tile_init();
- *           rsqrt_tile(dst_idx);
- *       });
+ *       sfpu_chain(Rsqrt<Legacy::Off, Approx::Exact, Dst::D0>{}));
+ *   // PostOp must be either NoOp (default) or an sfpu_chain(...). Single ops
+ *   // must be wrapped in a chain; raw lambdas are not accepted.
  *
  *   // 10. Low-level binary_op with explicit op type
  *   binary_op<BinaryOpType::ADD, BroadcastDim::SCALAR>(
@@ -377,27 +376,26 @@ enum class DestReuseReconfig {
  * Typical uses:
  *   // batch_norm stage 2: (x - mean) *= rsqrt(var + eps).
  *   // cb_rsqrt waited upfront in the outer scope, reused across iterations.
- *   sub(cb_input, cb_mean, cb_out, shape, DestReuseMul<cb_rsqrt>{});
+ *   sub(cb_input, cb_mean, cb_out, shape, sfpu_chain(DestReuseMul<cb_rsqrt>{}));
  *
  *   // Non-commutative: compute (cb_mean - x) by swapping operand routing.
  *   sub(cb_x, cb_dummy, cb_out, shape,
- *       DestReuseOp<cb_mean, EltwiseBinaryType::ELWSUB,
- *                   EltwiseBinaryReuseDestType::DEST_TO_SRCB>{});
+ *       sfpu_chain(DestReuseOp<cb_mean, EltwiseBinaryType::ELWSUB,
+ *                              EltwiseBinaryReuseDestType::DEST_TO_SRCB>{}));
  *
- *   // Stream the scale CB one tile per iteration.
- *   mul(cb_a, cb_b, cb_out, shape,
- *       DestReuseOp<cb_scale, EltwiseBinaryType::ELWMUL,
- *                   EltwiseBinaryReuseDestType::DEST_TO_SRCA,
- *                   Dst::D0, LoadPolicy::WaitAndPop>{});
+ *   // Combine with an SFPU post-transform — chain runs in order on the same DEST.
+ *   sub(cb_input, cb_mean, cb_out, shape,
+ *       sfpu_chain(DestReuseMul<cb_rsqrt>{}, Relu<Dst::D0>{}));
  *
  *   // Read tile 3 of a pre-waited CB instead of tile 0.
- *   auto post = DestReuseMul<cb_scale, Dst::D0, LoadPolicy::NoWaitNoPop>{};
- *   post.cb_tile_idx = 3;
- *   mul(cb_a, cb_b, cb_out, shape, post);
+ *   auto drm = DestReuseMul<cb_scale, Dst::D0, LoadPolicy::NoWaitNoPop>{};
+ *   drm.cb_tile_idx = 3;
+ *   mul(cb_a, cb_b, cb_out, shape, sfpu_chain(drm));
  *
- * Sets clashes_with_fpu = true — binary_op re-calls binary_init before each
- * tile's exec to restore the FPU state (unpack MOP, math MOP, ADDR_MOD) after
- * this PostOp reconfigures it via binary_dest_reuse_tiles_init.
+ * DestReuseOp is a chain element (extends LoadTag). Pass it through sfpu_chain()
+ * to binary_op's PostOp. clashes_with_fpu is inherited from LoadTag, so binary_op
+ * re-calls binary_init before each tile's binary_exec to restore the FPU state
+ * (unpack MOP, math MOP, ADDR_MOD) after binary_dest_reuse_tiles_init clobbers it.
  *
  * @tparam CB        CB index for the second operand.
  * @tparam OpType    Binary op to apply (default: ELWMUL).
@@ -413,14 +411,23 @@ template <
     Dst Slot = Dst::D0,
     LoadPolicy Policy = LoadPolicy::WaitNoPop,
     DestReuseReconfig Reconfig = DestReuseReconfig::None>
-struct DestReuseOp {
-    static constexpr bool clashes_with_fpu = true;
+struct DestReuseOp : LoadTag {
+    static constexpr uint32_t cb = CB;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static constexpr uint32_t max_dst = dst_idx;
+    static constexpr LoadPolicy policy = Policy;
     static constexpr bool do_wait = load_does_wait(Policy);
     static constexpr bool do_pop = load_does_pop(Policy);
+    static_assert(static_cast<uint32_t>(Slot) < 8, "DEST slot exceeds maximum capacity (8)");
 
     uint32_t cb_tile_idx = 0;
 
-    ALWI void operator()(uint32_t dst_idx) const;
+    ALWI void init() const;
+    ALWI void exec(uint32_t offset = 0) const;
+    ALWI void apply(uint32_t offset = 0) const {
+        init();
+        exec(offset);
+    }
 };
 
 /** @brief Alias: DestReuseOp specialised to ELWMUL + DEST_TO_SRCA. */

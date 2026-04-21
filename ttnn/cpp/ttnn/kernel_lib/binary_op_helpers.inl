@@ -193,7 +193,7 @@ inline constexpr bool post_op_needs_reinit_v =
 }  // namespace detail
 
 // =============================================================================
-// DestReuseOp PostOp Implementation
+// DestReuseOp Chain-Element Implementation
 // =============================================================================
 
 template <
@@ -203,7 +203,19 @@ template <
     Dst Slot,
     LoadPolicy Policy,
     DestReuseReconfig Reconfig>
-ALWI void DestReuseOp<CB, OpType, ReuseType, Slot, Policy, Reconfig>::operator()(uint32_t dst_idx) const {
+ALWI void DestReuseOp<CB, OpType, ReuseType, Slot, Policy, Reconfig>::init() const {
+    // No-op: binary_dest_reuse_tiles_init must be called per-exec (it programs the
+    // unpack/math MOPs freshly each call) so there is nothing to hoist out to init.
+}
+
+template <
+    uint32_t CB,
+    EltwiseBinaryType OpType,
+    EltwiseBinaryReuseDestType ReuseType,
+    Dst Slot,
+    LoadPolicy Policy,
+    DestReuseReconfig Reconfig>
+ALWI void DestReuseOp<CB, OpType, ReuseType, Slot, Policy, Reconfig>::exec(uint32_t offset) const {
     if constexpr (Policy == LoadPolicy::WaitAndPop) {
         // Streaming: pop 1 per call means indexing past tile 0 is incoherent.
         ASSERT(cb_tile_idx == 0);
@@ -221,9 +233,9 @@ ALWI void DestReuseOp<CB, OpType, ReuseType, Slot, Policy, Reconfig>::operator()
         }
     }
     binary_dest_reuse_tiles_init<OpType, ReuseType>(CB);
-    // DEST slot is Slot + dst_idx to handle both per-tile (dst_idx=0) and
-    // per-chunk (dst_idx=k) policies correctly.
-    binary_dest_reuse_tiles<OpType, ReuseType>(CB, cb_tile_idx, static_cast<uint32_t>(Slot) + dst_idx);
+    // DEST slot is Slot + offset to handle both per-tile (offset=0) and
+    // per-chunk (offset=k) chain dispatch.
+    binary_dest_reuse_tiles<OpType, ReuseType>(CB, cb_tile_idx, static_cast<uint32_t>(Slot) + offset);
     if constexpr (do_pop) {
         cb_pop_front(CB, 1);
     }
@@ -283,6 +295,10 @@ ALWI void binary_op(
     BinaryInputBlockShape shape,
     PostOp post_op,
     AccumT accum) {
+    static_assert(
+        std::is_same_v<PostOp, NoOp> || detail::is_sfpu_chain_v<PostOp>,
+        "binary_op PostOp must be NoOp or an SfpuChain. Wrap single ops in sfpu_chain(...) "
+        "-- e.g. sfpu_chain(Rsqrt<...>{}) or sfpu_chain(DestReuseMul<cb>{}).");
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
     constexpr bool is_square = (op_type == BinaryOpType::SQUARE);
@@ -430,13 +446,10 @@ ALWI void binary_op(
                 // Execute (unified LLK call)
                 binary_exec<op_type, bcast_dim>(icb_a, icb_b, tile_a, tile_b, dst_idx);
 
-                // Post-operation dispatch:
-                //   non-chain PostOp  -> call per tile (existing behavior, every policy)
-                //   chain + per-tile  -> once-init, 1-exec per tile (chunk_size == 1)
-                //   chain + per-chunk -> handled below the wt loop, not here
-                if constexpr (!detail::is_sfpu_chain_v<PostOp>) {
-                    post_op(dst_idx);
-                } else if constexpr (waits_per_tile(input_a_policy)) {
+                // Post-operation dispatch: PostOp is NoOp or SfpuChain<...>.
+                //   per-tile  -> once-init, 1-exec per tile (chunk_size == 1)
+                //   per-chunk -> handled below the wt loop, not here
+                if constexpr (detail::is_sfpu_chain_v<PostOp> && waits_per_tile(input_a_policy)) {
                     detail::apply_post_chain_batched(post_op, dst_idx, 1u);
                 }
 
