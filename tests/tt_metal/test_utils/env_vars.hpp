@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
@@ -11,16 +12,6 @@
 #include "llrt/tt_cluster.hpp"  // Full definition needed for Cluster::is_mock_or_emulated()
 
 #include <string>
-
-inline std::string get_string_lowercase(tt::ARCH arch) {
-    switch (arch) {
-        case tt::ARCH::WORMHOLE_B0: return "wormhole_b0";
-        case tt::ARCH::BLACKHOLE: return "blackhole";
-        case tt::ARCH::QUASAR: return "quasar";
-        case tt::ARCH::Invalid:
-        default: return "invalid";
-    }
-}
 
 namespace tt::test_utils {
 inline std::string get_env_arch_name() {
@@ -55,12 +46,12 @@ inline std::string get_umd_arch_name() {
         TT_FATAL(
             arch == detected_arch,
             "Expected all devices to be {} but device {} is {}",
-            get_string_lowercase(arch),
+            tt::get_string_lowercase(arch),
             device_id,
-            get_string_lowercase(detected_arch));
+            tt::get_string_lowercase(detected_arch));
     }
 
-    return get_string_lowercase(arch);
+    return tt::get_string_lowercase(arch);
 
 }
 
