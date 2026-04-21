@@ -93,12 +93,37 @@ class TestRMSNorm:
             eps=talker_config.rms_norm_eps,
         )
 
+        # Create sharded input directly so rms_norm itself is the only profiled op.
+        compute_grid = device.compute_with_storage_grid_size()
+        width_tiles = hidden_size // ttnn.TILE_SIZE
+        max_cores = min(width_tiles, int(compute_grid.x) * int(compute_grid.y))
+        best_gx, best_gy = 1, 1
+        for cores in range(max_cores, 1, -1):
+            if width_tiles % cores != 0:
+                continue
+            for gx in range(min(int(compute_grid.x), cores), 0, -1):
+                if cores % gx != 0:
+                    continue
+                gy = cores // gx
+                if gy <= int(compute_grid.y):
+                    best_gx, best_gy = gx, gy
+                    break
+            if best_gx * best_gy == cores:
+                break
+
+        sharded_mem_cfg = ttnn.create_sharded_memory_config(
+            shape=(batch, 1, seq_len, hidden_size),
+            core_grid=ttnn.CoreGrid(x=best_gx, y=best_gy),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
         ttnn_input = ttnn.from_torch(
             torch_input,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=sharded_mem_cfg,
         )
 
         ttnn_output = rmsnorm(ttnn_input)
