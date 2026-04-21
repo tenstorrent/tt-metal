@@ -4,6 +4,7 @@
 
 import functools, operator, os, re
 from typing import Iterable
+import ttnn
 import ttml
 
 
@@ -38,9 +39,9 @@ class Mesh:
         return name in self._axis_map
 
     def axis_size(self, name: str) -> int:
-        return self.shape[self.axis_pos(name)]
+        return self.shape[self.axis_index(name)]
 
-    def axis_pos(self, name: str) -> int:
+    def axis_index(self, name: str) -> int:
         if not name in self._axis_map:
             msg = (
                 f"Mesh has no axis named '{name}'.\n"
@@ -58,7 +59,7 @@ class Mesh:
         full tensor.
         """
         dev = ttml.autograd.AutoContext.get_instance().get_device()
-        cluster_axis = self.axis_pos(name)
+        cluster_axis = self.axis_index(name)
         return ttml.core.distributed.shard_tensor_to_mesh_mapper(dev, tdim, cluster_axis)
 
 
@@ -131,7 +132,7 @@ def _validate_mgd(mesh: Mesh) -> None:
                 f"  MGD file: {mgd_path}"
             )
         if mesh.has_axis("dp"):
-            dp_axis = mesh.axis_pos("dp")
+            dp_axis = mesh.axis_index("dp")
             if dp_axis < len(dim_types) and dim_types[dp_axis] != "RING":
                 raise RuntimeError(
                     f"DDP axis (axis {dp_axis}) expected RING topology, "
@@ -143,7 +144,7 @@ def _validate_mgd(mesh: Mesh) -> None:
     print(f"MGD validated: dims={mgd_dims}, file={mgd_path}")
 
 
-_current_mesh: Mesh | None = None
+_mesh: Mesh | None = None
 
 
 def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] | None = None):
@@ -164,24 +165,65 @@ def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] |
 
     ttml.autograd.AutoContext.get_instance().open_device(list(mesh.shape), list(device_ids))
 
-    global _current_mesh
-    _current_mesh = mesh
+    global _mesh
+    _mesh = mesh
 
 
-def maybe_current_mesh() -> Mesh | None:
+def maybe_mesh() -> Mesh | None:
     """Return the active device mesh, or ``None`` if no mesh has been opened."""
-    global _current_mesh
-    return _current_mesh
+    global _mesh
+    return _mesh
 
 
-def current_mesh() -> Mesh:
+def mesh() -> Mesh:
     """Return the active device mesh, raising ``RuntimeError`` if none is open."""
-    global _current_mesh
-    if _current_mesh is None:
+    global _mesh
+    if _mesh is None:
         msg = (
             "Device mesh is not initialized.\n"
             + "Use ttml.open_device_mesh(ttml.Mesh(shape, axis_names)) "
             + "to initialize the mesh.\n"
         )
         raise RuntimeError(msg)
-    return _current_mesh
+    return _mesh
+
+
+def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
+    """Average parameter gradients across one or more mesh axes.
+
+    For each parameter with an initialized gradient, the grad is all-reduced
+    (summed) across every axis in ``axis_names`` and then divided by the
+    product of those axis sizes, leaving each device with the mean grad.
+
+    Axes listed in ``axis_names`` but not present on the active mesh are
+    silently skipped — if none are present (or ``axis_names`` is empty, or
+    no mesh is open), the function is a no-op. The default ``("dp",)``
+    matches the common DDP case. TP is intentionally excluded: sharded
+    parameters already hold per-shard-correct grads, and replicated
+    parameters see identical inputs on every TP rank so their grads match
+    without a reduce.
+
+    Args:
+        parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
+        axis_names: Tuple of mesh axis names to reduce over.
+    """
+    m = maybe_mesh()
+    if m is None or not axis_names:
+        return
+
+    axes = tuple(m.axis_index(name) for name in axis_names if m.has_axis(name))
+    if not axes:
+        return
+
+    scaler = prod(m.shape[axis] for axis in axes)
+    if scaler == 1:
+        return
+    inv_scaler = 1.0 / float(scaler)
+
+    for _, param in parameters.items():
+        if not param.is_grad_initialized():
+            continue
+        grad_t = ttml.autograd.create_tensor(param.get_grad())
+        for axis in axes:
+            grad_t = ttml.ops.distributed.all_reduce(grad_t, True, axis)
+        param.set_grad(ttnn.multiply(grad_t.get_value(), inv_scaler))

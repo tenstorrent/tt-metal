@@ -151,12 +151,7 @@ def uniform(a: float = 0.0, b: float = 1.0):
     """Uniform distribution over [a, b)."""
 
     def uniform_init(shape, mapper=None):
-        # When a mapper is provided (TP sharding) the tensor is built from a
-        # CPU-side NumPy array because device ops don't accept mesh mappers.
-        if mapper is not None:
-            data = np.random.uniform(a, b, size=shape).astype(np.float32)
-            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-        return ttml.ops.rand(shape, a, b)
+        return ttml.ops.rand(shape, a, b, mesh_mapper=mapper)
 
     return uniform_init
 
@@ -165,10 +160,7 @@ def normal(mean: float = 0.0, std: float = 1.0):
     """Normal (Gaussian) distribution."""
 
     def normal_init(shape, mapper=None):
-        if mapper is not None:
-            data = np.random.normal(mean, std, size=shape).astype(np.float32)
-            return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-        return ttml.ops.randn(shape, mean, std)
+        return ttml.ops.randn(shape, mean, std, mesh_mapper=mapper)
 
     return normal_init
 

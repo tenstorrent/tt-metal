@@ -51,7 +51,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         # Head/group counts stored here are LOCAL (per-device) so that reshaping
         # in grouped_heads_creation matches the sharded activation width.
         if use_tp:
-            tp_size = ttml.current_mesh().axis_size("tp")
+            tp_size = ttml.mesh().axis_size("tp")
             self.num_heads = num_heads // tp_size
             self.num_groups = num_groups // tp_size
         else:
