@@ -75,6 +75,7 @@ jobs:
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+      GITHUB_WRITE_TOKEN: ${{ secrets.EVAN_PAT }}
 
   verify:
     if: inputs.fix-commit-sha != ''
