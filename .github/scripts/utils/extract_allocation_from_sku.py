@@ -15,47 +15,40 @@ def main():
         sys.exit(1)
 
     sku_name = sys.argv[1]
-    sku_config_path = sys.argv[2]
+    user_provided_path = sys.argv[2]
+
+    # Define safe base directory (repository root)
+    # Script is in .github/scripts/utils/
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    BASE_DIRECTORY = os.path.realpath(os.path.join(script_dir, "..", "..", ".."))
 
     # Sanitize file path to prevent path traversal attacks
-    # Resolve to absolute canonical path
+    # Join user input with base directory and resolve to absolute path
     try:
-        sku_config_path = os.path.realpath(sku_config_path)
+        sku_config_path = os.path.abspath(
+            os.path.join(BASE_DIRECTORY, user_provided_path)
+        )
     except (OSError, ValueError) as e:
         print(f"::error::Invalid SKU config path: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Determine the repository root (script is in .github/scripts/utils/)
-    script_dir = os.path.dirname(os.path.realpath(__file__))
-    repo_root = os.path.realpath(os.path.join(script_dir, "..", "..", ".."))
-
-    # Verify the resolved path is within the repository to prevent path traversal
-    try:
-        os.path.commonpath([repo_root, sku_config_path])
-        if not sku_config_path.startswith(repo_root + os.sep):
-            print(
-                f"::error::SKU config path is outside repository: {sku_config_path}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-    except ValueError:
-        # Paths are on different drives (Windows)
+    # Verify the resolved path is within the safe base directory
+    if not sku_config_path.startswith(BASE_DIRECTORY + os.sep):
         print(
-            f"::error::SKU config path is outside repository: {sku_config_path}",
+            f"::error::SKU config path is outside repository",
             file=sys.stderr,
         )
         sys.exit(1)
 
+    # Verify the file exists
     if not os.path.exists(sku_config_path):
-        print(
-            f"::error::SKU config file not found at {sku_config_path}", file=sys.stderr
-        )
+        print(f"::error::SKU config file not found", file=sys.stderr)
         sys.exit(1)
 
     # Verify the file is a regular file (not a directory or special file)
     if not os.path.isfile(sku_config_path):
         print(
-            f"::error::SKU config path is not a regular file: {sku_config_path}",
+            f"::error::SKU config path is not a regular file",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -82,9 +75,7 @@ def main():
 
     skus = config.get("skus", {})
     if sku_name not in skus:
-        print(
-            f"::error::SKU '{sku_name}' not found in {sku_config_path}", file=sys.stderr
-        )
+        print(f"::error::SKU '{sku_name}' not found in config file", file=sys.stderr)
         sys.exit(1)
 
     if "allocation" not in skus[sku_name]:
