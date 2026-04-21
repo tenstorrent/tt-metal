@@ -606,6 +606,29 @@ PERF_COUNTER_CSV_HEADERS = [
     "TDMA vs NOC L1 Share Median (%)",
     "TDMA vs NOC L1 Share Max (%)",
     "TDMA vs NOC L1 Share Avg (%)",
+    # === Per-thread stall overlap ===
+    "Stall Overlap T0 Min (%)",
+    "Stall Overlap T0 Median (%)",
+    "Stall Overlap T0 Max (%)",
+    "Stall Overlap T0 Avg (%)",
+    "Stall Overlap T1 Min (%)",
+    "Stall Overlap T1 Median (%)",
+    "Stall Overlap T1 Max (%)",
+    "Stall Overlap T1 Avg (%)",
+    "Stall Overlap T2 Min (%)",
+    "Stall Overlap T2 Median (%)",
+    "Stall Overlap T2 Max (%)",
+    "Stall Overlap T2 Avg (%)",
+    # === Packer load imbalance ===
+    "Packer Load Imbalance Min (%)",
+    "Packer Load Imbalance Median (%)",
+    "Packer Load Imbalance Max (%)",
+    "Packer Load Imbalance Avg (%)",
+    # === Compute-to-Unpack Ratio ===
+    "Compute-to-Unpack Ratio Min (%)",
+    "Compute-to-Unpack Ratio Median (%)",
+    "Compute-to-Unpack Ratio Max (%)",
+    "Compute-to-Unpack Ratio Avg (%)",
 ]
 
 
@@ -1000,12 +1023,12 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     if srca_write is None and has_counter("SRCA_WRITE_THREAD0"):
         srca_t0 = get_counter_series("SRCA_WRITE_THREAD0")
         srca_t1 = get_counter_series("SRCA_WRITE_THREAD1") if has_counter("SRCA_WRITE_THREAD1") else 0
-        srca_write = (srca_t0.fillna(0) + (srca_t1 if isinstance(srca_t1, int) else srca_t1.fillna(0)))
+        srca_write = srca_t0.fillna(0) + (srca_t1 if isinstance(srca_t1, int) else srca_t1.fillna(0))
     srcb_write = get_counter_series("SRCB_WRITE_ACTUAL")
     if srcb_write is None and has_counter("SRCB_WRITE_THREAD0"):
         srcb_t0 = get_counter_series("SRCB_WRITE_THREAD0")
         srcb_t1 = get_counter_series("SRCB_WRITE_THREAD1") if has_counter("SRCB_WRITE_THREAD1") else 0
-        srcb_write = (srcb_t0.fillna(0) + (srcb_t1 if isinstance(srcb_t1, int) else srcb_t1.fillna(0)))
+        srcb_write = srcb_t0.fillna(0) + (srcb_t1 if isinstance(srcb_t1, int) else srcb_t1.fillna(0))
     unpack0_busy = get_counter_series("UNPACK0_BUSY_THREAD0")
     unpack1_busy = get_counter_series("UNPACK1_BUSY_THREAD0")
     srca_write_avail = get_counter_series("SRCA_WRITE_AVAILABLE")
