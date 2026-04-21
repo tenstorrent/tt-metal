@@ -26,15 +26,13 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Param Type | Name         | Description                                                     | Type     | Valid Range | Required            |
- * |----------- |--------------|-----------------------------------------------------------------|----------|-------------|---------------------|
- * | Template   | FULL_CT_DIM  | Number of tiles in a full row of the input tensor (Quasar only) | uint32_t | > 0         | False, Quasar: True |
- * | Function   | icb          | Input circular buffer identifier                                | uint32_t | 0 to 31     | True                |
- * | Function   | block        | Size of tile block to work on                                   | uint32_t | > 0         | True                |
- * | Function   | ocb          | Output circular buffer identifier                               | uint32_t | 0 to 31     | True                |
+ * | Param Type | Name   | Description                              | Type     | Valid Range | Required |
+ * |----------- |--------|------------------------------------------|----------|-------------|----------|
+ * | Function   | icb    | Input circular buffer identifier         | uint32_t | 0 to 31     | True     |
+ * | Function   | block  | Size of tile block to work on            | uint32_t | > 0         | True     |
+ * | Function   | ocb    | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-template <std::uint32_t FULL_CT_DIM = 1>
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
@@ -49,10 +47,10 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
     PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, true /*tilize en*/>(ocb, 1, icb)));
 #endif
 #else
-    // TODO(SK) #42757: Quasar unpack tilize could issue BLOCK_CT_DIM tiles per MOP invocation, but scheduling
-    // BLOCK_CT_DIM against FULL_CT_DIM would need a compute-API-level workaround since BH/WH operate
+    // TODO(SK) #42757: Quasar unpack tilize could issue block_ct_dim tiles per MOP invocation, but scheduling
+    // block_ct_dim against full_ct_dim would need a compute-API-level workaround since BH/WH operate
     // tile-by-tile and have no equivalent concept. Deferred: not on the Quasar critical path.
-    UNPACK((llk_unpack_tilize_init<FULL_CT_DIM>(icb)));
+    UNPACK((llk_unpack_tilize_init(icb, block /*full_ct_dim*/)));  // block_ct_dim defaults to 1
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
 #endif
 }

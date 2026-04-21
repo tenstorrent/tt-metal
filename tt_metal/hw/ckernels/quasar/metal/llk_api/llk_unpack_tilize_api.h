@@ -15,20 +15,20 @@
  * @brief Initializes the unpacker for tilize operations on Quasar.
  *
  * Configures UNP_A stride registers and programs the MOP for tilizing
- * BLOCK_CT_DIM tiles from row-major L1 data into face format in SrcA.
+ * block_ct_dim tiles from row-major L1 data into face format in SrcA.
  *
- * @tparam BLOCK_CT_DIM  Number of tiles per MOP invocation.
- * @tparam FULL_CT_DIM   Number of tiles in a full row of the input tensor.
- * @param operand        The input dataflow buffer identifier.
+ * @param operand       The input dataflow buffer identifier.
+ * @param full_ct_dim   Number of tiles in a full row of the input tensor.
+ * @param block_ct_dim  Number of tiles per MOP invocation (defaults to 1).
  */
-template <std::uint32_t FULL_CT_DIM = 1, std::uint32_t BLOCK_CT_DIM = 1>
-inline void llk_unpack_tilize_init(const std::uint32_t operand) {
+inline void llk_unpack_tilize_init(
+    const std::uint32_t operand, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim = 1) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
     // TODO: Once narrow-tile is supported c_dim_faces will be variable.
     constexpr std::uint32_t c_dim_faces = 2;
 
-    _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE, FULL_CT_DIM, BLOCK_CT_DIM, c_dim_faces>(operand_id);
+    _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE, c_dim_faces>(operand_id, full_ct_dim, block_ct_dim);
 }
 
 /**

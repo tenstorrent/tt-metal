@@ -66,10 +66,8 @@ void kernel_main() {
     experimental::DataflowBuffer dfb_in(get_compile_time_arg_val(2));
     experimental::DataflowBuffer dfb_out(get_compile_time_arg_val(3));
 
-    constexpr uint32_t full_ct_dim = per_core_block_tile_cnt;
-
     compute_kernel_hw_startup(dfb_in.get_id(), dfb_out.get_id());
-    tilize_init<full_ct_dim>(dfb_in.get_id(), full_ct_dim, dfb_out.get_id());
+    tilize_init(dfb_in.get_id(), per_core_block_tile_cnt, dfb_out.get_id());
 
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
         dfb_in.wait_front(per_core_block_tile_cnt);
