@@ -28,6 +28,14 @@ on:
         description: "Verify mode: seconds between status checks"
         type: string
         default: "30"
+      start-wait-minutes:
+        description: "Verify mode: max minutes to wait for run to start (leave queued)"
+        type: string
+        default: "240"
+      finish-wait-minutes:
+        description: "Verify mode: max minutes to wait for run to finish once started"
+        type: string
+        default: "120"
       # --- Detection mode (used when fix-commit-sha is blank) ---
       max-phase:
         description: "Detection mode: stop after this phase (0-4)"
@@ -73,6 +81,8 @@ jobs:
       test-name: ${{ inputs.verify-test-name }}
       expected-failure-sig: ${{ inputs.verify-expected-failure-sig }}
       poll-interval-seconds: ${{ inputs.poll-interval-seconds }}
+      start-wait-minutes: ${{ inputs.start-wait-minutes }}
+      finish-wait-minutes: ${{ inputs.finish-wait-minutes }}
     secrets:
       GITHUB_WRITE_TOKEN: ${{ secrets.EVAN_PAT }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
