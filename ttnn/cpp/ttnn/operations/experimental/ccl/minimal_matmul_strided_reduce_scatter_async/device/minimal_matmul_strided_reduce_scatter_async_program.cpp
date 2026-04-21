@@ -17,6 +17,7 @@
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_factory.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 // Include RS types
 #include "ttnn/operations/experimental/ccl/strided_reduce_scatter_async/device/strided_reduce_scatter_async_op_device_operation_types.hpp"
@@ -59,7 +60,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> chunk_width_in_mm_blocks,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
-    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt);
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,
+    std::optional<tt::tt_metal::MathFidelity> reduce_math_fidelity = std::nullopt);
 
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
@@ -212,6 +214,12 @@ minimal_matmul_strided_reduce_scatter_async_program(
         ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler();
     std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> empty_rs_fused_op_signaler = std::nullopt;
 
+    // Propagate the user's math fidelity into the RS ring-reduce compute kernel
+    // so it matches the matmul's fidelity (otherwise the reduce kernel defaults
+    // to HiFi4, which shows up confusingly in the profiler's MATH FIDELITY column).
+    auto [mm_math_fidelity, _mm_math_approx, _mm_fp32_acc, _mm_packer_acc, _mm_dst_full] =
+        ttnn::get_compute_kernel_config_args(input_tensor.device()->arch(), compute_kernel_config);
+
     auto rs_shared_variables = ::ttnn::build_ring_strided_reduce_scatter_async_program_artifacts(
         program,
         matmul_output_tensor,    // RS input = MM output
@@ -242,7 +250,8 @@ minimal_matmul_strided_reduce_scatter_async_program(
         // Phase 2: fuse addcmul at the RS final write step (not in MM kernel)
         fused_ternary_scalar,
         addcmul_input_tensor1,
-        addcmul_input_tensor2);
+        addcmul_input_tensor2,
+        mm_math_fidelity);
 
     // =========================================================================
     // STEP 2: Create the Matmul program SECOND

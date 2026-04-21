@@ -5,8 +5,11 @@ import ttnn
 
 from .config import AttentionConfig, ProgramConfig
 from .operations import (
+    _fused_attn_out_enabled,
+    apply_allgather_and_slice,
     apply_allreduce,
     apply_output_projection,
+    apply_output_projection_fused_rs,
     apply_qkv_projection,
     apply_rope,
     concat_heads,
@@ -162,8 +165,13 @@ def prefill_forward(
     if batch_size > 1:
         tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
 
-    tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
-    tt_sdpa_out.deallocate(True)
-    # Tensor parallel allreduce
-    tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
+    if mesh_config.tp > 1 and _fused_attn_out_enabled():
+        rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager)
+        tt_sdpa_out.deallocate(True)
+        tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
+    else:
+        tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
+        tt_sdpa_out.deallocate(True)
+        # Tensor parallel allreduce
+        tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
     return tt_out_result

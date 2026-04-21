@@ -70,8 +70,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     // Optional fused addcmul at the final RS write step.
     // output = addcmul_a + fused_ternary_scalar * rs_result * addcmul_b
     std::optional<float> fused_ternary_scalar = std::nullopt,
-    const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,   // residual a [M, D/tp]
-    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt);  // gate b [1, D/tp]
+    const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,  // residual a [M, D/tp]
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,  // gate b [1, D/tp]
+    // Optional override for the ring-reduce compute kernel's math fidelity. When left
+    // unset, the kernel keeps its default (HiFi4 via tt_metal::ComputeConfig{}). Fused-op
+    // callers pass this through from their DeviceComputeKernelConfig so the reduce
+    // kernel runs at the same fidelity as the matmul (e.g. LoFi).
+    std::optional<tt::tt_metal::MathFidelity> reduce_math_fidelity = std::nullopt);
 
 // Override runtime arguments helper for ring topology
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(

@@ -1,9 +1,23 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+import os
+
 import ttnn
 
 from .weights import AttentionWeights
+
+
+def _env_int(name, default):
+    v = os.environ.get(name)
+    if v is None or v == "":
+        return default
+    return int(v)
+
+
+def _fused_attn_out_enabled():
+    return os.environ.get("GPT_OSS_FUSED_ATTN_OUT", "0") == "1"
 
 
 def apply_qkv_projection(hidden_states, weights: AttentionWeights):
@@ -114,6 +128,144 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
     tensor.deallocate(True)
     ttnn.add(out, weights.o_proj_bias, output_tensor=out)
     return out
+
+
+def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_config, ccl_manager):
+    """Fused output projection matmul + reduce scatter (prefill, TP>1 only).
+
+    Replaces the sequential `apply_output_projection` + `mesh_config.allreduce` (RS half)
+    with a single `minimal_matmul_strided_reduce_scatter_async` call. The trailing
+    all-gather + padding slice stay in `apply_allreduce_after_fused_rs`.
+
+    Dtypes:
+    - activation is cast to bf8_b before the MM (matches non-fused path's
+      `BFP8 x BFP8 => BF16` matmul signature on the input side)
+    - weight is bf8_b (as loaded)
+    - output is bf8_b (inherits from input — the fused-op C++ wrapper does
+      NOT currently expose `output_dtype` to Python, so we can't force bf16
+      here. The non-fused path had `ttnn.matmul(..., dtype=bf16)` which
+      gave `BFP8 x BFP8 => BF16`; replicating that exactly would require
+      adding `output_dtype` to the Python binding of
+      `minimal_matmul_strided_reduce_scatter_async`.)
+
+    Math fidelity: LoFi to match the non-fused `ttnn.matmul` default.
+
+    Returns the reduce-scatter output tensor [1, 1, S, padded_hidden/TP].
+    """
+    tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
+
+    TILE = 32
+    K = tensor.shape[-1]
+    N = weights.o_proj.shape[-1]
+    assert K % TILE == 0 and N % TILE == 0, f"K={K}, N={N} must be tile-aligned"
+
+    M_tiles = (tensor.shape[-2] + TILE - 1) // TILE
+    K_tiles = K // TILE
+    N_tiles = N // TILE
+
+    # Shape-specific defaults from measured sweeps. Only apply them when the
+    # input matches the exact measured shape — otherwise fall back to the
+    # S=128 config (safe baseline). Extend this block with more branches when
+    # additional shapes are swept.
+    #   S=128  (M_tiles=4):  winner y2_mb2_kb8_nb6_cw2               @ 104.5 us
+    #   S=1024 (M_tiles=32): winner y4_mb8_kb8_nb6_cw2 sbh=1 sbw=2   @ 274.3 us
+    # kb=8, nb=6, cw=2 held across both sweeps — those stay constant.
+    # At S=1024 a subblock sweep showed (1,2) and (1,3) beat (1,1) by ~3.6%.
+    if M_tiles == 32:
+        default_mm_grid_y = 4
+        default_m_block = 8
+        default_subblock_h = 1
+        default_subblock_w = 2
+    else:
+        default_mm_grid_y = 2
+        default_m_block = 2
+        default_subblock_h = 1
+        default_subblock_w = 1
+
+    mm_grid_x = _env_int("GPT_OSS_FMM_GRID_X", 8)
+    mm_grid_y = _env_int("GPT_OSS_FMM_GRID_Y", default_mm_grid_y)
+    mm_core_grid = ttnn.CoreCoord(mm_grid_x, mm_grid_y)
+
+    Nt_per_core = N_tiles // mm_grid_x
+    Mt_per_core = max(1, math.ceil(M_tiles / mm_grid_y))
+
+    M_block = _env_int("GPT_OSS_FMM_MBLOCK", min(default_m_block, Mt_per_core))
+    K_block = _env_int("GPT_OSS_FMM_KBLOCK", min(8, K_tiles))
+    N_block = _env_int("GPT_OSS_FMM_NBLOCK", min(6, Nt_per_core))
+    subblock_h = _env_int("GPT_OSS_FMM_SBH", default_subblock_h)
+    subblock_w = _env_int("GPT_OSS_FMM_SBW", default_subblock_w)
+    chunk_width = _env_int("GPT_OSS_FMM_CHUNK", 2)
+    num_workers_env = os.environ.get("GPT_OSS_FMM_WORKERS", "")
+    num_workers = int(num_workers_env) if num_workers_env else None
+    num_buffers_env = os.environ.get("GPT_OSS_FMM_BUFFERS", "")
+    num_buffers = int(num_buffers_env) if num_buffers_env else None
+
+    config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block,
+        K_block_size=K_block,
+        N_block_size=N_block,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=mm_core_grid,
+    )
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        ccl_manager.mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    mm_out, rs_out = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+        tensor,
+        weights.o_proj,
+        3,
+        ccl_manager.get_rs_ping_pong_semaphore(),
+        ttnn.CoreCoord(0, mm_grid_y),
+        compute_kernel_config=compute_config,
+        num_links=ccl_manager.num_links,
+        memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+        rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        topology=ccl_manager.topology,
+        cluster_axis=mesh_config.tp_axis,
+        bias=weights.o_proj_bias,
+        config=config,
+        barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        chunk_width_in_mm_blocks=chunk_width,
+        num_workers_per_link=num_workers,
+        num_buffers_per_channel=num_buffers,
+    )
+
+    tensor.deallocate(True)
+    mm_out.deallocate(True)
+
+    # The fused op inherits output dtype from input (bf8_b). Non-fused path
+    # produced bf16 via explicit `ttnn.matmul(..., dtype=bf16)`. Cast up so
+    # the downstream AllGather / add / layernorm see bf16, same as baseline.
+    rs_out_bf16 = ttnn.typecast(rs_out, ttnn.bfloat16)
+    rs_out.deallocate(True)
+    return rs_out_bf16
+
+
+def apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size: int):
+    """Complete the attention-output path after a fused MM+RS: AG, then drop padding."""
+    gathered = mesh_config.allgather(rs_out, ccl_manager, axis=mesh_config.tp_axis)
+    rs_out.deallocate(True)
+
+    local_hidden = hidden_size // mesh_config.tp
+    padded_local_hidden = ((local_hidden + 31) // 32) * 32
+    if padded_local_hidden != local_hidden:
+        shape = gathered.shape
+        sliced = ttnn.slice(
+            gathered,
+            starts=[0, 0, 0, 0],
+            ends=[shape[0], shape[1], shape[2], hidden_size],
+            steps=[1, 1, 1, 1],
+        )
+        gathered.deallocate(True)
+        return sliced
+    return gathered
 
 
 def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
