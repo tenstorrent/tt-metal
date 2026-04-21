@@ -1485,9 +1485,8 @@ void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, Ji
 }
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
-    // Mock devices don't dispatch to hardware, skip dispatch data population
-    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
-        tt::TargetDevice::Mock) {
+    // Mock/emulated devices don't dispatch to hardware, skip dispatch data population
+    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().is_mock_or_emulated()) {
         return;
     }
 
@@ -1841,11 +1840,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         "dependent on information that is set during device initialization.",
         this->get_id());
 
-    std::vector<std::shared_future<void>> events;
-
-    bool is_mock = tt::tt_metal::MetalContext::instance(context_id).get_cluster().get_target_device_type() ==
-                   tt::TargetDevice::Mock;
+    bool is_mock = tt::tt_metal::MetalContext::instance(context_id).get_cluster().is_mock_or_emulated();
     bool remote_enabled = jit_server::JitCompileRpcClient::enabled() && !is_mock;
+    std::vector<std::shared_future<void>> events;
 
     auto prep_kernel = [&](const std::shared_ptr<Kernel>& kernel) {
         JitBuildOptions build_options(build_env.build_env);
@@ -1922,7 +1919,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         sync_build_steps(events);
     }
 
-    // Mock devices don't have binaries to read
+    // Mock/emulated devices don't have binaries to read.
     if (!is_mock) {
         for (const auto& kernels : kernels_) {
             for (const auto& pair : kernels) {
