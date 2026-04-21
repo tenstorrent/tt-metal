@@ -189,10 +189,7 @@ def _scale_tiles_random_formats(b_torch, formats, distribution="random", weights
         else:
             raw_weights = [1.0] * len(formats)
         total_w = sum(raw_weights)
-        # Largest-remainder apportionment: weights are proportions scaled to tiles_h
-        # so ratios hold even when tiles_h < sum(weights). Avoids the pitfall of
-        # treating weights as absolute tile counts (e.g. {"bfp4": 77, "bfp0": 23}
-        # with tiles_h=8 would otherwise truncate to all-bfp4).
+        # Largest-remainder apportionment → exact share counts that sum to tiles_h.
         quotas = [w * tiles_h / total_w for w in raw_weights]
         floor_shares = [int(q) for q in quotas]
         remainders = [q - fs for q, fs in zip(quotas, floor_shares)]
@@ -201,8 +198,25 @@ def _scale_tiles_random_formats(b_torch, formats, distribution="random", weights
         shares = list(floor_shares)
         for i in order[:leftover]:
             shares[i] += 1
-        parts = [torch.full((s,), i, dtype=torch.long) for i, s in enumerate(shares) if s > 0]
-        col = torch.cat(parts) if parts else torch.zeros(tiles_h, dtype=torch.long)
+        # Interleaved placement (greedy largest-deficit): at each row, pick the
+        # format whose expected running count (share × row / tiles_h) is most
+        # behind its actual placed count. Spreads each format evenly across K
+        # rather than concatenating blocks — avoids a long contiguous bfp0/bfp2
+        # tail that exposes numerical edge cases in the reducer's silu path.
+        col = torch.empty(tiles_h, dtype=torch.long)
+        placed = [0.0] * len(shares)
+        for row in range(tiles_h):
+            best_f = 0
+            best_deficit = -float("inf")
+            for f, s in enumerate(shares):
+                if placed[f] >= s:
+                    continue
+                deficit = s * (row + 1) / tiles_h - placed[f]
+                if deficit > best_deficit:
+                    best_deficit = deficit
+                    best_f = f
+            col[row] = best_f
+            placed[best_f] += 1
         fmt_indices = col.unsqueeze(1).expand(tiles_h, tiles_w).contiguous()
     else:
         raise ValueError(f"Unknown distribution: {distribution}")
@@ -2517,8 +2531,8 @@ def test_matmul_expert_bspm_sparse_activation(bh_2d_mesh_device):
 @pytest.mark.parametrize(
     "formats_per_device, fmt_ratios",
     [
-        (["bfp4", "bfp0"], {"bfp4": 3, "bfp0": 1}),
-        (["bfp4", "bfp2", "bfp0"], {"bfp4": 2, "bfp2": 1, "bfp0": 1}),
+        (["bfp4", "bfp0"], {"bfp4": 77.8, "bfp0": 22.2}),
+        (["bfp4", "bfp2", "bfp0"], {"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3}),
     ],
     ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
 )
