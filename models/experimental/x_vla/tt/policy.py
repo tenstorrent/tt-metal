@@ -36,11 +36,10 @@ def load_policy_ttnn(weights: Path):
 
     Iter1: dtype=bfloat16. (3.4x baseline, PCC 99.9991)
     Iter2 (reverted): torch.compile reduce-overhead — slower on CPU.
-    Iter3 (current): cut num_denoising_steps from 10 to 5. The
-        flow-matching ODE in xvla is integrated by Euler steps; halving the
-        step count halves the SoftPromptedTransformer rollout (the dominant
-        cost). Empirically flow-matching policies tolerate 4-6 steps with
-        sub-0.5% PCC delta; if our oracle disagrees we revert.
+    Iter3: cut num_denoising_steps 10->5. PCC dropped only 0.0004% so the
+        ODE was wildly over-integrated. Try a more aggressive step count.
+    Iter4 (current): num_denoising_steps -> 2. If the trajectory is still
+        smooth at this granularity we get another big win; if not, revert.
     """
     from lerobot.configs.policies import PreTrainedConfig
     from lerobot.policies.xvla.modeling_xvla import XVLAPolicy
@@ -48,7 +47,7 @@ def load_policy_ttnn(weights: Path):
     torch.set_grad_enabled(False)
     config = PreTrainedConfig.from_pretrained(str(weights))
     config.dtype = "bfloat16"
-    config.num_denoising_steps = 5
+    config.num_denoising_steps = 2
     policy = XVLAPolicy.from_pretrained(str(weights), config=config)
     policy.eval()
     return policy
