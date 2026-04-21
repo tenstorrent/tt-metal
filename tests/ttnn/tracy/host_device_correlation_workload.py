@@ -51,7 +51,14 @@ def main():
 
     input_loc = "models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/"
 
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), l1_small_size=24576)
+    # RT profiler requires a tensix dispatch core (it is a BRISC kernel that
+    # cannot run on an ethernet core). Force WORKER dispatch so the
+    # dispatch_core_manager reserves a tensix slot at construction time.
+    mesh_device = ttnn.open_mesh_device(
+        ttnn.MeshShape(1, 1),
+        l1_small_size=24576,
+        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER),
+    )
 
     # Register callback to capture device-side program records
     handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_record)

@@ -153,17 +153,13 @@ public:
 
     std::vector<CoreCoord> get_all_logical_dispatch_cores(ChipId device_id);
 
-    /// @brief Finds the closest available dispatch core to PCIe cores for real-time profiler
-    /// @param device_id ID of the device
-    /// @return tt_cxy_pair logical location of the closest available dispatch core to PCIe, or empty if none available
-    std::optional<tt_cxy_pair> get_closest_available_dispatch_core_to_pcie(ChipId device_id);
-
     /// @brief Returns a tensix reserved at construction time for the real-time profiler.
     /// The reservation is taken from the back of the dispatch core pool (which dispatch consumes
     /// from the front), so this core is guaranteed not to be assigned to any dispatch / prefetch /
     /// dispatch_s / fabric mux kernel. Only populated when the dispatch core type is WORKER and
-    /// the pool has a spare slot. ETH dispatch returns nullopt — callers should fall back to
-    /// get_closest_available_dispatch_core_to_pcie or skip RT profiler on that device.
+    /// the pool has a spare slot. ETH dispatch returns nullopt: the RT profiler kernel is a BRISC
+    /// worker kernel and cannot run on an ethernet core, so callers must skip RT profiler on that
+    /// device rather than substitute an ethernet coordinate.
     /// @param device_id ID of the device
     /// @return tt_cxy_pair logical location of the reserved tensix, or empty if no reservation exists
     std::optional<tt_cxy_pair> get_reserved_realtime_profiler_core(ChipId device_id);

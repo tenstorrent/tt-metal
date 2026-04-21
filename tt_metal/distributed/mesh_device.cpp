@@ -1992,33 +1992,37 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         // Use the tensix that dispatch_core_manager reserved for the real-time profiler at
         // construction time. That slot is taken from the back of the dispatch pool (dispatch
         // consumes from the front), guaranteeing no collision with dispatch / prefetch /
-        // dispatch_s / fabric mux kernels that get assigned later. ETH dispatch returns
-        // nullopt (its pool is eth cores, not tensixes), and we fall back to the legacy
-        // closest-to-PCIe picker for that path.
+        // dispatch_s / fabric mux kernels that get assigned later.
+        //
+        // The reservation only happens for MMIO chips with WORKER dispatch — for ETH dispatch
+        // the dispatch pool holds ethernet cores, not tensixes, and the RT profiler kernel
+        // (a BRISC worker kernel) cannot run on an ethernet core. Rather than fall back to a
+        // picker that could return an ethernet coordinate, we disable RT profiler on that
+        // device cleanly. ETH dispatch users who need RT profiler must opt in to WORKER
+        // dispatch (DispatchCoreConfig(DispatchCoreType::WORKER)) when opening the device.
         std::optional<tt_cxy_pair> realtime_profiler_core_opt =
             dispatch_core_manager.get_reserved_realtime_profiler_core(device_id);
-        bool used_reserved_slot = realtime_profiler_core_opt.has_value();
-        if (!used_reserved_slot) {
-            realtime_profiler_core_opt = dispatch_core_manager.get_closest_available_dispatch_core_to_pcie(device_id);
-        }
 
         if (!realtime_profiler_core_opt.has_value()) {
-            log_warning(
+            log_info(
                 tt::LogMetal,
-                "No available dispatch core for real-time profiler on device {} — skipping RT profiler for this device",
+                "No reserved tensix available for real-time profiler on device {} (typically because dispatch is "
+                "configured for ETH cores) — skipping RT profiler for this device",
                 device_id);
             continue;
         }
 
         CoreCoord realtime_profiler_core(realtime_profiler_core_opt->x, realtime_profiler_core_opt->y);
 
-        // Validate the candidate against the device's actual TENSIX grid.
+        // Defensive: the reservation is taken from the dispatch tensix pool, so it is by
+        // construction inside the TENSIX grid, but validate anyway in case core descriptor
+        // overlays produce a stale entry for harvested devices.
         const auto& soc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
         CoreCoord tensix_grid = soc.get_grid_size(CoreType::TENSIX);
         if (realtime_profiler_core.x >= tensix_grid.x || realtime_profiler_core.y >= tensix_grid.y) {
             log_warning(
                 tt::LogMetal,
-                "Dispatch core ({}, {}) for real-time profiler on device {} is outside the TENSIX logical grid "
+                "Reserved RT profiler core ({}, {}) on device {} is outside the TENSIX logical grid "
                 "({}, {}) — disabling RT profiler on this device",
                 realtime_profiler_core.x,
                 realtime_profiler_core.y,
@@ -2030,8 +2034,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
 
         log_info(
             tt::LogMetal,
-            "Using {} tensix ({}, {}) for real-time profiler on device {}",
-            used_reserved_slot ? "reserved" : "closest-to-PCIe",
+            "Using reserved tensix ({}, {}) for real-time profiler on device {}",
             realtime_profiler_core.x,
             realtime_profiler_core.y,
             device_id);

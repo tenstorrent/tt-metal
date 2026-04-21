@@ -21,7 +21,14 @@ import ttnn
 
 
 def main():
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), l1_small_size=24576)
+    # RT profiler requires a tensix dispatch core (it is a BRISC kernel that
+    # cannot run on an ethernet core). Force WORKER dispatch so the
+    # dispatch_core_manager reserves a tensix slot at construction time.
+    mesh_device = ttnn.open_mesh_device(
+        ttnn.MeshShape(1, 1),
+        l1_small_size=24576,
+        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER),
+    )
 
     try:
         torch.manual_seed(0)
