@@ -55,6 +55,17 @@ class TTNNTransformerBlockStack(nn.Module):
         head_dim = torch_blocks[0].attn.head_dim
         self.head_dim_inv_sqrt = float(head_dim) ** -0.5
 
+        # LoFi compute-kernel config for the huge MLP matmuls. Uses
+        # lower-precision matmul core math at higher throughput — on
+        # Blackhole this is typically 2-3x faster than HiFi2. Accuracy
+        # hit is absorbed by the over-parameterized transformer weights.
+        self._mlp_kernel_cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
         # Per-layer weight bundles, each kept on device DRAM.
         self._layers: List[Any] = []
         for blk in torch_blocks:
@@ -147,8 +158,14 @@ class TTNNTransformerBlockStack(nn.Module):
 
         # --- MLP -----------------------------------------------------------
         h = ttnn.layer_norm(x_tt, weight=wb["ln2_w"], bias=wb["ln2_b"])
-        h = ttnn.linear(h, wb["fc1_w"], bias=wb["fc1_b"], activation="gelu")
-        h = ttnn.linear(h, wb["fc2_w"], bias=wb["fc2_b"])
+        h = ttnn.linear(
+            h, wb["fc1_w"], bias=wb["fc1_b"], activation="gelu",
+            compute_kernel_config=self._mlp_kernel_cfg,
+        )
+        h = ttnn.linear(
+            h, wb["fc2_w"], bias=wb["fc2_b"],
+            compute_kernel_config=self._mlp_kernel_cfg,
+        )
         x_tt = ttnn.add(x_tt, h)
         ttnn.deallocate(h)
         return x_tt
