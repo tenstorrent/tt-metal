@@ -7,7 +7,10 @@
 #include "ckernel_defs.h"
 #include "ckernel.h"
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
+#include "sfpu/ckernel_sfpu_gelu.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "sfpu/ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_recip.h"
 
 namespace ckernel {
 namespace sfpu {

@@ -46,6 +46,7 @@ tt_stl/**/CMakeLists.txt @ayerofieiev-tt @akerteszTT @riverwuTT @tenstorrent/met
 
 # Scaleout Tools
 tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @jpanasiukTT @tenstorrent/codeowner-bypass
+tools/scaleout/exabox/ @jpanasiukTT @aczajkowskiTT @ctr-fmamedov-crypto @gsarabandoTT @tt-mnijjar @mgajewskiTT @pbaraTT @vdu-TT @tt-rkim @jlakisTT @dpopovTT @tenstorrent/codeowner-bypass
 
 # Scaleout
 tests/scale_out/test_ccl_fabric_manager.py @tenstorrent/metalium-developers-metal-distributed @tenstorrent/codeowner-bypass
@@ -66,7 +67,7 @@ tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @jbaumanTT @tenstorrent/codeow
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @jbaumanTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @tenstorrent/codeowner-bypass
 tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tt_metal/graph/ @ayerofieiev-tt @akerteszTT @dgomezTT @tenstorrent/codeowner-bypass
+tt_metal/impl/graph/ @ayerofieiev-tt @akerteszTT @dgomezTT @tenstorrent/codeowner-bypass
 tt_metal/hostdevcommon/ @tenstorrent/metalium-runtime @tenstorrent/codeowner-bypass # this should go away
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT @tenstorrent/codeowner-bypass
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
@@ -96,6 +97,7 @@ tt_metal/impl/flatbuffer/ @cfjchu @kmabeeTT @nsmithtt @tenstorrent/codeowner-byp
 tt_metal/impl/jit_server/ @ruizhangTT @tenstorrent/metalium-runtime @tenstorrent/codeowner-bypass
 tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sagarwalTT @tenstorrent/codeowner-bypass
 tt_metal/impl/lightmetal/ @kmabeeTT @gsarabandoTT @tenstorrent/codeowner-bypass
+tt_metal/impl/memory_tracking/ @aperezvicente-TT @alnah005 @tenstorrent/codeowner-bypass
 tt_metal/impl/metal2_host_api/ @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
 tt_metal/impl/per_core_allocation/ @yugaoTT @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/impl/profiler/ @mo-tenstorrent @abhullar-tt @tenstorrent/codeowner-bypass

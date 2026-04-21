@@ -7,6 +7,7 @@
 #include "llk_math_eltwise_binary_sfpu_init.h"
 #include "llk_math_eltwise_binary_sfpu_params.h"
 #include "ckernel_sfpu_mul_int32.h"
+#include "sfpu/ckernel_sfpu_mul_int.h"
 
 namespace ckernel {
 

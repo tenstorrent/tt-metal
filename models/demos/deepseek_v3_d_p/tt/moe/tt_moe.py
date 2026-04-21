@@ -31,7 +31,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEInterm
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
-from models.demos.deepseek_v3_d_p.utils.test_utils import get_input_mem_config
 
 
 class TtMoe(LightweightModule):
@@ -55,6 +54,18 @@ class TtMoe(LightweightModule):
         - Split Connection: ROW_MAJOR (elementwise ops)
         - Final Add: ROW_MAJOR
     """
+
+    @staticmethod
+    def check_cache_complete(cache_path: Path, layer_idx: int, experts_per_chip: int) -> bool:
+        """Check if MoE cache is complete (gate + routed experts + shared expert)."""
+        prefix = f"layer_{layer_idx}"
+        if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate"):
+            return False
+        if not TtRoutedExpert.check_cache_complete(cache_path, f"{prefix}.routed_expert", experts_per_chip):
+            return False
+        if not TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert"):
+            return False
+        return True
 
     @staticmethod
     def build_ttnn_cache(
@@ -222,8 +233,6 @@ class TtMoe(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.gate",
         )
-        self.gate_input_mem_config = get_input_mem_config(gate_config, mesh_device.shape)
-
         logger.debug(f"Initializing TtMoe")
         logger.debug(f"  mesh_device.shape={mesh_device.shape}")
         logger.debug(f"  dispatch_group_size={dispatch_group_size}, num_dispatch_groups={num_dispatch_groups}")
@@ -334,12 +343,9 @@ class TtMoe(LightweightModule):
         # Reshape 3D -> 2D for gate: (batch, seq, emb) -> (batch*seq, emb)
         x_for_gate = ttnn.reshape(x, (x.shape[0] * x.shape[1], x.shape[2]))
         x_for_gate = ttnn.to_layout(x_for_gate, ttnn.TILE_LAYOUT)
-        if self.gate_input_mem_config is not None:
-            # TODO: check perf loss for x_for_gate in DRAM vs to_memory_config(gate_input_mem_config)
-            x_for_gate = ttnn.to_memory_config(x_for_gate, self.gate_input_mem_config)
 
         scores, indices, gate_logits, tt_expert_offsets, tt_expert_token_counts = self.gate(x_for_gate)
-        ttnn.deallocate(x_for_gate)  # x_for_gate is L1 height sharded and no longer needed.
+        ttnn.deallocate(x_for_gate)  # x_for_gate is no longer needed.
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
             if return_intermediates
