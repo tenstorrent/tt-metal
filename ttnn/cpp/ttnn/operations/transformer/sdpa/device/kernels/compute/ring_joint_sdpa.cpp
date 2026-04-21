@@ -134,16 +134,10 @@ void kernel_main() {
         (local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (local_padded_Nt % Sk_chunk_t)) : 0;
     constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
 
-    // Straddle chunk: balanced-zigzag causal places two coarse-chunks-worth of sequence on each
-    // device; local K shard is monotonic in original positions but with a gap at the coarse
-    // boundary (local position coarse_chunk_size_t tiles). When k_chunk_size does not divide the
-    // coarse chunk size, one K chunk straddles early/late content — its late-half columns must be
-    // -inf-masked on rix > rid halved iters where compute would otherwise attend them, and the
-    // K-loop must be extended by one chunk so the early-half is not dropped.
-    constexpr uint32_t coarse_chunk_size_t = local_padded_Nt / 2;
-    constexpr bool has_straddle = (coarse_chunk_size_t % Sk_chunk_t) != 0;
-    constexpr uint32_t straddle_chunk_id = coarse_chunk_size_t / Sk_chunk_t;
-    constexpr uint32_t straddle_num_padded_tiles = has_straddle ? (Sk_chunk_t - (coarse_chunk_size_t % Sk_chunk_t)) : 0;
+    using Straddle = KCausalStraddleInfo<local_padded_Nt, Sk_chunk_t>;
+    constexpr bool has_straddle = Straddle::has_straddle;
+    constexpr uint32_t straddle_chunk_id = Straddle::straddle_chunk_id;
+    constexpr uint32_t straddle_num_padded_tiles = Straddle::straddle_num_padded_tiles;
 
     RingAccumulatorState acc_state = {
         {cb_sum_A, cb_max_A, cb_out_im_A},  // prev
@@ -268,11 +262,12 @@ void kernel_main() {
 
             uint32_t iter_num_kv_chunks = num_kv_chunks;
             if (is_causal && is_balanced && ring_index > ring_id) {
-                iter_num_kv_chunks /= 2;
-                // Extend by one chunk to include the straddle chunk; its late-half columns are
-                // -inf-masked via lw_mask.straddle_* above, early-half columns attend normally.
                 if constexpr (has_straddle) {
+                    // Straddle chunk straddles the coarse-half boundary; extend to include it.
+                    // Its late-half columns are -inf-masked via lw_mask.straddle_* above.
                     iter_num_kv_chunks = straddle_chunk_id + 1;
+                } else {
+                    iter_num_kv_chunks /= 2;
                 }
             }
             bool skip_first_half_q = (ring_index >= ring_id ? false : is_balanced);

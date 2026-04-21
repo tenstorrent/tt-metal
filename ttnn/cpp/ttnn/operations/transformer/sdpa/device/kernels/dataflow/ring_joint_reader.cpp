@@ -205,14 +205,11 @@ void kernel_main() {
         // Indexes are updated accordingly; compute is skipped
         if (is_causal && is_balanced && ring_index > ring_id) {
             iter_num_kv_chunks /= 2;
-            // Mirror compute's K-loop extension in ring_joint_sdpa.cpp: when k_chunk_size does not
-            // divide the coarse-chunk size (local_padded_Nt/2), include the straddle chunk so K/V
-            // tiles for it get loaded. Compute -inf-masks its late-half columns via lw_mask.
-            constexpr uint32_t coarse_chunk_size_t = local_padded_Nt / 2;
-            constexpr bool has_straddle = (coarse_chunk_size_t % Sk_chunk_t) != 0;
-            constexpr uint32_t straddle_chunk_id = coarse_chunk_size_t / Sk_chunk_t;
-            if constexpr (has_straddle) {
-                iter_num_kv_chunks = straddle_chunk_id + 1;
+            // Mirror compute's K-loop extension: include the straddle chunk so K/V tiles
+            // for it get loaded. Compute -inf-masks its late-half columns via lw_mask.
+            using Straddle = KCausalStraddleInfo<local_padded_Nt, Sk_chunk_t>;
+            if constexpr (Straddle::has_straddle) {
+                iter_num_kv_chunks = Straddle::straddle_chunk_id + 1;
             }
         }
 
