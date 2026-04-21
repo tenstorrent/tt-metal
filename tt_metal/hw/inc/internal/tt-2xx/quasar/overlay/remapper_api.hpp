@@ -38,6 +38,8 @@
 #include "remapper_common.hpp"
 #include "overlay_addresses.h"
 
+using namespace overlay;
+
 /**
  * @brief Generic API for Counter Remapper Configuration
  *

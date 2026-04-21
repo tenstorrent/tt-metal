@@ -643,7 +643,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
 
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, mcast ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, mcast ? NOC_V2_MCAST_RESP_VC : NOC_V2_WR_RESP_VC);
 
     uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
@@ -1274,7 +1274,7 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_init_state(uint32
         __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
         __builtin_riscv_ttrocc_scmdbuf_wr_reg(
             TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
-            (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);
+            (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? NOC_V2_MCAST_RESP_VC : NOC_V2_WR_RESP_VC);
     } else {
         static_assert(cmd_buf <= 1, "normal cmdbuf operations are only valid for cmd_buf 0 or 1");
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
@@ -1282,7 +1282,7 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_init_state(uint32
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
             cmd_buf,
             TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
-            (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);
+            (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? NOC_V2_MCAST_RESP_VC : NOC_V2_WR_RESP_VC);
     }
 }
 
