@@ -101,9 +101,11 @@ bool configure_fabric_cores(
     // Safety: resetting only ERISC0/BRISC keeps the subordinate ERISC (NCRISC) running,
     // which maintains the ETH PHY link.  The reset window is brief (PCIe round-trip,
     // microseconds) and mirrors the pattern used in risc_firmware_initializer.cpp
-    // reset_cores().  Base UMD firmware does not touch fabric-specific state addresses
-    // (edm_status_address, termination_signal_address), so there is no race with the
-    // L1 clear below.
+    // reset_cores().  Although base UMD firmware is not expected to touch fabric-specific
+    // state addresses, the L1 clear below (addresses_to_clear) zeroes edm_status_address,
+    // termination_signal_address, edm_local_sync_address, and edm_local_tensix_sync_address
+    // as a belt-and-suspenders measure — so even if base firmware or stale L1 leaves garbage,
+    // the next session's terminate_stale_erisc_routers() sees clean zeros.
     bool all_channels_healthy = true;
     // Track dead channels so the L1 clear loop below can skip them.
     // For non-MMIO chips, WriteToDeviceL1 routes writes through ethernet — the same path

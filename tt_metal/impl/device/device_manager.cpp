@@ -472,9 +472,24 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
     }
 
     auto active_devices = this->get_all_active_devices_impl();
+    log_info(
+        tt::LogMetal,
+        "[initialize_fabric_and_dispatch_fw] Starting fabric + dispatch FW initialization for {} "
+        "devices (new session)",
+        active_devices.size());
 
     initializers_[FabricFirmwareInitializer::key] =
         std::make_unique<FabricFirmwareInitializer>(descriptor_, env_impl_.get_control_plane());
+    // Note on teardown-after-failed-init (#42429): if init() throws (e.g. configure_fabric
+    // detects dead ETH channels), FabricFirmwareInitializer::key is NOT added to init_done_,
+    // so close_devices() will skip FabricFirmwareInitializer::teardown().  This is intentional:
+    // when init fails because configure_fabric threw, the ERISCs have been soft-reset into base
+    // UMD firmware which does NOT understand the fabric TERMINATE protocol.  Attempting teardown
+    // (which sends TERMINATE signals and polls for EDMStatus::TERMINATED) on ERISCs running base
+    // firmware would time out on every channel, adding ~N*5s of wasted time and no benefit.
+    // The L1 clear in configure_fabric_cores() already zeroed edm_status_address et al., so the
+    // next session's terminate_stale_erisc_routers() will see clean zeros and not misclassify
+    // these channels as corrupt.
     initializers_[FabricFirmwareInitializer::key]->init(active_devices, init_done_);
     init_done_.insert(FabricFirmwareInitializer::key);
 
