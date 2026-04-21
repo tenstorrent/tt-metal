@@ -103,6 +103,19 @@ class TestTensorLifetime:
         assert by_id[101]["last_use_source_file"] == "consumer_ctx.py"
         assert by_id[101]["last_use_source_line"] == 3
 
+    def test_deallocate_operation_id_matches_python_op_name(self):
+        """Python registers the op as ttnn.deallocate (dot), not ttnn::deallocate."""
+        operations = [(10, "ttnn.deallocate", 0.0)]
+        input_tensors = [(10, 0, 999)]
+        output_tensors = []
+        stack_traces = []
+        recs = graph_report.compute_tensor_lifetime_records(
+            operations, input_tensors, output_tensors, stack_traces, {999}
+        )
+        assert len(recs) == 1
+        assert recs[0]["tensor_id"] == 999
+        assert recs[0]["deallocate_operation_id"] == 10
+
     def test_tensor_lifetime_table_populated_on_import(self, tmp_path):
         mock_graph = [
             {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5]},

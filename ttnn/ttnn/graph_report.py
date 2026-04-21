@@ -58,7 +58,11 @@ def _is_tensor_deallocate_operation(name: str) -> bool:
     """Return True if this trace op name corresponds to freeing device storage for a tensor."""
     if not name:
         return False
-    return name in ("ttnn::deallocate", "Tensor::deallocate") or name.endswith("::deallocate")
+    # Python-registered op uses a dot: register_python_operation(name="ttnn.deallocate", ...).
+    # Synthetic buffer-only frees use :: (see buffer_deallocate import path).
+    if name in ("ttnn::deallocate", "ttnn.deallocate", "Tensor::deallocate"):
+        return True
+    return name.endswith("::deallocate") or name.endswith(".deallocate")
 
 
 def _innermost_stack_frame(trace_text: str | None):
