@@ -10,10 +10,16 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
 from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, cap_seq_lens_to_max_prefill_chunk_size
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
-from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
+from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
+    HfAttentionWrapper,
+    HfDecoderWrapper,
+    HfModelWrapper,
+)
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
 
@@ -88,6 +94,10 @@ class ModelArgs(TTModelArgs):
             cache_hf=cache_hf,
         )
 
+        if is_blackhole() and self.num_devices > 1 and getattr(self.optimizations, "__name__", None) == "accuracy":
+            self.optimizations = DecodersPrecision.performance(self.n_layers, self.model_name)
+            self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
+
         # For Gemma3 we still need a real tokenizer even when using dummy_weights,
         # because prompt encoding relies on HF chat templates, not on checkpoint weights.
         if dummy_weights and self.tokenizer is None:
@@ -101,9 +111,14 @@ class ModelArgs(TTModelArgs):
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
-        force_fixed_k_chunk = getattr(self, "force_fixed_decode_k_chunk", False) or (
-            getattr(self.optimizations, "__name__", None) == "accuracy"
-        )
+        if is_blackhole():
+            env_has_chunk = bool(os.environ.get("GEMMA3_SDPA_DECODE_K_CHUNK", "").strip())
+            force_fixed_k_chunk = getattr(self, "force_fixed_decode_k_chunk", False) or env_has_chunk
+            # Single-chip BH: default to parent decode SDPA (k_chunk=0) so accuracy matches performance logits.
+        else:
+            force_fixed_k_chunk = getattr(self, "force_fixed_decode_k_chunk", False) or (
+                getattr(self.optimizations, "__name__", None) == "accuracy"
+            )
         if not force_fixed_k_chunk:
             return super().get_attn_sdpa_decode_program_config(prefetcher)
 
