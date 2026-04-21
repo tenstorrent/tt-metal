@@ -10,7 +10,7 @@
 job_summary:
   log_dirs:
     - docker-job/output
-  output_dir: docker-job/output/ai_summaries
+  output_dir: docker-job/ai_summaries
 
 run_summary:
   summary_dir: ai_job_summaries
