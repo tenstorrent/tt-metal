@@ -64,6 +64,8 @@ class ElfsCache:
                 try:
                     self._total_bytes += os.path.getsize(elf_path)
                 except OSError:
+                    # Size accounting is best-effort; a stat failure here
+                    # must not block ELF parsing or caching.
                     pass
 
             if self._enabled:
@@ -101,7 +103,6 @@ class ElfsCache:
         try:
             elf = ELFFile(mm)
             if not elf.has_dwarf_info():
-                mm.close()
                 raise TTTriageError(
                     f"Failed to extract DWARF info from ELF file {elf_path}.\n"
                     f"Run workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
