@@ -237,7 +237,7 @@ void calculate_recip_first_column() {
             if constexpr (DST_ACCUM_MODE || APPROX) {
                 sfpi::dst_reg[0] = out;
             } else {
-                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, RoundMode::NearestEven));
             }
             sfpi::dst_reg += 2;
         }
@@ -252,7 +252,7 @@ void calculate_recip_first_column() {
                     sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
                 } else {
                     sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-                    sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+                    sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, RoundMode::NearestEven));
                 }
             }
 
@@ -263,8 +263,7 @@ void calculate_recip_first_column() {
 
 template <bool legacy_compat = true>
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROXIMATE*/>(
-        calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
+    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
 }
 #endif
 
@@ -850,7 +849,7 @@ void calculate_exponential_first_column() {
 
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
 void exp_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_(
         calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, (int)VectorMode::C);
 }
 #endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
@@ -945,7 +944,7 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
 
 template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
-    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_(
         calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE>, idst, vector_mode, scale_bf16);
 }
 #endif
@@ -1113,7 +1112,7 @@ void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
 }
 
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_(
         calculate_softplus_first_column<APPROX>, idst, (int)VectorMode::C, beta, beta_reciprocal, threshold);
 }
 #endif
@@ -1390,8 +1389,8 @@ void apply_partial_mask_lightweight(
 /**
  * Lightweight causal mask: stamps neginf and diagonal tiles onto QKT using L1 accumulate.
  *
- * For Q tile-row i (0..num_rows-1) processing K chunk starting at k_low_idx:
- *   diag_col = q_low_idx + i - k_low_idx
+ * For Q tile-row i (0..num_rows-1) processing K chunk starting at k_start_tile:
+ *   diag_col = q_start_tile + i - k_start_tile
  *   - diag_col < 0:           entire row above diagonal -> stamp neginf on all num_cols tiles
  *   - 0 <= diag_col < num_cols: diagonal tile at col diag_col, neginf at cols diag_col+1..num_cols-1
  *   - diag_col >= num_cols:     entire row below diagonal -> no mask needed
@@ -1402,15 +1401,15 @@ void apply_causal_mask_lightweight(
     uint32_t neginf_idx,
     uint32_t diag_idx,
     uint32_t out_cb,
-    uint32_t q_low_idx,
-    uint32_t k_low_idx,
+    uint32_t q_start_tile,
+    uint32_t k_start_tile,
     uint32_t num_rows,
     uint32_t num_cols) {
     copy_tile_to_dst_init_short(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
-        int32_t diag_col = (int32_t)(q_low_idx + row) - (int32_t)k_low_idx;
+        int32_t diag_col = (int32_t)(q_start_tile + row) - (int32_t)k_start_tile;
         uint32_t row_offset = row * num_cols;
 
         if (diag_col < 0) {
@@ -1440,10 +1439,11 @@ void apply_causal_mask_lightweight(
 
 /**
  * Context for lightweight mask application in ring joint SDPA.
- * All mask tiles reside in a single CB. A default-constructed instance disables lightweight masking.
+ * All mask tiles reside in a single CB. This struct stores the pre-resolved mask metadata used when
+ * lightweight masking is enabled; enablement itself is controlled by the `lightweight_mask_enabled`
+ * template parameter(s), not by default-constructing this context.
  */
 struct LightweightMaskContext {
-    bool enabled = false;
     bool is_causal = false;                  // True only on ring_iter 0 for causal configs
     uint32_t neginf_tile_idx = 0;            // Index of -inf tile in the mask CB
     uint32_t causal_diag_tile_idx = 0;       // Index of causal diagonal tile in the mask CB
@@ -1515,16 +1515,16 @@ struct LightweightMaskContext {
         uint32_t global_n_mask_chunk_id,
         uint32_t local_n_mask_chunk_id,
         uint32_t joint_n_mask_chunk_id,
-        uint32_t q_low_idx = 0) const {
+        uint32_t q_start_tile = 0) const {
         if (is_causal) {
-            uint32_t k_low_idx = k_chunk * Sk_chunk_t;
+            uint32_t k_start_tile = k_chunk * Sk_chunk_t;
             apply_causal_mask_lightweight<dst_size>(
                 cb_mask_in,
                 neginf_tile_idx,
                 causal_diag_tile_idx,
                 cb_qk_im,
-                q_low_idx,
-                k_low_idx,
+                q_start_tile,
+                k_start_tile,
                 Sq_chunk_t,
                 Sk_chunk_t);
         }
@@ -1588,6 +1588,7 @@ enum SDPAType {
  * @tparam is_chunked - Whether query is chunked
  * @tparam scale_fp32 - FP32 scale factor
  * @tparam sliding_window_size - Sliding window attention size
+ * @tparam lightweight_mask_enabled - Enables the lightweight mask path (compile-time gated)
  *
  * Runtime Parameters:
  * @param Skt - Sequence length in tiles
@@ -1661,7 +1662,8 @@ template <
     bool use_joint_mask,
     bool is_chunked,
     uint32_t scale_fp32,
-    uint32_t sliding_window_size>
+    uint32_t sliding_window_size,
+    bool lightweight_mask_enabled = false>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1727,8 +1729,9 @@ void sdpa_inner_loop(
     const uint32_t q_per_core = iter_q_end - iter_q_start;
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
-        uint32_t q_low_idx;
-        uint32_t q_high_idx;
+        uint32_t q_start_tile = 0;    // First tile of Q chunk (tile units, both STANDARD and RING)
+        uint32_t q_high_tile = 0;     // STANDARD: upper tile bound for K iteration
+        uint32_t causal_k_limit = 0;  // RING: K-chunk index beyond which all K is above the diagonal
         if constexpr (sdpa_type == STANDARD) {
             uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
@@ -1746,19 +1749,18 @@ void sdpa_inner_loop(
             if constexpr (is_chunked) {
                 q_chunk = chunked_q_chunk_offset + q_chunk;
             }
-            q_low_idx = q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
+            q_start_tile = q_chunk * Sq_chunk_t;
             if (is_causal) {
-                q_high_idx = q_low_idx + Sq_chunk_t;
+                q_high_tile = q_start_tile + Sq_chunk_t;
             } else {
-                q_high_idx = Skt;
+                q_high_tile = Skt;
             }
         } else if (sdpa_type == RING) {
             uint32_t q_chunk = remap_q_index(q_iter, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
 
             if (is_causal) {
-                q_low_idx = q_chunk * Sq_chunk_t;
-                q_high_idx = q_low_idx + Sq_chunk_t;
-                q_high_idx = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
+                q_start_tile = q_chunk * Sq_chunk_t;
+                causal_k_limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
             }
             if (is_balanced && (q_chunk < q_num_chunks / 2)) {
                 continue;
@@ -1775,8 +1777,8 @@ void sdpa_inner_loop(
 
         uint32_t k_chunk_end;
         if constexpr (sdpa_type == STANDARD) {
-            // loop while k_low < q_high => (k_chunk * Sk_chunk_t) < q_high_idx.
-            k_chunk_end = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
+            // loop while k_low < q_high => (k_chunk * Sk_chunk_t) < q_high_tile.
+            k_chunk_end = (q_high_tile + Sk_chunk_t - 1) / Sk_chunk_t;
         } else {  // RING or JOINT.
             k_chunk_end = iter_k_chunk_end;
         }
@@ -1796,7 +1798,7 @@ void sdpa_inner_loop(
 
             KV_chunks_processed_in_iter++;
 
-            if (sdpa_type == RING && k_chunk >= q_high_idx && is_causal) {
+            if (sdpa_type == RING && k_chunk >= causal_k_limit && is_causal) {
                 cb_wait_front(cb_k_in, k_chunk_tiles);
                 cb_wait_front(cb_v_in, v_chunk_tiles);
                 cb_pop_front(cb_k_in, k_chunk_tiles);
@@ -1846,7 +1848,7 @@ void sdpa_inner_loop(
                 const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                 const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
                 // Apply mask if causal overlap, sliding window, or this K chunk has padding
-                apply_mask = (q_low_idx < k_high_idx) || (sliding_window_size > 0) || needs_padding_mask;
+                apply_mask = (q_start_tile < k_high_idx) || (sliding_window_size > 0) || needs_padding_mask;
             } else if constexpr (use_provided_mask) {
                 apply_mask = true;
             } else if constexpr (use_padded_mask) {
@@ -1860,7 +1862,7 @@ void sdpa_inner_loop(
             if (apply_mask) {
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
-                if (lw_mask.enabled) {
+                if constexpr (lightweight_mask_enabled) {
                     // Re-enter reserved state on cb_qk_im so the lightweight mask can be stamped in-place.
                     // matmul_blocks above already pushed the QK tiles, so tiles_received has been bumped;
                     // without the pop+push cycle below, reduce_c's cb_wait_front would return immediately
@@ -1886,7 +1888,7 @@ void sdpa_inner_loop(
                         global_n_mask_chunk_id,
                         local_n_mask_chunk_id,
                         joint_n_mask_chunk_id,
-                        q_low_idx);
+                        q_start_tile);
                     cb_push_back(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
                 } else {
                     add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
@@ -2143,7 +2145,8 @@ template <
     bool use_padded_mask,
     bool is_chunked,
     uint32_t scale_fp32,
-    uint32_t sliding_window_size>
+    uint32_t sliding_window_size,
+    bool lightweight_mask_enabled = false>
 void sdpa_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2200,7 +2203,8 @@ void sdpa_standard(
         false,  // use_joint_mask (not used)
         is_chunked,
         scale_fp32,
-        sliding_window_size>(
+        sliding_window_size,
+        lightweight_mask_enabled>(
         Skt,
         qk_in0_block_w,
         qk_subblock_w,
@@ -2392,7 +2396,8 @@ template <
     uint32_t NH,
     uint32_t DHt,
     uint32_t vDHt,
-    uint32_t scale_fp32>
+    uint32_t scale_fp32,
+    bool lightweight_mask_enabled = false>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
@@ -2444,8 +2449,8 @@ void sdpa_ring(
     const uint32_t cb_prev_out,
     const uint32_t cb_out,
     const LightweightMaskContext& lw_mask,
-    const bool is_causal,
-    const bool is_balanced,
+    const bool is_causal_ring_iter,
+    const bool skip_first_half_q,
     const bool is_last_ring_iter,
     const bool use_zigzag_balancing = false) {
     sdpa_inner_loop<
@@ -2465,8 +2470,9 @@ void sdpa_ring(
         false,  // use_joint_mask (not used)
         false,  // is_chunked (not used)
         scale_fp32,
-        0>(  // sliding_window_size (not used)
-        0,   // Skt (not used)
+        0,  // sliding_window_size (not used)
+        lightweight_mask_enabled>(
+        0,  // Skt (not used)
         qk_in0_block_w,
         qk_subblock_w,
         qk_subblock_h,
@@ -2521,8 +2527,8 @@ void sdpa_ring(
         cb_prev_out,
         cb_out,
         lw_mask,
-        is_causal,
-        is_balanced,
+        is_causal_ring_iter,
+        skip_first_half_q,
         use_zigzag_balancing,
         is_last_ring_iter);
 }
