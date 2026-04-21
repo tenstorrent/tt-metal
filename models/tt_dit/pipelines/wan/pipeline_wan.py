@@ -37,6 +37,8 @@ from ...utils.tensor import (
     bf16_tensor,
     fast_device_to_host,
     float32_tensor,
+    float_to_uint8,
+    float_to_unit_range,
     local_device_to_torch,
     typed_tensor_2dshard,
 )
@@ -165,6 +167,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         vae_dtype: ttnn.DataType = ttnn.bfloat16,
         vae_t_chunk_size: int | None = 1,
         sdpa_t_fracture_w_only: bool = False,
+        target_height: int = 0,
+        target_width: int = 0,
+        t_chunk_size: int = 0,
     ):
         super().__init__()
 
@@ -282,6 +287,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.vae_parallel_config,
             dtype=vae_dtype,
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
+            target_height=target_height,
+            target_width=target_width,
+            t_chunk_size=t_chunk_size,
+            cached=(vae_t_chunk_size is not None),
         )
 
         self.transformer_states = [
@@ -323,7 +332,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
         # TODO: Reset buffers for change in resolution. Also reinitialize trace
-        self.warmup_buffers(**self.get_default_resolution())
+        self.warmup_buffers(height=target_height, width=target_width)
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         prompt_1BLP = tt_model.prepare_text_conditioning(prompt_embeds)
@@ -332,11 +341,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         else:
             ttnn.copy(prompt_1BLP, buffer)
         return buffer
-
-    def get_default_resolution(self):
-        if self.mesh_device.shape.mesh_size() >= 32:
-            return {"height": 720, "width": 1280}
-        return {"height": 480, "width": 832}
 
     def warmup_buffers(self, height, width):
         self.run_single_prompt(
@@ -362,6 +366,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         pipeline_class=None,
         vae_t_chunk_size=_UNSET,
         sdpa_t_fracture_w_only=None,
+        target_height: int = 0,
+        target_width: int = 0,
+        num_frames: int = 81,
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
@@ -381,6 +388,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": True,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
+                "vae_t_chunk_size": 7,
             }
             device_configs[(4, 8)] = {
                 "sp_axis": 1,
@@ -389,7 +397,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
-                "vae_t_chunk_size": 11,  # default T = 21 so will use two steps
+                "vae_t_chunk_size": None,  # full-T
             }
             device_configs[(4, 32)] = {
                 "sp_axis": 1,
@@ -424,24 +432,31 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         sp_axis = config["sp_axis"] if sp_axis is None else sp_axis
         tp_axis = config["tp_axis"] if tp_axis is None else tp_axis
+        if vae_t_chunk_size is _UNSET:
+            vae_t_chunk_size = config.get("vae_t_chunk_size", 1)
+        full_latent_T = (num_frames - 1) // 4 + 1
+        decoder_t_chunk_size = full_latent_T if vae_t_chunk_size is None else vae_t_chunk_size
+
+        h_factor = tuple(mesh_device.shape)[tp_axis]
+        w_factor = tuple(mesh_device.shape)[sp_axis]
 
         parallel_config = DiTParallelConfig(
-            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tuple(mesh_device.shape)[tp_axis]),
-            sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=tuple(mesh_device.shape)[sp_axis]),
+            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=h_factor),
+            sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=w_factor),
             cfg_parallel=None,
         )
         vae_parallel_config = VaeHWParallelConfig(
             height_parallel=ParallelFactor(
-                factor=tuple(mesh_device.shape)[tp_axis],
+                factor=h_factor,
                 mesh_axis=tp_axis,
             ),
             width_parallel=ParallelFactor(
-                factor=tuple(mesh_device.shape)[sp_axis],
+                factor=w_factor,
                 mesh_axis=sp_axis,
             ),
         )
         encoder_parallel_config = EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis)
+            tensor_parallel=ParallelFactor(factor=h_factor, mesh_axis=tp_axis)
         )
         pipeline_class_ = pipeline_class or WanPipeline
         return pipeline_class_(
@@ -456,10 +471,13 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             topology=topology or config["topology"],
             is_fsdp=is_fsdp if is_fsdp is not None else config["is_fsdp"],
             checkpoint_name=checkpoint_name,
-            vae_t_chunk_size=vae_t_chunk_size if vae_t_chunk_size is not _UNSET else config.get("vae_t_chunk_size", 1),
+            vae_t_chunk_size=vae_t_chunk_size,
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only
             if sdpa_t_fracture_w_only is not None
             else config.get("sdpa_t_fracture_w_only", False),
+            target_height=target_height,
+            target_width=target_width,
+            t_chunk_size=decoder_t_chunk_size,
         )
 
     def _prepare_text_encoder(self):
@@ -994,28 +1012,38 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             self._prepare_vae()
             tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, t_chunk_size=self.vae_t_chunk_size)
 
-            # On-device post-processing for np output: [-1,1] → [0,1]
-            # VAE output is ROW_MAJOR; arithmetic ops require TILE_LAYOUT.
-            if output_type == "np":
-                tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.TILE_LAYOUT)
-                tt_video_BCTHW = ttnn.add(tt_video_BCTHW, 1.0)
-                tt_video_BCTHW = ttnn.multiply(tt_video_BCTHW, 0.5)
-                tt_video_BCTHW = ttnn.clamp(tt_video_BCTHW, min=0.0, max=1.0)
-                tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
-
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
             concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
+            d2h_permute = (0, 2, 3, 4, 1) if output_type in ("np", "uint8") else None
+
+            if output_type == "uint8":
+                pre_fn = float_to_uint8
+            elif output_type == "np":
+                pre_fn = float_to_unit_range
+            else:
+                pre_fn = None
+
             video_torch = fast_device_to_host(
                 tt_video_BCTHW,
                 self.mesh_device,
                 concat_dims,
                 ccl_manager=self.vae_ccl_manager,
+                pre_transfer_fn=pre_fn,
+                permute=d2h_permute,
             )
-            video_torch = video_torch[:, :, :, :new_logical_h, :]
 
-            if output_type == "np":
-                video = video_torch.permute(0, 2, 3, 4, 1).float().numpy()
+            if d2h_permute is not None:
+                # Output is (B, T, H, W, C) — trim height in dim 2.
+                video_torch = video_torch[:, :, :new_logical_h, :, :]
+            else:
+                # Output is (B, C, T, H, W) — trim height in dim 3.
+                video_torch = video_torch[:, :, :, :new_logical_h, :]
+
+            if output_type == "uint8":
+                video = video_torch.numpy()
+            elif output_type == "np":
+                video = video_torch.float().numpy()
             else:
                 video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
         else:
