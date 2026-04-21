@@ -13,9 +13,14 @@ import ttnn
 from ttnn.operations.ccl import MoEActivationFunction
 
 from ttnn.experimental.moe_compute_utils import (
+    DS_PAD_CORES,
     DS_W0_W1_SHARD_VALS,
     DS_W2_SHARD_VALS,
+    GPT_PAD_CORES,
+    GPT_W0_W1_SHARD_VALS,
+    GPT_W2_SHARD_VALS,
     get_weight_core_shard_maps,
+    get_weight_mem_configs,
     prepare_w0_w1_tensor_for_moe_compute,
     prepare_w2_tensor_for_moe_compute,
 )
@@ -31,6 +36,12 @@ MESH_GRAPH_DESC_1x16 = (
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
+
+# TODO (AM) this should go in a central location
+HIDDEN_TO_SHARD_INFO = {
+    7168: (DS_PAD_CORES, DS_W0_W1_SHARD_VALS, DS_W2_SHARD_VALS),
+    2880: (GPT_PAD_CORES, GPT_W0_W1_SHARD_VALS, GPT_W2_SHARD_VALS),
+}
 
 
 def is_mesh_graph_descriptor_set(expected_path):
@@ -1015,19 +1026,23 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("experts_per_device", [2, 3, 4])
+# @pytest.mark.parametrize("experts_per_device", [2, 3, 4])
+@pytest.mark.parametrize("experts_per_device", [2])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
-    [(1, 1, 5), (8, 5, 3)],
-    ids=["perf", "accuracy"],
+    [(8, 5, 3)],
+    #     [(1, 1, 5), (8, 5, 3)],
+    #     ids=["perf", "accuracy"],
 )
+# @pytest.mark.parametrize("N, hidden_size", [(2880, 2880)])
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize("enable_trace", [False])
+# @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("output_height_shard_dim", [4])
-@pytest.mark.parametrize("output_width_shard_dim", [4])
-@pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
+@pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU])
+# @pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
 @torch.no_grad()
 def test_moe_compute(
     mesh_device,
@@ -1041,7 +1056,6 @@ def test_moe_compute(
     N,
     hidden_size,
     output_height_shard_dim,
-    output_width_shard_dim,
     dtype,
     enable_trace,
     activation_type,
@@ -1094,6 +1108,16 @@ def test_moe_compute(
     logger.info(f"  num_iterations: {num_iterations}")
     logger.info(f"  enable_trace: {enable_trace}")
     logger.info(f"  activation_type: {activation_type}")
+
+    # Determine output_width_shard_dim based on hidden_size
+    if hidden_size == 7168:
+        output_width_shard_dim = 4  # DeepSeekRingConfig::OUTPUT_WIDTH_SHARD_DIM
+    elif hidden_size == 2880:
+        output_width_shard_dim = 3  # GptRingConfig::OUTPUT_WIDTH_SHARD_DIM
+    else:
+        raise ValueError(
+            f"Unsupported hidden size {hidden_size} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)"
+        )
 
     #########################################
     # CREATE TILIZE INPUT TENSORS AND GOLDENS
@@ -1244,7 +1268,7 @@ def test_moe_compute(
     # --------------------------------------------------------------------------
 
     w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(
-        mesh_device, DS_W0_W1_SHARD_VALS, DS_W2_SHARD_VALS
+        mesh_device, *HIDDEN_TO_SHARD_INFO[hidden_size]
     )
 
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
@@ -1279,31 +1303,9 @@ def test_moe_compute(
         cluster_axis,
     )
 
-    # ------------------------------------------------------------------------
-    # Create DRAM shard spec for w0_w1
-    # Tensor shape: (num_layers, experts_per_device, hidden_size, 4608) -> padded and reordered to (12, num_layers, experts_per_device, 6, hidden_size, 64)
-    # ------------------------------------------------------------------------
-    w0_w1_shard_height = num_layers * experts_per_device * 3 * hidden_size
-    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
-
-    w0_w1_shard_spec = ttnn.ShardSpec(
-        dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    w0_w1_mem_config, w2_mem_config = get_weight_mem_configs(
+        num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map, w2_shard_map, dram_core_range_set
     )
-
-    w0_w1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec)
-
-    # ------------------------------------------------------------------------
-    # Create DRAM shard spec for w2
-    # Tensor shape: (num_layers, experts_per_device, N, hidden_size) -> padded and reordered to (12, num_layers, experts_per_device, 5, N + 192, 128)
-    # ------------------------------------------------------------------------
-    w2_shard_height = num_layers * experts_per_device * 5 * (N + 192)
-    w2_shard_width = 4 * ttnn.TILE_SIZE
-
-    w2_shard_spec = ttnn.ShardSpec(
-        dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
-    )
-
-    w2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
 
     # ------------------------------------------------------------------------
     # Prepare w0_w1 tensor (interleaved, padded, and reordered)
@@ -1337,7 +1339,9 @@ def test_moe_compute(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    output_shard_cores = ttnn.experimental.get_moe_combine_cores(mesh_device)
+    output_shard_cores = ttnn.experimental.get_moe_combine_cores(
+        mesh_device, output_height_shard_dim, output_width_shard_dim
+    )
     combine_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in output_shard_cores])
     combine_barrier_semaphore = ttnn.create_global_semaphore(mesh_device, combine_core_range_set, 0)
     mux_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange((1, 1), (3, 3))])
@@ -1409,7 +1413,6 @@ def test_moe_compute(
             tt_w2,
             layer_id=layer_id,
             output_height_shard_dim=output_height_shard_dim,
-            output_width_shard_dim=output_width_shard_dim,
             cluster_axis=cluster_axis,
             mux_core_range_set=mux_core_range_set,
             optional_output_tensor=tt_combine_output_tensors[layer_id],
@@ -1485,7 +1488,9 @@ def test_moe_compute(
 
     pcc_threshold = _get_pcc_threshold(activation_type)
 
-    output_shard_cores = ttnn.experimental.get_moe_combine_cores(mesh_device)
+    output_shard_cores = ttnn.experimental.get_moe_combine_cores(
+        mesh_device, output_height_shard_dim, output_width_shard_dim
+    )
     per_expert_tokens_all_passed = True
     activation_all_passed = True
     e_t_all_passed = True

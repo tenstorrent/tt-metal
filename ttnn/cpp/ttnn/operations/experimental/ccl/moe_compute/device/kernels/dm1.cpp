@@ -13,7 +13,7 @@ inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) 
 // Type holder to extract config type at compile time
 template <uint32_t ConfigTypeValue>
 struct ConfigTypeHolder {
-    static constexpr auto config_type = static_cast<moe_ring::MoEConfigType>(ConfigTypeValue);
+    static constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(ConfigTypeValue);
     using type = moe_ring::ConfigType_t<config_type>;
 };
 }  // namespace detail

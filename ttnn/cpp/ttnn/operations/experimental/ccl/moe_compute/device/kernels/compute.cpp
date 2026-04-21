@@ -29,24 +29,24 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
     WAYPOINT("NSMD");
 }
 
-template <MoEActivationFunction activation>
+template <ttnn::experimental::prim::detail::MoEActivationFunction activation>
 inline void pack_init_activation() {};
 
 template <>
-inline void pack_init_activation<MoEActivationFunction::SWIGLU>() {
+inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU>() {
     PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
 };
 
 template <>
-inline void pack_init_activation<MoEActivationFunction::SILU>() {
+inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
     PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
 };
 
-template <MoEActivationFunction activation>
+template <ttnn::experimental::prim::detail::MoEActivationFunction activation>
 inline void pack_compute_activation() {};
 
 template <>
-inline void pack_compute_activation<MoEActivationFunction::SILU>() {
+inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
     PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
     PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
 
@@ -55,7 +55,7 @@ inline void pack_compute_activation<MoEActivationFunction::SILU>() {
 };
 
 template <>
-inline void pack_compute_activation<MoEActivationFunction::SWIGLU>() {
+inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU>() {
     PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(0, 1, 0)));
     PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
 };
@@ -63,7 +63,7 @@ inline void pack_compute_activation<MoEActivationFunction::SWIGLU>() {
 // Type holder to extract config type at compile time
 template <uint32_t ConfigTypeValue>
 struct ConfigTypeHolder {
-    static constexpr auto config_type = static_cast<moe_ring::MoEConfigType>(ConfigTypeValue);
+    static constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(ConfigTypeValue);
     using type = moe_ring::ConfigType_t<config_type>;
 };
 
@@ -77,7 +77,7 @@ void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr auto activation_type =
-        detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
+        ttnn::experimental::prim::detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
 
     // For synchronization with tilize cores
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
