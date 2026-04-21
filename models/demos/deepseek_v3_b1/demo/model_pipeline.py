@@ -47,6 +47,7 @@ class ModelPipeline:
         dense_layer_id_override: int | None = None,
         moe_layer_id_override: int | None = None,
         io_socket_descriptor_prefix: str | None = None,
+        num_slots: int = 64,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
@@ -87,6 +88,7 @@ class ModelPipeline:
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             enable_mtp=True,
+            num_slots=num_slots,
         )
         if config.num_stages != num_procs:
             raise RuntimeError(f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes")

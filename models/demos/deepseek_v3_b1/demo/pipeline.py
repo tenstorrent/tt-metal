@@ -352,6 +352,7 @@ def create_sp4_pipeline_configuration(
     enable_mtp: bool = False,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
+    num_slots: int = 64,
 ) -> PipelineConfiguration:
     """64-stage super-pod: Embed -> Dense(0,1,2) -> Decoder(3..60) -> LMHead -> Token fwd.
 
@@ -385,6 +386,7 @@ def create_sp4_pipeline_configuration(
         return lambda d: DenseDecoderStage(
             weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
+            num_slots=num_slots,
             forward_metadata=True,
         )
 
@@ -392,6 +394,7 @@ def create_sp4_pipeline_configuration(
         return lambda d: MoEDecoderStage(
             weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
+            num_slots=num_slots,
             forward_metadata=True,
         )
 
@@ -419,6 +422,7 @@ def create_pipeline_configuration_from_num_procs(
     enable_mtp: bool = False,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
+    num_slots: int = 64,
 ) -> PipelineConfiguration:
     """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod, 64 -> sp4)."""
     if num_procs == 4:
@@ -437,6 +441,7 @@ def create_pipeline_configuration_from_num_procs(
             enable_mtp=enable_mtp,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
+            num_slots=num_slots,
         )
     if num_procs == 64:
         return create_sp4_pipeline_configuration(
@@ -446,6 +451,7 @@ def create_pipeline_configuration_from_num_procs(
             enable_mtp=enable_mtp,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
+            num_slots=num_slots,
         )
     raise ValueError(f"Unsupported num_procs: {num_procs}")
 
@@ -617,6 +623,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
     enable_mtp: bool = False,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
+    num_slots: int = 64,
 ) -> PipelineConfiguration:
     """16-stage single-pod: Embed -> Dense(0,1,2) -> Decoder(3..12) -> LMHead -> Token fwd.
 
@@ -650,6 +657,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
         return lambda d: DenseDecoderStage(
             weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
+            num_slots=num_slots,
             forward_metadata=True,
         )
 
@@ -657,6 +665,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
         return lambda d: MoEDecoderStage(
             weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
+            num_slots=num_slots,
             forward_metadata=True,
         )
 

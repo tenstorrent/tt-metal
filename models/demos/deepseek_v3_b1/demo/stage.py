@@ -941,6 +941,12 @@ class _CombinedPipelineBlock:
             f"d2h_dev={loopback_exit_coord}",
         )
 
+    def export_host_socket_descriptors(self, io_socket_descriptor_prefix: str = "deepseek") -> None:
+        assert self.h2d_socket is not None, "Expected H2D socket on the first pipeline stage"
+        assert self.d2h_socket is not None, "Expected D2H socket on the first pipeline stage"
+        self.h2d_socket.export_descriptor(f"{io_socket_descriptor_prefix}_h2d")
+        self.d2h_socket.export_descriptor(f"{io_socket_descriptor_prefix}_d2h")
+
     def run(self) -> None:
         self.h2d_host_io.run()
         self.d2h_host_io.run()
