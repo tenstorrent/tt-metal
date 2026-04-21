@@ -100,7 +100,19 @@ MetalEnvImpl::~MetalEnvImpl() {
         s_registry_.erase(this);
     }
     check_use_count_zero();
-    teardown_fabric_objects();
+    try {
+        teardown_fabric_objects();
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogMetal,
+            "~MetalEnvImpl: teardown_fabric_objects() threw: {}. Likely dead ERISC relay on remote chip.",
+            e.what());
+    } catch (...) {
+        log_warning(
+            tt::LogMetal,
+            "~MetalEnvImpl: teardown_fabric_objects() threw non-std exception "
+            "(likely UmdException<RuntimeError> from dead ERISC relay). Ignoring.");
+    }
     try {
         cluster_.reset();
     } catch (const std::exception& e) {

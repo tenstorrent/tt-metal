@@ -191,7 +191,22 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     dev, mux_core, tensix_termination_address, tensix_termination_signal, CoreType::WORKER);
             }
 
-            cluster_.l1_barrier(dev->id());
+            try {
+                cluster_.l1_barrier(dev->id());
+            } catch (const std::exception& barrier_ex) {
+                log_warning(
+                    tt::LogMetal,
+                    "FabricFirmwareInitializer::teardown: l1_barrier threw on Device {}: {} — "
+                    "likely dead ERISC relay; continuing teardown.",
+                    dev->id(),
+                    barrier_ex.what());
+            } catch (...) {
+                log_warning(
+                    tt::LogMetal,
+                    "FabricFirmwareInitializer::teardown: l1_barrier threw non-std exception on Device {} "
+                    "(likely UmdException<RuntimeError> from dead ERISC relay). Continuing teardown.",
+                    dev->id());
+            }
 
             // Poll each MUX core until TERMINATED before proceeding.
             // Without this, configure_fabric() in the next test can write new launch messages
