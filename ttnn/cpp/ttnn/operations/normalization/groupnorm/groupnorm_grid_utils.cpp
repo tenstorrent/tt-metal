@@ -147,7 +147,8 @@ uint32_t compute_num_virtual_cols(uint32_t grid_x, int num_groups, uint32_t num_
 }
 
 std::optional<ttnn::CoreGrid> find_expected_dram_grid(
-    uint32_t max_x, uint32_t max_y, uint32_t num_channels, int num_groups, uint32_t input_nhw) {
+    uint32_t max_x, uint32_t max_y, uint32_t num_channels, int num_groups, uint32_t input_nhw, uint32_t num_batches) {
+    TT_FATAL(num_batches >= 1, "find_expected_dram_grid: num_batches must be >= 1, got {}", num_batches);
     uint32_t Ht = static_cast<uint32_t>(std::ceil(static_cast<double>(input_nhw) / ttnn::types::TILE_SIZE));
 
     for (uint32_t gx = max_x; gx >= 1; --gx) {
@@ -162,9 +163,13 @@ std::optional<ttnn::CoreGrid> find_expected_dram_grid(
         uint32_t max_gy = std::min<uint32_t>(Ht / rows_per_y, max_y);
         for (uint32_t gy = max_gy; gy >= 1; --gy) {
             uint32_t num_virtual_rows = rows_per_y * gy;
-            if (Ht % num_virtual_rows == 0) {
-                return ttnn::CoreGrid(gx, gy);
+            if (Ht % num_virtual_rows != 0) {
+                continue;
             }
+            if (num_virtual_rows >= num_batches && num_virtual_rows % num_batches != 0) {
+                continue;
+            }
+            return ttnn::CoreGrid(gx, gy);
         }
     }
     return std::nullopt;
