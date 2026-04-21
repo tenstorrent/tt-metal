@@ -217,7 +217,7 @@ ALWI void DestReuseOp<CB, OpType, ReuseType, Slot, Policy, Reconfig>::operator()
         // Wait for enough tiles to cover cb_tile_idx (minimum 1 tile for index 0).
         cb_wait_front(CB, cb_tile_idx + 1);
     }
-    if constexpr (Reconfig == DestReuseReconfig::CbSide) {
+    if constexpr (Reconfig == DestReuseReconfig::Input) {
         // DEST_TO_SRCA: CB feeds SRCB, so reconfig srcb. Inverse for DEST_TO_SRCB.
         if constexpr (ReuseType == EltwiseBinaryReuseDestType::DEST_TO_SRCA) {
             reconfig_data_format_srcb(CB);

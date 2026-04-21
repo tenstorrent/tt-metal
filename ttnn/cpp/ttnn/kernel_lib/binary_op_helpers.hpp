@@ -338,13 +338,18 @@ ALWI void square(uint32_t icb, uint32_t ocb, BinaryInputBlockShape shape, PostOp
 /**
  * @brief Data-format reconfig mode for DestReuseOp.
  *
- * - None:   no reconfig; CB format must already match binary_op's setup.
- * - CbSide: reconfig the SRC that receives CB — srcb when DEST_TO_SRCA,
- *           srca when DEST_TO_SRCB.
+ * DestReuseOp reads DEST (which needs no data-format reconfig) and CB (which
+ * may need one if CB's format differs from binary_op's icb_b/icb_a format).
+ * This enum toggles the CB-side reconfig only.
+ *
+ * - None:  no reconfig; CB's data format must already match binary_op's setup
+ *          (common case: cb_den / cb_scale has the same format as icb_b).
+ * - Input: reconfig the SRC register that receives the CB tile — srcb when
+ *          ReuseType = DEST_TO_SRCA, srca when ReuseType = DEST_TO_SRCB.
  */
 enum class DestReuseReconfig {
     None,
-    CbSide,
+    Input,
 };
 
 /**
