@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 
 
 class TtPrefillTransformer(LightweightModule):
@@ -45,6 +46,52 @@ class TtPrefillTransformer(LightweightModule):
     Note: LM head (ColumnParallelLinear output projection) is not implemented yet.
     TODO: Add LM head after https://github.com/tenstorrent/tt-metal/pull/41275 lands.
     """
+
+    @staticmethod
+    def check_cache_complete(
+        cache_path: Path | None,
+        num_layers: int,
+        experts_per_chip: int = 8,
+        first_k_dense: int = 3,
+    ) -> bool:
+        """
+        Top-level cache completeness check for the full transformer.
+
+        Checks embedding, all blocks (norms + MLA + FFN/MoE), and final norm.
+        Replaces the monolithic check_ttnn_cache_complete from cache_utils.py.
+
+        Args:
+            cache_path: Path to TTNN weight cache directory
+            num_layers: Number of transformer layers
+            experts_per_chip: Number of routed experts per chip (default: 8)
+            first_k_dense: Number of initial dense (non-MoE) layers (default: 3)
+
+        Returns:
+            True if all expected cache files exist, False otherwise
+        """
+        if not cache_path or not cache_path.exists():
+            logger.debug(f"TTNN cache path does not exist: {cache_path}")
+            return False
+
+        # Initialize fast cache checker for this directory
+        init_checker(cache_path)
+
+        # Embedding
+        if not TtParallelEmbedding.check_cache_complete(cache_path):
+            return False
+
+        # Per-layer blocks
+        for layer_idx in range(num_layers):
+            is_dense = layer_idx < first_k_dense
+            if not TtPrefillBlock.check_cache_complete(cache_path, layer_idx, is_dense, experts_per_chip):
+                return False
+
+        # Final norm
+        if not TtDistributedRmsNorm.check_cache_complete(cache_path, "norm"):
+            return False
+
+        logger.info(f"TTNN cache complete at {cache_path} ({num_layers} layers)")
+        return True
 
     def __init__(
         self,
