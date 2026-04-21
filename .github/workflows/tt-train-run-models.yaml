@@ -75,6 +75,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
+    timeout-minutes: ${{ inputs.timeout }}
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
