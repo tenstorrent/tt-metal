@@ -549,11 +549,7 @@ inline void _llk_pack_fast_tilize_block_(
             TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 2); // CH0Z += 2
             // move to the next tile in L1
             TTI_ADDDMAREG(p_adddmareg::REG_PLUS_REG, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
-            // Skip on the last unit: advanced address is CB_END, which maps to L1_SIZE via 32-bit overflow when CB_END == L1_SIZE.
-            if (i < num_units - 1)
-            {
-                TTI_REG2FLOP_COMMON(p_reg2flop::WRITE_4B, REG2FLOP_FLOP_INDEX(THCON_SEC0_REG1_L1_Dest_addr_ADDR32), p_gpr_pack::OUTPUT_ADDR);
-            }
+            TTI_REG2FLOP_COMMON(p_reg2flop::WRITE_4B, REG2FLOP_FLOP_INDEX(THCON_SEC0_REG1_L1_Dest_addr_ADDR32), p_gpr_pack::OUTPUT_ADDR);
             // this pack should behave as a no op aside from the address mod side effect (which is resetting the Y counter to the beginning of the tile)
             // but it actually provides some kind of a stall required when modifying the L1 base address while the packer is running
             // and has less performance impact than a PACK PACK STALLWAIT
@@ -591,10 +587,7 @@ inline void _llk_pack_fast_tilize_block_(
             TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 4); // CH0Z += 4
             // move to the next tile in L1
             TTI_ADDDMAREG(p_adddmareg::REG_PLUS_REG, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
-            if (i < num_units - 1)
-            {
-                TTI_REG2FLOP_COMMON(p_reg2flop::WRITE_4B, REG2FLOP_FLOP_INDEX(THCON_SEC0_REG1_L1_Dest_addr_ADDR32), p_gpr_pack::OUTPUT_ADDR);
-            }
+            TTI_REG2FLOP_COMMON(p_reg2flop::WRITE_4B, REG2FLOP_FLOP_INDEX(THCON_SEC0_REG1_L1_Dest_addr_ADDR32), p_gpr_pack::OUTPUT_ADDR);
             // same notes for the flush bit as above
             // address mod here resets to the beginning of the unit
             TTI_PACR_COMMON(ADDR_MOD_3, p_pacr::P_ZERO_OUTPUT_DISABLED, PACK_SEL(NUM_PACKERS), 1, 0);
@@ -641,10 +634,7 @@ inline void _llk_pack_fast_tilize_block_(
             TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 6); // CH0Z += 6
             // move to the next tile in L1
             TTI_ADDDMAREG(p_adddmareg::REG_PLUS_REG, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
-            if (i < num_units - 1)
-            {
-                TTI_REG2FLOP_COMMON(p_reg2flop::WRITE_4B, REG2FLOP_FLOP_INDEX(THCON_SEC0_REG1_L1_Dest_addr_ADDR32), p_gpr_pack::OUTPUT_ADDR);
-            }
+            TTI_REG2FLOP_COMMON(p_reg2flop::WRITE_4B, REG2FLOP_FLOP_INDEX(THCON_SEC0_REG1_L1_Dest_addr_ADDR32), p_gpr_pack::OUTPUT_ADDR);
             // same notes for the flush bit as above
             // address mod here resets to the beginning of the unit
             TTI_PACR_COMMON(ADDR_MOD_3, p_pacr::P_ZERO_OUTPUT_DISABLED, PACK_SEL(NUM_PACKERS), 1, 0);
