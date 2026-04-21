@@ -43,7 +43,7 @@ void kernel_main() {
                 l1_addr += aligned_stick_nbytes_dram;
             }
         }
-        uint64_t dst_noc_addr = get_noc_addr(dst_index, s_out);
+        uint64_t dst_noc_addr = s_out.get_noc_addr(dst_index);
         if constexpr (!is_l1_aligned) {
             noc_async_write((uint32_t)patch_data, dst_noc_addr, stick_nbytes * patch_size);
         } else {

@@ -30,7 +30,7 @@ void kernel_main() {
         uint32_t l1_write_addr = cb_in0.get_write_ptr();
         for (uint32_t i = 0; i < stride_h; i++) {
             for (uint32_t j = 0; j < stride_w; j++) {
-                uint64_t src_noc_addr = get_noc_addr(curr_src_offset, s_in);
+                uint64_t src_noc_addr = s_in.get_noc_addr(curr_src_offset);
                 noc_async_read(src_noc_addr, l1_write_addr, stick_nbytes);
                 curr_src_offset++;
                 l1_write_addr += aligned_stick_nbytes_dram;

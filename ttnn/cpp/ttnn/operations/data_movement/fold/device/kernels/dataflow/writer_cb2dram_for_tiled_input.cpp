@@ -56,7 +56,7 @@ void kernel_main() {
                 (remaining_width < tt::constants::TILE_HEIGHT) ? remaining_width : tt::constants::TILE_HEIGHT;
 
             for (uint32_t stick_idx = 0; stick_idx < width_limit; stick_idx++) {
-                const uint64_t dst_noc_addr = get_noc_addr(output_stick_idx, dst);
+                const uint64_t dst_noc_addr = dst.get_noc_addr(output_stick_idx);
                 noc_async_write(l1_read_addr, dst_noc_addr, stick_nbytes);
 
                 // Update pointers and indices
