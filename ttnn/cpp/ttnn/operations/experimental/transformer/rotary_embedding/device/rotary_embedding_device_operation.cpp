@@ -33,9 +33,20 @@ void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL((cos.layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
     TT_FATAL((sin.layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
 
-    TT_FATAL(input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
+    TT_FATAL(
+        input_tensor.padded_shape()[-1] == TILE_WIDTH || input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
+        "Input X dim ({}) must be either {} (single tile) or divisible by {} (rotate_half midpoint must "
+        "align with a tile boundary).",
+        input_tensor.padded_shape()[-1],
+        TILE_WIDTH,
+        TILE_WIDTH * 2);
     uint32_t seq_len = input_tensor.padded_shape()[-2];
     uint32_t X = input_tensor.padded_shape()[-1];
+    // The single-tile (Wt == 1) path rotates via matmul_tiles against an in-L1
+    // bfloat16 transformation matrix. On Wormhole LLK the mixed-precision
+    // combination "bfp8 input @ bf16 trans_mat" corrupts the matmul output
+    // pack, so constrain input/cos/sin to bfloat16 here until that LLK
+    // interaction is resolved.
     TT_FATAL(cos.dtype() == sin.dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.padded_shape() == sin.padded_shape(), "Cos and Sin dims must match");
     TT_FATAL(

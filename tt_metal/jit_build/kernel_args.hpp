@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <filesystem>
 #include <string>
 
 namespace tt::tt_metal {
@@ -11,6 +12,6 @@ namespace tt::tt_metal {
 void log_kernel_defines_and_args(
     const std::string& out_dir, const std::string& full_kernel_name, const std::string& defines_and_args_str);
 // Dump all kernel compile-time arguments to a file
-void dump_kernel_defines_and_args(const std::string& out_kernel_root_path);
+void dump_kernel_defines_and_args(const std::filesystem::path& out_kernel_root_path);
 
 }  // namespace tt::tt_metal
