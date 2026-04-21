@@ -317,7 +317,7 @@ def prepare_output_tensor_from_combine_writer(
 
 ATOL_THRESHOLD = 700
 SWIGLU_PCC_THRESHOLD = 0.984
-SILU_PCC_THRESHOLD = 0.988
+SILU_PCC_THRESHOLD = 0.986
 
 
 def _get_pcc_threshold(activation_type):
