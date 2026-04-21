@@ -340,22 +340,20 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 }
 
 // ----------------------------------------------------------------------------
-// Default Inference (optional inputs -> explicit)
+// InferWorkers: Populate spec.workers if not supplied by the user
 // ----------------------------------------------------------------------------
 //
-// Some optional parameters in the ProgramSpec are automatically inferred by the
-// runtime if the user doesn't specify them explicitly:
-//   - WorkerSpecs
-//   - Gen1 DM kernel configuration (TODO)
-//
-//
-// Infer WorkerSpecs from kernels, DFBs, and semaphores.
+// If WorkerSpecs are not supplied by the user, infer them from the
+// ProgramSpec's kernel/DFB/semaphore target_nodes fields.
 std::vector<WorkerSpec> InferWorkers(const ProgramSpec& spec) {
-    using CoverageSig = std::tuple<std::set<KernelSpecName>, std::set<DFBSpecName>, std::set<SemaphoreSpecName>>;
+    // NodeContents: the kernels, DFBs, and semaphores on a given node are its "signature"
+    // Nodes with the same NodeContents can be grouped together into the same WorkerSpec
+    using NodeContents = std::tuple<std::set<KernelSpecName>, std::set<DFBSpecName>, std::set<SemaphoreSpecName>>;
 
-    std::map<NodeCoord, CoverageSig> node_to_sig;
+    std::map<NodeCoord, NodeContents> node_contents_map;
 
-    // Compute coverage signatures for each node mentioned in any target_nodes field.
+    // Visit every node in a std::variant<NodeCoord, NodeRange, NodeRangeSet>
+    // TODO: Why the heck do we always deal with this silly variant? Why not just NodeRangeSet everywhere?
     auto for_each_node = [&](const std::variant<NodeCoord, NodeRange, NodeRangeSet>& target_nodes, auto&& fn) {
         const NodeRangeSet range_set = to_node_range_set(target_nodes);
         for (const NodeRange& range : range_set.ranges()) {
@@ -365,27 +363,30 @@ std::vector<WorkerSpec> InferWorkers(const ProgramSpec& spec) {
         }
     };
 
-    // Accumulate coverage signatures from kernels, DFBs, and semaphores.
+    // Populate the NodeContents for every node (mentioned somewhere in the ProgramSpec)
     for (const KernelSpec& kernel : spec.kernels) {
-        for_each_node(
-            kernel.target_nodes, [&](const NodeCoord& n) { std::get<0>(node_to_sig[n]).insert(kernel.unique_id); });
+        for_each_node(kernel.target_nodes, [&](const NodeCoord& n) {
+            std::get<0>(node_contents_map[n]).insert(kernel.unique_id);
+        });
     }
     for (const DataflowBufferSpec& dfb : spec.dataflow_buffers) {
-        for_each_node(dfb.target_nodes, [&](const NodeCoord& n) { std::get<1>(node_to_sig[n]).insert(dfb.unique_id); });
+        for_each_node(
+            dfb.target_nodes, [&](const NodeCoord& n) { std::get<1>(node_contents_map[n]).insert(dfb.unique_id); });
     }
     for (const SemaphoreSpec& sem : spec.semaphores) {
-        for_each_node(sem.target_nodes, [&](const NodeCoord& n) { std::get<2>(node_to_sig[n]).insert(sem.unique_id); });
+        for_each_node(
+            sem.target_nodes, [&](const NodeCoord& n) { std::get<2>(node_contents_map[n]).insert(sem.unique_id); });
     }
 
-    // Group nodes by coverage signature.
-    std::map<CoverageSig, std::vector<NodeCoord>> sig_to_nodes;
-    for (const auto& [node, sig] : node_to_sig) {
+    // Group nodes by NodeContents signature
+    std::map<NodeContents, std::vector<NodeCoord>> sig_to_nodes;
+    for (const auto& [node, sig] : node_contents_map) {
         sig_to_nodes[sig].push_back(node);
     }
 
-    // Build one WorkerSpec per signature.
+    // Build one WorkerSpec per NodeContents signature.
     // Inferred unique_ids have the form "inferred_worker@<node_range_set>"
-    // (so auto-generated status is explicit in error messages).
+    // (this makes the auto-inference obvious in error messaging).
     std::vector<WorkerSpec> workers;
     workers.reserve(sig_to_nodes.size());
     for (const auto& [sig, nodes] : sig_to_nodes) {
@@ -697,9 +698,15 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate WorkerSpecs
     //////////////////////////////
 
-    // By contract, MakeProgramFromSpec runs InferWorkers before validation, so
-    // spec.workers is always populated here — either by the user or by inference.
-    const auto& workers = *spec.workers;
+    // spec.workers is ALWAYS populated at this point.
+    // Either the user provided it, or runtime inferred it in a previous step.
+    //
+    // TODO: This isn't a user-facing error! A user-facing error is actionable to the user,
+    // it says "hey, your input was malformed, fix it". This is a developer-facing, active
+    // documentation of the code's assumptions.
+    // We REALLY shouldn't be using TT_FATAL for both flavors.
+    TT_FATAL(spec.workers.has_value(), "Interal Error: spec.workers must be populated.");
+    const auto& workers = spec.workers.value();
     TT_FATAL(!workers.empty(), "At least one WorkerSpec is required");
 
     // WorkerSpecs may not overlap in their target nodes
@@ -1413,15 +1420,23 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 Program MakeProgramFromSpec(const ProgramSpec& user_spec, bool skip_validation) {
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", user_spec.program_id);
 
-    // Step 1a: Copy the spec and infer defaults for any optional fields the user
-    // left unspecified. After this, `spec` is guaranteed to have workers populated.
-    // NOTE: We copy before CollectSpecData because the collected data caches
-    // pointers into spec.kernels; downstream maps (kernel_to_risc_mask) are keyed
-    // by those same pointers, so `collected` and the solver must see the same spec.
-    ProgramSpec spec = user_spec;
-    if (!spec.workers.has_value()) {
-        spec.workers = InferWorkers(spec);
+    // Step 1a: Infer missing fields (required, but "opt in" for the user)
+    //    - WorkerSpecs
+    //   - Gen1 DM kernel configs (TODO - upcoming PR)
+
+    // For now, just make a full copy of the ProgramSpec if inference is required.
+    // This is simple, but wasteful -- specs can be large, and inference will
+    // only fill in a few spare fields.
+    // TODO: Optimize this. We can maintain a separate "inference results" struct,
+    // and plumb that through the rest of the code alongside the user's spec.
+
+    std::optional<ProgramSpec> inferred_spec;
+    // If we need to infer some fields, for now just suck it up and copy everything.
+    if (!user_spec.workers.has_value()) {
+        inferred_spec = user_spec;
+        inferred_spec->workers = InferWorkers(*inferred_spec);
     }
+    const ProgramSpec& spec = inferred_spec.has_value() ? *inferred_spec : user_spec;
 
     // Step 1b: Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
