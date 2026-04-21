@@ -66,9 +66,15 @@ class VisionEncoder(LightweightModule):
             dtype = ttnn.bfloat16 if ttnn is not None and hasattr(ttnn, "bfloat16") else torch.bfloat16
         self.dtype = dtype
 
+        if mesh_device is not None and state_dict is None:
+            raise ValueError(
+                "VisionEncoder requires ``state_dict`` when ``mesh_device`` is set. "
+                "Load weights with ``models.demos.dots_ocr.tt.load.load_dots_vision_state_dict`` "
+                "and pass keys under the ``vision_tower.`` prefix expected by ``PatchMergerTT``."
+            )
         if state_dict is None:
-            # For tests/demo without real weights - create dummy
-            state_dict = self._create_dummy_state_dict(state_dict_prefix)
+            # CPU-only hybrid tests (``mesh_device is None``): synthetic merger tensors for the mock path.
+            state_dict = self._synthetic_patch_merger_state_dict(state_dict_prefix)
 
         if use_full_ttnn and mesh_device is not None:
             # Full TTNN Vision Transformer (Phase 2 implementation) — lazy import so CPU-only
@@ -97,20 +103,25 @@ class VisionEncoder(LightweightModule):
                     state_dict=state_dict,
                 )
             else:
+                patch_merger_prefix = state_dict_prefix + ".patch_merger"
+                if not any(k.startswith(patch_merger_prefix + ".") for k in state_dict.keys()):
+                    alt = state_dict_prefix + ".merger"
+                    if any(k.startswith(alt + ".") for k in state_dict.keys()):
+                        patch_merger_prefix = alt
                 self.patch_merger = PatchMergerTT(
                     mesh_device=mesh_device,
                     hidden_size=hidden_size,
                     out_hidden_size=out_hidden_size,
                     spatial_merge_size=spatial_merge_size,
                     state_dict=state_dict,
-                    state_dict_prefix=state_dict_prefix + ".patch_merger",
+                    state_dict_prefix=patch_merger_prefix,
                     weight_cache_path=weight_cache_path,
                     dtype=self.dtype if hasattr(self, "dtype") else dtype,
                 )
             print("ℹ️  Using HYBRID Vision (HF tower + TTNN PatchMerger)")
 
-    def _create_dummy_state_dict(self, prefix: str = "vision_tower") -> dict:
-        """Create synthetic weights for testing (matches test_patch_merger_pcc.py pattern)."""
+    def _synthetic_patch_merger_state_dict(self, prefix: str = "vision_tower") -> dict:
+        """Synthetic PatchMerger tensors for CPU-only tests (no device / no HF checkpoint)."""
         mlp = self.hidden_size * (self.spatial_merge_size**2)
         # ``nn.Linear`` weights are ``[out_features, in_features]``; ``PatchMergerTT`` transposes once for ttnn.
         return {

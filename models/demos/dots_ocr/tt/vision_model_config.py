@@ -16,6 +16,7 @@ This configures the full TTNN vision stack for Dots.mocr:
 from __future__ import annotations
 
 import math
+import types
 from typing import Optional
 
 from loguru import logger
@@ -23,6 +24,10 @@ from loguru import logger
 from models.demos.dots_ocr.tt._ttnn_import import get_ttnn
 from models.demos.dots_ocr.tt.model_config import DotsModelArgs
 from models.demos.dots_ocr.tt.vision_config_dataclass import DotsVisionConfig
+
+
+def _nearest_multiple(x: int, multiple_of: int) -> int:
+    return int(math.ceil(x / multiple_of) * multiple_of)
 
 
 class DotsVisionModelArgs(DotsModelArgs):
@@ -72,6 +77,9 @@ class DotsVisionModelArgs(DotsModelArgs):
         self.vision_intermediate_size = self.vision_config.intermediate_size
         self.vision_mlp_dim = self.vision_intermediate_size
 
+        # qwen25_vl-style aliases expected by its TT vision blocks
+        self.vision_unpadded_hidden_dim = self.vision_intermediate_size
+
         # Patching configuration
         self.patch_size = self.vision_config.patch_size
         self.spatial_merge_size = self.vision_config.spatial_merge_size
@@ -90,10 +98,73 @@ class DotsVisionModelArgs(DotsModelArgs):
 
         # TTNN-specific configurations
         self.tile_size = 32  # Standard TTNN tile size
+
+        # Pad hidden dim to a tile multiple per device (same intent as qwen25_vl VisionModelArgs)
+        num_dev = max(getattr(self, "num_devices", 1), 1)
+        self.vision_hidden_dim = _nearest_multiple(self.vision_unpadded_hidden_dim, self.tile_size * num_dev)
+        if self.vision_hidden_dim != self.vision_unpadded_hidden_dim:
+            logger.info(
+                f"Vision: padding hidden dim from {self.vision_unpadded_hidden_dim} to {self.vision_hidden_dim}"
+            )
+
         self.vision_padded_head_dim = math.ceil(self.vision_head_dim / self.tile_size) * self.tile_size
 
         if self.vision_padded_head_dim != self.vision_head_dim:
             logger.info(f"Vision: padding head dim from {self.vision_head_dim} to {self.vision_padded_head_dim}")
+
+        # qwen25_vl VisionAttention expects this aggregate qkv size
+        self.vision_qkv_size = self.vision_padded_head_dim * (2 * self.vision_n_kv_heads + self.vision_n_heads)
+
+        # Provide defaults used by qwen25_vl attention path
+        self.MAX_QKV_MM_SEQ_LEN = getattr(self, "MAX_QKV_MM_SEQ_LEN", 1024)
+        self.min_kv_prefill_shard_seqlen = getattr(self, "min_kv_prefill_shard_seqlen", 0)
+        self.ccl_dtype = getattr(self, "ccl_dtype", None)
+
+        # qwen25_vl uses a VISION_WO_PREFILL_PROGCFG; mirror with a simple config derived from matmul_config helpers.
+        try:
+            num_rows = lambda seq_len: min(seq_len, 2048)
+            k_dim = self.vision_dim
+            n_dim = self.vision_dim
+            self.model_config["VISION_WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
+                m=num_rows(seq_len),
+                k=k_dim,
+                n=n_dim,
+                grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
+                in0_block_w=max(1, self.vision_dim // 1024),
+                fuse_batch=seq_len <= 1024,
+            )
+        except Exception:
+            pass
+
+        # qwen25_vl vision MLP expects `args.optimizations.bfp4_mlp`.
+        # Dots uses `parse_optimizations`/DecodersPrecision in other paths; provide a compatibility shim.
+        opt = getattr(self, "optimizations", None)
+        if opt is None or not hasattr(opt, "bfp4_mlp"):
+            self.optimizations = types.SimpleNamespace(bfp4_mlp=False)
+
+        # qwen25_vl vision attention/MLP blocks expect `model_config["DECODERS_OPTIMIZATIONS"]` to have
+        # entries for every vision layer index. Dots' `ModelArgs` typically sizes this for the *text*
+        # decoder (`n_layers=28`), so indexing at vision layer 28..41 will KeyError. Provide a vision
+        # compatibility shim that returns conservative defaults independent of `decoder_id`.
+        ttnn = get_ttnn()
+
+        class _VisionOptimShim:
+            def get_tensor_dtype(self, decoder_id, tensor):
+                # Prefer bf8 weights for throughput; activations/outputs can be bf8 as well.
+                if ttnn is None:
+                    return None
+                return ttnn.bfloat8_b
+
+            def get_math_fidelity(self, decoder_id, op, configuration):
+                # Use the highest fidelity config available on the configuration.
+                return getattr(configuration, "compute_kernel_config_hifi4", None) or getattr(
+                    configuration, "compute_kernel_config_hifi2_fp16", None
+                )
+
+        try:
+            self.model_config["DECODERS_OPTIMIZATIONS"] = _VisionOptimShim()
+        except Exception:
+            pass
 
         logger.info(
             f"DotsVisionModelArgs: dim={self.vision_dim}, layers={self.vision_config.num_hidden_layers}, "
@@ -130,19 +201,24 @@ class DotsVisionModelArgs(DotsModelArgs):
         return DotsVisionConfig()
 
     def get_state_dict_prefix(self, module_name: str, layer_num: Optional[int] = None) -> str:
-        """Get state dict prefix for vision components."""
-        if layer_num is not None:
-            if module_name == "VisionBlock":
-                return f"vision_tower.blocks.{layer_num}."
-            return f"vision_tower.blocks.{layer_num}.{module_name.lower()}."
+        """
+        Get state dict prefix for vision components.
 
-        if module_name == "VisionTransformer":
-            return "vision_tower."
-        elif module_name == "PatchEmbed":
-            return "vision_tower.patch_embed."
-        elif module_name == "PatchMerger":
-            return "vision_tower.merger."  # or patch_merger depending on HF structure
-        return "vision_tower."
+        This follows the same conventions as `qwen25_vl.tt.model_config.VisionModelArgs` so we can
+        reuse its TT vision blocks for correctness bring-up.
+        """
+        layer_prefix = f"vision_tower.blocks.{layer_num}." if layer_num is not None else ""
+        module_map = {
+            # qwen25_vl TT blocks expect these canonical names
+            "MLP": "feed_forward",
+            "VisionAttention": "attention",
+            "VisionBlock": "",
+            "VisionTransformer": "vision_tower",
+            "PatchMerger": "vision_tower.merger",
+            "PatchEmbed": "vision_tower.patch_embed",
+            "": "",
+        }
+        return layer_prefix + module_map.get(module_name, "")
 
     def prepare_residual_tensor_prefill(self, x_bsh, force_replicated: bool = False):
         """

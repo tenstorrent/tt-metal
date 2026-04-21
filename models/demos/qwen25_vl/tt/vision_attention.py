@@ -463,6 +463,20 @@ class VisionAttention(LightweightModule):
         v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(v_heads_1VSD)
 
+        # `windowed_scaled_dot_product_attention` requires `cu_window_seqlens` on device as ttnn.Tensor.
+        # Qwen's DropInVisionTransformer converts upstream; Dots OCR passes torch cumulative lengths.
+        cu_sdpa = cu_seqlens
+        own_cu_sdpa = False
+        if not isinstance(cu_sdpa, ttnn.Tensor):
+            cu_pt = cu_sdpa.detach().cpu() if hasattr(cu_sdpa, "detach") else cu_sdpa
+            cu_sdpa = ttnn.from_torch(
+                cu_pt,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+            )
+            own_cu_sdpa = True
+
         # SDPA
         if chunk_start_idx is not None:
             # todo)) the use of chunked SDPA seem to imply the use of kv_cache (as keys_BKSD and values_BKSD are associated with kv_cache); Is this correct?
@@ -483,11 +497,14 @@ class VisionAttention(LightweightModule):
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
-                cu_seqlens,
+                cu_sdpa,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
             )
+
+        if own_cu_sdpa:
+            ttnn.deallocate(cu_sdpa)
 
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD_8b)

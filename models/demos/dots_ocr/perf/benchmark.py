@@ -96,7 +96,6 @@ def benchmark_ttnn(
     warmup: int,
     iters: int,
     *,
-    load_real_weights: bool,
     max_seq_len: int,
 ) -> dict:
     logger.info("Running TTNN benchmark (prefill + decode)...")
@@ -123,9 +122,7 @@ def benchmark_ttnn(
 
     mesh_device = open_mesh_device()
     try:
-        ref, model_args, tt_model, generator, visual = _build_tt_stack(
-            model_id, mesh_device, load_real_weights=load_real_weights, max_seq_len=max_seq_len
-        )
+        ref, model_args, tt_model, generator, visual = _build_tt_stack(model_id, mesh_device, max_seq_len=max_seq_len)
         # TTTransformer forward expects `kv_cache` as a per-layer list (not nested).
         # The tt_transformers Generator wrapper takes `[kv_cache]` (list per model) for decode,
         # so our `Generator.decode_forward` wrapper will wrap this again as needed.
@@ -234,7 +231,6 @@ def main() -> None:
     parser.add_argument("--iters", type=int, default=5)
     parser.add_argument("--backend", type=str, default="both", choices=["hf", "ttnn", "both"])
     parser.add_argument("--hf-model", type=str, default=None)
-    parser.add_argument("--real-weights", action="store_true")
     parser.add_argument("--max-seq-len", type=int, default=4096)
     args = parser.parse_args()
 
@@ -256,7 +252,6 @@ def main() -> None:
             args.max_new_tokens,
             args.warmup,
             args.iters,
-            load_real_weights=args.real_weights,
             max_seq_len=args.max_seq_len,
         )
 

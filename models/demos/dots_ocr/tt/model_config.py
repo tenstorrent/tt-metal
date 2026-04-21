@@ -3,22 +3,10 @@
 
 from __future__ import annotations
 
-import gc
 import os
 
 from loguru import logger
 
-from models.demos.dots_ocr.tt.qwen2_dummy_config import DOTS_DUMMY_QWEN2_CONFIG_DROP_KEYS
-from models.tt_transformers.tt.load_checkpoints import (
-    convert_hf_to_meta,
-    convert_hf_to_meta_mllama,
-    convert_hf_to_meta_mllama_no_qkv_permute,
-    convert_hf_to_meta_no_qkv_permute,
-    convert_vision_hf_to_meta,
-    convert_vision_hf_to_meta_no_qkv_permute,
-    standardize_hf_keys,
-    standardize_hf_keys_multimodal,
-)
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
@@ -61,6 +49,8 @@ class DotsModelArgs(ModelArgs):
             # but don't hard-require it for call sites that already provide HF-derived weights/configs.
             if hf_config is not None:
                 os.environ["HF_MODEL"] = getattr(hf_config, "_name_or_path", None) or "rednote-hilab/dots.mocr"
+        # Dots OCR TT stacks always load real checkpoint tensors (filtered loaders in ``tt/load.py``).
+        kwargs["dummy_weights"] = False
         super().__init__(*args, **kwargs)
 
         # `ModelArgs.__init__` defines `self.trust_remote_code_hf` but does not accept it
@@ -97,30 +87,6 @@ class DotsModelArgs(ModelArgs):
                         f"override DOTS_LM_HEAD_MAX_COLUMNS_PER_DEVICE)"
                     )
 
-        # Optional dummy vocab shrink (must match DOTS_DUMMY_VOCAB_SIZE used by load_state_dict()).
-        # This reduces LMHead weight sharding and compile time significantly on multi-chip targets.
-        if self.dummy_weights:
-            dv = os.environ.get("DOTS_DUMMY_VOCAB_SIZE", "").strip()
-            if dv:
-                try:
-                    dv_i = int(dv)
-                    if dv_i > 0:
-                        old_vs = self.vocab_size
-                        self.vocab_size = dv_i
-                        try:
-                            from models.tt_transformers.tt.model_config import compute_padded_vocab_size
-
-                            self.padded_vocab_size = (
-                                dv_i if self.num_devices == 0 else compute_padded_vocab_size(dv_i, self.num_devices)
-                            )
-                        except Exception:
-                            self.padded_vocab_size = dv_i
-                        logger.info(
-                            f"DotsModelArgs: dummy vocab_size {old_vs} -> {self.vocab_size} (DOTS_DUMMY_VOCAB_SIZE)"
-                        )
-                except ValueError:
-                    logger.warning(f"DotsModelArgs: invalid DOTS_DUMMY_VOCAB_SIZE={dv!r}; ignoring.")
-
         # Belt-and-braces divisibility check so we emit a dots-specific diagnostic
         # instead of a bare AssertionError from the parent. The parent also
         # checks this, so we don't repeat the assert; we just print a helpful
@@ -143,8 +109,8 @@ class DotsModelArgs(ModelArgs):
         """
         Load HF config from the real checkpoint (`HF_MODEL` / `CKPT_DIR`).
 
-        Parent `ModelArgs._set_hf_params` uses `LOCAL_HF_PARAMS[model_name]` when `dummy_weights=True`,
-        which does not include `dots.mocr`. We always load from `self.CKPT_DIR`.
+        Parent `ModelArgs._set_hf_params` may use `LOCAL_HF_PARAMS` for some models; Dots always loads
+        from ``self.CKPT_DIR`` (real checkpoint).
         """
         from transformers import AutoConfig
 
@@ -162,8 +128,6 @@ class DotsModelArgs(ModelArgs):
             vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
             return vision_config
 
-        if self.dummy_weights:
-            logger.info(f"DotsModelArgs: dummy_weights=True, loading HF config from CKPT_DIR={self.CKPT_DIR}")
         # Dots.mocr ships custom modelling code, so always pass trust_remote_code=True here.
         # NB: ``ModelArgs.__init__`` sets ``self.trust_remote_code_hf = False`` before calling
         # ``_set_hf_params`` and only post-init code can flip it — so we force True locally
@@ -261,13 +225,12 @@ class DotsModelArgs(ModelArgs):
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
         return layer_prefix + text_module_map[module_name]
 
-    def load_real_state_dict(self) -> dict:
+    def load_real_state_dict(self, *, qkv_permute: bool = False) -> dict:
         """
-        Load real weights (text + vision) from the Dots HF checkpoint.
+        Load real weights (text + vision) from the Dots HF checkpoint via filtered safetensors loads.
 
-        Wraps :func:`models.demos.dots_ocr.tt.load.load_dots_full_state_dict` so callers don't
-        need to plumb ``head_dim`` / ``n_heads`` / ``n_kv_heads`` themselves. Raises on
-        failure — callers that want to fall back to dummy weights should catch it.
+        Does not instantiate the full ``DotsOCRForCausalLM`` on the host (avoids OOM). Raises if
+        the checkpoint is missing or keys cannot be mapped.
         """
         from models.demos.dots_ocr.tt.load import load_dots_full_state_dict
 
@@ -276,113 +239,13 @@ class DotsModelArgs(ModelArgs):
             head_dim=self.head_dim,
             n_heads=self.n_heads,
             n_kv_heads=self.n_kv_heads,
+            qkv_permute=qkv_permute,
         )
-
-    @staticmethod
-    def _materialize_dummy_tensor(t: "torch.Tensor") -> "torch.Tensor":
-        """Allocate a real CPU tensor for a parameter (meta or dense)."""
-        import torch
-
-        if getattr(t, "is_meta", False):
-            if not t.dtype.is_floating_point:
-                return torch.zeros(t.shape, dtype=t.dtype, device="cpu")
-            x = torch.randn(t.shape, device="cpu", dtype=torch.float32) * 0.02
-            return x.to(dtype=t.dtype) if t.dtype != torch.float32 else x
-        return t.detach().clone().cpu()
-
-    def _qwen2_text_config_for_dummy_weights(self):
-        """
-        Build a pure ``Qwen2Config`` for the language backbone (no ViT).
-
-        ``DotsOCRConfig`` subclasses ``Qwen2Config`` and ``DotsOCRForCausalLM`` subclasses
-        ``Qwen2ForCausalLM``; the TT text stack only needs the Qwen2 decoder weights. This mirrors
-        ``qwen25_vl``'s pattern of instantiating only ``Qwen2_5_VisionTransformerPretrainedModel``
-        from ``vision_config`` instead of the full VLM.
-        """
-        from models.demos.dots_ocr.reference._flash_attn_shim import install as _install_flash_attn_shim
-
-        _install_flash_attn_shim()
-
-        from transformers import AutoConfig
-        from transformers.models.qwen2 import Qwen2Config
-
-        full = AutoConfig.from_pretrained(
-            self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
-        )
-        d = full.to_dict()
-        for k in DOTS_DUMMY_QWEN2_CONFIG_DROP_KEYS:
-            d.pop(k, None)
-        d["model_type"] = "qwen2"
-        d["architectures"] = ["Qwen2ForCausalLM"]
-        qcfg = Qwen2Config.from_dict(d)
-        qcfg.num_hidden_layers = self.n_layers
-        # Optional: shrink vocab for dummy-weight bringup to reduce LM-head compile/upload cost.
-        # This is safe for the prefill PCC test because it feeds embeddings directly (not token ids).
-        dv = os.environ.get("DOTS_DUMMY_VOCAB_SIZE", "").strip()
-        if dv:
-            try:
-                qcfg.vocab_size = int(dv)
-            except ValueError:
-                logger.warning(f"DotsModelArgs: invalid DOTS_DUMMY_VOCAB_SIZE={dv!r}; ignoring.")
-        return qcfg
 
     def load_state_dict(self):
         """
-        Load dummy weights for TTNN without instantiating ``DotsOCRForCausalLM`` (which adds ViT).
+        Same as :meth:`load_real_state_dict` with default Q/K layout (no extra HF permute).
 
-        Parent ``ModelArgs.load_state_dict`` uses ``AutoModelForCausalLM.from_config`` on the full
-        Dots config, which builds **text + vision** and often OOM-kills the host. We instead build
-        ``Qwen2ForCausalLM`` from a stripped ``Qwen2Config`` (same backbone as Dots text), on the
-        **meta** device, materialize CPU tensors, then apply the same multimodal standardize/convert
-        path as the parent.
+        Prefer :meth:`load_real_state_dict` with an explicit ``qkv_permute`` to match the text stack.
         """
-        if not self.dummy_weights:
-            return super().load_state_dict()
-
-        import torch
-        from transformers.models.qwen2 import Qwen2ForCausalLM
-
-        qcfg = self._qwen2_text_config_for_dummy_weights()
-
-        # Meta device: structure only (~no RAM), same idea as ``init_empty_weights`` in qwen25_vl demos.
-        with torch.device("meta"):
-            model = Qwen2ForCausalLM(qcfg)
-
-        full_sd = model.state_dict()
-        state_dict = {k: self._materialize_dummy_tensor(v) for k, v in full_sd.items()}
-        del model
-        full_sd.clear()
-        gc.collect()
-
-        self.is_mixture_of_experts = any(".experts." in k for k in state_dict)
-
-        if self.is_multimodal:
-            state_dict = standardize_hf_keys_multimodal(state_dict)
-            if self.is_llama_vision():
-                if self.use_hf_rope:
-                    state_dict = convert_hf_to_meta_mllama_no_qkv_permute(state_dict, self.head_dim, self.hf_config)
-                else:
-                    state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
-            else:
-                if self.use_hf_rope:
-                    state_dict = convert_vision_hf_to_meta_no_qkv_permute(state_dict, self.head_dim)
-                else:
-                    state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
-        else:
-            self.fuse_qkv = any("qkv" in layer_name for layer_name in state_dict.keys())
-            self.fuse_mlp = any("gate_up" in layer_name for layer_name in state_dict.keys())
-            state_dict = standardize_hf_keys(state_dict)
-            if self.use_hf_rope:
-                state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
-            else:
-                state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
-
-        keys_dict = list(state_dict.keys())[:]
-        remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
-        for k in keys_dict:
-            if any(r in k for r in remv):
-                state_dict.pop(k)
-        if getattr(self, "is_mixture_of_experts", False):
-            self.moe = True
-            self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
-        return state_dict
+        return self.load_real_state_dict(qkv_permute=False)
