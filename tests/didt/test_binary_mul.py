@@ -22,11 +22,11 @@ class BinaryMulTest(OpTestBase):
         super().__init__(*args, **kwargs)
 
     def run_device_operation(self):
-        for _ in range(self.loop_count):
-            ttnn.mul(
-                self.activations,
-                self.inputs[0],
-            )
+        # for _ in range(self.loop_count):
+        return ttnn.mul(
+            self.activations,
+            self.inputs[0],
+        )
         #    print("mul")
         # return ttnn.cos(
         #     self.activations,
