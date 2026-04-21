@@ -301,9 +301,10 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             kernel_descriptor.config);
 
         auto kernel_handle =
-            is_file
-                ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
-                : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
+            is_file ? CreateKernel(
+                          *this, std::string(kernel_descriptor.kernel_source), kernel_descriptor.core_ranges, config)
+                    : CreateKernelFromString(
+                          *this, std::string(kernel_descriptor.kernel_source), kernel_descriptor.core_ranges, config);
 
         for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
             SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);

@@ -7,13 +7,15 @@
 #include <limits>
 
 #include <tt-metalium/device.hpp>
+#include <tt_stl/small_vector.hpp>
 
 namespace tt::tt_metal {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
+template <typename ArgsVec>
 void append_sharded_args(
-    const Buffer& buffer, tensor_accessor::ArgsConfig args_config, std::vector<uint32_t>& args, bool is_runtime) {
+    const Buffer& buffer, tensor_accessor::ArgsConfig args_config, ArgsVec& args, bool is_runtime) {
     TT_FATAL(buffer.buffer_distribution_spec(), "Buffer must have a buffer distribution spec");
 
     const auto& buffer_distribution_spec = buffer.buffer_distribution_spec().value();
@@ -151,8 +153,8 @@ void TensorAccessorArgs::update_args_config() {
     }
 }
 
-void TensorAccessorArgs::append_to(
-    std::vector<uint32_t>& compile_time_args, std::vector<uint32_t>& common_runtime_args) const {
+template <typename ArgsVec1, typename ArgsVec2>
+void TensorAccessorArgs::append_to(ArgsVec1& compile_time_args, ArgsVec2& common_runtime_args) const {
     if (args_config_.test(tensor_accessor::ArgConfig::Sharded)) {
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, compile_time_args, /* is_runtime */ false);
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, common_runtime_args, /* is_runtime */ true);
@@ -168,7 +170,8 @@ void TensorAccessorArgs::append_to(
     }
 }
 
-void TensorAccessorArgs::append_to(std::vector<uint32_t>& compile_time_args) const {
+template <typename ArgsVec>
+void TensorAccessorArgs::append_to(ArgsVec& compile_time_args) const {
     TT_FATAL(
         (args_config_ & tensor_accessor::ArgConfig::Runtime).raw() == 0,
         "Common runtime arguments are required for ArgsConfig {}",
@@ -211,5 +214,16 @@ std::vector<uint32_t> TensorAccessorArgs::get_common_runtime_args() const {
     }
     return common_runtime_args;
 }
+
+// Explicit template instantiations for append_to
+// std::vector<uint32_t> (legacy callers)
+template void TensorAccessorArgs::append_to<std::vector<uint32_t>>(std::vector<uint32_t>&) const;
+template void TensorAccessorArgs::append_to<std::vector<uint32_t>, std::vector<uint32_t>>(
+    std::vector<uint32_t>&, std::vector<uint32_t>&) const;
+
+// SmallVector instantiations for KernelDescriptor::CompileTimeArgs and CommonRuntimeArgs
+template void TensorAccessorArgs::append_to<ttsl::SmallVector<uint32_t, 16>>(ttsl::SmallVector<uint32_t, 16>&) const;
+template void TensorAccessorArgs::append_to<ttsl::SmallVector<uint32_t, 16>, ttsl::SmallVector<uint32_t, 8>>(
+    ttsl::SmallVector<uint32_t, 16>&, ttsl::SmallVector<uint32_t, 8>&) const;
 
 }  // namespace tt::tt_metal

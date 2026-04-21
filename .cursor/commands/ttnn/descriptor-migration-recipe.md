@@ -339,6 +339,97 @@ Both must succeed with zero errors.
 
 ---
 
+## Performance best practices
+
+The ProgramDescriptor path calls `create_descriptor` on **every dispatch** (cache hit or miss).
+Everything built inside it — CBDescriptors, KernelDescriptors, CoreRangeSet copies,
+runtime arg vectors — is allocation overhead. Follow these patterns to keep it fast.
+
+### Use constexpr kernel paths
+
+Never build kernel paths with string concatenation. Always use `static constexpr const char*`:
+
+```cpp
+// BAD — heap allocation on every dispatch
+const std::string kernels_dir = "ttnn/cpp/ttnn/operations/my_op/device/kernels/";
+reader_desc.kernel_source = kernels_dir + "reader.cpp";
+
+// GOOD — zero cost
+static constexpr const char* READER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/my_op/device/kernels/reader.cpp";
+reader_desc.kernel_source = READER_KERNEL_PATH;
+```
+
+`kernel_source` is `std::string_view` — it must point to a string that outlives the descriptor.
+`static constexpr const char*` satisfies this.
+
+### Use KernelDescriptor type aliases for args
+
+Use `KernelDescriptor::CompileTimeArgs` and `KernelDescriptor::CoreRuntimeArgs` instead of
+`std::vector<uint32_t>`. These are `SmallVector` types that avoid heap allocation for small ops:
+
+```cpp
+// BAD
+std::vector<uint32_t> compile_time_args{cb_id};
+
+// GOOD
+KernelDescriptor::CompileTimeArgs compile_time_args{cb_id};
+```
+
+### Cache work split results with thread_local
+
+`split_work_to_cores`, `grid_to_cores`, and `device->compute_with_storage_grid_size()` are
+expensive and return identical results for the same (device, units_to_divide) pair.
+Cache them with a `thread_local` struct:
+
+```cpp
+namespace {
+struct WorkSplitCache {
+    IDevice* device = nullptr;
+    uint32_t units = 0;
+    CoreRangeSet all_cores, core_group_1, core_group_2;
+    uint32_t units_per_core_group_1 = 0, units_per_core_group_2 = 0;
+    std::vector<CoreCoord> cores;
+
+    bool matches(IDevice* dev, uint32_t u) const { return device == dev && units == u; }
+
+    void update(IDevice* dev, uint32_t u) {
+        device = dev; units = u;
+        auto grid = dev->compute_with_storage_grid_size();
+        auto [nc, ac, cg1, cg2, upcg1, upcg2] = split_work_to_cores(grid, u);
+        // ... store results
+        cores = grid_to_cores(nc, grid.x, grid.y);
+    }
+};
+static thread_local WorkSplitCache work_split_cache;
+}
+```
+
+Also cache `get_compute_kernel_config_args` in the same struct — arch and config are constant.
+
+### Cache the program hash
+
+The descriptor structure is identical across dispatches for the same (device, shape, dtype).
+Cache the hash to skip the full traversal:
+
+```cpp
+// In WorkSplitCache:
+std::size_t program_hash = 0;  // reset to 0 on cache invalidation
+
+// At the end of create_descriptor:
+if (work_split_cache.program_hash == 0) {
+    work_split_cache.program_hash = std::hash<ProgramDescriptor>{}(desc);
+}
+desc.custom_program_hash = work_split_cache.program_hash;
+```
+
+### See randn as the reference implementation
+
+`ttnn/cpp/ttnn/operations/randn/device/randn_program_factory.cpp` applies all of the above.
+Use it as the template for new descriptor ops.
+
+---
+
 ## Common pitfalls
 
 1. **Namespace resolution after moving factories.** If factories move to a different

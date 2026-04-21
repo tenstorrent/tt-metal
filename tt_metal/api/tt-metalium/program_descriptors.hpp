@@ -17,6 +17,7 @@
 
 #include <bitset>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 /**
@@ -99,17 +100,17 @@ struct ComputeConfigDescriptor {
 struct KernelDescriptor {
     // TODO: investigate using SmallVector here, using std::vector for now to abide size constraint
     // in tt_stl/tt_stl/reflection.hpp:185:23
-    using CompileTimeArgs = std::vector<uint32_t>;
+    using CompileTimeArgs = ttsl::SmallVector<uint32_t, 16>;
     using NamedCompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
-    using Defines = std::vector<std::pair<std::string, std::string>>;
-    using CoreRuntimeArgs = std::vector<uint32_t>;
+    using Defines = ttsl::SmallVector<std::pair<std::string, std::string>, 4>;
+    using CoreRuntimeArgs = ttsl::SmallVector<uint32_t, 8>;
     using RuntimeArgs = std::vector<std::pair<CoreCoord, CoreRuntimeArgs>>;
     using CommonRuntimeArgs = CoreRuntimeArgs;
     using ConfigDescriptor = std::
         variant<ReaderConfigDescriptor, WriterConfigDescriptor, DataMovementConfigDescriptor, ComputeConfigDescriptor>;
     enum class SourceType { FILE_PATH, SOURCE_CODE };
 
-    std::string kernel_source;
+    std::string_view kernel_source;
     SourceType source_type = SourceType::FILE_PATH;
 
     CoreRangeSet core_ranges;

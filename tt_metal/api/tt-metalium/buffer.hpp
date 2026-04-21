@@ -216,6 +216,10 @@ public:
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
+    // Creates a lightweight non-owning view of an existing buffer on a different device.
+    // No validation, no allocation. Used by MeshBuffer to create per-device handles cheaply.
+    static std::shared_ptr<Buffer> create_device_view(IDevice* device, const Buffer& source);
+
     // Creates a view of the region of the buffer.
     // The view is a new buffer (unless the region is the entire buffer) that shares the same underlying device memory.
     // The view keeps the underlying buffer alive as long as the view is alive.
@@ -293,6 +297,11 @@ public:
         std::optional<SubDeviceId> sub_device_id,
         bool owns_data,
         Private);
+
+    // Lightweight constructor: creates a non-owning view of an existing buffer on a different device.
+    // Copies address, size, page_size, shard_spec, etc. from the source buffer.
+    // No validation, no allocation — just a device-remapped handle.
+    Buffer(IDevice* device, const Buffer& source, Private);
 
 private:
     enum class AllocationStatus : uint8_t {

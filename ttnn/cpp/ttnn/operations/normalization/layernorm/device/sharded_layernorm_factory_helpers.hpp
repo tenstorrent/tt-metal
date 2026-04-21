@@ -114,10 +114,10 @@ struct KernelLayout {
 
 // Struct to hold kernel file paths based on operation mode
 struct KernelPaths {
-    std::string reader_sender;
-    std::string reader_receiver;
-    std::string writer;
-    std::string compute;
+    std::string_view reader_sender;
+    std::string_view reader_receiver;
+    std::string_view writer;
+    std::string_view compute;
 
     static KernelPaths get(
         bool is_pre_all_gather, bool is_post_all_gather, bool use_row_major_kernel, bool use_welford);
@@ -243,13 +243,13 @@ struct CompileTimeArgsContext {
 
 // Result of building compile-time args
 struct CompileTimeArgs {
-    std::vector<uint32_t> reader_sender;
-    std::vector<uint32_t> reader_receiver_all_to_all;
-    std::vector<uint32_t> reader_receiver;
-    std::vector<uint32_t> writer_sender;
-    std::vector<uint32_t> writer_receiver;
-    std::vector<uint32_t> compute_all_to_all;
-    std::vector<uint32_t> compute_not_all_to_all;
+    KernelDescriptor::CompileTimeArgs reader_sender;
+    KernelDescriptor::CompileTimeArgs reader_receiver_all_to_all;
+    KernelDescriptor::CompileTimeArgs reader_receiver;
+    KernelDescriptor::CompileTimeArgs writer_sender;
+    KernelDescriptor::CompileTimeArgs writer_receiver;
+    KernelDescriptor::CompileTimeArgs compute_all_to_all;
+    KernelDescriptor::CompileTimeArgs compute_not_all_to_all;
 
     static CompileTimeArgs build(const CompileTimeArgsContext& ctx);
 };
@@ -261,19 +261,19 @@ struct CompileTimeArgs {
 // Struct to hold kernel configuration for building kernel descriptors
 struct KernelConfig {
     // Paths
-    std::string reader_sender_path;
-    std::string reader_receiver_path;
-    std::string writer_path;
-    std::string compute_path;
+    std::string_view reader_sender_path;
+    std::string_view reader_receiver_path;
+    std::string_view writer_path;
+    std::string_view compute_path;
 
     // Compile time args
-    std::vector<uint32_t> reader_sender_ct_args;
-    std::vector<uint32_t> reader_receiver_all_to_all_ct_args;
-    std::vector<uint32_t> reader_receiver_ct_args;
-    std::vector<uint32_t> writer_sender_ct_args;
-    std::vector<uint32_t> writer_receiver_ct_args;
-    std::vector<uint32_t> compute_all_to_all_ct_args;
-    std::vector<uint32_t> compute_not_all_to_all_ct_args;
+    KernelDescriptor::CompileTimeArgs reader_sender_ct_args;
+    KernelDescriptor::CompileTimeArgs reader_receiver_all_to_all_ct_args;
+    KernelDescriptor::CompileTimeArgs reader_receiver_ct_args;
+    KernelDescriptor::CompileTimeArgs writer_sender_ct_args;
+    KernelDescriptor::CompileTimeArgs writer_receiver_ct_args;
+    KernelDescriptor::CompileTimeArgs compute_all_to_all_ct_args;
+    KernelDescriptor::CompileTimeArgs compute_not_all_to_all_ct_args;
 
     // Defines
     KernelDescriptor::Defines reader_sender_defines;

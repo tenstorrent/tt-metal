@@ -369,7 +369,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     const auto in1_tensor_next_block_stride = in0_block_w * in1_tensor_stride_h;
 
     // Compile time args for reader
-    std::vector<uint32_t> reader_compile_time_args = {
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
         (std::uint32_t)in0_tensor_stride_w,
         (std::uint32_t)in0_tensor_stride_h,
         (std::uint32_t)in0_tensor_next_block_stride,
@@ -385,7 +385,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
 
     // Compile time args for reader/writer
-    std::vector<uint32_t> reader_writer_compile_time_args = {
+    KernelDescriptor::CompileTimeArgs reader_writer_compile_time_args = {
         (std::uint32_t)in1_tensor_stride_w,
         (std::uint32_t)in1_tensor_stride_h,
         (std::uint32_t)in1_tensor_next_block_stride,
@@ -449,7 +449,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     };
 
     // Compute kernel compile time args (group 1)
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
+    KernelDescriptor::CompileTimeArgs compute_kernel_args_group_1 = {
         in0_block_w,
         in0_num_subblocks,
         in0_block_num_tiles,
@@ -521,7 +521,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
 
         reader_runtime_args.emplace_back(
             core,
-            std::vector<uint32_t>{
+            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
                 (uint32_t)in0_buffer->address(),
                 in0_start_tile_id,
                 num_output_blocks_per_core,
@@ -529,7 +529,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
 
         reader_writer_runtime_args.emplace_back(
             core,
-            std::vector<uint32_t>{
+            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
                 (uint32_t)in1_buffer->address(),
                 in1_start_tile_id,
                 num_output_blocks_per_core,
@@ -539,9 +539,9 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
 
         // Compute kernels have no per-core runtime args
         if (i < g1_numcores) {
-            compute_runtime_args_g1.emplace_back(core, std::vector<uint32_t>{});
+            compute_runtime_args_g1.emplace_back(core, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{});
         } else {
-            compute_runtime_args_g2.emplace_back(core, std::vector<uint32_t>{});
+            compute_runtime_args_g2.emplace_back(core, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{});
         }
 
         num_blocks_written += num_output_blocks_per_core;
@@ -594,7 +594,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
 
     // Core group 2 compute kernel (if needed)
     if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_kernel_args_group_2 = {
+        KernelDescriptor::CompileTimeArgs compute_kernel_args_group_2 = {
             in0_block_w,
             in0_num_subblocks,
             in0_block_num_tiles,

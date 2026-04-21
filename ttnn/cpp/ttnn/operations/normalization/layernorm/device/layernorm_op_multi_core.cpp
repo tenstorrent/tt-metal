@@ -390,7 +390,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     const auto fuse_pre_add = b.has_value();
 
     // Build compile time args for reader kernel
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size};
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {(std::uint32_t)block_size};
     if (!large_tensor_needed) {
         reader_compile_time_args.push_back((std::uint32_t)use_welford);
     }
@@ -413,7 +413,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     }
 
     // Build compile time args for writer kernel
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(std::uint32_t)block_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     if (input_is_row_major) {
         // RM writer needs elem_size to compute per-row NOC write sizes
@@ -499,7 +499,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     // Build compute args
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
-    std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
+    KernelDescriptor::CompileTimeArgs compute_args = {
+        Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
     if (use_welford_and_not_rms_norm) {
         compute_args.push_back(W);
         compute_args.push_back(ttnn::types::TILE_SIZE);
@@ -568,7 +569,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             (use_welford_and_not_rms_norm && large_tensor_needed) || (use_row_major_kernel && !input_is_row_major);
         const uint32_t reader_start = using_legacy_tile_reader ? tile_offset : curr_row;
 
-        std::vector<uint32_t> reader_args = {
+        tt::tt_metal::KernelDescriptor::CoreRuntimeArgs reader_args = {
             a_addr,
             num_tile_rows_per_core,
             Wt,
@@ -591,12 +592,14 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         // For the RM output writer arg[3] is start_tile_row (starting tile-row index for this core),
         // not the flat tile offset, because the RM writer computes row addresses directly.
         const uint32_t writer_start = input_is_row_major ? curr_row : tile_offset;
-        std::vector<uint32_t> writer_args = {dst_addr, Wt, num_tile_rows_per_core, writer_start};
+        tt::tt_metal::KernelDescriptor::CoreRuntimeArgs writer_args = {
+            dst_addr, Wt, num_tile_rows_per_core, writer_start};
         if (input_is_row_major) {
             writer_args.push_back(H_logical);  // arg[4]
         }
         writer_runtime_args.emplace_back(core, std::move(writer_args));
-        compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
+        compute_runtime_args.emplace_back(
+            core, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{num_tile_rows_per_core});
 
         curr_row += num_tile_rows_per_core;
     }
