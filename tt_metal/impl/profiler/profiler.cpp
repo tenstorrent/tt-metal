@@ -1530,6 +1530,9 @@ void DeviceProfiler::readRiscProfilerResults(
                     bufferEndIndex);
                 TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
                 log_warning(tt::LogMetal, "{}", warningMsg);
+                // Record that drops occurred so processDeviceMarkerData can tolerate
+                // orphan ZONE_START markers whose ZONE_END was dropped.
+                this->had_dropped_markers.store(true, std::memory_order_relaxed);
             }
 
             uint32_t riscNumRead = 0;
@@ -2045,19 +2048,34 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
             if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_START) {
                 start_marker_stack.push(device_marker_it);
             } else if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
-                TT_FATAL(
-                    !start_marker_stack.empty(),
-                    "End marker found without a corresponding start marker.\nEnd marker: {}",
-                    marker.to_string());
+                if (start_marker_stack.empty()) {
+                    // With dropped markers, a ZONE_START can be lost while its ZONE_END survives.
+                    // Skip rather than fatal — the marker will still appear in the raw device log.
+                    if (!this->had_dropped_markers.load(std::memory_order_relaxed)) {
+                        TT_FATAL(
+                            false,
+                            "End marker found without a corresponding start marker.\nEnd marker: {}",
+                            marker.to_string());
+                    }
+                    device_marker_it = next_device_marker_it;
+                    continue;
+                }
 
                 const auto& start_marker_it = start_marker_stack.top();
 
                 if (!MetalContext::instance(context_id).rtoptions().get_profiler_trace_only()) {
-                    TT_FATAL(
-                        start_marker_it->marker_id == marker.marker_id,
-                        "Start and end marker IDs do not match.\nStart marker: {}\nEnd marker: {}",
-                        start_marker_it->to_string(),
-                        marker.to_string());
+                    if (start_marker_it->marker_id != marker.marker_id) {
+                        if (!this->had_dropped_markers.load(std::memory_order_relaxed)) {
+                            TT_FATAL(
+                                false,
+                                "Start and end marker IDs do not match.\nStart marker: {}\nEnd marker: {}",
+                                start_marker_it->to_string(),
+                                marker.to_string());
+                        }
+                        // Stack is misaligned due to drops; skip this end without popping.
+                        device_marker_it = next_device_marker_it;
+                        continue;
+                    }
 
                     if (start_marker_it->marker_name != marker.marker_name) {
                         marker.marker_name = start_marker_it->marker_name;
@@ -2178,11 +2196,22 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
         device_marker_it = next_device_marker_it;
     }
 
-    TT_FATAL(
-        start_marker_stack.empty(),
-        "{} start markers detected without corresponding end markers. Marker at top of stack: {}",
-        start_marker_stack.size(),
-        start_marker_stack.top()->to_string());
+    if (!start_marker_stack.empty()) {
+        if (this->had_dropped_markers.load(std::memory_order_relaxed)) {
+            log_warning(
+                tt::LogMetal,
+                "{} start markers detected without corresponding end markers (some end markers were "
+                "dropped due to DRAM-buffer overflow; report will be partial). Marker at top of stack: {}",
+                start_marker_stack.size(),
+                start_marker_stack.top()->to_string());
+        } else {
+            TT_FATAL(
+                false,
+                "{} start markers detected without corresponding end markers. Marker at top of stack: {}",
+                start_marker_stack.size(),
+                start_marker_stack.top()->to_string());
+        }
+    }
 }
 
 void DeviceProfiler::setLastFDReadAsNotDone() { this->is_last_fd_read_done = false; }

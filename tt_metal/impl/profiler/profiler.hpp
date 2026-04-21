@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <atomic>
 #include <cstddef>
 #include <filesystem>
 #include <map>
@@ -86,6 +87,11 @@ private:
 
     // Last fast dispatch read performed flag
     bool is_last_fd_read_done{};
+
+    // Set when any risc reported DROPPED_ZONES during the most recent readRiscProfilerResults.
+    // Used by processDeviceMarkerData to downgrade start-without-end checks to warnings
+    // (dropped markers legitimately leave zones unclosed).
+    std::atomic<bool> had_dropped_markers{false};
 
     // Smallest timestamp
     uint64_t smallest_timestamp = (1lu << 63);
