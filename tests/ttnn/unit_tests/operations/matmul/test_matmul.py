@@ -1123,6 +1123,98 @@ def run_matmul_1d_tiny_tile(
     )
 
 
+def _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_h):
+    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, True) and is_llk_assert_enabled():
+        pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
+
+
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
+@pytest.mark.parametrize(
+    "m,k,n,tile_h,tile_w,transpose_tile",
+    [
+        (32, 32, 32, 32, 32, False),
+        (16, 32, 32, 16, 32, False),
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
+def test_linear_fused_non_broadcast_bias_2d_mcast_tiny_tile(mesh_device, m, k, n, tile_h, tile_w, transpose_tile):
+    """Fused bias [1,1,M,N] on MatmulMultiCoreReuseMultiCastProgramConfig (2D mcast tiny tile)."""
+    _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_h)
+    torch.manual_seed(0)
+    grid_1 = (1, 1)
+    run_matmul_2d_tiny_tile(
+        mesh_device,
+        m,
+        k,
+        n,
+        True,
+        grid_1,
+        tile_h,
+        tile_w,
+        True,
+        True,
+        ttnn.bfloat16,
+        transpose_tile,
+        bias_layout="full_mn",
+    )
+
+
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
+@pytest.mark.parametrize(
+    "m,k,n,tile_h,tile_w,transpose_tile",
+    [
+        (32, 32, 32, 32, 32, False),
+        (16, 32, 32, 16, 32, False),
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
+def test_linear_fused_non_broadcast_bias_1d_mcast_tiny_tile(mesh_device, m, k, n, tile_h, tile_w, transpose_tile):
+    """Fused bias [1,1,M,N] on MatmulMultiCoreReuseMultiCast1DProgramConfig (1D mcast tiny tile)."""
+    _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_h)
+    torch.manual_seed(0)
+    grid_1 = (1, 1)
+    run_matmul_1d_tiny_tile(
+        mesh_device,
+        m,
+        k,
+        n,
+        True,
+        grid_1,
+        tile_h,
+        tile_w,
+        True,
+        True,
+        ttnn.bfloat16,
+        transpose_tile,
+        bias_layout="full_mn",
+    )
+
+
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
+@pytest.mark.parametrize("m,k,n", [(32, 32, 32), (32, 64, 32)])
+@pytest.mark.parametrize("transpose_mcast", [False, True])
+@pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
+def test_linear_fused_non_broadcast_bias_2d_mesh_multiple_blocks(mesh_device, transpose_mcast, m, k, n):
+    """Fused bias [1,1,M,N] on mesh 2D multi-block MatmulMultiCoreReuseMultiCastProgramConfig."""
+    torch.manual_seed(0)
+    grid_1 = (1, 1)
+    run_matmul_2d_multiple_output_blocks_per_core(
+        mesh_device,
+        1,
+        m,
+        k,
+        n,
+        True,
+        grid_1,
+        False,
+        False,
+        1,
+        1,
+        transpose_mcast,
+        bias_layout="full_mn",
+    )
+
+
 @pytest.mark.parametrize("m", [128])
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1024])
