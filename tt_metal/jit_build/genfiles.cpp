@@ -90,9 +90,10 @@ void write_file(const std::filesystem::path& path, const std::string& content) {
     }
 
     jit_build::utils::FileRenamer tmp(path);
-    std::ofstream f(tmp.path(), std::ios::binary | std::ios::trunc);
-    if (!f) {
-        throw std::runtime_error("Cannot create file: " + path.string());
+    std::ofstream f;
+    std::error_code open_ec;
+    if (!tt::filesystem::safe_open(f, tmp.path(), std::ios::binary | std::ios::out | std::ios::trunc, open_ec)) {
+        throw std::runtime_error("Cannot create file: " + path.string() + ": " + open_ec.message());
     }
 
     f.write(content.data(), static_cast<std::streamsize>(content.size()));
@@ -179,9 +180,10 @@ void jit_build_genfiles_triscs_src(
     // We also append the include path to generated dir to hlkc cmldline.
     const fs::path generated_defines_fname = out_dir / "defines_generated.h";
     jit_build::utils::FileRenamer tmp(generated_defines_fname);
-    std::ofstream gen_defines_file(tmp.path());
-    if (!gen_defines_file) {
-        throw std::runtime_error("Cannot create file: " + generated_defines_fname.string());
+    std::ofstream gen_defines_file;
+    std::error_code open_ec;
+    if (!tt::filesystem::safe_open(gen_defines_file, tmp.path(), open_ec)) {
+        throw std::runtime_error("Cannot create file: " + generated_defines_fname.string() + ": " + open_ec.message());
     }
     settings.process_defines([&gen_defines_file](const string& define, const string& value) {
         gen_defines_file << "#define " << define << " " << value << endl;

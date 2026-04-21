@@ -21,6 +21,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
@@ -58,12 +59,13 @@ namespace {
 void build_failure(
     const string& target_name, const string& op, const string& cmd, const std::filesystem::path& log_file) {
     log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
-    std::ifstream file{log_file};
-    if (file.is_open()) {
+    std::ifstream file;
+    std::error_code ec;
+    if (tt::filesystem::safe_open(file, log_file, std::ios::in, ec)) {
         std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         TT_THROW("{} build failed. Log: {}", target_name, log_contents);
     } else {
-        TT_THROW("Failed to open {} failure log file {}", op, log_file);
+        TT_THROW("Failed to open {} failure log file {}: {}", op, log_file, ec.message());
     }
 }
 
@@ -499,32 +501,27 @@ bool JitBuildState::build_state_matches(const std::filesystem::path& out_dir) co
     uint64_t stored_hash{};
     bool hash_matches = false;
 
+    std::ifstream file;
     std::error_code open_ec;
-    bool success = tt::filesystem::retry_on_estale_ec(
-        [&](std::error_code& ec) {
-            std::ifstream file(hash_path);
-            if (!file.is_open()) {
-                ec.assign(errno, std::system_category());
-                return false;
-            }
-            file >> stored_hash;
-            if (file.fail()) {
-                ec.assign(errno, std::system_category());
-                return false;
-            }
-            hash_matches = (stored_hash == build_state_hash_);
-            return true;
-        },
-        open_ec);
-
-    if (!success) {
+    const bool opened = tt::filesystem::safe_open(file, hash_path, open_ec);
+    if (opened) {
+        file >> stored_hash;
+        if (file.fail()) {
+            open_ec.assign(errno, std::system_category());
+        }
+    }
+    if (!opened || file.fail()) {
         log_debug(
             tt::LogBuildKernels,
-            "Build state file not found or unreadable: {} (current hash={})",
+            "Build state file not found or unreadable: {} (current hash={}, ec={})",
             hash_path,
-            build_state_hash_);
+            build_state_hash_,
+            open_ec.message());
         return false;
     }
+
+    hash_matches = (stored_hash == build_state_hash_);
+
     if (!hash_matches) {
         log_debug(
             tt::LogBuildKernels,
@@ -532,14 +529,17 @@ bool JitBuildState::build_state_matches(const std::filesystem::path& out_dir) co
             out_dir,
             stored_hash,
             build_state_hash_);
-        return false;
     }
-    return true;
+    return hash_matches;
 }
 
 void JitBuildState::write_build_state_hash(const std::filesystem::path& out_dir) const {
     jit_build::utils::FileRenamer tmp(out_dir / BUILD_STATE_HASH_FILE);
-    std::ofstream file(tmp.path());
+    std::ofstream file;
+    std::error_code ec;
+    if (!tt::filesystem::safe_open(file, tmp.path(), ec)) {
+        TT_THROW("Failed to open build state hash temp file {}: {}", tmp.path(), ec.message());
+    }
     file << build_state_hash_;
 }
 
@@ -719,7 +719,16 @@ void JitBuildState::link(
     fs::path elf_dephash_path = elf_path;
     elf_dephash_path.concat(".dephash");
     jit_build::utils::FileRenamer dephash_file(elf_dephash_path);
-    std::ofstream hash_file(dephash_file.path());
+    std::ofstream hash_file;
+    std::error_code dephash_open_ec;
+    if (!tt::filesystem::safe_open(hash_file, dephash_file.path(), dephash_open_ec)) {
+        log_warning(
+            tt::LogBuildKernels,
+            "Cannot cache JIT build, failed to open {} for writing: {}",
+            dephash_file.path(),
+            dephash_open_ec.message());
+        return;
+    }
     jit_build::write_dependency_hashes({{elf_path.string(), std::move(link_dep_strs)}}, out_dir, elf_path, hash_file);
     hash_file.close();
     if (hash_file.fail()) {

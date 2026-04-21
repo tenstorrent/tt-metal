@@ -11,6 +11,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <system_error>
 
 #include <tt-logger/tt-logger.hpp>
 
@@ -61,24 +62,22 @@ void dump_kernel_defines_and_args(const std::filesystem::path& out_kernel_root_p
     auto tmp_path = tt::jit_build::utils::FileRenamer::generate_temp_path(kernel_args_csv);
 
     std::lock_guard<std::mutex> lock(mutex_kernel_defines_and_args_);
-    ofstream file(tmp_path, ios::trunc);
-    if (file.is_open()) {
-        for (auto const& [full_kernel_name, defines_and_args_str] : kernel_defines_and_args_) {
-            file << full_kernel_name << defines_and_args_str << "\n";
-        }
-        file.close();
-        if (file.fail()) {
-            std::error_code ec;
-            std::filesystem::remove(tmp_path, ec);
-            TT_THROW("Failed to write file: {}", tmp_path);
-        }
-        if (!tt::filesystem::safe_rename(tmp_path, kernel_args_csv, false)) {
-            std::error_code ec;
-            std::filesystem::remove(tmp_path, ec);
-            TT_THROW("Failed to rename {} to {}", tmp_path, kernel_args_csv);
-        }
-    } else {
-        TT_THROW("Failed to open file: {}", tmp_path);
+    ofstream file;
+    std::error_code open_ec;
+    if (!tt::filesystem::safe_open(file, tmp_path, ios::out | ios::trunc, open_ec)) {
+        TT_THROW("Failed to open file: {}: {}", tmp_path, open_ec.message());
+    }
+    for (const auto& [full_kernel_name, defines_and_args_str] : kernel_defines_and_args_) {
+        file << full_kernel_name << defines_and_args_str << "\n";
+    }
+    file.close();
+    if (file.fail()) {
+        tt::filesystem::safe_remove(tmp_path);
+        TT_THROW("Failed to write file: {}", tmp_path);
+    }
+    if (!tt::filesystem::safe_rename(tmp_path, kernel_args_csv, false)) {
+        tt::filesystem::safe_remove(tmp_path);
+        TT_THROW("Failed to rename {} to {}", tmp_path, kernel_args_csv);
     }
 }
 
