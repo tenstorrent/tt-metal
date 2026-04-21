@@ -19,7 +19,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -281,7 +281,7 @@ void run_single_core_copy_block_matmul_partials(
 // - pack_tile_block
 ////////////////////////////////////////////////////////////////////////////
 
-TEST_F(MeshDeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
+TEST_F(LLKMeshDeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
     for (bool fp32_dest_acc_en : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
@@ -292,7 +292,7 @@ TEST_F(MeshDeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
         }
     }
 }
-TEST_F(MeshDeviceFixture, TensixComputeCopyBlockMultiple) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeCopyBlockMultiple) {
     for (bool fp32_dest_acc_en : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
@@ -312,7 +312,7 @@ TEST_F(MeshDeviceFixture, TensixComputeCopyBlockMultiple) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
     for (bool fp32_dest_acc_en : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
