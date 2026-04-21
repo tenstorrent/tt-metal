@@ -1061,20 +1061,43 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
             const std::size_t start = chain_start_idx.value();
 
-            // Build chain in wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1.
-            // Break on conflict (core already in a different chain).
+            // Build chain order. In flatten_work mode, use linear traversal only
+            // (mirror ring_joint_sdpa): chain_start_idx already picks the first
+            // non-straddling core, and proceeding forward from there naturally
+            // places the (possibly lighter) trailing straddler last — which
+            // satisfies the kernel's descending-q invariant without an explicit
+            // sort, and also avoids the injector-clustering pattern that the
+            // wrap+sort path produces for mixed-q chains (see
+            // RingSDPA_ChainInjectorDRAMProfile.md).  In the hierarchical
+            // (non-flat) path, keep the wrap+reorder behavior.
             std::vector<std::size_t> chain_order;
-            for (std::size_t step = 0; step < segments.size(); ++step) {
-                std::size_t idx = (start + step) % segments.size();
-                const auto& seg = segments[idx];
-                const uint32_t core_idx = seg.core_idx;
-                if (core_idx >= core_work.size() || seg.head_work_index >= core_work[core_idx].head_work.size()) {
-                    continue;
+            if (flatten_work) {
+                for (std::size_t idx = start; idx < segments.size(); ++idx) {
+                    const auto& seg = segments[idx];
+                    const uint32_t core_idx = seg.core_idx;
+                    if (core_idx >= core_work.size() || seg.head_work_index >= core_work[core_idx].head_work.size()) {
+                        continue;
+                    }
+                    if (core_chain_info[core_idx].participates) {
+                        break;
+                    }
+                    chain_order.push_back(idx);
                 }
-                if (core_chain_info[core_idx].participates) {
-                    break;
+            } else {
+                // Wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1.
+                // Break on conflict (core already in a different chain).
+                for (std::size_t step = 0; step < segments.size(); ++step) {
+                    std::size_t idx = (start + step) % segments.size();
+                    const auto& seg = segments[idx];
+                    const uint32_t core_idx = seg.core_idx;
+                    if (core_idx >= core_work.size() || seg.head_work_index >= core_work[core_idx].head_work.size()) {
+                        continue;
+                    }
+                    if (core_chain_info[core_idx].participates) {
+                        break;
+                    }
+                    chain_order.push_back(idx);
                 }
-                chain_order.push_back(idx);
             }
 
             if (chain_order.size() < 2) {
@@ -1101,7 +1124,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 }
             }
 
-            if (uniform_q) {
+            if (flatten_work) {
+                // Linear-only flat mode: leave chain_order[0] as the injector.
+                // Descending-q invariant is satisfied structurally because the
+                // only lighter segment (if any) is the trailing straddler at the
+                // tail of the chain.
+            } else if (uniform_q) {
                 // All cores have equal q_chunk_count — safe to pick any injector.
                 // Choose the core whose physical X is furthest from existing
                 // injectors to spread DRAM reads across channels.
