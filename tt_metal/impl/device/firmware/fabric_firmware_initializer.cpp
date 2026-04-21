@@ -555,9 +555,34 @@ std::unordered_set<uint32_t> FabricFirmwareInitializer::terminate_stale_erisc_ro
     uint32_t stale_running_count = 0;
     uint32_t stale_timeout_count = 0;
 
+    // Fix N300 indefinite hang: on non-MMIO devices (e.g. N300 Device 1), every probe
+    // read that times out leaves one stuck command in the 4-slot ETH relay queue (UMD
+    // remote_communication_legacy_firmware.cpp read_non_mmio).  Once the queue fills,
+    // the next read_non_mmio enters a no-timeout while(full) spin → indefinite hang.
+    // Track relay timeouts and stop issuing reads once the queue is one slot from full.
+    // kMaxRelayTimeouts = cmd_buf_size - 1 = 3 (WH/BH ETH relay queue has 4 slots).
+    uint32_t relay_timeout_count = 0;
+    constexpr uint32_t kMaxRelayTimeouts = 3;
+    bool relay_broken = false;
+
     for (const auto& [eth_chan_id, direction] : active_channels) {
         const auto eth_logical_core =
             cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+
+        // If prior probe-read relay timeouts have brought the relay queue near capacity,
+        // skip reads for remaining channels to prevent the no-timeout while(full) hang.
+        if (relay_broken) {
+            probe_dead_channels.insert(eth_chan_id);
+            corrupt_count++;
+            log_warning(
+                tt::LogMetal,
+                "terminate_stale_erisc_routers: Device {} chan={} skipped (relay broken after "
+                "{} timeouts) — added to probe_dead_channels to prevent relay queue saturation",
+                dev->id(),
+                eth_chan_id,
+                relay_timeout_count);
+            continue;
+        }
 
         std::vector<uint32_t> status_buf(1, 0);
         // Fix F5 (#42429): wrap the initial probe read in a try-catch.  On a T3K after an
@@ -600,6 +625,23 @@ std::unordered_set<uint32_t> FabricFirmwareInitializer::terminate_stale_erisc_ro
                 detail::WriteToDeviceL1(dev, eth_logical_core, router_sync_address, zero_buf, CoreType::ETH);
             } catch (...) {
                 // write-side also unresponsive — best effort only
+            }
+            // Track relay timeouts.  Once we reach kMaxRelayTimeouts, the ETH relay queue
+            // for this device has (cmd_buf_size - 1) stuck commands and one slot remains.
+            // One more timed-out read would fill the queue; the FOLLOWING read would enter
+            // read_non_mmio's no-timeout while(full) loop.  Set relay_broken so the next
+            // channel iteration skips the read entirely.
+            if (++relay_timeout_count >= kMaxRelayTimeouts) {
+                log_warning(
+                    tt::LogMetal,
+                    "terminate_stale_erisc_routers: Device {} relay timeout count {} >= {} — "
+                    "ETH relay path appears broken (crashed relay ERISCs on non-MMIO device). "
+                    "Remaining channels will skip probe reads to prevent relay queue fill "
+                    "and indefinite hang in read_non_mmio while(full) loop.",
+                    dev->id(),
+                    relay_timeout_count,
+                    kMaxRelayTimeouts);
+                relay_broken = true;
             }
             corrupt_count++;
             continue;
