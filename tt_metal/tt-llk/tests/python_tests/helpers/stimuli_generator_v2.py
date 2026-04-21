@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import math
 import warnings
 from dataclasses import dataclass
@@ -205,7 +206,8 @@ class StimuliSpec:
         other faces as zeros.
 
         Args:
-            face_values: Mapping from 0-based face index to the value list for that face.
+            face_values:
+                Mapping from 0-based face index to the value list for that face.
                 Each list is written at the start of the flattened face; the rest
                 of the face is zero-filled. Faces not present in the mapping are
                 entirely zeros.
@@ -318,6 +320,7 @@ class StimuliSpec:
         Raises:
             KeyError: If *op* is not in the registry.
         """
+        # Deep-copy so callers can safely mutate specs without altering the registry.
         entry = _OP_DOMAIN_REGISTRY.get(op)
         if entry is None:
             registered = sorted(o.name for o in _OP_DOMAIN_REGISTRY)
@@ -327,8 +330,8 @@ class StimuliSpec:
                 f"Currently registered ({len(registered)}): {registered}"
             )
         if callable(entry):
-            return entry(data_format)
-        return entry
+            return copy.deepcopy(entry(data_format))
+        return copy.deepcopy(entry)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -584,16 +587,6 @@ _OP_DOMAIN_REGISTRY: Dict[
     ),
     MathOperation.SfpuElwRightShift: OperandSpecs(
         spec_A=StimuliSpec(distribution="uniform", low=0.0, high=255.0)
-    ),
-    # ── SFPU ternary ──────────────────────────────────────────────────────────
-    # where(cond, a, b): selects a when cond != 0, else b
-    # spec_A / spec_B cover the two value operands; the condition operand is
-    # generated separately by the caller (not modelled here).
-    # NOTE: TTNNWhere is an alias for SfpuWhere (same enum value) and is
-    # implicitly covered by this entry.
-    MathOperation.SfpuWhere: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-1.0, high=1.0),
-        spec_B=StimuliSpec(distribution="uniform", low=-1.0, high=1.0),
     ),
     # ── Reduce ────────────────────────────────────────────────────────────────
     MathOperation.ReduceColumn: OperandSpecs(
@@ -941,8 +934,8 @@ def convert_to_l1_view(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-# Set of distribution names that produce a deterministic global sweep and
-# should short-circuit the face loop in _generate_source_tensor_v2.
+# Distributions that generate one global deterministic sweep across the tensor
+# (linspace-style) and therefore bypass per-face generation.
 _LINSPACE_DISTRIBUTIONS = frozenset(
     {
         "ramp",
@@ -1486,7 +1479,7 @@ def generate_stimuli_v2(
             raise ValueError(
                 f"tile_dimensions and face_r_dim are mutually exclusive: "
                 f"when tile_dimensions is provided, face_r_dim is derived "
-                f"automatically.  Got tile_dimensions={tile_dimensions}, "
+                f"automatically. Got tile_dimensions={tile_dimensions}, "
                 f"face_r_dim={face_r_dim}."
             )
         if num_faces != MAX_NUM_FACES:
