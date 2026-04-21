@@ -128,16 +128,16 @@ models:
   sanity:
     wh_galaxy_perf: 10
   e2e:
-    wh_llmbox_perf: 262
-    wh_n150: 59
-    wh_n300: 5
-    wh_galaxy_perf: 100
+    wh_llmbox_perf: 300
+    wh_n150: 70
+    wh_n300: 15
+    wh_galaxy_perf: 120
   unit:
     wh_llmbox: 150
-    wh_llmbox_perf: 198
-    wh_n150: 105
-    wh_n300: 5
-    wh_galaxy_perf: 35
+    wh_llmbox_perf: 230
+    wh_n150: 120
+    wh_n300: 15
+    wh_galaxy_perf: 45
   integration:
     wh_llmbox: 422
   perf:
