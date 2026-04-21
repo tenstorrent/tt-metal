@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace tt::tt_metal {
 
@@ -35,6 +36,26 @@ public:
     // (Initially just DFB local accessor names, but will be extended and refactored as needed.)
     virtual void process_dataflow_buffer_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
+
+    // Named RTA/CRTA schema (Metal 2.0 APIs).
+    // The order of names determines the byte offset of each arg within the named-args
+    // section of the dispatch buffer.
+    // Returned by const-ref rather than via a process_* callback because the concrete storage
+    // is already an ordered vector — the callback indirection would just force a copy.
+    virtual const std::vector<std::string>& get_named_runtime_args() const {
+        static const std::vector<std::string> k_empty;
+        return k_empty;
+    }
+    virtual const std::vector<std::string>& get_named_common_runtime_args() const {
+        static const std::vector<std::string> k_empty;
+        return k_empty;
+    }
+    // User-configurable C++ namespace emitted around named RTA/CRTA/CTA accessors in
+    // kernel_args_generated.h. Defaults to "args" when not overridden.
+    virtual const std::string& get_args_namespace() const {
+        static const std::string k_default = "args";
+        return k_default;
+    }
 
     // Called to process additional include paths (e.g., kernel source directory for relative includes)
     virtual void process_include_paths(const std::function<void(const std::string& path)>&) const {}
