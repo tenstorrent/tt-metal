@@ -33,10 +33,6 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
         return ConcatS2IProgramFactory{};
     }
 
-    if (args.output_mem_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
-        return ConcatProgramFactory{};  // this is default factory
-    }
-
     // specific cases for 2 tensors
     if (input_tensors.size() == 2) {
         if (input_tensors[0].layout() == input_tensors[1].layout()) {
