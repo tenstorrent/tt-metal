@@ -18,23 +18,36 @@ from models.demos.wormhole.bge_m3.tt.device_kernels import (
     max_wo_mm_chunk_seq_len,
 )
 
-# SDPA chunk sizes must be multiples of TILE_WIDTH (32); Metal also expects power-of-two chunks in practice.
-# Cap at **256** (not 512): large K tiles increase per-kernel working set and can dominate device time or
-# stress the profiler. Prefer **256-wide Q** when it divides seq_len to halve Q-axis tiling vs 128.
-# Include 64/32 so short encoder runs (e.g. S32/S64) use chunk sizes that divide the real sequence length.
-_SDPA_Q_CHUNKS = (256, 128, 64, 32)
-_SDPA_K_CHUNKS = (256, 128, 64, 32)
+# SDPA tiling (``main``-compatible path): fixed **Q chunk = 128** and largest **K** in (256, 128) that
+# divides ``seq_len``; ``exp_approx_mode=True``. That pairing passes full-model PCC at S8192 on Wormhole.
+# Picking **Q=256** + ``exp_approx_mode=False`` (an optimization on this branch) regresses S8192 PCC.
+#
+# For S32/S64 (not divisible by 128), use flexible Q/K from (256..32) so tiles divide the runtime length.
+_SDPA_Q_CHUNK_MAIN = 128
+_SDPA_K_CANDIDATES_MAIN = (256, 128)
+_SDPA_Q_CHUNKS_FLEX = (256, 128, 64, 32)
+_SDPA_K_CHUNKS_FLEX = (256, 128, 64, 32)
 
 
 def _sdpa_chunks_for_seq_len(seq_len: int) -> tuple[int, int]:
-    """Pick largest (q_chunk, k_chunk) from candidate lists that divide ``seq_len``."""
+    """Q/K chunk sizes for SDPA. ``main`` uses fixed Q=128 for all 128-token-aligned lengths."""
+    if seq_len % 128 == 0:
+        for k_chunk in _SDPA_K_CANDIDATES_MAIN:
+            if k_chunk <= seq_len and seq_len % k_chunk == 0:
+                return _SDPA_Q_CHUNK_MAIN, k_chunk
+        raise ValueError(f"Unable to pick k_chunk_size for seq_len={seq_len} (expected a multiple of 128)")
     if seq_len % 32 != 0:
         raise ValueError(f"seq_len {seq_len} must be divisible by 32 (tile height)")
     if seq_len > 128 and seq_len % 128 != 0:
         raise ValueError(f"seq_len {seq_len} must be divisible by 128 when seq_len > 128")
-    q_chunk = next(q for q in _SDPA_Q_CHUNKS if q <= seq_len and seq_len % q == 0)
-    k_chunk = next(k for k in _SDPA_K_CHUNKS if k <= seq_len and seq_len % k == 0)
+    q_chunk = next(q for q in _SDPA_Q_CHUNKS_FLEX if q <= seq_len and seq_len % q == 0)
+    k_chunk = next(k for k in _SDPA_K_CHUNKS_FLEX if k <= seq_len and seq_len % k == 0)
     return q_chunk, k_chunk
+
+
+def _sdpa_exp_approx_for_seq_len(seq_len: int) -> bool:
+    """``main`` sets ``exp_approx_mode=True`` for 128-aligned encoder runs (incl. S8192); short S32/S64 use False."""
+    return seq_len % 128 == 0
 
 
 def _sdpa_storage_grid(mesh_device: ttnn.MeshDevice | None):
@@ -71,7 +84,7 @@ def _sdpa_program_config_for_seq_len(seq_len: int, mesh_device: ttnn.MeshDevice 
         compute_with_storage_grid_size=_sdpa_compute_grid_for_seq_len(seq_len, mesh_device),
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
-        exp_approx_mode=False,
+        exp_approx_mode=_sdpa_exp_approx_for_seq_len(seq_len),
     )
 
 
@@ -408,7 +421,7 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
             compute_with_storage_grid_size=_sdpa_compute_grid_for_seq_len(128, mesh_device),
             q_chunk_size=q0,
             k_chunk_size=k0,
-            exp_approx_mode=False,
+            exp_approx_mode=_sdpa_exp_approx_for_seq_len(128),
         )
 
     if config.qkv_compute_kernel_cfg is None:
