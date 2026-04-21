@@ -1093,6 +1093,125 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     }
 }
 
+// Overload for configure_fabric(): skip writes to dead ETH relay cores (#42429).
+// When fabric is initialising in degraded mode (some ETH channels dead), writing runtime args
+// through the dead relay path hangs indefinitely.  This overload applies the same per-core
+// dead-channel guard used for write_launch_msg_to_core (FIX C, device.cpp).
+void WriteRuntimeArgsToDevice(
+    IDevice* device,
+    Program& program,
+    bool force_slow_dispatch,
+    const std::unordered_set<CoreCoord>& logical_cores_to_skip) {
+    if (logical_cores_to_skip.empty()) {
+        WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
+        return;
+    }
+
+    ZoneScoped;
+    auto device_id = device->id();
+    if (!force_slow_dispatch) {
+        detail::DispatchStateCheck(false);
+    }
+
+    const auto& hal = MetalContext::instance().hal();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        CoreType core_type = hal.get_core_type(index);
+        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
+        uint64_t l1_noc_offset = hal.get_l1_noc_offset(programmable_core_type);
+        for (const auto& kg : program.impl().get_kernel_groups(index)) {
+            auto kernel_config = kg->launch_msg.view().kernel_config();
+            uint64_t kernel_config_base =
+                static_cast<uint64_t>(kernel_config.kernel_config_base()[index]) + l1_noc_offset;
+            for (const CoreRange& core_range : kg->core_ranges.ranges()) {
+                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                        CoreCoord logical_core(x, y);
+                        // FIX (#42429): skip dead ETH relay cores to prevent indefinite hang.
+                        if (core_type == CoreType::ETH && logical_cores_to_skip.count(logical_core)) {
+                            log_debug(
+                                tt::LogMetal,
+                                "WriteRuntimeArgsToDevice: skipping dead ETH core ({},{}) on device {}",
+                                x,
+                                y,
+                                device_id);
+                            continue;
+                        }
+                        auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
+                        for (auto kernel_id : kg->kernel_ids) {
+                            const auto& kernel = program.impl().get_kernel(kernel_id);
+                            const auto& rt_args = kernel->runtime_args(logical_core);
+                            uint32_t processor_index = hal.get_processor_index(
+                                kernel->get_kernel_programmable_core_type(),
+                                kernel->get_kernel_processor_class(),
+                                kernel->get_kernel_processor_type(0));
+                            auto rta_offset = kernel_config.rta_offset()[processor_index];
+                            if (!rt_args.empty()) {
+                                auto rt_args_addr = kernel_config_base + rta_offset.rta_offset();
+                                MetalContext::instance().get_cluster().write_core(
+                                    device_id, physical_core, rt_args, rt_args_addr);
+                            }
+                            const auto& common_rt_args = kernel->common_runtime_args();
+                            if (!common_rt_args.empty()) {
+                                auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset();
+                                MetalContext::instance().get_cluster().write_core(
+                                    device_id, physical_core, common_rt_args, common_rt_args_addr);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Overload for configure_fabric(): skip configuration of dead ETH relay cores (#42429).
+bool ConfigureDeviceWithProgram(
+    IDevice* device,
+    Program& program,
+    bool force_slow_dispatch,
+    const std::unordered_set<CoreCoord>& logical_cores_to_skip) {
+    if (logical_cores_to_skip.empty()) {
+        return ConfigureDeviceWithProgram(device, program, force_slow_dispatch);
+    }
+
+    ZoneScoped;
+    if (!force_slow_dispatch) {
+        detail::DispatchStateCheck(false);
+    }
+
+    auto device_id = device->id();
+    auto mesh_device = device->get_mesh_device();
+    const IDevice* validation_device = mesh_device ? mesh_device.get() : device;
+
+    program.impl().allocate_circular_buffers(validation_device);
+    program.impl().validate_circular_buffer_core_ranges(validation_device);
+    program.impl().validate_circular_buffer_region(validation_device);
+    program.impl().allocate_dataflow_buffers(validation_device);
+    program.impl().validate_dataflow_buffer_region(validation_device);
+
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
+    const auto& hal = MetalContext::instance().hal();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        const auto& logical_cores = logical_cores_used_in_program[index];
+        CoreType core_type = hal.get_core_type(index);
+        for (const auto& logical_core : logical_cores) {
+            // FIX (#42429): skip dead ETH relay cores to prevent indefinite hang.
+            if (core_type == CoreType::ETH && logical_cores_to_skip.count(logical_core)) {
+                log_debug(
+                    tt::LogMetal,
+                    "ConfigureDeviceWithProgram: skipping dead ETH core ({},{}) on device {}",
+                    logical_core.x,
+                    logical_core.y,
+                    device_id);
+                continue;
+            }
+            KernelGroup* kernel_group = program.impl().kernels_on_core(logical_core, index);
+            ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
+        }
+    }
+    return true;
+}
+
 void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
     program.impl().compile(device, force_slow_dispatch);

@@ -432,8 +432,45 @@ void Device::configure_fabric(const std::unordered_set<uint32_t>& pre_dead_chann
 
     fabric_program_->impl().finalize_offsets(this);
 
-    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
-    detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
+    // FIX D2 (#42429): Build the set of dead ETH logical cores so WriteRuntimeArgsToDevice
+    // and ConfigureDeviceWithProgram can skip them.  Both functions write to L1 through the
+    // ETH relay on non-MMIO devices; writing to a dead relay channel hangs indefinitely.
+    // FIX C (write_launch_msg_to_core) already guards the launch-message writes below — these
+    // two calls need the same treatment.
+    std::unordered_set<CoreCoord> dead_eth_logical_cores;
+    if (!all_dead_channels.empty()) {
+        const auto& logical_cores_in_prog = fabric_program_->impl().logical_cores();
+        const auto& hal_for_dead = env_impl.get_hal();
+        for (uint32_t pct_idx = 0; pct_idx < logical_cores_in_prog.size(); pct_idx++) {
+            if (hal_for_dead.get_core_type(pct_idx) != CoreType::ETH) {
+                continue;
+            }
+            for (const auto& lc : logical_cores_in_prog[pct_idx]) {
+                try {
+                    auto eth_chan = soc_desc_for_dead.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(lc.x, lc.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    if (all_dead_channels.count(eth_chan)) {
+                        dead_eth_logical_cores.insert(lc);
+                    }
+                } catch (...) {
+                    // Cannot resolve channel — conservatively skip this core.
+                    dead_eth_logical_cores.insert(lc);
+                }
+            }
+        }
+        if (!dead_eth_logical_cores.empty()) {
+            log_warning(
+                tt::LogMetal,
+                "configure_fabric: Device {} skipping WriteRuntimeArgsToDevice and "
+                "ConfigureDeviceWithProgram for {} dead ETH logical core(s) to avoid relay hang",
+                this->id_,
+                dead_eth_logical_cores.size());
+        }
+    }
+
+    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_, dead_eth_logical_cores);
+    detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_, dead_eth_logical_cores);
 
     // Only issue l1_barrier if we have no dead ETH channels on this device.  l1_barrier
     // calls driver_->l1_membar which internally calls wait_for_non_mmio_flush — on a non-MMIO
