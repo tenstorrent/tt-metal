@@ -51,6 +51,7 @@ void kernel_main() {
     /* Set transfer length */
     set_len_cmdbuf_0(elem_size);
 
+    // TODO: wrap with DeviceTimestampedData profiling once Quasar perf counters are supported
     for (uint32_t i = 0; i < num_elements; ++i) {
         push_both_addrgen_0();
         issue_cmdbuf_0();
