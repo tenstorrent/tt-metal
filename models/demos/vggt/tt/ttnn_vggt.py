@@ -124,6 +124,8 @@ def _install_ttnn_attention(model, device):
     if getattr(Attention, "_tt_patched", False):
         return
 
+    import math
+
     def ttnn_attn_forward(self, x: torch.Tensor, pos=None) -> torch.Tensor:
         if not getattr(self, "_tt_attn_ready", False):
             return self._orig_forward(x, pos=pos)
@@ -140,16 +142,33 @@ def _install_ttnn_attention(model, device):
         if self.rope is not None:
             q = self.rope(q, pos)
             k = self.rope(k, pos)
-        x = F.scaled_dot_product_attention(q, k, v, dropout_p=0.0)
+        # Attention on device: bf16 uploads (small) but hold the softmax +
+        # scores in fp32 via HiFi4 kernels and dtype=float32. bf16 softmax
+        # accumulates enough error over a 1374-long row to collapse
+        # world_points_conf; fp32 intermediate restores PCC.
+        dh = self.head_dim
+        dev = self._tt_device
+        kcfg = _hifi_kconfig(dev)
+        tt_q = ttnn.from_torch(q.to(torch.bfloat16).contiguous(),
+                               dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
+        tt_kt = ttnn.from_torch(k.transpose(-2, -1).to(torch.bfloat16).contiguous(),
+                                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
+        tt_v = ttnn.from_torch(v.to(torch.bfloat16).contiguous(),
+                               dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
+        tt_scores = ttnn.matmul(tt_q, tt_kt, compute_kernel_config=kcfg, dtype=ttnn.float32)
+        tt_scores = ttnn.multiply(tt_scores, 1.0 / math.sqrt(dh))
+        tt_attn = ttnn.softmax(tt_scores, dim=-1, compute_kernel_config=kcfg)
+        tt_ctx = ttnn.matmul(tt_attn, tt_v, compute_kernel_config=kcfg, dtype=ttnn.float32)
+        x = ttnn.to_torch(tt_ctx).to(v.dtype)
         x = x.transpose(1, 2).reshape(B, N, C)
         # proj with HiFi4 + fp32 dest to preserve the confidence-head PCC.
         x_bf16 = x.to(torch.bfloat16) if x.dtype != torch.bfloat16 else x
         tt_in = ttnn.from_torch(
-            x_bf16, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self._tt_device
+            x_bf16, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev
         )
         tt_out = ttnn.linear(
             tt_in, self._tt_proj_w, bias=self._tt_proj_b,
-            compute_kernel_config=_hifi_kconfig(self._tt_device),
+            compute_kernel_config=kcfg,
         )
         return ttnn.to_torch(tt_out).to(x.dtype)
 
