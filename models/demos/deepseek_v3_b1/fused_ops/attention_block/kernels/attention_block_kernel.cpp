@@ -1422,6 +1422,13 @@ void kernel_main() {
             mcast(mcast_args);
         }
 
+        if constexpr (Core::is_input_core) {
+            volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
+            unified_kernels::sync_riscs_enter(ccl_sync_sem);
+            unified_kernels::sync_riscs_exit(ccl_sync_sem);
+        }
+
         // SP position handling.
         // Read the global position from L1 and decide whether this device has
         // work / owns the current KV-cache slot. The normalized (device-local)
