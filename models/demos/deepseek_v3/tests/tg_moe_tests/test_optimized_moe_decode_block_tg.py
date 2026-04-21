@@ -3,17 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-MoE Decode Block End-to-End Test
+MoE End-to-End Test Scaled down for Single Galaxy
 
-Supports:
-Single Galaxy 8x1 Torus: Development/testing setup using TG
-   - Requires: TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_8x1_torus_graph_descriptor.textproto"
-
-For 8x1, run with:
-'MESH_DEVICE=TG8X1 USE_TORUS_MODE=1 TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_8x1_torus_graph_descriptor.textproto" \
- pytest models/demos/deepseek_v3/tests/tg_moe_tests/test_optimized_moe_decode_block_tg_8x1.py -v'
-
-For 8x4, run with:
+Run with:
 'MESH_DEVICE=TG8X4 USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/tg_moe_tests/test_optimized_moe_decode_block_tg.py -v'
 """
 
@@ -452,16 +444,6 @@ def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_
             tt_combine_tensor, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
         )
 
-    # Debug: Check the actual output tensor
-    logger.info(
-        f"[DEBUG] TT combine output - shape: {torch_combine_output.shape}, "
-        f"has_nan: {torch.isnan(torch_combine_output).any()}, "
-        f"has_inf: {torch.isinf(torch_combine_output).any()}, "
-        f"all_zero: {(torch_combine_output == 0).all()}, "
-        f"mean: {torch_combine_output.float().mean()}, "
-        f"std: {torch_combine_output.float().std()}"
-    )
-
     # check pcc
     pcc_passed, pcc_output = comp_pcc(torch_combine_output, torch_combine_golden, pcc=PCC_THRESHOLD)
     logger.info(f"Combine Output - Iteration: {iteration} - PCC: {pcc_output}")
@@ -548,24 +530,21 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     return pcc_passed and allclose_passed
 
 
-@pytest.mark.requires_device(["QUAD", "TG8X1", "TG8X4"])
+@pytest.mark.requires_device(["QUAD", "TG8X4"])
 @pytest.mark.skipif(
     (os.getenv("USE_TORUS_MODE") is None),
     reason=f"Requires ring fabric",
 )
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
-    [
-        # pytest.param((8, 1), (8, 1), id="8x1_tg"),
-        pytest.param((8, 4), (8, 4), id="8x4_tg"),
-    ],
+    [pytest.param((8, 4), (8, 4), id="8x4_tg")],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("layer_id, num_layers", [(0, 1)])
 @pytest.mark.parametrize("batches_per_device", [32])
 @pytest.mark.parametrize("shard_dim", [0])
-@pytest.mark.parametrize("experts_per_device", [2])  # Changed: experts will be calculated from mesh_shape
+@pytest.mark.parametrize("experts_per_device", [2])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("hidden_size", [7168])
@@ -620,7 +599,6 @@ def test_optimized_moe_decode_block(
     random.seed(2003)
 
     num_devices = mesh_shape[0] * mesh_shape[1]
-    print("NUM DEVICES: ", num_devices)
     experts = experts_per_device * num_devices  # Calculate total experts from mesh shape
     num_dispatch_devices = mesh_shape[cluster_axis]
     num_replicated_devices = num_devices // num_dispatch_devices
@@ -973,32 +951,25 @@ def test_optimized_moe_decode_block(
 
     scaled_output_memory_config = ttnn.L1_MEMORY_CONFIG
 
-    # For 16x1, use simpler memory config since we have no replication
-    # For 16x8, use the complex sharded config optimized for 8-way split
-    if num_replicated_devices == 1:
-        # 16x1: Single output tensor with full hidden size
-        fast_reduce_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    else:
-        # 16x8: Sharded config for 8-way split (hidden_size / 8)
-        fast_reduce_output_memory_config = ttnn.MemoryConfig(
-            ttnn.BufferType.L1,
-            ttnn.NdShardSpec(
-                ttnn.Shape([1, 32, 128]),
-                ttnn.CoreRangeSet(
-                    [
-                        ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
-                        ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
-                        ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
-                        ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
-                        ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
-                        ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
-                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-                    ]
-                ),
-                ttnn.ShardOrientation.ROW_MAJOR,
-                ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    fast_reduce_output_memory_config = ttnn.MemoryConfig(
+        ttnn.BufferType.L1,
+        ttnn.NdShardSpec(
+            ttnn.Shape([1, 32, 128]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                ]
             ),
-        )
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
 
     # NOTE:
     # - use DRAM here so we can run multiple iterations
@@ -1138,22 +1109,15 @@ def test_optimized_moe_decode_block(
             output_memory_config=fast_reduce_output_memory_config,
         )
 
-        # Conditionally apply reduce_scatter based on mesh shape
-        # For 16x1 (no replication), skip reduce_scatter and take first item
-        # For 16x8 (with replication), apply reduce_scatter across replicas
-        if mesh_shape[1 - cluster_axis] == 1:
-            # No replication: final output is the only item in the list
-            tt_final_output = tt_fast_reduce_output_tensors[0]
-        else:
-            tt_summed_output = ttnn.sum(tt_scaled_output, dim=0)
-            tt_final_output = ttnn.reduce_scatter(
-                tt_summed_output,
-                dim=-1,
-                num_links=4,
-                memory_config=rs_output_memory_config,
-                topology=ttnn.Topology.Ring,
-                cluster_axis=1 - cluster_axis,
-            )
+        tt_summed_output = ttnn.sum(tt_scaled_output, dim=0)
+        tt_final_output = ttnn.reduce_scatter(
+            tt_summed_output,
+            dim=-1,
+            num_links=4,
+            memory_config=rs_output_memory_config,
+            topology=ttnn.Topology.Ring,
+            cluster_axis=1 - cluster_axis,
+        )
 
         return tt_combine_output, tt_final_output
 
@@ -1198,17 +1162,6 @@ def test_optimized_moe_decode_block(
     all_iterations_passed = True
     for iteration in range(num_iterations):
         logger.info(f"Validating iteration: {iteration}")
-
-        # Debug: Check for NaN/inf in golden reference
-        golden_combine = torch_combine_goldens[iteration]
-        logger.info(
-            f"[DEBUG] Golden combine - shape: {golden_combine.shape}, "
-            f"has_nan: {torch.isnan(golden_combine).any()}, "
-            f"has_inf: {torch.isinf(golden_combine).any()}, "
-            f"all_zero: {(golden_combine == 0).all()}, "
-            f"mean: {golden_combine.float().mean()}, "
-            f"std: {golden_combine.float().std()}"
-        )
 
         if not verify_combine(
             iteration,
