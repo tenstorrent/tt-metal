@@ -651,68 +651,24 @@ class Qwen35Attention(LightweightModule):
         )
         ttnn.deallocate(x_dram)
 
-        # ---- CPU reshape to head-major (verbatim structure from forward_prefill) ----
-        mesh = self.mesh_device
-        num_devices = mesh.get_num_devices()
-
-        kp_cpu = ttnn.to_torch(kp_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
-        vp_cpu = ttnn.to_torch(vp_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+        # ---- Reshape to head-major: [1,1,S,heads*hd] → [1,heads,S,hd] ----
+        k, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            kp_tt, num_heads=NKV, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         ttnn.deallocate(kp_tt)
+        v, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            vp_tt, num_heads=NKV, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         ttnn.deallocate(vp_tt)
 
-        k_parts, v_parts = [], []
-        for d in range(num_devices):
-            kd = kp_cpu[d].squeeze(0).float().reshape(seq_len, NKV, HD).permute(1, 0, 2)
-            vd = vp_cpu[d].squeeze(0).float().reshape(seq_len, NKV, HD).permute(1, 0, 2)
-            k_parts.append(kd.unsqueeze(0))
-            v_parts.append(vd.unsqueeze(0))
-        k_stacked = torch.cat(k_parts, dim=0).to(torch.bfloat16).contiguous()
-        v_stacked = torch.cat(v_parts, dim=0).to(torch.bfloat16).contiguous()
-        del kp_cpu, vp_cpu, k_parts, v_parts
-
-        k = ttnn.from_torch(
-            k_stacked,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        # Q+gate: [1,1,S,NH*HD*2] → [1,NH,S,HD*2], then split q and gate along last dim
+        qg_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            qg_tt, num_heads=NH, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        v = ttnn.from_torch(
-            v_stacked,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
-        )
-        del k_stacked, v_stacked
-
-        qg_cpu = ttnn.to_torch(qg_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
         ttnn.deallocate(qg_tt)
-
-        q_parts, gate_parts = [], []
-        for d in range(num_devices):
-            qgd = qg_cpu[d].squeeze(0).float().reshape(seq_len, NH, HD * 2).permute(1, 0, 2)
-            q_parts.append(qgd[:, :, :HD].unsqueeze(0))
-            gate_parts.append(qgd[:, :, HD:].unsqueeze(0))
-        q_stacked = torch.cat(q_parts, dim=0).to(torch.bfloat16).contiguous()
-        gate_stacked = torch.cat(gate_parts, dim=0).to(torch.bfloat16).contiguous()
-        del qg_cpu, q_parts, gate_parts
-
-        q = ttnn.from_torch(
-            q_stacked,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
-        )
-        gate = ttnn.from_torch(
-            gate_stacked,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
-        )
-        del q_stacked, gate_stacked
+        q = ttnn.slice(qg_heads, (0, 0, 0, 0), (1, NH, seq_len, HD))
+        gate = ttnn.slice(qg_heads, (0, 0, 0, HD), (1, NH, seq_len, HD * 2))
+        ttnn.deallocate(qg_heads)
 
         # ---- QK L2 norm with learned scale ----
         q = ttnn.multiply(_rms_norm_dev(q), tw["q_norm"])
@@ -794,23 +750,10 @@ class Qwen35Attention(LightweightModule):
         ttnn.deallocate(attn_out)
         ttnn.deallocate(gate_val)
 
-        # ---- Output projection + all-reduce (verbatim from forward_prefill) ----
-        gated_cpu = ttnn.to_torch(gated, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+        # ---- Output projection + all-reduce ----
+        # [1, NH, seq_len, HD] → [1, 1, seq_len, NH*HD]
+        gated_flat = ttnn.experimental.nlp_concat_heads(gated, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gated)
-        flat_parts = []
-        for d in range(num_devices):
-            gd = gated_cpu[d].float()
-            flat_parts.append(gd.permute(1, 0, 2).reshape(1, seq_len, NH * HD).unsqueeze(0))
-        gated_flat_cpu = torch.cat(flat_parts, dim=0).to(torch.bfloat16).contiguous()
-        del gated_cpu, flat_parts
-        gated_flat = ttnn.from_torch(
-            gated_flat_cpu,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
-        )
-        del gated_flat_cpu
 
         wo_progcfg = create_prefill_matmul_program_config(seq_len, NH * HD, dim)
         wo_out = ttnn.linear(
