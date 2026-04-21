@@ -199,5 +199,5 @@ stage_to_slice_mapping:
     host: host-12
     slice: 0
 mesh_graph_desc_path: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
-rank_binding_file: blitz_decode_pipeline_rank_binding_superpod.yaml
-rank_file: blitz_decode_pipeline_rank_file_superpod
+rank_binding_file: blitz_decode_pipeline_rank_binding_superpod_ci.yaml
+rank_file: blitz_decode_pipeline_rank_file_superpod_ci
