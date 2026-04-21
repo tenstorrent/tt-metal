@@ -91,7 +91,7 @@ class TensorCacheProtocol(Protocol):
         fingerprint: Fingerprint,
         device,
         *,
-        preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
+        preprocess: Callable[[dict[str, torch.Tensor]], dict],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
         reconstruct: Callable[["CompressedTensorBuildInputs", object], "CompressedTensor"] | None = None,
     ) -> "ttnn.Tensor | dict[str, OverlappedTensor] | CompressedTensor":
@@ -358,7 +358,7 @@ class TensorCache:
         fingerprint: Fingerprint,
         device,
         *,
-        preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
+        preprocess: Callable[[dict[str, torch.Tensor]], dict],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
         reconstruct: Callable[["CompressedTensorBuildInputs", object], "CompressedTensor"] | None = None,
     ) -> "ttnn.Tensor | dict[str, OverlappedTensor] | CompressedTensor":
@@ -478,7 +478,7 @@ class EphemeralTensorCache:
         fingerprint: Fingerprint,
         device,
         *,
-        preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
+        preprocess: Callable[[dict[str, torch.Tensor]], dict],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
         reconstruct: Callable[["CompressedTensorBuildInputs", object], "CompressedTensor"] | None = None,
     ) -> "ttnn.Tensor | dict[str, OverlappedTensor] | CompressedTensor":

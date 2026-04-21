@@ -41,7 +41,7 @@ def pack_compact_tiles(
     assignment_2d: np.ndarray,
     tile_hw: int = DEFAULT_TILE_HW,
 ) -> bytes:
-    """Pack a (K, N) weight matrix to compact tile bytes in logical row-major order.
+    """Pack a (K, N) weight matrix to compact tile bytes in row-major tile order.
 
     Zero tiles (code 3 / bfp0) contribute 0 bytes — they are skipped entirely.
     The returned byte string is tightly packed; use *assignment_2d* with

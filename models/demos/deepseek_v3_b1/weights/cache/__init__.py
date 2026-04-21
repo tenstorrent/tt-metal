@@ -28,16 +28,21 @@ from models.demos.deepseek_v3_b1.weights.cache.types import (
 )
 
 
+def create_overlapped_tensor(*args, **kwargs):
+    """Lazy wrapper — defers heavy fuse imports until first call."""
+    from models.demos.deepseek_v3_b1.weights.cache.fuse import create_overlapped_tensor as _cot
+
+    return _cot(*args, **kwargs)
+
+
+def get_or_create_bspm_expert(*args, **kwargs):
+    """Lazy wrapper — defers bspm_expert_cache imports until first call."""
+    from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import get_or_create_bspm_expert as _fn
+
+    return _fn(*args, **kwargs)
+
+
 def __getattr__(name: str):
-    """Lazy exports to avoid import cycles."""
-    if name == "create_overlapped_tensor":
-        from models.demos.deepseek_v3_b1.weights.cache.fuse import create_overlapped_tensor as _cot
-
-        return _cot
-    if name == "get_or_create_bspm_expert":
-        from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import get_or_create_bspm_expert as _fn
-
-        return _fn
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
