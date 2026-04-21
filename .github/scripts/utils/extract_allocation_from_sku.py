@@ -49,7 +49,11 @@ def main():
     if "match_labels" in allocation:
         lines.append("matchLabels:")
         for key, value in allocation["match_labels"].items():
-            lines.append(f"  {key}: {value}")
+            # Quote keys that contain special characters like dots
+            if "." in key or "/" in key:
+                lines.append(f'  "{key}": {value}')
+            else:
+                lines.append(f"  {key}: {value}")
 
     if "topology_keys" in allocation:
         lines.append("topologyKeys:")
