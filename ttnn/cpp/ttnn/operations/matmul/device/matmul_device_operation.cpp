@@ -67,13 +67,13 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
         [](const auto& c) -> program_factory_t {
             using T = std::decay_t<decltype(c)>;
             if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreFactory{};
+                return MatmulMultiCoreProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory{};
+                return MatmulMultiCoreReuseOptimizedProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory{};
+                return MatmulMultiCoreReuseMcast2DProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
+                return MatmulMultiCoreReuseMcast1DProgramFactory{};
             } else if constexpr (std::is_same_v<
                                      T,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {

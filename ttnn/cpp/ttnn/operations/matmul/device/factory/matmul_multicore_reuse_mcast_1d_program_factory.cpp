@@ -5624,66 +5624,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         sub_device_start_core);
 }
 
-MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t MatmulMultiCoreReuseMcast1DProgramFactory::create(
-    const ttnn::prim::MatmulParams& operation_attributes,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    auto program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
-        operation_attributes.program_config.value());
-    DeviceComputeKernelConfig compute_kernel_config = operation_attributes.compute_kernel_config.value();
-
-    tt_metal::Program program{};
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler = std::nullopt;
-
-    auto b_tensors = std::vector<Tensor>{tensor_args.input_tensors.begin() + 1, tensor_args.input_tensors.end()};
-    auto shared_vars = matmul_multi_core_reuse_mcast_1d_optimized_(
-        program,
-        tensor_args.input_tensors.at(0),
-        b_tensors,
-        tensor_args.optional_input_tensors.at(0),
-        tensor_return_value,
-        operation_attributes.bcast_batch.value_or(false),
-        operation_attributes.transpose_a,
-        operation_attributes.transpose_b,
-        program_config.compute_with_storage_grid_size,
-        compute_kernel_config,
-        ttnn::get_throttle_level(compute_kernel_config),
-        program_config.in0_block_w,
-        program_config.out_subblock_h,
-        program_config.out_subblock_w,
-        program_config.out_block_h,
-        program_config.out_block_w,
-        program_config.per_core_M,
-        program_config.per_core_N,
-        program_config.fuse_batch,
-        program_config.fused_activation,
-        program_config.mcast_in0,
-        program_config.gather_in0,
-        program_config.hop_cores,
-        operation_attributes.untilize_out,
-        empty_fused_op_signaler,
-        operation_attributes.global_cb,
-        program_config.num_global_cb_receivers,
-        operation_attributes.sub_device_id,
-        tt::CBIndex::c_0,
-        std::nullopt);
-
-    return {std::move(program), std::move(shared_vars)};
-}
-
-void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ttnn::prim::MatmulParams& operation_attributes,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    reuse_mcast_1d_optimized_helpers::override_program_parameters(
-        cached_program.shared_variables,
-        operation_attributes.global_cb,
-        cached_program.program,
-        tensor_args,
-        tensor_return_value);
-}
-
 void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const shared_variables_t& shared_variables,
@@ -5962,40 +5902,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         std::move(restricted_cores));
 }
 
-MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::cached_mesh_workload_t
-MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
-    const ttnn::prim::MatmulParams& attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : mesh_coord_range) {
-            const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
-            auto single_device_program =
-                MatmulMultiCoreReuseMcast1DProgramFactory::create(attributes, tensor_args, tensor_return_value);
-            shared_variables[mesh_coord_range] = single_device_program.shared_variables;
-            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
-        }
-    }
-    return {std::move(workload), std::move(shared_variables)};
-}
-
-void MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const ttnn::prim::MatmulParams& attributes,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
-        auto cached_program_proxy = MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t::proxy(
-            program, cached_workload.shared_variables.at(mesh_coord_range));
-        MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
-            cached_program_proxy, attributes, tensor_args, tensor_return_value);
-    }
-}
-
-MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
+ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t>
+matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
