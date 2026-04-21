@@ -2743,13 +2743,15 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, ForceResetChannels_ClassifiedAsDegrad
     // MeshDevice::create calls configure() → wait_for_fabric_router_sync()
     // → verify_all_fabric_channels_healthy().  If any channel is DEGRADED or CORRUPT,
     // TT_THROW propagates up through create() and this EXPECT_NO_THROW catches it.
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     EXPECT_NO_THROW({
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig{mesh_device_->shape()},
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
-            1,
-            tt_fabric::FabricConfig::FABRIC_2D);
+            1);
     }) << "[Scenario AA] MeshDevice::create threw after a clean close/reopen — "
           "verify_all_fabric_channels_healthy() found CORRUPT or DEGRADED channels "
           "that should not exist after a clean teardown. "
