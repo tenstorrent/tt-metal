@@ -138,14 +138,30 @@ struct dst_idx_value<T, true> {
 template <typename T>
 inline constexpr uint32_t dst_idx_value_v = dst_idx_value<T>::value;
 
-// chain_has_loads_v<T>: true when T is an SfpuChain that contains at least one Load op.
+// clashes_with_fpu_v<T>: does this op touch FPU state that the originating
+// binary_op needs (unpack MOP, math MOP, ADDR_MOD, unpacker x-end counter)?
+// Default: is_load_op_v<T> — Loads call copy_tile_to_dst_init_short which
+// clobbers all of the above.
+// Opt-in: any op exposing `static constexpr bool clashes_with_fpu` sets it.
+// (DestReuseOp uses this to flag binary_dest_reuse_tiles_init.)
+template <typename T, typename = void>
+struct clashes_with_fpu : std::bool_constant<is_load_op_v<T>> {};
 template <typename T>
-struct chain_has_loads : std::false_type {};
+struct clashes_with_fpu<T, std::void_t<decltype(T::clashes_with_fpu)>>
+    : std::bool_constant<T::clashes_with_fpu || is_load_op_v<T>> {};
+template <typename T>
+inline constexpr bool clashes_with_fpu_v =
+    clashes_with_fpu<std::remove_cv_t<std::remove_reference_t<T>>>::value;
+
+// chain_has_fpu_clashing_ops_v<T>: any element of the chain clashes with FPU.
+template <typename T>
+struct chain_has_fpu_clashing_ops : std::false_type {};
 template <typename... Ops>
-struct chain_has_loads<SfpuChain<Ops...>> : std::bool_constant<(is_load_op_v<Ops> || ...)> {};
+struct chain_has_fpu_clashing_ops<SfpuChain<Ops...>>
+    : std::bool_constant<(clashes_with_fpu_v<Ops> || ...)> {};
 template <typename T>
-inline constexpr bool chain_has_loads_v =
-    chain_has_loads<std::remove_cv_t<std::remove_reference_t<T>>>::value;
+inline constexpr bool chain_has_fpu_clashing_ops_v =
+    chain_has_fpu_clashing_ops<std::remove_cv_t<std::remove_reference_t<T>>>::value;
 
 // Retrieve the I-th element of an SfpuChain by instance (preserves runtime fields).
 template <std::size_t I, typename First, typename... Rest>
@@ -177,7 +193,10 @@ ALWI void apply_post_chain_batched_impl(
 template <typename... Ops>
 ALWI void apply_post_chain_batched(
     const SfpuChain<Ops...>& chain, uint32_t base_dst, uint32_t chunk_size) {
-    // If the chain has Load ops, init the unpacker for copy_tile before running.
+    // If the chain has Load ops, init the unpacker for the first Load's CB before
+    // running. (The chain tracks load CBs via FirstLoadCB; future work: track ALL
+    // load CBs to handle format reconfig when a chain loads from multiple CBs
+    // with different data formats.)
     if constexpr ((is_load_op_v<Ops> || ...)) {
         copy_tile_to_dst_init_short(FirstLoadCB<SfpuChain<Ops...>>::value);
     }
@@ -185,19 +204,16 @@ ALWI void apply_post_chain_batched(
 }
 
 // post_op_needs_reinit_v<T>: true when binary_op must re-call binary_init before each
-// tile's exec (instead of once before the tile loop). Two triggers:
-//   1. PostOp sets T::needs_parent_reinit = true (e.g. DestReuseOp, which calls
-//      binary_dest_reuse_tiles_init and thus clobbers the unpack pipeline).
-//   2. PostOp is an SfpuChain containing Load ops (Load calls copy_tile_to_dst_init_short
-//      which also clobbers the unpack pipeline).
-template <typename T, typename = void>
-struct has_needs_parent_reinit : std::false_type {};
-template <typename T>
-struct has_needs_parent_reinit<T, std::void_t<decltype(T::needs_parent_reinit)>>
-    : std::bool_constant<T::needs_parent_reinit> {};
+// tile's exec (instead of once before the tile loop). The rule: anything that
+// clashes with the originating binary FPU state forces a reinit.
+//
+// Sources of clash:
+//   - PostOp itself has clashes_with_fpu_v<T> (e.g. DestReuseOp sets the member).
+//   - PostOp is an SfpuChain containing ANY element whose clashes_with_fpu_v is true
+//     (Loads clash by default; future ops can opt in by setting the member).
 template <typename T>
 inline constexpr bool post_op_needs_reinit_v =
-    has_needs_parent_reinit<T>::value || (is_sfpu_chain_v<T> && chain_has_loads_v<T>);
+    clashes_with_fpu_v<T> || (is_sfpu_chain_v<T> && chain_has_fpu_clashing_ops_v<T>);
 
 }  // namespace detail
 
@@ -213,8 +229,12 @@ template <
     LoadPolicy Policy,
     DestReuseReconfig Reconfig>
 ALWI void DestReuseOp<CB, OpType, ReuseType, Slot, Policy, Reconfig>::operator()(uint32_t dst_idx) const {
-    if constexpr (do_wait) {
-        // Wait for enough tiles to cover cb_tile_idx (minimum 1 tile for index 0).
+    if constexpr (Policy == LoadPolicy::WaitAndPop) {
+        // Streaming: pop 1 per call means indexing past tile 0 is incoherent.
+        ASSERT(cb_tile_idx == 0);
+        cb_wait_front(CB, 1);
+    } else if constexpr (Policy == LoadPolicy::WaitNoPop) {
+        // Persistent: wait for enough tiles to cover cb_tile_idx.
         cb_wait_front(CB, cb_tile_idx + 1);
     }
     if constexpr (Reconfig == DestReuseReconfig::Input) {

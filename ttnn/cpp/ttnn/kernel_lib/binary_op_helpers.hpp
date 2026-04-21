@@ -361,10 +361,14 @@ enum class DestReuseReconfig {
  * Result is written back to DEST[Slot + dst_idx].
  * ReuseType matters for non-commutative ops (ELWSUB); irrelevant for ELWMUL / ELWADD.
  *
- * CB lifecycle is controlled by Policy (same semantics as Load's LoadPolicy):
- *   WaitAndPop:  cb_wait_front(CB, cb_tile_idx + 1) + cb_pop_front(CB, 1) each invocation
- *   WaitNoPop:   cb_wait_front(CB, cb_tile_idx + 1) only (persistent tile, reused)
- *   NoWaitNoPop: neither (caller owns CB lifecycle externally)
+ * CB lifecycle is controlled by Policy:
+ *   WaitAndPop:  cb_wait_front(CB, 1) + cb_pop_front(CB, 1) each invocation.
+ *                Requires cb_tile_idx == 0 (ASSERTed) — streaming pop-per-call is
+ *                incompatible with indexing into a batch.
+ *   WaitNoPop:   cb_wait_front(CB, cb_tile_idx + 1) only (persistent tile, reused).
+ *                cb_tile_idx > 0 allowed: waits for enough tiles to cover the index.
+ *   NoWaitNoPop: neither (caller owns CB lifecycle externally).
+ *                cb_tile_idx > 0 allowed: caller is responsible for the pre-wait.
  *
  * Data-format reconfig for the CB side is controlled by Reconfig (see DestReuseReconfig).
  *
@@ -389,8 +393,9 @@ enum class DestReuseReconfig {
  *   post.cb_tile_idx = 3;
  *   mul(cb_a, cb_b, cb_out, shape, post);
  *
- * Sets needs_parent_reinit = true — binary_op re-calls binary_init before each
- * tile's exec to restore the unpack pipeline after this PostOp reconfigures it.
+ * Sets clashes_with_fpu = true — binary_op re-calls binary_init before each
+ * tile's exec to restore the FPU state (unpack MOP, math MOP, ADDR_MOD) after
+ * this PostOp reconfigures it via binary_dest_reuse_tiles_init.
  *
  * @tparam CB        CB index for the second operand.
  * @tparam OpType    Binary op to apply (default: ELWMUL).
@@ -407,7 +412,7 @@ template <
     LoadPolicy Policy = LoadPolicy::WaitNoPop,
     DestReuseReconfig Reconfig = DestReuseReconfig::None>
 struct DestReuseOp {
-    static constexpr bool needs_parent_reinit = true;
+    static constexpr bool clashes_with_fpu = true;
     static constexpr bool do_wait = load_does_wait(Policy);
     static constexpr bool do_pop = load_does_pop(Policy);
 
