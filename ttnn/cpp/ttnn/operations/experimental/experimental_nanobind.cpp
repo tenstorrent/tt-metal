@@ -71,7 +71,6 @@
 #include "ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
-#include "ttnn/operations/experimental/generic/patchable_generic_op_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
