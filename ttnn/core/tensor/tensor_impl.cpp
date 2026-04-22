@@ -349,19 +349,38 @@ HostTensor view(
     if (input_memory_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
         const auto old_rank = tensor.padded_shape().rank();
         const auto& old_nd_spec = input_memory_config.nd_shard_spec().value();
+
+        // Rank-expansion of a 0D/1D tensor into a 2D shape — the original allow-listed
+        // case. Requires the expanded 2D shape to still match the input's logical footprint.
         bool is_rank_expansion_to_2d = old_rank < 2 && new_padded_shape.rank() == 2 && new_padded_shape[0] == 1 &&
                                        (old_rank == 0 || new_padded_shape[1] == tensor.padded_shape()[-1]);
+
+        // Logical-shape-only update: same rank and same padded shape as the input. No bytes
+        // move, the physical tile layout is unchanged, and the per-core shard location and
+        // size are unchanged. The caller is just reinterpreting which logical elements live
+        // in which physical positions (e.g. a reduction op trimming logical dim after keeping
+        // the padded tile intact). Safe for ND-sharded tensors.
+        bool is_same_physical_shape = new_padded_shape.rank() == old_rank && new_padded_shape == tensor.padded_shape();
+
         TT_FATAL(
-            is_rank_expansion_to_2d,
-            "View is not supported for ND sharded tensors except for rank expansion to 2D. "
-            "Input shape: {}, New shape: {}",
+            is_rank_expansion_to_2d || is_same_physical_shape,
+            "View is not supported for ND sharded tensors except for rank expansion to 2D "
+            "or same-physical-shape (logical-only) metadata updates. Input shape: {}, New shape: {}",
             tensor.padded_shape(),
             new_padded_shape);
-        ttsl::SmallVector<uint32_t> new_shard_shape = old_rank == 0
-                                                          ? ttsl::SmallVector<uint32_t>{1, 1}
-                                                          : ttsl::SmallVector<uint32_t>{1, old_nd_spec.shard_shape[-1]};
-        output_memory_config =
-            MemoryConfig(input_memory_config.buffer_type(), old_nd_spec.with_shard_shape(Shape(new_shard_shape)));
+
+        if (is_same_physical_shape) {
+            // Keep the input's MemoryConfig as-is (including nd_shard_spec + flags) — no
+            // physical layout change means no metadata adjustment needed.
+            output_memory_config = input_memory_config;
+        } else {
+            // Rank-expansion-to-2D path: synthesize a new nd_shard_spec for the expanded shape.
+            ttsl::SmallVector<uint32_t> new_shard_shape =
+                old_rank == 0 ? ttsl::SmallVector<uint32_t>{1, 1}
+                              : ttsl::SmallVector<uint32_t>{1, old_nd_spec.shard_shape[-1]};
+            output_memory_config =
+                MemoryConfig(input_memory_config.buffer_type(), old_nd_spec.with_shard_shape(Shape(new_shard_shape)));
+        }
     } else {
         bool is_row_major = tensor.layout() == Layout::ROW_MAJOR;
         bool changing_last_dim = new_padded_shape[-1] != tensor.padded_shape()[-1];
