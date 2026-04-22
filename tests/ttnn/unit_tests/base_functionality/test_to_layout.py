@@ -1517,53 +1517,8 @@ def test_to_layout_interleaved_to_nd_sharded_tile_to_rm(
 #    output_nd_shard_shape, output_nd_grid, id)
 # Input tensor is created with TILE layout; its last-2 dims are NOT tile-aligned so
 # logical_shape != padded_shape. Input ND shard shape is sized to the padded shape.
-# Output is RM; shard shape is sized to the logical (unpadded) shape.
+# Output is RM;
 _ND_SHARDED_TILE_TO_RM_UNPADDING_CASES = [
-    # # [1,1,30,64] logical -> padded [1,1,32,64]. Input ND shard [1,1,32,64] on 1 core.
-    # # Output ND shard also [1,1,32,64] on 1 core (tile-aligned; covers full padded
-    # # physical shape and the RM output tensor's logical [1,1,30,64] fits within it).
-    # # A tighter shard [1,1,30,64] sized to the logical shape is rejected by the
-    # # TensorLayout validator because the physical shard shape must be tile-sized.
-    # (
-    #     [1, 1, 30, 64],
-    #     [1, 1, 32, 64],
-    #     _GRID_1x1,
-    #     [1, 1, 32, 64],
-    #     _GRID_1x1,
-    #     "h_only_1shard",
-    # ),
-    # # [1,1,60,64] logical -> padded [1,1,64,64]. Input shard [1,1,32,64] on 2 cores
-    # # (2 tile-shards). Output shard [1,1,32,64] on 2 cores (matches input; tile-aligned).
-    # (
-    #     [1, 1, 60, 64],
-    #     [1, 1, 32, 64],
-    #     _GRID_2x1,
-    #     [1, 1, 32, 64],
-    #     _GRID_2x1,
-    #     "h_only_multi_shard",
-    # ),
-    # # Non-tile-aligned on both last-2 dims:
-    # # [1,1,30,62] logical -> padded [1,1,32,64]. Input & output ND shard [1,1,32,64] on 1 core.
-    # # Shard covers padded physical; logical [1,1,30,62] tensor fits within a single shard.
-    # (
-    #     [1, 1, 30, 62],
-    #     [1, 1, 32, 64],
-    #     _GRID_1x1,
-    #     [1, 1, 32, 64],
-    #     _GRID_1x1,
-    #     "both_last2_1shard",
-    # ),
-    # # # With outer dim > 1:
-    # # # [2,1,30,64] logical -> padded [2,1,32,64]. Input ND shard [1,1,32,64] on 2 cores (2 shards).
-    # # # Output ND shard [1,1,30,64] on 2 cores.
-    # # (
-    # #     [2, 1, 30, 64],
-    # #     [1, 1, 32, 64],
-    # #     _GRID_2x1,
-    # #     [1, 1, 30, 64],
-    # #     _GRID_2x1,
-    # #     "with_outer_dim",
-    # # ),
     # Non-tile-aligned + uneven ND sharding + multi-shard-per-core:
     # [3,158,158] logical -> padded [3,160,160]. Input ND shard [2,64,64] on 6 cores (18 shards, 3/core).
     # Output RM ND shard [2,64,64] on 6 cores (uneven on all dims of LOGICAL shape: dim0 3/2, dim1/2 158/64).
@@ -1611,67 +1566,3 @@ def test_to_layout_nd_sharded_tile_to_rm_untilize_with_unpadding(
         output_mem_config,
         from_layout=ttnn.TILE_LAYOUT,
     )
-
-
-# # ---------------------------------------------------------------------------
-# # Diagnostic: call ttnn.untilize_with_unpadding DIRECTLY on an ND-sharded TILE
-# # tensor (bypassing ttnn.to_layout) to determine whether the ~0.5 PCC failure
-# # observed in test_to_layout_nd_sharded_tile_to_rm_untilize_with_unpadding is
-# # in to_layout or in untilize_with_unpadding itself.
-# #
-# # If this test fails with a similarly low PCC, the bug is in
-# # untilize_with_unpadding's ND-sharded path (specifically, not respecting
-# # per-outer-dim tile-row padding when outer dim > 1). If it passes, something
-# # that to_layout does before the untilize call is corrupting the tensor.
-# # ---------------------------------------------------------------------------
-
-
-# @pytest.mark.parametrize(
-#     "tensor_shape, input_nd_shard, input_nd_grid, case_id",
-#     [
-#         # Baseline: no outer dim. padded [1,1,32,64] -> unpad to [1,1,30,64].
-#         # ([1, 1, 30, 64], [1, 1, 32, 64], _GRID_1x1, "no_outer_dim"),
-#         # The failing case: outer dim = 2. padded [2,1,32,64] -> unpad to [2,1,30,64].
-#         # Expected: per-batch tile padding is stripped (2 rows/batch).
-#         ([2, 1, 30, 64], [1, 1, 32, 64], _GRID_2x1, "with_outer_dim"),
-#         # More outer-dim shards: outer dim = 4. padded [4,1,32,64] -> unpad to [4,1,30,64].
-#         # ([4, 1, 30, 64], [1, 1, 32, 64], _GRID_4x1, "outer_dim_4"),
-#     ],
-#     ids=lambda p: p if isinstance(p, str) else None,
-# )
-# def test_untilize_with_unpadding_nd_sharded_tile_direct(device, tensor_shape, input_nd_shard, input_nd_grid, case_id):
-#     """Directly invoke ttnn.untilize_with_unpadding on an ND-sharded TILE tensor with
-#     non-tile-aligned logical last-2 dims, bypassing ttnn.to_layout. Output is interleaved
-#     DRAM. Diagnostic for the PCC failure in test_to_layout_nd_sharded_tile_to_rm_untilize_with_unpadding.
-#     """
-#     torch.manual_seed(0)
-#     torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
-
-#     input_mem_config = _make_nd_mem_config(input_nd_shard, input_nd_grid)
-#     input_tensor = ttnn.from_torch(
-#         torch_input,
-#         dtype=ttnn.bfloat16,
-#         layout=ttnn.TILE_LAYOUT,
-#         device=device,
-#         memory_config=input_mem_config,
-#     )
-#     assert input_tensor.is_sharded()
-#     assert input_tensor.layout == ttnn.TILE_LAYOUT
-
-#     # output_tensor_end = logical_shape - 1 per dim (same spec to_layout_op.cpp uses at lines 149-153).
-#     output_tensor_end = [s - 1 for s in tensor_shape]
-
-#     print("output_tensor_end", output_tensor_end)
-
-#     output_tensor = ttnn.untilize_with_unpadding(
-#         input_tensor,
-#         output_tensor_end,
-#         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-#     )
-#     assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-#     assert tuple(output_tensor.shape) == tuple(tensor_shape)
-
-#     output_torch = ttnn.to_torch(output_tensor)
-#     assert tuple(output_torch.shape) == tuple(tensor_shape)
-#     assert_with_pcc(torch_input, output_torch, 0.9999)
-#     assert torch.allclose(torch_input, output_torch)

@@ -55,7 +55,9 @@ public:
     friend bool experimental::per_core_allocation::is_per_core_allocation(const MemoryConfig&);
     friend void experimental::per_core_allocation::set_per_core_allocation(MemoryConfig&, bool);
 
-    MemoryConfig with_shard_spec(std::optional<ShardSpec> shard_spec) const;
+    MemoryConfig with_shard_spec(std::optional<ShardSpec> shard_spec) const {
+        return MemoryConfig(memory_layout_, buffer_type_, std::move(shard_spec));
+    }
 
     bool is_sharded() const;
     bool is_l1() const;
