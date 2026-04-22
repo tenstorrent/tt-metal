@@ -216,6 +216,7 @@ class TtTransformer(LightweightModule):
                 self.args,
                 self.prefetcher_setup.worker_sub_device_id,
                 is_qwen=True if self.args.is_qwen else False,
+                is_olmo=getattr(self.args, "is_olmo", False),
             )
             self.sampling = SamplingGenerator(
                 args=self.args,

@@ -1146,3 +1146,129 @@ Three precision issues at seq_len=4096 in `llama_attention.py`:
 ### Block Hash
 - `llama_attention.py`: bfloat16 QKV+WO at 4k ISL
 - `llama_ccl.py`: sync RS fallback for bf16 inputs; async for bf8 prefill; sync for OLMo decode
+
+---
+
+## Session: 2026-04-21
+
+### Status: Fused QK Norm INTEGRATED — Decode 1L PCC 0.9998
+
+### Summary
+
+Replaced the 3-op QK norm (rms_norm + all_reduce + scale) in `llama_attention.py` decode path with `fused_olmo_qk_norm` (backed by `ttnn.fused_rms_minimal`, cluster_axis=0). This matches the approach used by Llama and eliminates the untilize→tile roundtrip, targeting ~12us per norm.
+
+### Root Cause of NaN (found and fixed)
+
+The NaN in the LMHead all_gather was caused by **mixing sync `reduce_scatter` with async `all_gather_async`** in the LMHead OLMo decode path. The sync `ttnn.reduce_scatter` leaves outstanding Ethernet fabric completion signals. The immediately following `all_gather_async` reads from those fabric channels before they are drained → NaN output. This is the same root cause as the documented 64K ISL prefill hang (OLMO_OPEN_ISSUES.md).
+
+**Fix**: Changed `line_all_gather` (async) to `ttnn.all_gather` (sync) in lm_head.py OLMo decode path. Both reduce_scatter and all_gather are now synchronous — no fabric signal conflict.
+
+**Investigation method**: Unit tests in `tests/ttnn/unit_tests/operations/ccl/test_olmo_fused_qk_norm_then_all_gather.py` isolated each hypothesis (fused kernel corruption, stats buffer L1 overlap, shared semaphore) — all passed, narrowing the root cause to the sync/async mismatch.
+
+### Files Modified
+
+1. **`llama_attention.py`**: Replaced 3-op K/Q norm with `fused_olmo_qk_norm(cluster_axis=0)` in decode forward. K input: `[1,1,32,128]` sharded on cores (5,0)-(6,0). Q input: `[1,1,32,640]` sharded on cores (5,1)-(6,1).
+
+2. **`llama_ccl.py`**:
+   - Added `fused_olmo_qk_norm()` function
+   - Added `LAYERNORM_QK_K_STATS` (16KB L1 at core (5,0)) and `LAYERNORM_QK_Q_STATS` (16KB L1 at core (5,1)) when `is_olmo=True`
+   - Added `BINARY_MUL_BF16` DRAM buffer for OLMo decode MLP all_gather
+   - `BINARY_MUL` moved from L1-sharded to DRAM for OLMo
+
+3. **`lm_head.py`**: OLMo decode LMHead now uses sync `ttnn.all_gather` (not async `line_all_gather`) after sync `line_reduce_scatter` to avoid fabric signal conflict.
+
+4. **`olmo_model_config.py`**: Added `OLMO_K_FUSED_NORM_MEMCFG/PROGCFG` and `OLMO_Q_FUSED_NORM_MEMCFG/PROGCFG` for fused norm grid configs.
+
+5. **`llama_model.py`**: `is_olmo=True` propagation to `TT_CCL` constructor in non-prefetcher decode setup path.
+
+6. **`tests/ttnn/unit_tests/operations/ccl/test_olmo_fused_qk_norm_then_all_gather.py`** (new): Unit tests verifying fused_rms_minimal × 2 + all_gather interaction, PCC, and semaphore safety.
+
+### PCC Results
+
+| Test | PCC | Status |
+|------|-----|--------|
+| Decode 1L logits | 0.9998 | PASS > 0.80 |
+
+### Block Hash
+- `llama_attention.py`: fused QK norm (cluster_axis=0) for OLMo decode
+- `llama_ccl.py`: fused_olmo_qk_norm + QK stats L1 buffers + BINARY_MUL_BF16 DRAM
+- `lm_head.py`: sync all_gather in OLMo decode LMHead
+- `test_olmo_fused_qk_norm_then_all_gather.py`: unit tests for fused norm + all_gather interaction
+
+---
+
+## Session: 2026-04-22 (part 2)
+
+### Status: QK norm cores moved to row 8 — ISL-4k hang FIXED
+
+### Root Cause of ISL-4k Hang (resolved)
+K-norm at `(5,0)-(6,0)` and Q-norm at `(5,1)-(6,1)` are INSIDE SDPA's 42-core decode
+footprint. For ISL ≥ ~2k, SDPA activates these cores and its static circular buffers
+overwrite the persistent `LAYERNORM_QK_K_STATS` / `LAYERNORM_QK_Q_STATS` L1 buffers
+at `(5,0)` and `(5,1)` → galaxy-wide hang.
+
+### Fix
+Moved both K and Q norm grids to **`(5,8)-(6,8)` (row 8)**. Confirmed:
+- SDPA_42 uses rows 0-7 fully (40 cores) + `(1,8),(2,8)` only; `(5,8)/(6,8)` are safe.
+- LayerNorm_32, RS_out_30, FF2_in_54 all stay within rows 0-7 of their sub_core_grids.
+- Same `block_w=2/10`, same `(2,1)` grid_size → **zero kernel recompilation**.
+- Metal re-initialises local semaphores between op dispatches → sharing sender core
+  `(5,8)` between K and Q norms is safe in traced execution.
+
+### Files Modified
+1. **`olmo_model_config.py`**: Single `qk_norm_grid = (5,8)-(6,8)` for both K and Q norm.
+2. **`llama_ccl.py`**: Both `LAYERNORM_QK_K_STATS` and `LAYERNORM_QK_Q_STATS` stats
+   buffers now placed at `(5,8)` (bbox start of `qk_norm_grid`).
+
+### Test Results
+| Test | Result |
+|------|--------|
+| single-batch1 (1L, B=1, ISL=128) | PASSED — 480 tok/s avg |
+| isl-4k-b1 (64L, B=1, ISL=4096) | PASSED — no hang, ~27 tok/s |
+
+### Block Hash
+- `olmo_model_config.py`: QK norm grids at (5,8)-(6,8) instead of rows 0/1
+- `llama_ccl.py`: QK stats buffers at (5,8) for both K and Q
+
+---
+
+## Session: 2026-04-22
+
+### Status: Fused QK norm re-applied on clean HEAD — 1-layer PASS, 64-layer PASS
+
+### Summary
+
+Reverted all working-tree changes to HEAD (preserved fused_qk_norm_full.patch) then re-applied minimal fused QK norm changes cleanly. Key bug fixes vs. prior session:
+
+1. **`ttnn.concat` needs TILE layout tensors** — Original approach pre-allocated pad tensors and used `concat` to reach 32 rows. But K/Q are ROW_MAJOR after reshape and `concat` requires TILE. Fixed by using `ttnn.pad` (which works on ROW_MAJOR and changes the logical shape) to pad from `q_batch` → 32 rows before `to_layout(TILE)`.
+
+2. **`to_layout(TILE)` does NOT change logical shape** — Tile layout auto-pads physical storage but keeps the logical shape. `fused_rms_minimal` checks `logical_shape[2] == 32`. Need `ttnn.pad` (not `to_layout`) to change the logical shape.
+
+3. **K must be reshaped back to [1, q_batch, 1, head_dim] before `to_memory_config(k_mem_cfg)`** — K from `llama_rs_create_heads` is `[1, 8, 1, 128]`. We reshape to `[1, 1, 8, 128]` for the norm. After norm + slice, we need `reshape([1, q_batch, 1, head_dim])` before restoring to `k_mem_cfg`. Without this, the OLMo rotary `ttnn.repeat(k, [1,1,8,1])` expands wrong dim and `rotary_embedding_llama_fused_qk` gets K `[1,1,64,128]` → assertion 64×128=8192 ≠ 1024 fails.
+
+4. **Cross-test L1 contamination fixed with `cleanup()` instead of `del tt_model`** — Previous session used `del tt_model; gc.collect()` which freed Python objects but didn't call `TtCCL.cleanup()`, leaving QK stats L1 buffers potentially alive. Now call `tt_model.tt_ccl.cleanup(); tt_model.tt_ccl.close()` explicitly after `ttnn.release_trace` to properly free all CCL L1/DRAM buffers before the next test starts.
+
+### Perf Results (2026-04-22)
+
+| Test | Result | Time |
+|------|--------|------|
+| 1-layer decode perf, batch=32 | PASSED | 22s |
+| 64-layer decode perf, batch=32 | PASSED | 24s |
+
+**64-layer decode perf (batch=32, ISL=127):**
+- Avg: 476.87 ms/step
+- Min: 471.50 ms, Max: 489.06 ms
+- Throughput: **67.1 tok/s (32 users)**
+
+### Files Modified (this session)
+
+1. **`llama_attention.py`**: Import `fused_olmo_qk_norm`; replace 3-op decode QK norm with `fused_olmo_qk_norm` + `ttnn.pad` for height padding; reshape K back to `[1, q_batch, 1, head_dim]` after norm.
+2. **`llama_ccl.py`**: Add `LAYERNORM_QK_K_STATS` and `LAYERNORM_QK_Q_STATS` L1 buffers + `fused_olmo_qk_norm()` function.
+3. **`olmo_model_config.py`**: Add `OLMO_K_FUSED_NORM_MEMCFG/PROGCFG` and `OLMO_Q_FUSED_NORM_MEMCFG/PROGCFG`.
+4. **`llama_model.py`**: Pass `is_olmo=True` to TtCCL in non-prefetcher decode path.
+5. **`demo_olmo_decode.py`**: Call `tt_model.tt_ccl.cleanup(); tt_model.tt_ccl.close()` after `release_trace` to prevent cross-test L1 contamination.
+
+### Block Hash
+- `llama_attention.py`: fused QK norm with pad+reshape
+- `llama_ccl.py`: QK stats buffers + fused_olmo_qk_norm
+- `demo_olmo_decode.py`: explicit CCL cleanup after release_trace

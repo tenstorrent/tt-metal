@@ -834,6 +834,58 @@ class TtOlmoModelArgs(TtModelArgs):
             ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1
         )
 
+        # ==== Fused QK-norm configs (fused_rms_minimal, cluster_axis=0) ====
+        # CRITICAL: use_two_stage_reduce = (grid_size.x > 1 && grid_size.y > 1).
+        # Must keep grid_size.y=1 (all cores in the same row) to disable two-stage reduce.
+        # The stats buffer must be on sender_core = grid bbox start.
+        #
+        # K: [1, 1, 32, 128] = 4 tiles, 2 cores at row y=0 → 64 per core (2 tiles), block_w=2
+        #    stats_core = (5,0) = grid bbox start
+        # Q: [1, 1, 32, 640] = 20 tiles, 2 cores at row y=1 → 320 per core (10 tiles), block_w=10
+        # QK-norm grids moved to row 8: outside SDPA's 42-core decode grid.
+        # SDPA uses 42 cores row-wise from (1,0): rows 0-7 fully (40 cores) +
+        # (1,8),(2,8) = 42 total.  (5,8) and (6,8) are NOT in that set.
+        # Confirmed safe: SDPA_42, LayerNorm_32, RS_out_30, FF2_in_54 all
+        # use ≤ row 7 of (5,x)/(6,x) in sub_core_grids / ff_sub_core_grids.
+        # Same block_w / grid_size as old (5,0)-(6,0) rows → kernel cache hit,
+        # zero recompilation needed.
+        qk_norm_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(5, 8), ttnn.CoreCoord(6, 8))]  # 2 cores, row y=8
+        )
+        # K-norm: 128 cols / 2 cores = 64 per core.  sender_core = (5,8)
+        self.model_config["OLMO_K_FUSED_NORM_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, 64),  # 128/2 = 64 per core
+            core_grid=qk_norm_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["OLMO_K_FUSED_NORM_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(2, 1),  # y=1 → use_two_stage_reduce=False
+            subblock_w=1,
+            block_h=1,
+            block_w=2,  # 64/32=2 tiles per core
+            inplace=False,
+        )
+        # Q-norm: 640 cols / 2 cores = 320 per core.  sender_core = (5,8)
+        # Uses the same physical cores as K-norm; Metal re-initialises local
+        # semaphores between sequential op dispatches, so no semaphore
+        # contamination between the two norms in traced execution.
+        self.model_config["OLMO_Q_FUSED_NORM_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, 320),  # 640/2 = 320 per core
+            core_grid=qk_norm_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["OLMO_Q_FUSED_NORM_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(2, 1),  # y=1 → use_two_stage_reduce=False
+            subblock_w=1,
+            block_h=1,
+            block_w=10,  # 320/32=10 tiles per core
+            inplace=False,
+        )
+
         # ==== Prefill MLP Configs ====
         def w1_w3_prg_config(seq_len, use_interleaved=False):
             if seq_len == 128:

@@ -387,6 +387,33 @@ class TT_CCL:
             )
             persistent_buffers["BINARY_MUL_BF16"] = tt_buffer_bf16
 
+            # QK-norm stats buffers: one 32×256 shard per stats core, replicated across all devices.
+            # Both K and Q stats live on (5,8) — the bbox-start (sender_core) of
+            # qk_norm_grid (5,8)-(6,8) in olmo_model_config.py.
+            # Row 8 is outside SDPA's 42-core decode grid, so no trace-CB conflict.
+            # Metal re-initialises local semaphores between sequential op dispatches,
+            # so sharing the sender_core between K and Q is safe in traced execution.
+            for key, stats_core in [
+                ("LAYERNORM_QK_K_STATS", ttnn.CoreCoord(5, 8)),
+                ("LAYERNORM_QK_Q_STATS", ttnn.CoreCoord(5, 8)),
+            ]:
+                sharded_cfg = ttnn.create_sharded_memory_config(
+                    shape=(32, 256),
+                    core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(stats_core, stats_core)]),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                tt_buf = ttnn.from_torch(
+                    torch.zeros((1, 1, M, 256)),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    memory_config=sharded_cfg,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                persistent_buffers[key] = tt_buf
+
         return persistent_buffers
 
     def get_persistent_buffers(self):
@@ -1700,3 +1727,49 @@ def tt_sharded_distributed_rmsnorm(
     )
     tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
     return tt_out, res
+
+
+def fused_olmo_qk_norm(
+    inp,
+    progcfg,
+    weight,
+    tt_ccl,
+    output_mem_config,
+    stats_key="LAYERNORM_QK_K_STATS",
+    epsilon=1e-6,
+):
+    """Apply fused_rms_minimal for OLMo QK-norm over the 8-device row axis (cluster_axis=0).
+
+    The stats buffer (LAYERNORM_QK_K_STATS or LAYERNORM_QK_Q_STATS) must be pre-allocated
+    in `get_all_gather_buffers()` on the sender_core matching the compute grid bbox start:
+      LAYERNORM_QK_K_STATS: sender_core=(5,8), K-norm grid (5,8)-(6,8)
+      LAYERNORM_QK_Q_STATS: sender_core=(5,8), Q-norm grid (5,8)-(6,8)
+    Both K and Q share the same physical grid at row 8 (outside SDPA's 42-core decode
+    footprint).  Metal re-initialises local semaphores per-dispatch, so sequential K→Q
+    in the decode trace does not cause semaphore contamination.
+    """
+    cluster_axis = 0
+    semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][tt_ccl.gather_idx[cluster_axis]]
+    stats_buffer = tt_ccl.all_gather_buffers.get(stats_key, None)
+    assert stats_buffer is not None, (
+        f"fused_olmo_qk_norm: stats buffer '{stats_key}' not found in all_gather_buffers. " f"is_olmo={tt_ccl.is_olmo}"
+    )
+    sharded_input_mem_config = inp.memory_config()
+    tt_out = ttnn.fused_rms_minimal(
+        inp,
+        progcfg,
+        cluster_axis,
+        tt_ccl.mesh_device,
+        semaphore,
+        topology=ttnn.Topology.Linear,
+        num_links=1,
+        epsilon=epsilon,
+        weight=weight,
+        stats=stats_buffer,
+        dtype=ttnn.bfloat16,
+        memory_config=sharded_input_mem_config,
+    )
+    tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
+    if output_mem_config is not None and tt_out.memory_config() != output_mem_config:
+        tt_out = ttnn.to_memory_config(tt_out, output_mem_config)
+    return tt_out

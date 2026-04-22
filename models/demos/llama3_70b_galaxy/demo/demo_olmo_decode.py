@@ -637,6 +637,13 @@ def run_olmo_demo(
 
     ttnn.release_trace(mesh_device, decode_trace_id)
 
+    # Explicitly free CCL L1 buffers so the next test in the same pytest session
+    # (e.g. isl-8k following isl-4k) doesn't inherit stale L1 QK-stats allocations
+    # that push its decode-trace CBs into conflicting addresses → hang at iter ~429.
+    tt_model.tt_ccl.cleanup()
+    tt_model.tt_ccl.close()
+    ttnn.synchronize_device(mesh_device)
+
     # Print per-user output for coherency check
     logger.info("\n" + "=" * 60)
     logger.info("PER-USER OUTPUT COHERENCY CHECK")
