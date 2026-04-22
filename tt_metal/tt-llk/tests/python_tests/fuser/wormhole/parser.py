@@ -272,6 +272,15 @@ class FpuMathSchema(BaseModel):
         return self
 
     def to_compute_node(self, operands):
+        src_a = operands.get(self.src_a)
+        src_b = operands.get(self.src_b)
+
+        if (
+            self.operation == FpuOperationEnum.Matmul
+            and src_a.dimensions[1] != src_b.dimensions[0]
+        ):
+            raise ValueError("Matmul: incompatible dimensions for src_a and src_b")
+
         if self.operation.is_eltwise():
             fpu = EltwiseFpu(self.operation.to_math_operation())
         elif self.operation == FpuOperationEnum.Reduce:
@@ -284,9 +293,6 @@ class FpuMathSchema(BaseModel):
             fpu = ReduceBlockMaxFpu()
         else:
             raise ValueError(f"Unknown FPU operation: {self.operation}")
-
-        src_a = operands.get(self.src_a)
-        src_b = operands.get(self.src_b)
 
         kwargs = {}
         if self.unpacker:
