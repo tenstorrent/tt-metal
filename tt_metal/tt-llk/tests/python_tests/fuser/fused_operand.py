@@ -186,7 +186,7 @@ class Operand:
 
     @property
     def cpp_name(self) -> str:
-        return f"buffer_{self.name}"
+        return f"{self.name}_buffer"
 
     def cpp_value(self, dest_acc: bool) -> str:
         buffer_size = calculate_tile_size_bytes(
