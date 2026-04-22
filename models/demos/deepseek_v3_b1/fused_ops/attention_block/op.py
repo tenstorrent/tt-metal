@@ -125,7 +125,7 @@ class AttentionBlock:
         def rmsnorm(x, gamma):
             variance = x.pow(2).mean(-1, keepdim=True)
             normalized = x * torch.rsqrt(variance + epsilon)
-            return normalized * gamma
+            return normalized
 
         position_id = position_ids[0]
         # RMSNorm -> Matmul: [1, K] @ [K, N] -> [1, N]
