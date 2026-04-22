@@ -1196,7 +1196,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 (std::uint32_t)in0_mcast_sender.y   // in0_mcast_sender_noc_y
             };
             // left half
-            if (core.x <= half_core || (!transpose_mcast and core.y == start_core_y)) {
+            if (core.x <= start_core_x + half_core || (!transpose_mcast and core.y == start_core_y)) {
                 tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);
             }
             // right half
@@ -1428,7 +1428,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 }
 
                 // left half
-                if (core.x <= half_core || (transpose_mcast and core.y == start_core_y)) {
+                if (core.x <= start_core_x + half_core || (transpose_mcast and core.y == start_core_y)) {
                     tt_metal::SetRuntimeArgs(
                         program, mm_kernel_in1_receiver_writer_id, core, mm_in1_receiver_writer_args);
                 }

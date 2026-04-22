@@ -75,16 +75,21 @@ int find_max_block_size(uint32_t val, uint32_t max_block_size) {
 }
 
 CoreRangeSet num_cores_to_corerangeset(
-    const CoreCoord start_core, const uint32_t target_num_cores, const CoreCoord grid_size, const bool row_wise) {
+    const CoreCoord start_core,
+    const uint32_t target_num_cores,
+    const CoreCoord grid_size,
+    const bool row_wise,
+    const uint32_t row_start_x) {
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
     uint32_t total_available_cores = 0;
     TT_FATAL(start_core.x < num_cores_x && start_core.y < num_cores_y, "Start core must be within grid size");
+    TT_FATAL(row_start_x <= start_core.x, "row_start_x ({}) must be <= start_core.x ({})", row_start_x, start_core.x);
     if (row_wise) {
-        // Full Rows
-        total_available_cores += (num_cores_y - 1 - start_core.y) * num_cores_x;
-        // Partial Rows
+        // Partial first row (start_core.x to right edge)
         total_available_cores += num_cores_x - start_core.x;
+        // Remaining full rows span [row_start_x, num_cores_x-1]
+        total_available_cores += (num_cores_y - 1 - start_core.y) * (num_cores_x - row_start_x);
     } else {
         // Full Cols
         total_available_cores += (num_cores_x - 1 - start_core.x) * num_cores_y;
@@ -102,19 +107,20 @@ CoreRangeSet num_cores_to_corerangeset(
     all_cores.reserve(3);
     uint32_t leftover_size = target_num_cores;
     CoreCoord s_core = start_core;
+    const uint32_t row_width = num_cores_x - row_start_x;
     if (row_wise) {
-        // Partial row at start
-        if (s_core.x != 0 && leftover_size > num_cores_x - start_core.x) {
+        // Partial row at start (only if not already at the row's left edge)
+        if (s_core.x != row_start_x && leftover_size > num_cores_x - s_core.x) {
             all_cores.emplace_back(s_core, CoreCoord(num_cores_x - 1, s_core.y));
-            s_core = {0, s_core.y + 1};
+            s_core = {row_start_x, s_core.y + 1};
             leftover_size -= all_cores.back().size();
         }
         // Full rows
-        if (leftover_size > num_cores_x) {
-            uint32_t num_full_rows = leftover_size / num_cores_x;
+        if (leftover_size > row_width) {
+            uint32_t num_full_rows = leftover_size / row_width;
             all_cores.emplace_back(s_core, CoreCoord(num_cores_x - 1, s_core.y + num_full_rows - 1));
             leftover_size -= all_cores.back().size();
-            s_core = {0, s_core.y + num_full_rows};
+            s_core = {row_start_x, s_core.y + num_full_rows};
         }
         // Partial row at end
         if (leftover_size > 0) {
@@ -143,8 +149,13 @@ CoreRangeSet num_cores_to_corerangeset(
 }
 
 CoreRangeSet num_cores_to_corerangeset(
+    const CoreCoord start_core, const uint32_t target_num_cores, const CoreCoord grid_size, const bool row_wise) {
+    return num_cores_to_corerangeset(start_core, target_num_cores, grid_size, row_wise, 0);
+}
+
+CoreRangeSet num_cores_to_corerangeset(
     const uint32_t target_num_cores, const CoreCoord grid_size, const bool row_wise) {
-    return num_cores_to_corerangeset({0, 0}, target_num_cores, grid_size, row_wise);
+    return num_cores_to_corerangeset({0, 0}, target_num_cores, grid_size, row_wise, 0);
 }
 
 CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(

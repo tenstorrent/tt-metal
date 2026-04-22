@@ -32,6 +32,9 @@ int find_max_block_size(uint32_t val, uint32_t max_block_size = 8);
 CoreRangeSet num_cores_to_corerangeset(
     CoreCoord start_core, uint32_t target_num_cores, CoreCoord grid_size, bool row_wise = false);
 
+CoreRangeSet num_cores_to_corerangeset(
+    CoreCoord start_core, uint32_t target_num_cores, CoreCoord grid_size, bool row_wise, uint32_t row_start_x);
+
 // TODO: Get rid of old function
 CoreRangeSet num_cores_to_corerangeset(uint32_t target_num_cores, CoreCoord grid_size, bool row_wise = false);
 

@@ -6,7 +6,7 @@
 
 Exercises core resolution in all non-DRAM-sharded factories:
   - allowed_worker_cores carries both the start coordinate and the grid size.
-    The factories use bounding_box().start_coord as the base core and
+    The factories use bounding_box().start as the base core and
     bounding_box().grid_size() as the compute grid dimensions.
   - sub_device_id provides the same offset when allowed_worker_cores is absent.
     When allowed_worker_cores is set it takes precedence for the start core.
@@ -254,6 +254,18 @@ class TestMcast1D:
         finally:
             _teardown(device, mgr)
 
+    @pytest.mark.parametrize("mcast_in0", [True, False])
+    @pytest.mark.parametrize("skip_cols", [1, 2])
+    def test_x_offset_via_awc(self, device, mcast_in0, skip_cols):
+        """Offset grid in X — start_core.x > 0, exercising the x-offset code path."""
+        grid = device.compute_with_storage_grid_size()
+        if grid.x <= skip_cols:
+            pytest.skip(f"Need >{skip_cols} cols, device has {grid.x}")
+        wcols = grid.x - skip_cols
+        a, b, ref = _tensors(device, self.M, self.K, self.N)
+        cfg = self._cfg(mcast_in0, wcols, grid.y, _crs(wcols, grid.y, start_x=skip_cols))
+        assert_with_pcc(ref, ttnn.to_torch(ttnn.matmul(a, b, program_config=cfg)), 0.999)
+
 
 # ---------------------------------------------------------------------------
 # 4) MatmulMultiCoreReuseMultiCastProgramConfig  (Factory D — 2D mcast)
@@ -312,6 +324,17 @@ class TestMcast2D:
             assert_with_pcc(ref, ttnn.to_torch(ttnn.matmul(a, b, program_config=cfg, sub_device_id=sd_id)), 0.999)
         finally:
             _teardown(device, mgr)
+
+    @pytest.mark.parametrize("skip_cols", [1, 2])
+    def test_x_offset_via_awc(self, device, skip_cols):
+        """Offset grid in X — start_core.x > 0, exercising the x-offset code path."""
+        grid = device.compute_with_storage_grid_size()
+        if grid.x <= skip_cols:
+            pytest.skip(f"Need >{skip_cols} cols, device has {grid.x}")
+        wcols = grid.x - skip_cols
+        cfg, M, N = self._cfg(wcols, grid.y, _crs(wcols, grid.y, start_x=skip_cols))
+        a, b, ref = _tensors(device, M, self.K, N)
+        assert_with_pcc(ref, ttnn.to_torch(ttnn.matmul(a, b, program_config=cfg)), 0.999)
 
 
 # ---------------------------------------------------------------------------
@@ -681,3 +704,19 @@ class TestValidation:
             allowed_worker_cores=_crs(4, 4),
         )
         assert "allowed_worker_cores" in repr(cfg)
+
+    def test_non_rectangular_crs_bbox_spans_gap(self, device):
+        """Non-contiguous CoreRangeSet: bounding_box() spans the row gap.
+
+        Factories derive start_core and grid_size from bounding_box(), so a
+        CRS with a missing row produces a bbox that includes that gap row.
+        This test documents the behavior so callers know gap cores will receive
+        kernels if a non-rectangular CRS is passed as allowed_worker_cores.
+        """
+        top = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))  # rows 0-1
+        bot = ttnn.CoreRange(ttnn.CoreCoord(0, 3), ttnn.CoreCoord(3, 4))  # rows 3-4
+        crs = ttnn.CoreRangeSet({top, bot})
+        bbox = crs.bounding_box()
+        assert bbox.start == ttnn.CoreCoord(0, 0)
+        assert bbox.end == ttnn.CoreCoord(3, 4)  # spans row-2 gap
+        assert bbox.grid_size() == ttnn.CoreCoord(4, 5)  # 4 cols × 5 rows including gap
