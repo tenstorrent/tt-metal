@@ -267,10 +267,10 @@ void kernel_main() {
 
         noc_semaphore_wait_min(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
 
-        tt::data_movement::common::print_bf16_pages(
-            src_data_l1_base_addr + *db * source_block_size_bytes,
-            source_token_segment_buffer_size_bytes / 2,
-            token_split_counts[e]);
+        // tt::data_movement::common::print_bf16_pages(
+        //             src_data_l1_base_addr + *db * source_block_size_bytes,
+        //             source_token_segment_buffer_size_bytes / 2,
+        //             token_split_counts[e]);
 
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr

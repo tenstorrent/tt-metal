@@ -264,12 +264,12 @@ void kernel_main() {
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - chunk * tile_height);
 
             cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
-            DPRINT << "past cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h) \n";
+            // DPRINT << "past cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h) \n";
 
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
             const uint32_t elts_per_page = source_width_tiles * tile_width;
 
-            // tt::data_movement::common::print_bf16_pages(source_base_l1_addr, elts_per_page, num_tokens_block);
+            tt::data_movement::common::print_bf16_pages(source_base_l1_addr, elts_per_page, num_tokens_block);
 
             while (width_tiles_to_send > 0) {
                 const uint32_t width_tile_start = width_tile_base + width_tiles_sent;
