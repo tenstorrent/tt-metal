@@ -125,8 +125,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
             _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM, unit_dims[0]);
         }
-        volatile std::uint32_t tt_reg_ptr* cfg   = get_cfg_pointer();
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = L1_ADDRESS(buffer_A[0]);
+        // Base address is programmed per-call inside _llk_unpack_fast_tilize_block_
+        // via _llk_unpack_configure_single_address_ (respects current cfg context).
     }
     {
         ZONE_SCOPED("TILE_LOOP")
@@ -142,88 +142,33 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            // Count 4-wide prefix units per row
-            std::uint32_t n4_per_row = 0;
-            for (std::uint32_t i = 0; i < units_per_row; i++)
-            {
-                if (unit_dims[i] == 4)
-                {
-                    n4_per_row++;
-                }
-            }
-
-            std::uint32_t n4_total = BLOCK_RT_DIM * n4_per_row;
-            bool has_tail          = (n4_per_row < units_per_row);
-
+            // Per-row per-chunk block calls (mirrors tt-metal API compute/tilize.h
+            // fast_tilize_block which iterates chunks of a single row). Each call
+            // processes one chunk at col_offset of one row; row base advances via L1.
+            std::uint32_t prev_chunk = unit_dims[0];
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                // Phase 1: all 4-wide prefix units (uses existing block function)
-                if (n4_total > 0)
+                for (std::uint32_t row = 0; row < BLOCK_RT_DIM; row++)
                 {
-                    if (loop > 0 && has_tail)
+                    std::uint32_t col_offset = 0;
+                    for (std::uint32_t u = 0; u < units_per_row; u++)
                     {
-                        // Restore 4-wide X counter after tail phase
-                        _llk_unpack_fast_tilize_reinit_xdim_(4);
-                    }
-                    // Pass prefix_tiles as ct_dim so block's units_per_row = prefix_tiles/4
-                    std::uint32_t prefix_ct = n4_per_row * 4;
-                    _llk_unpack_fast_tilize_block_(L1_ADDRESS(buffer_A[0]), 0, formats.unpack_A_src, 4, n4_total, prefix_ct, 4);
-                }
-
-                // Phase 2: all tail units (2-wide or 3-wide)
-                if (has_tail)
-                {
-                    // Reconfigure X counter for tail unit_dim
-                    // Process tail units across all rows with direct MOP calls
-                    for (std::uint32_t row = 0; row < BLOCK_RT_DIM; row++)
-                    {
-                        std::uint32_t col_offset = n4_per_row * 4; // tiles, in Y counter units
-
-                        for (std::uint32_t u = n4_per_row; u < units_per_row; u++)
+                        std::uint32_t chunk = unit_dims[u];
+                        if (chunk != prev_chunk)
                         {
-                            std::uint32_t udim = unit_dims[u];
-
-                            if (u == n4_per_row && row == 0)
-                            {
-                                // First tail unit: reconfigure and set counters
-                                _llk_unpack_fast_tilize_reinit_xdim_(udim);
-                                TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b0011);
-                                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111);
-                            }
-                            else if (u == n4_per_row && row > 0)
-                            {
-                                // New row: advance W, reset Y/Z
-                                TTI_ADDRCRXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b0010);
-                                TTI_ADDRCRZW(p_setadc::UNP_A, 0, 0, 2, 0, 0b0111);
-                            }
-
-                            if (u > n4_per_row)
-                            {
-                                // Switch unit_dim if needed
-                                if (unit_dims[u] != unit_dims[u - 1])
-                                {
-                                    _llk_unpack_fast_tilize_reinit_xdim_(udim);
-                                }
-                                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101);
-                                TT_INCADCXY(p_setadc::UNP_A, 0, 0, unit_dims[u - 1], 0); // Advance by prev unit's actual width
-                            }
-
-                            // Set Y to correct position (after prefix)
-                            if (u == n4_per_row && row == 0)
-                            {
-                                if (col_offset > 0)
-                                {
-                                    TT_INCADCXY(p_setadc::UNP_A, 0, 0, col_offset, 0);
-                                }
-                            }
-
-                            // Fire MOP: same 32 reads, same zmask as 4-wide
-                            constexpr std::uint32_t ZMASK = 0x80808080;
-                            TT_MOP_CFG(ZMASK >> 16);
-                            TT_MOP(0, 32 - 1, ZMASK & 0xFFFF);
-
-                            col_offset += udim;
+                            _llk_unpack_fast_tilize_reinit_xdim_(chunk);
+                            prev_chunk = chunk;
                         }
+                        _llk_unpack_fast_tilize_block_(
+                            L1_ADDRESS(buffer_A[row * BLOCK_CT_DIM]),
+                            0 /*tile_index unused*/,
+                            formats.unpack_A_src,
+                            chunk /*unit_dim*/,
+                            1 /*num_units: one chunk*/,
+                            chunk /*ct_dim: units_per_row=1, num_rows=1*/,
+                            4,
+                            col_offset);
+                        col_offset += chunk;
                     }
                 }
             }

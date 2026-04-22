@@ -37,11 +37,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t iter = 0; iter < NUM_ITERS; iter++)
     {
         // === Fast tilize A_row[iter] ===
+        // Base address is programmed inside _llk_unpack_fast_tilize_block_ via
+        // _llk_unpack_configure_single_address_ (respects current cfg context).
         _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, KT_DIM, KT_DIM <= 1 ? 1 : 4);
-
-        volatile std::uint32_t tt_reg_ptr* cfg   = get_cfg_pointer();
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = L1_ADDRESS(params.buffer_A[iter * KT_DIM]);
-
         _llk_unpack_fast_tilize_reinit_xdim_(KT_DIM);
         _llk_unpack_fast_tilize_block_(L1_ADDRESS(params.buffer_A[iter * KT_DIM]), 0, formats.unpack_A_src, KT_DIM, 1, KT_DIM, 4, 0);
 

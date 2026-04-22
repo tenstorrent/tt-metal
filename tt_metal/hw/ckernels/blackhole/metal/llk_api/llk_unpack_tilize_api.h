@@ -91,11 +91,8 @@ inline void llk_unpack_fast_tilize_block(
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
 
-    // Set L1 base address via coprocessor instructions (trace mode compatible).
-    TT_SETDMAREG(0, LOWER_HALFWORD(base_address), 0, LO_16(p_gpr_unpack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(base_address), 0, HI_16(p_gpr_unpack::TMP0));
-    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
-
+    // Base address is programmed per-call inside _llk_unpack_fast_tilize_block_
+    // via the standard context-switch dance (_llk_unpack_configure_single_address_).
     _llk_unpack_fast_tilize_block_(
         base_address, tile_index, unpack_src_format[operand_id],
         unit_dim, num_units, full_dim, num_faces, col_start);

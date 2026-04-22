@@ -480,16 +480,11 @@ inline void _llk_unpack_fast_tilize_mop_config_()
 
 inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t ct_dim, const std::uint32_t init_unit_dim = 4)
 {
-    // Unconditionally force unpack config context 0. The matmul or other operations may
-    // change the hardware context state without updating unp_cfg_context (software tracking).
-    // Always resetting ensures the hardware matches what fast-tilize expects.
-    // The STALLWAIT is required: without it, the SETC16 is in the coprocessor queue but
-    // subsequent config writes (RDCFG/WRCFG) can execute before the context switch propagates,
-    // causing the saved state to come from the wrong context. Confirmed on silicon via DPRINT
-    // Heisenbug — the bug disappears when debug prints add sufficient pipeline delay.
-    unp_cfg_context = 0;
-    TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+    // Context-safe writes only: Tile_x_dim (WRCFG below writes the full 32-bit word,
+    // covering cntx0 low-16 and cntx1 high-16), TileDescriptor (shared across contexts),
+    // Zstride (RMW on shared reg), and SETADCXX (thread-scoped counter, not per
+    // cfg context — see ISA SETADCXX). Per-call context switching happens in
+    // _llk_unpack_fast_tilize_block_.
 
     // Save state
     TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
@@ -535,7 +530,7 @@ inline void _llk_unpack_fast_tilize_reinit_xdim_(const std::uint32_t unit_dim)
 }
 
 inline void _llk_unpack_fast_tilize_block_(
-    [[maybe_unused]] const std::uint32_t base_address,
+    const std::uint32_t base_address,
     [[maybe_unused]] const std::uint32_t tile_index,
     [[maybe_unused]] const std::uint32_t unpack_src_format,
     const std::uint32_t unit_dim,
@@ -544,9 +539,16 @@ inline void _llk_unpack_fast_tilize_block_(
     [[maybe_unused]] const std::uint32_t num_faces = 4,
     const std::uint32_t col_start                  = 0)
 {
-    // ALL L1 addressing via CH0 counters. ZERO config writes in this function.
-    // Base_address must be set by caller (once, before first call).
-    // CH0 address: ((W*ZDim + Z)*YDim + Y)*XDim + X, where:
+    // Standard BH unpacker context dance (see _llk_unpack_untilize_pass_).
+    // Programs REG3 Base_address for the current cfg context via cfg[] write,
+    // then synchronises Trisc↔T6 so the MOP runs with that base in place.
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+    _llk_unpack_configure_single_address_(base_address, cfg);
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+    // L1 addressing via CH0 counters:
     //   Y selects tile within row (Y+=unit_dim per unit)
     //   Z selects tensor row (0..31 per unit)
     //   W selects tile-row (W+=2 per row, stride = ct_dim*1024 datums)
@@ -600,6 +602,11 @@ inline void _llk_unpack_fast_tilize_block_(
             TT_MOP(0, 32 - 1, ZMASK & 0xFFFF);
         }
     }
+
+    // Release the unpacker context acquired above and advance the software
+    // tracker so the next call targets the other cfg context slot.
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
 }
 
 template <bool is_fp32_dest_acc_en>

@@ -29,9 +29,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Delta 2: Metal API init_unit_dim = (full_dim >= 4) ? 4 : full_dim
     const std::uint32_t init_unit_dim = (KT_DIM >= 4) ? 4 : KT_DIM;
     _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, KT_DIM, init_unit_dim);
-    volatile std::uint32_t tt_reg_ptr* cfg   = get_cfg_pointer();
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = L1_ADDRESS(params.buffer_A[0]);
 
+    // Base address is programmed inside _llk_unpack_fast_tilize_block_ via
+    // _llk_unpack_configure_single_address_ (respects current cfg context).
     _llk_unpack_fast_tilize_reinit_xdim_(KT_DIM);
     _llk_unpack_fast_tilize_block_(L1_ADDRESS(params.buffer_A[0]), 0, formats.unpack_A_src, KT_DIM, 1, KT_DIM, 4, 0);
 
