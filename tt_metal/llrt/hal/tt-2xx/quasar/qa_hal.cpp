@@ -172,6 +172,7 @@ public:
                             MEM_TRISC0_GLOBAL_BASE +
                                 MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));  // for legacy kernels
                         flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC0_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
                         break;
                     case 1:
                     case 5:
@@ -183,6 +184,7 @@ public:
                             " -Wl,--defsym=__fw_data={} ",
                             MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
                         flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC1_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         break;
                     case 2:
                     case 6:
@@ -194,6 +196,7 @@ public:
                             " -Wl,--defsym=__fw_data={} ",
                             MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
                         flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC2_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         break;
                     case 3:
                     case 7:
@@ -205,6 +208,7 @@ public:
                             " -Wl,--defsym=__fw_data={} ",
                             MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
                         flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC3_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
                         break;
                     default: TT_THROW("Invalid processor id {}", params.processor_id);
                 }
@@ -212,7 +216,6 @@ public:
                 flags += fmt::format(
                     " -Wl,--defsym=__fw_tls={} ",
                     MEM_TRISC_LOCAL_BASE + MEM_TRISC_LOCAL_OFFSET * (params.processor_id % 4));
-                flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
                 flags += fmt::format(" -Wl,--defsym=__min_stack={} ", MEM_TRISC_STACK_MIN_SIZE);
             }
         }

@@ -249,8 +249,8 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
 
         // 8. Check that initialized thread local variables have the correct value.
         // I.e. incrementing the variable in one DM does not affect the value in another DM.
-        // TODO: Initializing thread local variables does not work yet. Once they work,
-        // update this check with the correct values.
+        // Each DM should observe its own independently initialized TLS value, so
+        // incrementing the variable in one DM does not affect the value in another DM.
         EXPECT_EQ(thread_local_start, 10u) << "dm=" << dm;
         EXPECT_EQ(thread_local_end, 11u) << "dm=" << dm;
 
