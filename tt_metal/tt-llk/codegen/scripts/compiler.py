@@ -110,6 +110,9 @@ def _make_dummy_stimuli(data_format):
         tile_count_B=1,
         tile_count_res=1,
         num_faces=4,
+        buffer_C=dummy,
+        stimuli_C_format=data_format,
+        tile_count_C=1,
     )
 
 
@@ -161,6 +164,7 @@ def compile_check(
         templates=templates,
         runtimes=runtimes,
         variant_stimuli=stimuli,
+        compile_time_formats=True,
     )
     configuration.generate_variant_hash()
 

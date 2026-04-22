@@ -469,12 +469,80 @@ Ready for: llk-planner agent (or writer, if planner step is collapsed)
 
 ---
 
-## Self-Logging (CRITICAL — DO NOT SKIP)
+## Self-Logging (MANDATORY — STRUCTURED TEMPLATE)
 
-**You MUST write `{LOG_DIR}/agent_analyzer.md` before returning.** Include:
-- Files read (target kernels, reference, test harness, parent file) and why.
-- Confluence pages fetched and what you extracted from each.
-- Instruction mappings decided and the reasoning.
-- Anything surprising or non-obvious about the target patterns.
+**Before returning, write `{LOG_DIR}/agent_analyzer.md` using the `Write` tool.**
+The file MUST contain the sections below in order. The orchestrator's Step 5f
+concatenates the structured sections from every agent log into the final run
+report; missing sections break the report. Raw chronology (assistant text +
+tool calls + trimmed results) is captured separately by
+`codegen/scripts/extract_run_transcripts.py` at Step 5e.1 — this log is for
+the **curated narrative and assumptions**, not a full transcript.
 
 If no `LOG_DIR` was provided, skip logging.
+
+### Required sections (omit nothing — write "none" if a section genuinely has no content)
+
+```markdown
+# Agent: llk-analyzer — {kernel} ({target_arch})
+
+## Inputs received
+- Flow: {generation | issue-fix}
+- Kernel / kernel_type: {name} / {sfpu|math|pack|unpack}
+- Reference arch / target arch: {ref} / {target}
+- Reference path: {path}
+- Any additional context the orchestrator passed (verbatim, do not summarize)
+
+## Assumptions made
+One bullet per assumption, in the shape:
+`- [Claim] — [Why I believed it] — [How/when it could be wrong]`.
+
+Examples:
+- Used ADDR_MOD_7 rather than ADDR_MOD_3 — every existing Quasar SFPU kernel uses ADDR_MOD_7
+  (`ckernel_sfpu_square.h`, `lrelu.h`, `typecast*.h`) and
+  `_eltwise_unary_sfpu_configure_addrmod_()` explicitly programs ADDR_MOD_7 —
+  would break if the parent wrapper is changed to program a different addrmod.
+- Treated `DataFormat.UInt16` as test-infrastructure-excluded, not kernel-excluded —
+  `VALID_QUASAR_DEST_REG_FORMATS` in `data_format_inference.py` rejects UInt16 before
+  the kernel runs — this assumption becomes wrong the moment the valid-formats list
+  is widened.
+
+**If you made no non-trivial assumptions, write "none" — but do not skip the section.**
+
+## Reasoning summary (4–6 sentences)
+Plain-prose summary of the approach. Not an enumeration of everything you read —
+the chronology in `transcripts/` already has that. Name the key decisions and
+their reasons. If the analysis had to pivot (e.g., you started planning for a
+UINT16-inclusive test matrix and then discovered the infra exclusion), say so.
+
+## Decisions & trade-offs
+For each non-trivial choice, write:
+- **Choice**: one-line statement of the decision.
+- **Alternatives**: what you considered.
+- **Why**: the deciding factor (citation to Confluence / sibling kernel / ISA).
+
+Typical analyzer decisions: LREG allocation, whether to add `_init_*_`, whether to
+fuse `_sfp_rows_` into the outer loop, which reference helpers to port vs. flag,
+which Confluence instructions to rely on.
+
+## Commands run (summary)
+Curated — NOT the full transcript (which is already captured in
+`{LOG_DIR}/transcripts/01_{slug}_commands.md`). List the **material** commands
+that shaped the analysis, one bullet each, with a one-line purpose:
+
+- `grep -n "^SFPLOADI:\|^SFPSTORE:" tt_llk_quasar/instructions/assembly.yaml` —
+  confirmed both instructions exist on Quasar before citing them.
+
+## Artifacts read / written
+- **Read** (files): list of paths with the role each played ("reference semantics",
+  "canonical Quasar SFPU shape", "parent wrapper contract", ...).
+- **Read** (Confluence pages): page ID + title + the single key finding extracted.
+- **Read** (DeepWiki): repo + question + the summarized answer.
+- **Written**: `codegen/artifacts/{kernel}_analysis.md` + this self-log.
+
+## Open questions / handoffs
+Things the writer / tester must verify or that you left unresolved. If none,
+write "none". Examples:
+- The 2-cycle hazard for SFPMAD→SFPSTORE is cited from the SFPU MAS but not
+  confirmed with a simulator trace — writer should add a NOP if the test fails.
+```

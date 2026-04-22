@@ -152,6 +152,11 @@ def _aggregate(
             input=0, output=0, cache_read=0, cache_creation=0, total=0, cost_usd=0.0
         )
 
+    # Claude Code writes each completed API response 2-4 times to the JSONL
+    # (once per persistence event). Deduplicate by requestId so we count each
+    # turn exactly once. Entries without a requestId are kept as-is.
+    seen_req_ids: set[str] = set()
+
     with jsonl_path.open() as fh:
         for line in fh:
             try:
@@ -164,6 +169,11 @@ def _aggregate(
             usage = msg.get("usage")
             if not usage:
                 continue
+            req_id = d.get("requestId")
+            if req_id:
+                if req_id in seen_req_ids:
+                    continue
+                seen_req_ids.add(req_id)
             if since_dt is not None:
                 ts = _parse_ts(d.get("timestamp"))
                 if ts is not None and ts < since_dt:

@@ -242,13 +242,11 @@ Keep the `if (unpack_to_dest) / else` branch in the C++ test so both paths are e
 Before spending the first `ATTEMPT` on a real run, verify the Python test parses and parametrizes cleanly:
 
 ```bash
-source {WORKTREE_DIR}/tests/.venv/bin/activate
-cd {WORKTREE_DIR}/tests/python_tests/{arch}
-TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 \
-    CHIP_ARCH={arch} pytest --compile-producer --co -q test_{op}_{arch}.py
+bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh count \
+    --worktree {WORKTREE_DIR} --arch {arch} --test test_{op}_{arch}.py
 ```
 
-`--compile-producer` is mandatory even for collection-only runs — without it, conftest opens real hardware and dies with `RuntimeError: No Tenstorrent devices were detected` on simulator-only hosts.
+The `count` command uses `--compile-producer` internally — conftest skips hardware init without it and dies with `RuntimeError: No Tenstorrent devices were detected` on simulator-only hosts.
 
 If this fails (import errors, parametrize errors), fix and re-run the collection check. The collection check is **not** a test run and does **not** count against the 10-attempt cap.
 
@@ -303,11 +301,12 @@ For substring filters without commas/brackets, `-k` works fine: `-k "exp_quasar 
 First, count the variants (free — `--co` runs no tests):
 
 ```bash
-cd {WORKTREE_DIR}/tests/python_tests/{arch}
-CHIP_ARCH={arch} pytest --compile-producer --co -q test_{op}_{arch}.py 2>&1 | tail -1
+VARIANT_COUNT=$(bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh count \
+    --worktree {WORKTREE_DIR} --arch {arch} --test test_{op}_{arch}.py)
+echo "Variants: $VARIANT_COUNT"
 ```
 
-`--compile-producer` is required so conftest skips hardware init — see 1A.9.
+The `count` command uses `--compile-producer` internally — see 1A.9 for why that flag is required.
 
 | Variant count | `--maxfail` | Why |
 |---|---|---|
@@ -324,78 +323,74 @@ Rationale for keeping the full matrix inside one pytest session (rather than re-
 ### 2.2 — Compile producer (no flock, parallel)
 
 ```bash
-source {WORKTREE_DIR}/tests/.venv/bin/activate
-cd {WORKTREE_DIR}/tests/python_tests/{arch}
-CHIP_ARCH={arch} pytest --compile-producer -n 15 test_{op}_{arch}.py
+bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh compile \
+    --worktree {WORKTREE_DIR} --arch {arch} --test test_{op}_{arch}.py
 COMPILE_EXIT=$?
 ```
 
 Rules:
 - **Always run to completion — no `-x`, no `--maxfail`.** `-n 15` parallelizes compilation, so the full matrix typically compiles in well under a minute even for 50+ variants. The marginal cost of seeing every compile error is near-zero; the cost of iterating on compile failures one-at-a-time is multiple full rebuilds. If every variant fails with the same error, fix once and the whole matrix is unblocked.
-- If the compile step fails, skip the simulator step — diagnose the compile failure directly (see Step 3 → "Compile error during test"). This still counts as one `ATTEMPT`.
+- If `COMPILE_EXIT != 0`, skip the simulator step — diagnose the compile failure directly (see Step 3 → "Compile error during test"). This still counts as one `ATTEMPT`.
 
 ### 2.3 — Simulator consumer (flock-wrapped, no xdist)
 
 Pick `--maxfail` per 2.1's table (omit entirely for ≤12 variants; drop it on the verification attempt).
 
-**Write the run recipe to a script file, then flock that script.** Do not inline the recipe via `flock … bash -c '…'` with the `'"'"'` escape trick — that form has been observed to exit `1` silently with zero output in this environment (verified 2026-04-21), including when a trailing `echo "---EXIT---"` outside the flock. The heredoc+script-file form below has single-quote-safe bodies and is reliable. It also makes the positional test-id (single quotes, brackets, commas) trivial to pass via a shell variable — see 2.1's `-k` gotcha.
+**Use `run_llk_tests.sh simulate` — it handles flock, stale-process cleanup, and temp-file lifecycle internally.** Never call `pytest --run-simulator` directly; the inline `flock … bash -c '…'` with the `'"'"'` escape trick has been observed to exit 1 silently with zero output in this environment (verified 2026-04-21).
 
-Example for a mid-size matrix using `--maxfail=5`:
+Example for a mid-size matrix using `--maxfail 5`:
 
 ```bash
-# Opportunistic sweep: remove sim scripts from prior runs that died before their own
-# trap could fire (agent killed, shell aborted, flock timeout mid-execution). Older
-# than 1h is always stale — no concurrent run takes that long.
-find /tmp -maxdepth 1 -name 'llk_tester_sim_*.sh' -mmin +60 -delete 2>/dev/null || true
-
-SIM_SCRIPT=$(mktemp /tmp/llk_tester_sim_XXXXXX.sh)
-# Ensure the script is removed even on abort/interrupt/SIGTERM — plain `rm -f`
-# after `flock` only fires on the happy path. Without this trap, crashed runs
-# leak scripts into /tmp.
-trap 'rm -f "$SIM_SCRIPT"' EXIT INT TERM
-cat >"$SIM_SCRIPT" <<'EOF'
-#!/usr/bin/env bash
-set -u
-STALE=$(lsof -ti :5556 2>/dev/null || true)
-if [ -n "$STALE" ]; then
-  echo "Killing stale port 5556 processes: $STALE"
-  echo "$STALE" | xargs kill -9 2>/dev/null || true
-fi
-pkill -9 -f "tt-exalens.*--port=5556" 2>/dev/null || true
-sleep 1
-source {WORKTREE_DIR}/tests/.venv/bin/activate
-cd {WORKTREE_DIR}/tests/python_tests/{arch}
-TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 \
-  CHIP_ARCH={arch} pytest --run-simulator --compile-consumer --port=5556 \
-  test_{op}_{arch}.py --timeout=600 -rN --maxfail=5
-EOF
-flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash "$SIM_SCRIPT"
+bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh simulate \
+    --worktree {WORKTREE_DIR} --arch {arch} --test test_{op}_{arch}.py \
+    --maxfail 5
 TEST_EXIT=$?
-# trap handles cleanup; the explicit rm below is redundant-but-harmless on the happy path
-rm -f "$SIM_SCRIPT"
-trap - EXIT INT TERM
 ```
 
-For a **single specific variant**, replace the bare `test_{op}_{arch}.py` argument with a `TEST_ID` variable inside the heredoc — the single quotes in `'SyncFull'` / `'false'` and the brackets/commas are all literal inside `<<'EOF'`:
+For a **single specific variant**, use `--test-id`. Single-quotes, brackets, and commas in the ID are safe — the script handles quoting internally:
 
 ```bash
-# inside the heredoc, replace the pytest line with:
-TEST_ID="test_{op}_{arch}.py::test_{op}_{arch}[formats_dest_acc_sync_implied_math_input_dims:(InputOutputFormat[Float16_b,Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, <ImpliedMathFormat.No: 'false'>, [32, 32])]"
-TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 \
-  CHIP_ARCH={arch} pytest --run-simulator --compile-consumer --port=5556 \
-  "$TEST_ID" --timeout=600 -rN
+bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh simulate \
+    --worktree {WORKTREE_DIR} --arch {arch} --test test_{op}_{arch}.py \
+    --test-id "test_{op}_{arch}.py::test_{op}_{arch}[formats_dest_acc_sync_implied_math_input_dims:(InputOutputFormat[Float16_b,Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, <ImpliedMathFormat.No: 'false'>, [32, 32])]"
+TEST_EXIT=$?
 ```
 
-Rules for the simulator step:
-- **Always** wrap in `flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash <script>`. Never run `pytest --run-simulator` bare, and never use the inline `bash -c '…'` with `'"'"'` escapes — see preamble above.
-- **Use `--timeout=600`, not `--timeout=300`.** First cold simulator start takes ~50s; a second start immediately after a prior run (even after killing port-5556 pids and `pkill tt-exalens`) can exceed 300s to become ready and trips pytest's timeout with no test output — you'll think the kernel hung when it's just warmup. 600s costs nothing on a healthy run and eliminates spurious `TIMEOUT` categorisations. If the run actually finishes fast, you're not paying the 600s — pytest's timeout is a ceiling, not a floor.
-- **Never** use `-n` with `--run-simulator` (xdist is not supported).
-- **Never use `-x`** — see 2.1. Use `--maxfail=N` to cap wasted simulator time while preserving the pattern signal.
+For a substring filter without commas/brackets, use `--k`:
+
+```bash
+bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh simulate \
+    --worktree {WORKTREE_DIR} --arch {arch} --test test_{op}_{arch}.py \
+    --k "exp_quasar and not integer"
+TEST_EXIT=$?
+```
+
+Exit codes from the script:
+- `0` — all tests passed
+- `1` — one or more tests failed (DATA_MISMATCH, TIMEOUT, ASSERTION)
+- `3` — environment error: flock timed out or no pytest output produced (`ENV_ERROR`)
+
+#### 2.3.1 — Execution model (Bash tool) — MANDATORY
+
+The `run_llk_tests.sh simulate` call is **synchronous and foreground**. Orchestrator agents that spawn this tester have no way to wake it from a backgrounded Bash — if you background the call, your turn ends, the parent cannot resume you, and the whole run hangs waiting for a process it can no longer observe. Every tester invocation that has hung to date did exactly this.
+
+Rules — non-negotiable:
+
+1. **Invoke via the Bash tool with `timeout: 1800000`** (30 min). This covers the internal `flock --timeout 900` (15 min max lock wait) + pytest's `--timeout=600` + setup/teardown headroom. Do NOT rely on the Bash tool's default 2-minute timeout — it will kill the simulator mid-run.
+2. **`run_in_background` MUST be `false` (omit it — false is the default).** Background mode returns immediately without the exit code. The call must block your turn until it exits. You cannot run anything else while it runs. That is intentional.
+3. **Never append `&`** to detach, and never start the simulator under `nohup`, `disown`, `setsid`, or any other detach mechanism.
+4. **Do not arm a `Monitor` or poll with `sleep` loops** to "wait" for the simulator. The Bash tool's synchronous return IS your wait mechanism.
+5. When the Bash call returns, read `TEST_EXIT` from the captured output and go straight to Step 2.4 (parse aggregate failures) in the same turn. Do not end your turn between "kicked off pytest" and "read TEST_EXIT".
+6. **If the 30-minute Bash timeout fires**, report `ENV_ERROR: simulator run exceeded 30 min` in the fix log — this does NOT consume an `ATTEMPT` against the 10-cap. A real kernel bug produces a `TENSIX TIMED OUT` / `TIMEOUT` failure inside the pytest output well under 600s; hitting the outer 30-minute ceiling means infrastructure, not logic.
+7. **If you find yourself about to write "let me wait for the monitor notification" or "the simulator is still running, I'll continue after it finishes"**, stop — you have backgrounded the call. Kill any leftover processes (`pkill -9 -f "pytest.*--run-simulator"`, `pkill -9 -f "tt-exalens.*--port=5556"`, `rm -f /tmp/llk_run_sim_*.sh`), re-invoke synchronously, and do not split the attempt across turns.
+
+Rules for `simulate`:
+- **Use `--timeout=600`, not `--timeout=300`.** First cold simulator start takes ~50s; a second start immediately after a prior run can exceed 300s — 600s eliminates spurious `TIMEOUT` categorisations without slowing healthy runs.
+- **Never** pass `--jobs` to `simulate` (xdist is not supported under the simulator; the script never passes `-n` to the consumer).
+- **Never use `-x`** — see 2.1. Use `--maxfail N` to cap wasted simulator time while preserving the failure-pattern signal.
 - **Verification run = no `--maxfail`.** Once you believe the fix works, run the full matrix to confirm no variant regressed.
-- `-rN` gives a short summary line per failure — keep it, it's what you grep in Step 2.4.
-- When `-k` is legitimately needed (see 2.1), the filter **must match** between compile and consumer steps so the consumer finds the ELFs the producer built.
-- If `flock` times out after 15 min, return `STUCK` with `ENV_ERROR: simulator lock unavailable`.
-- If the run exits non-zero with **no pytest output at all** (no `test session starts`, no variant lines), treat it as an infrastructure failure — do NOT count it as an `ATTEMPT` against the 10 cap. Re-run once with the script-file form to confirm; if still silent, report `ENV_ERROR`.
+- `-rN` is passed internally by the script — it gives a short summary line per failure that you grep in Step 2.4.
+- `compile` runs the full matrix (no `-k` filter). `simulate` may use `--k` for subset runs, and will find the ELFs the producer built since those were built for the full matrix.
 
 ### 2.4 — Parse aggregate failures
 
@@ -557,7 +552,7 @@ Whatever the outcome, the kernel path and test paths must be stated literally so
 ## Key Rules (non-negotiable)
 
 1. **10 runs, hard cap.** The counter is an invariant, not a guideline.
-2. **Never run `pytest --run-simulator` without `flock`, and always flock a script file — not an inline `bash -c '…'`.** Parallel codegen runs share port 5556; the inline form with `'"'"'` escapes fails silently in this env (2.3). Use `mktemp` + heredoc + `flock … bash "$SCRIPT"`.
+2. **Always use `run_llk_tests.sh simulate` (never call `pytest --run-simulator` directly), and always invoke it SYNCHRONOUSLY via the Bash tool with `timeout: 1800000` — never `run_in_background: true`, never `&`, never a Monitor-based "wait".** The script owns flock, stale-process cleanup, and temp-file lifecycle; the inline `bash -c '…'` form with `'"'"'` escapes fails silently in this env; backgrounded calls hang the whole pipeline because the parent orchestrator cannot resume you once your turn ends. See 2.3.1 for execution-model rules that are non-negotiable.
 3. **One fix per attempt.** Batch fixes hide which edit broke things.
 4. **Fix the kernel, not the test** (except when the issue explicitly says the test is wrong in the `issue-fix` flow).
 5. **Prefer extending an existing multi-op test** over creating a new file. Copy patterns exactly; do not reinvent boilerplate.
@@ -572,14 +567,100 @@ Whatever the outcome, the kernel path and test paths must be stated literally so
 
 ---
 
-## Self-Logging (MANDATORY)
+## Self-Logging (MANDATORY — STRUCTURED TEMPLATE)
 
-Before returning, write `{LOG_DIR}/agent_tester.md` using the `Write` tool. Include:
-- Flow (`new-kernel` or `issue-fix`) and the inputs you received.
-- Whether you extended an existing test or created new ones; the file paths.
-- Any infrastructure changes (enum additions, golden generator methods).
-- The complete fix log (every attempt, category, signature, hypothesis, fix applied, result).
-- Final outcome (`PASS` / `STUCK`) and attempts used.
-- Anything surprising or that a future agent should not have to rediscover.
+**Before returning, write `{LOG_DIR}/agent_tester.md` using the `Write` tool.**
+The file MUST contain the sections below in order. The orchestrator's Step 5f
+concatenates the structured sections from every agent log into the final run
+report; missing sections break the report. Raw chronology (assistant text +
+tool calls + trimmed results) is captured separately by
+`codegen/scripts/extract_run_transcripts.py` at Step 5e.1 — this log is for the
+**curated narrative plus the fix log**, not a full transcript.
 
 If no `LOG_DIR` was provided, skip logging.
+
+### Required sections (omit nothing — write "none" if a section genuinely has no content)
+
+```markdown
+# Agent: llk-tester — {kernel} ({target_arch}) — Cycle {N}
+
+## Inputs received
+- Flow: {new-kernel | issue-fix}
+- Kernel / kernel_type / target arch / kernel path / spec path
+- WORKTREE_DIR / LOG_DIR
+- (issue-fix) EXISTING_TEST_PATH and the ISSUE_CONTEXT (first 500 chars inline,
+  remaining cited by file path — do not paraphrase)
+
+## Assumptions made
+One bullet per assumption not derivable from the analysis or the existing
+repo. Shape: `- [Claim] — [Why I believed it] — [How/when it could be wrong]`.
+
+Examples:
+- Excluded `UInt16` from the format matrix — `VALID_QUASAR_DEST_REG_FORMATS`
+  rejects it and the kernel's SFPSTORE mode 6 path cannot be exercised through
+  `data_format_inference` — becomes wrong if that valid-formats list is widened.
+- Used `--timeout=600` instead of the historical 300 — 300 occasionally trips
+  on cold simulator starts after a prior kill — remains valid only while
+  warmup cost stays under 10 minutes.
+
+**If you made no non-trivial assumptions, write "none" — but do not skip the section.**
+
+## Reasoning summary (4–6 sentences)
+Why the test you wrote (or the existing test you chose) is the right one;
+anything surprising about the format matrix, dest_acc rules, or invalid-combo
+filter; whether you had to iterate on the fix loop and what the structural
+bug was. Keep it to the shape of the tests + the shape of the bug, not the
+blow-by-blow.
+
+## Decisions & trade-offs
+Per non-trivial choice: **Choice** / **Alternatives** / **Why**.
+
+Typical tester decisions: extend an existing multi-op test vs. create a new
+file (1A.1 rule); `dest_acc` and `unpack_to_dest` matrix; `--maxfail` tuning
+(2.1 table); which fix to try first when pattern suggests multiple root causes.
+
+## Fix log (complete — one block per attempt)
+Even on a first-try PASS, write at least one attempt block — the tester ran,
+it matters for the dashboard. On STUCK, all 10 blocks MUST be present.
+
+```
+### Attempt {N}
+- Category: {COMPILE_ERROR | TIMEOUT | DATA_MISMATCH | ASSERTION | ENV_ERROR | PASS}
+- Signature: {first meaningful line of the failure — or "all {N} variants passed"}
+- Hypothesis: {root cause if failure; N/A if PASS}
+- Source checked: {file / Confluence page / assembly.yaml section}
+- Fix applied: {file:line + what changed}  (or "N/A — PASS")
+- Expected outcome: {what the fix should change in the next run}  (or "N/A")
+- Observed outcome: {what actually happened on the next run}
+```
+
+## Commands run (summary)
+Curated. Full transcript is in `{LOG_DIR}/transcripts/NN_{slug}_commands.md`.
+Include at minimum: the collection-only smoke check, each `--compile-producer`
+run, each `flock`+simulator run (cite `TEST_EXIT`), and the verification run
+(no `--maxfail`).
+
+## Artifacts read / written
+- **Read** (files): spec, existing tests you modeled on, sibling kernels you
+  diffed against.
+- **Written** (files): `tests/sources/{arch}/...` and/or
+  `tests/python_tests/{arch}/...`, plus any infra files edited
+  (`llk_defs.h`, `llk_params.py`, `golden_generators.py`,
+  `format_config.py`, `data_format_inference.py`).
+- **Simulator log pointers**: the `emu_*.log` filenames produced under
+  `tests/python_tests/{arch}/` that captured the last run.
+
+## Open questions / handoffs
+Things the optimizer / refiner / human must verify. If none, write "none".
+Examples:
+- Simulator start took 52s cold; if the optimizer's re-run fails, distinguish
+  "optimization broke tests" from "simulator warm-up regressed".
+- Only `Float16`, `Float16_b`, `Float32` exercised — integer paths compile but
+  have no functional coverage until the valid-formats list is widened.
+
+## Final outcome
+- Result: PASS | STUCK
+- Attempts used: {N}/10
+- Formats tested: {list}
+- Formats excluded: {format: reason}
+```

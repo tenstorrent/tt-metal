@@ -107,6 +107,39 @@ are specified by
 All writes are atomic (write-to-temp + rename) and safe to interleave with the
 dashboard's reads.
 
+### Authoring rule for `--new-message` / `--prev-message` / `--final-message`
+
+Every message passed to `run_json_writer.py advance / phase-end / finalize` MUST
+be a self-contained sentence a stranger reading only `step_history` can follow.
+These messages are the public record of what each step did — they land in the
+dashboard and in `$LOG_DIR/run.json` and are the only summary most viewers will
+ever see. Short placeholder strings force the viewer to open the agent log to
+understand anything. That is a defect, not a style preference.
+
+Rules:
+
+1. **Name the concrete artifact produced or consumed.** Not "Analysis complete"
+   but "Analysis produced `fill_analysis.md` with 3 enumerated helpers and an
+   8-row Semantic→Instruction table".
+2. **Quantify.** Helper count, test count, cycle number, compile attempts,
+   refinement version — whatever applies. "156/156 variants passed" beats
+   "tests passed".
+3. **When a failure is being recorded, name the first meaningful error line**
+   (file:line symbol), not just the category. Dashboard readers scan these for
+   regressions.
+4. **Mid-step progress**: long-running steps (analyzer Confluence sweeps,
+   tester simulator runs) SHOULD call `run_json_writer.py message` at natural
+   breakpoints so the dashboard's spinner has something to render instead of a
+   stale step-start message. Each `message` call costs one atomic rename —
+   call it freely; do not batch.
+
+Example call:
+```bash
+python codegen/scripts/run_json_writer.py message \
+    --log-dir "$LOG_DIR" \
+    --message "Tester attempt 4/10 — DATA_MISMATCH on Int32 dest_acc=Yes; fixing LREG1 init ordering"
+```
+
 ### Step 0a: Write the initial run.json
 
 Right after `mkdir -p $LOG_DIR/instructions`, write the initial run.json so the
@@ -869,9 +902,77 @@ missing logs are visible rather than silently absent):
 - `agent_analysis_refiner_v1.md`, `agent_analysis_refiner_v2.md` (only when the refiner ran)
 - `agent_optimizer.md` (only if the optimizer was invoked)
 
+Each agent log MUST follow the structured template defined in the agent
+playbooks — **Assumptions**, **Reasoning summary**, **Decisions & trade-offs**,
+**Commands run**, **Artifacts read / written**, **Open questions**. If a log is
+present but the structured sections are missing, record an `agent_error`
+failure (`type: "agent_error"`, `message: "agent_<role>.md missing required
+structured sections"`, `resolved: false`) — the dashboard flags these so we can
+chase the agent that skipped its contract. Do NOT try to rewrite the log
+yourself; the agent owns its own reasoning capture.
+
+### Step 5e.1: Extract subagent transcripts
+
+Dump each subagent's raw Claude Code jsonl transcript into
+`$LOG_DIR/transcripts/` as per-agent reasoning / tools / commands markdown,
+plus an `INDEX.md` that summarizes tool counts and timing. This makes the
+model's chronological reasoning (assistant text, thinking blocks if emitted,
+tool calls, trimmed results) auditable after the run without opening raw jsonl
+files.
+
+The extractor uses the same session-discovery logic as `session_cost.py` —
+it reads `$CLAUDE_SESSION_PID` / `$PPID` to find the active session under
+`~/.claude/sessions/<pid>.json`, then walks the subagents directory.
+Non-fatal: if no session is found (e.g., running outside the claude CLI),
+the extractor logs and exits 1 without blocking the run.
+
+```bash
+python codegen/scripts/extract_run_transcripts.py --log-dir "$LOG_DIR" \
+    || echo "extract_run_transcripts: skipped (non-fatal)"
+```
+
+The extractor produces:
+
+- `$LOG_DIR/transcripts/INDEX.md` — one row per agent (type, description,
+  start/end timestamps, tool count) + per-agent links.
+- `$LOG_DIR/transcripts/NN_{slug}_reasoning.md` — full chronology:
+  assistant narration, thinking blocks (when present), every tool call with
+  its rendered input, trimmed tool result.
+- `$LOG_DIR/transcripts/NN_{slug}_tools.md` — histogram of tool calls and a
+  sequence table with sequence #, tool, target, result status, byte count.
+- `$LOG_DIR/transcripts/NN_{slug}_commands.md` — flat listings of Bash
+  commands (verbatim + description), Confluence page IDs / CQL searches,
+  DeepWiki questions, files read / written / edited, glob + grep patterns.
+
+These artifacts make the run reproducible and auditable: the commands file is
+a recipe the next engineer can replay; the reasoning file explains *why* each
+step was taken without forcing them to rerun the whole pipeline.
+
 ### 5f: Write and print the report
 
-Write `codegen/artifacts/{op}_report.md` AND print it to the terminal:
+Write `codegen/artifacts/{op}_report.md` AND print it to the terminal. The
+report is a superset of what the dashboard shows — it MUST aggregate the
+agents' structured self-logs (Assumptions / Reasoning / Commands) so the
+generated file is self-contained enough that a reader never has to chase
+sibling files to understand what happened.
+
+Aggregation rules:
+
+- **Assumptions**: concatenate the `## Assumptions` section from
+  `agent_analyzer.md`, `agent_writer.md`, and `agent_tester.md` (plus
+  refiner / optimizer when they ran). If an agent wrote "none", skip that
+  agent's section entry. Preserve the agent-origin prefix (e.g., `[analyzer] ...`).
+- **Reasoning highlights**: first paragraph (up to 5 sentences) of each
+  agent's `## Reasoning summary` section. This is the executive summary.
+- **Commands & tools summary**: top-5 Bash commands by length (verbatim, with
+  description) from each agent's `transcripts/NN_{slug}_commands.md`, plus the
+  per-agent tool histogram from `transcripts/NN_{slug}_tools.md`. If
+  extraction failed in Step 5e.1, write "(transcript extraction skipped)"
+  under each heading instead of leaving them blank.
+- **Artifacts inventory**: every file written or modified inside the worktree
+  during the run, with its final path under `$LOG_DIR/` if copied in Step 5d.
+
+Template:
 
 ```
 ========================================
@@ -888,6 +989,7 @@ Lines Generated:  {N}
 Timing:
   Start:          {START_TIME}
   End:            {END_TIME}
+  Duration:       {H}h{M}m{S}s
 ----------------------------------------
 Tokens:
   Input:          {N}
@@ -921,13 +1023,75 @@ Failures: {total_failures} ({resolved} resolved, {unresolved} unresolved)
   ...
   (omit this section if FAILURES is empty)
 ----------------------------------------
+Assumptions made during the run:
+  [analyzer] Used ADDR_MOD_7 because every existing Quasar SFPU kernel does;
+             would break if the parent wrapper switches to ADDR_MOD_3.
+  [writer]   LREG1 reserved for the fill constant (lrelu convention);
+             the scaffold's LREG0 remains unused.
+  [tester]   UInt16 excluded from the test matrix; VALID_QUASAR_DEST_REG_FORMATS
+             rejects it before the kernel runs — kernel code is still correct
+             (SFPSTORE mode 6 is ISA-valid).
+  ...
+  (one line per assumption; prefix with agent origin; omit section if empty)
+----------------------------------------
+Reasoning highlights:
+  [analyzer] {first paragraph of agent_analyzer.md § Reasoning summary}
+  [writer]   {first paragraph of agent_writer.md § Reasoning summary}
+  [tester]   {first paragraph of agent_tester.md § Reasoning summary}
+  [refiner]  {...}  (if it ran)
+  [optimizer]{...}  (if it ran)
+----------------------------------------
+Commands & tools summary:
+  analyzer:
+    Tool histogram: Read×18, Glob×9, Bash×4, Grep×4, Write×2,
+                    mcp__atlassian__getConfluencePage×2, ...
+    Key bash:
+      - grep -n "^SFPLOADI:\|^SFPSTORE:" tt_llk_quasar/instructions/assembly.yaml
+      - (verify target instructions exist on Quasar)
+      - ...
+  writer:
+    Tool histogram: Read×12, Bash×8, Write×3, Edit×2
+    Key bash:
+      - python -m scripts.agent_tools.kernel_template fill --type sfpu --arch quasar
+      - CHIP_ARCH=quasar python scripts/compiler.py ...
+  tester:
+    Tool histogram: Bash×28, Read×14, Edit×6, Write×2
+    Key bash:
+      - CHIP_ARCH=quasar pytest --compile-producer -n 15 test_fill_quasar.py
+      - flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash "$SIM_SCRIPT"
+  (full per-agent detail in {LOG_DIR}/transcripts/NN_{slug}_{tools,commands}.md)
+----------------------------------------
+Formats Tested:
+  Float16, Float16_b, Float32 (156 variants total)
+  Excluded: UInt16 (not in VALID_QUASAR_DEST_REG_FORMATS — infrastructure limit, not kernel defect)
+----------------------------------------
+Key Changes:
+  1. tt_llk_{target_arch}/{kernel_path} — NEW ({N} helpers)
+  2. {additional files touched}
+----------------------------------------
 Artifacts:
-  - codegen/artifacts/{op}_analysis.md
-  - codegen/artifacts/{op}_refinement_v*.md (if refinement occurred)
-  - codegen/artifacts/{op}_failed_attempt_v*/ (if refinement occurred)
+  Analysis:
+    - codegen/artifacts/{op}_analysis.md
+    - codegen/artifacts/{op}_refinement_v*.md (if refinement occurred)
+    - codegen/artifacts/{op}_failed_attempt_v*/ (if refinement occurred)
+  Agent self-logs:
+    - {LOG_DIR}/agent_analyzer.md
+    - {LOG_DIR}/agent_writer.md
+    - {LOG_DIR}/agent_tester.md
+    - {LOG_DIR}/agent_analysis_refiner_v*.md (if refinement occurred)
+    - {LOG_DIR}/agent_optimizer.md (if optimizer ran)
+  Subagent transcripts (raw chronology — assistant text + tool calls + results):
+    - {LOG_DIR}/transcripts/INDEX.md
+    - {LOG_DIR}/transcripts/NN_{slug}_reasoning.md  (one per agent)
+    - {LOG_DIR}/transcripts/NN_{slug}_tools.md       (one per agent)
+    - {LOG_DIR}/transcripts/NN_{slug}_commands.md    (one per agent)
+  Generated File:
+    - tt_llk_{target_arch}/{kernel_path}
 Metrics:
   - /proj_sw/user_dev/llk_code_gen/quasar/runs.jsonl
   - {LOG_DIR}/
+Branch:
+  - {WORKTREE_BRANCH}
 ========================================
 ```
 
@@ -976,22 +1140,25 @@ source ../tests/.venv/bin/activate
 CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
     -t "PARAM(...)" -r "PARAM(...)" -v
 
-# Functional tests — two-step compile-then-run flow.
-# Step A: parallel compile (no simulator, no flock).
-source ../tests/.venv/bin/activate
-cd ../tests/python_tests/quasar
-CHIP_ARCH=quasar pytest --compile-producer -n 15 test_{kernel_name}_quasar.py
+# Functional tests — use run_llk_tests.sh (handles flock, venv, simulator path).
+# Count variants (determines --maxfail from the 2.1 table in llk-tester.md).
+VARIANT_COUNT=$(bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh count \
+    --worktree {WORKTREE_DIR} --arch quasar --test test_{kernel_name}_quasar.py)
 
-# Step B: simulator consumer — ALWAYS use flock wrapper for simulator exclusivity, no -n.
-flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
-  STALE=$(lsof -ti :5556 2>/dev/null || true)
-  [ -n "$STALE" ] && echo "Killing stale port 5556 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
-  pkill -9 -f "tt-exalens.*--port=5556" 2>/dev/null || true
-  sleep 1
-  source ../tests/.venv/bin/activate
-  cd ../tests/python_tests/quasar
-  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest --run-simulator --compile-consumer --port=5556 test_{kernel_name}_quasar.py
-'
+# Compile-producer step (parallel, no flock).
+bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh compile \
+    --worktree {WORKTREE_DIR} --arch quasar --test test_{kernel_name}_quasar.py
+
+# Simulator-consumer step (flock-serialised, blocks until done).
+# Invoke via Bash tool with timeout: 1800000 — never run_in_background.
+bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh simulate \
+    --worktree {WORKTREE_DIR} --arch quasar --test test_{kernel_name}_quasar.py \
+    --maxfail 5   # omit for verification runs
+TEST_EXIT=$?
+
+# Or compile + simulate in one call (exit 2=compile fail, exit 1=test fail, exit 0=pass):
+bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh run \
+    --worktree {WORKTREE_DIR} --arch quasar --test test_{kernel_name}_quasar.py
 
 # List available tests
 ls ../tests/python_tests/quasar/test_*_quasar.py

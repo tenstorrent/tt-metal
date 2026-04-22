@@ -13,9 +13,9 @@ Your mission is to translate the analyzer's output into working kernel code that
 
 These are non-negotiable. Every kernel you write must follow them.
 
-1. **Write it like you'll maintain it.** Generated code will be read, debugged, and extended by engineers. Optimize for clarity.
+1. **Write it like you'll maintain it.** Generated code will be read, debugged, and extended by engineers. Optimize for clarity — but clarity comes from good naming and structure first, comments second.
 2. **No code duplication.** If variants share the same loop structure with different constants, use one function with a parameter — not separate functions. One function with `if constexpr` or a template param is always better than N copies of the same loop.
-3. **Minimal code.** The best kernel is the shortest correct one. Don't add one-line helper functions that just wrap a single instruction. Don't add comments restating the code. If the reference is 40 lines, the target should be ~40 lines.
+3. **Comment the non-obvious why, not the what.** The reader can see what `TTI_SFPSTORE(...)` does. They can't see why *this* LREG, *this* mode, or *this* ADDR_MOD was chosen when the reference used a different one. Only those architectural decisions need a comment. If the choice is obvious from the operand name (e.g., `SFPLOADI_MOD0_UPPER` writing the upper half), no comment is needed. See § Comment guidelines below.
 4. **Consistent conventions.** Pick one LREG, one ADDR_MOD, one naming pattern and stick with it throughout the file.
 5. **The reference is a guide, not gospel.** Understand what it does and why, then write the cleanest target version. Don't blindly copy, but don't gratuitously diverge either.
 
@@ -108,8 +108,46 @@ Your job is to transcribe pseudocode to C++, not to redesign. If you find yourse
 **Style rules** (match the sibling kernel the analysis cites):
 1. Indentation: 4 spaces (or whatever sibling uses)
 2. Braces: match sibling
-3. Comments: brief, only where non-obvious
-4. Line length: keep reasonable
+3. Line length: keep reasonable
+4. Comments: follow § Comment guidelines below. Think "code review", not "documentation" — the kernel is code that will be reviewed, not a tutorial.
+
+### Comment guidelines
+
+Target style: short, inline, one line per comment. Look at existing sibling kernels (e.g., `tt_llk_quasar/common/inc/sfpu/ckernel_sfpu_abs.h`) — match that density and tone. The goal is a code reviewer skimming the kernel understands the flow; it's not a tutorial or a design doc.
+
+**Canonical example of the expected style:**
+```cpp
+inline void _calculate_abs_sfp_rows_()
+{
+    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // load from dest into lreg[0]
+    // Apply absolute value: clear sign bit for FP32 (instr_mod1=1)
+    TTI_SFPABS(p_sfpu::LREG0, p_sfpu::LREG0, 1);
+    // Store result back to destination
+    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
+}
+
+inline void _calculate_abs_(const int iterations)
+{
+#pragma GCC unroll 8
+    for (int d = 0; d < iterations; d++)
+    {
+        _calculate_abs_sfp_rows_();
+        ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
+    }
+}
+```
+Notice: short end-of-line or single-line-above comments stating the intent of the instruction in plain words. No file header block, no per-function docblock, no ISA/Confluence citations, no analysis-section references, no multi-line rationale.
+
+**Rules:**
+1. **One short comment per meaningful instruction is fine** — describing intent in plain words ("load from dest into lreg[0]", "clear sign bit for FP32"). Keep it to one line. Prefer end-of-line; use single-line-above only if the comment would push the code past a reasonable line length.
+2. **No file-header block.** Skip it. If there's a single non-obvious cross-function invariant (e.g., LREG assignments shared across helpers), one short comment above the first function is enough. No reference-file path, no ISA citations, no dispatch tables.
+3. **No per-function docblocks.** The function name and signature carry the intent. If a template parameter's effect isn't obvious from its name, one inline comment next to its use is enough.
+4. **No analysis cross-references.** The kernel stands alone. Never write "see analysis §X" or cite Confluence page IDs.
+5. **No explanations of dropped reference parameters.** If `APPROXIMATION_MODE` is gone, it's gone — the signature speaks for itself.
+6. **Hazards on 2-cycle instructions:** one short inline note where the hazard lives (e.g., `// 2-cycle; next op stalls on result`). Don't restate it everywhere.
+7. **TT_ vs TTI_ choice:** if it matters, one short comment at the first runtime-parameter load. Never repeated.
+
+**Rule of thumb:** if the comment would feel out of place sitting next to the equivalent line in `ckernel_sfpu_abs.h`, it's too much. When in doubt, delete the comment — a clear name and a short adjacent note is almost always enough.
 
 ### Step 5: Compile-Check the Complete Kernel
 
@@ -300,15 +338,70 @@ Your task is complete when:
 
 ---
 
-## Self-Logging (CRITICAL — DO NOT SKIP)
+## Self-Logging (MANDATORY — STRUCTURED TEMPLATE)
 
-**You MUST write `{LOG_DIR}/agent_writer.md` before returning your final response.** This is not optional. If you skip this step, the run's log directory will be incomplete and unusable for debugging.
-
-Write your reasoning log to `{LOG_DIR}/agent_writer.md` using the Write tool. Include:
-- Analysis sections you relied on most (and any you found weak or missing)
-- Scaffold output (file path created)
-- Scaffold compile result (pass/fail, error if fail)
-- Final compile result (pass/fail, error if fail)
-- Anything surprising or non-obvious
+**Before returning, write `{LOG_DIR}/agent_writer.md` using the `Write` tool.**
+The file MUST contain the sections below in order. The orchestrator's Step 5f
+concatenates the structured sections from every agent log into the final run
+report; missing sections break the report. Raw chronology (assistant text +
+tool calls + trimmed results) is captured separately by
+`codegen/scripts/extract_run_transcripts.py` at Step 5e.1 — this log is for the
+**curated narrative**, not a full transcript.
 
 If no `LOG_DIR` was provided, skip logging.
+
+### Required sections (omit nothing — write "none" if a section genuinely has no content)
+
+```markdown
+# Agent: llk-kernel-writer — {kernel} ({target_arch}) — Cycle {N}
+
+## Inputs received
+- Kernel / kernel_type / target arch / kernel path
+- Analysis path (`codegen/artifacts/{kernel}_analysis.md`)
+- Cycle number and whether the analysis was refined (v1 / v2 history)
+
+## Assumptions made
+One bullet per assumption not derivable from the analysis. Shape:
+`- [Claim] — [Why I believed it] — [How/when it could be wrong]`.
+
+Examples:
+- Treated `sfpi::SFPLOADI_MOD0_*` constants as available on Quasar despite the
+  "no SFPI on Quasar" rule — the analysis noted these specific constants are
+  arch-agnostic — wrong if a future Quasar SFPI header scope-limits them.
+- Added `SfpuType::fill` to `tt_llk_quasar/llk_lib/llk_defs.h` — the analysis
+  did not list this as a prerequisite but the compile failed without it —
+  would be wrong if a dedicated enum-maintenance step is added to the pipeline.
+
+**If you made no non-trivial assumptions, write "none" — but do not skip the section.**
+
+## Reasoning summary (4–6 sentences)
+Why the kernel takes the shape it does in plain prose. Which analysis sections
+you leaned on most heavily; anywhere you had to make a judgment call; whether
+you diverged from the analysis (and why). If the scaffold failed compile the
+first time, say what changed.
+
+## Decisions & trade-offs
+Per non-trivial choice: **Choice** / **Alternatives** / **Why**.
+
+Typical writer decisions: whether to keep a `_sfp_rows_` helper or inline the
+body; whether to add a helper that was not in §6a; whether to drop a template
+parameter the analysis suggested; comment density beyond the mandatory minimum.
+
+## Commands run (summary)
+Curated. Full transcript is already in `{LOG_DIR}/transcripts/NN_{slug}_commands.md`.
+Include at minimum: the `kernel_template.py` invocation, each compile command
+(scaffold + final), and any scripts you ran to discover sibling patterns.
+
+## Artifacts read / written
+- **Read** (files): paths with the role each played (sibling kernel, scaffold
+  template, parent wrapper).
+- **Written** (files): the generated kernel path, test sources created, infra
+  edits (`llk_defs.h`, enum tables, golden generators).
+- **Compile log pointers**: final stderr on the last failing compile, if any.
+
+## Open questions / handoffs
+Things the tester must verify or that you left unresolved. If none, write
+"none". Examples:
+- Skipped the `*_bitcast_` variant's own compile-check — it delegates to
+  `_calculate_{op}_` — tester should still include it in the variant matrix.
+```

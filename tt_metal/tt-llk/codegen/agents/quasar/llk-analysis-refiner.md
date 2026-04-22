@@ -271,15 +271,75 @@ Recommendation: Human review. Do NOT re-run the pipeline automatically — the p
 
 ---
 
-## Self-Logging (MANDATORY)
+## Self-Logging (MANDATORY — STRUCTURED TEMPLATE)
 
-Before returning, write `{LOG_DIR}/agent_analysis_refiner_v${N}.md` using the `Write` tool. Include:
-- Iteration number (`v${N}`) and failure category picked.
-- The specific tester-log signatures that drove the classification (copy the lines).
-- Authoritative sources cross-checked (files + lines, Confluence page IDs, `assembly.yaml` entries).
-- Every section of the analysis you rewrote, in summary form — what it said before, what it says now, why.
-- Every section you consciously left unchanged (and why the evidence did not warrant touching it).
-- Fix patterns the tester exhausted — preserved here so future refiners see them without re-reading the whole tester log.
-- Anything surprising that a future refinement iteration should know.
+**Before returning, write `{LOG_DIR}/agent_analysis_refiner_v${N}.md` using the
+`Write` tool.** The file MUST contain the sections below in order. The
+orchestrator's Step 5f concatenates the structured sections from every agent
+log into the final run report; missing sections break the report. Raw
+chronology (assistant text + tool calls + trimmed results) is captured
+separately by `codegen/scripts/extract_run_transcripts.py` at Step 5e.1 — this
+log is for the **curated narrative and the evidence trail**, not a full
+transcript.
 
 If no `LOG_DIR` was provided, skip logging.
+
+### Required sections (omit nothing — write "none" if a section genuinely has no content)
+
+```markdown
+# Agent: llk-analysis-refiner — {kernel} ({target_arch}) — v${N}
+
+## Inputs received
+- Iteration: v${N} of max 2
+- Kernel / kernel_type / target arch / kernel path
+- Paths: ORIGINAL_ANALYSIS_PATH, ARCH_RESEARCH_PATH, TESTER_LOG_PATH,
+  WRITER_LOG_PATH, TEST_FILES (full list)
+
+## Failure classification
+- Primary category: {one of the refiner's failure taxonomy}
+- Tester-log signatures that drove this classification (paste the lines
+  verbatim — do not paraphrase).
+
+## Assumptions made
+One bullet per assumption embedded in the refined analysis that is NOT
+directly supported by a tester-log signature, Confluence page, or existing
+file. Shape: `- [Claim] — [Why I believed it] — [How/when it could be wrong]`.
+
+Refiners are particularly prone to over-correcting — call out every assumption
+the rewrite introduces. If v${N}'s rewrite fails, v${N+1} needs to see them.
+
+**If you made no non-trivial assumptions, write "none" — but do not skip the section.**
+
+## Reasoning summary (4–6 sentences)
+Plain-prose: what was structurally wrong with v${N-1}, what changed, why the
+new plan will not reproduce the same failure. Cite the tester-log signature
+that pinpointed the defect.
+
+## Decisions & trade-offs
+For each section rewritten: **Choice** (what the section now says) /
+**Alternatives** (other plans that would also plausibly fix the defect) /
+**Why** (which tester-log evidence chose between them).
+
+Also list sections you **consciously left unchanged** and the reason the
+evidence did not warrant touching them — this prevents v${N+1} from re-
+rewriting already-good sections.
+
+## Commands run (summary)
+Curated. Full transcript in `{LOG_DIR}/transcripts/NN_{slug}_commands.md`.
+
+## Artifacts read / written
+- **Read**: original analysis, tester log, writer log, test files, any
+  Confluence / DeepWiki cross-checks with page IDs + titles.
+- **Written**: refined analysis (path + sections touched), archive directory
+  path, refinement report path.
+
+## Fix patterns the tester already exhausted
+One bullet per attempt the tester already tried. The next writer-tester cycle
+should NOT retrace these. This is duplicated from the tester log on purpose —
+it makes the refiner log standalone-readable without cross-referencing.
+
+## Open questions / handoffs
+If v${N+1} is still likely, list the specific evidence the next refiner would
+need to see that this one lacked. If you are escalating, state what a human
+would need to unblock. If neither, write "none".
+```
