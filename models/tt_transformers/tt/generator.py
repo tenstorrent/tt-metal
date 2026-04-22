@@ -514,11 +514,18 @@ class Generator(WarmupForwardMixin):
 
         prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
         # Row-sharded batched prefill: process 1 user per row per iteration.
-        # Only used when sampling_params is present (device sampling / non-structured output).
-        # Structured output requires host sampling with grammar bitmask, which needs the
-        # single-user prefill path that returns full logits per user.
+        # Only used when device sampling is active (sampling_params is not None)
+        # and the prompt uses the harmony chat template (first token is <|start|>=200006).
+        # Host sampling (sampling_params=None) needs the single-user prefill path
+        # that returns full logits per user.
         model_0 = self.model[0]
-        if getattr(model_0, "users_row_sharded", False) and batch_size > 1 and sampling_params is not None:
+        is_harmony = tokens.shape[1] > 0 and int(tokens[0, 0]) == 200006
+        if (
+            getattr(model_0, "users_row_sharded", False)
+            and batch_size > 1
+            and sampling_params is not None
+            and is_harmony
+        ):
             return self._row_sharded_batched_prefill(
                 tokens,
                 page_table,
