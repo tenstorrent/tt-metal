@@ -46,7 +46,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
     [
-        (3200, 7168, 256, 8, 2),
+        (3200, 7168, 256, 8, 2),  # CF 2-> 32 ?
     ],
     ids=["3200-avg"],
 )
@@ -57,10 +57,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (32, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                # "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-                "fabric_router_config": create_fabric_router_config(max_payload_size=4096),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+                # "fabric_router_config": create_fabric_router_config(max_payload_size=4096),
             },
-            1,  # ,2
+            # 1,
+            2,  # num_links
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(
                 mesh_shape=(8, 4), topology="mesh-32x4"
@@ -304,13 +305,13 @@ def test_ttnn_dispatch_combine(
         tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
             tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
         )
-        ttnn.synchronize_device(mesh_device)
-        logger.success(f"Dispatch complete! {iteration=}/{num_iterations}")
+        # ttnn.synchronize_device(mesh_device)
+        # logger.success(f"Dispatch complete! {iteration=}/{num_iterations}")
 
         logger.debug(f"Running TTNN combine... {iteration=}/{num_iterations}")
         tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
-        ttnn.synchronize_device(mesh_device)
-        logger.success(f"Combine complete! {iteration=}/{num_iterations}")
+        # ttnn.synchronize_device(mesh_device)
+        # logger.success(f"Combine complete! {iteration=}/{num_iterations}")
 
         if not smoke:
             # Convert TTNN output back to torch
@@ -371,6 +372,9 @@ def test_ttnn_dispatch_combine(
             logger.success("✅ TTNN dispatch→combine round-trip matches input!")
         else:
             logger.warning("Skipping round-trip validation for smoke test.")
+
+        ttnn.synchronize_device(mesh_device)
+        logger.success(f"Dispatch+Combine complete! {iteration=}/{num_iterations}")
 
     logger.success("✅ TTNN dispatch→combine done")
 

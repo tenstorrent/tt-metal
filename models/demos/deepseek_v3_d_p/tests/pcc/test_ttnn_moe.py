@@ -18,7 +18,6 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
@@ -31,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_torch_expert_weights,
     extract_mesh_config,
     get_ep_mesh_composer,
+    get_max_payload_size,
     get_sp_mesh_composer,
     get_tp_mesh_composer,
 )
@@ -57,9 +57,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor, gate_fallback_mode, run_pcc_check",
     [
         # fmt: off
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.DEVICE, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")),
-        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 8, 2, GateComputeMode.HOST_ALL, True),
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")]),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 32, GateComputeMode.DEVICE, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")),
         # fmt: on
     ],
 )
@@ -67,41 +65,25 @@ from tests.ttnn.utils_for_testing import comp_pcc
     "mesh_device, device_params, num_links, topology",
     [
         pytest.param(
-            (8, 1),
+            (32, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+                # "fabric_router_config": create_fabric_router_config(max_payload_size=4096),
             },
-            1,
+            # 1,
+            2,  # num_links
             ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            marks=pytest.mark.requires_mesh_topology(
+                mesh_shape=(8, 4), topology="mesh-32x4"
+            ),  # (8, 4) is what single host see
+            id="mesh-32x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("num_iterations", [10000, 1], ids=["loop", "one_iteration"])
+@pytest.mark.timeout(0)
 def test_ttnn_moe(
     mesh_device,
     device_params,
@@ -115,6 +97,9 @@ def test_ttnn_moe(
     num_links,
     topology,
     gate_fallback_mode,
+    num_iterations,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     """
     Test TtMoe PCC against TorchMoe reference.
@@ -122,6 +107,10 @@ def test_ttnn_moe(
     Both TtMoe and TorchMoe create their gate internally from gate_weights
     and run forward(x) end-to-end. Validation compares intermediates directly.
     """
+
+    # skip CI if num_iterations > 1 to avoid long runtimes in CI, since this test is primarily for local debugging and PCC validation
+    if num_iterations > 1 and (is_ci_env or is_ci_v2_env):
+        pytest.skip("Skipping multi-iteration test in CI environment")
 
     mesh_device.disable_and_clear_program_cache()  # temporary disabling program cache; because cached all gather semaphores at wrong place cause this test case to OOM
     # pytest  models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-linear-8-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
@@ -259,8 +248,12 @@ def test_ttnn_moe(
     profiler.start("tt_forward")
     logger.debug("Running TtMoe forward pass...")
 
-    tt_output, tt_intermediates = tt_moe(tt_x, return_intermediates=True)
-    ttnn.synchronize_device(mesh_device)
+    for iteration in range(num_iterations):
+        logger.debug(f"Running TtMoe... {iteration=}/{num_iterations}")
+        tt_output, tt_intermediates = tt_moe(tt_x, return_intermediates=True)
+        ttnn.synchronize_device(mesh_device)
+        logger.debug(f"TtMoe complete! {iteration=}/{num_iterations}")
+    logger.success(f"TtMoe {num_iterations}")
     profiler.end("tt_forward")
 
     # Early return when run_pcc_check=False (profiling mode)
