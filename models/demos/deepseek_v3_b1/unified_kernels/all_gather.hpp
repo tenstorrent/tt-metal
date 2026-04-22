@@ -294,27 +294,47 @@ private:
 // Gather controller (NCRISC on gather core)
 // ============================================================================
 
+// Plain-data handoff between the active phase and the drain phase of
+// GatherController. Callers can store this at any scope; the controller
+// itself does not need to live across the split.
+struct GatherCompletionState {
+#if defined(COMPILE_FOR_NCRISC)
+    volatile tt_l1_ptr uint32_t* recv_sem_ptr;
+    uint32_t done_mask;
+#endif
+};
+
 template <typename CTArgs>
 class GatherController {
 public:
-    void operator()(const GatherArgs& args) { impl(args); }
+    // Full synchronous execution (identical to the previous behavior).
+    void operator()(const GatherArgs& args) {
+        GatherCompletionState st = start<false>(args);
+        wait_for_completion<true>(st);
+    }
 
-private:
-    void impl([[maybe_unused]] const GatherArgs& args) {
+    // Active phase: cross-core write to scratch[0], R1 kickoff, self-copy,
+    // R1->R2 bridge (wait on r2_src slot, copy to scratch[1], signal bit 2).
+    // On return the self-copy and scratch[1] writes are still in flight, and
+    // remote peers may still be posting into the output buffer. You must
+    // eventually pass the returned state to wait_for_completion().
+    template <bool barrier = true>
+    static GatherCompletionState start([[maybe_unused]] const GatherArgs& args) {
+        GatherCompletionState st{};
 #if defined(COMPILE_FOR_NCRISC)
         const uint64_t handoff_sem_noc =
             safe_get_noc_addr(args.transport_noc_x, args.transport_noc_y, args.handoff_sem_bank_addr, 0);
         const uint64_t scratch_base_noc =
             safe_get_noc_addr(args.transport_noc_x, args.transport_noc_y, args.transport_scratch_base_addr, 0);
 
-        volatile tt_l1_ptr uint32_t* recv_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_addr);
+        st.recv_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_addr);
 
         const uint32_t self_slot_offset = args.self_slot_index * CTArgs::slice_size_bytes;
         const uint32_t r2_src_slot_offset = args.r2_src_slot_index * CTArgs::slice_size_bytes;
 
         // Track which slots have been handled so the final wait is generic.
-        uint32_t done_mask = 0;
-        done_mask |= (1u << args.self_slot_index);
+        st.done_mask = 0;
+        st.done_mask |= (1u << args.self_slot_index);
 
         // Cross-core write to transport scratch[0] FIRST to unblock R1 ASAP.
         noc_async_write(args.local_input_addr, scratch_base_noc, CTArgs::slice_size_bytes);
@@ -327,8 +347,8 @@ private:
             args.local_input_addr, get_noc_addr(args.output_buffer_addr + self_slot_offset), CTArgs::slice_size_bytes);
 
         // R1→R2 bridge: wait for the slot that must be forwarded.
-        wait_for_slot<CTArgs::num_chunks, CTArgs::recv_sem_bits_per_slot>(recv_sem_ptr, args.r2_src_slot_index);
-        done_mask |= (1u << args.r2_src_slot_index);
+        wait_for_slot<CTArgs::num_chunks, CTArgs::recv_sem_bits_per_slot>(st.recv_sem_ptr, args.r2_src_slot_index);
+        st.done_mask |= (1u << args.r2_src_slot_index);
 
         // Copy received slot to transport scratch[1].
         const uint64_t scratch_r2_noc = scratch_base_noc + CTArgs::slice_size_bytes;
@@ -336,15 +356,28 @@ private:
         noc_async_writes_flushed();
         // Signal bit 2: scratch[1] ready (unblocks R2 on the active RISC)
         noc_semaphore_inc(handoff_sem_noc, 1 << 1);
+        if constexpr (barrier) {
+            noc_async_full_barrier();
+        }
+#endif
+        return st;
+    }
 
+    // Drain: wait for every remaining ring slot, reset recv_sem, fence all
+    // outstanding local NOC ops.
+    template <bool barrier = false>
+    static void wait_for_completion([[maybe_unused]] const GatherCompletionState& st) {
+#if defined(COMPILE_FOR_NCRISC)
         // Wait for all remaining slots (topology-agnostic).
         for (uint32_t slot = 0; slot < CTArgs::ring_size; slot++) {
-            if (!(done_mask & (1u << slot))) {
-                wait_for_slot<CTArgs::num_chunks, CTArgs::recv_sem_bits_per_slot>(recv_sem_ptr, slot);
+            if (!(st.done_mask & (1u << slot))) {
+                wait_for_slot<CTArgs::num_chunks, CTArgs::recv_sem_bits_per_slot>(st.recv_sem_ptr, slot);
             }
         }
-        noc_semaphore_set(recv_sem_ptr, 0);
-        noc_async_full_barrier();
+        noc_semaphore_set(st.recv_sem_ptr, 0);
+        if constexpr (barrier) {
+            noc_async_full_barrier();
+        }
 #endif
     }
 };
