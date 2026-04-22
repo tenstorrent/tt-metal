@@ -11,13 +11,15 @@ Entry point for creating and maintaining `compute_kernel_lib` helpers — unifie
 
 ## When to Use What
 
-| Situation | Action |
-|---|---|
-| Adding ops to an existing helper | Read [conventions](llk_helpers_conventions.md) section 5 (op structs). Add CRTP struct + init/call. |
-| Creating a new helper (known ops, known LLK calls) | Read [conventions](llk_helpers_conventions.md), write .hpp/.inl directly, add perf tests. |
-| Creating a new helper (unknown territory) | Run the [pipeline](llk_helpers_pipeline.md) — new helper mode, starts at Phase 0. |
-| Updating/improving an existing helper | Run the [pipeline](llk_helpers_pipeline.md) — update mode, starts at Phase 0 (reads existing files). |
-| **Migrating an existing kernel to a helper** | See "Kernel Migration Steps" below. Always the last step — helper features must exist first. |
+Three modes. Fleet Migration is the main one — it invokes the other two when it needs to fix a gap.
+
+| Mode | When | Entry point |
+|------|------|-------------|
+| **Helper Creation** | Need a new helper from scratch | Run the [pipeline](llk_helpers_pipeline.md) — new mode, Phase 0. |
+| **Helper Update** | Add op struct, fix API, new policy | Fast path (≤30 lines, new CRTP element only): conventions §5 + build + test. Larger changes: [pipeline](llk_helpers_pipeline.md) update mode. |
+| **Fleet Migration** | Migrate ≥1 kernel(s) to existing helpers | `/fleet-migration [op-dir]` → [llk_fleet_migration.md](llk_fleet_migration.md) |
+
+> **Note**: Fleet Migration drives the other two modes — when Phase 3 (Fix Gaps) discovers a missing element or API, it invokes Helper Update or Helper Creation. You do not invoke those manually in that context.
 
 ## Agent Files
 
