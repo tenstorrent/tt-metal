@@ -29,6 +29,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstring>
+#include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -1540,6 +1541,458 @@ TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorERISCRecovery) {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario M2: SigkillPredecessorMidHandshake — kill during EDM handshake.
+//
+// Scenario M kills AFTER full FABRIC_2D init completes (ERISCs in ACTIVE state,
+// a valid EDMStatus).  This test kills the child DURING the ETH handshake phase
+// (~2s into init, after firmware load starts but before wait_for_fabric_router_sync
+// returns).  Depending on where execution freezes, the router_sync_address may
+// hold an intermediate value like 0x49706550 ("iPeP" seen in CI on T3K MMIO devices
+// in Cycle 8) — NOT a valid EDMStatus enumerator.
+//
+// This exercises the `!is_known_edm_status(raw)` branch in
+// terminate_stale_erisc_routers() — the "CORRUPT" classification that:
+//   1. Sends TERMINATE best-effort (one shot, no poll — firmware is not running,
+//      the value came from a partially-executed L1 write, never will ACK)
+//   2. Logs an error (not a warning) about the corrupt L1 value
+//   3. Adds the channel to probe_dead_channels (skip RISC reset in configure_fabric)
+//
+// Shared-memory flag synchronization: child sets the flag immediately before
+// calling MeshDevice::create(), ensuring parent kills after firmware loading
+// has started.  Killing before the flag fires (pre-firmware) leaves edm_status=0
+// which is the clean path (not this test).
+//
+// Timing notes:
+//   child sleep after flag: 0 (parent kills 2s after flag)
+//   EDM firmware load starts: ~0-1s into create()
+//   ETH handshake in-flight: ~1-5s into create()
+//   Full FABRIC_2D sync: ~10-13s into create()
+//   Kill at 2s: lands in handshake window, may leave partial L1 state
+//
+// Pass = parent MeshDevice::create() succeeds (no hang/throw), dispatch OK.
+// Fail = hang > 120s, crash, or throw from terminate_stale_erisc_routers.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownKillPredecessorFixture, SigkillPredecessorMidHandshakeCorruption) {
+    auto mesh_shape = mesh_device_->shape();
+    log_info(tt::LogTest, "[Scenario M2] Closing fixture device before fork");
+    mesh_device_->close();
+    mesh_device_.reset();
+
+    // Shared flag: child sets to 1 once MeshDevice::create() is about to be called.
+    // Parent waits for flag, then kills 2s later to land mid-handshake.
+    volatile int* child_started = static_cast<volatile int*>(
+        ::mmap(nullptr, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0));
+    ASSERT_NE(child_started, MAP_FAILED) << "[Scenario M2] mmap failed: " << strerror(errno);
+    *child_started = 0;
+
+    pid_t child_pid = ::fork();
+    ASSERT_NE(child_pid, -1) << "[Scenario M2] fork() failed: " << strerror(errno);
+
+    if (child_pid == 0) {
+        // ---- CHILD: set flag, then start FABRIC_2D init (will be killed mid-handshake) ----
+        try {
+            tt_fabric::SetFabricConfig(
+                tt_fabric::FabricConfig::FABRIC_2D,
+                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+            // Signal parent: we are about to call MeshDevice::create() — firmware loading begins.
+            *child_started = 1;
+            auto child_device = MeshDevice::create(
+                MeshDeviceConfig(mesh_shape),
+                config_.l1_small_size,
+                config_.trace_region_size,
+                config_.num_cqs,
+                DispatchCoreConfig{},
+                {},
+                config_.worker_l1_size);
+            // If create() completes before the 2s kill window, spin until killed.
+            // The ERISC is in ACTIVE state at this point — still a valid test
+            // (terminate_stale_erisc_routers handles both ACTIVE and corrupt states).
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        } catch (...) {
+            _exit(2);
+        }
+        _exit(0);
+    }
+
+    // ---- PARENT: wait for child started flag, then kill 2s later ----
+    constexpr int kMaxFlagWaitMs = 10000;
+    for (int i = 0; i < kMaxFlagWaitMs && *child_started == 0; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (*child_started == 0) {
+        ::kill(child_pid, SIGKILL);
+        ::waitpid(child_pid, nullptr, 0);
+        ::munmap(const_cast<int*>(child_started), sizeof(int));
+        GTEST_SKIP()
+            << "[Scenario M2] Child never set child_started flag within 10s — "
+               "MeshDevice::create() never started.  Skipping mid-handshake kill test.";
+    }
+
+    // Kill 2s after firmware loading starts — targets the ETH handshake window
+    // (firmware loaded, writes to router_sync_address in-flight or partially complete).
+    log_info(
+        tt::LogTest,
+        "[Scenario M2] Child (pid={}) started MeshDevice::create() — sleeping 2s to reach "
+        "mid-handshake, then SIGKILL",
+        child_pid);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    log_info(tt::LogTest, "[Scenario M2] SIGKILLing child pid={} — targeting mid-handshake window", child_pid);
+    ::kill(child_pid, SIGKILL);
+    int wstatus = 0;
+    ::waitpid(child_pid, &wstatus, 0);
+    ::munmap(const_cast<int*>(child_started), sizeof(int));
+    log_info(
+        tt::LogTest,
+        "[Scenario M2] Child exited (status=0x{:08x}) — ERISC may have partial/corrupt router_sync_address",
+        static_cast<uint32_t>(wstatus));
+
+    // Re-open FABRIC_2D.  terminate_stale_erisc_routers() runs and encounters
+    // channels where router_sync_address may hold a non-EDMStatus mid-handshake value.
+    // The CORRUPT classification path (is_known_edm_status returns false) should
+    // handle this: best-effort TERMINATE, add to probe_dead_channels, continue.
+    log_info(tt::LogTest, "[Scenario M2] Re-opening FABRIC_2D after mid-handshake SIGKILL");
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    ASSERT_NO_THROW({
+        mesh_device_ = MeshDevice::create(
+            MeshDeviceConfig(mesh_shape),
+            config_.l1_small_size,
+            config_.trace_region_size,
+            config_.num_cqs,
+            DispatchCoreConfig{},
+            {},
+            config_.worker_l1_size);
+    }) << "[Scenario M2] MeshDevice::create() threw after mid-handshake SIGKILL — "
+          "terminate_stale_erisc_routers() failed to recover from corrupt router_sync_address. "
+          "Check the is_known_edm_status() / CORRUPT classification path.";
+
+    // Verification dispatch — confirms fabric is functional, not just that create() succeeded.
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(
+            tt::LogTest,
+            "[Scenario M2] Verification blocking dispatch after mid-handshake SIGKILL recovery");
+        ASSERT_NO_THROW(EnqueueMeshWorkload(cq, workload, /*blocking=*/true))
+            << "[Scenario M2] Blocking dispatch failed after mid-handshake SIGKILL recovery — "
+               "fabric channel may have been left in probe_dead state without recovery.";
+        log_info(
+            tt::LogTest,
+            "[Scenario M2] Dispatch completed — mid-handshake ERISC corrupt-state recovery verified");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario M3: MmioDeadPeerDispatchNotSkipped — FIX I coverage test.
+//
+// After SIGKILL predecessor at 15s (same setup as Scenario M), some non-MMIO
+// devices become dead-relay (dead_relay_devices_).  The MMIO devices whose
+// master router ETH channel connects to those dead-relay non-MMIO devices
+// are placed in mmio_dead_peer_devices_ (FIX I, #42429).
+//
+// Without FIX I: wait_for_fabric_router_sync() would hang on these MMIO
+// devices (firmware loaded, master chan handshake peer never responds → 10s
+// timeout → TT_THROW in MeshDevice::create()).
+//
+// Without the dead_relay_devices_ guard in dispatch kernel init: dispatch
+// kernel init would be skipped for MMIO devices incorrectly if they were
+// added to dead_relay_devices_ — but FIX I specifically prevents this.
+//
+// What this test verifies:
+//   1. MeshDevice::create() SUCCEEDS (FIX I prevents hang in sync wait).
+//   2. Dispatch to MMIO device coordinates SUCCEEDS (dispatch kernel was
+//      initialized for MMIO devices — they use PCIe, not ETH relay).
+//
+// The test identifies MMIO devices at runtime (get_associated_mmio_device)
+// and dispatches a blank workload to each MMIO coordinate.  If any MMIO
+// device's dispatch kernel was incorrectly skipped (bug: added to
+// dead_relay_devices_), EnqueueMeshWorkload will throw or hang.
+//
+// Pass = create() succeeds + every MMIO device coordinate dispatches cleanly.
+// Fail = hang in create() (FIX I broken) OR dispatch throw (wrong dead-relay skip).
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownKillPredecessorFixture, MmioDeadPeerDispatchNotSkipped) {
+    const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
+    if (num_devices < 4) {
+        GTEST_SKIP()
+            << "[Scenario M3] MMIO dead-peer test requires >= 4 devices (T3K / N300 multi-chip) "
+               "to produce dead-relay non-MMIO devices that create an MMIO dead-peer scenario.";
+    }
+
+    auto mesh_shape = mesh_device_->shape();
+    log_info(tt::LogTest, "[Scenario M3] Closing fixture device before fork");
+    mesh_device_->close();
+    mesh_device_.reset();
+
+    pid_t child_pid = ::fork();
+    ASSERT_NE(child_pid, -1) << "[Scenario M3] fork() failed: " << strerror(errno);
+
+    if (child_pid == 0) {
+        try {
+            tt_fabric::SetFabricConfig(
+                tt_fabric::FabricConfig::FABRIC_2D,
+                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+            auto child_device = MeshDevice::create(
+                MeshDeviceConfig(mesh_shape),
+                config_.l1_small_size,
+                config_.trace_region_size,
+                config_.num_cqs,
+                DispatchCoreConfig{},
+                {},
+                config_.worker_l1_size);
+            auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+            Program program;
+            auto kernel_id = CreateKernel(
+                program,
+                "tt_metal/kernels/dataflow/busy_spin.cpp",
+                cores,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            SetRuntimeArgs(program, kernel_id, CoreCoord{0, 0}, {1'000'000u});
+            auto workload = MeshWorkload();
+            workload.add_program(MeshCoordinateRange(child_device->shape()), std::move(program));
+            auto& cq = child_device->mesh_command_queue();
+            EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        } catch (...) {
+            _exit(2);
+        }
+        _exit(0);
+    }
+
+    log_info(
+        tt::LogTest,
+        "[Scenario M3] Waiting 15s for child (pid={}) to complete FABRIC_2D init + ACTIVE ERISCs",
+        child_pid);
+    std::this_thread::sleep_for(std::chrono::seconds(15));
+
+    log_info(tt::LogTest, "[Scenario M3] SIGKILLing child pid={}", child_pid);
+    ::kill(child_pid, SIGKILL);
+    int wstatus = 0;
+    ::waitpid(child_pid, &wstatus, 0);
+    log_info(
+        tt::LogTest,
+        "[Scenario M3] Child exited (status=0x{:08x}) — re-opening FABRIC_2D",
+        static_cast<uint32_t>(wstatus));
+
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    ASSERT_NO_THROW({
+        mesh_device_ = MeshDevice::create(
+            MeshDeviceConfig(mesh_shape),
+            config_.l1_small_size,
+            config_.trace_region_size,
+            config_.num_cqs,
+            DispatchCoreConfig{},
+            {},
+            config_.worker_l1_size);
+    }) << "[Scenario M3] MeshDevice::create() threw — FIX I mmio_dead_peer_devices_ guard may "
+          "have failed (wait_for_fabric_router_sync timed out on MMIO device with dead ETH peer).";
+
+    log_info(tt::LogTest, "[Scenario M3] Re-open succeeded — verifying MMIO device dispatch");
+
+    // Verify each MMIO device coordinate can accept dispatch (PCIe path, not ETH relay).
+    // If any MMIO device was incorrectly added to dead_relay_devices_, its dispatch kernel
+    // would not be initialized and EnqueueMeshWorkload would throw or hang.
+    auto& cluster = MetalContext::instance().get_cluster();
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    uint32_t mmio_devices_dispatched = 0;
+
+    for (const auto& dev_coord : MeshCoordinateRange(mesh_device_->shape())) {
+        IDevice* dev = mesh_device_->get_device(dev_coord);
+        if (!dev) {
+            continue;
+        }
+        const ChipId chip_id = dev->id();
+        const bool is_mmio = (cluster.get_associated_mmio_device(chip_id) == chip_id);
+        if (!is_mmio) {
+            continue;  // Skip non-MMIO devices — their dispatch may legitimately be degraded
+        }
+
+        log_info(
+            tt::LogTest,
+            "[Scenario M3] Dispatching to MMIO device {} at mesh coord ({},{}) — "
+            "must succeed (PCIe path unaffected by dead ETH relay)",
+            chip_id,
+            dev_coord[0],
+            dev_coord[1]);
+
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(dev_coord), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        EXPECT_NO_THROW(EnqueueMeshWorkload(cq, workload, /*blocking=*/true))
+            << "[Scenario M3] Dispatch to MMIO device " << chip_id << " failed — "
+            << "dispatch kernel init was incorrectly skipped (device may have been wrongly "
+            << "added to dead_relay_devices_; FIX I should prevent this for MMIO devices).";
+        mmio_devices_dispatched++;
+    }
+
+    EXPECT_GT(mmio_devices_dispatched, 0u)
+        << "[Scenario M3] No MMIO device coordinates found in mesh — cannot verify FIX I.  "
+           "Check that the mesh includes at least one MMIO device.";
+
+    log_info(
+        tt::LogTest,
+        "[Scenario M3] All {} MMIO device(s) dispatched successfully — "
+        "FIX I (mmio_dead_peer_devices_) correctly excludes MMIO devices from dead-relay skip",
+        mmio_devices_dispatched);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario MB: ProbeTimeBound — MeshDevice::create() completes within 60s
+// after SIGKILL predecessor on multi-chip topology (FIX H regression guard).
+//
+// Background (#42429):
+//   Before FIX H, each non-MMIO device independently ran terminate_stale_erisc_routers()
+//   and paid up to 3×15s=45s per device.  On T3K (4 non-MMIO devices):
+//     4 × 45s = 180s → exceeded the CI job timeout.
+//   FIX H short-circuits: once the first non-MMIO device confirms relay_broken=true,
+//   all remaining non-MMIO devices skip the probe entirely.  Total: ~45s (one device).
+//
+// This test asserts the time bound directly:
+//   - SIGKILL predecessor at 15s (ERISCs left in ACTIVE state, relay not broken yet)
+//   - Time MeshDevice::create() from start to finish
+//   - Assert < 60s (gives 15s margin above the 45s expected worst case for T3K)
+//
+// If FIX H is reverted or broken, this test catches the regression before CI
+// hits the 300s job timeout and produces an opaque "exit code 124" failure.
+//
+// Requirement: >= 4 devices (T3K topology needed to exercise the multi-device
+// relay path where FIX H's skip-on-first-broken logic matters).
+//
+// Pass = create() completes in < 60s.
+// Fail = create() takes >= 60s (FIX H short-circuit not working) or throws.
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownKillPredecessorFixture, ProbeTimeBound_CreateCompletesWithinBudget) {
+    const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
+    if (num_devices < 4) {
+        GTEST_SKIP()
+            << "[Scenario MB] Probe time bound test requires >= 4 devices (T3K) to exercise "
+               "FIX H multi-device relay short-circuit.  Single/dual-chip has no relay path.";
+    }
+
+    auto mesh_shape = mesh_device_->shape();
+    log_info(tt::LogTest, "[Scenario MB] Closing fixture device before fork");
+    mesh_device_->close();
+    mesh_device_.reset();
+
+    pid_t child_pid = ::fork();
+    ASSERT_NE(child_pid, -1) << "[Scenario MB] fork() failed: " << strerror(errno);
+
+    if (child_pid == 0) {
+        try {
+            tt_fabric::SetFabricConfig(
+                tt_fabric::FabricConfig::FABRIC_2D,
+                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+            auto child_device = MeshDevice::create(
+                MeshDeviceConfig(mesh_shape),
+                config_.l1_small_size,
+                config_.trace_region_size,
+                config_.num_cqs,
+                DispatchCoreConfig{},
+                {},
+                config_.worker_l1_size);
+            auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+            Program program;
+            auto kernel_id = CreateKernel(
+                program,
+                "tt_metal/kernels/dataflow/busy_spin.cpp",
+                cores,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            SetRuntimeArgs(program, kernel_id, CoreCoord{0, 0}, {1'000'000u});
+            auto workload = MeshWorkload();
+            workload.add_program(MeshCoordinateRange(child_device->shape()), std::move(program));
+            auto& cq = child_device->mesh_command_queue();
+            EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        } catch (...) {
+            _exit(2);
+        }
+        _exit(0);
+    }
+
+    log_info(
+        tt::LogTest,
+        "[Scenario MB] Waiting 15s for child (pid={}) to complete FABRIC_2D init + ACTIVE ERISCs",
+        child_pid);
+    std::this_thread::sleep_for(std::chrono::seconds(15));
+
+    log_info(tt::LogTest, "[Scenario MB] SIGKILLing child pid={}", child_pid);
+    ::kill(child_pid, SIGKILL);
+    int wstatus = 0;
+    ::waitpid(child_pid, &wstatus, 0);
+    log_info(
+        tt::LogTest,
+        "[Scenario MB] Child exited (status=0x{:08x}) — timing parent re-open",
+        static_cast<uint32_t>(wstatus));
+
+    // Time MeshDevice::create() from start to finish.
+    // FIX H guarantees at most one non-MMIO device pays the 3×15s probe cost.
+    // Total expected: ~45s + overhead.  Bound = 60s (15s margin).
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    const auto t0 = std::chrono::steady_clock::now();
+    ASSERT_NO_THROW({
+        mesh_device_ = MeshDevice::create(
+            MeshDeviceConfig(mesh_shape),
+            config_.l1_small_size,
+            config_.trace_region_size,
+            config_.num_cqs,
+            DispatchCoreConfig{},
+            {},
+            config_.worker_l1_size);
+    }) << "[Scenario MB] MeshDevice::create() threw during timed re-open.";
+    const auto elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+
+    log_info(
+        tt::LogTest,
+        "[Scenario MB] MeshDevice::create() completed in {}ms (bound = 60000ms)",
+        elapsed_ms);
+
+    // The primary regression guard: if FIX H's any_relay_broken short-circuit
+    // is reverted, re-open on T3K takes ~180s (4 non-MMIO × 45s) → this fails.
+    EXPECT_LT(elapsed_ms, 60000)
+        << "[Scenario MB] MeshDevice::create() took " << elapsed_ms << "ms — exceeded 60s bound. "
+        << "FIX H (any_relay_broken short-circuit in compile_and_configure_fabric) may have "
+        << "regressed.  Expected: first non-MMIO device pays ≤45s probe, rest are fast-pathed. "
+        << "Without FIX H, T3K pays 4 × 45s = 180s → CI job timeout.";
+
+    // Functional sanity: dispatch a workload to confirm the mesh is usable.
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    {
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[Scenario MB] Verification dispatch after timed re-open");
+        EXPECT_NO_THROW(EnqueueMeshWorkload(cq, workload, /*blocking=*/true))
+            << "[Scenario MB] Post-reopen dispatch failed.";
+    }
+
+    log_info(
+        tt::LogTest,
+        "[Scenario MB] Probe time bound verified: create() = {}ms < 60000ms — "
+        "FIX H any_relay_broken short-circuit is working correctly",
+        elapsed_ms);
+}
+
+// ---------------------------------------------------------------------------
 // GAP 1: Verify is_known_edm_status() coverage via compile-time enum count.
 //
 // is_known_edm_status() lives in an anonymous namespace inside
@@ -2331,12 +2784,23 @@ TEST_F(AsyncTeardownFabric2DFixture, DeviceConfigureFabric_DegradedModeOnAllPreK
 // TODO: Once UMD Cluster is mockable (or a test-seam is added to
 //       configure_fabric_cores()), implement this test to cover the catch
 //       block at fabric_init.cpp lines ~174–196.
+//
+// OPUS SUGGESTION (Cycle 3 audit, GAP 2):
+//   Add a mock seam to EthernetHandshake::advance() that can inject
+//   PEER_DIED mid-sequence.  The same seam enables Scenarios W, X, and Y
+//   without real hardware manipulation.  Proposed seam signature:
+//     using EthHandshakeAdvanceFn = std::function<EthernetHandshakeResult(
+//         Device*, uint32_t eth_chan, EthernetHandshakePhase)>;
+//   Pass into configure_fabric_cores() via an optional parameter (defaulting
+//   to the real advance() call).  In tests, inject a lambda that throws or
+//   returns PEER_DIED on the target channel.
 // ---------------------------------------------------------------------------
 TEST_F(AsyncTeardownFabric2DFixture, ConfigureFabricCores_CatchesResetExceptionAndRecords) {
     GTEST_SKIP()
         << "[Scenario W] SKIPPED — requires mock/fault-injection for "
            "cluster.assert_risc_reset_at_core() to inject std::exception. "
-           "TODO: add UMD Cluster mock seam and implement the catch-block coverage test.";
+           "TODO: add UMD Cluster mock seam (or EthernetHandshake::advance() seam — "
+           "see OPUS SUGGESTION above) and implement the catch-block coverage test.";
 }
 
 // ---------------------------------------------------------------------------
@@ -2368,6 +2832,17 @@ TEST_F(AsyncTeardownFabric2DFixture, ConfigureFabricCores_CatchesResetExceptionA
 //       a unit test with a mock device/cluster.
 //   (c) Add a dedicated "corrupt L1 recovery" hardware test that explicitly
 //       accepts the cost of a machine reset and is tagged accordingly in CI.
+//
+// OPUS SUGGESTION (Cycle 3 audit, GAP 2):
+//   Add a mock seam to EthernetHandshake::advance() that injects PEER_DIED
+//   mid-sequence.  With this seam, terminate_stale_erisc_routers() can be
+//   exercised on a fake Device* without touching real ERISC L1:
+//     (1) EthHandshakeAdvanceFn seam returns PEER_DIED on the target channel
+//     (2) terminate_stale_erisc_routers() sees the injected bad value and
+//         classifies it as CORRUPT → adds to probe_dead_channels
+//     (3) configure_fabric_cores() receives that set → skips the channel
+//   This is the cleanest path: no hardware write, no machine reset risk,
+//   and it exercises the exact is_known_edm_status() branch we care about.
 // ---------------------------------------------------------------------------
 TEST_F(AsyncTeardownFabric2DRepeatFixture, TerminateStaleEriscRouters_CorruptStatusDetected) {
     GTEST_SKIP()
@@ -2375,8 +2850,8 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, TerminateStaleEriscRouters_CorruptSta
            "permanently breaks the machine until a hardware reset (configure_fabric_cores "
            "skips the soft reset for corrupt channels, leaving the ERISC halted with the bad "
            "value in L1). "
-           "TODO: mock ReadFromDeviceL1 or expose terminate_stale_erisc_routers() as a free "
-           "function for unit testing.";
+           "TODO: add EthernetHandshake::advance() mock seam (see OPUS SUGGESTION above) to "
+           "inject PEER_DIED mid-sequence — no hardware write needed.";
 }
 
 // ---------------------------------------------------------------------------
@@ -2412,6 +2887,18 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, TerminateStaleEriscRouters_CorruptSta
 // TODO: Introduce a compile-factory seam (std::function<bool(Device*)>) in
 //       FabricFirmwareInitializer so tests can inject a throwing stub for one
 //       device and verify the join-before-rethrow invariant under TSAN.
+//
+// OPUS SUGGESTION (Cycle 3 audit, GAP 2):
+//   The same EthernetHandshake::advance() mock seam proposed for Scenarios W
+//   and X partially unblocks this test.  Full unblock requires the compile-
+//   factory seam to make compile_fabric() fail on one specific device:
+//     using CompileFabricFn = std::function<void(Device*)>;
+//   Add as optional ctor parameter (or protected virtual) to
+//   FabricFirmwareInitializer.  In tests, inject a lambda that throws
+//   std::runtime_error for device index 1.  Wrap the entire test in TSAN
+//   (add to TEST(..., ...) with //NOLINTNEXTLINE or TSAN CI tag) to catch
+//   any concurrent unordered_map access in BuildEnvManager that would be the
+//   actual bug this test is guarding against.
 // ---------------------------------------------------------------------------
 TEST_F(AsyncTeardownFabric2DRepeatFixture, CompileAndConfigureFabric_JoinsAllFuturesBeforeRethrow) {
     GTEST_SKIP()
@@ -2420,7 +2907,7 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, CompileAndConfigureFabric_JoinsAllFut
            "stub for one device. "
            "TODO: add std::function<bool(Device*)> compile_fn parameter (defaulting to "
            "dev->compile_fabric()) and implement the multi-device throw + join-before-rethrow "
-           "test under TSAN.";
+           "test under TSAN. See OPUS SUGGESTION above for seam design.";
 }
 
 // ---------------------------------------------------------------------------

@@ -101,6 +101,91 @@ void FabricFirmwareInitializer::init(
 
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         log_info(tt::LogMetal, "Initializing Fabric");
+
+        // GAP 1 (#42429): Pre-init L1 health scan — canary check BEFORE routing table writes.
+        //
+        // write_routing_tables_to_all_chips() writes to Tensix L1 on non-MMIO devices through the
+        // ETH relay.  If a prior process left stale ERISC firmware running (e.g. crashed mid-
+        // handshake, leaving edm_status = 0x49706550 "iPeP"), those relay ERISCs are unresponsive
+        // and the routing table write either hangs or silently corrupts.
+        //
+        // This scan emits a WARNING if any active ETH channel shows a non-zero / non-TERMINATED
+        // edm_status.  It does NOT gate the init path — terminate_stale_erisc_routers() (called
+        // inside compile_and_configure_fabric()) is the authoritative recovery step.  The purpose
+        // here is early-warning telemetry: if a routing table write later hangs, the log will show
+        // the pre-existing stale state that caused it.
+        //
+        // If any channel fails to read (ETH relay completely unresponsive), the warning includes
+        // the exception message and skips that device — terminate_stale_erisc_routers() will deal
+        // with it properly via the relay_broken / probe_dead_channels machinery.
+        try {
+            const auto& builder_context = control_plane_.get_fabric_context().get_builder_context();
+            const auto router_sync_address =
+                builder_context.get_fabric_router_sync_address_and_status().first;
+            constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+
+            for (auto* dev : devices_) {
+                if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
+                    continue;
+                }
+                const auto fabric_node_id =
+                    control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+                const auto& active_channels =
+                    control_plane_.get_active_fabric_eth_channels(fabric_node_id);
+
+                uint32_t stale_count = 0;
+                uint32_t corrupt_count = 0;
+                for (const auto& [eth_chan_id, direction] : active_channels) {
+                    const auto eth_logical_core =
+                        cluster_.get_soc_desc(dev->id())
+                            .get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+                    std::vector<uint32_t> status_buf(1, 0);
+                    try {
+                        detail::ReadFromDeviceL1(
+                            dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+                    } catch (const std::exception& read_ex) {
+                        log_warning(
+                            tt::LogMetal,
+                            "pre-init L1 scan: Device {} chan={} read FAILED ({}) — ETH relay may "
+                            "already be unresponsive before routing table write",
+                            dev->id(),
+                            eth_chan_id,
+                            read_ex.what());
+                        continue;
+                    }
+                    const uint32_t status = status_buf[0];
+                    if (status == 0 || status == terminated_val) {
+                        continue;  // clean
+                    }
+                    if (is_known_edm_status(status)) {
+                        stale_count++;
+                    } else {
+                        corrupt_count++;
+                    }
+                }
+
+                if (stale_count > 0 || corrupt_count > 0) {
+                    log_warning(
+                        tt::LogMetal,
+                        "pre-init L1 scan: Device {} has {} stale-running and {} corrupt ETH "
+                        "channel(s) BEFORE routing table write. terminate_stale_erisc_routers() "
+                        "will attempt recovery — but routing table writes to non-MMIO devices "
+                        "that use these relay ERISCs may race with stale firmware (#42429).",
+                        dev->id(),
+                        stale_count,
+                        corrupt_count);
+                }
+            }
+        } catch (const std::exception& scan_ex) {
+            // Non-fatal: terminate_stale_erisc_routers() is the recovery path.
+            // Log and proceed — the scan is informational only.
+            log_warning(
+                tt::LogMetal,
+                "pre-init L1 scan failed ({}): proceeding with routing table write. "
+                "If init hangs, check for stale ERISC firmware from a prior process.",
+                scan_ex.what());
+        }
+
         control_plane_.write_routing_tables_to_all_chips();
         compile_and_configure_fabric();
         log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
