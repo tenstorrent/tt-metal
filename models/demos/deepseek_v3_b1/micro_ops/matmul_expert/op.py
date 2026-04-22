@@ -226,9 +226,6 @@ def create_expert_fmt_tensors(cts: list, mesh_device, core_grid, num_tiles_k: in
     mesh_shape = mesh_device.shape
     all_cores = ttnn.corerange_to_cores(core_grid)
     dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
-    num_tiles = num_tiles_k * out_w
-    meta_words_per_expert = (num_tiles + 9) // 10
-    num_experts = len(cts)
 
     fmt_result = {}
     base_result = {}
@@ -389,7 +386,6 @@ def _build_program_for_device(
     # in1 region: [0, in1_region_bytes), fmt region: [in1_region_bytes, total).
     num_subblocks_k = Kt // subblock_k
     max_tile_size = _TILE_SIZES[1]
-    max_subblock_bytes = subblock_k * subblock_n * max_tile_size
     in1_region_bytes = subblock_k * subblock_n * num_in1_buffers * max_tile_size
     cb_in1_dram_total_bytes = in1_region_bytes
 
@@ -616,10 +612,8 @@ def create_dram_expert_metadata(
     num_experts = num_total_experts
     num_banks = len(primary_worker_cores)
     num_total_cores = len(compute_cores_list)
-    num_iterations = num_subblocks_k * (per_core_N // subblock_n)
     tiles_per_block = subblock_k * subblock_n
     meta_words_per_block = _meta_words_for_tiles(tiles_per_block)
-    fmt_words_per_expert = num_iterations * meta_words_per_block
     BLOCK_SIZE_UNIT = 64
 
     # K-parallelism: cores within a bank split the K dim.
@@ -634,7 +628,6 @@ def create_dram_expert_metadata(
         f"num_subblocks_k ({num_subblocks_k}) must be divisible by " f"k_parallel_per_bank ({k_parallel_per_bank})"
     )
     num_subblocks_k_local = num_subblocks_k // k_parallel_per_bank
-    num_tiles_k = subblock_k * num_subblocks_k
     num_tiles_k_local = subblock_k * num_subblocks_k_local
     num_iterations_local = num_subblocks_k_local * (per_core_N // subblock_n)
     fmt_words_per_expert_local = num_iterations_local * meta_words_per_block

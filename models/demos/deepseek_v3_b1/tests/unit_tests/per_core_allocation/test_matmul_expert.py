@@ -66,7 +66,6 @@ def shuffle_tensor_tiles(tensor, tile_size, num_banks, subblock_k=None, subblock
     tiles = tiles.permute(0, 1, 3, 2, 4).contiguous()
     tiles = tiles.reshape(-1, num_tiles_per_shard, tile_size, tile_size)
 
-    num_subblocks_k = K_tiles // subblock_k
     num_n_groups = per_N_tiles // subblock_n
     block_size = subblock_k * subblock_n
 
@@ -1772,7 +1771,6 @@ def _run_hybrid_expert_multi_device(
     subblock_n = dram_per_core_N // num_subblocks_n are derived inside
     _compute_dram_matmul_params.
     """
-    cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
     assert dram_expert_ids, "DRAM expert path is always required"
     assert len(dram_expert_ids) <= num_experts, "dram_expert_ids exceeds num_experts"
     if not tp_expert:
