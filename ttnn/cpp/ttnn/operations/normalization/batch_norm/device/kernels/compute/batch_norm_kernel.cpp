@@ -2,63 +2,50 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/eltwise_binary.h"
-#include "ttnn/kernel/compute/moreh_common.hpp"
-
 #include <cstdint>
 
 #include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_math.hpp"
 
-ALWI void batchnorm_bcast_tiles(
+// CB ids are promoted to template parameters because DestReuseMul<cb_den, ...>
+// requires cb_den to be a compile-time constant. Runtime params (freq,
+// tile_start, weight_has, bias_has) stay runtime.
+template <
     uint32_t cb_bcast,
     uint32_t cb_other,
-    uint32_t freq,
-    uint32_t tile_start,
     uint32_t cb_batch_var,
     uint32_t cb_eps,
     uint32_t cb_den,
     uint32_t cb_weight,
     uint32_t cb_bias,
     uint32_t cb_tmp_1,
-    uint32_t cb_output_0,
-    uint32_t weight_has,
-    uint32_t bias_has) {
+    uint32_t cb_output_0>
+ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start, uint32_t weight_has, uint32_t bias_has) {
     constexpr uint32_t onetile = 1;
-    constexpr int dst0 = 0;
-    uint32_t weight_has_value = weight_has;
-    uint32_t bias_has_value = bias_has;
-    auto cb_affine_or_out = (weight_has_value || bias_has_value) ? cb_tmp_1 : cb_output_0;
-    auto cb_scaled_output = (bias_has_value) ? cb_tmp_1 : cb_output_0;
+    const uint32_t weight_has_value = weight_has;
+    const uint32_t bias_has_value = bias_has;
+    const auto cb_affine_or_out = (weight_has_value || bias_has_value) ? cb_tmp_1 : cb_output_0;
+    const auto cb_scaled_output = (bias_has_value) ? cb_tmp_1 : cb_output_0;
 
     experimental::CircularBuffer cb_bcast_obj(cb_bcast);
-    experimental::CircularBuffer cb_other_obj(cb_other);
-    experimental::CircularBuffer cb_batch_var_obj(cb_batch_var);
     experimental::CircularBuffer cb_den_obj(cb_den);
     experimental::CircularBuffer cb_weight_obj(cb_weight);
     experimental::CircularBuffer cb_bias_obj(cb_bias);
-    experimental::CircularBuffer cb_tmp_1_obj(cb_tmp_1);
-    experimental::CircularBuffer cb_output_0_obj(cb_output_0);
-    experimental::CircularBuffer cb_affine_or_out_obj(cb_affine_or_out);
-    experimental::CircularBuffer cb_scaled_output_obj(cb_scaled_output);
 
-    // 1/(sqrt(batch_var + eps))
-    cb_den_obj.reserve_back(onetile);
-    cb_batch_var_obj.wait_front(onetile);
+    // Stage A — cb_den = rsqrt(cb_batch_var + cb_eps)
+    // cb_batch_var streams (wait/pop one tile); cb_eps is persistent (kernel_main owns wait/pop).
+    compute_kernel_lib::add<
+        compute_kernel_lib::BroadcastDim::NONE,
+        compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+        compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+        cb_batch_var,
+        cb_eps,
+        cb_den,
+        compute_kernel_lib::BinaryInputBlockShape::single(),
+        compute_kernel_lib::sfpu_chain(compute_kernel_lib::Rsqrt<>{}));
 
-    tile_regs_acquire();
-    add_tiles_init_with_dt(cb_batch_var, cb_eps);
-    add_tiles(cb_batch_var, cb_eps, 0, 0, dst0);
-    rsqrt_tile_init();
-    rsqrt_tile(dst0);
-    tile_regs_commit();
-
-    tile_regs_wait();
-    pack_tile_with_dt(dst0, cb_den);
-    tile_regs_release();
-
-    cb_batch_var_obj.pop_front(onetile);
-    cb_den_obj.push_back(onetile);
-
+    // cb_bcast / cb_den / cb_weight / cb_bias are persistent: wait once before loop, pop once after.
     cb_bcast_obj.wait_front(onetile);
     cb_den_obj.wait_front(onetile);
     if (weight_has_value) {
@@ -67,63 +54,42 @@ ALWI void batchnorm_bcast_tiles(
     if (bias_has_value) {
         cb_bias_obj.wait_front(onetile);
     }
+
     for (uint32_t j = tile_start; j < freq; ++j) {
-        // input - batch_mean
-        cb_other_obj.wait_front(onetile);
-        cb_affine_or_out_obj.reserve_back(onetile);
+        // Stage B — cb_affine_or_out = (cb_other - cb_bcast) * cb_den
+        // Fuses sub + dest-reuse mul in one DEST window via DestReuseMul chain PostOp.
+        // cb_other streams; cb_bcast and cb_den are persistent (NoWaitNoPop).
+        compute_kernel_lib::sub<
+            compute_kernel_lib::BroadcastDim::NONE,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+            cb_other,
+            cb_bcast,
+            cb_affine_or_out,
+            compute_kernel_lib::BinaryInputBlockShape::single(),
+            compute_kernel_lib::sfpu_chain(
+                compute_kernel_lib::
+                    DestReuseMul<cb_den, compute_kernel_lib::Dst::D0, compute_kernel_lib::LoadPolicy::NoWaitNoPop>{}));
 
-        tile_regs_acquire();
-        sub_tiles_init(cb_other, cb_bcast);
-        sub_tiles(cb_other, cb_bcast, 0, 0, 0);
-
-        // (input - batch_mean)/(sqrt(batch_var + eps)) = result
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_den);
-        binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_den, 0, 0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(0, cb_affine_or_out);
-        tile_regs_release();
-
-        cb_affine_or_out_obj.push_back(onetile);
-        cb_other_obj.pop_front(onetile);
-
-        // result = result * weight
+        // Stage C — cb_scaled_output = cb_affine_or_out * cb_weight
         if (weight_has_value) {
-            cb_scaled_output_obj.reserve_back(onetile);
-            cb_affine_or_out_obj.wait_front(1);
-
-            tile_regs_acquire();
-            mul_tiles_init_with_dt(cb_affine_or_out, cb_weight);
-            mul_tiles(cb_affine_or_out, cb_weight, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_scaled_output);
-            tile_regs_release();
-
-            cb_affine_or_out_obj.pop_front(1);
-            cb_scaled_output_obj.push_back(onetile);
+            compute_kernel_lib::mul<
+                compute_kernel_lib::BroadcastDim::NONE,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                cb_affine_or_out, cb_weight, cb_scaled_output, compute_kernel_lib::BinaryInputBlockShape::single());
         }
 
-        // result = result + bias
+        // Stage D — cb_output_0 = cb_tmp_1 + cb_bias
         if (bias_has_value) {
-            cb_output_0_obj.reserve_back(onetile);
-            cb_tmp_1_obj.wait_front(onetile);
-
-            tile_regs_acquire();
-            add_tiles_init_with_dt(cb_tmp_1, cb_bias);
-            add_tiles(cb_tmp_1, cb_bias, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_output_0);
-            tile_regs_release();
-
-            cb_tmp_1_obj.pop_front(onetile);
-            cb_output_0_obj.push_back(onetile);
+            compute_kernel_lib::add<
+                compute_kernel_lib::BroadcastDim::NONE,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                cb_tmp_1, cb_bias, cb_output_0, compute_kernel_lib::BinaryInputBlockShape::single());
         }
     }
+
     cb_bcast_obj.pop_front(onetile);
     cb_den_obj.pop_front(onetile);
     if (weight_has_value) {
@@ -156,8 +122,8 @@ void kernel_main() {
     constexpr auto cb_tmp_1 = get_compile_time_arg_val(9);      // (input - batch_mean)/(sqrt(batch_var + eps))
     constexpr auto cb_bias = get_compile_time_arg_val(10);      // bias tensor
 
-    auto cb_bcast = cb_batch_mean;
-    auto cb_other = cb_input;
+    constexpr auto cb_bcast = cb_batch_mean;
+    constexpr auto cb_other = cb_input;
 
     binary_op_init_common(cb_other, cb_bcast, cb_output_0);
 
@@ -169,36 +135,28 @@ void kernel_main() {
     cb_eps_obj.wait_front(onetile);
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        batchnorm_bcast_tiles(
+        batchnorm_bcast_tiles<
             cb_bcast,
             cb_other,
-            tile_freq,
-            tile_start,
             cb_batch_var,
             cb_eps,
             cb_den,
             cb_weight,
             cb_bias,
             cb_tmp_1,
-            cb_output_0,
-            weight_has_value,
-            bias_has_value);
+            cb_output_0>(tile_freq, tile_start, weight_has_value, bias_has_value);
     }
     if (remaining_iterations > 0) {
-        batchnorm_bcast_tiles(
+        batchnorm_bcast_tiles<
             cb_bcast,
             cb_other,
-            remaining_iterations,
-            tile_start,
             cb_batch_var,
             cb_eps,
             cb_den,
             cb_weight,
             cb_bias,
             cb_tmp_1,
-            cb_output_0,
-            weight_has_value,
-            bias_has_value);
+            cb_output_0>(remaining_iterations, tile_start, weight_has_value, bias_has_value);
     }
 
     cb_eps_obj.pop_front(onetile);
