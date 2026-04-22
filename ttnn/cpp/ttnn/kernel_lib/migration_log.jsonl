@@ -52,3 +52,5 @@
 {"type":"attempt","kernel":"experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_poly.cpp","status":"BLOCKED","commit":null,"blockers":["GAP-10","GAP-13"],"stages_migrated":[],"stages_blocked":["all"],"tests_passed":null,"notes":"FillScalar available (GAP-9 fixed); blocked by missing CopyDest element and multi-DST logsigmoid_tile","ts":"2026-04-22"}
 {"type":"attempt","kernel":"reduction/generic/device/kernels/compute/reduce_h_neg.cpp","status":"BLOCKED","commit":null,"blockers":["GAP-11"],"stages_migrated":[],"stages_blocked":["all"],"tests_passed":null,"notes":"chunked multi-tile reduction with self-feeding cb_acc; sfpu_pipeline cannot advance cb_tile_idx across batch steps","ts":"2026-04-22"}
 {"type":"state","phase":2,"phase_name":"gap_map","progress":{"done":0,"total":0},"ts":"2026-04-22"}
+{"type": "h_checkpoint", "phase": 3, "decision": "approved", "approved_gaps": ["GAP-10", "GAP-13"], "deferred_gaps": [], "notes": "GAP-10 (Logsigmoid) and GAP-13 (CopyDest) fixed in 8906320e45e. Sweep authorized.", "ts": "2026-04-22"}
+{"type": "state", "phase": 4, "phase_name": "sweep", "progress": {"done": 0, "total": 4}, "ts": "2026-04-22"}
