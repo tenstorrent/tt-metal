@@ -125,6 +125,8 @@ class Generator(WarmupForwardMixin):
             return
         self.already_warmed_up_prefill = True
 
+        warmup_use_trace = enable_trace and getattr(self.model_args[0], "warmup_prefill_capture_trace", True)
+
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
         warmup_batch_sizes = (1,)
 
@@ -134,12 +136,18 @@ class Generator(WarmupForwardMixin):
         sampling_parameters_sweeped = False
 
         if enable_trace:
-            logger.info("Using batch-1-only traced prefill warmup; runtime batched prefill remains enabled")
+            if warmup_use_trace:
+                logger.info("Using batch-1-only traced prefill warmup; runtime batched prefill remains enabled")
+            else:
+                logger.info(
+                    "Skipping prefill trace capture during warmup (compile kernels via untraced prefill only); "
+                    "trace will be captured on the first real prefill."
+                )
 
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
                 if model_id != 0 and (
-                    supported_length not in self.model_args[0].trace_prefill_supported_seq_lens or not enable_trace
+                    supported_length not in self.model_args[0].trace_prefill_supported_seq_lens or not warmup_use_trace
                 ):
                     continue
 
@@ -181,7 +189,7 @@ class Generator(WarmupForwardMixin):
                         self.prefill_forward_text(
                             **warmup_args,
                             kv_cache=kv_cache,
-                            enable_trace=enable_trace,
+                            enable_trace=warmup_use_trace,
                             model_id_warmup=model_id,
                             sampling_params=param,
                         )
