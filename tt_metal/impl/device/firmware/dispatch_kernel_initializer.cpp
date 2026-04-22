@@ -155,6 +155,24 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
                     devices_.begin(), devices_.end(), [&](IDevice* d) { return d->id() == mmio_controlled_device_id; });
                 if (it != devices_.end()) {
                     dispatch_topology_->populate_cq_static_args(*it);
+                } else {
+                    // Device excluded from dispatch_devices (dead ETH relay — see FIX E2 in #42429).
+                    // We still need to populate its kernel nodes' static_config so that MMIO device
+                    // kernels' GenerateDependentConfigs() can safely read downstream kernel metadata
+                    // (e.g. prefetch_d static_config fields) without throwing std::bad_optional_access.
+                    // Immediately remove the program from the compile group so it is never compiled
+                    // or written to device (#42429 FIX E3).
+                    auto* dead_relay_dev = device_manager_->get_device(mmio_controlled_device_id);
+                    if (dead_relay_dev != nullptr) {
+                        dispatch_topology_->populate_cq_static_args(dead_relay_dev);
+                        // Remove from compile group — returns (and drops) the program.
+                        dispatch_topology_->get_compiled_cq_program(dead_relay_dev);
+                        log_debug(
+                            tt::LogMetal,
+                            "compile_dispatch_kernels: Device {} static_config populated but excluded from "
+                            "compilation (dead ETH relay, #42429 FIX E3)",
+                            mmio_controlled_device_id);
+                    }
                 }
             }
         }
