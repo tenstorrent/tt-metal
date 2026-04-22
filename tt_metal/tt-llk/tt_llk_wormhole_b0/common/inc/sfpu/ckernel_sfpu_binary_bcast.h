@@ -271,7 +271,7 @@ inline void _record_broadcast_replay_()
 // 2-cycle latency on LREG_BCAST so callers don't need to insert their own).
 inline void _broadcast_stage3_with_data_prefetch_(std::uint32_t data_addr0, std::uint32_t data_addr1, std::uint32_t data_addr2, std::uint32_t data_addr3)
 {
-    constexpr InstrModLoadStore IM = InstrModLoadStore::FP32;
+    constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
 
     TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TT_SFPLOAD(LREG_DATA0, IM, ADDR_MOD_3, data_addr0); // fills LREG_TMP latency
@@ -304,7 +304,7 @@ template <BinaryOp BINOP>
 inline void _process_col_bcast_row_band_(
     std::uint32_t bcast_col0_addr, std::uint32_t left_face_addr, std::uint32_t right_face_addr, std::uint32_t data_tile_offset, std::uint32_t out_tile_offset)
 {
-    constexpr InstrModLoadStore IM = InstrModLoadStore::FP32;
+    constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
 
     // Slot addresses within this row band (tile-local: face-base + in-face
     // row-band offset + even/odd col-group).
@@ -424,7 +424,7 @@ template <BinaryOp BINOP>
 inline void _process_row_bcast_data_band_(
     std::uint32_t data_tile_base, std::uint32_t bcast_tile_base, std::uint32_t out_tile_base, std::uint32_t face_pair_base, std::uint32_t band_off)
 {
-    constexpr InstrModLoadStore IM = InstrModLoadStore::FP32;
+    constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
 
     const std::uint32_t data_slot_base  = data_tile_base + face_pair_base + band_off;
     const std::uint32_t bcast_row0_base = bcast_tile_base + FACE0_BASE; // bcast row 0 always in upper-left
