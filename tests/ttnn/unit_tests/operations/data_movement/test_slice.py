@@ -1468,3 +1468,38 @@ def test_issue_38841_regression(device):
     tt_output_torch = ttnn.to_torch(tt_output)
 
     assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, begins, ends, step",
+    [
+        [(1, 8190, 1, 128), [0, 0, 0, 0], [1, 8190, 1, 128], [1, 1, 1, 2]],
+    ],
+)
+def test_slice_large_tensor_stride_last_dim(device, input_shape, begins, ends, step):
+    """Test slice with stride in last dimension on large tensor (1, 8190, 1, 128)"""
+
+    torch.manual_seed(2003)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_output = ttnn.slice(tt_input, begins, ends, step)
+
+    torch_output = torch_input[
+        begins[0] : ends[0] : step[0],
+        begins[1] : ends[1] : step[1],
+        begins[2] : ends[2] : step[2],
+        begins[3] : ends[3] : step[3],
+    ]
+
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_output, tt_output_torch, 0.99)
