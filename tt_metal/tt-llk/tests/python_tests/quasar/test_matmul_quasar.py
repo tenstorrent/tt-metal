@@ -106,11 +106,6 @@ def test_matmul(
         dimensions_dest_acc_dest_sync
     )
 
-    if format.output_format.is_mx_format() and dest_acc == DestAccumulation.No:
-        pytest.skip(
-            "Mx output format without destination accumulation produces flaky results"
-        )
-
     torch_format = format_dict[format.output_format]
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
