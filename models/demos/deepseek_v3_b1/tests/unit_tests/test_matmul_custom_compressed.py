@@ -8,6 +8,9 @@ Tiles are pre-sorted by format. The kernel reconfigures the unpacker
 only once per format group instead of per tile.
 """
 
+import os
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -16,7 +19,8 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
-from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import ttnn_quantize_fn
+from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import COMPRESSED_FORMATS, ttnn_quantize_fn
 from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import MatmulCustomCompressed
 
 
@@ -187,6 +191,7 @@ def _run_matmul_custom_compressed_with_assignment(
     passing, pcc_message = comp_pcc(torch_expected, output_torch, pcc_threshold)
     logger.info(pcc_message)
     assert passing, pcc_message
+    return passing, pcc_message
 
 
 def _run_matmul_custom_compressed(
@@ -317,6 +322,43 @@ def _run_matmul_custom_compressed_hybrid(
 
     _run_matmul_custom_compressed_with_assignment(
         device, M, K, N, impl, torch_a, torch_b, assignment, num_cores, pcc_threshold
+    )
+
+
+def _run_matmul_custom_compressed_bspm(
+    device, M, K, N, bspm_path, proj_idx, expert_idx=0, num_cores=1, pcc_threshold=0.90
+):
+    """Like _run_matmul_custom_compressed but uses a real BSPM assignment instead of an assigner.
+
+    Loads the assignment for one expert projection from the binary .bspm file and calls
+    CompressedTensor.from_bspm() to bypass the assigner entirely.  Random weights are used
+    so the test does not require a checkpoint; the purpose is to validate that the kernel
+    correctly decompresses a real mixed-precision {bfp4, bfp2, zero} tile map.
+    """
+
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_b = torch.randn((K, N)).float()
+
+    assignment = load_bspm_for_expert(
+        str(bspm_path),
+        expert_idx=expert_idx,
+        proj_idx=proj_idx,
+        tile_rows=K // 32,
+        tile_cols=N // 32,
+    )
+
+    tile_counts = {fmt: 0 for fmt in COMPRESSED_FORMATS}
+    for idx in assignment.ravel():
+        tile_counts[COMPRESSED_FORMATS[idx]] += 1
+
+    logger.info(f"BSPM tile counts (proj_idx={proj_idx}): {tile_counts}")
+    assert tile_counts.get("bfp4", 0) > 0, "Expected bfp4 tiles from BSPM assignment"
+    low_p = tile_counts.get("bfp2", 0) + tile_counts.get("bfp0", 0)
+    assert low_p > 0, "Expected bfp2/bfp0 tiles at 3.5 b/e budget"
+
+    _run_matmul_custom_compressed_with_assignment(
+        device, M, K, N, "new", torch_a, torch_b, assignment, num_cores, pcc_threshold
     )
 
 
@@ -488,99 +530,21 @@ def test_matmul_custom_compressed_hybrid_optimized(device, M, K, N):
 # ---------------------------------------------------------------------------
 
 
-def _run_matmul_custom_compressed_bspm(
-    device, M, K, N, bspm_path, proj_idx, expert_idx=0, num_cores=1, pcc_threshold=0.90
-):
-    """Like _run_matmul_custom_compressed but uses a real BSPM assignment instead of an assigner.
-
-    Loads the assignment for one expert projection from the binary .bspm file and calls
-    CompressedTensor.from_bspm() to bypass the assigner entirely.  Random weights are used
-    so the test does not require a checkpoint; the purpose is to validate that the kernel
-    correctly decompresses a real mixed-precision {bfp4, bfp2, zero} tile map.
-    """
-
-    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
-
-    tile_w = 32
-    assert N % (num_cores * tile_w) == 0, f"N={N} must be divisible by num_cores*tile_w={num_cores * tile_w}"
-    n_per_core = N // num_cores
-
-    assignment = load_bspm_for_expert(
-        str(bspm_path),
-        expert_idx=expert_idx,
-        proj_idx=proj_idx,
-        tile_rows=K // tile_w,
-        tile_cols=N // tile_w,
-    )
-
-    torch.manual_seed(0)
-    torch_b = torch.randn((K, N)).float()
-
-    max_cols = device.compute_with_storage_grid_size().x
-    full_rows = num_cores // max_cols
-    remainder = num_cores % max_cols
-    ranges = []
-    if full_rows > 0:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(max_cols - 1, full_rows - 1)))
-    if remainder > 0:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(remainder - 1, full_rows)))
-    core_grid = ttnn.CoreRangeSet(ranges)
-
-    b_shard_spec = ttnn.ShardSpec(core_grid, [K, n_per_core], ttnn.ShardOrientation.ROW_MAJOR)
-    b_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, b_shard_spec)
-    ct = CompressedTensor.from_bspm(torch_b, assignment, device=device, memory_config=b_mem_config)
-
-    logger.info(f"BSPM tile counts (proj_idx={proj_idx}): {ct.tile_counts}")
-    assert ct.tile_counts.get("bfp4", 0) > 0, "Expected bfp4 tiles from BSPM assignment"
-    low_p = ct.tile_counts.get("bfp2", 0) + ct.tile_counts.get("bfp0", 0)
-    assert low_p > 0, "Expected bfp2/bfp0 tiles at 3.5 b/e budget"
-
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_expected = (torch_a.float() @ torch_b.float()).bfloat16()
-
-    a_shard_spec = ttnn.ShardSpec(core_grid, [M, K], ttnn.ShardOrientation.ROW_MAJOR)
-    a_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, a_shard_spec)
-    ttnn_a = ttnn.from_torch(
-        torch_a.repeat(num_cores, 1),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=a_mem_config,
-        tile=ttnn.Tile([M, tile_w]),
-    )
-
-    out_shard_spec = ttnn.ShardSpec(core_grid, [M, n_per_core], ttnn.ShardOrientation.ROW_MAJOR)
-    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec)
-    ttnn_output = ttnn.from_torch(
-        torch.zeros((M, N), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=out_mem_config,
-        tile=ttnn.Tile([M, tile_w]),
-    )
-
-    # BUG tenstorrent/tt-metal#42586: hangs here when assignment has 0 bfp8 tiles
-    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output)
-    output_torch = ttnn.to_torch(ttnn_result)
-
-    passing, pcc = comp_pcc(torch_expected, output_torch, pcc_threshold)
-    logger.info(f"BSPM matmul PCC: {pcc}")
-    assert passing, f"BSPM matmul PCC too low: {pcc}"
-
-
 @pytest.mark.skip(reason="Bug: constexpr_compact hangs with 0 bfp8 tiles — tenstorrent/tt-metal#42586")
-def test_matmul_custom_compressed_bspm_gate_proj(device):
-    """[1, 7168] x [7168, 2048] with real BSPM assignment at 3.5 b/e — gate_proj shape.
+@pytest.mark.parametrize(
+    "M,K,N,proj_idx",
+    [
+        (1, 7168, 2048, 0),  # gate_proj: [7168, 64] per core (2 tile columns)
+        (1, 2048, 7168, 2),  # down_proj: [2048, 224] per core (7 tile columns)
+    ],
+)
+def test_matmul_custom_compressed_bspm_projections(device, M, K, N, proj_idx):
+    """Test matmul with real BSPM assignment at 3.5 b/e for different projection shapes.
 
-    Uses 32 cores so each shard is [7168, 64] (2 tile columns). Assignment loaded from the
-    binary .bspm file for layer 4 expert 0 proj_idx=0 (gate_proj).
+    Uses 32 cores with width-sharded weights. Assignment loaded from the binary .bspm file
+    for layer 4 expert 0. proj_idx selects gate_proj (0) or down_proj (2).
     Requires BSPM_RESULTS_DIR.
     """
-    import os
-    from pathlib import Path
-
-    import pytest
 
     bspm_results_dir = os.environ.get("BSPM_RESULTS_DIR")
     if not bspm_results_dir:
@@ -589,30 +553,7 @@ def test_matmul_custom_compressed_bspm_gate_proj(device):
     if not bspm_path.exists():
         pytest.skip(f"BSPM file not found: {bspm_path}")
 
-    _run_matmul_custom_compressed_bspm(device, M=1, K=7168, N=2048, bspm_path=bspm_path, proj_idx=0, num_cores=32)
-
-
-@pytest.mark.skip(reason="Bug: constexpr_compact hangs with 0 bfp8 tiles — tenstorrent/tt-metal#42586")
-def test_matmul_custom_compressed_bspm_down_proj(device):
-    """[1, 2048] x [2048, 7168] with real BSPM assignment at 3.5 b/e — down_proj shape.
-
-    Uses 32 cores so each shard is [2048, 224] (7 tile columns). Assignment loaded from
-    layer 4 expert 0 proj_idx=2 (down_proj).
-    Requires BSPM_RESULTS_DIR.
-    """
-    import os
-    from pathlib import Path
-
-    import pytest
-
-    bspm_results_dir = os.environ.get("BSPM_RESULTS_DIR")
-    if not bspm_results_dir:
-        pytest.skip("BSPM_RESULTS_DIR not set")
-    bspm_path = Path(bspm_results_dir) / "deepseek-r1-0528" / "layer_4" / "precision_eval" / "precision_map_B_3.5.bspm"
-    if not bspm_path.exists():
-        pytest.skip(f"BSPM file not found: {bspm_path}")
-
-    _run_matmul_custom_compressed_bspm(device, M=1, K=2048, N=7168, bspm_path=bspm_path, proj_idx=2, num_cores=32)
+    _run_matmul_custom_compressed_bspm(device, M, K, N, bspm_path, proj_idx, num_cores=32)
 
 
 @pytest.mark.skip(reason="Bug: constexpr_compact hangs with 0 bfp8 tiles — tenstorrent/tt-metal#42586")
@@ -623,12 +564,6 @@ def test_matmul_custom_compressed_bspm_mixed_budget(device):
     equal or higher PCC than the mixed 3.5 b/e assignment.  Both must pass PCC >= 0.85.
     Requires BSPM_RESULTS_DIR.
     """
-    import os
-    from pathlib import Path
-
-    import pytest
-
-    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
 
     bspm_results_dir = os.environ.get("BSPM_RESULTS_DIR")
     if not bspm_results_dir:
@@ -638,71 +573,22 @@ def test_matmul_custom_compressed_bspm_mixed_budget(device):
         pytest.skip(f"BSPM file not found: {bspm_path}")
 
     M, K, N = 1, 7168, 2048
-    tile_w = 32
     num_cores = 32
-    n_per_core = N // num_cores
 
-    assignment_35 = load_bspm_for_expert(
-        str(bspm_path), expert_idx=0, proj_idx=0, tile_rows=K // tile_w, tile_cols=N // tile_w
-    )
+    assignment_35 = load_bspm_for_expert(str(bspm_path), expert_idx=0, proj_idx=0, tile_rows=K // 32, tile_cols=N // 32)
     # Synthetic uniform BFP4 baseline: ttnn code 1 = bfp4 (BS code 2 remapped via 3 - bs)
-    assignment_bfp4 = np.ones((K // tile_w, N // tile_w), dtype=np.int8)
+    assignment_bfp4 = np.ones((K // 32, N // 32), dtype=np.int8)
 
     torch.manual_seed(0)
     torch_b = torch.randn((K, N)).float()
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_expected = (torch_a.float() @ torch_b.float()).bfloat16()
 
-    max_cols = device.compute_with_storage_grid_size().x
-    full_rows = num_cores // max_cols
-    remainder = num_cores % max_cols
-    ranges = []
-    if full_rows > 0:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(max_cols - 1, full_rows - 1)))
-    if remainder > 0:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(remainder - 1, full_rows)))
-    core_grid = ttnn.CoreRangeSet(ranges)
-
-    def _run_with_assignment(assignment):
-        b_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(core_grid, [K, n_per_core], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        ct = CompressedTensor.from_bspm(torch_b, assignment, device=device, memory_config=b_mem)
-        a_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(core_grid, [M, K], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        ttnn_a = ttnn.from_torch(
-            torch_a.repeat(num_cores, 1),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=a_mem,
-            tile=ttnn.Tile([M, tile_w]),
-        )
-        out_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(core_grid, [M, n_per_core], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        ttnn_out = ttnn.from_torch(
-            torch.zeros((M, N), dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=out_mem,
-            tile=ttnn.Tile([M, tile_w]),
-        )
-        return ttnn.to_torch(MatmulCustomCompressed.op(ttnn_a, ct, ttnn_out))
-
-    out_35 = _run_with_assignment(assignment_35)
-    out_bfp4 = _run_with_assignment(assignment_bfp4)
-
-    passing_35, pcc_35 = comp_pcc(torch_expected, out_35, 0.85)
-    passing_bfp4, pcc_bfp4 = comp_pcc(torch_expected, out_bfp4, 0.85)
+    passing_35, pcc_35 = _run_matmul_custom_compressed_with_assignment(
+        device, M, K, N, "new", torch_a, torch_b, assignment_35, num_cores=num_cores, pcc_threshold=0.85
+    )
+    passing_bfp4, pcc_bfp4 = _run_matmul_custom_compressed_with_assignment(
+        device, M, K, N, "new", torch_a, torch_b, assignment_bfp4, num_cores=num_cores, pcc_threshold=0.85
+    )
 
     logger.info(f"3.5 b/e BSPM PCC: {pcc_35}")
     logger.info(f"Uniform BFP4 PCC: {pcc_bfp4}")
