@@ -4,106 +4,219 @@
 
 import os
 import statistics
-import tempfile
 import time
 
 import numpy as np
 import pytest
 
-from models.tt_dit.utils.video import export_to_video
-
-X264_PRESETS = [
-    "ultrafast",
-    "superfast",
-    "veryfast",
-    "faster",
-    "fast",
-    "medium",
-    "slow",
-    "slower",
-    "veryslow",
-]
+from models.tt_dit.utils.video import export_to_video, export_to_video_pyav, rgb_to_yuv420p
 
 NUM_FRAMES = 81
 HEIGHT = 720
 WIDTH = 1280
-NUM_RUNS = 10
+FPS = 16
+PRESET = "ultrafast"
+
+GOPS = [1, 2, 4, 8, 16, 32]
+THREADS = [1, 2, 4, 8, 10, 12, 14, 16, 18, 20]
 
 
 @pytest.fixture(scope="module")
-def random_frames():
+def frames_rgb():
     rng = np.random.default_rng(42)
     return rng.integers(0, 256, size=(NUM_FRAMES, HEIGHT, WIDTH, 3), dtype=np.uint8)
 
 
-@pytest.mark.parametrize("preset", X264_PRESETS)
-def test_export_to_video_preset(preset, random_frames, tmp_path):
-    """Benchmark export_to_video across x264 presets (10 runs each)."""
-    durations = []
+@pytest.fixture(scope="module")
+def frames_yuv420(frames_rgb):
+    return rgb_to_yuv420p(frames_rgb)
 
-    for i in range(NUM_RUNS):
-        out_path = str(tmp_path / f"{preset}_{i}.mp4")
+
+def _benchmark(frames, tmp_path, prefix, num_runs, encoder=export_to_video, **kwargs):
+    durations = []
+    out_path = None
+    for i in range(num_runs):
+        out_path = str(tmp_path / f"{prefix}_{i}.mp4")
         t0 = time.perf_counter()
-        export_to_video(random_frames, out_path, fps=16, preset=preset)
+        encoder(frames, out_path, fps=FPS, preset=PRESET, **kwargs)
         durations.append(time.perf_counter() - t0)
 
-    last_file = str(tmp_path / f"{preset}_{NUM_RUNS - 1}.mp4")
-    file_size_mb = os.path.getsize(last_file) / (1024 * 1024)
+    size_mb = os.path.getsize(out_path) / (1024 * 1024)
+    return {
+        "mean": statistics.mean(durations),
+        "median": statistics.median(durations),
+        "std": statistics.stdev(durations) if num_runs > 1 else 0.0,
+        "min": min(durations),
+        "max": max(durations),
+        "size_mb": size_mb,
+    }
 
-    mean_t = statistics.mean(durations)
-    std_t = statistics.stdev(durations)
-    min_t = min(durations)
-    max_t = max(durations)
-    median_t = statistics.median(durations)
 
+# ---------------------------------------------------------------------------
+# Sweep 1: RGB vs YUV420 input (skip ffmpeg's internal colorspace conversion).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("pix_fmt_in", ["rgb24", "yuv420p"])
+def test_pix_fmt_in(pix_fmt_in, frames_rgb, frames_yuv420, tmp_path):
+    frames = frames_rgb if pix_fmt_in == "rgb24" else frames_yuv420
+    stats = _benchmark(
+        frames,
+        tmp_path,
+        f"pix_{pix_fmt_in}",
+        num_runs=10,
+        pix_fmt_in=pix_fmt_in,
+        width=WIDTH,
+        height=HEIGHT,
+    )
     print(
-        f"\n{'=' * 80}\n"
-        f"Preset: {preset:12s}\n"
-        f"  Runs       : {NUM_RUNS}\n"
-        f"  Mean       : {mean_t:8.3f}s\n"
-        f"  Median     : {median_t:8.3f}s\n"
-        f"  Std        : {std_t:8.3f}s\n"
-        f"  Min        : {min_t:8.3f}s\n"
-        f"  Max        : {max_t:8.3f}s\n"
-        f"  File size  : {file_size_mb:8.2f} MB\n"
-        f"{'=' * 80}"
+        f"\n[pix_fmt_in={pix_fmt_in}] "
+        f"mean={stats['mean']:.3f}s median={stats['median']:.3f}s "
+        f"std={stats['std']:.3f}s min={stats['min']:.3f}s max={stats['max']:.3f}s "
+        f"size={stats['size_mb']:.2f} MB"
     )
 
 
-def test_export_to_video_summary(random_frames, tmp_path):
-    """Run all presets and print a combined summary table."""
-    rows = []
+# ---------------------------------------------------------------------------
+# Sweep 2+3: GOP x threads (combined — libx264 frame-threading parallelizes
+# across GOPs so the two parameters interact). Single test, single table.
+# ---------------------------------------------------------------------------
 
-    for preset in X264_PRESETS:
-        durations = []
-        for i in range(NUM_RUNS):
-            out_path = str(tmp_path / f"summary_{preset}_{i}.mp4")
-            t0 = time.perf_counter()
-            export_to_video(random_frames, out_path, fps=16, preset=preset)
-            durations.append(time.perf_counter() - t0)
 
-        last_file = str(tmp_path / f"summary_{preset}_{NUM_RUNS - 1}.mp4")
-        file_size_mb = os.path.getsize(last_file) / (1024 * 1024)
+def test_gop_threads_sweep(frames_yuv420, tmp_path):
+    grid = {}  # (gop, threads) -> stats
+    num_runs = 10
 
-        rows.append(
-            {
-                "preset": preset,
-                "mean": statistics.mean(durations),
-                "median": statistics.median(durations),
-                "std": statistics.stdev(durations),
-                "min": min(durations),
-                "max": max(durations),
-                "size_mb": file_size_mb,
-            }
-        )
+    for gop in GOPS:
+        for threads in THREADS:
+            grid[(gop, threads)] = _benchmark(
+                frames_yuv420,
+                tmp_path,
+                f"g{gop}_t{threads}",
+                num_runs=num_runs,
+                pix_fmt_in="yuv420p",
+                width=WIDTH,
+                height=HEIGHT,
+                gop=gop,
+                threads=threads,
+            )
 
-    header = f"{'Preset':>12s} | {'Mean':>8s} | {'Median':>8s} | {'Std':>8s} | {'Min':>8s} | {'Max':>8s} | {'Size MB':>8s}"
-    sep = "-" * len(header)
-    lines = ["\n" + sep, header, sep]
-    for r in rows:
-        lines.append(
-            f"{r['preset']:>12s} | {r['mean']:8.3f} | {r['median']:8.3f} | {r['std']:8.3f} | {r['min']:8.3f} | {r['max']:8.3f} | {r['size_mb']:8.2f}"
-        )
-    lines.append(sep)
+    lines = [
+        "",
+        f"gop x threads sweep (preset={PRESET}, yuv420p input, {NUM_FRAMES} frames, "
+        f"{WIDTH}x{HEIGHT}, {num_runs} runs/cell)",
+        "",
+        "mean encode time (seconds)",
+    ]
+    header = "  gop\\threads | " + " | ".join(f"{t:>7d}" for t in THREADS)
+    lines.append(header)
+    lines.append("-" * len(header))
+    for gop in GOPS:
+        row = f"  {gop:>11d} | " + " | ".join(f"{grid[(gop, t)]['mean']:7.3f}" for t in THREADS)
+        lines.append(row)
+
+    lines.append("")
+    lines.append("stdev encode time (seconds)")
+    lines.append(header)
+    lines.append("-" * len(header))
+    for gop in GOPS:
+        row = f"  {gop:>11d} | " + " | ".join(f"{grid[(gop, t)]['std']:7.3f}" for t in THREADS)
+        lines.append(row)
+
+    lines.append("")
+    lines.append("output file size (MB)")
+    lines.append(header)
+    lines.append("-" * len(header))
+    for gop in GOPS:
+        row = f"  {gop:>11d} | " + " | ".join(f"{grid[(gop, t)]['size_mb']:7.2f}" for t in THREADS)
+        lines.append(row)
+
+    best_gop, best_th = min(grid, key=lambda k: grid[k]["mean"])
+    best = grid[(best_gop, best_th)]
+    lines.append("")
+    lines.append(
+        f"Fastest: gop={best_gop} threads={best_th} " f"mean={best['mean']:.3f}s size={best['size_mb']:.2f} MB"
+    )
 
     print("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# zerolatency tune: disables lookahead and B-frames in libx264. Expected to
+# speed up encode at the cost of compression efficiency.
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Best config: yuv420p input, gop=4, threads=16. Baseline for future
+# comparisons against feeding-path or encoder changes.
+# ---------------------------------------------------------------------------
+
+
+def test_best_config(frames_yuv420, tmp_path):
+    stats = _benchmark(
+        frames_yuv420,
+        tmp_path,
+        "best",
+        num_runs=10,
+        pix_fmt_in="yuv420p",
+        width=WIDTH,
+        height=HEIGHT,
+        gop=4,
+        threads=16,
+    )
+    print(
+        f"\n[best yuv420p gop=4 threads=16] "
+        f"mean={stats['mean']:.3f}s median={stats['median']:.3f}s "
+        f"std={stats['std']:.3f}s min={stats['min']:.3f}s max={stats['max']:.3f}s "
+        f"size={stats['size_mb']:.2f} MB"
+    )
+
+
+# ---------------------------------------------------------------------------
+# PyAV: in-process libavcodec. No subprocess, no pipe, no user->kernel write
+# copies. Same config as test_best_config for apples-to-apples comparison.
+# ---------------------------------------------------------------------------
+
+
+def test_best_config_pyav(frames_yuv420, tmp_path):
+    stats = _benchmark(
+        frames_yuv420,
+        tmp_path,
+        "best_pyav",
+        num_runs=10,
+        encoder=export_to_video_pyav,
+        pix_fmt_in="yuv420p",
+        width=WIDTH,
+        height=HEIGHT,
+        gop=4,
+        threads=16,
+    )
+    print(
+        f"\n[pyav yuv420p gop=4 threads=16] "
+        f"mean={stats['mean']:.3f}s median={stats['median']:.3f}s "
+        f"std={stats['std']:.3f}s min={stats['min']:.3f}s max={stats['max']:.3f}s "
+        f"size={stats['size_mb']:.2f} MB"
+    )
+
+
+@pytest.mark.parametrize("tune", [None, "zerolatency"])
+def test_tune_zerolatency(tune, frames_yuv420, tmp_path):
+    label = "off" if tune is None else tune
+    stats = _benchmark(
+        frames_yuv420,
+        tmp_path,
+        f"tune_{label}",
+        num_runs=10,
+        pix_fmt_in="yuv420p",
+        width=WIDTH,
+        height=HEIGHT,
+        threads=16,
+        tune=tune,
+    )
+    print(
+        f"\n[tune={label}] "
+        f"mean={stats['mean']:.3f}s median={stats['median']:.3f}s "
+        f"std={stats['std']:.3f}s min={stats['min']:.3f}s max={stats['max']:.3f}s "
+        f"size={stats['size_mb']:.2f} MB"
+    )
