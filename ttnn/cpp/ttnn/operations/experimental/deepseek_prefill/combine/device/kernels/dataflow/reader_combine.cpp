@@ -79,7 +79,7 @@ void kernel_main() {
     // Number of dispatch groups (index 34)
     constexpr uint32_t num_dispatch_groups = get_compile_time_arg_val(34);
 
-    // TensorAccessorArgs for all 4 tensors (starting at index 34)
+    // TensorAccessorArgs for all 4 tensors (starting at index 35)
     constexpr auto dispatched_buffer_args = TensorAccessorArgs<35>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
