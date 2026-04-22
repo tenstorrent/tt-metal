@@ -86,12 +86,6 @@ uint64_t hash_file_content(std::istream& file) {
     return hasher.digest();
 }
 
-struct PathHash {
-    size_t operator()(const std::filesystem::path& p) const {
-        return std::hash<std::filesystem::path::string_type>{}(p.native());
-    }
-};
-
 class FileHashCache {
 public:
     static FileHashCache& instance() {
@@ -184,7 +178,7 @@ void write_dependency_hashes(
     const std::filesystem::path& out_dir,
     const std::filesystem::path& obj,
     std::ostream& hash_file) {
-    auto iter = dependencies.find(obj.string());
+    auto iter = dependencies.find(obj);
     if (iter == dependencies.end()) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, no dependencies found for {}.", obj);
         hash_file.setstate(std::ios::badbit);
@@ -206,7 +200,7 @@ void write_dependency_hashes(
         }
         // Always write absolute path to the hash file, so when reading back we don't need to
         // worry about relative paths
-        hash_file << dep_path << '\t' << hash << '\n';
+        hash_file << dep_path.string() << '\t' << hash << '\n';
     }
 }
 
