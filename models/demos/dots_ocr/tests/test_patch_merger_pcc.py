@@ -7,6 +7,7 @@ import pytest
 import torch
 
 from models.demos.dots_ocr.reference.patch_merger import PatchMergerRef
+from models.demos.dots_ocr.reference.pcc import comp_pcc
 
 try:
     import ttnn  # type: ignore
@@ -24,8 +25,8 @@ from models.demos.dots_ocr.tt.patch_merger import PatchMerger as PatchMergerTT
 
 
 def _open_device():
-    if os.environ.get("MESH_DEVICE") is None:
-        return None
+    # Default to T3K when unset; mesh helpers will fall back/clamp as needed.
+    os.environ.setdefault("MESH_DEVICE", "T3K")
     from models.demos.dots_ocr.tt.mesh import open_mesh_device as _open
 
     try:
@@ -50,7 +51,6 @@ def _tt_to_torch(device, y_tt):
     return out
 
 
-@pytest.mark.skipif(os.environ.get("MESH_DEVICE") is None, reason="Requires TT device (set MESH_DEVICE)")
 def test_patch_merger_pcc_gt_0_99(tmp_path):
     torch.manual_seed(0)
     B, S_patch, hidden = 1, 256, 1536
@@ -61,8 +61,8 @@ def test_patch_merger_pcc_gt_0_99(tmp_path):
     ref = PatchMergerRef(hidden_size=hidden, out_hidden_size=out_hidden, spatial_merge_size=spatial_merge_size)
     # Create synthetic state_dict that matches TT module's expected keys
     state_dict_prefix = "patch_merger"
-    # PyTorch ``nn.Linear`` weights are ``[out_features, in_features]``. ``PatchMergerTT``
-    # applies the same ``transpose`` as qwen25_vl (HF-style layout), so store **raw** linear
+    # PyTorch ``nn.Linear`` weights are ``[out_features, in_features]``. ``PatchMergerTT`` uses
+    # HF Dots (hub) layout, so store **raw** linear
     # weights — do **not** pre-transpose here (double-transpose made ``w2`` wrong and broke matmul).
     state_dict = {
         f"{state_dict_prefix}.ln_q.weight": ref.norm.weight.detach().clone(),
@@ -97,10 +97,8 @@ def test_patch_merger_pcc_gt_0_99(tmp_path):
         y_tt = tt(x_tt)
         y_tt_torch = _tt_to_torch(device, y_tt)
 
-        # PCC
-        ref_flat = y_ref.flatten()
-        tt_flat = y_tt_torch.flatten()
-        pcc = torch.corrcoef(torch.stack([ref_flat, tt_flat]))[0, 1].item()
+        pcc = comp_pcc(y_ref, y_tt_torch)
+        print(f"PatchMerger PCC: {pcc}")
         assert pcc > 0.99, f"PCC too low: {pcc}"
     finally:
         if device is not None:

@@ -4,10 +4,7 @@
 """
 TTNN Vision Attention for Dots OCR.
 
-Implements self-attention for the 42-layer vision transformer. Uses Qwen2-style
-RoPE. Vision weights are replicated across the mesh (TP=1 for vision, even on
-N300 / T3K-1x2 submesh); the text decoder is the only path that actually
-shards via ``cluster_shape[1]``.
+Runs QKV, RoPE, attention, and out-projection fully in TTNN.
 """
 
 from __future__ import annotations
@@ -19,17 +16,73 @@ from models.demos.dots_ocr.tt._ttnn_import import get_ttnn
 from models.demos.dots_ocr.tt.vision_model_config import DotsVisionModelArgs
 
 
+def _rotate_half(x):
+    ttnn = get_ttnn()
+    if ttnn is None:
+        raise RuntimeError("ttnn is required")
+    last = x.shape[-1]
+    half = last // 2
+    x1 = ttnn.slice(x, (0, 0, 0, 0), (x.shape[0], x.shape[1], x.shape[2], half))
+    x2 = ttnn.slice(x, (0, 0, 0, half), (x.shape[0], x.shape[1], x.shape[2], last))
+    neg_x2 = ttnn.mul(x2, -1, use_legacy=False)
+    return ttnn.concat([neg_x2, x1], dim=-1)
+
+
+def _apply_rotary_tt(q, k, cos, sin):
+    ttnn = get_ttnn()
+    if ttnn is None:
+        raise RuntimeError("ttnn is required")
+    # q,k: [B, H, S, D], cos/sin: [1, 1, S, D] or broadcastable.
+    # Match the HF rotate-half formulation used by the reference vision tower.
+    q_embed = ttnn.add(ttnn.mul(q, cos, use_legacy=True), ttnn.mul(_rotate_half(q), sin, use_legacy=True))
+    k_embed = ttnn.add(ttnn.mul(k, cos, use_legacy=True), ttnn.mul(_rotate_half(k), sin, use_legacy=True))
+    return q_embed, k_embed
+
+
+def _pk(state_dict: dict, *cands: str) -> str | None:
+    for c in cands:
+        if c in state_dict:
+            return c
+    return None
+
+
+def _find_key_contains(sd: dict, *, contains_all: tuple[str, ...], endswith: str | None = None) -> str | None:
+    for k in sd.keys():
+        if endswith is not None and not k.endswith(endswith):
+            continue
+        ok = True
+        for s in contains_all:
+            if s not in k:
+                ok = False
+                break
+        if ok:
+            return k
+    return None
+
+
+def _tt_to_torch_single_replica(mesh_device, x_ttnn):
+    """
+    Convert a potentially mesh-distributed tensor to torch by gathering, then
+    selecting the first replica shard (for replicated tensors).
+    """
+    ttnn = get_ttnn()
+    if ttnn is None:
+        raise RuntimeError("ttnn is required")
+    composer = None
+    if mesh_device is not None and hasattr(ttnn, "ConcatMeshToTensor"):
+        composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    out = ttnn.to_torch(x_ttnn, mesh_composer=composer) if composer is not None else ttnn.to_torch(x_ttnn)
+    try:
+        num = mesh_device.get_num_devices() if mesh_device is not None else 1
+        if num > 1 and out.shape[0] % num == 0:
+            per = out.shape[0] // num
+            return out[:per]
+    except Exception:
+        pass
+    return out
+
+
 class VisionAttentionTT(LightweightModule):
-    """
-    TTNN Vision Attention for Dots OCR Vision Transformer.
-
-    Implements:
-    - QKV projection
-    - Qwen2-style RoPE (using host cos/sin matrices)
-    - Scaled dot-product attention
-    - Output projection
-    """
-
     def __init__(
         self,
         mesh_device,
@@ -47,103 +100,249 @@ class VisionAttentionTT(LightweightModule):
         self.model_args = model_args
         self.layer_num = layer_num
         self.dtype = dtype
-
         self.hidden_size = model_args.vision_dim
         self.num_heads = model_args.vision_n_heads
         self.head_dim = model_args.vision_head_dim
         self.num_kv_heads = model_args.vision_n_kv_heads
-
-        # Vision weights are currently replicated across the mesh (see ``_load_weights``)
-        # so effective tensor parallelism is 1 regardless of mesh size. The vision tower
-        # is small relative to the text decoder and the HF hybrid path remains the default
-        # on multi-chip targets like T3K; replicating avoids all-gather plumbing in the
-        # vision stack for now. We still track the true mesh width here so downstream
-        # code (e.g. future TP'd vision forward) can key off ``cluster_shape``.
-        self.num_devices = mesh_device.get_num_devices() if mesh_device is not None else 1
-        cluster_shape = getattr(model_args, "cluster_shape", None)
-        self.cluster_shape = cluster_shape if cluster_shape else [1, self.num_devices]
-
-        # Load weights
         self._load_weights(state_dict, weight_cache_path, dtype)
 
+    def _as_tt(self, w, name, weight_cache_path, dtype, ttnn, mc, mesh, layer: int):
+        if ttnn is None or mesh is None:
+            return w.clone() if hasattr(w, "clone") else w
+        # TTNN `linear` expects weights shaped [in_features, out_features] so K matches input width.
+        # HF state_dict weights are typically [out_features, in_features].
+        if hasattr(w, "dim") and callable(w.dim) and w.dim() == 2:
+            w = torch.transpose(w, -2, -1).contiguous()
+        return ttnn.as_tensor(
+            w,
+            device=mesh,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mc,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh) if hasattr(ttnn, "ReplicateTensorToMesh") else None,
+            cache_file_name=(weight_cache_path / f"layer_{layer}_{name}" if weight_cache_path else None),
+        )
+
     def _load_weights(self, state_dict: dict, weight_cache_path, dtype):
-        """Load QKV and output projection weights."""
-        prefix = self.model_args.get_state_dict_prefix("VisionAttention", self.layer_num)
+        base_prefix = self.model_args.get_state_dict_prefix("VisionAttention", self.layer_num)
+        # HF checkpoints have varied naming for the attention module: attention / attn / self_attn.
+        prefixes = []
+        if base_prefix:
+            prefixes.append(base_prefix)
+            prefixes.append(base_prefix.replace("attention", "attn"))
+            prefixes.append(base_prefix.replace("attention", "self_attn"))
+        else:
+            prefixes.append("")
+        # normalize to trailing dot for key construction
+        prefixes = [p + "." if p and not p.endswith(".") else p for p in prefixes]
         ttnn = get_ttnn()
+        mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None) if ttnn is not None else None
+        mesh = self.mesh_device
 
-        # QKV weights - combined for efficiency
-        qkv_weight_key = f"{prefix}qkv.weight"  # or separate q, k, v
-        if qkv_weight_key in state_dict:
-            weight = state_dict[qkv_weight_key]
-            if ttnn is not None and self.mesh_device is not None:
-                self.qkv_weight = ttnn.as_tensor(
-                    weight,
-                    device=self.mesh_device,
-                    dtype=dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    cache_file_name=weight_cache_path / f"layer_{self.layer_num}_qkv" if weight_cache_path else None,
-                )
+        # Find a prefix that exists in the state_dict.
+        # Some checkpoints use slightly different layouts; as a backstop, fall back to substring search
+        # for this block/layer.
+        chosen = None
+        for prefix in prefixes:
+            k_qkv = _pk(state_dict, f"{prefix}qkv.weight", f"{prefix}qkv_proj.weight")
+            if k_qkv is not None:
+                chosen = prefix
+                break
+            # unfused path: require at least q_proj.weight to exist
+            if _pk(state_dict, f"{prefix}wq.weight", f"{prefix}q_proj.weight") is not None:
+                chosen = prefix
+                break
+        if chosen is None:
+            # Backstop: search for keys containing the layer id + qkv/o_proj.
+            layer_tags = (
+                f"blocks.{self.layer_num}.",
+                f"layers.{self.layer_num}.",
+                f"layer.{self.layer_num}.",
+            )
+            k_qkv = None
+            for layer_tag in layer_tags:
+                k_qkv = _find_key_contains(state_dict, contains_all=(layer_tag, "qkv"), endswith="weight")
+                if k_qkv is not None:
+                    break
+            if k_qkv is not None:
+                # Use whatever prefix precedes "qkv" in the found key.
+                chosen = k_qkv.split("qkv")[0]
             else:
-                self.qkv_weight = weight.clone() if hasattr(weight, "clone") else weight
-        else:
-            # Try individual weights or create dummy for testing
+                k_qproj = None
+                for layer_tag in layer_tags:
+                    k_qproj = _find_key_contains(state_dict, contains_all=(layer_tag, "q_proj"), endswith="weight")
+                    if k_qproj is not None:
+                        break
+                if k_qproj is None:
+                    # Some checkpoints use "query_key_value" naming.
+                    for layer_tag in layer_tags:
+                        k_qproj = _find_key_contains(state_dict, contains_all=(layer_tag, "query"), endswith="weight")
+                        if k_qproj is not None:
+                            break
+                if k_qproj is not None:
+                    if "q_proj" in k_qproj:
+                        chosen = k_qproj.split("q_proj")[0]
+                    elif "query" in k_qproj:
+                        chosen = k_qproj.split("query")[0]
+
+        if chosen is None:
             self.qkv_weight = None
-
-        # Output projection
-        o_proj_key = f"{prefix}o_proj.weight"
-        if o_proj_key in state_dict:
-            weight = state_dict[o_proj_key]
-            if ttnn is not None and self.mesh_device is not None:
-                self.o_proj_weight = ttnn.as_tensor(
-                    weight,
-                    device=self.mesh_device,
-                    dtype=dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    cache_file_name=weight_cache_path / f"layer_{self.layer_num}_o_proj" if weight_cache_path else None,
-                )
-            else:
-                self.o_proj_weight = weight.clone() if hasattr(weight, "clone") else weight
-        else:
+            self.qkv_bias = None
             self.o_proj_weight = None
+            self.o_proj_bias = None
+            return
+        prefix = chosen
+
+        k_qkv = _pk(
+            state_dict,
+            f"{prefix}qkv.weight",
+            f"{prefix}qkv_proj.weight",
+            f"{prefix}qkv_proj._linear.weight",
+            f"{prefix}query_key_value.weight",
+            f"{prefix}query_key_value._linear.weight",
+        )
+        k_b = _pk(state_dict, f"{prefix}qkv.bias", f"{prefix}qkv_proj.bias", f"{prefix}qkv_proj._linear.bias")
+        wq, wk, wv = (
+            _pk(state_dict, f"{prefix}wq.weight", f"{prefix}q_proj.weight", f"{prefix}query.weight"),
+            _pk(state_dict, f"{prefix}wk.weight", f"{prefix}k_proj.weight", f"{prefix}key.weight"),
+            _pk(state_dict, f"{prefix}wv.weight", f"{prefix}v_proj.weight", f"{prefix}value.weight"),
+        )
+        bq, bk, bv = (
+            _pk(state_dict, f"{prefix}wq.bias", f"{prefix}q_proj.bias"),
+            _pk(state_dict, f"{prefix}wk.bias", f"{prefix}k_proj.bias"),
+            _pk(state_dict, f"{prefix}wv.bias", f"{prefix}v_proj.bias"),
+        )
+        if k_qkv is not None:
+            w_fused = state_dict[k_qkv]
+            b_fused = state_dict[k_b] if k_b else None
+        elif wq and wk and wv:
+            w_fused = torch.cat((state_dict[wq], state_dict[wk], state_dict[wv]), dim=0)
+            if bq and bk and bv:
+                b_fused = torch.cat((state_dict[bq], state_dict[bk], state_dict[bv]), dim=0)
+            else:
+                b_fused = None
+        else:
+            w_fused = None
+            b_fused = None
+        if w_fused is not None:
+            self.qkv_weight = self._as_tt(w_fused, "qkv_w", weight_cache_path, dtype, ttnn, mc, mesh, self.layer_num)
+        else:
+            self.qkv_weight = None
+        if b_fused is not None:
+            self.qkv_bias = self._as_tt(b_fused, "qkv_b", weight_cache_path, dtype, ttnn, mc, mesh, self.layer_num)
+        else:
+            self.qkv_bias = None
+
+        o_w = _pk(
+            state_dict,
+            f"{prefix}wo.weight",
+            f"{prefix}o_proj.weight",
+            f"{prefix}out_proj.weight",
+            f"{prefix}o_proj._linear.weight",
+            f"{prefix}proj.weight",
+        )
+        o_b = _pk(
+            state_dict,
+            f"{prefix}wo.bias",
+            f"{prefix}o_proj.bias",
+            f"{prefix}out_proj.bias",
+            f"{prefix}o_proj._linear.bias",
+        )
+        self.o_proj_weight = (
+            self._as_tt(state_dict[o_w], "o_w", weight_cache_path, dtype, ttnn, mc, mesh, self.layer_num)
+            if o_w
+            else None
+        )
+        self.o_proj_bias = (
+            self._as_tt(state_dict[o_b], "o_b", weight_cache_path, dtype, ttnn, mc, mesh, self.layer_num)
+            if o_b
+            else None
+        )
 
     def forward(
         self,
         x,
-        rot_mats: tuple[torch.Tensor, torch.Tensor] | None = None,
+        rot_mats: tuple[object, object] | None = None,
         **kwargs,
     ):
-        """
-        Forward pass for vision attention.
+        ttnn = get_ttnn()
+        if ttnn is None:
+            raise RuntimeError("VisionAttentionTT requires ttnn")
+        if self.qkv_weight is None or self.o_proj_weight is None:
+            raise ValueError("VisionAttentionTT weights not loaded")
 
-        Args:
-            x: Input tensor [B, seq_len, hidden_size]
-            rot_mats: (cos_matrix, sin_matrix) for RoPE
-        """
-        # For Phase 2, implement a functional version
-        # In a full implementation, this would:
-        # 1. Project to Q, K, V
-        # 2. Apply RoPE using rot_mats
-        # 3. Compute attention
-        # 4. Project output
+        # Expect x as ttnn.Tensor with shape [1, 1, S, D] (concatenated tokens across images/chunks).
+        if not isinstance(x, ttnn.Tensor):
+            raise TypeError(f"Expected ttnn.Tensor, got {type(x)}")
+        if len(x.shape) != 4:
+            raise ValueError(f"Expected x rank-4 [B,1,S,D], got shape={x.shape}")
+        b, one, s, d = x.shape
+        if int(b) != 1 or int(one) != 1:
+            raise ValueError(f"Only B=1 supported, got {x.shape}")
 
-        # For now, return input with minimal transformation for pipeline testing
-        # This allows the full stack to be wired together
-        if isinstance(x, torch.Tensor):
-            # CPU path for testing
-            return x
+        qkv = ttnn.linear(
+            x, self.qkv_weight, bias=self.qkv_bias, memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        )
+        h = int(self.num_heads)
+        hd = int(self.head_dim)
+        qkv = ttnn.reshape(qkv, (1, 1, int(s), 3, h, hd))  # [1,1,S,3,H,hd]
+        q = ttnn.slice(qkv, (0, 0, 0, 0, 0, 0), (1, 1, int(s), 1, h, hd))
+        k = ttnn.slice(qkv, (0, 0, 0, 1, 0, 0), (1, 1, int(s), 2, h, hd))
+        v = ttnn.slice(qkv, (0, 0, 0, 2, 0, 0), (1, 1, int(s), 3, h, hd))
+        q = ttnn.reshape(q, (1, h, int(s), hd))
+        k = ttnn.reshape(k, (1, h, int(s), hd))
+        v = ttnn.reshape(v, (1, h, int(s), hd))
+
+        if rot_mats is not None and len(rot_mats) == 2:
+            cos, sin = rot_mats
+            if not isinstance(cos, ttnn.Tensor) or not isinstance(sin, ttnn.Tensor):
+                raise TypeError("rot_mats must be ttnn tensors")
+            q, k = _apply_rotary_tt(q, k, cos, sin)
+
+        # Block-diagonal attention using cu_seqlens to prevent cross-image attention.
+        cu = kwargs.get("cu_seqlens")
+        if cu is None:
+            # Single segment fallback.
+            ctx = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
+            ctx = ttnn.reshape(ctx, (1, 1, int(s), h * hd))
+            return ttnn.linear(
+                ctx, self.o_proj_weight, bias=self.o_proj_bias, memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+            )
+
+        # For correctness/PCC, use the explicit per-segment SDPA path below.
+        # The windowed/varlen SDPA kernels can have different numerics and have historically
+        # produced low PCC vs HF for Dots vision.
+
+        if isinstance(cu, ttnn.Tensor):
+            cu_host = _tt_to_torch_single_replica(self.mesh_device, cu).flatten().to(torch.int64).tolist()
+        elif isinstance(cu, torch.Tensor):
+            cu_host = cu.flatten().to(torch.int64).tolist()
         else:
-            # TTNN path - return as-is for Phase 2 foundation
-            # In real implementation, this would do proper attention computation
-            return x
+            cu_host = list(cu)
+        if len(cu_host) < 2 or cu_host[0] != 0 or cu_host[-1] != int(s):
+            raise ValueError(f"Invalid cu_seqlens={cu_host} for S={int(s)}")
+
+        ctx_segments = []
+        for a, b0 in zip(cu_host[:-1], cu_host[1:]):
+            a = int(a)
+            b0 = int(b0)
+            seg = b0 - a
+            if seg <= 0:
+                continue
+            q_seg = ttnn.slice(q, (0, 0, a, 0), (1, h, b0, hd))
+            k_seg = ttnn.slice(k, (0, 0, a, 0), (1, h, b0, hd))
+            v_seg = ttnn.slice(v, (0, 0, a, 0), (1, h, b0, hd))
+            ctx_seg = ttnn.transformer.scaled_dot_product_attention(q_seg, k_seg, v_seg, is_causal=False)
+            ctx_segments.append(ctx_seg)
+
+        ctx = ttnn.concat(ctx_segments, dim=2) if len(ctx_segments) > 1 else ctx_segments[0]
+        ctx = ttnn.reshape(ctx, (1, 1, int(s), h * hd))
+        return ttnn.linear(
+            ctx, self.o_proj_weight, bias=self.o_proj_bias, memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        )
 
 
-# Convenience function
 def create_vision_attention(mesh_device, model_args, state_dict, layer_num, weight_cache_path=None, dtype=None):
-    """Create VisionAttentionTT instance."""
     return VisionAttentionTT(
         mesh_device=mesh_device,
         model_args=model_args,

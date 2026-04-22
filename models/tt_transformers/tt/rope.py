@@ -449,6 +449,7 @@ class RotarySetup(LightweightModule):
         prefetcher: Optional[Prefetcher] = None,
     ) -> None:
         super().__init__()
+        self.datatype = datatype
 
         self.use_qk_fused = use_qk_fused
         self.original_batch_size = batch_size
@@ -735,6 +736,7 @@ class HfRotarySetup(LightweightModule):
         self.batch_size = batch_size
         self.head_dim = head_dim
         self.max_seq_len = max_seq_len
+        self.datatype = datatype
 
         self.device = device
         # Generate the cos/sin matrices in HF format (no Meta permutation)

@@ -26,7 +26,7 @@ hardware, typically T3K-class). The helpers here replace that shorthand.
 Environment variables consumed here:
 
 - ``MESH_DEVICE``             — topology selector (see table above). Same knob as
-                                ``tt_transformers``, ``qwen25_vl``, Llama demos, etc.
+                                ``tt_transformers``, other demo stacks, etc.
 - ``DOTS_T3K_OPEN_FULL_MESH`` — T3K / ``T3K_1X8`` / ``T3K_2X4``: open the **physical**
                                 multi-device mesh (8 WH devices on T3K), then ``create_submesh``
                                 to the logical 1×1 or 1×2 shape dots.mocr can use (default ``1``).
@@ -192,10 +192,9 @@ def open_mesh_device(mesh_shape=None):
     Open a ``ttnn`` mesh device for dots.mocr.
 
     **T3K (8-device Wormhole LLMBox):** by default (``DOTS_T3K_OPEN_FULL_MESH=1``), opens the
-    **physical** mesh (e.g. ``1×8``), then ``create_submesh`` to the **logical** shape
-    (``1×1`` or ``1×2`` from :func:`resolve_supported_mesh_shape`) so the full system is
-    initialized while the model still runs at TP≤2. Use :func:`close_dots_mesh_device` to
-    close both the submesh and parent mesh.
+    **physical** mesh (e.g. ``1×8``) and returns it, so callers can run on the full 8-device mesh.
+    Set ``DOTS_T3K_CREATE_SUBMESH=1`` to create a smaller logical submesh (e.g. ``1×1`` / ``1×2``)
+    after initializing the full system.
 
     If ``mesh_shape`` is passed explicitly, behavior is unchanged: that shape is opened directly.
 
@@ -219,17 +218,30 @@ def open_mesh_device(mesh_shape=None):
         )
         t3k_family = canonical in ("T3K", "T3K_1X8", "T3K_2X4")
         device = None
-        if open_full and t3k_family and physical != logical and hasattr(ttnn, "MeshShape"):
+        create_submesh = os.environ.get("DOTS_T3K_CREATE_SUBMESH", "0").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "y",
+        )
+        if open_full and t3k_family and hasattr(ttnn, "MeshShape"):
             try:
                 full = ttnn.open_mesh_device(ttnn.MeshShape(physical[0], physical[1]))
-                sub = full.create_submesh(ttnn.MeshShape(logical[0], logical[1]))
-                setattr(sub, "_dots_parent_mesh_device", full)
-                device = sub
-                logger.info(
-                    f"dots_ocr.mesh: T3K-class system — opened physical mesh {physical} "
-                    f"({full.get_num_devices()} devices), running dots.mocr on submesh {logical} "
-                    f"({sub.get_num_devices()} devices). Set DOTS_T3K_OPEN_FULL_MESH=0 to open {logical} only."
-                )
+                if create_submesh and physical != logical:
+                    sub = full.create_submesh(ttnn.MeshShape(logical[0], logical[1]))
+                    setattr(sub, "_dots_parent_mesh_device", full)
+                    device = sub
+                    logger.info(
+                        f"dots_ocr.mesh: T3K-class system — opened physical mesh {physical} "
+                        f"({full.get_num_devices()} devices), running dots.mocr on submesh {logical} "
+                        f"({sub.get_num_devices()} devices). Set DOTS_T3K_OPEN_FULL_MESH=0 to open {logical} only."
+                    )
+                else:
+                    device = full
+                    logger.info(
+                        f"dots_ocr.mesh: T3K-class system — opened physical mesh {physical} "
+                        f"({full.get_num_devices()} devices). Set DOTS_T3K_CREATE_SUBMESH=1 to run on a submesh {logical}."
+                    )
             except Exception as exc:
                 logger.warning(
                     f"dots_ocr.mesh: full mesh {physical} + submesh {logical} failed ({exc!r}); "

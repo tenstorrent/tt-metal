@@ -4,12 +4,7 @@
 """
 HF reference loading for Dots OCR (CPU / no CUDA).
 
-**Compared to ``qwen25_vl``:** that demo vendors ``reference/model.py`` and gates optional
-``flash_attn`` with ``transformers.utils.is_flash_attn_2_available()`` — if unavailable, vision
-FlashAttention helpers are set to ``None`` and attention classes fall back to ``"eager"`` /
-``"sdpa"`` via ``QWEN2_5_VL_*_ATTENTION_CLASSES`` (see ``qwen25_vl/reference/model.py``).
-
-**Dots** loads **remote** code from the Hub (``trust_remote_code=True``). Transformers still runs
+**Remote Hub models:** Dots loads **remote** code from the Hub (``trust_remote_code=True``). Transformers still runs
 static ``check_imports`` on that file before ``from_pretrained(..., _attn_implementation="eager")``
 applies, so a bare ``import flash_attn`` in the checkpoint must resolve. We use
 ``_flash_attn_shim.install()`` only for that import check; **runtime** attention is eager PyTorch

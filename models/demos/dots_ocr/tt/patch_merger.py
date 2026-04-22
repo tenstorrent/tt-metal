@@ -14,9 +14,44 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.dots_ocr.tt.vision_rmsnorm import RMSNorm
 
 
+def dots_merger_state_dict_for_patch_merger_tt(hf_sd: dict) -> dict:
+    """
+    Subset of HF weights for TT `PatchMerger`, with `mlp.*` mapped to `feed_forward.*`.
+
+    This is a small compatibility shim for checkpoints that name the merger MLP as
+    `vision_tower.(patch_)merger.mlp.{0,2}.*` instead of `feed_forward.{0,2}.*`.
+    """
+
+    def _pick(*candidates: str):
+        for c in candidates:
+            if c in hf_sd:
+                return c
+        return None
+
+    state_dict: dict = {}
+    for k, v in hf_sd.items():
+        if k.startswith("vision_tower.merger.") or k.startswith("vision_tower.patch_merger."):
+            state_dict[k] = v
+    for i in (0, 2):
+        for suffix in ("weight", "bias"):
+            src = _pick(
+                f"vision_tower.merger.mlp.{i}.{suffix}",
+                f"vision_tower.patch_merger.mlp.{i}.{suffix}",
+                f"model.vision_tower.merger.mlp.{i}.{suffix}",
+                f"model.vision_tower.patch_merger.mlp.{i}.{suffix}",
+            )
+            if src is not None:
+                state_dict[f"vision_tower.merger.feed_forward.{i}.{suffix}"] = hf_sd[src]
+    return state_dict
+
+
+# Backward-compatible private name (older tests / imports).
+_dots_merger_state_dict_for_patch_merger_tt = dots_merger_state_dict_for_patch_merger_tt
+
+
 class PatchMerger(LightweightModule):
     """
-    TTNN PatchMerger (ported from qwen25_vl) with DotsOCR-compatible dimensions.
+    TTNN PatchMerger (HF ``vision_tower`` patch-merger layout) for Dots OCR.
 
     Input:  x [B, 1, S_patch, H_v]
     Output: y [B, 1, S_img, H_out], where S_img = S_patch / (spatial_merge_size^2)
@@ -50,10 +85,32 @@ class PatchMerger(LightweightModule):
         ln_b = f"{state_dict_prefix}.ln_q.bias"
         if ln_w in state_dict and ln_b in state_dict:
             self._merge_pre_norm = "layernorm"
-            # LightweightModule is not nn.Module; keep norms as plain tensors.
-            self._ln_q_weight = state_dict[ln_w].clone().float()
-            self._ln_q_bias = state_dict[ln_b].clone().float()
+            w_bf = state_dict[ln_w].clone().to(torch.bfloat16)
+            b_bf = state_dict[ln_b].clone().to(torch.bfloat16)
+            # Host reference only (e.g. HF golden); TT path uses ``_ln_q_*_tt`` below.
+            self._ln_q_weight = w_bf
+            self._ln_q_bias = b_bf
             self.norm = None
+            self._ln_q_w_ttnn = self._ln_q_b_ttnn = None
+            if mesh_device is not None and ttnn is not None and hasattr(ttnn, "as_tensor"):
+                mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+                mm = ttnn.ReplicateTensorToMesh(mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+                self._ln_q_w_ttnn = ttnn.as_tensor(
+                    w_bf,
+                    dtype=weight_dtype,
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=mem,
+                    mesh_mapper=mm,
+                )
+                self._ln_q_b_ttnn = ttnn.as_tensor(
+                    b_bf,
+                    dtype=weight_dtype,
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=mem,
+                    mesh_mapper=mm,
+                )
         else:
             self._merge_pre_norm = "rmsnorm"
             self.norm = RMSNorm(
@@ -66,7 +123,31 @@ class PatchMerger(LightweightModule):
                 eps=1e-6,
             )
 
-        torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+        def _pick_key(*candidates: str) -> str:
+            for c in candidates:
+                if c in self.state_dict:
+                    return c
+            raise KeyError(f"None of the candidate keys exist in state_dict: {candidates}")
+
+        def torch_weight(name: str):
+            # HF checkpoints have used both:
+            # - {prefix}.feed_forward.{0,2}.weight  (our expected layout)
+            # - {prefix}.mlp.{0,2}.weight          (HF module layout)
+            prefixes = [state_dict_prefix]
+            # Checkpoints sometimes use "vision_tower.patch_merger.*" while callers pass "vision_tower.merger".
+            if state_dict_prefix.endswith(".merger"):
+                prefixes.append(state_dict_prefix[: -len(".merger")] + ".patch_merger")
+            elif state_dict_prefix.endswith(".patch_merger"):
+                prefixes.append(state_dict_prefix[: -len(".patch_merger")] + ".merger")
+
+            candidates: list[str] = []
+            for p in prefixes:
+                candidates.append(f"{p}.{name}.weight")
+                if name.startswith("feed_forward."):
+                    candidates.append(f"{p}.mlp.{name.split('.')[-1]}.weight")
+
+            key = _pick_key(*candidates)
+            return torch.transpose(self.state_dict[key], -2, -1)
 
         if weight_cache_path is None:
             cache_name = lambda _: None
@@ -95,71 +176,19 @@ class PatchMerger(LightweightModule):
         self.w1 = as_weight_tensor("feed_forward.0", dtype)
         self.w2 = as_weight_tensor("feed_forward.2", dtype)
 
-        # Torch path uses HF-shaped ``nn.Linear`` weights [out, in] + bias (ttnn path transposes for tilize).
-        p0w = f"{state_dict_prefix}.feed_forward.0.weight"
-        p0b = f"{state_dict_prefix}.feed_forward.0.bias"
-        p2w = f"{state_dict_prefix}.feed_forward.2.weight"
-        p2b = f"{state_dict_prefix}.feed_forward.2.bias"
-        self._ff0_w_torch = state_dict[p0w].clone().float() if p0w in state_dict else None
-        self._ff0_b_torch = state_dict[p0b].clone().float() if p0b in state_dict else None
-        self._ff2_w_torch = state_dict[p2w].clone().float() if p2w in state_dict else None
-        self._ff2_b_torch = state_dict[p2b].clone().float() if p2b in state_dict else None
-
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # Support both TT tensors and torch tensors (hybrid vision path).
-        if isinstance(x, torch.Tensor) or not _HAS_TTNN:
-            if getattr(self, "_merge_pre_norm", "rmsnorm") == "layernorm":
-                w = self._ln_q_weight.to(dtype=x.dtype, device=x.device)
-                b = self._ln_q_bias.to(dtype=x.dtype, device=x.device)
-                x = torch.nn.functional.layer_norm(x, (self.hidden_size,), w, b, eps=1e-6)
-            else:
-                x = self.norm(x)
-            if x.dim() == 2:
-                x = x.unsqueeze(0).unsqueeze(0)
-            elif x.dim() == 3:
-                x = x.unsqueeze(1)
-
-            # [B, 1, S_patch, H] -> [B, 1, S_img, H*m^2]
-            x = x.reshape(x.shape[0], x.shape[1], -1, self.mlp_size)
-
-            # Prefer checkpoint-faithful ``nn.Linear`` weights/biases (same as HF ``PatchMerger.mlp``).
-            if self._ff0_w_torch is not None and self._ff2_w_torch is not None:
-                w1_t = self._ff0_w_torch.to(device=x.device)
-                w2_t = self._ff2_w_torch.to(device=x.device)
-                b1 = self._ff0_b_torch.to(device=x.device) if self._ff0_b_torch is not None else None
-                b2 = self._ff2_b_torch.to(device=x.device) if self._ff2_b_torch is not None else None
-            else:
-                w1 = self.w1
-                w2 = self.w2
-                if _HAS_TTNN and not isinstance(w1, torch.Tensor):
-                    w1 = ttnn.to_torch(w1)
-                if _HAS_TTNN and not isinstance(w2, torch.Tensor):
-                    w2 = ttnn.to_torch(w2)
-                w1_t = w1
-                w2_t = w2
-                if w2_t.dim() == 2 and w2_t.shape[0] == self.mlp_size and w2_t.shape[1] == self.out_hidden_size:
-                    w2_t = w2_t.t()
-                b1 = b2 = None
-
-            x = torch.nn.functional.linear(x.float(), w1_t.float(), b1).to(torch.bfloat16)
-            x = torch.nn.functional.gelu(x, approximate="none")
-            x = torch.nn.functional.linear(x.float(), w2_t.float(), b2).to(torch.bfloat16)
-            return x
-
+        if not _HAS_TTNN or ttnn is None:
+            raise RuntimeError("PatchMerger TT path requires ttnn")
         if getattr(self, "_merge_pre_norm", "rmsnorm") == "layernorm":
-            x_torch = ttnn.to_torch(x).float()
-            w = self._ln_q_weight.to(device=x_torch.device)
-            b = self._ln_q_bias.to(device=x_torch.device)
-            x_torch = torch.nn.functional.layer_norm(x_torch, (self.hidden_size,), w, b, eps=1e-6).to(torch.bfloat16)
-            x = ttnn.from_torch(
-                x_torch,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
-                if hasattr(ttnn, "ReplicateTensorToMesh")
-                else None,
+            if self._ln_q_w_ttnn is None or self._ln_q_b_ttnn is None:
+                raise ValueError(
+                    "ln_q is LayerNorm in checkpoint: upload ln_q weight/bias to device (requires mesh_device)."
+                )
+            x = ttnn.layer_norm(
+                x,
+                weight=self._ln_q_w_ttnn,
+                bias=self._ln_q_b_ttnn,
+                epsilon=1e-6,
             )
         else:
             x = self.norm(x)

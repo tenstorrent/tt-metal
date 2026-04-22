@@ -88,7 +88,7 @@ class VisionBlockTT(LightweightModule):
     def forward(
         self,
         x,
-        rot_mats: tuple[torch.Tensor, torch.Tensor] | None = None,
+        rot_mats: tuple[object, object] | None = None,
         **kwargs,
     ):
         """
@@ -96,25 +96,19 @@ class VisionBlockTT(LightweightModule):
 
         x -> norm1 -> attention -> residual -> norm2 -> mlp -> residual
         """
+        ttnn = get_ttnn()
+        if ttnn is None:
+            raise RuntimeError("VisionBlockTT requires ttnn")
+        if not isinstance(x, ttnn.Tensor):
+            raise TypeError(f"Expected ttnn.Tensor, got {type(x)}")
+
         residual = x
-
-        # Post-Norm: norm -> sublayer -> residual
-        if isinstance(x, torch.Tensor):
-            # CPU path for testing/foundation
-            x_norm = self.norm1(x)
-            x_attn = self.attention(x_norm, rot_mats=rot_mats, **kwargs)
-            x = residual + x_attn
-
-            x_norm2 = self.norm2(x)
-            x_mlp = self.mlp(x_norm2)
-            x = x + x_mlp
-
-            return x
-        else:
-            # TTNN path - simplified for Phase 2 foundation
-            # In full implementation, this would use proper TTNN operations
-            # For now, maintain tensor flow for pipeline testing
-            return x
+        x_norm = self.norm1(x)
+        x_attn = self.attention(x_norm, rot_mats=rot_mats, cu_seqlens=kwargs.get("cu_seqlens"))
+        x = ttnn.add(residual, x_attn)
+        x_norm2 = self.norm2(x)
+        x_mlp = self.mlp(x_norm2)
+        return ttnn.add(x, x_mlp)
 
 
 # Convenience function

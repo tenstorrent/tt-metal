@@ -17,10 +17,10 @@ import torch
 
 
 def test_vision_encoder_pcc_gt_0_99(tmp_path):
-    """Test hybrid VisionEncoder interface with TTNN PatchMerger.
+    """Test full TTNN VisionEncoder interface on device.
 
-    Note: Full PCC against real HF vision_tower is complex due to model size.
-    This test validates the hybrid interface and patch merger integration.
+    Note: Full PCC against HF is tracked in dedicated PCC tests. This test is a
+    device-level bring-up check that real weights load and a forward pass runs.
     """
     ttnn = pytest.importorskip("ttnn")
     if not hasattr(ttnn, "open_mesh_device"):
@@ -32,9 +32,13 @@ def test_vision_encoder_pcc_gt_0_99(tmp_path):
     torch.manual_seed(0)
 
     def _open_device():
-        """Open a mesh per ``MESH_DEVICE`` (N150/N300/T3K); ``None`` if unset."""
-        if os.environ.get("MESH_DEVICE") is None:
-            return None
+        """Open a mesh device, defaulting to single-chip when unset."""
+        os.environ.setdefault("MESH_DEVICE", "T3K")
+        # dots.mocr uses GQA with n_kv_heads=2, so TP cols must divide 2.
+        # On T3K we open the physical mesh but *run* on a 1x2 submesh for correctness.
+        os.environ.setdefault("DOTS_T3K_OPEN_FULL_MESH", "1")
+        os.environ.setdefault("DOTS_T3K_CREATE_SUBMESH", "1")
+        os.environ.setdefault("DOTS_T3K_TP", "2")
         try:
             return open_mesh_device()
         except Exception as e:
@@ -45,13 +49,12 @@ def test_vision_encoder_pcc_gt_0_99(tmp_path):
         state_dict = None
         if device is not None:
             from models.demos.dots_ocr.reference.hf_utils import get_hf_model_id
-            from models.demos.dots_ocr.tt.vision_qwenstyle import _dots_merger_state_dict_for_patch_merger_tt
             from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 
             model_id = os.environ.get("HF_MODEL", get_hf_model_id())
             try:
-                hf_sd = load_hf_state_dict_filtered(model_id, ("vision_tower.", "model.vision_tower."))
-                state_dict = _dots_merger_state_dict_for_patch_merger_tt(hf_sd)
+                # Load the full vision_tower weights (patch embed + 42 blocks + norm + merger).
+                state_dict = load_hf_state_dict_filtered(model_id, ("vision_tower.", "model.vision_tower."))
             except Exception as exc:
                 pytest.skip(f"Real vision weights required for device test: {exc}")
 
@@ -65,12 +68,11 @@ def test_vision_encoder_pcc_gt_0_99(tmp_path):
             spatial_merge_size=2,
         )
 
-        # Create test inputs
-        B = 1
-        pixel_values = torch.randn(B, 3, 64, 64, dtype=torch.bfloat16)  # small image
-        grid_thw = torch.tensor([[1, 4, 4]], dtype=torch.int32)  # 4x4 patches
+        # Create test inputs matching patch_size=14.
+        pixel_values = torch.randn(1, 3, 224, 224, dtype=torch.bfloat16)
+        grid_thw = torch.tensor([[1, 16, 16]], dtype=torch.int32)
 
-        # Get TTNN hybrid output
+        # Run full TTNN vision forward
         tt_vision_tokens = encoder.forward(pixel_values, grid_thw)
 
         assert isinstance(tt_vision_tokens, torch.Tensor)
@@ -88,31 +90,60 @@ def test_vision_encoder_pcc_gt_0_99(tmp_path):
 
 
 def test_vision_encoder_smoke():
-    """Smoke test for VisionEncoder interface (CPU-only, no TTNN required)."""
+    """Smoke test for full TTNN VisionEncoder (requires TT device + weights)."""
+    ttnn = pytest.importorskip("ttnn")
+    if not hasattr(ttnn, "open_mesh_device"):
+        pytest.skip("TTNN runtime has no open_mesh_device (mesh API missing)")
+    from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, open_mesh_device
     from models.demos.dots_ocr.tt.vision import VisionEncoder
 
-    # Test without device for basic interface validation
-    encoder = VisionEncoder(
-        mesh_device=None,  # Not used in smoke test
-        hidden_size=64,
-        out_hidden_size=64,
-        spatial_merge_size=2,
-    )
+    os.environ.setdefault("MESH_DEVICE", "T3K")
+    device = None
+    try:
+        # dots.mocr uses GQA with n_kv_heads=2 in the shared ModelArgs base. That forces TP cols to divide 2.
+        # On T3K, open a 1x2 mesh for vision tests to satisfy both n_heads=12 and n_kv_heads=2 constraints.
+        mesh_shape = None
+        try:
+            if os.environ.get("MESH_DEVICE", "").upper().startswith("T3K"):
+                mesh_shape = ttnn.MeshShape(1, 2)
+        except Exception:
+            mesh_shape = None
+        device = open_mesh_device(mesh_shape=mesh_shape) if mesh_shape is not None else open_mesh_device()
+        from models.demos.dots_ocr.reference.hf_utils import get_hf_model_id
+        from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 
-    # Test with synthetic inputs
-    B = 1
-    pixel_values = torch.randn(B, 3, 64, 64, dtype=torch.bfloat16)
-    grid_thw = torch.tensor([[1, 4, 4]], dtype=torch.int32)
+        model_id = os.environ.get("HF_MODEL", get_hf_model_id())
+        try:
+            state_dict = load_hf_state_dict_filtered(model_id, ("vision_tower.", "model.vision_tower."))
+        except Exception as exc:
+            pytest.skip(f"Real vision weights required for TTNN smoke test: {exc}")
 
-    # Should not crash and return reasonable shape
-    output = encoder.forward(pixel_values, grid_thw)
+        encoder = VisionEncoder(
+            mesh_device=device,
+            hf_model=None,
+            state_dict=state_dict,
+            weight_cache_path=None,
+            hidden_size=1536,
+            out_hidden_size=1536,
+            spatial_merge_size=2,
+        )
 
-    assert isinstance(output, torch.Tensor)
-    assert output.dim() == 2, f"Expected 2D output, got {output.dim()}D"
-    assert output.shape[1] == 64, f"Expected hidden_size=64, got {output.shape[1]}"
-    assert output.shape[0] > 0, "Should produce at least one vision token"
-    assert not torch.isnan(output).any(), "Output contains NaNs"
-    assert not torch.isinf(output).any(), "Output contains Infs"
+        # Smoke input must match the checkpoint's patch embedding configuration.
+        # Dots vision uses patch_size=14, so a canonical shape is 224x224 with 16x16 patches.
+        pixel_values = torch.randn(1, 3, 224, 224, dtype=torch.bfloat16)
+        grid_thw = torch.tensor([[1, 16, 16]], dtype=torch.int32)
+
+        output = encoder.forward(pixel_values, grid_thw)
+
+        assert isinstance(output, torch.Tensor)
+        assert output.dim() == 2, f"Expected 2D output, got {output.dim()}D"
+        assert output.shape[1] == 1536, f"Expected hidden_size=1536, got {output.shape[1]}"
+        assert output.shape[0] > 0, "Should produce at least one vision token"
+        assert not torch.isnan(output).any(), "Output contains NaNs"
+        assert not torch.isinf(output).any(), "Output contains Infs"
+    finally:
+        if device is not None:
+            close_dots_mesh_device(device)
 
 
 if __name__ == "__main__":

@@ -4,20 +4,16 @@
 """
 Top-level TT model classes for Dots OCR.
 
-Mirrors the layout of ``models/demos/qwen25_vl/tt/model.py``:
+- ``DotsTransformer(TTTransformer)`` — text decoder: for **token ids** ``[B,S]``, the parent
+  ``prepare_inputs_prefill`` runs ``embd`` on device and slices **device** ``HfRotarySetup`` cos/sin.
+  For **fused host embeddings** ``[B,S,D]``, ``prepare_inputs_prefill`` uploads embeds and optional
+  host rot_mats (or uses device RoPE caches when ``rot_mats is None``).
+- ``DropInVisionTransformer`` — TT vision path with the same call signature as HF
+  ``model.vision_tower`` (``forward(pixel_values, grid_thw)``), built from checkpoint weights
+  and :class:`~models.demos.dots_ocr.tt.vision_transformer.VisionTransformerTT`.
 
-- ``DotsTransformer(TTTransformer)`` — text decoder subclass that overrides
-  ``prepare_inputs_prefill`` to accept host-side embeddings (so we can fuse text + vision
-  tokens on host before prefill) and ``_prepare_cos_sin`` to replicate host cos/sin to mesh.
-- ``DropInVisionTransformer`` — a ``torch.nn.Module`` wrapper around the TT vision stack
-  (``VisionTransformerTT``) with the same signature as the HF reference vision tower
-  (``forward(pixel_values, grid_thw) -> torch.Tensor``), suitable to be dropped in place of
-  ``reference_model.vision_tower`` in end-to-end demos.
-
-The legacy ``DotsOCRModel`` / ``create_dots_ocr_model`` stubs have been removed; callers
-should now build the pieces explicitly (``DotsModelArgs``, ``DotsTransformer``,
-``DropInVisionTransformer``) and drive prefill/decode via
-``models.tt_transformers.tt.generator.Generator`` the same way qwen25_vl's demo does.
+Callers build ``DotsModelArgs`` / ``DotsTransformer`` / optional ``DropInVisionTransformer`` and
+drive decode via ``models.tt_transformers.tt.generator.Generator``.
 """
 
 from __future__ import annotations
@@ -40,11 +36,9 @@ class DotsTransformer(TTTransformer):
     TT text decoder for Dots OCR.
 
     Thin subclass of ``tt_transformers`` ``Transformer`` that:
-    - Uses the standard ``Attention`` class and the default RoPE setup (Dots uses Qwen2-style
-      single-position RoPE; no multimodal rope_deltas like qwen25_vl).
-    - Overrides ``prepare_inputs_prefill`` so that ``tokens`` is actually a [B, S, D]
-      **embedding tensor** (text + vision already fused on host). This is the same contract
-      qwen25_vl's ``Transformer.prepare_inputs_prefill`` exposes.
+    - Uses the standard ``Attention`` class and RoPE setup for the **text** decoder.
+    - Overrides ``prepare_inputs_prefill`` so ``tokens`` can be a [B, S, D] **embedding** tensor
+      (text + vision fused on host), or [B, S] token ids (delegates to the parent).
     - Overrides ``_prepare_cos_sin`` to expand and replicate host cos/sin to the mesh.
     """
 
@@ -179,22 +173,12 @@ class DotsTransformer(TTTransformer):
 
 class DropInVisionTransformer(torch.nn.Module):
     """
-    Drop-in replacement for the HF Dots vision tower.
+    Drop-in for HF ``model.vision_tower`` (Dots OCR): same
+    ``forward(pixel_values, grid_thw) -> torch.Tensor`` as the hub implementation.
 
-    Mirrors ``qwen25_vl.tt.model.DropInVisionTransformer``:
-    - Same interface: ``forward(pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor``.
-    - Loads state_dict from the HF reference model (via ``standardize_hf_keys_multimodal`` +
-      ``convert_hf_to_meta``) so the TT vision weights match the HF checkpoint.
-    - Delegates the heavy compute to :class:`VisionTransformerTT`.
-
-    Usage::
-
-        reference_model = AutoModelForCausalLM.from_pretrained(
-            ..., trust_remote_code=True, _attn_implementation="eager", use_safetensors=True
-        )
-        vision_model_args = DotsVisionModelArgs(mesh_device=mesh_device, hf_config=reference_model.config)
-        visual = DropInVisionTransformer(reference_model, vision_model_args)
-        image_embeds = visual(inputs.pixel_values, inputs.image_grid_thw)
+    Loads weights from the reference model checkpoint (``standardize_hf_keys_multimodal`` +
+    ``convert_hf_to_meta``) and runs :class:`VisionTransformerTT` (TTNN linears, device RoPE,
+    TTNN SDPA, TTNN patch merger).
     """
 
     def __init__(
@@ -211,24 +195,39 @@ class DropInVisionTransformer(torch.nn.Module):
 
         ttnn = get_ttnn()
         if dtype is None:
-            dtype = ttnn.bfloat8_b if ttnn is not None else torch.bfloat16
+            # Default to bf16 for correctness (PCC tests). Callers can still opt into bf8 for perf.
+            dtype = ttnn.bfloat16 if ttnn is not None else torch.bfloat16
         self.dtype = dtype
 
         # Build a state_dict for the TT vision stack from the HF reference model.
-        # Keep keys as-is so ``VisionTransformerTT`` can look up ``vision_tower.*``; the reference
-        # model state_dict already uses those prefixes for Dots.
+        #
+        # IMPORTANT: do not run `convert_hf_to_meta` here. That conversion is designed for the
+        # *text* stack (decoder) and will remap/permute keys that do not apply to the HF vision
+        # tower. For vision PCC we want the raw HF `vision_tower.*` tensors.
         try:
-            from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, standardize_hf_keys_multimodal
+            from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multimodal
 
             hf_sd = reference_model.state_dict()
             hf_sd = standardize_hf_keys_multimodal(hf_sd)
-            head_dim = getattr(model_args, "vision_head_dim", None) or getattr(model_args, "head_dim", 64)
-            state_dict = convert_hf_to_meta(hf_sd, head_dim)
+            # Filter to just the HF vision tower weights and normalize `model.` prefixes away.
+            state_dict = {}
+            for k, v in hf_sd.items():
+                k2 = k[len("model.") :] if k.startswith("model.") else k
+                if k2.startswith("vision_tower."):
+                    state_dict[k2] = v
         except Exception as exc:  # pragma: no cover — bring-up fallback
             logger.warning(
                 f"DropInVisionTransformer: falling back to raw HF state_dict (no key mapping). " f"Reason: {exc}"
             )
-            state_dict = reference_model.state_dict()
+            # Best-effort filter for raw HF state dict too.
+            raw = reference_model.state_dict()
+            state_dict = {}
+            for k, v in raw.items():
+                k2 = k[len("model.") :] if k.startswith("model.") else k
+                if k2.startswith("vision_tower."):
+                    state_dict[k2] = v
+            if not state_dict:
+                state_dict = raw
 
         weight_cache_path = None
         if hasattr(model_args, "weight_cache_path"):

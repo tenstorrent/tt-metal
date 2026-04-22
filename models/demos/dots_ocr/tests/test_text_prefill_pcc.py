@@ -2,16 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Text-only prefill PCC test for Dots OCR.
+Text-only prefill / decoder-logit PCC for Dots OCR.
 
-Validates that TTNN prefill (with proper host cos/sin RoPE matrices)
-produces logits with high PCC vs the HF reference (default floor ``DOTS_TEXT_PREFILL_PCC_MIN``, 0.985).
+**Reference (PyTorch / HF only)**
+``DotsOCRReference`` and the HF text submodel run in **PyTorch** to produce gold ``hf_logits`` and
+to read checkpoint weights for ``convert_hf_to_meta``. No separate “TT path” prefill is implemented
+in torch.
 
-This implements Step 2 of the implementation plan.
+**TT path (ttnn only for the model forward)**
+``Generator.prefill_forward_text(input_ids, rot_mats=None)``: ttnn token ``embd``, device
+``HfRotarySetup`` prefill cos/sin, then ``ttnn_prefill_forward`` (decoder + LM head). Logits are
+read back to host tensors only for :func:`comp_pcc` vs HF.
+
+**Constants:** ``TEXT_PREFILL_PCC_MIN`` (floor vs HF; end-to-end ttnn is typically ~0.98–0.99).
+PCC lines: ``[dots_ocr text_prefill_pcc] ...``.
 """
 
 import gc
-import os
 
 import pytest
 import torch
@@ -19,7 +26,7 @@ from loguru import logger
 
 from models.demos.dots_ocr.reference.hf_utils import HFLoadSpec
 from models.demos.dots_ocr.reference.model import DotsOCRReference
-from models.demos.dots_ocr.reference.rope import get_hf_rot_mats_from_model
+from models.demos.dots_ocr.reference.pcc import comp_pcc
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_hf_to_meta_no_qkv_permute
 
 try:
@@ -37,21 +44,8 @@ from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device
 from models.demos.dots_ocr.tt.model import DotsTransformer
 from models.demos.dots_ocr.tt.model_config import DotsModelArgs
 
-_TINY_TEXT_MODEL = "hf-internal-testing/tiny-random-LlamaForCausalLM"
-
-
-def _comp_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    """
-    Pearson correlation coefficient between two same-shaped tensors.
-
-    Local helper to keep this test importable even when TTNN runtime is absent.
-    """
-    a = a.reshape(-1).float()
-    b = b.reshape(-1).float()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = (a.norm() * b.norm()).clamp(min=1e-12)
-    return float((a @ b) / denom)
+# PCC floor vs HF reference (full ttnn prefill; adjust if CI hardware varies).
+TEXT_PREFILL_PCC_MIN: float = 0.985
 
 
 def _load_dots_reference(model_id: str, *, dtype=torch.bfloat16):
@@ -78,7 +72,7 @@ def _open_mesh_device():
 
 def run_text_decoder_prefill_pcc_check(tmp_path):
     """
-    Run TT ``DotsTransformer`` text-only prefill and compare last-token logits to HF (``comp_pcc``).
+    ttnn prefill (``prefill_forward_text``, no host rot/embed path) vs HF last **non-pad** token.
 
     Shared by ``test_text_only_prefill_pcc_gt_0_99`` and ``test_decoder_smoke.test_dots_decoder_prefill_pcc``.
     """
@@ -159,32 +153,31 @@ def run_text_decoder_prefill_pcc_check(tmp_path):
                 else None
             )
 
-            # Use host RoPE mats derived from the HF model config. This removes any possibility that TT's
-            # internal rope cache generation differs.
-            rot_mats = get_hf_rot_mats_from_model(ref.model, inputs.input_ids)
-
-            # Feed embeddings directly to avoid token-id embedding path differences.
-            embeds = _text_model.get_input_embeddings()(inputs.input_ids)
+            if inputs.attention_mask is not None:
+                n_real = int(inputs.attention_mask[0].sum().item())
+            else:
+                n_real = int(inputs.input_ids.shape[1])
+            # int32 [1, S] for ttnn token embd + device RoPE (no host prefill_forward_embeddings).
+            input_ids_for_ttnn = inputs.input_ids.to(dtype=torch.int32, device="cpu")
+            if input_ids_for_ttnn.dim() == 1:
+                input_ids_for_ttnn = input_ids_for_ttnn.unsqueeze(0)
 
         del ref
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        # High-fidelity settings help push PCC over 0.99 on real hardware.
-        # Import lazily so the module still imports in environments that module-skip TTNN tests.
         optimizations = None
         try:
             from models.tt_transformers.tt.model_config import parse_optimizations
 
             optimizations = parse_optimizations(
-                # NOTE: parse_optimizations expects *Enum values* (lowercase), not Enum member names.
                 "precision_cfg{activation:bf16,wqkv:bf16,wo:bf16,kv_cache:bf16,ff1_3:bf16,ff2:bf16} "
                 "fidelity_cfg{accuracy:hifi4fp32,li_qkv_prefill:hifi4fp32,sdpa_prefill:hifi4fp32,li_o_prefill:hifi4fp32,"
                 "li_qkv_decode:hifi4fp32,sdpa_decode:hifi4fp32,li_o_decode:hifi4fp32,li_ff1_3:hifi4fp32,li_ff2:hifi4fp32}"
             )
         except Exception as e:
-            logger.warning(f"Prefill test: could not set high-fidelity optimizations ({e!r}); continuing with defaults")
+            logger.warning(f"Prefill test: could not set optimizations ({e!r}); continuing with defaults")
 
         def _run_once(*, qkv_permute: bool):
             model_args = DotsModelArgs(
@@ -260,21 +253,24 @@ def run_text_decoder_prefill_pcc_check(tmp_path):
             from models.demos.dots_ocr.tt.generator import Generator
 
             generator = Generator(tt_model, model_args, device)
-            # Keep inputs in bf16 to better match HF numerics and avoid fp32->bf16 quantization differences
-            # happening inside the TT path.
-            tt_logits = generator.prefill_forward_embeddings(embeds.to(torch.bfloat16), rot_mats=rot_mats)
-
-            hf_last = hf_logits[:, -1:, :]
-            # Use the shared comp_pcc helper (same as qwen25_vl) instead of raw corrcoef on a flattened vector.
-            # This tends to be less brittle for large-vocab logits comparisons.
+            prompt_lens = torch.tensor([n_real], dtype=torch.int32)
+            tt_logits = generator.prefill_forward_text(input_ids_for_ttnn, rot_mats=None, prompt_lens=prompt_lens)
+            pcc_label = "ttnn token embd+device RoPE+decoder"
+            last_pos = n_real - 1
+            hf_last = hf_logits[:, last_pos : last_pos + 1, :]
+            # Use shared :func:`comp_pcc` (less brittle for large-vocab logits than ad-hoc corrcoef).
             # If vocab differs (should not in real-weight mode), compare overlapping prefix.
             hf_cmp = hf_last.float()
             tt_cmp = tt_logits.float()
             min_vocab = min(hf_cmp.shape[-1], tt_cmp.shape[-1])
             hf_cmp = hf_cmp[..., :min_vocab]
             tt_cmp = tt_cmp[..., :min_vocab]
-            pcc = _comp_pcc(hf_cmp, tt_cmp)
+            pcc = comp_pcc(hf_cmp, tt_cmp)
             logger.info(f"Text-only prefill PCC (qkv_permute={int(qkv_permute)}): {pcc:.4f}")
+            print(
+                f"[dots_ocr text_prefill_pcc] qkv_permute={int(qkv_permute)} last_token_pcc={pcc:.6f}  ({pcc_label})",
+                flush=True,
+            )
             return pcc
 
         # Run TT PCC: try both QKV conversion variants and take the best (requires real weights; see gate above).
@@ -283,12 +279,14 @@ def run_text_decoder_prefill_pcc_check(tmp_path):
             pcc1 = _run_once(qkv_permute=True)
             pcc = max(pcc0, pcc1)
             logger.info(f"Best Text-only prefill PCC: {pcc:.4f} (max of permute={pcc1:.4f}, noperm={pcc0:.4f})")
-            # Default 0.985: real HW/compiler variance can land just under 0.99; override with
-            # DOTS_TEXT_PREFILL_PCC_MIN (e.g. 0.99 on golden machines).
-            min_pcc = float(os.environ.get("DOTS_TEXT_PREFILL_PCC_MIN", "0.985"))
-            assert pcc >= min_pcc, (
-                f"PCC too low: {pcc:.4f} (expected >= {min_pcc}; " f"set DOTS_TEXT_PREFILL_PCC_MIN to relax or tighten)"
+            min_pcc = TEXT_PREFILL_PCC_MIN
+            print(
+                f"[dots_ocr text_prefill_pcc] best_last_token_pcc={pcc:.6f}  "
+                f"noperm={pcc0:.6f}  perm={pcc1:.6f}  min_threshold={min_pcc:.6f}",
+                flush=True,
             )
+            assert pcc >= min_pcc, f"PCC too low: {pcc:.4f} (expected >= {min_pcc}; see TEXT_PREFILL_PCC_MIN)"
+            print(f"[dots_ocr text_prefill_pcc] PASS  (PCC {pcc:.6f} >= {min_pcc})", flush=True)
         except Exception as e:
             logger.exception("Prefill/PCC path raised: {}", e)
             raise
@@ -300,8 +298,7 @@ def run_text_decoder_prefill_pcc_check(tmp_path):
 
 def test_text_only_prefill_pcc_gt_0_99(tmp_path):
     """
-    Test that TTNN text-only prefill with proper RoPE alignment
-    achieves PCC > 0.99 vs HF reference logits.
+    Last-token prefill PCC: full ttnn prefill vs HF (torch) reference. Floor ``TEXT_PREFILL_PCC_MIN``.
     """
     run_text_decoder_prefill_pcc_check(tmp_path)
 

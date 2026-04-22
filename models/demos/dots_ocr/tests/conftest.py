@@ -4,8 +4,8 @@
 """
 Local test config for dots_ocr.
 
-Mirrors ``models/demos/qwen25_vl/conftest.py`` by re-exporting the ``device_params``
-fixture from ``models.tt_transformers.conftest`` so tests can parametrize it the same way
+Re-exports the ``device_params`` fixture from ``models.tt_transformers.conftest`` so Dots OCR
+tests can parametrize it the same way as other tt_transformers demos
 (e.g. ``fabric_config``, ``trace_region_size``, ``num_command_queues``).
 
 Tests can still be run in isolation without pulling the repo-wide ``tt-metal/conftest.py``:

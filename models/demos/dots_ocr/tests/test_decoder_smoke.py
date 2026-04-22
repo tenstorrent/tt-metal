@@ -50,9 +50,7 @@ def test_dots_decoder_import_smoke():
 
 def test_dots_decoder_prefill_pcc(tmp_path):
     """
-    PCC: ``DotsTransformer`` text-only prefill vs HF reference last-token logits (``comp_pcc``).
-
-    Shared implementation with ``test_text_only_prefill_pcc_gt_0_99`` in ``test_text_prefill_pcc.py``.
+    Same as ``test_text_only_prefill_pcc_gt_0_99``: full ttnn prefill vs HF reference, ``comp_pcc``.
     """
     from models.demos.dots_ocr.tests.test_text_prefill_pcc import run_text_decoder_prefill_pcc_check
 
