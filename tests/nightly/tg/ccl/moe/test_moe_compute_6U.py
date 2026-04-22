@@ -1309,9 +1309,11 @@ def test_moe_compute(
     torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
 
     # Create bias tensors for validation.
-    # The bias tile is 32 rows stored in Bfp4_b format. The kernel computes
-    # matmul(ones(32,32), bias(32,N)) which sums all 32 rows per column; the golden
-    # matches via sum(dim=2) in compute_matmul_golden.
+    # The packed bias tile is 32 rows stored in Bfp4_b format, with only row 0
+    # populated and the remaining rows zero. The kernel applies bias via
+    # matmul(ones(32,32), bias(32,N)), which reproduces the row-0 bias values for
+    # each column directly; no extra sum(dim=2)-style adjustment is needed in the
+    # golden for this mechanism.
     #
     # Use a small zero-mean normal distribution (float32 draw, cast to bf16) so each
     # element in the tile varies — closer to real expert biases than a single constant.
