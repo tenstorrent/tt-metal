@@ -407,12 +407,14 @@ class MLP(AbstractModule):
         per_core_N_tiles = ttnn.core.divup(per_device_out_features, ttnn.TILE_SIZE * core_grid_size.x)
 
         # not to OOM on L1 for seq_len>=16k
-        tile_bytes = 2 * ttnn.TILE_SIZE * ttnn.TILE_SIZE  # BF16
+        bf16_tile_bytes = 2 * ttnn.TILE_SIZE * ttnn.TILE_SIZE
+        fp32_tile_bytes = 4 * ttnn.TILE_SIZE * ttnn.TILE_SIZE  # fp32_dest_acc_en=True
         max_l1 = ttnn.get_max_worker_l1_unreserved_size()
-        kernel_overhead = 30 * 1024  # emprical threshold = 25kB + 5kB safety margin
-        out_cb_bytes = per_core_M_tiles * per_core_N_tiles * tile_bytes
-        available_tiles = (max_l1 - kernel_overhead - out_cb_bytes) // tile_bytes
-        max_in0_block_w = max(1, available_tiles // (2 * (per_core_M_tiles + per_core_N_tiles)))
+        out_cb_bytes = per_core_M_tiles * per_core_N_tiles * bf16_tile_bytes
+        interm_cb_bytes = per_core_M_tiles * per_core_N_tiles * fp32_tile_bytes
+        available_for_in_cbs = max_l1 - out_cb_bytes - interm_cb_bytes
+        # in0 and in1 are each double-buffered BF16; solve for in0_block_w:
+        max_in0_block_w = max(1, available_for_in_cbs // (2 * bf16_tile_bytes * (per_core_M_tiles + per_core_N_tiles)))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=core_grid_size,
