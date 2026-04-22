@@ -410,10 +410,22 @@ def handle_cat(func, args, kwargs):
         deallocate_tensors.append(deallocate_tensor)
         device = tensors[index].to_ttnn.device() if device is None else device
     assert device is not None, "At least one of the inputs must be a TTNN tensor."
+    is_mesh = hasattr(device, "get_num_devices") and device.get_num_devices() > 1
     dtype = tensors[0].to_ttnn.dtype
     for index, tensor in enumerate(tensors):
         if deallocate_tensors[index]:
-            tensor.ttnn_tensor = ttnn.to_device(tensor.to_ttnn, device)
+            if is_mesh and tensor.to_ttnn.device() is None:
+                torch_t = ttnn.to_torch(tensor.to_ttnn)
+                tensor.ttnn_tensor = ttnn.from_torch(
+                    torch_t,
+                    dtype=tensor.to_ttnn.dtype,
+                    layout=tensor.to_ttnn.layout,
+                    device=device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                tensor.ttnn_tensor = ttnn.to_device(tensor.to_ttnn, device)
         if tensor.ttnn_tensor.layout != ttnn.TILE_LAYOUT:
             tensor.ttnn_tensor = ttnn.to_layout(tensor.to_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if tensor.to_ttnn.dtype != dtype:

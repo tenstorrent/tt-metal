@@ -81,13 +81,26 @@ def _make_sparse_matmul_program_config(
     core_x = int(getattr(grid, "x"))
     core_y = int(getattr(grid, "y"))
     n_tiles = (int(out_features) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-    num_cores = max(1, core_x * core_y)
-    per_core_N = max(1, int(math.ceil(n_tiles / num_cores)))
+    max_cores = max(1, core_x * core_y)
+
+    if n_tiles >= max_cores:
+        per_core_N = max(1, int(math.ceil(n_tiles / max_cores)))
+        gx, gy = core_x, core_y
+    else:
+        per_core_N = 1
+        actual = n_tiles
+        gx, gy = 1, actual
+        for y in range(1, core_y + 1):
+            if actual % y == 0:
+                x = actual // y
+                if x <= core_x:
+                    gx, gy = x, y
+
     out_block_w = per_core_N
     if out_subblock_w is None:
         out_subblock_w = min(per_core_N, 4)
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
         in0_block_w=int(in0_block_w),
         out_subblock_h=int(out_subblock_h),
         out_subblock_w=int(out_subblock_w),
@@ -752,10 +765,12 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
         )
 
     def move_weights_to_device_impl(self):
-        self.e_score_correction_bias = ttnn.to_device(self.e_score_correction_bias, self.device)
-        self.scatter_input = ttnn.to_device(self.scatter_input, self.device)
-        self.scatter_src = ttnn.to_device(self.scatter_src, self.device)
-        self.expert_scale = ttnn.to_device(self.expert_scale, self.device)
+        from models.experimental.tt_symbiote.core.run_config import to_device_mesh_safe
+
+        self.e_score_correction_bias = to_device_mesh_safe(self.e_score_correction_bias, self.device)
+        self.scatter_input = to_device_mesh_safe(self.scatter_input, self.device)
+        self.scatter_src = to_device_mesh_safe(self.scatter_src, self.device)
+        self.expert_scale = to_device_mesh_safe(self.expert_scale, self.device)
 
     def forward(self, router_logits: ttnn.Tensor):
         if router_logits.layout != ttnn.TILE_LAYOUT:
@@ -1115,7 +1130,7 @@ class TTNNExperts(TTNNModule):
         module.torch_w3_proj = torch_experts.gate_up_proj[:, torch_experts.config.moe_intermediate_size :, :].permute(
             [0, 2, 1]
         )
-        module.torch_w2_proj = torch_experts.down_proj.permute([0, 2, 1])
+        module.torch_w2_proj = torch_experts.down_proj.unsqueeze(0)
 
         return module
 
@@ -1137,7 +1152,7 @@ class TTNNExperts(TTNNModule):
             self.torch_w2_proj.to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=1),
         )
         del self.torch_w1_proj
         del self.torch_w3_proj
@@ -1179,16 +1194,23 @@ class TTNNExperts(TTNNModule):
 
         hidden_tiles = self.hidden_size // ttnn.TILE_SIZE
         intermediate_tiles = self.intermediate_size // ttnn.TILE_SIZE
+
+        def _largest_divisor_le(n, mx):
+            for d in range(mx, 0, -1):
+                if n % d == 0:
+                    return d
+            return 1
+
         self._gate_up_program_config = _make_sparse_matmul_program_config(
             device=self.device,
             out_features=int(self.intermediate_size),
-            in0_block_w=min(8, hidden_tiles),
+            in0_block_w=_largest_divisor_le(hidden_tiles, 8),
             per_core_M=1,
         )
         self._down_program_config = _make_sparse_matmul_program_config(
             device=self.device,
             out_features=int(self.hidden_size),
-            in0_block_w=min(8, intermediate_tiles),
+            in0_block_w=_largest_divisor_le(intermediate_tiles, 8),
             per_core_M=1,
         )
         self._expert_compute_cfg = ttnn.WormholeComputeKernelConfig(
@@ -1448,8 +1470,9 @@ class TTNNMoE(TTNNModule):
         super().preprocess_weights_impl()
 
     def move_weights_to_device_impl(self):
-        # No mesh_mapper → replicate to all devices
-        self._gate_weight_tt = ttnn.to_device(self._gate_weight_tt, self.device)
+        from models.experimental.tt_symbiote.core.run_config import to_device_mesh_safe
+
+        self._gate_weight_tt = to_device_mesh_safe(self._gate_weight_tt, self.device)
         super().move_weights_to_device_impl()
 
     @run_on_devices(DeviceArch.T3K)
@@ -1688,19 +1711,30 @@ class TTNNBailingMoE(TTNNMoE):
         return adapted
 
 
+def _mesh_to_torch(t):
+    """ttnn.to_torch — reads only from device 0 for replicated multi-device tensors."""
+    try:
+        dev = t.device()
+        if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
+            return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+    except Exception:
+        pass
+    return ttnn.to_torch(t)
+
+
 def _to_torch_for_fallback(tensor):
     """Convert symbiote/ttnn input to torch for fallback."""
     if isinstance(tensor, torch.Tensor):
         if not isinstance(tensor, TorchTTNNTensor):
             return tensor
         if getattr(tensor, "ttnn_tensor", None) is not None:
-            return ttnn.to_torch(tensor.ttnn_tensor)
+            return _mesh_to_torch(tensor.ttnn_tensor)
         return getattr(tensor, "to_torch", tensor.elem if getattr(tensor, "elem", None) is not None else tensor)
     if hasattr(tensor, "ttnn_tensor") and tensor.ttnn_tensor is not None:
-        return ttnn.to_torch(tensor.ttnn_tensor)
+        return _mesh_to_torch(tensor.ttnn_tensor)
     try:
         if getattr(ttnn, "is_tensor_storage_on_device", None) and ttnn.is_tensor_storage_on_device(tensor):
-            return ttnn.to_torch(tensor)
+            return _mesh_to_torch(tensor)
     except Exception:
         pass
     if hasattr(tensor, "to_torch"):
@@ -1711,7 +1745,7 @@ def _to_torch_for_fallback(tensor):
     return tensor
 
 
-@trace_disabled
+# @trace_disabled
 class TTNNDeepseekV2MoE(TTNNModule):
     """TTNN symbiote for DeepSeek V2 MoE.
     Uses TTNNDeepseekOCRMoEGate, reuses TTNNExperts for moe_infer, and TTNNGlm4MoeMLP for shared expert.
@@ -1735,7 +1769,7 @@ class TTNNDeepseekV2MoE(TTNNModule):
         module.experts = TTNNExperts.from_torch(stacked_experts)
 
         if getattr(torch_moe, "shared_experts", None) is not None:
-            module.shared_experts = TTNNGlm4MoeMLP.from_torch(torch_moe.shared_experts)
+            module.shared_experts = TTNNDeepseekV2DenseMLP.from_torch(torch_moe.shared_experts)
         else:
             module.shared_experts = None
 
@@ -1786,38 +1820,26 @@ class TTNNDeepseekV2MoE(TTNNModule):
             orig_shape = [batch, seq, hidden]
 
         topk_idx, topk_weight, _ = self.gate(hidden_states)
-        topk_idx = topk_idx[:, :, : self.num_experts_per_tok]
-        topk_weight = topk_weight[:, :, : self.num_experts_per_tok]
+
+        # Gate outputs 4D (1, 1, T, top_k); TTNNExperts expects 2D (T, top_k)
+        T = batch * seq
+        topk_idx = ttnn.reshape(topk_idx, (T, self.num_experts_per_tok))
+        topk_weight = ttnn.reshape(topk_weight, (T, self.num_experts_per_tok))
 
         routed_output = self.experts(hidden_states_4d, topk_idx, topk_weight)
-        routed_output = routed_output[:, :, :, : self.hidden_size]
         routed_output = _unwrap_ttnn(routed_output)
 
         if self.shared_experts is not None:
             shared_out = _unwrap_ttnn(self.shared_experts(hidden_states_4d))
-            routed_output = ttnn.to_device(routed_output, self.device)
             routed_output = ttnn.add(routed_output, shared_out)
 
         return ttnn.reshape(routed_output, orig_shape)
 
     def forward(self, hidden_states):
-        self._used_fallback = False
-        device = getattr(self, "device", None)
-        if device is None:
-            self._used_fallback = True
-            inp = _to_torch_for_fallback(hidden_states)
-            with torch.no_grad():
-                return self._fallback_torch_layer(inp)
-        try:
-            return self._forward_ttnn(hidden_states)
-        except Exception:
-            self._used_fallback = True
-            inp = _to_torch_for_fallback(hidden_states)
-            with torch.no_grad():
-                return self._fallback_torch_layer(inp)
+        return self._forward_ttnn(hidden_states)
 
 
-@trace_enabled
+# @trace_enabled
 class TTNNDeepseekOCRMoEGate(TTNNModule):
     """MoEGate module for DeepSeek OCR."""
 

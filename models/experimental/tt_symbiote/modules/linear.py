@@ -64,8 +64,10 @@ class TTNNLinear(TTNNModule):
 
     def move_weights_to_device_impl(self):
         """Move weights to TTNN device."""
-        self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
-        self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+        from models.experimental.tt_symbiote.core.run_config import to_device_mesh_safe
+
+        self.tt_weight = to_device_mesh_safe(self.tt_weight_host, self.device)
+        self.tt_bias = to_device_mesh_safe(self.tt_bias_host, self.device)
 
     def deallocate_weights_impl(self):
         """Deallocate weights from device."""

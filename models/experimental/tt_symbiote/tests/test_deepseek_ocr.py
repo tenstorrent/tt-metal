@@ -32,6 +32,7 @@ from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
 from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from tqdm import tqdm
 
 # --- HuggingFace model compatibility patches ---
@@ -74,6 +75,22 @@ if not hasattr(DynamicCache, "get_usable_length"):
 _vision_cache = {}
 
 
+def _mesh_from_torch(tensor, device, **kwargs):
+    """Wrap ttnn.from_torch with mesh_mapper when device is multi-device."""
+    if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
+        kwargs.setdefault("mesh_mapper", ttnn.ReplicateTensorToMesh(device))
+    return ttnn.from_torch(tensor, device=device, **kwargs)
+
+
+def _mesh_to_torch(tensor, device):
+    """Wrap ttnn.to_torch with mesh_composer when device is multi-device."""
+    if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
+        mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+        t = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+        return t[: tensor.shape[0]]
+    return ttnn.to_torch(tensor)
+
+
 def _install_vision_cache(model):
     """Cache vision pipeline outputs so subsequent infer() calls reuse run-0 results.
 
@@ -89,22 +106,13 @@ def _install_vision_cache(model):
     if sam is not None and isinstance(sam, TTNNModule):
 
         def _cached_sam_forward(x):
-            # Key the cache on input shape: with crop_mode=True the SAM tower
-            # is invoked twice per infer() (base image + 9 cropped patches),
-            # and a single shared key would corrupt the second call.
             x_raw = _uw(x)
             sam_key = ("sam", tuple(x_raw.shape))
             if sam_key in _vision_cache:
-                return ttnn.from_torch(
-                    _vision_cache[sam_key],
-                    device=sam.device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+                return _vision_cache[sam_key]
 
             if isinstance(x_raw, torch.Tensor):
-                x_raw = ttnn.from_torch(x_raw, device=sam.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                x_raw = _mesh_from_torch(x_raw, sam.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
             if x_raw.layout != ttnn.TILE_LAYOUT:
                 x_raw = ttnn.to_layout(x_raw, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -118,9 +126,9 @@ def _install_vision_cache(model):
                     pos = sam.torch_layer.pos_embed
                     src_size = pos.shape[1]
                     if src_size != H:
-                        pos_nhwc = ttnn.from_torch(
+                        pos_nhwc = _mesh_from_torch(
                             pos,
-                            device=sam.device,
+                            sam.device,
                             dtype=ttnn.bfloat16,
                             layout=ttnn.ROW_MAJOR_LAYOUT,
                             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -132,9 +140,9 @@ def _install_vision_cache(model):
                         pos_nhwc = ttnn.repeat(pos_nhwc, (B, 1, 1, 1))
                         sam._pos_cache[cache_key] = pos_nhwc
                     else:
-                        sam._pos_cache[cache_key] = ttnn.from_torch(
+                        sam._pos_cache[cache_key] = _mesh_from_torch(
                             pos.expand(B, -1, -1, -1),
-                            device=sam.device,
+                            sam.device,
                             dtype=ttnn.bfloat16,
                             layout=ttnn.TILE_LAYOUT,
                         )
@@ -151,7 +159,8 @@ def _install_vision_cache(model):
             x_conv = _uw(sam.net_3(x_conv))
 
             x_conv = ttnn.permute(x_conv, (0, 3, 1, 2))
-            _vision_cache[sam_key] = ttnn.to_torch(x_conv).detach().clone()
+            x_conv = _mesh_to_torch(x_conv, sam.device)
+            _vision_cache[sam_key] = x_conv
             return x_conv
 
         sam.forward = _cached_sam_forward
@@ -161,18 +170,19 @@ def _install_vision_cache(model):
         orig_vit_forward = vit.forward
 
         def _cached_vit_forward(x, patch_embeds=None):
-            # Same shape-keying rationale as SAM above.
             vit_key = ("vit", tuple(_uw(x).shape))
             if vit_key in _vision_cache:
-                return ttnn.from_torch(
-                    _vision_cache[vit_key],
-                    device=vit.device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+                return _vision_cache[vit_key]
             result = orig_vit_forward(x, patch_embeds)
-            _vision_cache[vit_key] = ttnn.to_torch(result).detach().clone()
+            if isinstance(result, TorchTTNNTensor):
+                tt = result.ttnn_tensor
+                if tt is not None:
+                    result = _mesh_to_torch(tt, vit.device)
+                else:
+                    result = result.to_torch
+            elif isinstance(result, ttnn.Tensor):
+                result = _mesh_to_torch(result, vit.device)
+            _vision_cache[vit_key] = result
             return result
 
         vit.forward = _cached_vit_forward
@@ -197,11 +207,25 @@ def create_paged_kv_cache(model_config, device, batch_size=1):
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 245760}],
+    [{"l1_small_size": 245760, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
     indirect=True,
 )
-def test_deepseek_ocr(device):
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "P150": (1, 1),
+            "P300": (1, 2),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+    ],
+    indirect=True,
+)
+def test_deepseek_ocr(mesh_device):
     """Test DeepSeek-OCR model with TTNN acceleration."""
+    device = mesh_device
 
     model_name = "deepseek-ai/DeepSeek-OCR"
 

@@ -8,7 +8,7 @@ from torch import nn
 import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
-from models.experimental.tt_symbiote.core.run_config import trace_disabled, trace_enabled
+from models.experimental.tt_symbiote.core.run_config import trace_enabled
 
 
 @trace_enabled
@@ -34,9 +34,10 @@ class TTNNLayerNorm(TTNNModule):
 
     def move_weights_to_device_impl(self):
         """Move weights to TTNN device."""
-        self.tt_weight = ttnn.to_device(self.tt_weight, self.device)
-        if self.tt_bias is not None:
-            self.tt_bias = ttnn.to_device(self.tt_bias, self.device)
+        from models.experimental.tt_symbiote.core.run_config import to_device_mesh_safe
+
+        self.tt_weight = to_device_mesh_safe(self.tt_weight, self.device)
+        self.tt_bias = to_device_mesh_safe(self.tt_bias, self.device)
 
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through LayerNorm."""
@@ -89,7 +90,9 @@ class TTNNRMSNorm(TTNNModule):
 
     def move_weights_to_device_impl(self):
         """Move weights to TTNN device."""
-        self.tt_weight = ttnn.to_device(self.tt_weight, self.device)
+        from models.experimental.tt_symbiote.core.run_config import to_device_mesh_safe
+
+        self.tt_weight = to_device_mesh_safe(self.tt_weight, self.device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if x.layout != ttnn.TILE_LAYOUT:
@@ -152,11 +155,9 @@ class TTNNLocalRMSNorm(TTNNModule):
 
     def move_weights_to_device_impl(self):
         """Move weights to TTNN device with replication across mesh."""
-        self.tt_weight = ttnn.to_device(
-            self.tt_weight,
-            self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        from models.experimental.tt_symbiote.core.run_config import to_device_mesh_safe
+
+        self.tt_weight = to_device_mesh_safe(self.tt_weight, self.device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through local RMSNorm. Input is 4D [batch, heads, seq, head_dim]."""

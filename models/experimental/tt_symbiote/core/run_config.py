@@ -71,9 +71,8 @@ class DistributedConfig:
     def __post_init__(self):
         if self.tensor_config is None and self.mesh_device.get_num_devices() > 1:
             self.tensor_config = DistributedTensorConfig(
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, (0, -1)),
-                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, self.mesh_device.shape, (0, -1)),
-                logical_shape_fn=logical_shape_for_batch_channel_sharding(self.mesh_device.shape),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
             )
         if self.ccl_manager is None and self.mesh_device.get_num_devices() > 1:
             self.ccl_manager = TT_CCL(self.mesh_device)
@@ -359,14 +358,60 @@ def to_ttnn_wrap_keep_torch(e):
     return e
 
 
+def to_device_mesh_safe(tensor, device, memory_config=None):
+    """Move a ttnn.Tensor to device, using ReplicateTensorToMesh for mesh devices."""
+    if tensor is None:
+        return None
+    if memory_config is None:
+        memory_config = ttnn.DRAM_MEMORY_CONFIG
+    is_mesh = hasattr(device, "get_num_devices") and device.get_num_devices() > 1
+    if is_mesh and (tensor.device() is None or tensor.device() != device):
+        try:
+            torch_t = ttnn.to_torch(tensor)
+            return ttnn.from_torch(
+                torch_t,
+                dtype=tensor.dtype,
+                layout=tensor.layout,
+                device=device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                memory_config=memory_config,
+            )
+        except Exception:
+            return ttnn.to_device(tensor, device, memory_config=memory_config)
+    return ttnn.to_device(tensor, device, memory_config=memory_config)
+
+
 def set_device_wrap(device):
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
+    is_mesh = device is not None and hasattr(device, "get_num_devices") and device.get_num_devices() > 1
+
+    def _host_to_mesh(tt):
+        """Move a HOST ttnn.Tensor to a mesh device via replication."""
+        try:
+            torch_t = ttnn.to_torch(tt)
+            return ttnn.from_torch(
+                torch_t,
+                dtype=tt.dtype,
+                layout=tt.layout,
+                device=device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        except Exception:
+            return ttnn.to_device(tt, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     def _set_device_wrap(e):
         if isinstance(e, ttnn.Tensor) and device is not None and e.device() != device:
-            e = ttnn.to_device(e, device)
+            if is_mesh and e.device() is None:
+                e = _host_to_mesh(e)
+            else:
+                e = ttnn.to_device(e, device)
         elif isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None and e.ttnn_tensor.device() != device:
-            e.ttnn_tensor = ttnn.to_device(e.ttnn_tensor, device)
+            if is_mesh and e.ttnn_tensor.device() is None:
+                e.ttnn_tensor = _host_to_mesh(e.ttnn_tensor)
+            else:
+                e.ttnn_tensor = ttnn.to_device(e.ttnn_tensor, device)
         if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
             assert e.ttnn_tensor.device() is not None
         return e
@@ -418,15 +463,33 @@ def fast_unwrap_to_device(device):
     """Lightweight transform: extract ttnn.Tensor and ensure on-device. No TorchTTNNTensor wrapping."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
+    is_mesh = device is not None and hasattr(device, "get_num_devices") and device.get_num_devices() > 1
+
+    def _to_device_safe(t):
+        if is_mesh and (t.device() is None or t.device() != device):
+            try:
+                torch_t = ttnn.to_torch(t)
+                return ttnn.from_torch(
+                    torch_t,
+                    dtype=t.dtype,
+                    layout=t.layout,
+                    device=device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            except Exception:
+                return ttnn.to_device(t, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.to_device(t, device)
+
     def _transform(e):
         if isinstance(e, TorchTTNNTensor):
             t = e.ttnn_tensor if e.ttnn_tensor is not None else e.to_ttnn
             if device is not None and t.device() != device:
-                t = ttnn.to_device(t, device)
+                t = _to_device_safe(t)
             return t
         elif isinstance(e, ttnn.Tensor):
             if device is not None and e.device() != device:
-                e = ttnn.to_device(e, device)
+                e = _to_device_safe(e)
             return e
         return e
 
@@ -559,13 +622,20 @@ class NormalRun:
             return self.elem
 
         def _to_torch(self):
-            is_mesh_device = self.ttnn_distributed_tensor_config is not None
-            if is_mesh_device:
-                result = ttnn.to_torch(
-                    self.ttnn_tensor, mesh_composer=self.ttnn_distributed_tensor_config.mesh_composer
-                ).to(self.device, self.dtype)
+            tt = self.ttnn_tensor
+            dev = tt.device()
+            is_mesh = dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1
+            if is_mesh:
+                result = ttnn.to_torch(ttnn.get_device_tensors(tt)[0]).to(self.device, self.dtype)
+            elif self.ttnn_distributed_tensor_config is not None:
+                result = ttnn.to_torch(tt, mesh_composer=self.ttnn_distributed_tensor_config.mesh_composer).to(
+                    self.device, self.dtype
+                )
+                logical = self.ttnn_distributed_tensor_config.get_logical_shape(tt.shape)
+                if result.shape[0] != logical[0]:
+                    result = result[: logical[0]]
             else:
-                result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
+                result = ttnn.to_torch(tt).to(self.device, self.dtype)
             return result
 
         result = self.elem
@@ -592,9 +662,6 @@ class NormalRun:
         self.ttnn_tensor = ttnn.from_torch(
             self.elem.cpu(),
             dtype=torch_dtype_to_ttnn_dtype(self.elem.dtype),
-            mesh_mapper=self.ttnn_distributed_tensor_config.mesh_mapper
-            if self.ttnn_distributed_tensor_config
-            else None,
             layout=ttnn.TILE_LAYOUT if self.dtype == torch.bool else None,
         )
         return self.ttnn_tensor

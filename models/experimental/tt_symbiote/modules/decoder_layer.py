@@ -193,12 +193,16 @@ class TTNNDeepseekV2DecoderLayer(TTNNModule):
     def _ensure_ttnn(self, t):
         """Convert torch.Tensor to on-device ttnn.Tensor if needed."""
         if isinstance(t, torch.Tensor) and not isinstance(t, ttnn.Tensor):
+            kwargs = {}
+            if hasattr(self.device, "get_num_devices") and self.device.get_num_devices() > 1:
+                kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
             return ttnn.from_torch(
                 t.to(torch.bfloat16),
                 device=self.device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                **kwargs,
             )
         if t.layout != ttnn.TILE_LAYOUT:
             t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
