@@ -509,13 +509,34 @@ struct SdpaReduceWorker {
         static constexpr uint32_t cb_r1_result_ms = cbR1ResultMs;
         static constexpr uint32_t cb_l_out = cbLOut;
         static constexpr uint32_t scale_fp32 = scaleFp32;
-        static constexpr uint32_t tiles_per_l_chunk = tilesPerLChunk;
-        static constexpr uint32_t num_l_chunks = numLChunks;
+        static constexpr uint32_t transport_tiles_per_l_chunk = tilesPerLChunk;
+        static constexpr uint32_t transport_num_l_chunks = numLChunks;
         static constexpr uint32_t position_enabled = positionEnabled;
         static constexpr uint32_t per_device_chunk_size = perDeviceChunkSize;
         static constexpr bool final_reduction = finalReduction;
-        // SDPA uses "block_size" terminology
-        static constexpr uint32_t block_size = tilesPerLChunk;
+        static constexpr uint32_t total_l_tiles = transport_num_l_chunks * transport_tiles_per_l_chunk;
+        // Blackhole's non-dense SDPA srcB-reuse path tops out at 8 logical 8x32 tiles per block.
+        static constexpr uint32_t max_compute_block_size = 8;
+
+        static constexpr uint32_t derive_compute_block_size() {
+            if constexpr (transport_tiles_per_l_chunk <= max_compute_block_size) {
+                return transport_tiles_per_l_chunk;
+            } else {
+                for (uint32_t candidate = max_compute_block_size; candidate > 0; --candidate) {
+                    if ((total_l_tiles % candidate) == 0) {
+                        return candidate;
+                    }
+                }
+                return 1;
+            }
+        }
+
+        // SDPA uses "block_size" terminology on the compute path.
+        static constexpr uint32_t block_size = derive_compute_block_size();
+        static_assert(block_size > 0, "compute block_size must be > 0");
+        static_assert(block_size <= max_compute_block_size, "compute block_size exceeds supported maximum");
+        static_assert(total_l_tiles % block_size == 0, "total_l_tiles must be divisible by compute block_size");
+        static constexpr uint32_t num_l_blocks = total_l_tiles / block_size;
     };
 
     // ========================================================================
@@ -810,8 +831,7 @@ struct SdpaReduceWorker {
                 unified_kernels::update_local_cb_rd_ptr(
                     CTArgs::cb_neighbor_l, neighbor_cb_base_rd_ptr + 0 * neighbor_cb_page_size);
                 unified_kernels::update_local_cb_rd_ptr(
-                    CTArgs::cb_neighbor_ms,
-                    neighbor_cb_base_rd_ptr + (CTArgs::num_l_chunks * CTArgs::block_size) * neighbor_cb_page_size);
+                    CTArgs::cb_neighbor_ms, neighbor_cb_base_rd_ptr + CTArgs::total_l_tiles * neighbor_cb_page_size);
             }));
 
             // ROUND 1: reduce(local, r1_neighbor) -> r1_result (unnormalized)
@@ -821,7 +841,7 @@ struct SdpaReduceWorker {
                 false /* untilize - R1 doesn't untilize */,
                 CTArgs::block_size,
                 CTArgs::scale_fp32,
-                CTArgs::num_l_chunks,
+                CTArgs::num_l_blocks,
                 vector_mode>(
                 CTArgs::cb_neighbor_ms,
                 CTArgs::cb_local_ms,
@@ -838,16 +858,15 @@ struct SdpaReduceWorker {
             // No cb_wait_front needed: NCRISC always pushes all MS CBs unconditionally
             // (even for invalid neighbors with dummy data), so tiles are guaranteed present.
             cb_pop_front(CTArgs::cb_neighbor_ms, 1);
-            cb_pop_front(CTArgs::cb_neighbor_l, CTArgs::num_l_chunks * CTArgs::block_size);
+            cb_pop_front(CTArgs::cb_neighbor_l, CTArgs::total_l_tiles);
 
             UNPACK(({
                 unified_kernels::update_local_cb_rd_ptr(
                     CTArgs::cb_neighbor_l,
-                    neighbor_cb_base_rd_ptr + (CTArgs::num_l_chunks * CTArgs::block_size + 1) * neighbor_cb_page_size);
+                    neighbor_cb_base_rd_ptr + (CTArgs::total_l_tiles + 1) * neighbor_cb_page_size);
                 unified_kernels::update_local_cb_rd_ptr(
                     CTArgs::cb_neighbor_ms,
-                    neighbor_cb_base_rd_ptr +
-                        (2 * CTArgs::num_l_chunks * CTArgs::block_size + 1) * neighbor_cb_page_size);
+                    neighbor_cb_base_rd_ptr + (2 * CTArgs::total_l_tiles + 1) * neighbor_cb_page_size);
             }));
 
             // ROUND 2: reduce(r1_result, r2_neighbor) -> final output (normalized L)
@@ -862,7 +881,7 @@ struct SdpaReduceWorker {
                 true /* untilize */,
                 CTArgs::block_size,
                 CTArgs::scale_fp32,
-                CTArgs::num_l_chunks,
+                CTArgs::num_l_blocks,
                 vector_mode>(
                 CTArgs::cb_neighbor_ms,
                 CTArgs::cb_r1_result_ms,
@@ -878,7 +897,7 @@ struct SdpaReduceWorker {
             // Do NOT pop cb_r1_result_ms — BRISC owns that pop (writer_impl line 668)
             // after send_streaming() reads it for R2 forwarding.
             cb_pop_front(CTArgs::cb_neighbor_ms, 1);
-            cb_pop_front(CTArgs::cb_neighbor_l, CTArgs::num_l_chunks * CTArgs::block_size);
+            cb_pop_front(CTArgs::cb_neighbor_l, CTArgs::total_l_tiles);
             UNPACK(({
                 unified_kernels::update_local_cb_rd_ptr(CTArgs::cb_neighbor_l, neighbor_cb_base_rd_ptr);
                 unified_kernels::update_local_cb_rd_ptr(CTArgs::cb_neighbor_ms, neighbor_cb_base_rd_ptr);

@@ -39,6 +39,54 @@ def _get_element_size_bytes(dtype):
     raise ValueError(f"Unsupported dtype for sdpa_reduce_to_all: {dtype}")
 
 
+def _compute_sdpa_out_tiles(batch_size: int, l_width: int, tile_height: int, tile_width: int) -> int:
+    input_l_num_pages = (batch_size // tile_height) * (l_width // tile_width)
+
+    pnh = 8
+    dh = input_l_num_pages * tile_width
+    dht = dh // tile_width
+    pnht = pnh // tile_height
+    return pnht * dht
+
+
+def _compute_sdpa_l_chunk_layout(
+    out_tiles: int,
+    input_page_size_bytes: int,
+    *,
+    max_payload_size_bytes: int | None = None,
+) -> tuple[int, int, int]:
+    if out_tiles <= 0:
+        raise ValueError(f"out_tiles must be > 0, got {out_tiles}")
+    if input_page_size_bytes <= 0:
+        raise ValueError(f"input_page_size_bytes must be > 0, got {input_page_size_bytes}")
+
+    if max_payload_size_bytes is None:
+        max_tiles_per_chunk = 8
+        min_num_l_chunks = (out_tiles + max_tiles_per_chunk - 1) // max_tiles_per_chunk
+        num_l_chunks = max(min_num_l_chunks, 4)
+        if out_tiles % num_l_chunks != 0:
+            raise ValueError("out_tiles must be divisible by num_l_chunks")
+        tiles_per_l_chunk = out_tiles // num_l_chunks
+        return num_l_chunks, tiles_per_l_chunk, tiles_per_l_chunk * input_page_size_bytes
+
+    max_tiles_per_chunk = max_payload_size_bytes // input_page_size_bytes
+    if max_tiles_per_chunk == 0:
+        raise ValueError(
+            "Fabric max payload size is smaller than a single L tile payload: "
+            f"{max_payload_size_bytes} < {input_page_size_bytes}"
+        )
+
+    for tiles_per_l_chunk in range(min(out_tiles, max_tiles_per_chunk), 0, -1):
+        if out_tiles % tiles_per_l_chunk == 0:
+            num_l_chunks = out_tiles // tiles_per_l_chunk
+            return num_l_chunks, tiles_per_l_chunk, tiles_per_l_chunk * input_page_size_bytes
+
+    raise ValueError(
+        f"Could not derive payload-constrained chunking for out_tiles={out_tiles}, "
+        f"input_page_size_bytes={input_page_size_bytes}, max_payload_size_bytes={max_payload_size_bytes}"
+    )
+
+
 def compute_forwarder_scratch_size(
     batch_size: int,
     l_width: int,
@@ -47,6 +95,7 @@ def compute_forwarder_scratch_size(
     tile_width: int = 32,
     bytes_per_element: int = 2,
     num_links: int = 2,
+    max_payload_size_bytes: int | None = None,
 ):
     """
     Compute the total forwarder scratch buffer size in bytes for SDPA reduce-to-all.
@@ -54,22 +103,12 @@ def compute_forwarder_scratch_size(
     This matches the calculation in sdpa_reduce_to_all/op.py for proper L1 allocation.
     """
     input_page_size_bytes = tile_height * tile_width * bytes_per_element
-    input_l_num_pages = (batch_size // tile_height) * (l_width // tile_width)
-
-    PNH = 8
-    DH = input_l_num_pages * tile_width
-    DHt = DH // tile_width
-    PNHt = PNH // tile_height
-    out_tiles = PNHt * DHt
-
-    max_tiles_per_chunk = 8
-    min_num_l_chunks = (out_tiles + max_tiles_per_chunk - 1) // max_tiles_per_chunk
-    num_l_chunks = max(min_num_l_chunks, 4)
-    if out_tiles % num_l_chunks != 0:
-        raise ValueError("out_tiles must be divisible by num_l_chunks")
-
-    tiles_per_l_chunk = out_tiles // num_l_chunks
-    l_chunk_size_bytes = tiles_per_l_chunk * input_page_size_bytes
+    out_tiles = _compute_sdpa_out_tiles(batch_size, l_width, tile_height, tile_width)
+    num_l_chunks, _tiles_per_l_chunk, l_chunk_size_bytes = _compute_sdpa_l_chunk_layout(
+        out_tiles,
+        input_page_size_bytes,
+        max_payload_size_bytes=max_payload_size_bytes,
+    )
 
     header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
     l1_alignment = 16
@@ -300,27 +339,18 @@ class SdpaReduceToAll:
                 l1_alignment = 16
                 aligned_page_size = _round_up(input_page_size_bytes, l1_alignment)
 
-                input_l_num_pages = (shard_spec.shape[0] // tile_height) * (shard_spec.shape[1] // tile_width)
-
-                PNH = 8
-                DH = input_l_num_pages * tile_width
-                DHt = DH // tile_width
-                PNHt = PNH // tile_height
-                Sq_chunk_t = PNHt
-                out_tiles = Sq_chunk_t * DHt
-
-                max_tiles_per_chunk = 8
-                min_num_l_chunks = (out_tiles + max_tiles_per_chunk - 1) // max_tiles_per_chunk
-                num_l_chunks = max(min_num_l_chunks, 4)
-                if out_tiles % num_l_chunks != 0:
-                    raise ValueError("out_tiles must be divisible by num_l_chunks")
-
-                tiles_per_l_chunk = out_tiles // num_l_chunks
-                l_chunk_size_bytes = tiles_per_l_chunk * input_page_size_bytes
+                out_tiles = _compute_sdpa_out_tiles(
+                    batch_size=shard_spec.shape[0],
+                    l_width=shard_spec.shape[1],
+                    tile_height=tile_height,
+                    tile_width=tile_width,
+                )
+                num_l_chunks, tiles_per_l_chunk, l_chunk_size_bytes = _compute_sdpa_l_chunk_layout(
+                    out_tiles,
+                    input_page_size_bytes,
+                    max_payload_size_bytes=max_fabric_payload_size,
+                )
                 ms_tile_size_bytes = aligned_page_size
-
-                if l_chunk_size_bytes > max_fabric_payload_size:
-                    raise ValueError("L chunk payload exceeds fabric max payload size")
 
                 # Slots are sized for the largest payload (L chunk); MS uses slot 0.
                 header_cb_size = _round_up(packet_header_size_bytes, l1_alignment)

@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Run DeepSeek CCL trace tests under tracy for a matrix of num_links and max
-payload sizes, then summarize top-level zone durations from
-profile_log_device.csv.
+Run DeepSeek CCL trace tests under tracy for per-CCL parameter sweeps, then
+summarize top-level zone durations from profile_log_device.csv.
 
 Op time definition:
 - Parse only trace id 1 from profile_log_device.csv.
@@ -40,10 +39,12 @@ class CCLConfig:
     default_num_links: tuple[int, ...]
     supported_num_links: tuple[int, ...]
     transport_mode: str
-    env_num_links: str
+    env_num_links: str | None
     env_max_payload_size: str
     top_level_zones: tuple[str, ...]
     zone_labels: dict[str, str]
+    fixed_setup_description: str | None = None
+    show_num_links_in_report: bool = True
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,35 @@ CCL_CONFIGS = {
             "CCL_COMPUTE": "compute",
         },
     ),
+    "sdpa_reduce_to_all": CCLConfig(
+        title="SDPA reduce-to-all trace perf matrix",
+        test_target=(
+            "models/demos/deepseek_v3_b1/tests/unit_tests/test_sdpa_reduce_to_all.py::" "test_sdpa_reduce_to_all_trace"
+        ),
+        benchmark_shape=(8, 4096),
+        default_num_links=(2,),
+        supported_num_links=(2,),
+        transport_mode="fixed forwarder topology",
+        env_num_links=None,
+        env_max_payload_size="SDPA_REDUCE_TO_ALL_MAX_PAYLOAD_SIZE_BYTES",
+        top_level_zones=(
+            "SDPA_REDUCE_READER",
+            "SDPA_REDUCE_WRITER",
+            "SDPA_REDUCE_COMPUTE",
+            "SDPA_REDUCE_FORWARDER",
+        ),
+        zone_labels={
+            "SDPA_REDUCE_READER": "reader",
+            "SDPA_REDUCE_WRITER": "writer",
+            "SDPA_REDUCE_COMPUTE": "compute",
+            "SDPA_REDUCE_FORWARDER": "forwarder",
+        },
+        fixed_setup_description=(
+            "2 forwarder cores total; each forwarder core binds to one physical link, "
+            "with BRISC/NCRISC handling the two traffic directions on that core."
+        ),
+        show_num_links_in_report=False,
+    ),
 }
 
 RISC_ORDER = {
@@ -138,7 +168,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-links",
         default=None,
-        help="Comma or space separated num_links values. Defaults are CCL-specific.",
+        help="Comma or space separated num_links values for CCLs that expose num_links as a sweep knob.",
     )
     parser.add_argument(
         "--max-payload-sizes",
@@ -475,7 +505,6 @@ def render_summary_section(
         f"Test target: {test_target}",
         f"Configured benchmark shape: {format_shape(config.benchmark_shape)}",
         f"Configured transport mode: {config.transport_mode}",
-        f"Configured num_links: {', '.join(str(v) for v in num_links_list)}",
         f"Trace id: {TRACE_ID}",
         "Source: profile_log_device.csv only (top-level zones only; no micro-profiling).",
         "Conversion: us = cycles / CHIP_FREQ[MHz], ns = cycles * 1000 / CHIP_FREQ[MHz].",
@@ -483,6 +512,10 @@ def render_summary_section(
         f"Top-level zones: {', '.join(config.top_level_zones)}",
         "",
     ]
+    if config.show_num_links_in_report:
+        lines.insert(3, f"Configured num_links: {', '.join(str(v) for v in num_links_list)}")
+    elif config.fixed_setup_description is not None:
+        lines.insert(3, f"Setup: {config.fixed_setup_description}")
 
     if not results:
         lines.append("Results pending.")
@@ -493,34 +526,59 @@ def render_summary_section(
     lines.append("Observed CHIP_FREQ[MHz]: " + ", ".join(format_float(freq, 3) for freq in observed_freqs))
     lines.append("")
 
-    summary_headers = ["num_links", "max_payload_size_bytes", "op_time_us", "op_cycles", "op_bucket"]
     summary_rows = []
-    result_lookup = {}
-    for result in results:
-        row = [
-            str(result.num_links),
-            str(result.max_payload_size),
-            format_float(cycles_to_us(result.op_cycles, result.chip_freq_mhz), 3),
-            format_float(result.op_cycles, 1),
-            bucket_display(result.op_bucket, config),
-        ]
-        summary_rows.append(row)
-        result_lookup[(result.num_links, result.max_payload_size)] = result
+    if config.show_num_links_in_report:
+        summary_headers = ["num_links", "max_payload_size_bytes", "op_time_us", "op_cycles", "op_bucket"]
+        result_lookup = {}
+        for result in results:
+            row = [
+                str(result.num_links),
+                str(result.max_payload_size),
+                format_float(cycles_to_us(result.op_cycles, result.chip_freq_mhz), 3),
+                format_float(result.op_cycles, 1),
+                bucket_display(result.op_bucket, config),
+            ]
+            summary_rows.append(row)
+            result_lookup[(result.num_links, result.max_payload_size)] = result
 
-    matrix_headers = ["num_links \\ max_payload"] + [str(payload) for payload in max_payload_sizes]
-    matrix_rows_us = []
-    matrix_rows_cycles = []
-    for num_links in num_links_list:
-        row_us = [str(num_links)]
-        row_cycles = [str(num_links)]
+        matrix_headers = ["num_links \\ max_payload"] + [str(payload) for payload in max_payload_sizes]
+        matrix_rows_us = []
+        matrix_rows_cycles = []
+        for num_links in num_links_list:
+            row_us = [str(num_links)]
+            row_cycles = [str(num_links)]
+            for max_payload in max_payload_sizes:
+                result = result_lookup.get((num_links, max_payload))
+                value_us = cycles_to_us(result.op_cycles, result.chip_freq_mhz) if result is not None else None
+                value_cycles = result.op_cycles if result is not None else None
+                row_us.append(format_float(value_us, 3))
+                row_cycles.append(format_float(value_cycles, 1))
+            matrix_rows_us.append(row_us)
+            matrix_rows_cycles.append(row_cycles)
+    else:
+        summary_headers = ["max_payload_size_bytes", "op_time_us", "op_cycles", "op_bucket"]
+        result_lookup = {}
+        for result in results:
+            row = [
+                str(result.max_payload_size),
+                format_float(cycles_to_us(result.op_cycles, result.chip_freq_mhz), 3),
+                format_float(result.op_cycles, 1),
+                bucket_display(result.op_bucket, config),
+            ]
+            summary_rows.append(row)
+            result_lookup[result.max_payload_size] = result
+
+        matrix_headers = ["metric"] + [str(payload) for payload in max_payload_sizes]
+        row_us = ["op_time_us"]
+        row_cycles = ["op_cycles"]
         for max_payload in max_payload_sizes:
-            result = result_lookup.get((num_links, max_payload))
+            result = result_lookup.get(max_payload)
             value_us = cycles_to_us(result.op_cycles, result.chip_freq_mhz) if result is not None else None
             value_cycles = result.op_cycles if result is not None else None
             row_us.append(format_float(value_us, 3))
             row_cycles.append(format_float(value_cycles, 1))
-        matrix_rows_us.append(row_us)
-        matrix_rows_cycles.append(row_cycles)
+        matrix_rows_us = [row_us]
+        matrix_rows_cycles = [row_cycles]
 
     lines.append("### Per-run overview")
     lines.append("")
@@ -586,11 +644,14 @@ def render_details_section(
         f"Test target: {test_target}",
         f"Configured benchmark shape: {format_shape(config.benchmark_shape)}",
         f"Configured transport mode: {config.transport_mode}",
-        f"Configured num_links: {', '.join(str(v) for v in num_links_list)}",
         f"Trace id: {TRACE_ID}",
         "Source: profile_log_device.csv only (top-level zones only; no micro-profiling).",
         "",
     ]
+    if config.show_num_links_in_report:
+        lines.insert(3, f"Configured num_links: {', '.join(str(v) for v in num_links_list)}")
+    elif config.fixed_setup_description is not None:
+        lines.insert(3, f"Setup: {config.fixed_setup_description}")
 
     if not results:
         lines.append("Results pending.")
@@ -599,7 +660,10 @@ def render_details_section(
 
     bucket_order = collect_bucket_order(results, config)
     for result in results:
-        lines.append(f"### num_links={result.num_links}, max_payload_size_bytes={result.max_payload_size}")
+        if config.show_num_links_in_report:
+            lines.append(f"### num_links={result.num_links}, max_payload_size_bytes={result.max_payload_size}")
+        else:
+            lines.append(f"### max_payload_size_bytes={result.max_payload_size}")
         lines.append("")
         lines.append(f"Report: {result.report_path}")
         lines.append(f"CHIP_FREQ[MHz]: {format_float(result.chip_freq_mhz, 3)}")
@@ -747,9 +811,14 @@ def main() -> int:
     for ccl in selected_ccls:
         config = CCL_CONFIGS[ccl]
         test_targets[ccl] = args.test_target or config.test_target
-        num_links_list = (
-            parse_int_list(args.num_links) if args.num_links is not None else list(config.default_num_links)
-        )
+        if config.env_num_links is None:
+            if args.num_links is not None:
+                raise RuntimeError(f"{ccl} does not expose num_links as a sweep knob")
+            num_links_list = list(config.default_num_links)
+        else:
+            num_links_list = (
+                parse_int_list(args.num_links) if args.num_links is not None else list(config.default_num_links)
+            )
         if not num_links_list:
             raise RuntimeError("num_links list is empty")
         invalid_num_links = [value for value in num_links_list if value not in config.supported_num_links]
@@ -768,7 +837,8 @@ def main() -> int:
         for max_payload in max_payload_sizes:
             for num_links in num_links_list:
                 env = os.environ.copy()
-                env[config.env_num_links] = str(num_links)
+                if config.env_num_links is not None:
+                    env[config.env_num_links] = str(num_links)
                 env[config.env_max_payload_size] = str(max_payload)
 
                 before = set(list_profile_logs(report_root))
@@ -827,15 +897,25 @@ def main() -> int:
                 write_text_sync(summary_path, summary_text)
                 write_text_sync(details_path, details_text)
 
-                print(
-                    "Updated reports after ccl={}, num_links={}, max_payload_size_bytes={}: op_time={} us ({:.1f} cycles)".format(
-                        ccl,
-                        num_links,
-                        max_payload,
-                        format_float(cycles_to_us(op_cycles, chip_freq_mhz), 3),
-                        op_cycles,
+                if config.show_num_links_in_report:
+                    print(
+                        "Updated reports after ccl={}, num_links={}, max_payload_size_bytes={}: op_time={} us ({:.1f} cycles)".format(
+                            ccl,
+                            num_links,
+                            max_payload,
+                            format_float(cycles_to_us(op_cycles, chip_freq_mhz), 3),
+                            op_cycles,
+                        )
                     )
-                )
+                else:
+                    print(
+                        "Updated reports after ccl={}, max_payload_size_bytes={}: op_time={} us ({:.1f} cycles)".format(
+                            ccl,
+                            max_payload,
+                            format_float(cycles_to_us(op_cycles, chip_freq_mhz), 3),
+                            op_cycles,
+                        )
+                    )
 
     print(f"Wrote summary: {summary_path}")
     print(f"Wrote details: {details_path}")
