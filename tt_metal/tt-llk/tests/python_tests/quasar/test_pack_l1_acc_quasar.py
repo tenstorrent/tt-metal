@@ -163,12 +163,13 @@ def test_pack_l1_acc_quasar(
     )
 
     # This test accumulates the results of each block on top of each other
+    # Slice the full golden into per-block partials and accumulate
     elements_per_block = output_tiles_in_block * num_faces * face_r_dim * FACE_C_DIM
     partials = [
         full_golden[block * elements_per_block : (block + 1) * elements_per_block]
         for block in range(output_num_blocks)
     ]
-    golden_tensor = PackGolden.apply_l1_accumulation(
+    golden_tensor = generate_golden.apply_l1_accumulation(
         partials, data_format=formats.output_format
     )
 
