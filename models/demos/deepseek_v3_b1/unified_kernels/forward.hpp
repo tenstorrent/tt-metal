@@ -119,7 +119,6 @@ struct Forward {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsWorkerCore && CTArgs::is_entry_column) {
-                DPRINT << "start of forward op (entry)\n";
                 static_assert(noc_mode == DM_DYNAMIC_NOC);
                 SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                 set_receiver_socket_page_size(recv, args.socket_page_size);
@@ -141,69 +140,68 @@ struct Forward {
 
 #elif defined(COMPILE_FOR_NCRISC)
             if constexpr (IsWorkerCore && CTArgs::is_entry_column) {
-                DPRINT << "start of forward op NCRISC (entry)\n";
+                // Wait for BRISC's socket-staged payload in cb0. cb0 is bound to a
+                // separate persistent staging region (sdpa_out_interm scratch in
+                // op.py:_overlap_cbs_with_sdpa_buffer) — *not* the residual tensor.
+                // This mirrors main's Broadcast, where bcast_pkt_cb aliases the
+                // standalone bcast_input_tensor (≠ residual_mcast_src tensor).
                 cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                 const uint32_t src = get_read_ptr(CTArgs::cb0_id);
                 constexpr uint32_t tensor_size_bytes = CTArgs::tensor_page_size * CTArgs::num_pages_to_read;
                 const uint64_t dst = get_noc_addr(args.my_noc_x, args.my_noc_y, args.tensor_address, 0);
-                DPRINT << "FWD_NCRISC_DBG (entry): src_cb=" << CTArgs::cb0_id << " src_l1_addr=" << HEX() << src
-                       << " tensor_address=" << args.tensor_address << " bytes=" << DEC() << tensor_size_bytes
-                       << " noc=(" << args.my_noc_x << "," << args.my_noc_y << ")\n";
+                // Real local copy from the staging buffer into the residual tensor
+                // so downstream residual_mcast / RMSNorm can read it. Identical to
+                // Broadcast root's noc_async_write(src=bcast_input, dst=residual).
                 noc_async_write(src, dst, tensor_size_bytes);
                 noc_async_write_barrier();
-                // After write+barrier, dump first 8 u16 from the tensor L1 region to confirm
-                // the embedding actually landed at tensor_address (vs. e.g. wrong NOC route).
-                {
-                    invalidate_l1_cache();
-                    volatile tt_l1_ptr uint16_t* ptr =
-                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(args.tensor_address);
-                    DPRINT << "FWD_NCRISC_DBG: post-write tensor[0..8] (raw u16): " << HEX() << ptr[0] << " " << ptr[1]
-                           << " " << ptr[2] << " " << ptr[3] << " " << ptr[4] << " " << ptr[5] << " " << ptr[6] << " "
-                           << ptr[7] << DEC() << "\n";
-                }
 
                 if constexpr (CTArgs::enable_cross_column) {
-                    DPRINT << "forward: sending cross-column via fabric\n";
-                    const uint32_t staging_addr = src;
+                    // BCAST-style fabric send: header lives in PacketHeaderPool (a
+                    // separate L1 region managed by the fabric stack), and the data
+                    // is shipped *directly* from the persistent source buffer via
+                    // send_payload_without_header. This is the key invariant that
+                    // lets the receiver-side semaphore double as a data-ready signal
+                    // without needing an extra barrier semaphore — see Broadcast.
+                    PacketHeaderPool::reset();
 
                     size_t fabric_arg_idx = 0;
                     auto sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
                         fabric_arg_idx);
-                    sender.open();
+                    sender.open_start();
+                    volatile PACKET_HEADER_TYPE* hdr = PacketHeaderPool::allocate_header();
+                    fabric_set_unicast_route(
+                        hdr, static_cast<uint16_t>(args.partner_chip_id), static_cast<uint16_t>(args.partner_mesh_id));
+                    sender.open_finish();
 
-                    constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
+                    const uint64_t sem_noc =
+                        get_noc_addr(args.partner_noc_x, args.partner_noc_y, args.cross_col_sem_addr);
                     uint32_t bytes_sent = 0;
                     for (uint32_t pkt = 0; pkt < CTArgs::num_fabric_packets; pkt++) {
                         uint32_t chunk_size = CTArgs::fabric_max_payload;
                         if (bytes_sent + chunk_size > CTArgs::cross_column_payload) {
                             chunk_size = CTArgs::cross_column_payload - bytes_sent;
                         }
-
-                        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr =
-                            reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(staging_addr);
-                        fabric_set_unicast_route(
-                            hdr,
-                            static_cast<uint16_t>(args.partner_chip_id),
-                            static_cast<uint16_t>(args.partner_mesh_id));
-                        uint64_t dest_noc =
+                        const uint64_t dest_noc =
                             get_noc_addr(args.partner_noc_x, args.partner_noc_y, args.partner_tensor_addr + bytes_sent);
-                        uint64_t sem_noc =
-                            get_noc_addr(args.partner_noc_x, args.partner_noc_y, args.cross_col_sem_addr);
                         hdr->to_noc_fused_unicast_write_atomic_inc(
                             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dest_noc, sem_noc, 1, false},
                             chunk_size);
-                        DPRINT << "FWD_NCRISC_DBG: cross-col pkt "
-                               << " dest_noc=" << (uint32_t)dest_noc << " sem_noc=" << (uint32_t)sem_noc
-                               << " chunk_size=" << (uint32_t)chunk_size << "\n";
-
-                        noc_async_write(
-                            args.tensor_address + bytes_sent,
-                            get_noc_addr(args.my_noc_x, args.my_noc_y, staging_addr + pkt_hdr_bytes),
-                            chunk_size);
-                        noc_async_write_barrier();
 
                         sender.wait_for_empty_write_slot();
-                        sender.send_payload_flush_non_blocking_from_address(staging_addr, pkt_hdr_bytes + chunk_size);
+                        // Ship pure data straight from the persistent source buffer.
+                        sender.send_payload_without_header_non_blocking_from_address(src + bytes_sent, chunk_size);
+                        // Ship the header from the pool — never touches the data buffer.
+                        sender.send_payload_flush_non_blocking_from_address(
+                            reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
+
+                        // Single-header reuse: the NOC reads of `hdr` issued by the
+                        // flush above are non-blocking and may still be in flight when
+                        // we next overwrite `hdr` via to_noc_fused_unicast_write_atomic_inc.
+                        // wait_for_empty_write_slot() waits on EDM slot availability,
+                        // *not* on our L1 reads draining. Flush here so the next iter's
+                        // header write doesn't race with the previous send. Mirrors
+                        // broadcast.hpp's noc_async_writes_flushed() between rotations.
+                        noc_async_writes_flushed();
 
                         bytes_sent += chunk_size;
                     }
@@ -215,22 +213,16 @@ struct Forward {
                 cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                 DPRINT << "end of forward op NCRISC (entry)\n";
             } else if constexpr (IsWorkerCore && !CTArgs::is_entry_column) {
-                DPRINT << "start of forward op NCRISC (non-entry): waiting for fabric"
-                       << " tensor_address=" << HEX() << args.tensor_address << DEC() << "\n";
                 volatile tt_l1_ptr uint32_t* sem =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.cross_col_sem_addr);
-                while (*sem < CTArgs::num_fabric_packets) {
-                    invalidate_l1_cache();
-                }
-                noc_semaphore_set(sem, 0);
-                {
-                    invalidate_l1_cache();
-                    volatile tt_l1_ptr uint16_t* ptr =
-                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(args.tensor_address);
-                    DPRINT << "FWD_NCRISC_DBG (non-entry): post-fabric tensor[0..8] (raw u16): " << HEX() << ptr[0]
-                           << " " << ptr[1] << " " << ptr[2] << " " << ptr[3] << " " << ptr[4] << " " << ptr[5] << " "
-                           << ptr[6] << " " << ptr[7] << DEC() << "\n";
-                }
+                noc_semaphore_wait_min(sem, CTArgs::num_fabric_packets);
+                // Atomic decrement, NOT noc_semaphore_set(sem, 0). The next iteration's
+                // entry device may have already started fabric-sending; an in-flight
+                // atomic_inc that arrives between wait_min returning and us zeroing
+                // `sem` would be silently dropped, causing the next wait to hang.
+                // Same pattern as broadcast.hpp's semaphore_dec(sem_ptrs[link_idx], ...).
+                unified_kernels::semaphore_dec(sem, CTArgs::num_fabric_packets);
+
                 DPRINT << "end of forward op NCRISC (non-entry): data received\n";
             }
 

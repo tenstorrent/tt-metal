@@ -282,6 +282,11 @@ class _MoeRoutedExpertContext:
     # Forward (per-device socket read, replaces bcast when parallel sockets are used)
     enable_forward: bool = False
     forward_params: dict = None
+    # Dedicated persistent L1 tensor backing bcast_pkt_cb (CB 46) for the forward
+    # staging buffer. Allocated separately from sdpa_out_interm_buffer so that
+    # entry-column devices (which have a smaller effective sdpa_out_interm shard)
+    # don't overflow when cb46 is packed in.
+    forward_staging_tensor: Any = None
 
 
 @dataclass
@@ -1284,8 +1289,10 @@ class MoeRoutedExpertOp:
             )
 
             reduce_payload_size_bytes = reduce_shard_elements * reduce_element_size
+            print("reduce payload size bytes:", reduce_payload_size_bytes)
             reduce_packet_header_size = 96
             reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
+            print("reduce slot size bytes:", reduce_slot_size_bytes)
 
             reduce_worker_grid = gate_proj_core_ranges
             reduce_worker_cores_list = ttnn.corerange_to_cores(reduce_worker_grid, row_wise=True)
@@ -2915,6 +2922,50 @@ class MoeOp:
         )
         return [ttnn.create_global_semaphore(device, available_cores, 0) for _ in range(MoeSem.NUM_SEMAPHORES)]
 
+    @staticmethod
+    def create_forward_staging_tensor(mesh_device, sender_core, K, dtype=ttnn.bfloat16):
+        """Allocate the dedicated persistent L1 buffer that backs cb46 (forward staging).
+
+        MUST be called BEFORE any persistent pipeline kernel is launched so that
+        the host-to-device upload performed by ttnn.from_torch doesn't deadlock
+        against an already-busy dispatch queue.
+
+        Args:
+            mesh_device: ttnn.MeshDevice the MoE op will run on.
+            sender_core: ttnn.CoreCoord of the MoE sender core (e.g. (12, 9)).
+            K: Hidden size (number of elements along the activation row).
+            dtype: Element dtype of the staging buffer (default bfloat16).
+
+        Returns:
+            ttnn.Tensor: a height-sharded L1 tensor on `sender_core` with shape
+            (1, K) per device, suitable to pass as `forward_staging_tensor` to
+            MoeOp.op().
+        """
+        import torch
+
+        sender_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
+        # Round up to a tile-multiple width (32 elements) so layout=TILE works.
+        shard_width = ((K + 31) // 32) * 32
+        shard_spec = ttnn.ShardSpec(
+            sender_grid,
+            (1, shard_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        mem_cfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            shard_spec,
+        )
+        torch_zeros = torch.zeros((1, shard_width), dtype=torch.bfloat16)
+        return ttnn.from_torch(
+            torch_zeros,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=mem_cfg,
+            tile=ttnn.Tile([1, 32]),
+        )
+
     # ------------------------------------------------------------------
     # Shared utility setup APIs (used by both routed and shared experts)
     # ------------------------------------------------------------------
@@ -3997,38 +4048,68 @@ class MoeOp:
         shared_ctx.output_gather_params["receiver_data_addr"] = out_addr + cb38_offset
         out_offset += cb38_total_size
 
-        # ── Forward staging CB (bcast_pkt_cb / CB 46) → sdpa_out_interm_buffer ──
-        # Sender-core only. Must NOT alias the residual_mcast_src tensor: Forward
-        # NCRISC writes a fabric packet header into staging_addr=get_read_ptr(cb46)
-        # before sending; if that aliases the residual tensor, the header overwrites
-        # the embedding's leading bytes, corrupting MoE's input on every device.
+        # Forward staging CB (bcast_pkt_cb / CB 46).
+        #
+        # Preferred: bind cb46 to a dedicated persistent L1 tensor
+        # (`forward_staging_tensor`) provided by the caller. This avoids any
+        # interaction with sdpa_out_interm_buffer's per-device shard size, which
+        # is too small on entry-column devices (3 and 7) and used to overflow
+        # by ~9.7 KB, corrupting adjacent receiver semaphores and stalling
+        # downstream multicasts at noc_semaphore_wait.
+        #
+        # Legacy fallback (only when the caller didn't pre-allocate the
+        # staging buffer): pack cb46 at `out_offset` inside sdpa_out_interm_buffer.
+        # This preserves backwards compatibility with older tests that haven't
+        # been updated to pass `forward_staging_tensor`.
         if routed_ctx.enable_forward and routed_ctx.bcast_pkt_cb is not None:
-            cb46_offset = out_offset
             cb46_cb_id = routed_ctx.bcast_pkt_cb
             cb46_total_size = routed_ctx.forward_params["payload_size_bytes"]
             rmsnorm_fmt = routed_ctx.rmsnorm_output_cb_descriptor.format_descriptors[0]
             cb46_page_size = rmsnorm_fmt.page_size
             cb46_tile = rmsnorm_fmt.tile
-            print(
-                f"[overlap] bcast_pkt_cb (forward staging): cb_id={cb46_cb_id} "
-                f"offset={cb46_offset} size={cb46_total_size} page_size={cb46_page_size}",
-                flush=True,
-            )
-            cb46_desc = ttnn.cb_descriptor_from_sharded_tensor(
-                cb46_cb_id,
-                out_buf,
-                address_offset=cb46_offset,
-                total_size=cb46_total_size,
-            )
-            cb46_fmt = ttnn.CBFormatDescriptor(
-                buffer_index=cb46_cb_id,
-                data_format=routed_ctx.data_format,
-                page_size=cb46_page_size,
-                tile=cb46_tile,
-            )
-            cb46_desc.format_descriptors = [cb46_fmt]
-            routed_ctx.bcast_pkt_cb_descriptor = cb46_desc
-            out_offset += cb46_total_size
+
+            if routed_ctx.forward_staging_tensor is not None:
+                print(
+                    f"[overlap] bcast_pkt_cb (forward staging) -> dedicated PB: cb_id={cb46_cb_id} "
+                    f"size={cb46_total_size} page_size={cb46_page_size}",
+                    flush=True,
+                )
+                cb46_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                    cb46_cb_id,
+                    routed_ctx.forward_staging_tensor,
+                )
+                cb46_fmt = ttnn.CBFormatDescriptor(
+                    buffer_index=cb46_cb_id,
+                    data_format=routed_ctx.data_format,
+                    page_size=cb46_page_size,
+                    tile=cb46_tile,
+                )
+                cb46_desc.format_descriptors = [cb46_fmt]
+                routed_ctx.bcast_pkt_cb_descriptor = cb46_desc
+                # NOTE: out_offset is intentionally NOT incremented — cb46 no
+                # longer consumes space in sdpa_out_interm_buffer.
+            else:
+                cb46_offset = out_offset
+                print(
+                    f"[overlap] bcast_pkt_cb (forward staging, LEGACY overlap): cb_id={cb46_cb_id} "
+                    f"offset={cb46_offset} size={cb46_total_size} page_size={cb46_page_size}",
+                    flush=True,
+                )
+                cb46_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                    cb46_cb_id,
+                    out_buf,
+                    address_offset=cb46_offset,
+                    total_size=cb46_total_size,
+                )
+                cb46_fmt = ttnn.CBFormatDescriptor(
+                    buffer_index=cb46_cb_id,
+                    data_format=routed_ctx.data_format,
+                    page_size=cb46_page_size,
+                    tile=cb46_tile,
+                )
+                cb46_desc.format_descriptors = [cb46_fmt]
+                routed_ctx.bcast_pkt_cb_descriptor = cb46_desc
+                out_offset += cb46_total_size
 
         # ── Reduce: CB 24 (add_cb_out / reduce_local_cb) → sdpa_out_interm_buffer ──
         # When reduce is enabled, CB 24 is a working buffer (not final output).
@@ -4705,6 +4786,7 @@ class MoeOp:
             cross_col_payload = 0
             if self.exit_column is not None:
                 fabric_max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+                print("fabric max payload: ", fabric_max_payload)
                 cross_col_payload = int(socket_page_size)
                 num_fabric_packets = (cross_col_payload + fabric_max_payload - 1) // fabric_max_payload
 
@@ -4938,6 +5020,11 @@ class MoeOp:
         bcast_sender_coord=None,
         socket=None,
         forward_sockets=None,
+        # Pre-allocated persistent L1 tensor backing cb46 (forward staging buffer).
+        # Must be allocated BEFORE any persistent pipeline kernels are launched so
+        # that the host-to-device upload doesn't deadlock against the dispatch
+        # queue. See `MoeOp.create_forward_staging_tensor` helper.
+        forward_staging_tensor=None,
         reconfig_moe_cbs=False,
         semaphores=None,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
@@ -5038,6 +5125,22 @@ class MoeOp:
         if sdpa_kv_cache_buffer is not None and sdpa_out_interm_buffer is not None:
             sdpa_kv_cache_buffer_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)[0]
             sdpa_out_interm_buffer_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)[0]
+
+            # Bind the dedicated cb46 staging tensor (must be allocated by the
+            # caller BEFORE persistent pipeline kernels are launched, otherwise
+            # the host-to-device upload required by ttnn.from_torch deadlocks
+            # against the running dispatch queue).
+            #
+            # If the caller didn't provide one (e.g. older tests), we fall back
+            # to the legacy behavior of packing cb46 inside sdpa_out_interm_buffer
+            # via _overlap_cbs_with_sdpa_buffer.
+            if routed_ctx.enable_forward and forward_staging_tensor is not None:
+                routed_ctx.forward_staging_tensor = forward_staging_tensor
+                print(
+                    f"[MoeOp] using caller-provided forward_staging_tensor (cb46 backing): "
+                    f"shape={forward_staging_tensor.shape}",
+                    flush=True,
+                )
 
             reduce_all_cores_set = None
             if routed_ctx.enable_reduce_to_all and routed_ctx.reduce_params:
@@ -5244,6 +5347,9 @@ class MoeOp:
             io_tensors += [ctx.bcast_input_tensor]
         if ctx.bcast_intermediate_tensor is not None:
             io_tensors += [ctx.bcast_intermediate_tensor]
+        # Keep forward staging tensor (cb46 backing) alive for the lifetime of MoeOp
+        if ctx.routed_ctx.forward_staging_tensor is not None:
+            io_tensors += [ctx.routed_ctx.forward_staging_tensor]
         return io_tensors
 
     def _build_kernel_defines(self):
@@ -5373,6 +5479,8 @@ class MoeOp:
         # Forward: per-device sockets (replaces bcast when parallel sockets are used).
         # List of sockets, one per device in the mesh.
         forward_sockets=None,
+        # Pre-allocated cb46 staging buffer (must be created before pipeline launch).
+        forward_staging_tensor=None,
         # CB reconfig for fusion with preceding op
         reconfig_moe_cbs=False,
         # Global semaphores (created by MoeOp.create_semaphores)
@@ -5478,6 +5586,7 @@ class MoeOp:
             bcast_sender_coord=bcast_sender_coord,
             socket=socket,
             forward_sockets=forward_sockets,
+            forward_staging_tensor=forward_staging_tensor,
             reconfig_moe_cbs=reconfig_moe_cbs,
             semaphores=semaphores,
             noc_mode=noc_mode,
