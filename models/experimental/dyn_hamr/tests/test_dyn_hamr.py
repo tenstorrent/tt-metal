@@ -26,6 +26,7 @@ import torch
 FRAMES = int(os.environ.get("DYN_HAMR_FRAMES", "3"))
 WARMUP = int(os.environ.get("DYN_HAMR_WARMUP", "1"))
 BATCH = int(os.environ.get("DYN_HAMR_BATCH", "1"))
+TRIALS = int(os.environ.get("DYN_HAMR_TRIALS", "3"))
 
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -46,14 +47,24 @@ def _emit(speed_fps: float, accuracy: float, peak_dram_bytes: int) -> None:
 
 
 def _time_forward(model, sample: torch.Tensor) -> float:
+    """Report the median fps across ``TRIALS`` independent timed runs.
+
+    Noise on a shared Blackhole host (single-digit-FPS workloads) was ±5% —
+    enough to mask a ~5% speedup.  The median of 3 knocks that down to ~1%
+    without burning many extra seconds.
+    """
     with torch.no_grad():
         for _ in range(WARMUP):
             model(sample)
-        t0 = time.perf_counter()
-        for _ in range(FRAMES):
-            model(sample)
-        dt = time.perf_counter() - t0
-    return (FRAMES * sample.shape[0]) / dt if dt > 0 else 0.0
+        fps_samples = []
+        for _ in range(TRIALS):
+            t0 = time.perf_counter()
+            for _ in range(FRAMES):
+                model(sample)
+            dt = time.perf_counter() - t0
+            fps_samples.append((FRAMES * sample.shape[0]) / dt if dt > 0 else 0.0)
+    fps_samples.sort()
+    return fps_samples[len(fps_samples) // 2]
 
 
 def _try_import_tt():
