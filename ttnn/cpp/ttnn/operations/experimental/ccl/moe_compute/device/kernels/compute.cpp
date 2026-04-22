@@ -133,9 +133,9 @@ void kernel_main() {
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
     constexpr uint32_t w2_dram_tiles_h = has_bias ? (num_w2_tiles_h + 1) : num_w2_tiles_h;
     constexpr uint32_t w2_txns_h = (w2_dram_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;
+    // When has_bias, w2_dram_tiles_h includes the bias row, so w2_blocks_per_four_mm2_tile already
+    // accounts for the extra block needed by the bias tile — it serves as the per-A2A-iter loop bound.
     constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;
-    constexpr uint32_t w2_blocks_per_expert =
-        has_bias ? (w2_blocks_per_four_mm2_tile * moe_ring::NUM_A2A_ITERS_B) : moe_ring::W2_BLOCKS_PER_EXPERT;
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -241,27 +241,14 @@ void kernel_main() {
                 uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
 
                 tile_regs_acquire();
-                if constexpr (has_bias) {
-                    uint32_t k_tracker = 0;
-                    for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
-                        cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                [[maybe_unused]] uint32_t k_tracker = 0;
+                for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
+                    cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
-                        for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
-                            if (k_tracker < num_w0_w1_tiles_h) {
-                                matmul_block(
-                                    cb_s2c_in,
-                                    cb_r2c_w0_w1,
-                                    in0_index++,
-                                    /*in1_index=*/k,
-                                    /*idst=*/0,
-                                    /*transpose=*/false,
-                                    /*ct_dim=*/4,
-                                    /*rt_dim=*/1,
-                                    /*kt_dim=*/1);
-                                k_tracker++;
-                            } else if (k_tracker == num_w0_w1_tiles_h) {
-                                // Bias addition: matmul(ones_tile, bias_row); then skip padding K slots in this block
-                                // and in later blocks (DRAM blocks > logical K + bias).
+                    for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
+                        if constexpr (has_bias) {
+                            if (k_tracker == num_w0_w1_tiles_h) {
+                                // Bias addition: matmul(ones_tile, bias_row)
                                 matmul_block(
                                     cb_c2c_ones_tile,
                                     cb_r2c_w0_w1,
@@ -273,28 +260,27 @@ void kernel_main() {
                                     /*rt_dim=*/1,
                                     /*kt_dim=*/1);
                                 k_tracker++;
+                                continue;
+                            } else if (k_tracker > num_w0_w1_tiles_h) {
+                                k_tracker++;
+                                continue;  // skip padding K slots after bias
                             }
                         }
-                        cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-                    }
-                } else {
-                    for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
-                        cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-
-                        for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
-                            matmul_block(
-                                cb_s2c_in,
-                                cb_r2c_w0_w1,
-                                in0_index++,
-                                /*in1_index=*/k,
-                                /*idst=*/0,
-                                /*transpose=*/false,
-                                /*ct_dim=*/4,
-                                /*rt_dim=*/1,
-                                /*kt_dim=*/1);
+                        matmul_block(
+                            cb_s2c_in,
+                            cb_r2c_w0_w1,
+                            in0_index++,
+                            /*in1_index=*/k,
+                            /*idst=*/0,
+                            /*transpose=*/false,
+                            /*ct_dim=*/4,
+                            /*rt_dim=*/1,
+                            /*kt_dim=*/1);
+                        if constexpr (has_bias) {
+                            k_tracker++;
                         }
-                        cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
                     }
+                    cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
                 }
 
                 tile_regs_commit();
@@ -339,38 +325,14 @@ void kernel_main() {
 
                 tile_regs_acquire();
                 if constexpr (has_bias) {
-                    // Per-iteration block count: total blocks split evenly across A2A iterations.
-                    // Matches GPT-OSS: w2_bias_blocks_per_iter = w2_blocks_per_expert / num_a2a_iters
-                    constexpr uint32_t w2_blocks_per_iter = w2_blocks_per_expert / num_a2a_iters;
-                    // Reset k_tracker each iteration — each A2A iter processes all weight tiles + bias
+                    // w2_blocks_per_four_mm2_tile already accounts for the bias row; equals the
+                    // per-A2A-iteration block count (w2_blocks_per_expert / num_a2a_iters).
                     uint32_t w2_k_tracker = 0;
 
-                    for (uint32_t block_id = 0; block_id < w2_blocks_per_iter; ++block_id) {
+                    for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
                         cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
                         for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                            if (w2_k_tracker < num_w2_tiles_h) {
-                                if (dm1_tiles_remaining == 0) {
-                                    cb_pop_front(cb_w2c_rdy, 1);
-                                    cb_wait_front(cb_w2c_rdy, 1);
-                                    dm1_tiles_remaining =
-                                        moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][++dm1_step];
-                                    in2_offset += tiles_per_step;
-                                    in2_index = in2_offset;
-                                }
-                                dm1_tiles_remaining--;
-
-                                matmul_block(
-                                    cb_s2c_in2,
-                                    cb_r2c_w2,
-                                    in2_index++,
-                                    /*in1_index=*/k,
-                                    /*idst=*/0,
-                                    /*transpose=*/false,
-                                    /*ct_dim=*/4,
-                                    /*rt_dim=*/1,
-                                    /*kt_dim=*/1);
-                                w2_k_tracker++;
-                            } else if (w2_k_tracker == num_w2_tiles_h) {
+                            if (w2_k_tracker == num_w2_tiles_h) {
                                 // Bias addition: matmul(ones_tile, bias_row); padding K slots do not consume in2/dm1.
                                 matmul_block(
                                     cb_c2c_ones_tile,
@@ -383,7 +345,32 @@ void kernel_main() {
                                     /*rt_dim=*/1,
                                     /*kt_dim=*/1);
                                 w2_k_tracker++;
+                                continue;
+                            } else if (w2_k_tracker > num_w2_tiles_h) {
+                                w2_k_tracker++;
+                                continue;  // skip padding K slots after bias
                             }
+                            if (dm1_tiles_remaining == 0) {
+                                cb_pop_front(cb_w2c_rdy, 1);
+                                cb_wait_front(cb_w2c_rdy, 1);
+                                dm1_tiles_remaining =
+                                    moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][++dm1_step];
+                                in2_offset += tiles_per_step;
+                                in2_index = in2_offset;
+                            }
+                            dm1_tiles_remaining--;
+
+                            matmul_block(
+                                cb_s2c_in2,
+                                cb_r2c_w2,
+                                in2_index++,
+                                /*in1_index=*/k,
+                                /*idst=*/0,
+                                /*transpose=*/false,
+                                /*ct_dim=*/4,
+                                /*rt_dim=*/1,
+                                /*kt_dim=*/1);
+                            w2_k_tracker++;
                         }
                         cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                     }
