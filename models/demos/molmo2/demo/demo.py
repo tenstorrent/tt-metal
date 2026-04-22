@@ -1588,9 +1588,7 @@ class Molmo2Generator:
                 kv_caches=self.kv_caches,  # Pass KV cache to fill during prefill
                 rot_mats=rot_mats,
                 page_table=page_table_for_trace,
-                last_token_idx=trace_tensors["hidden_states"].shape[-2] - 1
-                if trace_tensors["hidden_states"].shape[-2] > 8192
-                else None,
+                last_token_idx=trace_tensors["hidden_states"].shape[-2] - 1,
             )
 
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -2262,6 +2260,7 @@ class Molmo2Generator:
             current_pos=self.current_pos,
             rot_mats=rot_mats_warmup,
             page_table=page_table_for_trace,
+            last_token_idx=compile_hidden.shape[-2] - 1,
         )
         ttnn.deallocate(compile_hidden)
         ttnn.deallocate(compile_logits)
@@ -2280,6 +2279,7 @@ class Molmo2Generator:
                 current_pos=self.current_pos,
                 rot_mats=rot_mats,
                 page_table=page_table_for_trace,
+                last_token_idx=trace_tensors["hidden_states"].shape[-2] - 1,
             )
 
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -2573,9 +2573,7 @@ class Molmo2Generator:
                 kv_caches=self.kv_caches,  # Pass KV cache to compile fill_cache
                 rot_mats=rot_mats,
                 page_table=effective_page_table,  # Compile paged attention ops
-                last_token_idx=trace_tensors["hidden_states"].shape[-2] - 1
-                if trace_tensors["hidden_states"].shape[-2] > 8192
-                else None,
+                last_token_idx=trace_tensors["hidden_states"].shape[-2] - 1,
             )
         else:
             # Non-traced path: use page_table argument if provided, else try trace_tensors
@@ -2600,7 +2598,7 @@ class Molmo2Generator:
                 kv_caches=self.kv_caches,  # Also pass KV cache for non-traced warmup
                 rot_mats=rot_mats,
                 page_table=effective_page_table,  # Pass page_table for paged attention
-                last_token_idx=hidden_states_ttnn.shape[-2] - 1 if hidden_states_ttnn.shape[-2] > 8192 else None,
+                last_token_idx=hidden_states_ttnn.shape[-2] - 1,
             )
 
         compile_time = (time.perf_counter() - start) * 1000
@@ -2622,6 +2620,7 @@ class Molmo2Generator:
             current_pos=self.current_pos,
             rot_mat_idxs=self.rot_mat_idxs,
             page_table=page_table,
+            last_token_idx=hidden_states.shape[-2] - 1 if hidden_states.shape[-2] > 8192 else None,
         )
 
         compile_time = (time.perf_counter() - start) * 1000
@@ -3091,6 +3090,7 @@ class Molmo2Generator:
                 current_pos=self.current_pos,
                 rot_mat_idxs=self.rot_mat_idxs,
                 page_table=effective_page_table,
+                last_token_idx=hidden_states.shape[-2] - 1 if hidden_states.shape[-2] > 8192 else None,
             )
             ttnn.synchronize_device(self.mesh_device)
             decode_time = (time.perf_counter() - start_time) * 1000
@@ -4487,7 +4487,7 @@ def main():
     parser.add_argument(
         "--k-pool",
         type=int,
-        default=None,
+        default=24,
         metavar="K",
         help=(
             "Vision pooling k_pool = pool_h * pool_w (e.g. 4 → 2×2, 9 → 3×3, 24 → 4×6; non-square k picks factors near √k). "

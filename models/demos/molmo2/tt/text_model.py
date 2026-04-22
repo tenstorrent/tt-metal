@@ -334,6 +334,7 @@ class TextModel(LightweightModule):
         rot_mats: Optional[List[ttnn.Tensor]] = None,
         rot_mat_idxs: Optional[ttnn.Tensor] = None,
         page_table: Optional[ttnn.Tensor] = None,
+        last_token_idx: Optional[int] = None,
     ) -> ttnn.Tensor:
         """
         Decode-mode forward pass (single token at a time).
@@ -373,6 +374,8 @@ class TextModel(LightweightModule):
             x = block.forward_decode(x, rot_mats, transformation_mat, kv_cache, current_pos, page_table)
 
         # Final normalization
+        if last_token_idx is not None:
+            x = ttnn.slice(x, (0, 0, last_token_idx, 0), (1, 1, last_token_idx + 1, self.hidden_dim))
         x = self.ln_f(x)
 
         # Language model head
