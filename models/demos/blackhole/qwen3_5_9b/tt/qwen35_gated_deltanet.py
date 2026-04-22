@@ -610,10 +610,6 @@ class Qwen35GatedDeltaNet:
 
         return o
 
-    def enable_inplace_state(self):
-        """Enable inplace state updates for trace capture."""
-        self.use_inplace_state = True
-
     def set_external_state(self, recurrent_state, conv_state):
         """Point layer at externally-allocated state buffers.
         Sets use_inplace_state=True so all forward passes write state inplace (preserving buffer addresses).

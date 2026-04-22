@@ -4,7 +4,6 @@
 Wraps the experimental `gated_attention_forward_ttnn()` into a module
 that manages weight tensors, KV cache, and integrates with the model framework.
 """
-import torch
 
 import ttnn
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention import gated_attention_forward_ttnn
@@ -71,155 +70,14 @@ class Qwen35GatedAttention:
             packer_l1_acc=True,
         )
 
-        # KV cache state (concat-based, default)
+        # KV cache state (concat-based prefill)
         self.past_key = None
         self.past_value = None
-        # Pre-allocated KV cache for trace capture
         self.max_seq_len = args.max_seq_len
-        self.kv_cache_key = None
-        self.kv_cache_value = None
-        self.cache_pos = 0
-        self.use_preallocated_cache = False
         # Paged attention state (for vLLM integration)
         self.paged_kv_cache_key = None
         self.paged_kv_cache_value = None
         self.use_paged_attention = False
-
-    def enable_preallocated_cache(self, batch_size=1):
-        """Allocate fixed-size KV cache for trace-compatible decode."""
-        self.kv_cache_key = ttnn.from_torch(
-            torch.zeros(batch_size, self.num_kv_heads, self.max_seq_len, self.head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self.kv_cache_value = ttnn.from_torch(
-            torch.zeros(batch_size, self.num_kv_heads, self.max_seq_len, self.head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        # Buffers to capture new K/V during trace (read by host between replays)
-        _dram = ttnn.DRAM_MEMORY_CONFIG
-        self.trace_new_k_buf = ttnn.from_torch(
-            torch.zeros(batch_size, self.num_kv_heads, 1, self.head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=_dram,
-        )
-        self.trace_new_v_buf = ttnn.from_torch(
-            torch.zeros(batch_size, self.num_kv_heads, 1, self.head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=_dram,
-        )
-        # Attention mask [1, 1, 1, max_seq_len] — 0 for valid, -inf for invalid
-        mask = torch.zeros(1, 1, 1, self.max_seq_len, dtype=torch.bfloat16)
-        mask[:, :, :, :] = -10000.0  # All invalid initially
-        self.trace_attn_mask = ttnn.from_torch(
-            mask,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=_dram,
-        )
-        # Staging position: last slot in cache, always unmasked, holds current step's K/V
-        self.staging_pos = self.max_seq_len - 1
-        # Padding zeros for update_cache (needs dim[-2]=32)
-        self.trace_kv_pad_zeros = ttnn.from_torch(
-            torch.zeros(batch_size, self.num_kv_heads, 31, self.head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=_dram,
-        )
-        # Pre-computed tensors for on-device mask computation (avoids host round-trip)
-        # Position indices [0, 1, 2, ..., max_seq_len-1] for threshold comparison
-        self.mask_indices = ttnn.from_torch(
-            torch.arange(self.max_seq_len, dtype=torch.bfloat16).reshape(1, 1, 1, -1),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=_dram,
-        )
-        # One-hot at staging position (1.0 at staging_pos, 0.0 elsewhere)
-        staging_one_hot = torch.zeros(1, 1, 1, self.max_seq_len, dtype=torch.bfloat16)
-        staging_one_hot[:, :, :, self.staging_pos] = 1.0
-        self.staging_mask = ttnn.from_torch(
-            staging_one_hot,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=_dram,
-        )
-        # Pre-allocate HEIGHT_SHARDED K/V buffers for sdpa_decode path in trace.
-        # paged_update_cache requires sharded inputs; pre-allocating avoids
-        # allocation during trace capture (which is not allowed).
-        # Logical shape is [1, N, 1, head_dim] — TILE_LAYOUT pads dim[-2] to 32 internally.
-        N = batch_size * self.num_kv_heads
-        _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(N - 1, 0))})
-        _shard_spec = ttnn.ShardSpec(_shard_grid, [32, self.head_dim], ttnn.ShardOrientation.ROW_MAJOR)
-        _sharded_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec)
-        k_buf = ttnn.from_torch(
-            torch.zeros(1, N, 1, self.head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-        self.sdpa_k_shard = ttnn.interleaved_to_sharded(k_buf, _sharded_mc)
-        ttnn.deallocate(k_buf)
-        v_buf = ttnn.from_torch(
-            torch.zeros(1, N, 1, self.head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-        self.sdpa_v_shard = ttnn.interleaved_to_sharded(v_buf, _sharded_mc)
-        ttnn.deallocate(v_buf)
-
-        self.use_preallocated_cache = True
-        self.use_trace_mode = False
-        self.cache_pos = 0
-
-    def enable_trace_mode(self):
-        """Switch to trace-compatible mode (must call enable_preallocated_cache first)."""
-        self.use_trace_mode = True
-
-    def update_cache_after_trace(self, pos):
-        """Write captured K/V into cache at the correct position (called between trace replays).
-
-        All on device — uses the same concat+update_cache pattern as the trace forward
-        path (ttnn_gated_attention.py lines 212-215). No host round-trips.
-        """
-        k_padded = ttnn.concat([self.trace_new_k_buf, self.trace_kv_pad_zeros], dim=2)
-        v_padded = ttnn.concat([self.trace_new_v_buf, self.trace_kv_pad_zeros], dim=2)
-        ttnn.update_cache(self.kv_cache_key, k_padded, update_idx=pos)
-        ttnn.update_cache(self.kv_cache_value, v_padded, update_idx=pos)
-        ttnn.deallocate(k_padded)
-        ttnn.deallocate(v_padded)
-
-    def update_mask_for_pos(self, valid_len):
-        """Update attention mask to expose positions 0..valid_len-1 + staging pos.
-
-        All on device — uses pre-computed index tensor + comparison ops.
-        No host round-trips (the old path created a CPU tensor and transferred each step).
-        """
-        # mask_indices: [0, 1, 2, ..., max_seq_len-1]
-        # valid where index < valid_len (1.0) or at staging_pos (1.0), else 0.0
-        valid = ttnn.lt(self.mask_indices, float(valid_len))
-        # staging_mask is 1.0 at staging_pos only; positions don't overlap since
-        # staging_pos = max_seq_len-1 and valid_len <= max_seq_len-1
-        combined = ttnn.add(valid, self.staging_mask)
-        # non-zero → 0.0 (unmasked), zero → -10000.0 (masked)
-        new_mask = ttnn.where(combined, 0.0, -10000.0)
-        ttnn.copy(new_mask, self.trace_attn_mask)
-        ttnn.deallocate(valid)
-        ttnn.deallocate(combined)
-        ttnn.deallocate(new_mask)
 
     def forward(self, x, cos, sin, position_tensor=None, page_table=None, chunk_page_table=None, chunk_start_idx=None):
         T = x.shape[1]
@@ -278,69 +136,7 @@ class Qwen35GatedAttention:
                 page_table=page_table,
                 paged_kv_cache_key=self.paged_kv_cache_key,
                 paged_kv_cache_value=self.paged_kv_cache_value,
-                paged_k_buf=getattr(self, "paged_k_buf", None),
-                paged_v_buf=getattr(self, "paged_v_buf", None),
             )
-            return output
-        elif self.use_preallocated_cache and self.use_trace_mode:
-            # Trace-compatible mode with sdpa_decode when position_tensor is available,
-            # fallback to staging+mask approach otherwise.
-            output, _, _ = gated_attention_forward_ttnn(
-                hidden_states=x,
-                q_proj_weight=self.q_proj_weight,
-                k_proj_weight=self.k_proj_weight,
-                v_proj_weight=self.v_proj_weight,
-                o_proj_weight=self.o_proj_weight,
-                q_norm_weight=self.q_norm_weight,
-                k_norm_weight=self.k_norm_weight,
-                cos=cos,
-                sin=sin,
-                num_attention_heads=self.num_heads,
-                num_key_value_heads=self.num_kv_heads,
-                head_dim=self.head_dim,
-                device=self.device,
-                norm_eps=self.norm_eps,
-                kv_cache_key=self.kv_cache_key,
-                kv_cache_value=self.kv_cache_value,
-                compute_kernel_config=ckc,
-                use_optimized_concat=True,
-                memory_config=mc,
-                norm_weights_pre_offset=True,
-                trace_new_k_buf=self.trace_new_k_buf,
-                trace_new_v_buf=self.trace_new_v_buf,
-                trace_attn_mask=self.trace_attn_mask,
-                trace_kv_pad_zeros=self.trace_kv_pad_zeros,
-                trace_staging_pos=self.staging_pos,
-                cur_pos_tensor=position_tensor,
-            )
-            return output
-        elif self.use_preallocated_cache:
-            output, _, _ = gated_attention_forward_ttnn(
-                hidden_states=x,
-                q_proj_weight=self.q_proj_weight,
-                k_proj_weight=self.k_proj_weight,
-                v_proj_weight=self.v_proj_weight,
-                o_proj_weight=self.o_proj_weight,
-                q_norm_weight=self.q_norm_weight,
-                k_norm_weight=self.k_norm_weight,
-                cos=cos,
-                sin=sin,
-                num_attention_heads=self.num_heads,
-                num_key_value_heads=self.num_kv_heads,
-                head_dim=self.head_dim,
-                device=self.device,
-                norm_eps=self.norm_eps,
-                kv_cache_key=self.kv_cache_key,
-                kv_cache_value=self.kv_cache_value,
-                cache_pos=self.cache_pos,
-                cache_len=self.max_seq_len,
-                compute_kernel_config=ckc,
-                use_optimized_concat=True,
-                memory_config=mc,
-                norm_weights_pre_offset=True,
-                cur_pos_tensor=position_tensor,
-            )
-            self.cache_pos += T
             return output
         else:
             # Concat path: used by non-paged prefill and short-sequence paged prefill (T<=1024).
@@ -375,39 +171,9 @@ class Qwen35GatedAttention:
         """Clear KV cache for new sequence."""
         self.past_key = None
         self.past_value = None
-        self.cache_pos = 0
 
     def set_paged_kv_cache(self, k_cache, v_cache):
         """Attach externally-allocated paged KV cache (called once after allocate_kv_cache)."""
         self.paged_kv_cache_key = k_cache
         self.paged_kv_cache_value = v_cache
         self.use_paged_attention = True
-
-    def enable_trace_buffers(self, batch_size=1):
-        """Allocate pre-sharded K/V buffers for paged attention inside trace.
-        Uses [B]-core shard grid matching paged path's [1, B, H_kv, D] input shape.
-        """
-        B = batch_size
-        head_dim = self.head_dim
-        num_kv_heads = self.num_kv_heads
-        _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(B - 1, 0))})
-        _shard_spec = ttnn.ShardSpec(_shard_grid, [32, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
-        _sharded_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec)
-
-        k_interleaved = ttnn.from_torch(
-            torch.zeros(1, B, num_kv_heads, head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-        self.paged_k_buf = ttnn.interleaved_to_sharded(k_interleaved, _sharded_mc)
-        ttnn.deallocate(k_interleaved)
-
-        v_interleaved = ttnn.from_torch(
-            torch.zeros(1, B, num_kv_heads, head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-        self.paged_v_buf = ttnn.interleaved_to_sharded(v_interleaved, _sharded_mc)
-        ttnn.deallocate(v_interleaved)
