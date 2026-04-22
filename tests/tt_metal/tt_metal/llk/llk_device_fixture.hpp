@@ -178,7 +178,7 @@ protected:
 class LLKMeshDeviceFixtureSlowDispatchOnly : public LLKMeshDeviceFixture {
 protected:
     void SetUp() override {
-        if (!this->IsSlowDispatch()) {
+        if (!detail::detect_slow_dispatch()) {
             GTEST_SKIP() << "Skipping: test requires slow dispatch (TT_METAL_SLOW_DISPATCH_MODE=1)";
         }
         LLKMeshDeviceFixture::SetUp();
@@ -210,6 +210,7 @@ protected:
     void SetUp() override {
         auto& s = shared_state();
         if (!s.initialized) {
+            // Defensive — should never happen because SetUpTestSuite runs first.
             SetUpTestSuite();
         }
         detail::apply_shared_state(*this, s);
@@ -223,6 +224,15 @@ protected:
 
 class LLKBlackholeSingleCardFixture : public LLKMeshDeviceSingleCardFixture {
 protected:
+    // Skip suite-level device init on non-Blackhole hosts; every test will be
+    // skipped in SetUp() anyway, so there's no point opening devices.
+    static void SetUpTestSuite() {
+        if (detail::detect_arch() != tt::ARCH::BLACKHOLE) {
+            return;
+        }
+        LLKMeshDeviceSingleCardFixture::SetUpTestSuite();
+    }
+
     void SetUp() override {
         if (detail::detect_arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "This test can only be run on Blackhole cards";
@@ -233,6 +243,13 @@ protected:
 
 class LLKQuasarMeshDeviceSingleCardFixture : public LLKMeshDeviceSingleCardFixture {
 protected:
+    static void SetUpTestSuite() {
+        if (detail::detect_arch() != tt::ARCH::QUASAR) {
+            return;
+        }
+        LLKMeshDeviceSingleCardFixture::SetUpTestSuite();
+    }
+
     void SetUp() override {
         if (detail::detect_arch() != tt::ARCH::QUASAR) {
             GTEST_SKIP() << "Not a Quasar device";
