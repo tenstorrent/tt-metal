@@ -28,7 +28,7 @@ struct DeepseekMoeFastReduceNcFusedReaderCtArgs {
     uint32_t act_page_size{};
     uint32_t scores_buf_page_size{};
     uint32_t scores_tile_size{};
-    uint32_t num_cores_to_be_used{};
+    uint32_t num_cores{};
     uint32_t input_granularity{};
     uint32_t reduction_dim{};
     uint32_t reduction_dim_size{};
@@ -44,16 +44,16 @@ std::vector<uint32_t> to_reader_ct_arg_vector(const DeepseekMoeFastReduceNcFused
         ct.cb_scores_id,
         ct.cb_scores_rm_id,
         ct.act_page_size,
-        ct.scores_buf_page_size,
+        ct.scores_buf_page_size,  // DRAM page size
         ct.scores_tile_size,
-        ct.num_cores_to_be_used,
+        ct.num_cores,
         ct.input_granularity,
         ct.reduction_dim,
-        ct.reduction_dim_size,
-        ct.inner_num_tiles,
-        ct.reduction_num_tiles,
+        ct.reduction_dim_size,   // experts_k
+        ct.inner_num_tiles,      // the number of tiles in the inner dimensions: [reduction_dim+1,...,rank-1]
+        ct.reduction_num_tiles,  // the number of tiles in the reduction dimension: inner_num_tiles * reduction_dim_size
         ct.num_tokens,
-        ct.scores_cb_rm_page_size,
+        ct.scores_cb_rm_page_size,  // cb_scores_rm_id page size: one page = one token row
     };
 }
 
@@ -115,12 +115,8 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
 
     auto grid = device->compute_with_storage_grid_size();
     const auto
-        [num_cores_to_be_used,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true);
+        [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
+            tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
@@ -181,7 +177,7 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
         .act_page_size = input_page_size,
         .scores_buf_page_size = scores_page_size,
         .scores_tile_size = scores_tile_size,
-        .num_cores_to_be_used = num_cores_to_be_used,
+        .num_cores = num_cores,
         .input_granularity = input_granularity,
         .reduction_dim = reduction_dim,
         .reduction_dim_size = reduction_dim_size,
@@ -197,7 +193,7 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
     std::vector<uint32_t> writer_ct_args = {
         cb_out_id,
         output_page_size,
-        num_cores_to_be_used,
+        num_cores,
         input_tensor_Wt,
         slice_Wt,
         static_cast<uint32_t>(output_tensors.size())};
@@ -280,8 +276,8 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
     ////////////////////////////////////////////////////////////////////////////
     // Each core is assigned an output work unit in a row wise round robin
     // fashion. For a given core, the first index is i, and all subsequent
-    // indices are increments of num_cores_to_be_used. The total number of
-    // units is num_tiles_per_group times num_cores_to_be_used.
+    // indices are increments of num_cores. The total number of
+    // units is num_tiles_per_group times num_cores.
     // For example, with 130 output tiles to be processed on an 8x8 grid
     // - the increment is 64
     // - the first 2 cores will have num_tiles_per_core 3 and the rest 2
@@ -310,7 +306,7 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
 
         uint32_t num_tiles_per_core =
             core_group_1.contains(core_group.ranges().at(0)) ? num_cols_per_core_group_1 : num_cols_per_core_group_2;
-        uint32_t page_id_range_length = num_tiles_per_core * num_cores_to_be_used;
+        uint32_t page_id_range_length = num_tiles_per_core * num_cores;
 
         for (const auto& core : corerange_to_cores(core_group)) {
             uint32_t start_tiles_to_read = start_tiles_read + page_id_range_length;
@@ -337,7 +333,7 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
     }
 
     return cached_program_t{
-        std::move(program), {reader_kernel_id, writer_kernel_id, corerange_to_cores(all_cores), num_cores_to_be_used}};
+        std::move(program), {reader_kernel_id, writer_kernel_id, corerange_to_cores(all_cores), num_cores}};
 }
 
 void DeepseekMoEFastReduceNCFusedProgramFactory::override_runtime_arguments(

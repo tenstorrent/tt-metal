@@ -23,7 +23,7 @@
 
 using namespace ckernel;
 
-constexpr uint32_t num_output_tiles_to_process = get_compile_time_arg_val(0);
+constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
 constexpr uint32_t reduction_dim_size = get_compile_time_arg_val(1);
 constexpr uint32_t input_granularity = get_compile_time_arg_val(2);
 constexpr uint32_t compute_input_cb_id_0 = get_compile_time_arg_val(3);
@@ -49,7 +49,7 @@ void kernel_main() {
     // Wait for all score tiles — they are pre-loaded once by the reader prologue
     // and remain resident for the entire kernel invocation.
     cb_wait_front(compute_input_cb_id_1, reduction_dim_size);
-    for (uint32_t i = 0; i < num_output_tiles_to_process; ++i) {
+    for (uint32_t i = 0; i < num_output_tiles; ++i) {
         tile_regs_acquire();
 
         for (uint32_t j = 0; j < num_input_tiles_iter; ++j) {

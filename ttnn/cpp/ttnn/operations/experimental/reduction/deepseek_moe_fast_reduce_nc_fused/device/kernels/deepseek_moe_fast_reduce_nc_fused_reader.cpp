@@ -79,17 +79,23 @@ void kernel_main() {
     // [token][1][s=1][k] -> [k][1][t][s_padded=32]
     for (uint32_t k = 0; k < reduction_dim_size; ++k) {
         volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + k * tile_u16_stride;
-        for (uint32_t t = 0; t < num_tokens; ++t) {
-            uint16_t score = scores_rm_u16[t * cb_scores_rm_page_size / 2 + k];
-            if (t < 16) {  // Face 0,1
-                expert_tile[t * 16] = score;
-            } else {  // Face 2,3
+
+        // Fill Face 0 (rows 0-15, col 0) for tokens t = 0..15
+        for (uint32_t t = 0; t < 16 && t < num_tokens; ++t) {
+            // score location in RM: t * (cb_scores_rm_page_size / 2) + k
+            uint16_t score = scores_rm_u16[t * (cb_scores_rm_page_size / 2) + k];
+            expert_tile[t * 16] = score;
+        }
+        // Fill Face 2 (rows 16-31, col 0) for tokens t = 16..num_tokens-1
+        if (num_tokens > 16) {
+            for (uint32_t t = 16; t < num_tokens; ++t) {
+                uint16_t score = scores_rm_u16[t * (cb_scores_rm_page_size / 2) + k];
                 expert_tile[512 + (t - 16) * 16] = score;
             }
         }
     }
 
-    // Step 4: Release scores to compute kernel
+    // Step 3: Release scores to compute kernel
     cb_push_back(cb_scores_id, reduction_dim_size);
     cb_push_back(cb_scores_rm_id, num_tokens);
 
