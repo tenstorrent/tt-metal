@@ -33,8 +33,7 @@ using WorkerSpecName = std::string;
 // ProgramSpec & WorkerSpec
 //------------------------------------------------
 
-// WorkerSpec describes the specific configuration of a worker node,
-// (kernels, DFBs, and semaphores) and the set of nodes it applies to.
+// WorkerSpec describes the configuration of a worker node
 struct WorkerSpec {
     // Worker type identifier
     WorkerSpecName unique_id;
@@ -59,11 +58,9 @@ struct ProgramSpec {
     std::vector<DataflowBufferSpec> dataflow_buffers;
     std::vector<SemaphoreSpec> semaphores;
 
-    // (Optional) Worker specifications.
-    // Providing WorkerSpecs explicitly improves the readability of the
-    // ProgramSpec and results in clearer error messaging.
-    // If left as std::nullopt, the runtime automatically infers WorkerSpecs
-    // based on the target_nodes fields of the kernel, DFB and semaphore specs.
+    // Worker specifications (optional on Gen1, required on Gen2+)
+    // This info is redundant, but improves clarity and messaging.
+    // (Done to simplify porting from ProgramDescriptor.)
     std::optional<std::vector<WorkerSpec>> workers = std::nullopt;
 };
 
