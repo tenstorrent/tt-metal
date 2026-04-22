@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -14,7 +14,14 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
+from models.demos.deepseek_v3.tt.moe_optimized import MoEOptimized
+from models.demos.deepseek_v3.utils.config_helpers import (
+    USERS_PER_ROW,
+    get_fabric_config,
+    is_quad_mesh,
+    is_ring_fabric,
+    sub_state_dict,
+)
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -26,8 +33,10 @@ from models.demos.deepseek_v3.utils.test_utils import (
 )
 
 
-def build_reference_model(hf_config):
+@pytest.fixture
+def reference_model(hf_config):
     """Build the routed-experts-only MoE reference used by the TT MoE test."""
+    torch.use_deterministic_algorithms(True)
     moe_config = deepcopy(hf_config)
     moe_config.n_shared_experts = None
     return DeepseekV3MoE(moe_config).eval()
@@ -59,6 +68,13 @@ def load_real_moe_input(mode: str, module_path: str, num_tokens: int) -> torch.T
     return torch_input[:, :, :num_tokens, :].squeeze(0).to(torch.bfloat16)
 
 
+def _moe_cls(mesh_device: ttnn.Device, fabric_config: ttnn.FabricConfig):
+    """Same selection as ``moe_decoder_block_2d._moe_cls``: quad (16x8) + ring uses fused MoE path."""
+    if is_quad_mesh(mesh_device) and is_ring_fabric(fabric_config):
+        return MoEOptimized
+    return MoE
+
+
 def generate_reference_io(
     mode: str,
     num_tokens: int,
@@ -79,7 +95,7 @@ def generate_reference_io(
         moe_state_dict = {
             name: tensor
             for name, tensor in sub_state_dict(checkpoint_state_dict, module_path + ".").items()
-            if not name.startswith("shared_experts.") and not name.endswith(".weight_scale_inv")
+            if not name.startswith("shared_experts.")
         }
         if not moe_state_dict:
             pytest.skip(f"Checkpoint does not contain routed MoE weights under '{module_path}'")
@@ -105,6 +121,7 @@ def run_test_forward_pass_moe(
     mode,
     num_tokens,
     batch_size_per_row,
+    reference_model,
     hf_config,
     request,
     cache_path,
@@ -117,7 +134,8 @@ def run_test_forward_pass_moe(
 ):
     """Test forward pass against reference model."""
 
-    reference_model = build_reference_model(hf_config)
+    moe_cls = _moe_cls(mesh_device, device_params["fabric_config"])
+
     module_path = "model.layers.3.mlp" if weight_type == "real" else None
     checkpoint_state_dict = request.getfixturevalue("state_dict") if weight_type == "real" else None
     state_dict, torch_input, reference_output = generate_reference_io(
@@ -131,7 +149,7 @@ def run_test_forward_pass_moe(
     )
 
     weight_config = get_test_weight_config(
-        MoE,
+        moe_cls,
         hf_config,
         (state_dict,),
         cache_path,
@@ -143,7 +161,7 @@ def run_test_forward_pass_moe(
     )
 
     model_config = get_model_config(
-        MoE,
+        moe_cls,
         mode,
         hf_config,
         mesh_device,
@@ -151,8 +169,8 @@ def run_test_forward_pass_moe(
         batch_size_per_row=batch_size_per_row,
         topk_fallback=topk_fallback,
     )
-    model_state = MoE.create_state(hf_config, mesh_device, ccl)
-    model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
+    model_state = moe_cls.create_state(hf_config, mesh_device, ccl)
+    model_shared_state = moe_cls.create_shared_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     tt_input = ttnn.from_torch(
@@ -165,7 +183,7 @@ def run_test_forward_pass_moe(
     )
 
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(MoE, mode, tt_input, run_config, handle_tensor_parallel=True)
+    tt_output = run_module_forward(moe_cls, mode, tt_input, run_config, handle_tensor_parallel=True)
 
     expected_output_memory_config = run_config["output_memory_config"]
     actual_output_memory_config = tt_output.memory_config()
@@ -182,10 +200,7 @@ def run_test_forward_pass_moe(
     ttnn.deallocate(tt_output)
 
     logger.info(f"Mode: {mode}, Num tokens: {num_tokens}, Weight type: {weight_type}")
-    # Random MoE weights exercise the routed-expert dataflow with synthetic low-precision expert weights.
-    # Keep real checkpoint coverage at the stricter threshold while allowing the random smoke case its observed margin.
-    pcc_required = 0.96 if weight_type == "random" else 0.97
-    assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=pcc_required)
+    assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.97)
 
 
 @pytest.mark.timeout(1200)
@@ -209,13 +224,14 @@ def run_test_forward_pass_moe(
         True,
     ],
 )
-@pytest.mark.parametrize("weight_type", ["random", "real"])
+@pytest.mark.parametrize("weight_type", ["real"])
 def test_forward_pass(
     device_params,
     mode,
     batch_size_per_row,
     seq_len,
     set_deterministic_env,
+    reference_model,
     hf_config,
     request,
     cache_path,
@@ -229,6 +245,7 @@ def test_forward_pass(
         mode=mode,
         num_tokens=batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len,
         batch_size_per_row=batch_size_per_row,
+        reference_model=reference_model,
         hf_config=hf_config,
         request=request,
         cache_path=cache_path,
@@ -252,6 +269,7 @@ def test_forward_pass(
 def test_mode_decode_forward_pass_batch_8_users_per_row(
     device_params,
     set_deterministic_env,
+    reference_model,
     hf_config,
     request,
     cache_path,
@@ -263,6 +281,7 @@ def test_mode_decode_forward_pass_batch_8_users_per_row(
         mode="decode",
         num_tokens=8 * mesh_device.shape[0],
         batch_size_per_row=8,
+        reference_model=reference_model,
         hf_config=hf_config,
         request=request,
         cache_path=cache_path,

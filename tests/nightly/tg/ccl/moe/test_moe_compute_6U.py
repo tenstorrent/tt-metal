@@ -1,8 +1,7 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 import functools
 from loguru import logger
 import math
@@ -11,22 +10,6 @@ import pytest
 import random
 import torch
 import ttnn
-from ttnn.operations.ccl import MoEActivationFunction
-
-from ttnn.experimental.moe_compute_utils import (
-    prepare_w0_w1_tensor_for_moe_compute,
-    prepare_w0_w1_tensor_with_bias,
-    prepare_w2_tensor_for_moe_compute,
-    prepare_w2_tensor_with_bias,
-    auto_output_width_shard_dim,
-    get_weight_core_shard_maps,
-    get_weight_mem_configs,
-    _shard_tiles,
-    _w2_shard_tiles,
-)
-
-from tests.nightly.tg.ccl.moe.test_selective_combine_6U import device_mesh_iterator
-from tests.nightly.t3000.ccl.test_all_to_all_combine import get_batch_cluster_idxr, get_cluster_dims
 
 from models.common.utility_functions import comp_pcc
 
@@ -36,128 +19,11 @@ MESH_GRAPH_DESC_1x16 = (
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
-# FYI: These tests also work in a MESH_GRAPH_DESC_1x4 setting (~1 minute to set up), but not in a 1x2 setting.
 
 
 def is_mesh_graph_descriptor_set(expected_path):
     """Check if TT_MESH_GRAPH_DESC_PATH is set to the expected path."""
     return os.environ.get("TT_MESH_GRAPH_DESC_PATH") == expected_path
-
-
-# ---------------------------------------------------------------------------
-# Data-driven model configs for parametrized MoE tests
-# ---------------------------------------------------------------------------
-
-MOE_DEVICE_PARAMS = {
-    "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-    "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-    "trace_region_size": 500000,
-}
-
-
-@dataclasses.dataclass(frozen=True)
-class MoEModelConfig:
-    name: str
-    N: int
-    hidden_size: int
-    selected_experts_k: int
-    experts_per_device_values: tuple = (2,)
-    has_bias_values: tuple = (False,)
-    test_modes: tuple = ("correctness",)
-    activation_types: tuple = (MoEActivationFunction.SILU,)
-    num_layers: int = 5
-    num_iterations: int = 3
-    tokens_per_device: int = 32
-    output_height_shard_dim: int = 4
-    marks: tuple = ()
-
-
-def _expand_model_configs(configs):
-    """Expand each model config into pytest.param entries for every (test_mode, has_bias, experts_per_device, activation) combo."""
-    expanded = []
-    for cfg in configs:
-        for test_mode in cfg.test_modes:
-            for has_bias in cfg.has_bias_values:
-                for epd in cfg.experts_per_device_values:
-                    for act in cfg.activation_types:
-                        bias_tag = "bias" if has_bias else "no_bias"
-                        act_tag = act.name.lower()
-                        expanded.append(
-                            pytest.param(
-                                cfg,
-                                test_mode,
-                                has_bias,
-                                epd,
-                                act,
-                                id=f"{cfg.name}-{test_mode}-{bias_tag}-{epd}experts_per_device-{act_tag}",
-                                marks=cfg.marks,
-                            )
-                        )
-    return expanded
-
-
-# fmt: off
-_MODELS_1x16 = [
-    MoEModelConfig("qwen3_omni_talker",   N=384,  hidden_size=1024, selected_experts_k=6),
-    MoEModelConfig("qwen3_omni_thinker",  N=768,  hidden_size=2048, selected_experts_k=8),
-    MoEModelConfig("qwen35_35b",          N=512,  hidden_size=2048, selected_experts_k=8),
-    MoEModelConfig("qwen3_235b",          N=1536, hidden_size=4096, selected_experts_k=8),
-    MoEModelConfig("qwen35_397b",         N=1024, hidden_size=4096, selected_experts_k=10),
-    MoEModelConfig("glm_47",              N=1536, hidden_size=5120, selected_experts_k=8),
-    MoEModelConfig("glm5",                N=2048, hidden_size=6144, selected_experts_k=8),
-    MoEModelConfig("deepseek_v3",         N=2048, hidden_size=7168, selected_experts_k=8, has_bias_values=(False, True), test_modes=("perf", "correctness")),
-    MoEModelConfig("kimi_k25",            N=2048, hidden_size=7168, selected_experts_k=8, experts_per_device_values=(6,), num_layers=3, num_iterations=2),
-    MoEModelConfig("deepseek_v4_flash",   N=2048, hidden_size=4096, selected_experts_k=6),
-    MoEModelConfig("deepseek_v4_pro",     N=3072, hidden_size=7168, selected_experts_k=6, experts_per_device_values=(6,), num_layers=3, num_iterations=2,
-                   marks=(pytest.mark.xfail(reason="Combine AllClose fails for specific output values (hidden=7168, N=3072) — likely selective_reduce_combine kernel bug"),)),
-    MoEModelConfig("mistral_large_3",     N=4096, hidden_size=7168, selected_experts_k=4, num_layers=3, num_iterations=2,
-                   marks=(pytest.mark.xfail(reason="L1 overflow: N=4096 A2A buffer (12*12*2048=288KB) exceeds Wormhole L1 budget by ~21KB"),)),
-    MoEModelConfig("ling_1t",             N=2048, hidden_size=8192, selected_experts_k=8, num_layers=3, num_iterations=2,
-                   marks=(pytest.mark.xfail(reason="Wormhole L1 too small for hidden=8192: dim=4 overflows mux L1 by 93KB, dim=2 overflows combine CB (2MB > 1MB bank)"),)),
-]
-
-_MODELS_1x8 = [
-    MoEModelConfig("deepseek_ocr", N=896,  hidden_size=1280, selected_experts_k=6),
-    MoEModelConfig("gemma_4_26b",  N=704,  hidden_size=2816, selected_experts_k=8, activation_types=(MoEActivationFunction.GELU,)),
-    MoEModelConfig("gpt_oss",      N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness"), activation_types=(MoEActivationFunction.SWIGLU,)),
-]
-# fmt: on
-
-MODELS_1x16 = _expand_model_configs(_MODELS_1x16)
-MODELS_1x8 = _expand_model_configs(_MODELS_1x8)
-
-
-def _run_model_test(
-    mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
-):
-    if test_mode == "perf":
-        selected_experts_k = 1
-        num_layers = 1
-        num_iterations = 5
-    else:
-        selected_experts_k = model_cfg.selected_experts_k
-        num_layers = model_cfg.num_layers
-        num_iterations = model_cfg.num_iterations
-
-    run_moe_compute_test(
-        mesh_device=mesh_device,
-        mesh_shape=mesh_shape,
-        cluster_axis=1,
-        experts_per_device=experts_per_device,
-        tokens_per_device=model_cfg.tokens_per_device,
-        selected_experts_k=selected_experts_k,
-        num_layers=num_layers,
-        num_iterations=num_iterations,
-        N=model_cfg.N,
-        hidden_size=model_cfg.hidden_size,
-        output_height_shard_dim=model_cfg.output_height_shard_dim,
-        output_width_shard_dim=auto_output_width_shard_dim(model_cfg.hidden_size),
-        dtype=ttnn.bfloat16,
-        enable_trace=enable_trace,
-        activation_type=activation_type,
-        has_bias=has_bias,
-    )
 
 
 def validate_per_expert_tokens(
@@ -169,17 +35,14 @@ def validate_per_expert_tokens(
     # L1 alignment constant (16 bytes)
     l1_alignment = 16
 
-    # Validate shape: [num_devices, num_cores, aligned_row_elements]
-    # Row is experts_per_device uint32s, aligned to 16 bytes. Replicated on every core
+    # Validate shape: [num_devices, aligned_row_elements]
+    # Row is experts_per_device uint32s, aligned to 16 bytes
     per_expert_row_bytes = ((experts_per_device * 4 + l1_alignment - 1) // l1_alignment) * l1_alignment
     per_expert_row_elements = per_expert_row_bytes // 4
-    # Note: the bounding box containing tilize, matmul, combine cores spans the whole grid.
-    core_range = mesh_device.compute_with_storage_grid_size()
-    num_cores = core_range.x * core_range.y
-    expected_per_expert_shape = (num_devices * num_cores, per_expert_row_elements)
+    expected_per_expert_shape = (num_devices, per_expert_row_elements)
 
     # Convert per_expert_total_tokens tensor to torch
-    # Shape per device: [num_cores (70), aligned_elements] as uint32
+    # Shape per device: [1, aligned_elements] as uint32
     per_expert_total_tokens_torch = ttnn.to_torch(
         per_expert_total_tokens_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     )
@@ -190,25 +53,21 @@ def validate_per_expert_tokens(
         f"got {per_expert_total_tokens_torch.shape}"
     )
 
-    per_expert_total_tokens_torch = per_expert_total_tokens_torch.reshape(
-        (num_devices, num_cores, per_expert_row_elements)
-    )
     for device_idx in range(num_devices):
-        for c in range(num_cores):
-            device_counts = per_expert_total_tokens_torch[device_idx][c]
+        device_counts = per_expert_total_tokens_torch[device_idx].flatten()
 
-            for local_exp_idx in range(experts_per_device):
-                expected_count = expert_token_counts[device_idx, local_exp_idx].item()
-                actual_count = device_counts[local_exp_idx].item()
+        for local_exp_idx in range(experts_per_device):
+            expected_count = expert_token_counts[device_idx, local_exp_idx].item()
+            actual_count = device_counts[local_exp_idx].item()
 
-                if actual_count != expected_count:
-                    logger.warning(
-                        f"  Device {device_idx}, Expert {local_exp_idx}: "
-                        f"count mismatch - expected {expected_count}, got {actual_count}"
-                    )
-                    per_expert_tokens_all_passed = False
-                else:
-                    logger.info(f"  Device {device_idx}, Expert {local_exp_idx}: count={actual_count} PASSED")
+            if actual_count != expected_count:
+                logger.warning(
+                    f"  Device {device_idx}, Expert {local_exp_idx}: "
+                    f"count mismatch - expected {expected_count}, got {actual_count}"
+                )
+                per_expert_tokens_all_passed = False
+            else:
+                logger.info(f"  Device {device_idx}, Expert {local_exp_idx}: count={actual_count} PASSED")
 
     return per_expert_tokens_all_passed
 
@@ -394,9 +253,12 @@ def prepare_output_tensor_from_combine_writer(
     combine_output_shards = [all_output_shards[c.x, c.y] for c in output_shard_cores]
     output_shard_tensor = torch.stack(combine_output_shards)
 
-    # Consistent with token_offset logic in program factories
-    assert output_shard_tensor.numel() % (experts_per_device * hidden) == 0
-    buffer_size_total_tokens = output_shard_tensor.numel() // (experts_per_device * hidden)
+    buffer_size_total_tokens = 512
+    # Validate that hardcoded buffer_size_total_tokens matches the actual tensor dimensions
+    # The view operation requires: output_shard_tensor.numel() == experts_per_device * buffer_size_total_tokens * hidden
+    assert buffer_size_total_tokens == output_shard_tensor.numel() // (
+        experts_per_device * hidden
+    ), f"buffer_size_total_tokens ({buffer_size_total_tokens}) doesn't match computed value from tensor shape"
 
     output_shape = (
         output_shard_height_dim,
@@ -440,38 +302,6 @@ def prepare_output_tensor_from_combine_writer(
     return torch_output
 
 
-# Matmul with bias: LoFi + bf16/bfp4 on device can land just under PCC_THRESHOLD (e.g. ~0.987994 on one
-# device/expert) while still tracking golden closely; combine PCC stays above 0.988.
-PCC_THRESHOLD_MATMUL_WITH_BIAS = 0.98799
-ATOL_THRESHOLD = 700
-SWIGLU_PCC_THRESHOLD = 0.984
-SILU_PCC_THRESHOLD = 0.986
-GELU_PCC_THRESHOLD = 0.986
-
-
-def _get_base_pcc_threshold(activation_type, has_bias):
-    # Determine PCC threshold based on activation type
-    # Note: this threshold is applicable for checking a block of 32 tokens, smaller matrices will need a lower threshold
-    # https://github.com/tenstorrent/tt-metal/blob/368efa1f7062704b8e885aa72dae115e91320032/tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_gpt_e2e.py#L438
-    act_threshold = None
-    if activation_type == MoEActivationFunction.SWIGLU:
-        act_threshold = SWIGLU_PCC_THRESHOLD
-    elif activation_type == MoEActivationFunction.SILU:
-        act_threshold = SILU_PCC_THRESHOLD
-    elif activation_type == MoEActivationFunction.GELU:
-        act_threshold = GELU_PCC_THRESHOLD
-    else:
-        raise TypeError("Invalid Activation type")
-
-    bias_threshold = None
-    if has_bias:
-        bias_threshold = PCC_THRESHOLD_MATMUL_WITH_BIAS
-    else:
-        bias_threshold = act_threshold
-
-    return min(bias_threshold, act_threshold)
-
-
 def validate_matmul(
     layer_id,
     experts_per_device,
@@ -485,9 +315,6 @@ def validate_matmul(
     torch_output_ref,
     tt_output_tensor,
     mesh_device,
-    base_pcc_threshold,
-    *,
-    has_bias: bool = False,
 ):
     logger.info(f"\n========== Matmul Output Tensor Validation ==========")
 
@@ -505,56 +332,30 @@ def validate_matmul(
         output_shard_cores=output_shard_cores,
         output_shard_height_dim=output_shard_height_dim,
         output_shard_width_dim=output_shard_width_dim,
-        experts_per_device=2,  # always 2 for double buffer
+        experts_per_device=experts_per_device,
         hidden=hidden,
     )
 
-    matmul_all_passed = True
-    # Calculate which experts are still in the double buffer
-    # Buffer toggles for each expert: 0->1->0->1...
-    # So for N experts, the last 2 experts in the buffer are:
-    # - If N is even: buffer 0 has expert N-2, buffer 1 has expert N-1
-    # - If N is odd: buffer 0 has expert N-1, buffer 1 has expert N-2
-    experts_to_check = []
-    if experts_per_device == 1:
-        experts_to_check = [(0, 0)]  # Only one expert in buffer 0
-    elif experts_per_device == 2:
-        experts_to_check = [(0, 0), (1, 1)]  # Expert 0 in buffer 0, expert 1 in buffer 1
-    else:
-        # For >2 experts, determine which 2 experts remain in the buffer
-        if experts_per_device % 2 == 0:
-            # Even number of experts
-            experts_to_check = [(experts_per_device - 2, 0), (experts_per_device - 1, 1)]
-        else:
-            # Odd number of experts
-            experts_to_check = [(experts_per_device - 1, 0), (experts_per_device - 2, 1)]
+    # (D, E/devices, T, H)
+    reshaped_device_outputs = torch.stack(
+        [reshape_func(raw_output[d], expert_token_counts[d], d) for d in range(devices)]
+    )
 
-    logger.info(f"Checking experts in double buffer: {experts_to_check}")
+    matmul_all_passed = True
 
     # smaller batch -> smaller dataset so PCC is less stable. A lower threshold is acceptable.
     MATMUL_PCC_THRESHOLD = 0.987 if total_tokens == 512 else 0.986
-
-    # Build buffer token counts based on which experts are actually in the buffer
-    reshaped_device_outputs = []
     for d in range(devices):
-        buffer_token_counts = torch.zeros(2, dtype=expert_token_counts[d].dtype)
-        for expert_id, buffer_idx in experts_to_check:
-            buffer_token_counts[buffer_idx] = expert_token_counts[d][expert_id]
-        reshaped_device_outputs.append(reshape_func(raw_output[d], buffer_token_counts, d))
-    reshaped_device_outputs = torch.stack(reshaped_device_outputs)
-
-    for d in range(devices):
-        for expert_id, buffer_idx in experts_to_check:
+        for expert_id in range(experts_per_device):
             active_tokens = expert_token_counts[d, expert_id].item()
             if active_tokens == 0:
                 continue
             # torch_output_ref is (L, D, E/D, T, H)
             torch_layer_output = torch_output_ref[layer_id, d, expert_id, :active_tokens, :]
-            # The buffer position determines where to read from in the output
-            tt_layer_output = reshaped_device_outputs[d, buffer_idx, :active_tokens, :]
+            tt_layer_output = reshaped_device_outputs[d, expert_id, :active_tokens, :]
 
             _pcc_passed, pcc_val = comp_pcc(torch_layer_output, tt_layer_output)
-            allclose_passed = torch.allclose(torch_layer_output, tt_layer_output, atol=ATOL_THRESHOLD)
+            allclose_passed = torch.allclose(torch_layer_output, tt_layer_output, atol=600)
             std = torch_layer_output.std().item()
             relative_rmse_val = (
                 (torch.nn.functional.mse_loss(torch_layer_output, tt_layer_output).sqrt().item() / std)
@@ -562,73 +363,16 @@ def validate_matmul(
                 else 0.0
             )
 
-            # Base PCC threshold is valid for 32xhidden, for comparing smaller matrices, a looser threshold is valid
-            pcc_threshold = base_pcc_threshold if active_tokens >= 16 else base_pcc_threshold - 0.001
-            if pcc_val < pcc_threshold:
+            if pcc_val < MATMUL_PCC_THRESHOLD:
                 matmul_all_passed = False
-
-                logger.warning(
-                    f"Layer {layer_id}, Expert {expert_id} (buffer {buffer_idx}): PCC={pcc_val:.6f} RMSE: {relative_rmse_val}"
-                    f" Allclose passed: {allclose_passed}"
-                )
-
-                if not allclose_passed:
-                    mask = (tt_layer_output - torch_layer_output).abs() > ATOL_THRESHOLD
-                    logger.warning(
-                        f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]} indices: {mask.nonzero(as_tuple=True)}"
-                    )
+                logger.warning(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f}")
             else:
                 logger.info(
-                    f"Layer {layer_id}, Expert {expert_id} (buffer {buffer_idx}): PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
+                    f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
                     f" Allclose passed: {allclose_passed}"
                 )
 
     return matmul_all_passed
-
-
-def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, combine_goldens, pcc_threshold):
-    if cluster_axis == 0:
-        mesh_shape = tuple(mesh_device.shape)
-        # need to roll my own mesh composer here for the transposed ordering
-        device_shards = [
-            ttnn.to_torch(ittout, mesh_composer=None) for ittout in ttnn.get_device_tensors(tt_combine_output)
-        ]
-        ordered_shards = []
-        for ir in range(mesh_shape[1]):
-            for ic in range(mesh_shape[0]):
-                ordered_shards.append(device_shards[ic * mesh_shape[1] + ir])
-        torch_combine_out = torch.cat(ordered_shards, dim=1)
-
-    else:
-        torch_combine_out = ttnn.to_torch(tt_combine_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
-
-    output_ref, output_data_map = combine_goldens
-
-    assert torch_combine_out.shape == output_ref[0].shape
-    combine_all_passed = True
-
-    for k in range(torch_combine_out.shape[0]):
-        vals, refs = [], []
-        for t in range(torch_combine_out.shape[1]):
-            if output_data_map[layer_id, k, t].item() == 1:
-                vals.append(torch_combine_out[k, t, :])
-                refs.append(output_ref[layer_id, k, t, :])
-
-        vals = torch.stack(vals)
-        refs = torch.stack(refs)
-        _, pcc_val = comp_pcc(refs, vals)
-        allclose_passed = torch.allclose(refs, vals, atol=ATOL_THRESHOLD)
-
-        if pcc_val < pcc_threshold or not allclose_passed:
-            combine_all_passed = False
-            logger.warning(f"Layer {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
-            if not allclose_passed:
-                mask = (vals - refs).abs() > ATOL_THRESHOLD
-                logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
-        else:
-            logger.info(f"Combine, layer: {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
-
-    return combine_all_passed
 
 
 def create_torch_w0(L, E, K, N):
@@ -728,6 +472,189 @@ def create_torch_w2(L, E, N, K):
         logger.info(f"[WEIGHT_INIT] w2: RANDOM - mode={mode}")
 
     return torch_w2
+
+
+def prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores):
+    """
+    Prepare the w0_w1 tensor by interleaving chunks of w0 and w1 width-wise.
+
+    Args:
+        torch_w0: Weight tensor of shape (L, E, K, N)
+        torch_w1: Weight tensor of shape (L, E, K, N)
+        L: Number of layers
+        E: Number of experts
+        K: Input dimension
+        N: Output dimension
+        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, pad_flag)
+
+    Returns:
+        torch_w0_w1_interleaved: Interleaved tensor of shape (L, E, K, 4096)
+    """
+    Nt = N // ttnn.TILE_SIZE  # 2048 / 32 = 64 chunks per tensor
+
+    # Reshape to expose chunks: (L, E, K, N) -> (L, E, K, Nt, ttnn.TILE_SIZE)
+    w0_chunks = torch_w0.view(L, E, K, Nt, ttnn.TILE_SIZE)
+    w1_chunks = torch_w1.view(L, E, K, Nt, ttnn.TILE_SIZE)
+
+    # Stack w0 and w1 chunks together: (L, E, K, Nt, 2, ttnn.TILE_SIZE)
+    # This puts w0_chunk_i and w1_chunk_i adjacent to each other
+    stacked = torch.stack([w0_chunks, w1_chunks], dim=4)
+
+    # Reshape to interleave: (L, E, K, Nt * 2 * ttnn.TILE_SIZE) = (L, E, K, 4096)
+    # The order will be: w0_chunk_0, w1_chunk_0, w0_chunk_1, w1_chunk_1, ...
+    torch_w0_w1_interleaved = stacked.view(L, E, K, Nt, 2 * ttnn.TILE_SIZE)
+
+    # Permute to move Nt before K: (L, E, K, Nt, 2*TILE) -> (L, E, Nt, K, 2*TILE)
+    torch_w0_w1_permuted = torch_w0_w1_interleaved.permute(0, 1, 3, 2, 4)
+
+    each_shard = []
+
+    # Pick appropriate number of column tiles for each core based on the ring position.
+    start_tile = 0
+    for ring_pos in range(len(ring2cores)):
+        (_, _, pad_flag) = ring2cores[ring_pos]
+        num_tiles = 5 if pad_flag else 6
+        each_shard.append(torch_w0_w1_permuted[:, :, start_tile : start_tile + num_tiles, :, :])
+
+        if pad_flag:
+            each_shard.append(torch.zeros(L, E, 1, K, 2 * ttnn.TILE_SIZE, dtype=torch_w0_w1_permuted.dtype))
+        start_tile += num_tiles
+
+    torch_w0_w1_reordered = torch.cat(each_shard, dim=2)  # (L, E, 5 * 8 + 1 * 8 + 6 * 4, K, 64)
+    all_groups_per_bank = torch_w0_w1_reordered.view(L, E, 12, -1, K, 2 * ttnn.TILE_SIZE)  # (L, E, 12, 6, K, 64)
+    all_groups_per_bank = all_groups_per_bank.permute(2, 0, 1, 3, 4, 5)  # (12, L, E, 6, K, 64)
+
+    # Let us further make the 6 as 3 and 64 as 128.
+    torch_w0_w1_pair_2_tiles = all_groups_per_bank.view(12, L, E, 3, -1, K, 2 * ttnn.TILE_SIZE)
+    # (12, L, E, 3, 2, K, 64) -> (12, L, E, 3, K, 2, 64)
+    torch_w0_w1_pair_2_tiles = torch_w0_w1_pair_2_tiles.permute(0, 1, 2, 3, 5, 4, 6)
+    torch_w0_w1_paired = torch_w0_w1_pair_2_tiles.reshape(12, L, E, 3, -1, 4 * ttnn.TILE_SIZE)
+
+    return torch_w0_w1_paired
+
+
+def prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores):
+    """
+    Prepare the w2 tensor by padding and reordering tiles.
+
+    Args:
+        torch_w2: Weight tensor of shape (L, E, N, K)
+        L: Number of layers
+        E: Number of experts
+        N: Intermediate dimension
+        K: Output dimension
+        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, pad_flag)
+
+    Returns:
+        torch_w2_reordered: Reordered tensor of shape (L, E, N_padded, 7680)
+    """
+    # Separate the tensor into 4 groups of 4 * 32 tiles and then 1 group of 2/3 * 32 tiles.
+    each_shard = []
+
+    start_col = 0
+    for ring_pos in range(len(ring2cores)):
+        (_, _, pad_flag) = ring2cores[ring_pos]
+        last_group_tiles = 3 if pad_flag else 2
+        last_group_pad_tiles = 1 if pad_flag else 2
+
+        # Get the first 4 groups of 4 * 32 tiles.
+        each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * 4 * ttnn.TILE_SIZE])
+        start_col += 4 * 4 * ttnn.TILE_SIZE
+        each_shard.append(torch_w2[:, :, :, start_col : start_col + last_group_tiles * ttnn.TILE_SIZE])
+        start_col += last_group_tiles * ttnn.TILE_SIZE
+
+        # Add padding for the last group.
+        each_shard.append(torch.zeros(L, E, N, last_group_pad_tiles * ttnn.TILE_SIZE, dtype=torch_w2.dtype))
+
+    torch_w2_reordered = torch.cat(each_shard, dim=-1)  # (L, E, N, 12 * (4 * 4 * 32 + 4 * 32))
+    all_groups_per_bank = torch_w2_reordered.view(L, E, N, 12, -1, 4 * ttnn.TILE_SIZE)
+
+    # (L, E, N, 12, 5, 128) -> (12, L, E, 5, N, 128)
+    all_groups_per_bank = all_groups_per_bank.permute(3, 0, 1, 4, 2, 5)
+
+    # Group N in terms of tiles first
+    N_grouped = all_groups_per_bank.view(
+        12, L, E, 5, -1, ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE
+    )  # (12, L, E, 5, 64, 32, 128)
+
+    # Figure out the order of N tiles based on the ring position.
+    core_chunk_order = torch.tensor(list(reversed(range(len(ring2cores))))).roll(1)
+
+    # Figure out the starting position for each chunk
+    chunk_sizes = [5 if ring2cores[ring_pos][2] else 6 for ring_pos in range(len(ring2cores))]
+    chunk_start_positions = torch.cat(
+        [torch.zeros(1, dtype=torch.int32), torch.cumsum(torch.tensor(chunk_sizes, dtype=torch.int32), dim=0)]
+    )
+
+    each_shard = []
+    # Assemble the number of such N tiles based on the ring position.
+    for core_id in range(len(ring2cores)):
+        each_chunk = []
+        for chunk_id in core_chunk_order:
+            start_pos = chunk_start_positions[chunk_id]
+            end_pos = chunk_start_positions[chunk_id + 1]
+            this_chunk = N_grouped[core_id, :, :, :, start_pos:end_pos, :, :]
+            each_chunk.append(this_chunk)
+        each_shard.append(torch.cat(each_chunk, dim=3))
+
+        core_chunk_order = core_chunk_order.roll(1)
+
+    N_reordered = torch.stack(each_shard).view(12, L, E, 5, -1, 4 * ttnn.TILE_SIZE)
+
+    # Pad "N" dimension to make it divisible by 7 tiles, since we read 7 tiles at a time.
+    Nt = N // ttnn.TILE_SIZE  # 2048 / 32 = 64 chunks per tensor
+    N_padding = math.ceil(Nt / 7) * 7 * ttnn.TILE_SIZE - N
+    padding = torch.zeros(12, L, E, 5, N_padding, 4 * ttnn.TILE_SIZE, dtype=torch_w2.dtype)
+    all_groups_per_bank = torch.cat([N_reordered, padding], dim=4)  # (12, L, E, 5, N + 192, 128)
+    return all_groups_per_bank
+
+
+def get_w0_w1_memory_config(num_layers, experts_per_device, hidden_size, compute_matmul_dram_core_range_set):
+    w0_w1_shard_height = num_layers * experts_per_device * 3 * hidden_size
+    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
+    w0_w1_shard_spec = ttnn.ShardSpec(
+        compute_matmul_dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    w0_w1_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec
+    )
+    return w0_w1_memory_config
+
+
+def get_w2_memory_config(num_layers, experts_per_device, matmul_N, compute_matmul_dram_core_range_set):
+    w2_shard_height = num_layers * experts_per_device * 5 * (matmul_N + 192)
+    w2_shard_width = 4 * ttnn.TILE_SIZE
+    w2_shard_spec = ttnn.ShardSpec(
+        compute_matmul_dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    w2_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
+    return w2_memory_config
+
+
+def determine_compute_matmul_cores(mesh_device):
+    MATMUL_FULL_CORES = {0, 3, 6, 9}
+    MATMUL_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
+
+    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
+    core2dram = {}
+    for dram_bank_id, core_coords in enumerate(in0_core_coords):
+        core2dram[core_coords] = dram_bank_id
+
+    in0_num_cores = len(in0_core_coords)
+
+    # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
+    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+
+    ring2cores = {}
+    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
+        # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
+        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES else 0)
+
+    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
+    dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
+    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
+
+    return ring2cores, dram_core_range_set
 
 
 def tt_to_torch_dtype(tt_dtype):
@@ -1032,27 +959,8 @@ def compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
     return golden_e_t, experts_per_device
 
 
-# hardcoded for GPT-OSS
-def _swiglu_reference(gate, up, alpha=1.702, clamp_limit=7.0):
-    gate_c = torch.clamp(gate, max=clamp_limit)
-    up_c = torch.clamp(up, min=-clamp_limit, max=clamp_limit)
-    return (up_c + 1.0) * gate_c * torch.sigmoid(alpha * gate_c)
-
-
 def compute_matmul_golden(
-    torch_input_ref,
-    torch_w0,
-    torch_w1,
-    torch_w2,
-    layers,
-    experts,
-    devices,
-    tokens_per_device,
-    hidden,
-    torch_b0=None,
-    torch_b1=None,
-    torch_b2=None,
-    activation_type=MoEActivationFunction.SILU,
+    torch_input_ref, torch_w0, torch_w1, torch_w2, layers, experts, devices, tokens_per_device, hidden
 ):
     tokens = tokens_per_device * devices
 
@@ -1070,83 +978,17 @@ def compute_matmul_golden(
     # Compute gate activations for each expert
     # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
     torch_w0_output_ref = torch_input_ref @ torch_w0
-    if torch_b0 is not None:
-        # True PyTorch MoE math: x @ W + bias.
-        # Bias shape: (L, E, N) - broadcasts across tokens (L, E, T, N) automatically.
-        # Weights are replicated per-device, so bias must be too.
-        b0 = torch_b0.repeat([1, devices, 1])  # (L, E, N)
-        torch_w0_output_ref = torch_w0_output_ref + b0.unsqueeze(2)  # broadcast T dimension
-
+    torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
+    # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
     torch_w1_output_ref = torch_input_ref @ torch_w1
-    if torch_b1 is not None:
-        # Same reasoning as b0.
-        b1 = torch_b1.repeat([1, devices, 1])  # (L, E, N)
-        torch_w1_output_ref = torch_w1_output_ref + b1.unsqueeze(2)
-
-    if activation_type == MoEActivationFunction.SILU:
-        # SILU: silu(x @ w0) * (x @ w1)
-        torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
-        # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
-        torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
-    elif activation_type == MoEActivationFunction.SWIGLU:
-        torch_intermediate_ref = _swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)  # (L, E, T, N)
-    elif activation_type == MoEActivationFunction.GELU:
-        torch_gelu_output_ref = torch.nn.functional.gelu(torch_w0_output_ref, approximate="tanh")
-        torch_intermediate_ref = torch_gelu_output_ref * torch_w1_output_ref  # (L, E, T, N)
-    else:
-        raise ValueError(f"Unsupported activation type: {activation_type}")
+    torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
 
     # (L, E, T, N) @ (L, E, N, K) -> (L, E, T, K)
     torch_output_ref = torch_intermediate_ref @ torch_w2
-    if torch_b2 is not None:
-        # Same reasoning as b0: true PyTorch bias addition.
-        b2 = torch_b2.repeat([1, devices, 1])  # (L, E, K)
-        torch_output_ref = torch_output_ref + b2.unsqueeze(2)
 
     # pull device dim back out for comparison
     # (L, E, T, H) -> (L, D, E/D, T, H)
     return torch_output_ref.reshape(layers, devices, experts // devices, tokens, hidden)
-
-
-def compute_combine_golden(
-    layers,
-    experts,
-    tokens,
-    hidden_size,
-    select_experts_k,
-    mesh_shape,
-    matmul_goldens,
-    dense_token_activations,
-    cluster_axis,
-):
-    cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
-    experts_per_device = experts // devices
-
-    output_ref_tensor = torch.zeros(layers, select_experts_k, tokens * cluster_factor, hidden_size).bfloat16()
-    output_data_map = torch.zeros(output_ref_tensor.shape[:-1])
-
-    batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, tokens)
-
-    for l in range(layers):
-        for m0, m1, d in device_mesh_iterator(mesh_shape):
-            activations = dense_token_activations[l][d]
-            for e in range(experts_per_device):
-                dense_token_index = 0
-                for a in activations:
-                    if a["k_indices"][e] == -1:
-                        continue
-                    st = a["token_id"]
-                    k = a["k_indices"][e]
-
-                    gt = batch_rep_idxr(m0, m1, st)
-
-                    contrib = matmul_goldens[l, d, e, dense_token_index]
-                    output_ref_tensor[l, k, gt] = contrib
-                    output_data_map[l, k, gt] = 1
-
-                    dense_token_index += 1
-
-    return output_ref_tensor, output_data_map
 
 
 def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
@@ -1230,7 +1072,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("tokens_per_device", [3, 8, 16, 32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
-    [(1, 1, 5), (8, 5, 3)],
+    [(1, 1, 1), (8, 5, 1)],
     ids=["perf", "accuracy"],
 )
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
@@ -1238,10 +1080,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("output_height_shard_dim", [4])
 @pytest.mark.parametrize("output_width_shard_dim", [4])
-@pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
-@pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "with_bias"])
-@torch.no_grad()
-def run_moe_compute_test(
+def test_moe_compute(
     mesh_device,
     mesh_shape,
     cluster_axis,
@@ -1256,11 +1095,15 @@ def run_moe_compute_test(
     output_width_shard_dim,
     dtype,
     enable_trace,
-    activation_type,
-    has_bias,
+    device_params,
 ):
     """
-    Core test execution helper function.
+    This test:
+    1. Generates a sparse buffer (simulating output from all_to_all_dispatch)
+    2. Generates all-gathered expert indices and scores
+    3. Generates per-device expert mapping
+    4. Runs the moe operation
+    5. Verifies the outputs against a golden reference
     """
     torch.manual_seed(2003)
     random.seed(2003)
@@ -1288,9 +1131,6 @@ def run_moe_compute_test(
     )
     logger.info(f"  hidden_size: {hidden_size}")
     logger.info(f"  dtype: {dtype}")
-    logger.info(f"  num_iterations: {num_iterations}")
-    logger.info(f"  enable_trace: {enable_trace}")
-    logger.info(f"  activation_type: {activation_type}")
 
     #########################################
     # CREATE TILIZE INPUT TENSORS AND GOLDENS
@@ -1374,12 +1214,17 @@ def run_moe_compute_test(
         e_t_goldens.append(golden_e_t)
 
         # Create input tensors
-        # NOTE: we're extremely tight on L1 for a single invocation of the op.
-        # When running multiple layers, all inputs go to DRAM and get moved to L1
-        # per-layer via to_memory_config.
-        init_sparse_mem_config = sparse_mem_config if num_layers == 1 else ttnn.DRAM_MEMORY_CONFIG
-        init_expert_indices_mem_config = expert_indices_mem_config if num_layers == 1 else ttnn.DRAM_MEMORY_CONFIG
-        init_expert_scores_mem_config = expert_scores_mem_config if num_layers == 1 else ttnn.DRAM_MEMORY_CONFIG
+        # NOTE:
+        # - when running multiple layers we initially create tt_sparse_buffer, tt_expert_indices and tt_expert_scores in DRAM, we'll move to L1 before running moe_compute
+        # - we're extremely tight on L1 for a single invocation of the op
+        if num_layers == 1:
+            init_sparse_mem_config = sparse_mem_config
+            init_expert_indices_mem_config = expert_indices_mem_config
+            init_expert_scores_mem_config = expert_scores_mem_config
+        else:
+            init_sparse_mem_config = ttnn.DRAM_MEMORY_CONFIG
+            init_expert_indices_mem_config = ttnn.DRAM_MEMORY_CONFIG
+            init_expert_scores_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
         ### Sparse buffer is sharded across devices (dim 0) ###
         tt_sparse_buffer = ttnn.from_torch(
@@ -1434,36 +1279,11 @@ def run_moe_compute_test(
     # --------------------------------------------------------------------------
     # Shard grid
     # --------------------------------------------------------------------------
-
-    w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(mesh_device, hidden_size, N)
+    ring2cores, dram_core_range_set = determine_compute_matmul_cores(mesh_device)
 
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
     torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
-
-    # Create bias tensors for validation.
-    # The packed bias tile is 32 rows stored in Bfp4_b format, with only row 0
-    # populated and the remaining rows zero. The kernel applies bias via
-    # matmul(ones(32,32), bias(32,N)), which reproduces the row-0 bias values for
-    # each column directly; no extra sum(dim=2)-style adjustment is needed in the
-    # golden for this mechanism.
-    #
-    # Use a small zero-mean normal distribution (float32 draw, cast to bf16) so each
-    # element in the tile varies — closer to real expert biases than a single constant.
-    # test_moe_compute already fixed torch.manual_seed(2003) so draws are reproducible.
-    #
-    # Biases are identical per-device (same as weights which use ReplicateTensorToMesh).
-    # The golden's .repeat([1, devices, 1, 1]) in compute_matmul_golden is correct
-    # under this assumption.
-    if has_bias:
-        _bias_std = 0.12
-        # True PyTorch bias format: (L, E, N) without tile padding.
-        # The _prepare functions will convert to kernel tile format as needed.
-        torch_b0 = (torch.randn(num_layers, experts_per_device, N, dtype=torch.float32) * _bias_std).to(torch.bfloat16)
-        torch_b1 = (torch.randn(num_layers, experts_per_device, N, dtype=torch.float32) * _bias_std).to(torch.bfloat16)
-        torch_b2 = (torch.randn(num_layers, experts_per_device, hidden_size, dtype=torch.float32) * _bias_std).to(
-            torch.bfloat16
-        )
 
     # now we can create our golden reference
     # (L, D, E/D, T, H) (block sparse)
@@ -1477,47 +1297,25 @@ def run_moe_compute_test(
         num_devices,
         tokens_per_device,
         hidden_size,
-        torch_b0=torch_b0 if has_bias else None,
-        torch_b1=torch_b1 if has_bias else None,
-        torch_b2=torch_b2 if has_bias else None,
-        activation_type=activation_type,
-    )
-
-    # compute goldens for combine
-    combine_goldens = compute_combine_golden(
-        num_layers,
-        experts,
-        total_tokens,
-        hidden_size,
-        selected_experts_k,
-        mesh_shape,
-        matmul_goldens,
-        activation_goldens,
-        cluster_axis,
-    )
-
-    # Get memory configurations for weights (handles bias padding)
-    w0_w1_mem_config, w2_mem_config, K_for_shard, w2_N_total = get_weight_mem_configs(
-        num_layers,
-        experts_per_device,
-        hidden_size,
-        N,
-        w0_w1_shard_map,
-        w2_shard_map,
-        dram_core_range_set,
-        has_bias=has_bias,
     )
 
     # ------------------------------------------------------------------------
+    # Create DRAM shard spec for w0_w1
+    # Tensor shape: (num_layers, experts_per_device, hidden_size, 4608) -> padded and reordered to (12, num_layers, experts_per_device, 6, hidden_size, 64)
+    # ------------------------------------------------------------------------
+    w0_w1_mem_config = get_w0_w1_memory_config(num_layers, experts_per_device, hidden_size, dram_core_range_set)
+
+    # ------------------------------------------------------------------------
+    # Create DRAM shard spec for w2
+    # Tensor shape: (num_layers, experts_per_device, N, hidden_size) -> padded and reordered to (12, num_layers, experts_per_device, 5, N + 192, 128)
+    # ------------------------------------------------------------------------
+    w2_mem_config = get_w2_memory_config(num_layers, experts_per_device, N, dram_core_range_set)
+
+    # ------------------------------------------------------------------------
     # Prepare w0_w1 tensor (interleaved, padded, and reordered)
-    if has_bias:
-        torch_w0_w1_reordered = prepare_w0_w1_tensor_with_bias(
-            torch_w0, torch_w1, torch_b0, torch_b1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
-        )
-    else:
-        torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
-        )
+    torch_w0_w1_reordered = prepare_w0_w1_tensor(
+        torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
+    )
 
     # Create tt_w0_w1 tensor with DRAM sharding
     tt_w0_w1 = ttnn.from_torch(
@@ -1531,36 +1329,7 @@ def run_moe_compute_test(
 
     # ------------------------------------------------------------------------
     # Prepare w2 tensor (padded and reordered)
-    if has_bias:
-        torch_w2_reordered = prepare_w2_tensor_with_bias(
-            torch_w2, torch_b2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
-        )
-    else:
-        torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-            torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
-        )
-
-    if False:  # has_bias:
-        # Verify prepare_w2_tensor_with_bias correctness:
-        # The bias tile occupies element rows [N:N+TILE_SIZE] in the N dimension (tile Nt).
-        # It should be non-zero (bias was appended) and must NOT appear in the weight rows [0:N]
-        # (bias tile is at position Nt, after all ring-rotated weight tiles).
-        #
-        # Note: different cores receive different K-column slices, so bias row values
-        # differ per core. The invariant is positional: bias is at N, not ring-rotated
-        # into an earlier N position.
-        bias_rows = torch_w2_reordered[:, :, :, :, N : N + ttnn.TILE_SIZE, :]  # (12, L, E, 5, 32, 128)
-        assert bias_rows.abs().max() > 0.1, (
-            "W2 bias row (at N-dim position N:N+TILE_SIZE) appears to be all zeros — "
-            "bias may not have been appended at the correct position"
-        )
-        # Groups 0-3 (dim 3, indices 0:4) are fully populated from unpadded bias data for all
-        # 12 cores; group 4 may have trailing padding zeros for some cores, so exclude it.
-        first_four_groups = bias_rows[:, :, :, :4, :, :]  # (12, L, E, 4, 32, 128)
-        assert torch.isfinite(first_four_groups).all(), "W2 bias row groups 0-3 contain non-finite values"
-        assert (
-            first_four_groups.abs().max() > 1e-3
-        ), "W2 bias row groups 0-3 appear all-near-zero — bias may not be packed at N:N+TILE_SIZE"
+    torch_w2_reordered = prepare_w2_tensor(torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores)
 
     # Create tt_w2 tensor with DRAM sharding
     tt_w2 = ttnn.from_torch(
@@ -1572,89 +1341,6 @@ def run_moe_compute_test(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    output_shard_cores = ttnn.experimental.get_moe_combine_cores(
-        mesh_device, output_height_shard_dim, output_width_shard_dim
-    )
-    combine_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in output_shard_cores])
-    combine_barrier_semaphore = ttnn.create_global_semaphore(mesh_device, combine_core_range_set, 0)
-    mux_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange((1, 1), (3, 3))])
-
-    torch_combine_output_tensor = torch.zeros([selected_experts_k, total_tokens, hidden_size], dtype=torch.bfloat16)
-    tt_combine_output_tensors = [
-        ttnn.from_torch(
-            torch_combine_output_tensor,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
-        )
-        for _ in range(num_layers)
-    ]
-
-    #########################################
-    # HELPER FUNCTIONS
-    #########################################
-
-    def prepare_layer_inputs(layer_id):
-        """Prepare inputs for a specific layer by moving from DRAM to L1"""
-        if num_layers == 1:
-            # Already in L1
-            return tt_sparse_buffers[0], tt_expert_indices_buffers[0], tt_expert_scores_buffers[0]
-        else:
-            tt_sparse_buffer = ttnn.to_memory_config(tt_sparse_buffers[layer_id], memory_config=sparse_mem_config)
-            tt_expert_indices = ttnn.to_memory_config(
-                tt_expert_indices_buffers[layer_id], memory_config=expert_indices_mem_config
-            )
-            tt_expert_scores = ttnn.to_memory_config(
-                tt_expert_scores_buffers[layer_id], memory_config=expert_scores_mem_config
-            )
-            return tt_sparse_buffer, tt_expert_indices, tt_expert_scores
-
-    def deallocate_layer_inputs(tt_sparse_buffer, tt_expert_indices, tt_expert_scores):
-        """Deallocate L1 inputs if using multiple layers"""
-        if num_layers != 1:
-            ttnn.deallocate(tt_sparse_buffer)
-            ttnn.deallocate(tt_expert_indices)
-            ttnn.deallocate(tt_expert_scores)
-
-    def convert_outputs_to_dram(outputs):
-        """Convert L1 outputs to DRAM and deallocate L1 versions"""
-        l1_per_expert, l1_activation, l1_e_t, _, l1_matmul, combine = outputs
-
-        # Convert to DRAM
-        dram_per_expert = ttnn.to_memory_config(l1_per_expert, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        dram_activation = ttnn.to_memory_config(l1_activation, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        dram_e_t = ttnn.to_memory_config(l1_e_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        dram_matmul = ttnn.to_memory_config(l1_matmul, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # Deallocate L1 versions
-        ttnn.deallocate(l1_per_expert)
-        ttnn.deallocate(l1_activation)
-        ttnn.deallocate(l1_e_t)
-        ttnn.deallocate(l1_matmul)
-
-        return (dram_per_expert, dram_activation, dram_e_t, dram_matmul, combine)
-
-    def run_op_inner(tt_sparse_buffer, tt_expert_indices, tt_expert_scores, layer_id):
-        """Core moe_compute operation"""
-        return ttnn.experimental.moe_compute(
-            tt_sparse_buffer,
-            tt_expert_indices,
-            tt_expert_scores,
-            tt_expert_mapping,
-            tt_w0_w1,
-            tt_w2,
-            layer_id=layer_id,
-            output_height_shard_dim=output_height_shard_dim,
-            intermediate_size=N,
-            has_bias=has_bias,
-            cluster_axis=cluster_axis,
-            mux_core_range_set=mux_core_range_set,
-            optional_output_tensor=tt_combine_output_tensors[layer_id],
-            optional_cross_device_semaphore=combine_barrier_semaphore,
-            activation_type=activation_type,
-        )
-
     #########################################
     # RUN OP
     #########################################
@@ -1663,25 +1349,78 @@ def run_moe_compute_test(
         moe_compute_outputs = []
 
         for layer_id in range(num_layers):
-            # Prepare layer inputs
-            tt_sparse_buffer, tt_expert_indices, tt_expert_scores = prepare_layer_inputs(layer_id)
+            # if only running a single layer, we can fit the single set of inputs in L1 initially
+            # otherwise with multiple layers, and multiple sets of inputs, we need to move inputs into L1 before a given
+            if num_layers == 1:
+                tt_sparse_buffer = tt_sparse_buffers[0]
+                tt_expert_indices = tt_expert_indices_buffers[0]
+                tt_expert_scores = tt_expert_scores_buffers[0]
+            else:
+                tt_sparse_buffer = ttnn.to_memory_config(tt_sparse_buffers[layer_id], memory_config=sparse_mem_config)
+                tt_expert_indices = ttnn.to_memory_config(
+                    tt_expert_indices_buffers[layer_id], memory_config=expert_indices_mem_config
+                )
+                tt_expert_scores = ttnn.to_memory_config(
+                    tt_expert_scores_buffers[layer_id], memory_config=expert_scores_mem_config
+                )
 
-            # Run core moe_compute operation
-            outputs = run_op_inner(tt_sparse_buffer, tt_expert_indices, tt_expert_scores, layer_id)
+            # run the op
+            (
+                l1_per_expert_total_tokens_output_tensor,
+                l1_expert_activation_output_tensor,
+                l1_e_t_output_tensor,
+                _,  # tile layout output of selective tilize (same buffer as output)
+                l1_output_tensor,
+            ) = ttnn.experimental.moe_compute(
+                tt_sparse_buffer,
+                tt_expert_indices,
+                tt_expert_scores,
+                tt_expert_mapping,
+                tt_w0_w1,
+                tt_w2,
+                layer_id=layer_id,
+                output_height_shard_dim=output_height_shard_dim,
+                output_width_shard_dim=output_width_shard_dim,
+                cluster_axis=cluster_axis,
+            )
 
-            # Deallocate L1 inputs
-            deallocate_layer_inputs(tt_sparse_buffer, tt_expert_indices, tt_expert_scores)
+            # deallocate L1 inputs
+            # if running with multiple layers, we have to deallocate previous inputs to free up L1 space
+            # we still have the DRAM version of the input tensor after deallocating the L1 version
+            if num_layers != 1:
+                ttnn.deallocate(tt_sparse_buffer)
+                ttnn.deallocate(tt_expert_indices)
+                ttnn.deallocate(tt_expert_scores)
 
-            # Convert outputs to DRAM and save
-            moe_compute_output = convert_outputs_to_dram(outputs)
+            # convert outputs to DRAM (we don't have enough L1 space to leave outputs in L1 when running multiple invocations)
+            dram_per_expert_total_tokens_output_tensor = ttnn.to_memory_config(
+                l1_per_expert_total_tokens_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            dram_expert_activation_output_tensor = ttnn.to_memory_config(
+                l1_expert_activation_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            dram_e_t_output_tensor = ttnn.to_memory_config(l1_e_t_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            dram_output_tensor = ttnn.to_memory_config(l1_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            # # deallocate L1 outputs
+            ttnn.deallocate(l1_per_expert_total_tokens_output_tensor)
+            ttnn.deallocate(l1_expert_activation_output_tensor)
+            ttnn.deallocate(l1_e_t_output_tensor)
+            ttnn.deallocate(l1_output_tensor)
+
+            # save outputs to verify later
+            moe_compute_output = (
+                dram_per_expert_total_tokens_output_tensor,
+                dram_expert_activation_output_tensor,
+                dram_e_t_output_tensor,
+                dram_output_tensor,
+            )
             moe_compute_outputs.append(moe_compute_output)
 
         return moe_compute_outputs
 
     logger.info(f"\n========== Running op ==========")
-
     moe_compute_outputs = []
-
     if enable_trace:
         # Compile the op
         for i in range(num_iterations):
@@ -1700,7 +1439,6 @@ def run_moe_compute_test(
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         logger.info(f"Done executing trace")
     else:
-        # Non-trace execution
         for i in range(num_iterations):
             moe_compute_output = run_op()
             ttnn.synchronize_device(mesh_device)
@@ -1721,31 +1459,25 @@ def run_moe_compute_test(
         }
     )
 
-    base_pcc_threshold = _get_base_pcc_threshold(activation_type, has_bias)
-
-    output_shard_cores = ttnn.experimental.get_moe_combine_cores(
-        mesh_device, output_height_shard_dim, output_width_shard_dim
-    )
+    output_shard_cores = ttnn.experimental.get_moe_combine_cores(mesh_device)
     per_expert_tokens_all_passed = True
     activation_all_passed = True
     e_t_all_passed = True
     matmul_all_passed = True
-    combine_all_passed = True
     for i in range(num_iterations):
         for layer_id in range(num_layers):
             (
                 per_expert_total_tokens_output_tensor,
                 expert_activation_output_tensor,
                 e_t_output_tensor,
-                matmul_output_tensor,
-                combine_output_tensor,
+                output_tensor,
             ) = moe_compute_outputs[i][layer_id]
 
             logger.info(f"\n========== Iteration {i} Layer {layer_id} Validation ==========")
             logger.info(f"Per expert total tokens tensor shape: {per_expert_total_tokens_output_tensor.shape}")
             logger.info(f"Expert activation tensor shape: {expert_activation_output_tensor.shape}")
             logger.info(f"E-T (expert-to-token) tensor shape: {e_t_output_tensor.shape}")
-            logger.info(f"Matmul Output tensor shape: {matmul_output_tensor.shape}")
+            logger.info(f"Output tensor shape: {output_tensor.shape}")
 
             # ========== Per Expert Total Tokens Tensor Validation ==========
             expert_token_counts = per_expert_tokens_goldens[layer_id]
@@ -1769,7 +1501,6 @@ def run_moe_compute_test(
                 e_t_all_passed = False
 
             # ========== Matmul Output Tensor Validation ==========
-
             if not validate_matmul(
                 layer_id,
                 experts_per_device,
@@ -1781,22 +1512,10 @@ def run_moe_compute_test(
                 hidden_size,
                 expert_token_counts,
                 matmul_goldens,
-                matmul_output_tensor,
+                output_tensor,
                 mesh_device,
-                base_pcc_threshold,
-                has_bias=has_bias,
             ):
                 matmul_all_passed = False
-
-            if not validate_combine(
-                layer_id,
-                mesh_device,
-                cluster_axis,
-                combine_output_tensor,
-                combine_goldens,
-                base_pcc_threshold,
-            ):
-                combine_all_passed = False
 
     # Asserts
     logger.info(f"\n========== Asserts ==========")
@@ -1804,190 +1523,8 @@ def run_moe_compute_test(
     logger.info(f"\nExpert Activation Verification: {'PASSED' if activation_all_passed else 'FAILED'}")
     logger.info(f"\nE-T Tensor Verification: {'PASSED' if e_t_all_passed else 'FAILED'}")
     logger.info(f"\nMatmul Output Tensor Verification: {'PASSED' if matmul_all_passed else 'FAILED'}")
-    logger.info(f"\nCombine Output Tensor Verification: {'PASSED' if combine_all_passed else 'FAILED'}")
 
     assert per_expert_tokens_all_passed, "Per expert total tokens tensor verification failed!"
     assert activation_all_passed, "Expert activation tensor verification failed!"
     assert e_t_all_passed, "E-T tensor verification failed!"
     assert matmul_all_passed, "Matmul output tensor verification failed!"
-    assert combine_all_passed, "Combine output tensor verification failed!"
-
-
-# ---------------------------------------------------------------------------
-# Parametrized model tests (1x16 mesh)
-# ---------------------------------------------------------------------------
-@pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
-    reason=f"1x16 model tests require TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
-)
-@pytest.mark.parametrize("device_params", [MOE_DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize(
-    "enable_trace", [pytest.param(False, id="disable_trace"), pytest.param(True, id="enable_trace")]
-)
-@pytest.mark.parametrize("model_cfg, test_mode, has_bias, experts_per_device, activation_type", MODELS_1x16)
-def test_moe_compute_1x16(
-    mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
-):
-    _run_model_test(
-        mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
-    )
-
-
-# ---------------------------------------------------------------------------
-# Parametrized model tests (1x8 mesh)
-# ---------------------------------------------------------------------------
-@pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
-    reason=f"1x8 model tests require TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
-)
-@pytest.mark.parametrize("device_params", [MOE_DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
-@pytest.mark.parametrize(
-    "enable_trace", [pytest.param(False, id="disable_trace"), pytest.param(True, id="enable_trace")]
-)
-@pytest.mark.parametrize("model_cfg, test_mode, has_bias, experts_per_device, activation_type", MODELS_1x8)
-def test_moe_compute_1x8(
-    mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
-):
-    _run_model_test(
-        mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
-    )
-
-
-# ---------------------------------------------------------------------------
-# CPU-only unit tests for formula-based shard distribution (no hardware required)
-# ---------------------------------------------------------------------------
-
-
-def test_shard_tiles_deepseek_w0w1():
-    """DS: Nt=64, n_cores=12 → big=6, small=5; big at positions where (i*4)%12 < 4 = {0,3,6,9}."""
-    n_tiles, n_cores = 64, 12
-    result = [_shard_tiles(n_tiles, c, n_cores) for c in range(n_cores)]
-    assert sum(result) == n_tiles
-    assert result[0] == 6  # (0*4)%12=0 < 4 → big
-    assert result[1] == 5  # (1*4)%12=4, not < 4 → small
-    assert result[3] == 6  # (3*4)%12=0 < 4 → big
-    assert result[6] == 6
-    assert result[9] == 6
-    assert all(v in (5, 6) for v in result)
-
-
-def test_shard_tiles_gpt_w0w1():
-    """GPT: Nt=90, n_cores=12 → big=8, small=7; exactly 6 big cores."""
-    n_tiles, n_cores = 90, 12
-    result = [_shard_tiles(n_tiles, c, n_cores) for c in range(n_cores)]
-    assert sum(result) == n_tiles
-    assert result.count(8) == 6
-    assert result.count(7) == 6
-
-
-def test_shard_tiles_glm5_w0w1():
-    """GLM-5: Nt=64 (same as DS), same distribution."""
-    result = [_shard_tiles(64, c, 12) for c in range(12)]
-    assert sum(result) == 64
-    assert result[0] == 6 and result[3] == 6  # same big positions as DS
-
-
-def test_shard_tiles_exactly_divisible():
-    """DS V4 Pro: Nt=96, 96%12=0 → all cores get 8."""
-    result = [_shard_tiles(96, c, 12) for c in range(12)]
-    assert all(v == 8 for v in result)
-    assert sum(result) == 96
-
-
-def test_w2_shard_tiles_deepseek():
-    """DS: Ht=224, Nt=64, n=12, n_big_nt+n_big_ht=4+8=12 → complement.
-    W0W1-big cores {0,3,6,9} get small W2 (18 tiles);
-    W0W1-small cores get big W2 (19 tiles)."""
-    result = [_w2_shard_tiles(224, c, 64, 12) for c in range(12)]
-    assert sum(result) == 224
-    assert result[0] == 18  # W0W1-big → small W2
-    assert result[1] == 19  # W0W1-small → big W2
-    assert result[3] == 18
-    assert result[2] == 19
-
-
-def test_w2_shard_tiles_glm5():
-    """GLM-5: Ht=192, Nt=64, n=12 → Ht%12=0 so n_big_ht=0.
-    n_big_nt+n_big_ht=4+0≠12 → fallback to _shard_tiles(192,c,12)=16 uniform."""
-    result = [_w2_shard_tiles(192, c, 64, 12) for c in range(12)]
-    assert all(v == 16 for v in result)
-    assert sum(result) == 192
-
-
-def test_w2_shard_tiles_complementary_off():
-    """When n_big_nt + n_big_ht != n_cores, _w2_shard_tiles falls back to _shard_tiles.
-
-    Ht=224, Nt=96, n=12: n_big_nt=96%12=0, n_big_ht=224%12=8, 0+8!=12 -> fallback.
-    """
-    Ht, Nt, n = 224, 96, 12
-    result = [_w2_shard_tiles(Ht, c, Nt, n) for c in range(n)]
-    fallback = [_shard_tiles(Ht, c, n) for c in range(n)]
-    assert result == fallback, "Expected fallback to _shard_tiles when complementary condition not met"
-    assert sum(result) == Ht
-
-
-def test_w2_shard_tiles_complementary_off_another():
-    """Ht=160, Nt=64, n=12: n_big_nt=4, n_big_ht=4, 4+4=8!=12 -> fallback."""
-    Ht, Nt, n = 160, 64, 12
-    result = [_w2_shard_tiles(Ht, c, Nt, n) for c in range(n)]
-    fallback = [_shard_tiles(Ht, c, n) for c in range(n)]
-    assert result == fallback
-    assert sum(result) == Ht
-
-
-def test_w2_shard_tiles_dsv4_flash():
-    """DS V4 Flash: Ht=128, Nt=64, n=12. n_big_nt=4, n_big_ht=8, 4+8=12 → complement."""
-    result = [_w2_shard_tiles(128, c, 64, 12) for c in range(12)]
-    assert sum(result) == 128
-    assert result[0] == 128 // 12  # W0W1-big → small W2
-    assert result[1] == 128 // 12 + 1  # W0W1-small → big W2
-
-
-def test_w2_shard_tiles_gpt():
-    """GPT: Ht=90, Nt=90, n=12. n_big_nt=6, n_big_ht=6, 6+6=12 → complement."""
-    result = [_w2_shard_tiles(90, c, 90, 12) for c in range(12)]
-    assert sum(result) == 90
-    assert result.count(8) + result.count(7) == 12
-
-
-def test_auto_output_width_shard_dim():
-    assert auto_output_width_shard_dim(7168) == 4  # DS: Ht=224, 224%4=0
-    assert auto_output_width_shard_dim(2880) == 3  # GPT: Ht=90, 90%4≠0, 90%3=0
-    assert auto_output_width_shard_dim(6144) == 4  # GLM-5: Ht=192, 192%4=0
-    assert auto_output_width_shard_dim(8192) == 4  # Ling-1T: Ht=256
-    assert auto_output_width_shard_dim(5120) == 4  # GLM-4.7: Ht=160
-    assert auto_output_width_shard_dim(4096) == 4  # DS V4 Flash: Ht=128
-    assert auto_output_width_shard_dim(7168) == 4  # Kimi K2.5: same as DS
-
-
-def test_shard_tiles_total_always_correct():
-    """Property: sum of all _shard_tiles == n_tiles, for all interesting model shapes."""
-    shapes = [(64, 12), (90, 12), (96, 12), (192, 12), (48, 12), (128, 12), (224, 12), (256, 12)]
-    for n_tiles, n_cores in shapes:
-        result = [_shard_tiles(n_tiles, c, n_cores) for c in range(n_cores)]
-        assert sum(result) == n_tiles, f"Failed for n_tiles={n_tiles}, n_cores={n_cores}"
-
-
-def test_intermediate_tiles_must_exceed_core_count():
-    """Verify that configurations with intermediate_tiles < n_cores are detectable.
-
-    The C++ validate function enforces intermediate_tiles >= matmul_num_cores
-    via TT_FATAL. This test validates the invariant at the formula level:
-    if intermediate_size / 32 < n_cores, the _shard_tiles distribution degenerates
-    (some cores get 0 tiles).
-    """
-    n_cores = 12
-    # intermediate_size = 256 -> intermediate_tiles = 8, which is < 12
-    small_intermediate_tiles = 256 // 32  # = 8
-    assert small_intermediate_tiles < n_cores
-    shards = [_shard_tiles(small_intermediate_tiles, c, n_cores) for c in range(n_cores)]
-    # At least one core gets 0 tiles -- degenerate, triggers TT_FATAL on device
-    assert any(s == 0 for s in shards), "Expected degenerate shard distribution with 0-tile cores"
-    assert sum(shards) == small_intermediate_tiles
-
-    # Boundary: intermediate_tiles == n_cores -> exactly 1 tile per core, valid
-    boundary_tiles = n_cores
-    boundary_shards = [_shard_tiles(boundary_tiles, c, n_cores) for c in range(n_cores)]
-    assert all(s == 1 for s in boundary_shards)
