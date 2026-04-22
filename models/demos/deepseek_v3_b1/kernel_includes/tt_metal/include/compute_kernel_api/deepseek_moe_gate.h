@@ -30,7 +30,8 @@ ALWI void deepseek_moe_gate_init(uint32_t icb0, uint32_t icb1) {
         transpose_wh_init_short(icb0);
     } else {
         // Init copy add (FPU)
-        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 1)));
+        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(
+            icb0, icb1, /*transpose_of_faces=*/1, /*within_face_16x16_transpose=*/1)));
         MATH((llk_math_deepseek_moe_gate_eltwise_binary_init_with_operands<
               ELWADD,
               DeepseekMoeGateEltwiseBinaryMode::COPY,
