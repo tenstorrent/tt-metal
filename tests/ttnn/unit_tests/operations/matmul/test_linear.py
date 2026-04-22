@@ -16,13 +16,8 @@ from models.common.utility_functions import (
     skip_for_slow_dispatch,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
+from tests.ttnn.unit_tests.operations.matmul.test_matmul import is_tiny_tile_combo_supported
 
-from tests.ttnn.unit_tests.operations.matmul.test_matmul import (
-    is_tiny_tile_combo_supported,
-    run_matmul_1d_tiny_tile,
-    run_matmul_2d_tiny_tile,
-    run_matmul_2d_multiple_output_blocks_per_core,
-)
 
 pytestmark = pytest.mark.use_module_device
 
