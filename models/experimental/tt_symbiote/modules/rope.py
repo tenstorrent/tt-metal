@@ -10,6 +10,7 @@ import torch.nn as nn
 
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.run_config import trace_enabled
 
 
 def rotate_half(x):
@@ -61,6 +62,7 @@ class TorchRotaryPositionEmbedding(nn.Module):
         return q_embed, k_embed
 
 
+@trace_enabled
 class TTNNRotaryPositionEmbedding(TTNNModule):
     """TTNN-accelerated Rotary Position Embedding."""
 

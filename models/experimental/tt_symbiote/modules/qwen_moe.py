@@ -21,7 +21,7 @@ import ttnn
 
 from models.experimental.tt_symbiote.core.module import run_on_devices, DeviceArch, tree_map
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
+from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig, trace_enabled
 from models.experimental.tt_symbiote.modules.moe import (
     TTNNMoERouterDecode,
     TTNNExperts,
@@ -169,6 +169,7 @@ class TTNNQwenMoERouterDecode(TTNNMoERouterDecode):
         return topk_expert_idx, topk_weights
 
 
+@trace_enabled
 class TTNNQwenExperts(TTNNExperts):
     """Qwen-specific experts using sparse_matmul with fused w1/w3 projections.
 
@@ -386,7 +387,10 @@ class TTNNQwenExperts(TTNNExperts):
         num_tokens = total_tokens
 
         # Generate sparsity tensor
-        remap_topk_mask_expanded = ttnn.repeat(self.remap_topk_mask, ttnn.Shape((1, batch_size_per_device, 1, 1)))
+        if batch_size_per_device == 1:
+            remap_topk_mask_expanded = self.remap_topk_mask
+        else:
+            remap_topk_mask_expanded = ttnn.repeat(self.remap_topk_mask, ttnn.Shape((1, batch_size_per_device, 1, 1)))
         _, sparsity_t = ttnn.moe_expert_token_remap(
             remap_topk_mask_expanded,
             self.expert_mapping_tensors,
@@ -481,7 +485,7 @@ class TTNNQwenExperts(TTNNExperts):
             expert_output,
             shape=(self.num_experts_per_device, 1, total_tokens, self.hidden_size),
         )
-        expert_output = ttnn.to_layout(expert_output, ttnn.ROW_MAJOR_LAYOUT)
+        expert_output = ttnn.to_layout(expert_output, ttnn.ROW_MAJOR_LAYOUT, memory_config=decode_memory_config)
 
         # Reshape to match combine expected format
         expert_output = ttnn.reshape(
@@ -543,6 +547,7 @@ class TTNNQwenExperts(TTNNExperts):
         return final_output
 
 
+@trace_enabled
 class TTNNQwen3MoE(TTNNMoE):
     """TTNN MoE for Qwen3.5-35B-A3B architecture with 256 experts, top-8 routing.
 

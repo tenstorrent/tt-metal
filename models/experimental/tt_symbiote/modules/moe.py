@@ -19,7 +19,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearIColShardedWRowSharded,
 )
-from models.experimental.tt_symbiote.core.run_config import disable_trace
+from models.experimental.tt_symbiote.core.run_config import disable_trace, trace_enabled
 import math
 
 
@@ -661,6 +661,7 @@ class TTNNGlm4MoeTopkRouter(TTNNLinearIColShardedWRowSharded):
         return tt_output
 
 
+@trace_enabled
 class TTNNGlm4MoeMLP(TTNNModule):
     @classmethod
     def from_torch(cls, torch_layer: Glm4MoeMLP):
@@ -856,6 +857,7 @@ class TTNNGlm4MoeMoE(TTNNModule):
         return hidden_states
 
 
+@trace_enabled
 class TTNNMoERouterDecode(TTNNModule):
     """TTNN-accelerated MoE router (decode mode)."""
 
@@ -1240,7 +1242,10 @@ class TTNNExperts(TTNNModule):
         num_tokens = batch_size * seq_len
 
         # 4. Generate sparsity tensor
-        remap_topk_mask_expanded = ttnn.repeat(self.remap_topk_mask, ttnn.Shape((1, batch_size_per_device, 1, 1)))
+        if batch_size_per_device == 1:
+            remap_topk_mask_expanded = self.remap_topk_mask
+        else:
+            remap_topk_mask_expanded = ttnn.repeat(self.remap_topk_mask, ttnn.Shape((1, batch_size_per_device, 1, 1)))
         _, sparsity_t = ttnn.moe_expert_token_remap(
             remap_topk_mask_expanded,
             self.expert_mapping_tensors,

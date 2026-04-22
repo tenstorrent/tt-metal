@@ -16,6 +16,7 @@ except ImportError:
 
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.run_config import trace_enabled
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
@@ -352,6 +353,7 @@ class TorchSDPAAttention(torch.nn.Module):
         return attn_output
 
 
+@trace_enabled
 class TTNNSDPAAttention(TTNNModule):
     def __init__(self):
         super().__init__()
