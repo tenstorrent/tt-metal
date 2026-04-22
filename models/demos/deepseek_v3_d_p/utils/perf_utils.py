@@ -2,12 +2,107 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import shutil
+import tempfile
+
 import pandas as pd
 from loguru import logger
 from tracy.process_model_log import get_latest_ops_log_filename
 
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.tt_transformers.tests.test_utils import merge_device_rows
+
+# TP-collective ops: depend on TP=4 topology/bandwidth → take from 2x4
+# Everything else: depends on SP=8 tokens-per-chip and 8 experts/device → take from 8x1
+#
+# Key insight for Matmul:
+#   8x1: 64 experts, 8/device, dispatch_group_size=8, M=12800/expert, TP=1 (N=2048) → correct M+count, wrong N
+#   2x4: 256 experts, 32/device, dispatch_group_size=2, M=800/expert,  TP=4 (N=512)  → correct N, wrong M+count
+#   8x4: 256 experts,  8/device, dispatch_group_size=8, M=12800/expert, TP=4 (N=512) → target
+#
+#   8x1 M per expert (dispatch_group_size=8 × max_tokens=1600) = 12800 matches 8x4 exactly.
+#   2x4 M per expert (dispatch_group_size=2 × max_tokens=400) = 800 — 16x smaller, only 32/8=4x
+#   more experts, so 2x4 total work is 4x LESS than 8x4 (scaling by ÷4 makes it 16x too small).
+#   Use 8x1 for matmuls: M and expert count match 8x4; only N differs (2048 vs 512).
+
+TP_OPS = {
+    "ReduceScatterDeviceOperation",  # TP collective
+    "AllGatherDeviceOperation",  # TP collective
+    "AllBroadcastDeviceOperation",  # gate AllReduce on TP axis
+    "PostCombineReduceDeviceOperation",  # contains ReduceScatter on TP axis
+    "DeepseekGroupedGateDeviceOperation",  # only exists with TP>1
+    "ConcatDeviceOperation",  # gate routing, TP-structured (8x1~0ms vs 8x4=0.28ms)
+    "CopyDeviceOperation",  # TP path op, absent in 8x1
+    "ReshapeViewDeviceOperation",  # 2x4=8x4=0.039ms vs 8x1=0.013ms
+    "MaskedBincountDeviceOperation",  # 2x4=8x4=0.026ms vs 8x1=0.011ms
+    "InterleavedToShardedDeviceOperation",  # 2x4=8x4=0.002ms
+}
+
+
+def load_merged_durations(csv_path: str, use_avg: bool = False) -> pd.Series:
+    df = pd.read_csv(csv_path)
+    df = df[df["OP TYPE"] == "tt_dnn_device"]
+    if use_avg:
+        # avg across devices per invocation, then sum across invocations
+        # = total duration / num_devices
+        num_devices = df["DEVICE ID"].nunique()
+        return df.groupby("OP CODE")["DEVICE KERNEL DURATION [ns]"].sum() / num_devices
+    df_merged = merge_device_rows(df)
+    return df_merged.groupby("OP CODE")["DEVICE KERNEL DURATION [ns]"].sum()
+
+
+def approximate_8x4_perf(csv_8x1: str, csv_2x4: str, csv_8x4: str = None, use_avg: bool = False) -> pd.DataFrame:
+    """
+    Approximate 8x4 MOE performance from cheaper 8x1 + 2x4 runs.
+
+    - TP collective ops (ReduceScatter / AllGather / AllReduce / PostCombineReduce etc.):
+      taken from 2x4 — same TP=4 topology, near-identical bandwidth.
+    - Everything else (Dispatch / Combine / element-wise): taken from 8x1 —
+      same SP=8 tokens-per-chip and same 8 experts/device as 8x4.
+    """
+    ops_8x1 = load_merged_durations(csv_8x1, use_avg=use_avg)
+    ops_2x4 = load_merged_durations(csv_2x4, use_avg=use_avg)
+    ops_8x4 = load_merged_durations(csv_8x4, use_avg=use_avg) if csv_8x4 else None
+
+    all_ops = set(ops_8x4.index) if ops_8x4 is not None else set(ops_8x1.index) | set(ops_2x4.index)
+
+    rows = []
+    for op in sorted(all_ops):
+        if op in TP_OPS:
+            src = "2x4"
+            approx_ns = ops_2x4.get(op, 0)
+        else:
+            approx_ns = ops_8x1.get(op, 0)
+            if approx_ns == 0 and ops_2x4.get(op, 0) > 0:
+                src = "2x4 (fallback)"
+                approx_ns = ops_2x4.get(op, 0)
+            else:
+                src = "8x1"
+
+        row = {"OP CODE": op, "source": src, "approx [ms]": approx_ns / 1e6}
+        if ops_8x4 is not None:
+            row["actual 8x4 [ms]"] = ops_8x4.get(op, float("nan")) / 1e6
+        rows.append(row)
+
+    df_result = pd.DataFrame(rows).sort_values("approx [ms]", ascending=False).reset_index(drop=True)
+
+    if ops_8x4 is not None:
+        df_result["diff [ms]"] = (df_result["approx [ms]"] - df_result["actual 8x4 [ms]"]).round(3)
+        df_result["err [%]"] = (
+            df_result["diff [ms]"] / df_result["actual 8x4 [ms]"].replace(0, float("nan")) * 100
+        ).round(1)
+
+    approx_total = df_result["approx [ms]"].sum()
+    actual_total = df_result["actual 8x4 [ms]"].sum() if ops_8x4 is not None else None
+
+    print(f"{'Approximation total:':25s} {approx_total:.3f} ms")
+    if ops_8x4 is not None:
+        err = (approx_total - actual_total) / actual_total * 100
+        print(f"{'8x4 actual total:':25s} {actual_total:.3f} ms")
+        print(f"{'Error:':25s} {err:+.1f}%")
+
+    return df_result
 
 
 def run_model_device_perf_test_with_merge(
@@ -111,3 +206,47 @@ def run_model_device_perf_test_with_merge(
         expected_results=expected_results,
         comments=comments,
     )
+
+
+def run_approx_galaxy_moe_perf(
+    command_8x1: str,
+    command_2x4: str,
+    subdir: str,
+    num_iterations: int = 1,
+    batch_size: int = 1,
+):
+    """
+    Approximate 8x4 galaxy MoE performance from cheaper 8x1 + 2x4 proxy runs.
+
+    Runs both proxy commands sequentially, captures the profiler CSV from each,
+    then applies the SP/TP op-selection logic from approx.py to log the estimated
+    per-op breakdown and total. No perf assertion is performed.
+
+    SP ops (Dispatch, Combine, expert FFN Matmul, ...) come from 8x1.
+    TP ops (AllGather, ReduceScatter, AllBroadcast, gate, ...) come from 2x4.
+    """
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+
+    logger.info("Running 8x1 proxy (dispatch + combine + expert FFN)...")
+    run_device_perf(command_8x1, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size)
+    csv_8x1 = get_latest_ops_log_filename(subdir)
+    logger.info(f"8x1 CSV: {csv_8x1}")
+
+    # run_device_perf calls clear_profiler_runtime_artifacts() which deletes all of
+    # generated/profiler/ before each run. Copy the 8x1 CSV to a temp file so it
+    # survives the 2x4 run's cleanup.
+    tmp_csv_8x1 = None
+    try:
+        tmp_csv_8x1 = tempfile.NamedTemporaryFile(suffix=".csv", delete=False).name
+        shutil.copy(csv_8x1, tmp_csv_8x1)
+
+        logger.info("Running 2x4 proxy (gate + TP collectives)...")
+        run_device_perf(command_2x4, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size)
+        csv_2x4 = get_latest_ops_log_filename(subdir)
+        logger.info(f"2x4 CSV: {csv_2x4}")
+
+        df_approx = approximate_8x4_perf(csv_8x1=tmp_csv_8x1, csv_2x4=csv_2x4)
+        logger.info(f"\n{df_approx.to_string(index=False)}")
+    finally:
+        if tmp_csv_8x1:
+            os.unlink(tmp_csv_8x1)
