@@ -130,7 +130,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     params.kernel_run_params = {
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "producer",
-            .runtime_args =
+            .runtime_varargs =
                 {{node,
                   {
                       input_buffer->address(),
@@ -140,7 +140,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
         },
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "consumer",
-            .runtime_args =
+            .runtime_varargs =
                 {{node,
                   {
                       output_buffer->address(),
@@ -246,7 +246,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
             .kernel_spec_name = "producer",
             .named_runtime_args = {{.node = node, .args = {{"src_addr", input_buffer->address()}}}},
             .named_common_runtime_args = {{"num_entries", num_transfers}},
-            .runtime_args = {{node, {producer_vararg_sentinel}}},
+            .runtime_varargs = {{node, {producer_vararg_sentinel}}},
         },
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "consumer",

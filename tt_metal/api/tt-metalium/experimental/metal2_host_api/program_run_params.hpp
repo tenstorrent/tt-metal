@@ -48,14 +48,14 @@ struct ProgramRunParams {
 
         // Unnamed runtime argument "varargs"
         // (these are specified per-node; length can vary per-node)
-        using NodeRuntimeArgs = std::vector<uint32_t>;
-        using RuntimeArgs = std::vector<std::pair<NodeCoord, NodeRuntimeArgs>>;
-        RuntimeArgs runtime_args;
+        using NodeVarargs = std::vector<uint32_t>;
+        using Varargs = std::vector<std::pair<NodeCoord, NodeVarargs>>;
+        Varargs runtime_varargs;
 
         // Unnamed common runtime argument "varargs"
         // (common to all nodes on which the kernel runs)
-        using CommonRuntimeArgs = std::vector<uint32_t>;
-        CommonRuntimeArgs common_runtime_args;
+        using CommonVarargs = std::vector<uint32_t>;
+        CommonVarargs common_runtime_varargs;
     };
     // KernelRunParams must be specified for ALL kernels in the ProgramSpec.
     std::vector<KernelRunParams> kernel_run_params;
