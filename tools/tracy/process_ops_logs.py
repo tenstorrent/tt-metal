@@ -846,9 +846,7 @@ def _enrich_ops_from_device_logs(
                 # Fidelity metrics
                 assign_metric("Fidelity Stall Rate", per_op_stats.get("Fidelity Stall Rate", {}))
                 assign_metric("HiFi Fraction", per_op_stats.get("HiFi Fraction", {}))
-                assign_metric(
-                    "Avg HF Cycles Per Instrn", per_op_stats.get("Avg HF Cycles Per Instrn", {}), suffix=""
-                )
+                assign_metric("Avg HF Cycles Per Instrn", per_op_stats.get("Avg HF Cycles Per Instrn", {}), suffix="")
 
                 # Instruction issue rates
                 assign_metric("T0 Instrn Issue Rate", per_op_stats.get("T0 Instrn Issue Rate", {}), suffix="")
@@ -1135,9 +1133,7 @@ def get_device_data_generate_report(
                     # Write all metrics to CSV row systematically
                     for base_name, m in metrics.items():
                         is_raw = (
-                            "IPC" in base_name
-                            or "Issue Rate" in base_name
-                            or base_name == "Avg HF Cycles Per Instrn"
+                            "IPC" in base_name or "Issue Rate" in base_name or base_name == "Avg HF Cycles Per Instrn"
                         )
                         suffix = "" if is_raw else " (%)"
                         # Special handling for SFPU/FPU/MATH "Avg on full grid" legacy names

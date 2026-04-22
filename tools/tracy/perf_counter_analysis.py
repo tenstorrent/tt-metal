@@ -1103,9 +1103,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     # === Fidelity metrics ===
     # Fidelity Stall Rate: fraction of math-valid cycles spent in a fidelity phase.
     if has_counter("MATH_FIDELITY_STALL") and has_counter("MATH_INSTRN_AVAILABLE"):
-        per_op_stats["Fidelity Stall Rate"] = compute_ratio_metric(
-            "MATH_FIDELITY_STALL", "MATH_INSTRN_AVAILABLE"
-        )
+        per_op_stats["Fidelity Stall Rate"] = compute_ratio_metric("MATH_FIDELITY_STALL", "MATH_INSTRN_AVAILABLE")
     # HiFi Fraction: fraction of issued math instructions that used HiFi (2+ HF cycles).
     if (
         has_counter("MATH_INSTRN_HF_1_CYCLE")
@@ -1286,9 +1284,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     # SrcA/B Write Actual Efficiency: fraction of attempted writes not blocked
     # by port unavailability. Uses the "port-OK" counter for both sides.
     if has_counter("SRCA_WRITE_ACTUAL") and has_counter("SRCA_WRITE_AVAILABLE"):
-        per_op_stats["SrcA Write Actual Efficiency"] = compute_ratio_metric(
-            "SRCA_WRITE_ACTUAL", "SRCA_WRITE_AVAILABLE"
-        )
+        per_op_stats["SrcA Write Actual Efficiency"] = compute_ratio_metric("SRCA_WRITE_ACTUAL", "SRCA_WRITE_AVAILABLE")
     if has_counter("SRCB_WRITE_NOT_BLOCKED_PORT") and has_counter("SRCB_WRITE_AVAILABLE"):
         per_op_stats["SrcB Write Actual Efficiency"] = compute_ratio_metric(
             "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_AVAILABLE"
