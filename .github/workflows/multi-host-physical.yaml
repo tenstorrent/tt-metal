@@ -287,10 +287,8 @@ jobs:
     if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
-      - multi-host-glx-4x
-      - arch-wormhole_b0
       - bare-metal
-      - g05glx01
+      - g08glx03
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
