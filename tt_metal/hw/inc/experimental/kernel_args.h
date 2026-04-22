@@ -25,8 +25,6 @@
 // NOTE: Currently, only uint32_t args are supported. However, named kernel arguments via
 // get_arg() will later be extended to support arbitrary POD types.
 
-#include "api/dataflow/dataflow_api.h"
-
 namespace experimental {
 
 // byte_offset is measured from the start of the *named* section of the dispatch buffer.
