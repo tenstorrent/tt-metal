@@ -248,10 +248,18 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
     if use_custom_cache:
         cache_kwargs["past_key_values"] = create_paged_kv_cache(model.config, mesh_device)
 
-    # Warmup run
+    # Run 1: Warm-up
     outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, **cache_kwargs)
+    ttnn.synchronize_device(mesh_device)
 
-    # Reset cache for actual run
+    # Run 2: Dedicated trace capture
+    cache_kwargs = {}
+    if use_custom_cache:
+        cache_kwargs["past_key_values"] = create_paged_kv_cache(model.config, mesh_device)
+    outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, **cache_kwargs)
+    ttnn.synchronize_device(mesh_device)
+
+    # Run 3: Production / benchmarked run
     cache_kwargs = {}
     if use_custom_cache:
         cache_kwargs["past_key_values"] = create_paged_kv_cache(model.config, mesh_device)
