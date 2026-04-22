@@ -32,7 +32,7 @@ ParsedDependencies parse_dependency_file(std::istream& file) {
     enum class ParseState { Target, Dependencies };
     ParseState state = ParseState::Target;
     std::string line;
-    std::vector<std::string>* current_deps = nullptr;
+    std::vector<std::filesystem::path>* current_deps = nullptr;
     while (std::getline(file, line)) {
         size_t pos = 0;
         while ((pos = line.find_first_not_of(" \t", pos)) != std::string::npos) {
