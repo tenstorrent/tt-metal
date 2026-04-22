@@ -28,7 +28,7 @@ void kernel_main() {
     uint32_t dest_write_addr = get_write_ptr(cb_id_in0);
     if (aligned) {
         for (uint32_t h = 0; h < block_height; ++h) {
-            uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
+            uint64_t src_noc_addr = s0.get_noc_addr(stick_id);
             noc_async_read(src_noc_addr, dest_write_addr, block_width_bytes);
             stick_id++;
             dest_write_addr += padded_block_width_bytes;
@@ -67,7 +67,7 @@ void kernel_main() {
                 if (slot_states[slot] == SlotState::IDLE && rows_issued < block_height) {
                     // Start new src->scratch transfer
                     noc_async_read_set_trid(active_trid);
-                    uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
+                    uint64_t src_noc_addr = s0.get_noc_addr(stick_id);
                     noc_async_read(src_noc_addr, scratch_write_addrs[slot], aligned_block_width_bytes);
                     dest_write_addrs[slot] = dest_write_addr;
                     slot_states[slot] = SlotState::SRC_PENDING;
