@@ -1890,6 +1890,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     if (remote_enabled) {
         // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
         // server.
+        // TODO: precompiled kernel is not supported in remote mode
         auto endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
         TT_FATAL(
             !endpoints.empty(),
