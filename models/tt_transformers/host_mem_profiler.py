@@ -2,6 +2,47 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+  host_mem_profiler.py — Host-side memory profiler for model tests
+  ===============================================================
+
+  Wraps a pytest run with `memory_profiler` to record host process memory
+  over time, then saves a PNG plot with peak and baseline annotations.
+
+  Dependencies
+  ------------
+  `memory-profiler` and `matplotlib` are auto-installed if absent.
+  All other dependencies must be available in the active environment.
+
+  Usage
+  -----
+      python host_mem_profiler.py \\
+          --name        "Llama-3.1-8B"                          \\
+          --mesh-device T3K                                      \\
+          --hf-model    meta-llama/Llama-3.1-8B-Instruct        \\
+          --test        models/tt_transformers/demo/simple_text_demo.py \\
+          -k            performance-ci-token-matching
+
+  Arguments
+  ---------
+    --name          Display name shown in the plot title and used to name
+                    the output directory. Default: Llama-3.2-1B-Instruct
+    --mesh-device   Value passed as MESH_DEVICE env var (e.g. N150, T3K).
+                    Default: N150
+    --hf-model      Hugging Face model ID passed as HF_MODEL env var.
+                    Default: meta-llama/Llama-3.2-1B-Instruct
+    --test          Pytest target (file, directory, or node id).
+                    Default: models/tt_transformers/demo/simple_text_demo.py
+    -k              Optional pytest -k filter expression.
+
+  Output
+  ------
+  Results are written to:
+
+      profiling_results/<name>_<YYYYMMDD_HHMMSS>/memory_profile.png
+
+  The script exits with pytest's return code; no plot is saved on failure.
+"""
 
 import argparse
 import importlib
