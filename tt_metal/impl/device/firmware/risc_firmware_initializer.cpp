@@ -416,6 +416,35 @@ void RiscFirmwareInitializer::terminate_active_ethernet_cores_on_all_chips() {
     }
 }
 
+void RiscFirmwareInitializer::propagate_dead_mmio_peers() {
+    // Fixed-point transitive closure: if MMIO device M has an Ethernet-connected
+    // peer that is already in mmio_dead_peer_devices_, add M too.  A single-hop
+    // dead relay on one MMIO chip can make multi-hop paths through that chip
+    // unreachable from neighbouring MMIO chips.  Repeat until stable.
+    const auto& all_mmio = cluster_.mmio_chip_ids();
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (const tt::ChipId mmio_id : all_mmio) {
+            if (mmio_dead_peer_devices_.count(mmio_id)) {
+                continue;  // already in the set
+            }
+            for (const tt::ChipId peer : cluster_.get_ethernet_connected_device_ids(mmio_id)) {
+                if (mmio_dead_peer_devices_.count(peer)) {
+                    mmio_dead_peer_devices_.insert(mmio_id);
+                    log_warning(
+                        tt::LogAlways,
+                        "propagate_dead_mmio_peers: MMIO device {} added — Ethernet peer {} already dead.",
+                        mmio_id,
+                        peer);
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+}
+
 void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     ZoneScoped;
     std::unordered_map<tt::ChipId, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
@@ -426,7 +455,20 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
             // subsequent ETH cores on the same device will also fail — the relay is shared.
             // Track this per-device so we skip the 5-second read_non_mmio timeout for each
             // additional core and go straight to force-reset.
-            bool relay_dead = false;
+            //
+            // Pre-check: if this device's MMIO host is already in mmio_dead_peer_devices_
+            // (populated by prior reset_cores() calls and transitively closed), mark the relay
+            // dead immediately — no point attempting reads that will each block for 5 seconds.
+            const tt::ChipId mmio_host = cluster_.get_associated_mmio_device(device_id);
+            bool relay_dead = mmio_dead_peer_devices_.count(mmio_host) > 0;
+            if (relay_dead) {
+                log_warning(
+                    tt::LogAlways,
+                    "reset_cores: device {} MMIO host {} in dead-peer set — "
+                    "all ETH cores treated as stale without relay reads.",
+                    device_id,
+                    mmio_host);
+            }
             for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
                 CoreCoord virtual_core =
                     cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
@@ -461,6 +503,17 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
                         // UMD throws std::runtime_error (caught above); catch(...) is a safety net only.
                         relay_dead = true;
                         still_running = true;
+                    }
+                    // First detection of a dead relay for this device: mark the MMIO host
+                    // and transitively propagate so subsequent devices benefit immediately.
+                    if (relay_dead && !mmio_dead_peer_devices_.count(mmio_host)) {
+                        mmio_dead_peer_devices_.insert(mmio_host);
+                        log_warning(
+                            tt::LogAlways,
+                            "reset_cores: marking MMIO host {} as dead-peer (dead relay detected on device {}).",
+                            mmio_host,
+                            device_id);
+                        propagate_dead_mmio_peers();
                     }
                 }
                 if (still_running) {
