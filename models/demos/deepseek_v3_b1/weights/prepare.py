@@ -39,6 +39,7 @@ from models.demos.deepseek_v3_b1.weights.cache import (
     TensorTarget,
 )
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
+from models.demos.deepseek_v3_b1.weights.overlap.spec import _core_list
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     DOWN_PROJ_SINGLE_DEVICE_SPEC,
     GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
@@ -1302,6 +1303,7 @@ def _build_l1_compressed_tensor(
     assignment: np.ndarray | None = None,
     device=None,
     mesh_mapper_config=None,
+    tile_hw: int = 32,
 ) -> CompressedTensor:
     """Create a single per-core L1 CompressedTensor for one expert projection.
 
@@ -1311,13 +1313,19 @@ def _build_l1_compressed_tensor(
 
     Args:
         weight: Float weight tensor.  For single-device: ``(K, N)``.
-                For multi-device: ``(mesh_rows, mesh_cols, K, N_per_device)``.
-        core_grid: L1 compute cores for the shard.
+                For multi-device with ``PlacementReplicate``: ``(K, N)``.
+                For multi-device with ``PlacementShard`` (e.g. shared-expert-
+                style TP8): ``(mesh_rows, mesh_cols, K_per_device, N_per_device)``
+                where K/N have already been split along the mesh dims.
+        core_grid: L1 compute cores for the shard.  ``N_per_device`` must be
+                divisible by ``num_cores`` and the resulting ``per_core_N``
+                must be tile-aligned (``% tile_hw == 0``).
         assigner: ``CompressedTensorAssigner`` (mutually exclusive with *assignment*).
         assignment: Pre-computed BSPM tile-level assignment array (mutually
                     exclusive with *assigner*).
         device: Device/mesh to allocate on (``None`` keeps host-only).
         mesh_mapper_config: ``ttnn.MeshMapperConfig`` for multi-device.
+        tile_hw: Tile dimension for alignment check (default 32).
     """
     assert (assigner is None) != (assignment is None), "Provide exactly one of assigner or assignment"
 
@@ -1326,8 +1334,14 @@ def _build_l1_compressed_tensor(
         K, N = weight.shape[2], weight.shape[3]
     else:
         K, N = weight.shape[0], weight.shape[1]
-    per_core_N = N // num_cores
     assert N % num_cores == 0, f"N ({N}) must be divisible by num_cores ({num_cores})"
+    per_core_N = N // num_cores
+    assert per_core_N % tile_hw == 0, (
+        f"per_core_N ({per_core_N}) must be a multiple of tile_hw ({tile_hw}); "
+        f"got N={N} on {num_cores} cores. Shrink the per-device core grid or "
+        f"pick a mesh mapper whose per-device N stays tile-aligned."
+    )
+    assert K % tile_hw == 0, f"K ({K}) must be a multiple of tile_hw ({tile_hw})"
 
     shard_spec = ttnn.ShardSpec(core_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
@@ -1347,6 +1361,134 @@ def _build_l1_compressed_tensor(
         device=device,
         memory_config=mem_config,
     )
+
+
+# Default scratchpad headroom carved out of ``worker_l1_size`` before handing
+# the remainder to SRAM hot experts.  Covers CB reservations, activation shards,
+# and the allocator's internal bookkeeping so an SRAM pack that fills the
+# measured budget still leaves room for runtime scratch.  Raise if a kernel
+# runs out of L1 during ``test_decoder`` with SRAM hot experts enabled.
+_SRAM_SAFETY_RESERVE_BYTES = 256 * 1024
+
+
+def _tensor_l1_per_core_footprint(tt_tensor: ttnn.Tensor) -> tuple[int, list[tuple[int, int]]]:
+    """Return ``(per_core_bytes, cores)`` for an L1-sharded ``ttnn.Tensor``.
+
+    Returns ``(0, [])`` when the tensor is not in L1 or not sharded.  Handles
+    both tile-layout tensors (bfp8 / bfp4 / bfloat16) and the row-major uint32
+    backing of fused ``OverlappedTensor`` buffers.
+    """
+    mc = tt_tensor.memory_config()
+    if mc.buffer_type != ttnn.BufferType.L1 or mc.shard_spec is None:
+        return 0, []
+    shape = mc.shard_spec.shape
+    cores = _core_list(mc.shard_spec.grid)
+    if tt_tensor.layout == ttnn.TILE_LAYOUT:
+        tile = tt_tensor.tile
+        tile_h, tile_w = tile.tile_shape
+        per_core_bytes = (shape[0] // tile_h) * (shape[1] // tile_w) * tile.get_tile_size(tt_tensor.dtype)
+    else:
+        # Fused OverlappedTensor buffers land here: uint32 backing + row-major
+        # WIDTH_SHARDED.  ``shape`` is in uint32 words so 4 bytes per element.
+        elem_bytes = 4 if tt_tensor.dtype == ttnn.uint32 else tt_tensor.element_size()
+        per_core_bytes = shape[0] * shape[1] * elem_bytes
+    return per_core_bytes, cores
+
+
+def max_per_core_l1_usage_on_cores(
+    tensors: list[Any],
+    target_cores: set[tuple[int, int]] | list[tuple[int, int]],
+) -> int:
+    """Max L1 bytes already reserved on any core in ``target_cores``.
+
+    Walks a flat list of ``OverlappedTensor`` / ``ttnn.Tensor`` (``None``
+    entries are ignored) and returns the maximum per-core byte total across
+    ``target_cores``.  Fused buffers shared between multiple ``OverlappedTensor``
+    views are deduped by underlying ``fused_tensor.tensor_id`` so the lockstep
+    L1 reservation is counted once.
+
+    Only the *reservation* is counted, not per-subtensor offsets -- this
+    matches how the allocator sees lockstep L1 blocks on Tenstorrent devices.
+    """
+    target = set(target_cores)
+    seen_fused: set[int] = set()
+    per_core: dict[tuple[int, int], int] = {}
+    for obj in tensors:
+        if obj is None:
+            continue
+        if hasattr(obj, "fused_tensor"):
+            fused = obj.fused_tensor
+            tid = fused.tensor_id
+            if tid in seen_fused:
+                continue
+            seen_fused.add(tid)
+            tt_tensor = fused
+        elif isinstance(obj, ttnn.Tensor):
+            tt_tensor = obj
+        else:
+            continue
+        per_core_bytes, cores = _tensor_l1_per_core_footprint(tt_tensor)
+        if per_core_bytes == 0:
+            continue
+        for c in cores:
+            if c in target:
+                per_core[c] = per_core.get(c, 0) + per_core_bytes
+    return max(per_core.values(), default=0)
+
+
+def _quantize_dequantize_bfp_fn(x, fmt_str):
+    """Dequantizer used by ``CompressedTensorAssigner`` for bfp{0,2,4,8}."""
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
+
+    mant_map = {"bfp8": 7, "bfp4": 3, "bfp2": 1, "bfp0": 0}
+    return quantize_dequantize_bfp(x, mant_map[fmt_str])
+
+
+def _greedy_trim_experts_by_budget(
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+    candidate_indices: list[int],
+    assigner: CompressedTensorAssigner,
+    core_grids: SramExpertCoreGrids,
+    l1_budget_bytes: int,
+    *,
+    mesh_shape: tuple[int, int] = (1, 1),
+    tile_hw: int = 32,
+) -> tuple[list[int], int]:
+    """Greedily trim a ranked expert list to fit ``l1_budget_bytes`` in order.
+
+    Mirrors the inner loop of :func:`build_sram_hot_expert_config` but operates
+    on a pre-ranked ``candidate_indices`` list (so the caller controls the
+    ordering, e.g. routing frequency).  Returns ``(selected, bytes_used)``.
+    """
+    selected: list[int] = []
+    bytes_used = 0
+    for expert_idx in candidate_indices:
+        gate_key = _key(layer_idx, f"mlp.experts.{expert_idx}.gate_proj.weight")
+        up_key = _key(layer_idx, f"mlp.experts.{expert_idx}.up_proj.weight")
+        down_key = _key(layer_idx, f"mlp.experts.{expert_idx}.down_proj.weight")
+
+        # Cast to float32: bfloat16 can't be consumed by the assigner
+        # (downstream ``np.asarray(..., dtype=np.float32)`` rejects it).
+        weights = [
+            state_dict[gate_key].T.contiguous().float(),
+            state_dict[up_key].T.contiguous().float(),
+            state_dict[down_key].T.contiguous().float(),
+        ]
+        assignments = []
+        shapes = []
+        for w in weights:
+            result = assigner.assign(w, _quantize_dequantize_bfp_fn)
+            assignments.append(result.assignment)
+            shapes.append(tuple(w.shape))
+
+        expert_bytes = compute_expert_l1_bytes(assignments, shapes, core_grids, tile_hw=tile_hw, mesh_shape=mesh_shape)
+
+        if bytes_used + expert_bytes > l1_budget_bytes:
+            break
+        selected.append(expert_idx)
+        bytes_used += expert_bytes
+    return selected, bytes_used
 
 
 def prepare_compressed_sram_slots(
@@ -1401,28 +1543,39 @@ def prepare_compressed_sram_slots(
     up_cts: list[CompressedTensor] = []
     down_cts: list[CompressedTensor] = []
 
-    # Match the DRAM MoE convention (see `_moe_routed_expert_tensor_target`):
-    # expert weights are REPLICATED across every device in the submesh, so each
-    # device holds a full copy of each hot expert in its own SRAM.  Without a
-    # `mesh_mapper_config`, `CompressedTensor._pack_data_and_assignment` forces
-    # `num_devices = 1` and takes the single-device packer path, which is wrong
-    # for a multi-device mesh handle.  Build an explicit all-replicate config
-    # sized to the mesh shape.
+    # Match the shared-expert TP8 convention (see `_shared_down_tensor_target`
+    # and `preprocess_gate_up`): expert weights are 2D-sharded across the 4x2
+    # mesh with dim-0 (K) split along mesh_rows and dim-1 (N) split along
+    # mesh_cols.  This reduces per-core L1 footprint by ~2.4x vs full replicate,
+    # letting ~2-3x more hot experts fit per core. The consuming kernel must
+    # emit a cross-mesh_rows reduce at the down output (shared expert's
+    # existing pipeline already does this -- see `MoeOp` wiring TODO).
     mesh_mapper_config = None
+    mesh_rows, mesh_cols = 1, 1
     if device_for_torch is not None:
         num_mesh_devices = getattr(device_for_torch, "get_num_devices", lambda: 1)()
         if num_mesh_devices > 1:
             mesh_shape = device_for_torch.shape
-            mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementReplicate()] * mesh_shape.dims())
+            mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
+            mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)])
+
+    def _shard_for_mesh(w: torch.Tensor) -> torch.Tensor:
+        """Reshape ``(K, N)`` -> ``(mesh_rows, mesh_cols, K/rows, N/cols)`` for TP8."""
+        if mesh_rows == 1 and mesh_cols == 1:
+            return w
+        K, N = w.shape
+        assert K % mesh_rows == 0, f"K ({K}) must be divisible by mesh_rows ({mesh_rows})"
+        assert N % mesh_cols == 0, f"N ({N}) must be divisible by mesh_cols ({mesh_cols})"
+        return w.reshape(mesh_rows, K // mesh_rows, mesh_cols, N // mesh_cols).permute(0, 2, 1, 3).contiguous()
 
     for slot_idx, expert_idx in enumerate(initial_expert_indices):
         gate_key = _key(layer_idx, f"mlp.experts.{expert_idx}.gate_proj.weight")
         up_key = _key(layer_idx, f"mlp.experts.{expert_idx}.up_proj.weight")
         down_key = _key(layer_idx, f"mlp.experts.{expert_idx}.down_proj.weight")
 
-        gate_w = state_dict[gate_key].T.contiguous()
-        up_w = state_dict[up_key].T.contiguous()
-        down_w = state_dict[down_key].T.contiguous()
+        gate_w = _shard_for_mesh(state_dict[gate_key].T.contiguous())
+        up_w = _shard_for_mesh(state_dict[up_key].T.contiguous())
+        down_w = _shard_for_mesh(state_dict[down_key].T.contiguous())
 
         gate_cts.append(
             _build_l1_compressed_tensor(
@@ -1473,6 +1626,7 @@ def compute_expert_l1_bytes(
     tensor_shapes: list[tuple[int, int]],
     core_grids: SramExpertCoreGrids,
     tile_hw: int = 32,
+    mesh_shape: tuple[int, int] = (1, 1),
 ) -> int:
     """Compute the exact L1 byte cost for one expert across all projections.
 
@@ -1487,12 +1641,17 @@ def compute_expert_l1_bytes(
         assignments: 3 projection assignment arrays in order
             ``[gate, up, down]``, each ``(tiles_h, tiles_w)`` with tt-metal
             format codes (0=bfp8, 1=bfp4, 2=bfp2, 3=bfp0).
-        tensor_shapes: 3 projection ``(K, N)`` logical shapes in the same
-            order (must match assignment tile counts).
+        tensor_shapes: 3 projection ``(K, N)`` **logical** shapes (pre-TP,
+            i.e. full tensor) in the same order.  Must match assignment tile
+            counts.  TP division is applied via *mesh_shape*.
         core_grids: :class:`SramExpertCoreGrids` giving one grid per
             projection.  Use :meth:`SramExpertCoreGrids.uniform` for symmetric
-            unit-test weights.
+            unit-test weights.  The grids refer to **per-device** cores.
         tile_hw: Tile dimension (default 32).
+        mesh_shape: ``(mesh_rows, mesh_cols)`` for TP-sharded SRAM slots
+            mirroring the shared-expert TP8 layout (dim-0 split along
+            mesh_rows, dim-1 split along mesh_cols).  Defaults to ``(1, 1)``
+            (no TP).
 
     Returns:
         L1 bytes needed on the most loaded core (max across cores of the
@@ -1513,17 +1672,31 @@ def compute_expert_l1_bytes(
         f"got {len(assignments)} assignments / {len(tensor_shapes)} shapes"
     )
     grids = [core_grids.gate, core_grids.up, core_grids.down]
+    mesh_rows, mesh_cols = mesh_shape
 
     per_core_totals: dict[tuple[int, int], int] = {}
 
     for assignment, (K, N), grid in zip(assignments, tensor_shapes, grids):
+        # Under TP8 shared-expert style, each device holds K/mesh_rows × N/mesh_cols.
+        assert K % mesh_rows == 0, f"K ({K}) must be divisible by mesh_rows ({mesh_rows})"
+        assert N % mesh_cols == 0, f"N ({N}) must be divisible by mesh_cols ({mesh_cols})"
+        K_dev = K // mesh_rows
+        N_dev = N // mesh_cols
+
         num_cores = grid.num_cores()
-        per_core_N = N // num_cores
-        shard_spec = ttnn.ShardSpec(grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+        per_core_N = N_dev // num_cores
+        shard_spec = ttnn.ShardSpec(grid, [K_dev, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
         mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-        shard_mapping = compute_shard_page_mapping([K, N], mem_config, tile_hw)
-        assignment_flat = assignment.ravel()
+        shard_mapping = compute_shard_page_mapping([K_dev, N_dev], mem_config, tile_hw)
+
+        # Extract the tile-assignment slab that lands on *one* device: the top-
+        # left (K_dev, N_dev) subtensor in tile units (CompressedTensor assigns
+        # from the flat logical shape).
+        K_dev_tiles = K_dev // tile_hw
+        N_dev_tiles = N_dev // tile_hw
+        assignment_dev = assignment[:K_dev_tiles, :N_dev_tiles]
+        assignment_flat = assignment_dev.ravel()
 
         for core, page_indices in shard_mapping:
             shard_bytes = int(tile_byte_lut[assignment_flat[list(page_indices)]].sum())
@@ -1555,6 +1728,7 @@ def build_sram_hot_expert_config(
     routing_frequencies: dict[int, list[int]],
     *,
     tile_hw: int = 32,
+    mesh_shape: tuple[int, int] = (1, 1),
 ) -> SramHotExpertConfig:
     """Build per-layer SRAM hot expert config using two-pass greedy allocation.
 
@@ -1573,16 +1747,13 @@ def build_sram_hot_expert_config(
         l1_budget_bytes: Maximum L1 bytes available per core for hot experts.
         routing_frequencies: ``layer_idx → list[int]`` activation counts.
         tile_hw: Tile dimension (default 32).
+        mesh_shape: ``(mesh_rows, mesh_cols)`` for the shared-expert-style
+            TP8 layout applied to SRAM slots.  Defaults to ``(1, 1)`` (no TP).
+            See :func:`compute_expert_l1_bytes`.
 
     Returns:
         ``SramHotExpertConfig`` mapping ``layer_idx → list[expert_idx]``.
     """
-    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
-
-    def _quantize_fn(x, fmt_str):
-        mant_map = {"bfp8": 7, "bfp4": 3, "bfp2": 1, "bfp0": 0}
-        return quantize_dequantize_bfp(x, mant_map[fmt_str])
-
     config: SramHotExpertConfig = {}
 
     for layer_idx in layer_indices:
@@ -1591,40 +1762,18 @@ def build_sram_hot_expert_config(
             logger.warning("No routing frequencies for layer {}, skipping", layer_idx)
             continue
 
-        ranked_experts = sorted(range(len(freqs)), key=lambda e: freqs[e], reverse=True)
+        ranked_experts = [e for e in sorted(range(len(freqs)), key=lambda e: freqs[e], reverse=True) if freqs[e] > 0]
 
-        selected: list[int] = []
-        budget_used = 0
-
-        for expert_idx in ranked_experts:
-            if freqs[expert_idx] == 0:
-                break
-
-            gate_key = _key(layer_idx, f"mlp.experts.{expert_idx}.gate_proj.weight")
-            up_key = _key(layer_idx, f"mlp.experts.{expert_idx}.up_proj.weight")
-            down_key = _key(layer_idx, f"mlp.experts.{expert_idx}.down_proj.weight")
-
-            # Cast to float32: bfloat16 can't be consumed by the assigner
-            # (downstream ``np.asarray(..., dtype=np.float32)`` rejects it).
-            gate_w = state_dict[gate_key].T.contiguous().float()
-            up_w = state_dict[up_key].T.contiguous().float()
-            down_w = state_dict[down_key].T.contiguous().float()
-
-            weights = [gate_w, up_w, down_w]
-            assignments = []
-            shapes = []
-            for w in weights:
-                result = assigner.assign(w, _quantize_fn)
-                assignments.append(result.assignment)
-                shapes.append(tuple(w.shape))
-
-            expert_bytes = compute_expert_l1_bytes(assignments, shapes, core_grids, tile_hw)
-
-            if budget_used + expert_bytes > l1_budget_bytes:
-                break
-
-            selected.append(expert_idx)
-            budget_used += expert_bytes
+        selected, budget_used = _greedy_trim_experts_by_budget(
+            state_dict,
+            layer_idx,
+            ranked_experts,
+            assigner,
+            core_grids,
+            l1_budget_bytes,
+            mesh_shape=mesh_shape,
+            tile_hw=tile_hw,
+        )
 
         if selected:
             config[layer_idx] = selected
@@ -1898,6 +2047,8 @@ def prepare_moe_layer_weights(
     sram_hot_experts: SramHotExpertConfig | None = None,
     sram_core_grids: SramExpertCoreGrids | None = None,
     sram_assigner: CompressedTensorAssigner | None = None,
+    worker_l1_size: int | None = None,
+    sram_safety_reserve_bytes: int = _SRAM_SAFETY_RESERVE_BYTES,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer.
 
@@ -1911,6 +2062,17 @@ def prepare_moe_layer_weights(
     its own tile-aligned grid via :class:`SramExpertCoreGrids`; a symmetric
     single-grid layout (e.g. for unit tests) can be built with
     :meth:`SramExpertCoreGrids.uniform`.
+
+    When ``worker_l1_size`` is provided alongside ``sram_hot_experts``, the
+    caller-supplied expert list is treated as a *ranked candidate list* and
+    trimmed in place to fit the L1 budget left over after attention / shared /
+    routed weights are allocated on the SRAM core grid:
+
+        l1_budget = worker_l1_size - attention_peak_on_sram_cores - sram_safety_reserve_bytes
+
+    The attention peak is measured from the actually-allocated fused /
+    standalone tensors, so budgets stay accurate as attention packing
+    evolves.  Without ``worker_l1_size`` the list is used verbatim.
     """
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
@@ -1946,15 +2108,75 @@ def prepare_moe_layer_weights(
     if sram_expert_indices:
         assert sram_core_grids is not None, "sram_core_grids required when sram_hot_experts specifies this layer"
         assert sram_assigner is not None, "sram_assigner required when sram_hot_experts specifies this layer"
-        sram_slots = prepare_compressed_sram_slots(
-            device=device,
-            state_dict=state_dict,
-            layer_idx=layer_idx,
-            initial_expert_indices=sram_expert_indices,
-            core_grids=sram_core_grids,
-            assigner=sram_assigner,
-            move_to_device=move_to_device,
-        )
+
+        if worker_l1_size is not None:
+            mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
+            sram_core_set = (
+                set(_core_list(sram_core_grids.gate))
+                | set(_core_list(sram_core_grids.up))
+                | set(_core_list(sram_core_grids.down))
+            )
+            attn_peak_bytes = max_per_core_l1_usage_on_cores(
+                [
+                    attn.q_a_proj,
+                    attn.q_b_proj,
+                    attn.kv_a_proj,
+                    attn.o_proj,
+                    attn.gate_mm,
+                    attn.attn_norm,
+                    attn.q_norm,
+                    attn.kv_norm,
+                    attn.ffn_norm,
+                    attn.gate_bias,
+                    attn.kv_b1_proj,
+                    attn.kv_b2_proj,
+                    shared.shared_gate_proj,
+                    shared.shared_up_proj,
+                    shared.shared_down_proj,
+                    routed.routed_gate_proj,
+                    routed.routed_up_proj,
+                    routed.routed_down_proj,
+                ],
+                sram_core_set,
+            )
+            l1_budget_bytes = max(0, worker_l1_size - attn_peak_bytes - sram_safety_reserve_bytes)
+            logger.info(
+                "SRAM L1 budget (layer {}): worker_l1={} - attn_peak={} - reserve={} = {} bytes/core",
+                layer_idx,
+                worker_l1_size,
+                attn_peak_bytes,
+                sram_safety_reserve_bytes,
+                l1_budget_bytes,
+            )
+            trimmed, bytes_used = _greedy_trim_experts_by_budget(
+                state_dict,
+                layer_idx,
+                sram_expert_indices,
+                sram_assigner,
+                sram_core_grids,
+                l1_budget_bytes,
+                mesh_shape=mesh_shape,
+            )
+            logger.info(
+                "SRAM expert selection (layer {}): {} candidates -> {} selected ({} / {} bytes/core)",
+                layer_idx,
+                len(sram_expert_indices),
+                len(trimmed),
+                bytes_used,
+                l1_budget_bytes,
+            )
+            sram_expert_indices = trimmed
+
+        if sram_expert_indices:
+            sram_slots = prepare_compressed_sram_slots(
+                device=device,
+                state_dict=state_dict,
+                layer_idx=layer_idx,
+                initial_expert_indices=sram_expert_indices,
+                core_grids=sram_core_grids,
+                assigner=sram_assigner,
+                move_to_device=move_to_device,
+            )
 
     result = DeepSeekV3MoELayerWeights(
         q_a_proj=attn.q_a_proj,

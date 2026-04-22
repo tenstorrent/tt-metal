@@ -44,8 +44,23 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
 # Blackhole DRAM-worker cores excluded from the SRAM hot-expert down-proj grid.
 _BH_DRAM_WORKER_CORES = {(0, 0), (0, 3), (0, 7), (0, 9), (7, 1), (7, 4), (7, 6), (7, 9)}
 
-# Target number of hot experts per layer (top-ranked by routing frequency).
-_SRAM_HOT_EXPERTS_PER_LAYER = 17
+# Safety ceiling on SRAM hot experts per layer.  The real cap is the
+# per-core L1 budget measured from the attention footprint inside
+# ``prepare_moe_layer_weights`` (see ``worker_l1_size`` wiring below), this
+# value just bounds how many ranked candidates we hand to the greedy trim
+# so we don't waste CPU time running the assigner on hundreds of experts
+# that will never fit.  32 is comfortably above the ~15 bfp4 / ~7 bfp8
+# experts that realistically fit per 4x2 device under shared-expert-style
+# TP8 (16 gate + 16 up + 56 down cores, per_core_N=64).
+_SRAM_HOT_EXPERTS_CEILING = 32
+
+# Per-device core-count split under shared-expert-style TP8.
+# Under TP8 (mesh 4x2 with K sharded along 4 rows, N sharded along 2 cols)
+# per-device N is half the full N; these counts keep per_core_N tile-aligned
+# (>= 32) while maximising how many experts fit in L1 per core.
+_SRAM_GATE_CORES_PER_DEVICE_TP8 = 16  # per_core_N = 1024 / 16 = 64
+_SRAM_UP_CORES_PER_DEVICE_TP8 = 16
+_SRAM_DOWN_CORES_PER_DEVICE_TP8 = 56  # per_core_N = 3584 / 56 = 64
 
 
 def _build_down_cores(submesh) -> list[ttnn.CoreCoord]:
@@ -73,18 +88,46 @@ def _build_down_cores(submesh) -> list[ttnn.CoreCoord]:
     return cores
 
 
-def _build_sram_core_grids(submesh) -> SramExpertCoreGrids:
-    """Build the gate/up/down SRAM core grids used by the routed-expert pipeline.
+def _mesh_shape_from_submesh(submesh) -> tuple[int, int]:
+    """Return ``(mesh_rows, mesh_cols)`` for the TP-aware SRAM layout.
 
-    * ``gate``: 64-core "A" grid from ``SharedExpertOp.build_ab_grids()``
-    * ``up``:   64-core "B" grid (disjoint from A) from the same helper
-    * ``down``: 112-core down-proj grid
-
-    These grids are tile-aligned and satisfy ``N % num_cores == 0`` for
-    ``N=2048`` (gate/up) and ``N=7168`` (down).
+    Single-device submeshes report ``(1, 1)`` so the TP8 reshape short-
+    circuits to a 2D replicate path inside ``prepare_compressed_sram_slots``.
     """
+    if submesh.get_num_devices() <= 1:
+        return (1, 1)
+    return (submesh.shape[0], submesh.shape[1])
+
+
+def _build_sram_core_grids(submesh) -> SramExpertCoreGrids:
+    """Per-device gate/up/down SRAM core grids for shared-expert-style TP8.
+
+    Under TP8 (4x2 mesh, dim-0 sharded along mesh_rows, dim-1 along
+    mesh_cols) each device sees per-projection:
+
+    * ``gate`` / ``up``: ``(K=1792, N=1024)`` on 16 cores (per_core_N=64)
+    * ``down``:          ``(K= 512, N=3584)`` on 56 cores (per_core_N=64)
+
+    We take the first-N entries of the existing shared-expert ``a_cores`` /
+    ``b_cores`` and of the down-proj grid.  The spatial layout is irrelevant
+    for pure allocation tests (which is the only path that consumes these
+    grids today -- the kernel wiring into ``MoeOp.op`` is a separate task);
+    once that wiring lands, revisit the core picks to align with the data-
+    movement topology.
+
+    On single-device / TP=1 runs we keep the full 64 / 64 / 112 grids so
+    per_core_N stays tile-aligned with the un-split logical (K, N).
+    """
+    mesh_rows, mesh_cols = _mesh_shape_from_submesh(submesh)
+    tp = mesh_rows * mesh_cols
+
     a_cores, b_cores = SharedExpertOp.build_ab_grids()
     down_cores = _build_down_cores(submesh)
+    if tp > 1:
+        a_cores = a_cores[:_SRAM_GATE_CORES_PER_DEVICE_TP8]
+        b_cores = b_cores[:_SRAM_UP_CORES_PER_DEVICE_TP8]
+        down_cores = down_cores[:_SRAM_DOWN_CORES_PER_DEVICE_TP8]
+
     return SramExpertCoreGrids(
         gate=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in a_cores]),
         up=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in b_cores]),
@@ -93,29 +136,32 @@ def _build_sram_core_grids(submesh) -> SramExpertCoreGrids:
 
 
 def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
-    """Build the (sram_hot_experts, sram_core_grids, sram_assigner) triple.
+    """Build the ``(sram_hot_experts, sram_core_grids, sram_assigner)`` triple.
 
-    Uses routing frequencies from ``data/routing_frequencies.json`` to pick
-    the top ``_SRAM_HOT_EXPERTS_PER_LAYER`` experts for ``layer_idx`` and
-    allocates them on the per-projection grids of the routed-expert pipeline
-    (64 / 64 / 112 cores for gate / up / down).
+    Returns up to ``_SRAM_HOT_EXPERTS_CEILING`` candidates ranked by routing
+    frequency for ``layer_idx``; the actual budget-aware trim runs inside
+    ``prepare_moe_layer_weights`` against the attention footprint measured
+    after allocation (see ``worker_l1_size`` plumbing below).  A generous
+    10 MiB budget is passed here so the ceiling, not the byte cap, selects
+    the candidate set.
     """
     sram_core_grids = _build_sram_core_grids(submesh)
     sram_assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
 
     freqs = _load_routing_frequencies()
-    l1_budget_bytes = 10 * 1024 * 1024  # generous; truncated to N experts below
+    generous_budget_bytes = 10 * 1024 * 1024
     full_config = build_sram_hot_expert_config(
         state_dict,
         [layer_idx],
         sram_assigner,
         sram_core_grids,
-        l1_budget_bytes,
+        generous_budget_bytes,
         freqs,
+        mesh_shape=_mesh_shape_from_submesh(submesh),
     )
-    sram_hot_experts = {k: v[:_SRAM_HOT_EXPERTS_PER_LAYER] for k, v in full_config.items()}
+    sram_hot_experts = {k: v[:_SRAM_HOT_EXPERTS_CEILING] for k, v in full_config.items()}
     logger.info(
-        "SRAM hot experts: layer {} -> {} experts selected",
+        "SRAM hot experts: layer {} -> {} ranked candidates (pre-budget trim)",
         layer_idx,
         len(sram_hot_experts.get(layer_idx, [])),
     )
@@ -477,6 +523,7 @@ def test_decoder(
         sram_hot_experts=sram_hot_experts,
         sram_core_grids=sram_core_grids,
         sram_assigner=sram_assigner,
+        worker_l1_size=device_params.get("worker_l1_size") if use_sram_hot_experts else None,
     )
 
     logger.info("Creating decoder block tensors...")
