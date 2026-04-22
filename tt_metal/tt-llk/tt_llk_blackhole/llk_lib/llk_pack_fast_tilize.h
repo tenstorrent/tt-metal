@@ -139,12 +139,9 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     [[maybe_unused]] const std::uint32_t num_faces = 4,
     const std::uint32_t pack_src_format            = (std::uint32_t)DataFormat::Float16_b)
 {
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-    // DEST remap: set from BOTH math and pack threads. This shared config register
-    // affects both MOVA2D (math writes) and PACR (pack reads). Setting from both
-    // threads ensures each coprocessor sees the change from its own RISC-V core.
-    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_remap_addrs_RMW>(1);
-    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_swizzle_32b_RMW>(1);
+    // DEST remap (remap_addrs + swizzle_32b) is set by _llk_math_fast_tilize_init_
+    // on the math thread (mirrors pack_untilize_dest_init; tracked by
+    // tt-metal#17132 / tt-llk#989). No action needed here, no uninit.
 
     if constexpr (is_fp32_dest_acc_en)
     {
@@ -193,8 +190,6 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
-    TTI_NOP;
-    TTI_NOP;
 
     _llk_pack_fast_tilize_configure_addrmod_();
     _llk_pack_fast_tilize_load_replay_();
@@ -233,7 +228,6 @@ inline void _llk_pack_fast_tilize_uninit_(
     [[maybe_unused]] const std::uint32_t num_faces,
     const std::uint32_t pack_src_format = (std::uint32_t)DataFormat::Float16_b)
 {
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     if constexpr (is_fp32_dest_acc_en)
     {
         // Mirror of init: restore caller's pack_src_format via reconfig, which also
@@ -242,10 +236,7 @@ inline void _llk_pack_fast_tilize_uninit_(
         reconfig_packer_data_format<is_fp32_dest_acc_en>(
             pack_src_format, pack_dst_format, tile_size, FACE_R_DIM, TILE_C_DIM, num_faces, /*partial_face=*/false);
     }
-    // Clear DEST remap from pack thread too (math thread also clears in its uninit).
-    // Both threads must see the cleared state from their own RISC-V core.
-    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_remap_addrs_RMW>(0);
-    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_swizzle_32b_RMW>(0);
+    // DEST remap is NOT cleared here — set/owned by the math thread (see init comment).
     // BH-specific: restore strides modified by fast-tilize init (WH doesn't modify them).
     // Note: set_packer_strides's first param is semantically pack_src_format.
     set_packer_strides(pack_src_format, TILE_C_DIM);

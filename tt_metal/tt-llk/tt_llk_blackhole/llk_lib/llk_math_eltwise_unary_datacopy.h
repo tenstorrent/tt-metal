@@ -453,10 +453,12 @@ inline void _llk_math_eltwise_unary_datacopy_uninit_()
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unpack_dst_format, [[maybe_unused]] const std::uint32_t unit_dim)
 {
-    // DEST remap (remap_addrs + swizzle_32b) is set/cleared by the pack thread
-    // in _llk_pack_fast_tilize_init_ / _llk_pack_fast_tilize_uninit_.
-    // Cannot use _llk_math_reconfig_remap_ pattern here because tensix_sync()
-    // deadlocks — the math coprocessor has SyncHalf wait instructions in-flight.
+    // DEST remap (remap_addrs + swizzle_32b) is enabled here to mirror
+    // pack_untilize_dest_init's BH workaround (see tt-metal#17132 / tt-llk#989).
+    // Kernels that call fast_tilize_init from inside a loop pay the tensix_sync
+    // cost per iteration; systematic hoist is tracked in the same issues.
+    // No uninit — leaving the bits set is benign for subsequent ops.
+    _llk_math_reconfig_remap_(true);
 
     // Compat fp32-dest: MOVA2D does not correctly handle 32-bit DEST rows (BH HW quirk,
     // same as WH). Temporarily clear Fp32_enabled so MOVA2D treats DEST as 16-bit.
