@@ -2,20 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
-import json
 import math
 import os
+from contextlib import contextmanager
 from itertools import takewhile
 from pathlib import Path
 from types import NoneType
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import torch
-from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import DeepseekSamplingArgs, SavedWeight
-from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+from models.demos.deepseek_v3.utils.config_dataclass import ConfigWeight, DeepseekSamplingArgs, SavedWeight
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
@@ -34,6 +32,20 @@ DEFAULT_SAMPLING_TOP_P = 0.95
 # So, using 32 as default value for top-k when sampling on device. If top-k = 0 is needed, then
 # do sampling on host.
 DEFAULT_SAMPLING_TOP_K = 32
+
+_LEGACY_SAVED_WEIGHT_EMISSION_DEPTH = 0
+
+
+@contextmanager
+def emit_legacy_saved_weights():
+    """Temporarily make ``shard_and_save()`` dump tensors to disk and return ``SavedWeight`` records."""
+
+    global _LEGACY_SAVED_WEIGHT_EMISSION_DEPTH
+    _LEGACY_SAVED_WEIGHT_EMISSION_DEPTH += 1
+    try:
+        yield
+    finally:
+        _LEGACY_SAVED_WEIGHT_EMISSION_DEPTH -= 1
 
 
 def get_fabric_config():
@@ -608,11 +620,11 @@ def get_state_dicts(
     return torch.stack(tensors, dim=concat_dim)
 
 
-def sub_state_dict(state_dict: dict[str, torch.Tensor], prefix: str, num_layers: int | None = None):
+def sub_state_dict(state_dict: Mapping[str, torch.Tensor], prefix: str, num_layers: int | None = None):
     """Get a subset of the state dict with a given prefix."""
-    # Preserve laziness when applicable by returning a LazyStateDict view.
-    if isinstance(state_dict, LazyStateDict):
-        return state_dict.view_with_prefix(prefix, num_layers)
+    view_with_prefix = getattr(state_dict, "view_with_prefix", None)
+    if callable(view_with_prefix):
+        return view_with_prefix(prefix, num_layers)
     if num_layers is None:
         return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
     else:
@@ -634,68 +646,10 @@ def sub_state_dicts(
 
 TENSOR_CACHE_EXTENSION = ".tensorbin"
 
-# Cache specs dumping for conversion optimization
-_CACHE_SPECS_DUMP_ENV_VAR = "DEEPSEEK_V3_CACHE_SPECS_JSONL"
-_CACHE_SPECS_DUMP_ENV_VAR_LEGACY = "DEEPSEEK_V3_DUMP_CACHE_SPECS"
-
-
-def _enum_name_or_str(obj: Any) -> str | None:
-    """Get the name of an enum or return the string representation."""
-    if obj is None:
-        return None
-    if hasattr(obj, "name"):
-        return obj.name
-    return str(obj)
-
-
-def _memory_config_to_dict(memory_config: ttnn.MemoryConfig | None) -> dict[str, Any] | None:
-    """Convert a MemoryConfig to a dictionary for JSON serialization."""
-    if memory_config is None:
-        return None
-    # Use the built-in to_json() method for proper serialization, then parse it
-    # This handles CoreRangeSet and other complex types correctly
-    try:
-        return json.loads(memory_config.to_json())
-    except (AttributeError, TypeError):
-        # Fallback to manual conversion if to_json() is not available
-        # This handles the case where grid might be a CoreRangeSet
-        grid_dict = None
-        if memory_config.shard_spec is not None and memory_config.shard_spec.grid is not None:
-            grid = memory_config.shard_spec.grid
-            # Handle CoreRangeSet - convert to list of ranges
-            if hasattr(grid, "__iter__"):
-                # It's a CoreRangeSet (iterable of CoreRange objects)
-                grid_dict = [
-                    {
-                        "start": (core_range.start.x, core_range.start.y),
-                        "end": (core_range.end.x, core_range.end.y),
-                    }
-                    for core_range in grid
-                ]
-            elif hasattr(grid, "start") and hasattr(grid, "end"):
-                # It's a single CoreRange
-                grid_dict = {
-                    "start": (grid.start.x, grid.start.y),
-                    "end": (grid.end.x, grid.end.y),
-                }
-
-        return {
-            "memory_layout": _enum_name_or_str(memory_config.memory_layout),
-            "buffer_type": _enum_name_or_str(memory_config.buffer_type),
-            "shard_spec": (
-                {
-                    "grid": grid_dict,
-                    "shape": list(memory_config.shard_spec.shape) if memory_config.shard_spec.shape else None,
-                    "orientation": _enum_name_or_str(memory_config.shard_spec.orientation),
-                }
-                if memory_config.shard_spec is not None
-                else None
-            ),
-        }
-
 
 def _get_relative_cache_path(path: Path) -> str | None:
     """Extract the cache-relative path after the ``mesh_<rows>x<cols>`` directory."""
+
     path_str = str(path)
     mesh_idx = path_str.find("mesh_")
     if mesh_idx == -1:
@@ -704,44 +658,6 @@ def _get_relative_cache_path(path: Path) -> str | None:
     if len(parts) < 2:
         return None if path.is_absolute() else path_str
     return parts[1]
-
-
-def _append_cache_specs_record(record: dict[str, Any]) -> None:
-    """Append a cache specs record to the JSONL file specified by the environment variable."""
-    dump_path_str = os.getenv(_CACHE_SPECS_DUMP_ENV_VAR) or os.getenv(_CACHE_SPECS_DUMP_ENV_VAR_LEGACY)
-    if not dump_path_str:
-        return
-
-    dump_path = Path(dump_path_str)
-    try:
-        dump_path.parent.mkdir(parents=True, exist_ok=True)
-        data = (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
-        fd = os.open(dump_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
-        try:
-            fcntl_module = None
-            try:
-                import fcntl as fcntl_module
-            except Exception:
-                fcntl_module = None
-            if fcntl_module is not None:
-                try:
-                    fcntl_module.flock(fd, fcntl_module.LOCK_EX)
-                except Exception as e:
-                    # Best-effort locking: ignore failures but log for diagnostics.
-                    logger.debug(f"Failed to acquire file lock on {dump_path}: {e}")
-            bytes_written = os.write(fd, data)
-            if bytes_written != len(data):
-                raise OSError(f"Short write while appending cache specs to {dump_path}")
-            if fcntl_module is not None:
-                try:
-                    fcntl_module.flock(fd, fcntl_module.LOCK_UN)
-                except Exception as e:
-                    # Best-effort unlocking: ignore failures but log for diagnostics.
-                    logger.debug(f"Failed to release file lock on {dump_path}: {e}")
-        finally:
-            os.close(fd)
-    except Exception as e:
-        logger.warning(f"Failed to append cache specs record to {dump_path}: {e}")
 
 
 def shard_and_save(
@@ -756,14 +672,17 @@ def shard_and_save(
     memory_config: ttnn.MemoryConfig | None = None,
     _torch_impl: bool = False,
     padding_needed: tuple[int, int, int] = (0, 0, 0),
-) -> SavedWeight:
-    """Shard a tensor and save it to a file."""
+) -> ConfigWeight:
+    """Shard a tensor and materialize it directly as a TTNN tensor."""
     assert all(isinstance(shard_dim, (int, NoneType)) for shard_dim in shard_dims)
     assert isinstance(remove_dims, bool) or all(isinstance(remove_dim, bool) for remove_dim in remove_dims)
     assert len(shard_dims) == 2, "shard_dims must be exactly 2 dimensions (can repeat)"
 
     if isinstance(remove_dims, bool):
         remove_dims = (remove_dims, remove_dims)
+
+    if not tensor.is_contiguous():
+        tensor = tensor.contiguous()
 
     assert (
         shard_dims[0] != shard_dims[1] or remove_dims[0] == remove_dims[1]
@@ -793,16 +712,6 @@ def shard_and_save(
                 not remove_dim or tensor.shape[shard_dim] == mesh_dim
             ), f"The removed dim {shard_dim} must be fully sharded"
 
-    cache_path = (
-        path if path.name.endswith(TENSOR_CACHE_EXTENSION) else path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
-    )
-    if cache_path.exists():
-        logger.info(f"Cache file already exists, skipping shard_and_save: {cache_path}")
-        relative_cache_path = _get_relative_cache_path(cache_path)
-        if relative_cache_path is None:
-            raise ValueError(f"Expected path under a 'mesh_<rows>x<cols>' cache directory: {cache_path}")
-        return SavedWeight(Path(relative_cache_path), memory_config)
-
     if _torch_impl:
         ttnn_tensor = _shard_torch_impl(
             path=path,
@@ -827,50 +736,26 @@ def shard_and_save(
             padding_needed=padding_needed,
         )
 
-    if not path.name.endswith(TENSOR_CACHE_EXTENSION):
-        path = path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+    if _LEGACY_SAVED_WEIGHT_EMISSION_DEPTH > 0:
+        cache_path = (
+            path
+            if path.name.endswith(TENSOR_CACHE_EXTENSION)
+            else path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+        )
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        relative_cache_path = _get_relative_cache_path(cache_path)
+        if relative_cache_path is None:
+            raise ValueError(f"Expected path under a 'mesh_<rows>x<cols>' cache directory: {cache_path}")
+        try:
+            ttnn.dump_tensor(cache_path, ttnn_tensor)
+            return SavedWeight(Path(relative_cache_path), ttnn_tensor.memory_config())
+        finally:
+            try:
+                ttnn.deallocate(ttnn_tensor)
+            except Exception:
+                pass
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    record = {
-        "event": "deepseek_v3.cache_tensor_spec",
-        "pid": os.getpid(),
-        "cache_file_path": str(path),
-        "cache_file_relpath": _get_relative_cache_path(path),
-        "torch_shape": list(tensor.shape),
-        "torch_dtype": str(tensor.dtype),
-        "requested_dtype": _enum_name_or_str(dtype),
-        "requested_layout": _enum_name_or_str(layout),
-        "requested_memory_config": _memory_config_to_dict(memory_config),
-        "shard_dims": list(shard_dims),
-        "remove_dims": list(remove_dims),
-        "mesh_shape": list(mesh_device.shape),
-        "mesh_num_devices": mesh_device.get_num_devices(),
-        "dtype_is_tilized": dtype in {ttnn.bfloat4_b, ttnn.bfloat8_b},
-        "shard_device_impl_uses_dram_interleaved_workaround": memory_config == ttnn.DRAM_MEMORY_CONFIG,
-        "torch_impl": _torch_impl,
-        "status": "ok",
-        "result_shape": list(ttnn_tensor.shape),
-        "result_dtype": _enum_name_or_str(ttnn_tensor.dtype),
-        "result_layout": _enum_name_or_str(ttnn_tensor.layout),
-        "result_memory_config": _memory_config_to_dict(ttnn_tensor.memory_config()),
-    }
-    try:
-        ttnn.dump_tensor(path, ttnn_tensor)
-    except Exception as e:
-        record["status"] = f"error({type(e).__name__}: {e})"
-        _append_cache_specs_record(record)
-        raise
-    else:
-        _append_cache_specs_record(record)
-
-    # Always convert cache-root-prefixed paths to relative paths for portability.
-    relative_cache_path = _get_relative_cache_path(path)
-    if relative_cache_path is None:
-        raise ValueError(f"Expected path under a 'mesh_<rows>x<cols>' cache directory: {path}")
-    path = Path(relative_cache_path)
-
-    return SavedWeight(path, memory_config)
+    return ttnn_tensor
 
 
 def _shard_device_impl(
@@ -884,7 +769,7 @@ def _shard_device_impl(
     layout: ttnn.Layout | None,
     memory_config: ttnn.MemoryConfig | None,
     padding_needed: tuple[int, int, int] = (0, 0, 0),
-) -> SavedWeight:
+) -> ttnn.Tensor:
     assert layout in {
         None,
         ttnn.ROW_MAJOR_LAYOUT,
@@ -1167,7 +1052,7 @@ def _shard_torch_impl(
     dtype: ttnn.DataType | None = None,
     layout: ttnn.Layout | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
-) -> SavedWeight:
+) -> ttnn.Tensor:
     if shard_dims[0] == shard_dims[1]:
         assert remove_dims[0] == remove_dims[1], "If sharding a single dim, both remove_dim values must be the same"
         remove_dims = (remove_dims[0],)

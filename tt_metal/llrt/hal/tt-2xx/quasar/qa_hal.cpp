@@ -294,7 +294,7 @@ public:
     std::string common_flags(const Params& params) const override {
         // TODO: Use correct tt-qsr cpu options #32893
         std::string cflags =
-            params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64-rocc " : "-mcpu=tt-qsr32-tensixbh ";
+            params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64-rocc " : "-mcpu=tt-qsr32-tensix ";
         cflags += "-fno-extern-tls-init ";
         cflags += "-ftls-model=local-exec ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
