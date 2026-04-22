@@ -1017,6 +1017,56 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         }
     }
     log_info(tt::LogMetal, "Fabric initialized on {} devices", configured_count);
+
+    // FIX I (#42429): Identify MMIO devices whose master router ETH channel connects to a
+    // dead-relay non-MMIO device.  Those channels have fabric firmware loaded but their ETH
+    // peer (on the non-MMIO device) will never complete the startup handshake — the relay
+    // path to it is broken, so the peer ERISC never writes the sync value back.
+    // Track them in mmio_dead_peer_devices_ so wait_for_fabric_router_sync() and
+    // verify_all_fabric_channels_healthy() can skip them.
+    // Cannot add to dead_relay_devices_: that would cause DeviceManager to skip dispatch
+    // kernel init for the MMIO device, which is wrong (MMIO dispatch uses PCIe, not ETH relay).
+    if (!dead_relay_devices_.empty()) {
+        const auto& eth_connections = cluster_.get_ethernet_connections();
+        for (auto* dev : compiled_devices) {
+            if (!dev) {
+                continue;
+            }
+            // Only MMIO devices are relevant here (non-MMIO are already in dead_relay_devices_).
+            if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
+                continue;
+            }
+            // Already tracked as dead-relay — nothing further needed.
+            if (dead_relay_devices_.count(dev->id()) > 0) {
+                continue;
+            }
+            const auto master_chan = builder_context.get_fabric_master_router_chan(dev->id());
+            auto dev_conn_it = eth_connections.find(dev->id());
+            if (dev_conn_it == eth_connections.end()) {
+                continue;
+            }
+            for (const auto& [eth_chan, peer_info] : dev_conn_it->second) {
+                if (static_cast<int>(eth_chan) != static_cast<int>(master_chan)) {
+                    continue;
+                }
+                const ChipId peer_chip_id = std::get<0>(peer_info);
+                if (dead_relay_devices_.count(peer_chip_id) > 0) {
+                    mmio_dead_peer_devices_.insert(dev->id());
+                    log_warning(
+                        tt::LogMetal,
+                        "compile_and_configure_fabric: Device {} MMIO master router chan={} connects "
+                        "to dead-relay Device {} — marking for sync skip. Firmware on chan={} loaded "
+                        "but peer handshake will never complete (peer ETH relay broken). "
+                        "Dispatch init not affected. (#42429 FIX I)",
+                        dev->id(),
+                        master_chan,
+                        peer_chip_id,
+                        master_chan);
+                }
+                break;  // master_chan found; no need to iterate further channels for this device
+            }
+        }
+    }
 }
 
 void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
@@ -1045,6 +1095,18 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
                 tt::LogMetal,
                 "wait_for_fabric_router_sync: Device {} is a dead-relay device — skipping router "
                 "sync (no fabric firmware loaded, relay path broken). (#42429 FIX G)",
+                dev->id());
+            return;
+        }
+        // FIX I (#42429): skip MMIO devices whose master router channel connects to a dead-relay
+        // non-MMIO peer.  Firmware was loaded on the master channel but the peer will never write
+        // the sync value back — waiting here would always time out and throw.
+        if (mmio_dead_peer_devices_.count(dev->id()) > 0) {
+            log_warning(
+                tt::LogMetal,
+                "wait_for_fabric_router_sync: Device {} MMIO master router connects to dead-relay "
+                "peer — skipping router sync (firmware loaded but peer handshake will never "
+                "complete). (#42429 FIX I)",
                 dev->id());
             return;
         }
@@ -1194,6 +1256,17 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
                 tt::LogMetal,
                 "verify_all_fabric_channels_healthy: Device {} is a dead-relay device — "
                 "skipping channel health verification (no fabric firmware loaded). (#42429 FIX G)",
+                dev->id());
+            continue;
+        }
+        // FIX I (#42429): skip MMIO devices whose master router connects to a dead-relay peer.
+        // Firmware was loaded but peer never started — channel will not be at READY_FOR_TRAFFIC.
+        if (mmio_dead_peer_devices_.count(dev->id()) > 0) {
+            log_warning(
+                tt::LogMetal,
+                "verify_all_fabric_channels_healthy: Device {} MMIO master router connects to "
+                "dead-relay peer — skipping health check (peer firmware never started). "
+                "(#42429 FIX I)",
                 dev->id());
             continue;
         }

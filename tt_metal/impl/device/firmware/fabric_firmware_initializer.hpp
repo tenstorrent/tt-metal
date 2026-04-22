@@ -80,6 +80,14 @@ private:
     // These devices cannot receive ANY writes (including dispatch firmware) via the relay.
     std::unordered_set<ChipId> dead_relay_devices_;
 
+    // FIX I (#42429): MMIO devices whose master router ETH channel connects to a dead-relay
+    // non-MMIO device. Their fabric firmware was loaded but the startup handshake peer (the
+    // non-MMIO device's ERISC) will never respond — relay path is broken.
+    // These devices are excluded from fabric router sync and channel health checks.
+    // Unlike dead_relay_devices_, they are NOT excluded from dispatch kernel init —
+    // MMIO dispatch goes through PCIe, not ETH relay, and must proceed normally.
+    std::unordered_set<ChipId> mmio_dead_peer_devices_;
+
     // GAP 5: Track channels that were force-reset during teardown.
     // On the next verify_all_fabric_channels_healthy() call, channels that were force-reset
     // in a previous session are expected to fail — log them as "degraded" rather than
