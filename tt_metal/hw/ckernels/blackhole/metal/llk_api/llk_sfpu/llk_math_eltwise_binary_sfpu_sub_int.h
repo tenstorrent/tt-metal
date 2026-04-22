@@ -5,6 +5,7 @@
 #pragma once
 
 #include "llk_math_eltwise_binary_sfpu_macros.h"
+#include "sfpu/ckernel_sfpu_sub_int.h"
 
 namespace ckernel {
 
