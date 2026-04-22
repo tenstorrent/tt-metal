@@ -216,6 +216,38 @@ currently always uses `cb_tile_idx=0` inside batched loops.
 
 ---
 
+### GAP-13: `copy_dest_values` — copy one DEST slot to another
+`copy_dest_values(src_slot, dst_slot)` moves a DST register value to another slot in-place.
+No chain element wraps this. Needed in gelu_backward to save tanh before squaring it.
+
+**Blocked kernels** (2):
+- experimental/unary_backward/gelu_backward/eltwise_bw_gelu_approx_tanh.cpp
+- experimental/unary_backward/gelu_backward/eltwise_bw_gelu_poly.cpp
+
+**Fix**: Add `CopyDest<SrcSlot, DstSlot>` element (10 lines). Wraps `copy_dest_values(src, dst)`.
+**Complexity**: Very low.
+
+---
+
+### GAP-14: Mid-chain-reinit after DestReuseOp followed by Load in same iteration
+`chain_has_non_load_fpu_clash_v` triggers `copy_tile_to_dst_init_short` reinit at the START
+of each sfpu_pipeline iteration. But if a DestReuseOp clobbers the MOP state and a Load
+follows within the SAME `chain.apply()`, the Load's `copy_tile` runs under the wrong state.
+
+**Blocked kernels** (2):
+- eltwise/unary/hardshrink_kernel.cpp
+- eltwise/unary_ng/hardshrink_kernel.cpp
+
+**Fix**: In `SfpuChain::apply()`, detect when a non-Load FPU-clashing element precedes a Load
+element and call `copy_tile_to_dst_init_short(CB)` inline between them. This requires each
+Load to call its own `copy_tile_to_dst_init_short(CB)` inside `exec()` when the preceding
+element is known to have clobbered the state — i.e., `Load::init()` should be non-trivial
+when the chain contains a preceding DestReuseOp.
+**Complexity**: Medium — needs compile-time chain analysis to identify the "DestReuseOp precedes
+Load" pattern and conditionally emit the reinit.
+
+---
+
 ## Structural — not fixable via helpers alone
 
 ### STRUCT-1: Matmul fused with eltwise
@@ -293,6 +325,8 @@ refactor of the op framework), or accept these as permanently macro-driven.
 | GAP-10 | Multi-DST SFPU (3+ slots) | 4 |
 | GAP-11 | Indexed Load in pipeline | 4 |
 | ~~GAP-12~~ | ~~Missing TanhDerivative element~~ | ~~1~~ | **FIXED**: TanhDerivative |
+| GAP-13 | Missing `CopyDest` element | 2 |
+| GAP-14 | Mid-chain reinit after DestReuseOp+Load | 2 |
 | STRUCT-1 | Matmul fused | 8 |
 | STRUCT-2 | moreh *_to_cb layer | ~15 |
 | STRUCT-3 | Runtime bcast dispatch | 3 |

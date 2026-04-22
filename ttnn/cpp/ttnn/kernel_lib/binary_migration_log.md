@@ -63,6 +63,20 @@ feature that does or does not fit the helper API.
   (NoWaitNoPop), runtime `in_cb`/`out_cb` from q/k selection — helpers take `uint32_t` OK
 - **Tests**: 16 decode tests passed (head_dim 128/64/256, batch 1/8/16/32, with program cache)
 
+### `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/hardshrink_kernel_sfpu.cpp`
+- **Commit**: `8ad4a58c6aa`
+- **Pattern**: two sequential `sfpu_pipeline` calls sharing a streaming intermediate CB.
+  Uses `FillScalar` (GAP-9, now fixed), `SfpuAdd/Sub/Mul`, `Ltz`, `Gtz`, `Load` fan-out.
+  Chain 1 (→ cb_tmp0, PerTile): `FillScalar<D0>{λ}, Load<cb_input,D1,WaitNoPop>,
+    SfpuAdd<D0,D1,D0>, Ltz<D0>, SfpuMul<D0,D1,D0>`
+  Chain 2 (→ cb_output, Bulk): `FillScalar<D1>{λ}, Load<cb_input,D0,WaitNoPop>,
+    SfpuSub<D0,D1,D0>, Gtz<D0>, Load<cb_input,D1,NoWaitPop>, SfpuMul<D0,D1,D0>,
+    Load<cb_tmp0,D1,WaitAndPop>, SfpuAdd<D0,D1,D0>`
+  cb_tmp0 capacity = 2×ntiles_per_block; safe to fill then drain sequentially.
+- **Why not unary_ng**: `unary_ng/hardshrink_kernel.cpp` uses FPU `binary_dest_reuse_tiles`
+  (BF16 precision) — still blocked by GAP-mid-chain-reinit.
+- **Tests**: FP32 (DataType.FLOAT32) and BF16 (DataType.BFLOAT16) hardshrink single tests PASS
+
 ### `ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/hardswish_kernel.cpp`
 ### `ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/tanhshrink_kernel.cpp`
 ### `ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/mish_kernel.cpp`
@@ -343,25 +357,47 @@ These are structural to how the blocked sub-tile computation works across all no
 ### `sfpu_chain + DestReuseOp` pattern — evaluated and blocked
 
 The following kernels were found during fresh independent investigation. They use
-`binary_dest_reuse_tiles` or multi-DEST SFPU ops, but all are blocked:
+`binary_dest_reuse_tiles` or multi-DEST SFPU ops, but remain blocked. GAP-9 (FillScalar)
+and GAP-12 (TanhDerivative) are now fixed — remaining blockers listed per kernel.
 
-- **`eltwise/unary/hardshrink_kernel.cpp`** / **`unary/hardshrink_kernel_sfpu.cpp`**:
-  Multiple `binary_dest_reuse_tiles` per DEST window (3 in one window); `hardshrink_kernel_sfpu`
-  uses `fill_tile(*lambd)` with runtime value → not expressible in chain.
+- **`eltwise/unary/hardshrink_kernel.cpp`** / **`eltwise/unary_ng/hardshrink_kernel.cpp`**:
+  Uses FPU `binary_dest_reuse_tiles` (BFloat16 precision path). Window 2 contains 3
+  DestReuseOp calls from two different CBs (`cb_input` × 2, `cb_tmp0` × 1) in one chain.
+  After DestReuseOp1 clobbers the MOP state, the second Load in the same window needs
+  `copy_tile_to_dst_init_short` — but `chain_has_non_load_fpu_clash_v` only triggers the
+  reinit between sfpu_pipeline iterations, not between elements within one `chain.apply()`.
+  **Fix needed**: per-element reinit in `sfpu_chain` — re-call `copy_tile_to_dst_init_short`
+  before each Load that follows a DestReuseOp within the SAME chain iteration.
+  *(Note: `hardshrink_kernel_sfpu.cpp` — the FP32 variant using SFPU binary ops — was
+  migrated with commit `8ad4a58c6aa`. See MIGRATED section.)*
+
 - **`eltwise/unary/logsigmoid_kernel.cpp`** / **`unary_ng/logsigmoid_kernel.cpp`**:
   `logsigmoid_tile(dst0, dst1, dst_out)` takes 3 DST args — multi-slot coordination
-  not expressible as a single-slot `sfpu_chain` element.
+  not expressible as a single-slot `sfpu_chain` element. GAP-10 (multi-DST wrappers).
+  **Fix needed**: add `Logsigmoid<DataSlot, AuxSlot>` chain element (10 lines).
+
 - **`eltwise/unary_backward/tanh_bw/eltwise_bw_tanh_deriv.cpp`**:
-  Pattern is `sfpu_chain(Load<D0>, Load<D1>, TanhDerivative<D1>, SfpuMul<D0,D1,D0>)` — clean
-  in principle. Blocked by `TanhDerivative` not existing in `sfpu_helpers`. Also needs
-  WaitUpfrontNoPop + indexed Load (tile i from a pre-waited batch) which sfpu_pipeline's
-  default `cb_tile_idx=0` doesn't support.
-- **`experimental/unary_backward/gelu_backward/eltwise_bw_gelu_approx_tanh.cpp`** and `.._poly.cpp`:
-  8+ DEST slots with fill_tile(runtime constant) steps throughout; complex multi-register algebra.
+  `TanhDerivative` now available (GAP-12 fixed). Remaining blocker: **GAP-11 (indexed Load)**.
+  Kernel pre-waits `per_core_block_size` tiles from two CBs and accesses them at index i
+  per batch step. `sfpu_pipeline` with `WaitNoPop` always uses `cb_tile_idx=0` — no mechanism
+  to advance the tile index across iterations.
+  Chain that would work once GAP-11 is fixed:
+  ```
+  sfpu_chain(Load<cb_grad,D0,WaitNoPop>, Load<cb_input,D1,WaitNoPop>,
+             TanhDerivative<Exact,D1>, SfpuMul<D0,D1,D0>)
+  ```
+
+- **`experimental/unary_backward/gelu_backward/eltwise_bw_gelu_approx_tanh.cpp`** (and `_poly.cpp`):
+  `FillScalar`/`FillConst` now available (GAP-9 fixed). Remaining blockers:
+  1. **`copy_dest_values(src, dst)`** — copies one DST slot to another. No chain element
+     exists for this. Needed to save tanh result before squaring it.
+     **Fix needed**: add `CopyDest<SrcSlot, DstSlot>` element (10 lines).
+  2. All SFPU binary ops (`SfpuMul/SfpuAdd/SfpuSub`) and fills exist; once `CopyDest` is
+     added, gelu_backward is expressible as a single long SFPU chain (stride=9, Disabled batching).
+
 - **`reduction/generic/reduce_h_neg.cpp`**:
-  Chunked multi-tile reduction (`copy+neg` then `reduce`) with self-feeding cb_acc and
-  variable `ntiles` per chunk. sfpu_pipeline's Load uses `cb_tile_idx=0` always — can't
-  read tile i from a pre-waited block of N tiles.
+  Chunked multi-tile reduction with self-feeding cb_acc and variable `ntiles` per chunk.
+  **GAP-11 (indexed Load)** — `sfpu_pipeline` can't advance `cb_tile_idx` across batch steps.
 - **`experimental/topk_router_gpt/compute.cpp`** /
   **`experimental/deepseek/mla/compute_collector.cpp`** /
   **`experimental/deepseek/moe/moe_gate_mm/compute.cpp`**:
