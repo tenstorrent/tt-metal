@@ -31,7 +31,7 @@ jobs:
       create-issues: ${{ inputs.create-issues }}
       issue-repo: ${{ inputs.issue-repo }}
       target-repo: ${{ inputs.target-repo }}
-      max-issues: ${{ inputs.max-issues }}
+      max-issues: ${{ fromJSON(inputs.max-issues) }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
