@@ -45,12 +45,12 @@ void kernel_main() {
 
     for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
         uint32_t M_start = m_sub * M_block;
-        uint32_t current_M_block = (M_block < Mpc - M_start) ? M_block : (Mpc - M_start);
+        uint32_t current_M_block = std::min(M_block, Mpc - M_start);
 
         for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
             uint32_t row_base = n_sub * M_block;
             uint32_t N_start = n_sub * M_block;
-            uint32_t current_N = (M_block < Mpc - N_start) ? M_block : (Mpc - N_start);
+            uint32_t current_N = std::min(M_block, Mpc - N_start);
 
             // Read odd K-columns from DRAM
             for (uint32_t blk = 0; blk < num_blocks; blk++) {
