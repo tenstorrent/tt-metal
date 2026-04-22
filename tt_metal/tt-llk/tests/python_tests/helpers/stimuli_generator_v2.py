@@ -6,6 +6,7 @@ import math
 import warnings
 from dataclasses import dataclass
 from dataclasses import replace as _dataclass_replace
+from enum import Enum
 from typing import Callable, Dict, List, Optional, Set, Union
 
 import torch
@@ -28,6 +29,26 @@ from .tile_constants import (
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Distribution kinds
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class DistributionKind(str, Enum):
+    UNIFORM = "uniform"
+    GAUSSIAN = "gaussian"
+    SAW = "saw"
+    LOG_UNIFORM = "log_uniform"
+    CONSTANT = "constant"
+    SEQUENTIAL = "sequential"
+    RAMP = "ramp"
+    GAUSSIAN_LINSPACE = "gaussian_linspace"
+    LOG_UNIFORM_LINSPACE = "log_uniform_linspace"
+    IDENTITY = "identity"
+    FACE_IDENTITY = "face_identity"
+    CUSTOM = "custom"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # StimuliSpec
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -39,8 +60,8 @@ class StimuliSpec:
 
     Parameters
     ----------
-    distribution : str or callable
-        How values are sampled.  Supported string values:
+    distribution : DistributionKind or callable
+        How values are sampled.  Supported enum members (from DistributionKind):
 
         "uniform"
             Uniform random in [low, high].  For integer formats the bounds
@@ -162,7 +183,7 @@ class StimuliSpec:
         if combined.
     """
 
-    distribution: Union[str, Callable] = "uniform"
+    distribution: Union[DistributionKind, Callable] = DistributionKind.UNIFORM
     low: float = 0.0
     high: float = 1.0
     value: float = 1.0
@@ -173,27 +194,41 @@ class StimuliSpec:
     face_specs: Optional[List[Optional["StimuliSpec"]]] = None
     masked_faces: Optional[Set[int]] = None
 
+    def __post_init__(self) -> None:
+        if not (
+            callable(self.distribution)
+            or isinstance(self.distribution, DistributionKind)
+        ):
+            raise TypeError(
+                f"StimuliSpec.distribution must be DistributionKind or callable, "
+                f"got {type(self.distribution).__name__!r}: {self.distribution!r}"
+            )
+
     # ── convenience constructors ──────────────────────────────────────────────
 
     @classmethod
     def constant(cls, value: float = 1.0, **kwargs) -> "StimuliSpec":
         """All elements equal to *value*."""
-        return cls(distribution="constant", value=value, **kwargs)
+        return cls(distribution=DistributionKind.CONSTANT, value=value, **kwargs)
 
     @classmethod
     def identity(cls, diagonal_value: float = 1.0, **kwargs) -> "StimuliSpec":
         """Identity matrix: *diagonal_value* on the diagonal, zero elsewhere."""
-        return cls(distribution="identity", value=diagonal_value, **kwargs)
+        return cls(
+            distribution=DistributionKind.IDENTITY, value=diagonal_value, **kwargs
+        )
 
     @classmethod
     def face_identity(cls, diagonal_value: float = 1.0, **kwargs) -> "StimuliSpec":
         """Per-face identity block: *diagonal_value* on the face diagonal, zero elsewhere."""
-        return cls(distribution="face_identity", value=diagonal_value, **kwargs)
+        return cls(
+            distribution=DistributionKind.FACE_IDENTITY, value=diagonal_value, **kwargs
+        )
 
     @classmethod
     def custom(cls, values: List[float], **kwargs) -> "StimuliSpec":
         """Explicit values at the start of each face, zero-filled remainder."""
-        return cls(distribution="custom", values=list(values), **kwargs)
+        return cls(distribution=DistributionKind.CUSTOM, values=list(values), **kwargs)
 
     @classmethod
     def custom_faces(
@@ -235,7 +270,7 @@ class StimuliSpec:
         for idx, vals in face_values.items():
             face_specs[idx] = cls.custom(values=vals)
         return cls(
-            distribution="constant",
+            distribution=DistributionKind.CONSTANT,
             value=0.0,
             face_specs=face_specs,
             **kwargs,
@@ -244,22 +279,22 @@ class StimuliSpec:
     @classmethod
     def sequential(cls, **kwargs) -> "StimuliSpec":
         """Sequential values 1, 2, 3, …"""
-        return cls(distribution="sequential", **kwargs)
+        return cls(distribution=DistributionKind.SEQUENTIAL, **kwargs)
 
     @classmethod
     def uniform(cls, low: float = 0.0, high: float = 1.0, **kwargs) -> "StimuliSpec":
         """Uniform random in [low, high]."""
-        return cls(distribution="uniform", low=low, high=high, **kwargs)
+        return cls(distribution=DistributionKind.UNIFORM, low=low, high=high, **kwargs)
 
     @classmethod
     def gaussian(cls, mean: float = 0.0, std: float = 1.0, **kwargs) -> "StimuliSpec":
         """Normal distribution with *mean* and *std*."""
-        return cls(distribution="gaussian", mean=mean, std=std, **kwargs)
+        return cls(distribution=DistributionKind.GAUSSIAN, mean=mean, std=std, **kwargs)
 
     @classmethod
     def saw(cls, low: float = 0.0, high: float = 1.0, **kwargs) -> "StimuliSpec":
         """Per-face sawtooth linspace from *low* to *high*, restarting every face."""
-        return cls(distribution="saw", low=low, high=high, **kwargs)
+        return cls(distribution=DistributionKind.SAW, low=low, high=high, **kwargs)
 
     @classmethod
     def log_uniform(
@@ -271,12 +306,14 @@ class StimuliSpec:
                 f"log_uniform requires strictly positive low and high, "
                 f"got low={low}, high={high}"
             )
-        return cls(distribution="log_uniform", low=low, high=high, **kwargs)
+        return cls(
+            distribution=DistributionKind.LOG_UNIFORM, low=low, high=high, **kwargs
+        )
 
     @classmethod
     def ramp(cls, low: float = 0.0, high: float = 1.0, **kwargs) -> "StimuliSpec":
         """Continuous linear sweep from *low* to *high* across the full tensor."""
-        return cls(distribution="ramp", low=low, high=high, **kwargs)
+        return cls(distribution=DistributionKind.RAMP, low=low, high=high, **kwargs)
 
     @classmethod
     def gaussian_linspace(
@@ -286,7 +323,12 @@ class StimuliSpec:
         Deterministic sweep through a Gaussian: values spaced by inverting
         the normal CDF (no randomness, fully determined by mean/std/size).
         """
-        return cls(distribution="gaussian_linspace", mean=mean, std=std, **kwargs)
+        return cls(
+            distribution=DistributionKind.GAUSSIAN_LINSPACE,
+            mean=mean,
+            std=std,
+            **kwargs,
+        )
 
     @classmethod
     def log_uniform_linspace(
@@ -298,7 +340,12 @@ class StimuliSpec:
                 f"log_uniform_linspace requires strictly positive low and high, "
                 f"got low={low}, high={high}"
             )
-        return cls(distribution="log_uniform_linspace", low=low, high=high, **kwargs)
+        return cls(
+            distribution=DistributionKind.LOG_UNIFORM_LINSPACE,
+            low=low,
+            high=high,
+            **kwargs,
+        )
 
     @classmethod
     def for_op(
@@ -367,33 +414,39 @@ class OperandSpecs:
 def _exp_spec(fmt: DataFormat) -> OperandSpecs:
     """Safe input range for exp(x) per format to avoid overflow."""
     if fmt == DataFormat.MxFp8P:
-        spec = StimuliSpec(distribution="uniform", low=-5.0, high=5.0)
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
-        spec = StimuliSpec(distribution="uniform", low=-10.0, high=10.0)
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     else:
-        spec = StimuliSpec(distribution="uniform", low=-80.0, high=80.0)
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-80.0, high=80.0)
     return OperandSpecs(spec_A=spec)
 
 
 def _exp2_spec(fmt: DataFormat) -> OperandSpecs:
     """Safe input range for exp2(x) = 2^x per format to avoid overflow."""
     if fmt == DataFormat.MxFp8P:
-        spec = StimuliSpec(distribution="uniform", low=-7.0, high=7.0)
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-7.0, high=7.0)
     elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
-        spec = StimuliSpec(distribution="uniform", low=-14.0, high=14.0)
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-14.0, high=14.0)
     else:
-        spec = StimuliSpec(distribution="uniform", low=-100.0, high=100.0)
+        spec = StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-100.0, high=100.0
+        )
     return OperandSpecs(spec_A=spec)
 
 
 def _square_spec(fmt: DataFormat) -> OperandSpecs:
     """Safe input range for square(x) = x^2 per format to avoid overflow."""
     if fmt == DataFormat.MxFp8P:
-        spec = StimuliSpec(distribution="uniform", low=-20.0, high=20.0)
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-20.0, high=20.0)
     elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
-        spec = StimuliSpec(distribution="uniform", low=-200.0, high=200.0)
+        spec = StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        )
     else:
-        spec = StimuliSpec(distribution="uniform", low=-1000.0, high=1000.0)
+        spec = StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-1000.0, high=1000.0
+        )
     return OperandSpecs(spec_A=spec)
 
 
@@ -418,31 +471,33 @@ _OP_DOMAIN_REGISTRY: Dict[
     # ── SFPU unary ────────────────────────────────────────────────────────────
     # abs: all reals; include negative branch
     MathOperation.Abs: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-10.0, high=10.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
     # acosh: domain x >= 1
     MathOperation.Acosh: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=1.0, high=10.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=1.0, high=10.0)
     ),
     # asinh: all reals
     MathOperation.Asinh: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-10.0, high=10.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
     # atanh: domain |x| < 1; stay away from ±1 to avoid ±inf
     MathOperation.Atanh: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-0.95, high=0.95)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.95, high=0.95)
     ),
     # celu: exercises both the exponential branch (x < 0) and linear (x >= 0)
     MathOperation.Celu: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-5.0, high=5.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
     # cos: cover the full unit circle
     MathOperation.Cos: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-math.pi, high=math.pi)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-math.pi, high=math.pi
+        )
     ),
     # elu: exercises the exponential branch (x < 0)
     MathOperation.Elu: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-5.0, high=5.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
     # exp: format-specific overflow threshold
     MathOperation.Exp: _exp_spec,
@@ -450,27 +505,29 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Exp2: _exp2_spec,
     # fill: the hardware ignores the input value; any range is fine
     MathOperation.Fill: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=0.0, high=1.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=1.0)
     ),
     # gelu: Gaussian activation — gaussian distribution naturally exercises tails
     MathOperation.Gelu: OperandSpecs(
-        spec_A=StimuliSpec(distribution="gaussian", mean=0.0, std=3.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.GAUSSIAN, mean=0.0, std=3.0)
     ),
     # hardsigmoid: linear region between -3 and 3, clipped outside
     MathOperation.Hardsigmoid: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-4.0, high=4.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
     ),
     # log: domain x > 0; log-uniform spans several decades
     MathOperation.Log: OperandSpecs(
-        spec_A=StimuliSpec(distribution="log_uniform", low=1e-4, high=1e3)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3
+        )
     ),
     # log1p: domain x > -1; log1p(x) = log(1 + x)
     MathOperation.Log1p: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-0.99, high=10.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=10.0)
     ),
     # neg: all reals
     MathOperation.Neg: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-10.0, high=10.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
     # reciprocal: domain x != 0; log-uniform avoids zero and covers decades.
     # Only strictly positive values are generated here so that negative-
@@ -478,76 +535,82 @@ _OP_DOMAIN_REGISTRY: Dict[
     # To test negative inputs, supply an explicit spec such as:
     #   StimuliSpec.uniform(low=-100.0, high=-0.1)
     MathOperation.Reciprocal: OperandSpecs(
-        spec_A=StimuliSpec(distribution="log_uniform", low=0.1, high=100.0)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.LOG_UNIFORM, low=0.1, high=100.0
+        )
     ),
     # relu / relu_max / relu_min / threshold: include negatives (zero branch)
     MathOperation.Relu: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-5.0, high=5.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
     MathOperation.ReluMax: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-5.0, high=5.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
     MathOperation.ReluMin: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-5.0, high=5.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
     MathOperation.Threshold: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-5.0, high=5.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
     # rsqrt: domain x > 0; log-uniform covers a wide positive range
     MathOperation.Rsqrt: OperandSpecs(
-        spec_A=StimuliSpec(distribution="log_uniform", low=1e-4, high=100.0)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=100.0
+        )
     ),
     # sigmoid: cover both saturation regions
     MathOperation.Sigmoid: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-8.0, high=8.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-8.0, high=8.0)
     ),
     # silu: silu(x) = x * sigmoid(x); cover saturation + linear regions
     MathOperation.Silu: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-5.0, high=5.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
     # sin: cover the full unit circle
     MathOperation.Sin: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-math.pi, high=math.pi)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-math.pi, high=math.pi
+        )
     ),
     # sqrt: domain x >= 0
     MathOperation.Sqrt: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=0.0, high=100.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=100.0)
     ),
     # square: format-specific overflow threshold
     MathOperation.Square: _square_spec,
     # tanh: cover saturation regions (saturates near ±1 for |x| > ~3)
     MathOperation.Tanh: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-5.0, high=5.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
     # topk family: operation sorts/merges; any values are valid
     MathOperation.TopKLocalSort: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-10.0, high=10.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
     MathOperation.TopKMerge: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-10.0, high=10.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
     MathOperation.TopKRebuild: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-10.0, high=10.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
     # ── FPU binary ────────────────────────────────────────────────────────────
     MathOperation.Elwadd: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-1.0, high=1.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
     MathOperation.Elwmul: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-1.0, high=1.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
     MathOperation.Elwsub: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-1.0, high=1.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
     # ── SFPU binary ───────────────────────────────────────────────────────────
     MathOperation.SfpuElwadd: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-1.0, high=1.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
     MathOperation.SfpuElwmul: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-1.0, high=1.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
     MathOperation.SfpuElwsub: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-1.0, high=1.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
     # div: srcA is the dividend (any value); srcB is the divisor.
     # The divisor uses log-uniform over strictly positive values so that
@@ -556,47 +619,51 @@ _OP_DOMAIN_REGISTRY: Dict[
     # To test negative-divisor behaviour, supply an explicit spec_B such as:
     #   StimuliSpec.uniform(low=-10.0, high=-0.1)
     MathOperation.SfpuElwdiv: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-2.0, high=2.0),
-        spec_B=StimuliSpec(distribution="log_uniform", low=0.1, high=10.0),
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.LOG_UNIFORM, low=0.1, high=10.0
+        ),
     ),
     MathOperation.SfpuElwrsub: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-1.0, high=1.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
     # pow: srcA is the base (must be non-negative for non-integer exponents);
     # srcB is the exponent (non-negative to keep output finite)
     MathOperation.SfpuElwpow: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=0.0, high=5.0),
-        spec_B=StimuliSpec(distribution="uniform", low=0.0, high=5.0),
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=5.0),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=5.0),
     ),
     # xlogy: computes x * log(y) element-wise
     # srcA (x): x >= 0 so xlogy(0, y) = 0 is well-defined
     # srcB (y): y > 0 so log(y) is finite; log-uniform spans several decades
     MathOperation.SfpuXlogy: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=0.0, high=10.0),
-        spec_B=StimuliSpec(distribution="log_uniform", low=1e-4, high=10.0),
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=10.0),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=10.0
+        ),
     ),
     MathOperation.SfpuAddTopRow: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-1.0, high=1.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
     # shift ops: operate on integer bit patterns; both operands in [0, 255]
     MathOperation.SfpuElwLeftShift: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=0.0, high=255.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=255.0)
     ),
     MathOperation.SfpuElwLogicalRightShift: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=0.0, high=255.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=255.0)
     ),
     MathOperation.SfpuElwRightShift: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=0.0, high=255.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=255.0)
     ),
     # ── Reduce ────────────────────────────────────────────────────────────────
     MathOperation.ReduceColumn: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-1.0, high=1.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
     MathOperation.ReduceRow: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-1.0, high=1.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
     MathOperation.ReduceScalar: OperandSpecs(
-        spec_A=StimuliSpec(distribution="uniform", low=-1.0, high=1.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
 }
 
@@ -938,9 +1005,9 @@ def convert_to_l1_view(
 # (linspace-style) and therefore bypass per-face generation.
 _LINSPACE_DISTRIBUTIONS = frozenset(
     {
-        "ramp",
-        "gaussian_linspace",
-        "log_uniform_linspace",
+        DistributionKind.RAMP,
+        DistributionKind.GAUSSIAN_LINSPACE,
+        DistributionKind.LOG_UNIFORM_LINSPACE,
     }
 )
 
@@ -964,18 +1031,18 @@ def _generate_linspace_tensor(
     """
     dist = spec.distribution
 
-    if dist == "ramp":
+    if dist == DistributionKind.RAMP:
         return torch.linspace(spec.low, spec.high, size, dtype=torch.float32).to(
             dtype=dtype
         )
 
-    if dist == "gaussian_linspace":
+    if dist == DistributionKind.GAUSSIAN_LINSPACE:
         # Inverse CDF of the standard normal: Φ⁻¹(p) = √2 · erfinv(2p − 1)
         p = torch.linspace(_GAUSSIAN_LINSPACE_EPS, 1.0 - _GAUSSIAN_LINSPACE_EPS, size)
         values = spec.mean + spec.std * math.sqrt(2.0) * torch.erfinv(2.0 * p - 1.0)
         return values.to(dtype=dtype)
 
-    if dist == "log_uniform_linspace":
+    if dist == DistributionKind.LOG_UNIFORM_LINSPACE:
         if spec.low <= 0 or spec.high <= 0:
             raise ValueError(
                 f"log_uniform_linspace requires strictly positive low and high, "
@@ -1071,12 +1138,12 @@ def _generate_integer_face(
 
     distribution = spec.distribution
 
-    if distribution == "uniform":
+    if distribution == DistributionKind.UNIFORM:
         return torch.randint(
             low=low, high=high + 1, size=(size,), dtype=dtype, generator=generator
         )
 
-    if distribution == "saw":
+    if distribution == DistributionKind.SAW:
         return (
             torch.linspace(spec.low, spec.high, size, dtype=torch.float32)
             .round()
@@ -1084,14 +1151,14 @@ def _generate_integer_face(
             .to(dtype=dtype)
         )
 
-    if distribution == "gaussian":
+    if distribution == DistributionKind.GAUSSIAN:
         raw = (
             torch.randn(size, dtype=torch.float32, generator=generator) * spec.std
             + spec.mean
         )
         return raw.round().clamp(low, high).to(dtype=dtype)
 
-    if distribution == "log_uniform":
+    if distribution == DistributionKind.LOG_UNIFORM:
         if spec.low <= 0 or spec.high <= 0:
             raise ValueError(
                 f"log_uniform requires strictly positive low and high bounds; "
@@ -1111,9 +1178,7 @@ def _generate_integer_face(
 
     raise ValueError(
         f"Unknown distribution {distribution!r} for integer format. "
-        f"Expected one of 'uniform', 'gaussian', 'saw', 'log_uniform', "
-        f"'ramp', 'gaussian_linspace', 'log_uniform_linspace', "
-        f"'constant', 'sequential', 'face_identity', 'custom', or a callable."
+        f"Expected a DistributionKind member or a callable."
     )
 
 
@@ -1171,14 +1236,14 @@ def generate_face_v2(
         return result.to(dtype=dtype)
 
     # ── format-independent distributions ─────────────────────────────────────
-    if distribution == "constant":
+    if distribution == DistributionKind.CONSTANT:
         if stimuli_format.is_integer():
             int_min, int_max = _get_integer_bounds(stimuli_format)
             clamped = max(int_min, min(int(spec.value), int_max))
             return torch.full((size,), clamped, dtype=dtype)
         return torch.full((size,), spec.value, dtype=dtype)
 
-    if distribution == "sequential":
+    if distribution == DistributionKind.SEQUENTIAL:
         if stimuli_format.is_integer():
             int_min, int_max = _get_integer_bounds(stimuli_format)
             result = torch.arange(1, size + 1, dtype=torch.int64)
@@ -1186,14 +1251,14 @@ def generate_face_v2(
             return result.to(dtype=dtype)
         return torch.arange(1, size + 1, dtype=dtype)
 
-    if distribution == "identity":
+    if distribution == DistributionKind.IDENTITY:
         raise ValueError(
             "distribution='identity' is a tensor-level operation and cannot "
             "be used in a per-face context (e.g. inside face_specs). "
             "Use distribution='face_identity' for per-face identity blocks."
         )
 
-    if distribution == "face_identity":
+    if distribution == DistributionKind.FACE_IDENTITY:
         diag_val = spec.value
         if stimuli_format.is_integer():
             int_min, int_max = _get_integer_bounds(stimuli_format)
@@ -1202,7 +1267,7 @@ def generate_face_v2(
         face.diagonal()[:] = diag_val
         return face.reshape(-1)
 
-    if distribution == "custom":
+    if distribution == DistributionKind.CUSTOM:
         if spec.values is None or len(spec.values) == 0:
             raise ValueError("distribution='custom' requires a non-empty 'values' list")
         if len(spec.values) > size:
@@ -1225,21 +1290,21 @@ def generate_face_v2(
         return _generate_integer_face(spec, stimuli_format, size, dtype, generator)
 
     # ── float / BFP / MX formats ─────────────────────────────────────────────
-    if distribution == "uniform":
+    if distribution == DistributionKind.UNIFORM:
         raw = torch.rand(size, dtype=dtype, generator=generator)
         return raw * (spec.high - spec.low) + spec.low
 
-    if distribution == "gaussian":
+    if distribution == DistributionKind.GAUSSIAN:
         # NOTE: Gaussian is unbounded — extreme outliers in reduced-precision
         # formats (bfloat16, float16) may produce inf/NaN.  Set *std*
         # conservatively relative to the format's representable range.
         raw = torch.randn(size, dtype=dtype, generator=generator)
         return raw * spec.std + spec.mean
 
-    if distribution == "saw":
+    if distribution == DistributionKind.SAW:
         return torch.linspace(spec.low, spec.high, size, dtype=dtype)
 
-    if distribution == "log_uniform":
+    if distribution == DistributionKind.LOG_UNIFORM:
         if spec.low <= 0 or spec.high <= 0:
             raise ValueError(
                 f"log_uniform requires strictly positive low and high, "
@@ -1255,9 +1320,7 @@ def generate_face_v2(
 
     raise ValueError(
         f"Unknown distribution {distribution!r}. "
-        f"Expected one of 'uniform', 'gaussian', 'saw', 'log_uniform', "
-        f"'ramp', 'gaussian_linspace', 'log_uniform_linspace', "
-        f"'constant', 'sequential', 'face_identity', 'custom', or a callable."
+        f"Expected a DistributionKind member or a callable."
     )
 
 
@@ -1293,7 +1356,8 @@ def _generate_source_tensor_v2(
 
     # ── masked_faces validation for short-circuit distributions ──────────
     _SHORT_CIRCUIT_DISTRIBUTIONS = frozenset(
-        {"identity", "sequential"} | _LINSPACE_DISTRIBUTIONS
+        {DistributionKind.IDENTITY, DistributionKind.SEQUENTIAL}
+        | _LINSPACE_DISTRIBUTIONS
     )
     if spec.masked_faces and spec.distribution in _SHORT_CIRCUIT_DISTRIBUTIONS:
         raise ValueError(
@@ -1303,7 +1367,7 @@ def _generate_source_tensor_v2(
         )
 
     # ── identity: tensor-level structured pattern (no face loop) ───────
-    if spec.distribution == "identity":
+    if spec.distribution == DistributionKind.IDENTITY:
         if input_dimensions is None or len(input_dimensions) != 2:
             raise ValueError(
                 "distribution='identity' requires input_dimensions=[rows, cols]"
@@ -1320,7 +1384,7 @@ def _generate_source_tensor_v2(
             tensor = bfp4b_to_float16b(tensor)
         return tensor
 
-    if spec.distribution == "sequential":
+    if spec.distribution == DistributionKind.SEQUENTIAL:
         if stimuli_format.is_integer():
             int_min, int_max = _get_integer_bounds(stimuli_format)
             tensor = torch.arange(1, num_elements + 1, dtype=torch.int64)
