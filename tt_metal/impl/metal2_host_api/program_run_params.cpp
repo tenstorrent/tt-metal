@@ -57,7 +57,7 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
 
         // Validate vararg RTA counts per node
         std::unordered_set<NodeCoord> nodes_with_vararg_params;
-        for (const auto& [node_coord, args] : kernel_params.runtime_args) {
+        for (const auto& [node_coord, args] : kernel_params.runtime_varargs) {
             auto [it_node, node_inserted] = nodes_with_vararg_params.insert(node_coord);
             TT_FATAL(
                 node_inserted,
@@ -94,11 +94,11 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
 
         // Validate vararg CRTA count
         TT_FATAL(
-            kernel_params.common_runtime_args.size() == schema->num_common_runtime_args,
+            kernel_params.common_runtime_varargs.size() == schema->num_common_runtime_args,
             "Kernel '{}' expects {} vararg common_runtime_args, but {} were provided",
             kernel_name,
             schema->num_common_runtime_args,
-            kernel_params.common_runtime_args.size());
+            kernel_params.common_runtime_varargs.size());
 
         // Validate named RTAs: every declared name set per-node, no extras, no duplicate node entries.
         const auto& named_rta_names = schema->named_runtime_args;
@@ -220,7 +220,7 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
 
         // Build a node -> vararg-values-span lookup.
         std::unordered_map<NodeCoord, const std::vector<uint32_t>*> varargs_by_node;
-        for (const auto& [node, args] : kernel_params.runtime_args) {
+        for (const auto& [node, args] : kernel_params.runtime_varargs) {
             varargs_by_node[node] = &args;
         }
 
@@ -264,7 +264,7 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
 
         // Combine named CRTAs and vararg CRTAs into one common buffer.
         std::vector<uint32_t> combined_crtas;
-        combined_crtas.reserve(schema->named_common_runtime_args.size() + kernel_params.common_runtime_args.size());
+        combined_crtas.reserve(schema->named_common_runtime_args.size() + kernel_params.common_runtime_varargs.size());
         for (const auto& name : schema->named_common_runtime_args) {
             auto v_it = kernel_params.named_common_runtime_args.find(name);
             TT_FATAL(
@@ -275,7 +275,9 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
             combined_crtas.push_back(v_it->second);
         }
         combined_crtas.insert(
-            combined_crtas.end(), kernel_params.common_runtime_args.begin(), kernel_params.common_runtime_args.end());
+            combined_crtas.end(),
+            kernel_params.common_runtime_varargs.begin(),
+            kernel_params.common_runtime_varargs.end());
 
         // Set common runtime args
         // TODO: Why on earth does SetCommonRuntimeArgs() only work the first time??
