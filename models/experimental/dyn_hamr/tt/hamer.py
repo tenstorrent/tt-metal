@@ -85,8 +85,11 @@ class TtHamer:
         self.device_id = device_id
         self.device: Optional[Any] = None
         self.peak_dram_bytes = 0
+        self._vit_params: Optional[dict] = None
         if _USE_TT:
             self._open_device()
+            if self.device is not None:
+                self._build_vit_params()
 
     def _open_device(self) -> None:
         if _cluster_contended():
@@ -104,17 +107,53 @@ class TtHamer:
             print(f"[dyn_hamr] tt-nn device open failed on id={self.device_id}: {e}")
             self.device = None
 
-    def _roundtrip_smoke(self, x: torch.Tensor) -> None:
-        if self.device is None:
-            return
-        import ttnn  # noqa: WPS433
-        probe = x[..., :1, :1].contiguous().to(torch.bfloat16)
-        tt_tensor = ttnn.from_torch(probe, device=self.device, layout=ttnn.TILE_LAYOUT)
-        _ = ttnn.to_torch(tt_tensor)
-        self.peak_dram_bytes = max(self.peak_dram_bytes, probe.numel() * probe.element_size())
+    def _build_vit_params(self) -> None:
+        """Lift the reference ViT-H weights into bfloat16 tile tensors on
+        DRAM.  Runs once at construction; the 670M-parameter upload is
+        amortized over every subsequent forward.
+        """
+        try:
+            from models.experimental.dyn_hamr.tt import ttnn_vit  # noqa: WPS433
+            self._vit_params = ttnn_vit.build_parameters_from_reference(self.ref, self.device)
+            # Rough bookkeeping of bytes pushed to DRAM.
+            self.peak_dram_bytes = sum(
+                p.numel() * p.element_size() for p in self.ref.backbone.parameters()
+            ) // 2  # bfloat16 halves fp32
+        except Exception as e:
+            print(f"[dyn_hamr] vit param upload failed: {e}; forward will use CPU ref")
+            self._vit_params = None
+
+    def _forward_device(self, image: torch.Tensor) -> Optional[torch.Tensor]:
+        """NPU forward: ViT on device, MANO head on CPU (head port is still
+        code-only).  Returns ``None`` if the device path isn't available.
+        """
+        if self.device is None or self._vit_params is None:
+            return None
+        try:
+            import ttnn  # noqa: WPS433
+            from models.experimental.dyn_hamr.tt import ttnn_vit  # noqa: WPS433
+
+            # NCHW → NHWC on host (cheap), push to device.
+            nhwc = image.permute(0, 2, 3, 1).contiguous().to(torch.bfloat16)
+            tt_input = ttnn.from_torch(
+                nhwc, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16,
+            )
+            tt_feat = ttnn_vit.forward(tt_input, self._vit_params)  # (B, 192, 1280) tile-layout
+            feat_host = ttnn.to_torch(tt_feat).to(torch.float32)
+            # Reshape token-major → (B, 1280, 16, 12) like the CPU backbone output.
+            B = image.shape[0]
+            feat_map = feat_host.reshape(B, 16, 12, 1280).permute(0, 3, 1, 2).contiguous()
+            # Head still on CPU until its tt-nn port is activated.
+            with torch.no_grad():
+                return self.ref.head(feat_map)
+        except Exception as e:
+            print(f"[dyn_hamr] tt-nn forward failed: {e}; falling back to CPU ref for this call")
+            return None
 
     def __call__(self, image: torch.Tensor) -> torch.Tensor:
-        self._roundtrip_smoke(image)
+        tt_out = self._forward_device(image)
+        if tt_out is not None:
+            return tt_out
         with torch.no_grad():
             return self.ref(image)
 
