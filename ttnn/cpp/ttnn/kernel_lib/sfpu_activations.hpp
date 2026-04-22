@@ -38,6 +38,19 @@ struct Gelu : UnaryOp<Gelu<approx, Slot>, Slot> {
     ALWI void call(uint32_t d0) const;
 };
 
+/**
+ * @brief GELU derivative for backward pass: d/dx gelu(x).
+ *
+ * Wraps gelu_derivative_tile_init<fast>() and gelu_derivative_tile<fast>(d0).
+ * Default Approx::Exact uses the piecewise polynomial (Max ULP = 1 on BF16);
+ * Approx::Fast uses the faster formula-based kernel.
+ */
+template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
+struct GeluDerivative : UnaryOp<GeluDerivative<approx, Slot>, Slot> {
+    ALWI void init() const;
+    ALWI void call(uint32_t d0) const;
+};
+
 template <Dst Slot = Dst::D0>
 struct Silu : UnaryOp<Silu<Slot>, Slot> {
     ALWI void init() const;

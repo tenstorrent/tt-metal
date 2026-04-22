@@ -19,6 +19,11 @@ ALWI void Gelu<approx, Slot>::init() const { gelu_tile_init<static_cast<bool>(ap
 template <Approx approx, Dst Slot>
 ALWI void Gelu<approx, Slot>::call(uint32_t d0) const { gelu_tile<static_cast<bool>(approx)>(d0); }
 
+template <Approx approx, Dst Slot>
+ALWI void GeluDerivative<approx, Slot>::init() const { gelu_derivative_tile_init<static_cast<bool>(approx)>(); }
+template <Approx approx, Dst Slot>
+ALWI void GeluDerivative<approx, Slot>::call(uint32_t d0) const { gelu_derivative_tile<static_cast<bool>(approx)>(d0); }
+
 template <Dst Slot>
 ALWI void Silu<Slot>::init() const { silu_tile_init(); }
 template <Dst Slot>

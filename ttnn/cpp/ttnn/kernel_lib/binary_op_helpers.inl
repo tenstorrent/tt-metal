@@ -215,12 +215,15 @@ template <
 ALWI void DestReuseOp<CB, OpType, ReuseType, Slot, Policy, Reconfig>::exec(uint32_t offset) const {
     if constexpr (Policy == LoadPolicy::WaitAndPop) {
         // Streaming: pop 1 per call means indexing past tile 0 is incoherent.
-        ASSERT(cb_tile_idx == 0);
+        ASSERT(cb_tile_idx_ == 0);
         cb_wait_front(CB, 1);
     } else if constexpr (Policy == LoadPolicy::WaitNoPop) {
-        // Persistent: wait for enough tiles to cover cb_tile_idx.
-        cb_wait_front(CB, cb_tile_idx + 1);
+        // Persistent: wait for enough tiles to cover cb_tile_idx_.
+        cb_wait_front(CB, cb_tile_idx_ + 1);
     }
+    // WaitUpfrontPopAtEnd: pipeline bulk-waits N tiles before the loop and
+    // bulk-pops N after via wait_upfront/pop_upfront. exec() only advances the
+    // rising index into the pre-waited block.
     if constexpr (Reconfig == DestReuseReconfig::Input) {
         // DEST_TO_SRCA: CB feeds SRCB, so reconfig srcb. Inverse for DEST_TO_SRCB.
         if constexpr (ReuseType == EltwiseBinaryReuseDestType::DEST_TO_SRCA) {
@@ -232,9 +235,12 @@ ALWI void DestReuseOp<CB, OpType, ReuseType, Slot, Policy, Reconfig>::exec(uint3
     binary_dest_reuse_tiles_init<OpType, ReuseType>(CB);
     // DEST slot is Slot + offset to handle both per-tile (offset=0) and
     // per-chunk (offset=k) chain dispatch.
-    binary_dest_reuse_tiles<OpType, ReuseType>(CB, cb_tile_idx, static_cast<uint32_t>(Slot) + offset);
+    binary_dest_reuse_tiles<OpType, ReuseType>(CB, cb_tile_idx_, static_cast<uint32_t>(Slot) + offset);
     if constexpr (do_pop) {
         cb_pop_front(CB, 1);
+    }
+    if constexpr (is_upfront) {
+        cb_tile_idx_++;
     }
 }
 

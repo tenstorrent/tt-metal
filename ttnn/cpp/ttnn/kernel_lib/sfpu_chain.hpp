@@ -561,50 +561,56 @@ inline constexpr bool chain_is_hoist_safe_v =
 // -----------------------------------------------------------------------------
 // Upfront-CB duplicate detection
 //
-// An "upfront Load" is Load<CB, Slot, WaitUpfrontPopAtEnd, ...>. The pipeline
-// bulk-waits and bulk-pops `num_tiles` on each upfront CB, once per chain call.
-// Two upfront Loads sharing the same CB would double-pop and desync the CB.
-// We statically forbid it.
+// An element is an "upfront CB input" when it exposes `static constexpr bool
+// is_upfront == true` and `static constexpr uint32_t cb`. Load sets these;
+// DestReuseOp sets these. The pipeline bulk-waits and bulk-pops `num_tiles`
+// on each upfront CB once per chain call — two upfront elements sharing a
+// CB would double-pop and desync it. We statically forbid it, uniformly
+// across Load and DestReuseOp (and future CB-input ops that opt in via the
+// same static members).
 // -----------------------------------------------------------------------------
 
 namespace detail {
 
-// Does any upfront Load in Chain reference TargetCB?
+// SFINAE detector for T::is_upfront + T::cb. Any chain element that declares
+// these static constexpr members participates in upfront-CB bookkeeping.
+template <typename T, typename = void>
+struct upfront_cb_info {
+    static constexpr bool is_upfront = false;
+    static constexpr uint32_t cb = 0;
+};
+template <typename T>
+struct upfront_cb_info<T, std::void_t<decltype(T::is_upfront), decltype(T::cb)>> {
+    static constexpr bool is_upfront = T::is_upfront;
+    static constexpr uint32_t cb = T::cb;
+};
+
+// Does any upfront CB-input element in Chain reference TargetCB?
 template <uint32_t TargetCB, typename Chain>
 struct chain_has_upfront_cb : std::false_type {};
 
 template <uint32_t TargetCB>
 struct chain_has_upfront_cb<TargetCB, SfpuChain<>> : std::false_type {};
 
-// Non-Load first element: skip and recurse.
 template <uint32_t TargetCB, typename First, typename... Rest>
-struct chain_has_upfront_cb<TargetCB, SfpuChain<First, Rest...>> : chain_has_upfront_cb<TargetCB, SfpuChain<Rest...>> {
-};
-
-// Load first element: match if upfront and CB equals TargetCB, else recurse.
-template <uint32_t TargetCB, uint32_t CB, Dst Slot, LoadPolicy Policy, LoadReconfig Reconfig, typename... Rest>
-struct chain_has_upfront_cb<TargetCB, SfpuChain<Load<CB, Slot, Policy, Reconfig>, Rest...>>
+struct chain_has_upfront_cb<TargetCB, SfpuChain<First, Rest...>>
     : std::bool_constant<
-          (load_is_upfront(Policy) && CB == TargetCB) || chain_has_upfront_cb<TargetCB, SfpuChain<Rest...>>::value> {};
+          (upfront_cb_info<First>::is_upfront && upfront_cb_info<First>::cb == TargetCB) ||
+          chain_has_upfront_cb<TargetCB, SfpuChain<Rest...>>::value> {};
 
-// Does Chain contain two upfront Loads that share the same CB?
-// (For every upfront Load, check if any later upfront Load reuses its CB.)
+// Does Chain contain two upfront CB-input elements sharing the same CB?
+// (For every upfront element, check if any later upfront element reuses its CB.)
 template <typename Chain>
 struct chain_has_duplicate_upfront_cbs : std::false_type {};
 
 template <>
 struct chain_has_duplicate_upfront_cbs<SfpuChain<>> : std::false_type {};
 
-// Non-Load first element: skip and recurse.
 template <typename First, typename... Rest>
 struct chain_has_duplicate_upfront_cbs<SfpuChain<First, Rest...>>
-    : chain_has_duplicate_upfront_cbs<SfpuChain<Rest...>> {};
-
-// Load first element: if upfront, check the rest for the same CB; always recurse.
-template <uint32_t CB, Dst Slot, LoadPolicy Policy, LoadReconfig Reconfig, typename... Rest>
-struct chain_has_duplicate_upfront_cbs<SfpuChain<Load<CB, Slot, Policy, Reconfig>, Rest...>>
     : std::bool_constant<
-          (load_is_upfront(Policy) && chain_has_upfront_cb<CB, SfpuChain<Rest...>>::value) ||
+          (upfront_cb_info<First>::is_upfront &&
+           chain_has_upfront_cb<upfront_cb_info<First>::cb, SfpuChain<Rest...>>::value) ||
           chain_has_duplicate_upfront_cbs<SfpuChain<Rest...>>::value> {};
 
 }  // namespace detail

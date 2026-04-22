@@ -425,9 +425,8 @@ struct DestReuseOp {
     static constexpr LoadPolicy policy = Policy;
     static constexpr bool do_wait = load_does_wait(Policy);
     static constexpr bool do_pop = load_does_pop(Policy);
+    static constexpr bool is_upfront = load_is_upfront(Policy);
     static_assert(static_cast<uint32_t>(Slot) < 8, "DEST slot exceeds maximum capacity (8)");
-
-    uint32_t cb_tile_idx = 0;
 
     ALWI void init() const;
     ALWI void exec(uint32_t offset = 0) const;
@@ -435,6 +434,33 @@ struct DestReuseOp {
         init();
         exec(offset);
     }
+
+    // Reset internal tile counter back to 0. Called by sfpu_pipeline after all
+    // tiles are processed so the chain can be reused across blocks.
+    ALWI void reset_tile_idx() const {
+        if constexpr (is_upfront) {
+            cb_tile_idx_ = 0;
+        }
+    }
+
+    // Upfront CB lifecycle: pipeline bulk-waits N tiles before the tile loop
+    // and bulk-pops N tiles after. Only fires for WaitUpfrontPopAtEnd policy.
+    ALWI void wait_upfront(uint32_t n) const {
+        if constexpr (is_upfront) {
+            cb_wait_front(CB, n);
+        }
+    }
+    ALWI void pop_upfront(uint32_t n) const {
+        if constexpr (is_upfront) {
+            cb_pop_front(CB, n);
+        }
+    }
+
+private:
+    // Internal tile counter. Meaningful only for WaitUpfrontPopAtEnd: exec()
+    // self-advances it each call, pipeline zeroes it at the end of a call.
+    // For every other policy it stays 0 — callers cannot override.
+    mutable uint32_t cb_tile_idx_ = 0;
 };
 
 /** @brief Alias: DestReuseOp specialised to ELWMUL + DEST_TO_SRCA. */
