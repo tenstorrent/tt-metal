@@ -145,6 +145,61 @@ def moe_routed_expert_torch_for_cache(w: torch.Tensor, num_banks: int) -> torch.
     return w_shuffled.reshape(1, 1, K, N_padded).contiguous()
 
 
+def moe_routed_expert_tp8_torch_for_cache(
+    w: torch.Tensor,
+    num_banks: int,
+    mesh_shape: tuple[int, int],
+    shard_dim: int,
+) -> torch.Tensor:
+    """TP-shard one MoE routed expert projection across a 2D mesh.
+
+    ``shard_dim=1``: column-parallel (gate/up) — split N across ``mesh_rows*mesh_cols`` devices.
+    ``shard_dim=0``: row-parallel (down) — split K across ``mesh_rows*mesh_cols`` devices.
+
+    TP slice ``i`` goes to mesh position ``(i // mesh_cols, i % mesh_cols)`` (row-major).
+    Each per-device slice is DRAM-bank-shuffled (like :func:`moe_routed_expert_torch_for_cache`),
+    then packed as ``(mesh_rows, mesh_cols, K_per_device, N_padded_per_device)``. When paired
+    with :class:`Shard2dMeshMapper` ``dims=(0, 1)`` the mapper splits dims 0/1 so each device
+    receives its ``(1, 1, K_per_device, N_padded)`` slice.
+    """
+    tile_w = 32
+    mesh_rows, mesh_cols = mesh_shape
+    tp = mesh_rows * mesh_cols
+    K, N = w.shape
+
+    if shard_dim == 1:
+        assert N % tp == 0, f"N={N} must be divisible by tp={tp} for column-parallel shard"
+        per_device_N = N // tp
+        K_per_device = K
+        N_padded = ((per_device_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+        shuffled_slices = []
+        for tp_idx in range(tp):
+            slc = w[:, tp_idx * per_device_N : (tp_idx + 1) * per_device_N].contiguous()
+            if N_padded != per_device_N:
+                slc = torch.nn.functional.pad(slc, (0, N_padded - per_device_N))
+            shuffled_slices.append(
+                shuffle_dram_tiles(slc.unsqueeze(0), tile_w, num_banks).reshape(K_per_device, N_padded)
+            )
+    elif shard_dim == 0:
+        assert K % tp == 0, f"K={K} must be divisible by tp={tp} for row-parallel shard"
+        per_device_K = K // tp
+        K_per_device = per_device_K
+        N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+        shuffled_slices = []
+        for tp_idx in range(tp):
+            slc = w[tp_idx * per_device_K : (tp_idx + 1) * per_device_K, :].contiguous()
+            if N_padded != N:
+                slc = torch.nn.functional.pad(slc, (0, N_padded - N))
+            shuffled_slices.append(
+                shuffle_dram_tiles(slc.unsqueeze(0), tile_w, num_banks).reshape(per_device_K, N_padded)
+            )
+    else:
+        raise ValueError(f"shard_dim must be 0 or 1, got {shard_dim}")
+
+    stacked = torch.stack(shuffled_slices).reshape(mesh_rows, mesh_cols, K_per_device, N_padded)
+    return stacked.contiguous()
+
+
 def mlp_routed_dense_stacked_torch_for_cache(
     experts: torch.Tensor, num_banks: int, mesh_shape: tuple[int, int]
 ) -> torch.Tensor:
