@@ -713,15 +713,19 @@ def test_dram_matmul_bspm_cache_roundtrip(device, tmp_path):
     - tiles.bin is smaller than a uniform BFP4 baseline (compact format saves space).
     - Matmul PCC between miss and hit is ≥ 0.99 (round-trip is numerically lossless).
     """
+    import hashlib
+
     from models.common.utility_functions import comp_pcc
     from models.demos.deepseek_v3_b1.compressed_tensor import bfp4_tile_byte_count
     from models.demos.deepseek_v3_b1.weights.cache import (
+        BspmVariant,
         CacheContext,
         CompressedTensorBuildInputs,
         CompressedTensorTarget,
         SourceTensorSelection,
         TensorCache,
     )
+    from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import get_or_create_bspm_expert
     from models.demos.deepseek_v3_b1.weights.cache.fingerprint import compute_artifact_id
 
     tile_w = 32
@@ -742,6 +746,7 @@ def test_dram_matmul_bspm_cache_roundtrip(device, tmp_path):
     torch.manual_seed(0)
     w_logical = torch.randn(K, N_padded).float().numpy()
 
+    assignment_hash = hashlib.sha256(assignment_logical.tobytes()).hexdigest()[:16]
     cache_ctx = CacheContext(
         schema_version=1,
         hf_model_id="test_model",
@@ -753,18 +758,19 @@ def test_dram_matmul_bspm_cache_roundtrip(device, tmp_path):
         K=K,
         N_padded=N_padded,
         num_banks=num_banks,
-        bspm_variant="B",
+        bspm_variant=BspmVariant.B,
         bspm_budget=3.5,
+        assignment_hash=assignment_hash,
     )
     fp = cache_ctx.fingerprint(source=SourceTensorSelection(names=("test_weight",)), target=tgt)
 
     cache = TensorCache(tmp_path / "cache")
 
     def _preprocess(_raw):
-        return {tgt.name: CompressedTensorBuildInputs(w_logical=w_logical, assignment_logical=assignment_logical)}
+        return CompressedTensorBuildInputs(w=w_logical, assignment=assignment_logical)
 
     # --- First call: cache miss — writes tiles.bin, assignment.npy, metadata.json ---
-    ct_miss = cache.get_or_create(fp, device, preprocess=_preprocess, raw_tensors={})
+    ct_miss = get_or_create_bspm_expert(cache, fp, device, raw_tensors={}, preprocess=_preprocess)
     assert isinstance(ct_miss, CompressedTensor), f"Expected CompressedTensor from miss, got {type(ct_miss)}"
 
     artifact_id = compute_artifact_id(fp)
@@ -807,7 +813,7 @@ def test_dram_matmul_bspm_cache_roundtrip(device, tmp_path):
     )
 
     # --- Second call: cache hit — reloads from tiles.bin without calling preprocess ---
-    ct_hit = cache.get_or_create(fp, device, preprocess=_preprocess, raw_tensors={})
+    ct_hit = get_or_create_bspm_expert(cache, fp, device, raw_tensors={}, preprocess=_preprocess)
     assert isinstance(ct_hit, CompressedTensor), f"Expected CompressedTensor from hit, got {type(ct_hit)}"
 
     # --- Matmul PCC: miss and hit must agree (lossless round-trip) ---
