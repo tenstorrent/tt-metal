@@ -376,6 +376,36 @@ constexpr ALWI auto sfpu_chain(Ops... ops) {
 }
 
 // =============================================================================
+// Chain Traits (defined after SfpuChain to use its full definition)
+// =============================================================================
+
+/** @brief True if T is a non-Load element with clashes_with_fpu = true.
+ *
+ * This identifies elements like DestReuseOp that run binary_dest_reuse_tiles_init,
+ * which clobbers the copy_tile_to_dst_init_short MOP state. After such an element
+ * runs, any subsequent Load in the next tile iteration needs copy_tile_to_dst_init_short
+ * to be called again.
+ *
+ * Load ops have clashes_with_fpu = true too (they SET up the copy state), but they
+ * do not clobber it — only non-Load elements that run FPU binary_dest_reuse_tiles_init do.
+ */
+template <typename T, typename = void>
+struct has_non_load_fpu_clash : std::false_type {};
+template <typename T>
+struct has_non_load_fpu_clash<T, std::void_t<decltype(T::clashes_with_fpu)>>
+    : std::bool_constant<T::clashes_with_fpu && !is_load_op_v<T>> {};
+
+/** @brief True if any element in Chain clobbers copy_tile init state (e.g. contains DestReuseOp). */
+template <typename Chain>
+struct chain_has_non_load_fpu_clash : std::false_type {};
+template <typename... Ops>
+struct chain_has_non_load_fpu_clash<SfpuChain<Ops...>>
+    : std::bool_constant<(has_non_load_fpu_clash<Ops>::value || ...)> {};
+template <typename T>
+inline constexpr bool chain_has_non_load_fpu_clash_v =
+    chain_has_non_load_fpu_clash<std::remove_cv_t<std::remove_reference_t<T>>>::value;
+
+// =============================================================================
 // Pipeline Function Declaration
 // =============================================================================
 

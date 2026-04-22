@@ -3,48 +3,37 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/compute_kernel_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
-    constexpr auto cb_input = tt::CBIndex::c_0;
-    constexpr auto cb_output = tt::CBIndex::c_2;
+    constexpr uint32_t cb_input = static_cast<uint32_t>(tt::CBIndex::c_0);
+    constexpr uint32_t cb_output = static_cast<uint32_t>(tt::CBIndex::c_2);
     init_sfpu(cb_input, cb_output);
 
+    // tanhshrink(x) = x - tanh(x)
+    // DEST_TO_SRCB: loads x from CB into SRCB, then computes SRCA(x) - SRCB(tanh(x)).
+    // DestReuseOp clobbers copy_tile init state; sfpu_pipeline reinits per tile.
+    auto chain = sfpu_chain(
+        Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+        Tanh<Approx::Exact, Dst::D0>{},
+        DestReuseOp<
+            cb_input,
+            EltwiseBinaryType::ELWSUB,
+            EltwiseBinaryReuseDestType::DEST_TO_SRCB,
+            Dst::D0,
+            LoadPolicy::WaitAndPop>{});
+
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        cb_reserve_back(cb_output, per_core_block_dim);
-        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            cb_wait_front(cb_input, 1);
-            tile_regs_acquire();
-
-            // Pop tile after tile, copy to DST and pack
-            copy_tile_init(cb_input);
-            copy_tile(cb_input, 0, 0);
-
-            tanh_tile_init();
-            tanh_tile(0);
-
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_input);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                cb_input, 0, 0);
-
-            tile_regs_commit();
-
-            tile_regs_wait();
-
-            pack_tile(0, cb_output);
-
-            tile_regs_release();
-
-            cb_pop_front(cb_input, 1);
-        }
-        cb_push_back(cb_output, per_core_block_dim);
+        sfpu_pipeline<
+            SfpuBatching::Auto,
+            SfpuInputPolicy::WaitAndPopPerTile,
+            SfpuOutputPolicy::Bulk,
+            SfpuDataFormatReconfig::NONE>(chain, cb_output, per_core_block_dim);
     }
 }

@@ -4,22 +4,12 @@
 
 #include <cstdint>
 
-#ifdef INP_FLOAT32
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
-#endif
-
-#ifdef INP_FLOAT
-#include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/eltwise_unary/log1p.h"
-#include "api/compute/compute_kernel_api.h"
-#endif
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     const uint32_t approx_arg = get_arg_val<uint32_t>(0);
@@ -32,7 +22,6 @@ void kernel_main() {
 #ifdef INP_FLOAT32
     // mish(x) = x * tanh(log1p(exp(x)))
     // FP32 path: use SFPU helpers with binary mul (needs two DEST slots)
-    using namespace compute_kernel_lib;
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         if (use_approx) {
             auto chain = sfpu_chain(
@@ -65,41 +54,48 @@ void kernel_main() {
 #endif
 
 #ifdef INP_FLOAT
-    // BFloat16 path: use FPU binary_dest_reuse for mul (preserves original precision path)
-    for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        cb_reserve_back(cb_output, per_core_block_dim);
-        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            cb_wait_front(cb_input, 1);
-            tile_regs_acquire();
-
-            copy_tile_to_dst_init_short(cb_input);
-            copy_tile(cb_input, 0, 0);
-
-            if (use_approx) {
-                exp_tile_init<true>();
-                exp_tile<true>(0);
-                log1p_tile_init<true>();
-                log1p_tile<true>(0);
-            } else {
-                exp_tile_init<false>();
-                exp_tile<false>(0);
-                log1p_tile_init<false>();
-                log1p_tile<false>(0);
-            }
-            tanh_tile_init<false>();
-            tanh_tile<false>(0);
-
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                cb_input, 0, 0);
-
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, cb_output);
-            tile_regs_release();
-            cb_pop_front(cb_input, 1);
+    // BFloat16 path: use FPU binary_dest_reuse for the final x * tanh(log1p(exp(x))) multiply.
+    // This preserves the original BFloat16 precision path (FPU mul vs SFPU mul in INP_FLOAT32).
+    // DestReuseOp clobbers copy_tile init; sfpu_pipeline detects this via
+    // chain_has_non_load_fpu_clash_v and reinits copy_tile_to_dst_init_short per tile.
+    if (use_approx) {
+        auto chain = sfpu_chain(
+            Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+            Exp<Approx::Fast, Approx::Fast, Dst::D0>{},
+            Log1p<Approx::Fast, Dst::D0>{},
+            Tanh<Approx::Exact, Dst::D0>{},
+            DestReuseOp<
+                cb_input,
+                EltwiseBinaryType::ELWMUL,
+                EltwiseBinaryReuseDestType::DEST_TO_SRCA,
+                Dst::D0,
+                LoadPolicy::WaitAndPop>{});
+        for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+            sfpu_pipeline<
+                SfpuBatching::Auto,
+                SfpuInputPolicy::WaitAndPopPerTile,
+                SfpuOutputPolicy::Bulk,
+                SfpuDataFormatReconfig::NONE>(chain, cb_output, per_core_block_dim);
         }
-        cb_push_back(cb_output, per_core_block_dim);
+    } else {
+        auto chain = sfpu_chain(
+            Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+            Exp<Approx::Exact, Approx::Fast, Dst::D0>{},
+            Log1p<Approx::Exact, Dst::D0>{},
+            Tanh<Approx::Exact, Dst::D0>{},
+            DestReuseOp<
+                cb_input,
+                EltwiseBinaryType::ELWMUL,
+                EltwiseBinaryReuseDestType::DEST_TO_SRCA,
+                Dst::D0,
+                LoadPolicy::WaitAndPop>{});
+        for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+            sfpu_pipeline<
+                SfpuBatching::Auto,
+                SfpuInputPolicy::WaitAndPopPerTile,
+                SfpuOutputPolicy::Bulk,
+                SfpuDataFormatReconfig::NONE>(chain, cb_output, per_core_block_dim);
+        }
     }
 #endif
 }

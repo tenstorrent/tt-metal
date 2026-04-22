@@ -103,8 +103,16 @@ ALWI void sfpu_pipeline(
         pack_reconfig_data_format(ocb);
     }
 
-    // Initialize unpacker for the first Load's CB (once, before the tile loop)
-    copy_tile_to_dst_init_short(detail::FirstLoadCB<Chain>::value);
+    // Determine whether any chain element (e.g. DestReuseOp) calls
+    // binary_dest_reuse_tiles_init, which clobbers the copy_tile_to_dst_init_short
+    // MOP state.  When true, copy_tile_to_dst_init_short must be called at the start
+    // of every tile iteration; when false the one-time init before the loop suffices.
+    constexpr bool needs_copy_reinit_per_tile = chain_has_non_load_fpu_clash_v<Chain>;
+
+    if constexpr (!needs_copy_reinit_per_tile) {
+        // Normal path: init once before the tile loop.
+        copy_tile_to_dst_init_short(detail::FirstLoadCB<Chain>::value);
+    }
 
     // Bulk output: reserve all tiles upfront
     if constexpr (output_policy == SfpuOutputPolicy::Bulk) {
@@ -116,6 +124,11 @@ ALWI void sfpu_pipeline(
     // that amortising it across tiles via exec_only isn't worth the extra complexity.
     // Batched path packs multiple tiles per acquire/release cycle.
     for (uint32_t i = 0; i < num_tiles; i += batch_size) {
+        if constexpr (needs_copy_reinit_per_tile) {
+            // DestReuseOp in the chain clobbered copy_tile init state last iteration.
+            // Re-init here so the Load ops in this iteration find the right unpacker state.
+            copy_tile_to_dst_init_short(detail::FirstLoadCB<Chain>::value);
+        }
         const uint32_t actual =
             (batch_size == 1) ? 1 : (((i + batch_size) <= num_tiles) ? batch_size : (num_tiles - i));
 
