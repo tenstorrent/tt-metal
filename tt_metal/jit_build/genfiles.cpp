@@ -215,8 +215,13 @@ void jit_build_genfiles_triscs_src(
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
+<<<<<<< HEAD
     const string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
     
+=======
+    const fs::path out_dir = fs::path(env.get_out_kernel_root_path()) / settings.get_full_kernel_name();
+
+>>>>>>> 9de4847ba78 (Fix precommit whitespace)
     write_kernel_bindings_generated_header(out_dir, settings);
     write_kernel_args_generated_header(out_dir, settings);
 
