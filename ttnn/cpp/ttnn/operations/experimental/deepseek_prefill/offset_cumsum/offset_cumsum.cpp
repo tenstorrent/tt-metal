@@ -8,6 +8,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/subgroup_gather_histograms/subgroup_gather_histograms.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum {
 
@@ -24,23 +25,34 @@ std::array<ttnn::Tensor, 2> offset_cumsum(
 
     auto reshaped = ttnn::reshape(input_tensor, ttnn::Shape({1, n_routed_experts}));
 
-    // NOTE: all_gather still runs on the full mesh along `cluster_axis` — the gathered
-    // tensor is [num_devices, n_routed_experts] even when subgroups are active. The
-    // per-subgroup scoping happens in the local prim op below, which only reads its
-    // subgroup's rows of the gathered tensor. On single-host meshes this redundant
-    // cross-subgroup fabric traffic is fine; for multi-host it should be replaced with
-    // a true subgroup-scoped gather.
-    auto gathered = ttnn::all_gather(
-        reshaped,
-        /*dim=*/0,
-        /*cluster_axis=*/cluster_axis,
-        /*subdevice_id=*/std::nullopt,
-        /*memory_config=*/memory_config,
-        /*optional_output_tensor=*/std::nullopt,
-        /*num_links=*/num_links);
+    ttnn::Tensor gathered;
+    if (num_dispatch_subgroups > 1) {
+        // Subgroup-scoped gather — fabric traffic stays within each dispatch subgroup.
+        // Output is [dispatch_group_size, n_routed_experts] holding only this subgroup's rows.
+        gathered = ttnn::subgroup_gather_histograms(
+            reshaped,
+            /*cluster_axis=*/cluster_axis,
+            /*num_dispatch_subgroups=*/num_dispatch_subgroups,
+            /*num_links=*/num_links,
+            /*memory_config=*/memory_config);
+    } else {
+        gathered = ttnn::all_gather(
+            reshaped,
+            /*dim=*/0,
+            /*cluster_axis=*/cluster_axis,
+            /*subdevice_id=*/std::nullopt,
+            /*memory_config=*/memory_config,
+            /*optional_output_tensor=*/std::nullopt,
+            /*num_links=*/num_links);
+    }
 
     auto row_major = ttnn::to_layout(gathered, tt::tt_metal::Layout::ROW_MAJOR, std::nullopt, std::nullopt);
 
+    // Both paths produce an [H, n_routed_experts] tensor where H == dispatch_group_size.
+    // With that uniform contract, the prim no longer needs num_dispatch_subgroups to pick
+    // a window — it just cumsums over all H rows and writes the result at row_idx =
+    // coord[cluster_axis] % H. We still pass num_dispatch_subgroups so the program-cache
+    // key differs for subgroup vs. non-subgroup runs (different input shapes).
     return ttnn::prim::offset_cumsum(row_major, cluster_axis, num_dispatch_subgroups);
 }
 

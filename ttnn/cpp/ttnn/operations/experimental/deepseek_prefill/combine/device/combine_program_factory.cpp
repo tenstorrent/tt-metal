@@ -68,44 +68,6 @@ void create_tensor_cb(
 
 }  // namespace detail
 
-namespace {
-
-// Partition a single contiguous MeshCoordinateRangeSet along `axis` into `num_subgroups`
-// equal contiguous sub-ranges. See dispatch_program_factory.cpp for the mirror helper.
-std::vector<ttnn::distributed::MeshCoordinateRange> split_into_subgroups(
-    const ttnn::distributed::MeshCoordinateRangeSet& tensor_coords, uint32_t axis, uint32_t num_subgroups) {
-    TT_FATAL(
-        tensor_coords.ranges().size() == 1,
-        "Combine subgroups require tensor_coords to be a single contiguous range (got {} ranges)",
-        tensor_coords.ranges().size());
-    const auto& full_range = tensor_coords.ranges().front();
-    const auto full_shape = full_range.shape();
-    TT_FATAL(axis < full_shape.dims(), "axis ({}) out of range for mesh shape with {} dims", axis, full_shape.dims());
-    const uint32_t axis_size = full_shape[axis];
-    TT_FATAL(
-        axis_size % num_subgroups == 0,
-        "axis {} size ({}) must be divisible by num_subgroups ({})",
-        axis,
-        axis_size,
-        num_subgroups);
-    const uint32_t subgroup_span = axis_size / num_subgroups;
-
-    std::vector<ttnn::distributed::MeshCoordinateRange> subgroups;
-    subgroups.reserve(num_subgroups);
-    for (uint32_t i = 0; i < num_subgroups; ++i) {
-        tt::stl::SmallVector<uint32_t> start_vals(
-            full_range.start_coord().coords().begin(), full_range.start_coord().coords().end());
-        tt::stl::SmallVector<uint32_t> end_vals(
-            full_range.end_coord().coords().begin(), full_range.end_coord().coords().end());
-        start_vals[axis] = full_range.start_coord()[axis] + i * subgroup_span;
-        end_vals[axis] = start_vals[axis] + subgroup_span - 1;
-        subgroups.emplace_back(ttnn::MeshCoordinate(start_vals), ttnn::MeshCoordinate(end_vals));
-    }
-    return subgroups;
-}
-
-}  // namespace
-
 CombineProgramFactory::cached_mesh_workload_t CombineProgramFactory::create_mesh_workload(
     const CombineParams& operation_attributes,
     const MeshCoordinateRangeSet& tensor_coords,
@@ -121,7 +83,7 @@ CombineProgramFactory::cached_mesh_workload_t CombineProgramFactory::create_mesh
 
     const uint32_t subgroup_axis = operation_attributes.axis.value_or(0);
     const auto subgroups =
-        split_into_subgroups(tensor_coords, subgroup_axis, operation_attributes.num_dispatch_subgroups);
+        ccl::common::split_into_subgroups(tensor_coords, subgroup_axis, operation_attributes.num_dispatch_subgroups);
 
     for (const auto& subgroup_range : subgroups) {
         auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
