@@ -8,8 +8,8 @@ Usage from the training loop::
 
     from moe_activation_logger import should_log_step, log_step
 
-    if args.moe_activation_log and should_log_step(global_step):
-        log_step(args.moe_activation_log, global_step, model.get_moe_layers())
+    if args.log_expert_activations and should_log_step(global_step):
+        log_step(args.log_expert_activations, global_step, model.get_moe_layers())
 
 The logger is intentionally minimal and side-effect free beyond the CSV
 append: no device calls, no torch imports, no global state. It relies onrun_nano_deepseek_training_eqdiag.log

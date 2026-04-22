@@ -1139,7 +1139,7 @@ def main():
         help="Print model layer-by-layer summary after creation",
     )
     parser.add_argument(
-        "--moe_activation_log",
+        "--log-expert-activations",
         type=str,
         default=None,
         help=(
@@ -1526,8 +1526,8 @@ def main():
                         moe_layers = model.get_moe_layers()
                         # Read activation probabilities BEFORE update_expert_bias
                         # (which resets the underlying _token_counts buffer).
-                        if args.moe_activation_log and moe_activation_logger.should_log_step(global_step):
-                            moe_activation_logger.log_step(args.moe_activation_log, global_step, moe_layers)
+                        if args.log_expert_activations and moe_activation_logger.should_log_step(global_step):
+                            moe_activation_logger.log_step(args.log_expert_activations, global_step, moe_layers)
                         for moe_layer in moe_layers:
                             moe_layer.update_expert_bias()
 

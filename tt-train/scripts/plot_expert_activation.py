@@ -12,12 +12,12 @@ Consumes the CSV emitted by
 
 Example::
 
-    python tt-train/tools/plot_expert_activation.py \\
+    python tt-train/scripts/plot_expert_activation.py \\
         --input moe_activation.csv \\
         --output moe_activation.png
 
     # Single-layer output
-    python tt-train/tools/plot_expert_activation.py \\
+    python tt-train/scripts/plot_expert_activation.py \\
         --input moe_activation.csv --output layer0.png --layer 0
 """
 
