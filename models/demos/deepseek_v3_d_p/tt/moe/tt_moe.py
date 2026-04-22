@@ -419,7 +419,7 @@ class TtMoe(LightweightModule):
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
         )
-        ttnn.deallocate(x)
+        x = ttnn.deallocate(x)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
@@ -438,7 +438,14 @@ class TtMoe(LightweightModule):
         logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer.shape}")
 
         expert_outputs = self.routed_expert(dispatched_buffer, tt_expert_token_counts)
-        ttnn.deallocate(dispatched_buffer)
+
+        if not return_intermediates:
+            dispatched_buffer = ttnn.deallocate(dispatched_buffer)
+        else:
+            # add squeezed dimenisions back for intermediates to match original dispatch output shape
+            dispatched_buffer = ttnn.unsqueeze(dispatched_buffer, dim=0)
+            dispatched_buffer = ttnn.unsqueeze(dispatched_buffer, dim=0)
+
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
         # Add back the batch dimensions for combine
