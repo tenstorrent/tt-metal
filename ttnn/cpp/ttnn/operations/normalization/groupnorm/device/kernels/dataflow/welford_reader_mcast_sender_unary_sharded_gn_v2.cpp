@@ -181,13 +181,13 @@ void kernel_main() {
 
                 experimental::UnicastEndpoint remote_ep;
                 for (uint32_t i = 1; i < num_mcast_cores; ++i) {
-                    noc.async_read<Noc::TxnIdMode::DISABLED, NOC_L1_READ_ALIGNMENT_BYTES>(
+                    noc.async_read<experimental::Noc::TxnIdMode::DISABLED, NOC_L1_READ_ALIGNMENT_BYTES>(
                         remote_ep,
                         experimental::CoreLocalMem<uint32_t>(global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
                         NOC_L1_READ_ALIGNMENT_BYTES,
                         {.noc_x = noc_coord_x[i], .noc_y = noc_coord_y[i], .addr = global_means_ptr},
                         {});
-                    noc.async_read<Noc::TxnIdMode::DISABLED, NOC_L1_READ_ALIGNMENT_BYTES>(
+                    noc.async_read<experimental::Noc::TxnIdMode::DISABLED, NOC_L1_READ_ALIGNMENT_BYTES>(
                         remote_ep,
                         experimental::CoreLocalMem<uint32_t>(global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
                         NOC_L1_READ_ALIGNMENT_BYTES,
