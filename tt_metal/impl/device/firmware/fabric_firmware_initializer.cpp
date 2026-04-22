@@ -940,9 +940,16 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         std::rethrow_exception(first_ex);
     }
 
+    // FIX H (#42429): Once any non-MMIO device confirms its relay is broken, all subsequent
+    // non-MMIO devices share the same fate — on T3K the relay path to all remote chips routes
+    // through the same MMIO-device ETH relay ERISCs.  Rather than paying 3×15s probe timeouts
+    // per additional non-MMIO device, track whether any relay broke and fast-path the rest.
+    bool any_relay_broken = false;
     size_t configured_count = 0;
     for (auto* dev : compiled_devices) {
         if (dev) {
+            const bool is_non_mmio = (cluster_.get_associated_mmio_device(dev->id()) != dev->id());
+
             // Fix A: probe for stale ERISC firmware on all active channels BEFORE
             // configure_fabric_cores() clears L1 and loads the new firmware image.
             // This gives old firmware a chance to terminate cleanly rather than being
@@ -962,7 +969,34 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
             //   Dispatch firmware initialization writes to non-ETH cores via the same relay and
             //   can fill the remaining (4-N) slots → hang.  Any probe timeout means the relay
             //   is compromised for subsequent writes.
-            auto [probe_dead_channels, relay_broken] = terminate_stale_erisc_routers(dev, builder_context);
+            std::unordered_set<uint32_t> probe_dead_channels;
+            bool relay_broken = false;
+
+            if (any_relay_broken && is_non_mmio) {
+                // FIX H: relay already confirmed broken by a prior non-MMIO device — skip the
+                // 3×15s probe timeout sequence entirely.  Mark ALL active ETH channels dead so
+                // configure_fabric() skips every relay-routed write (ETH reset, runtime args,
+                // ConfigureDeviceWithProgram, l1_barrier).  This cuts ~135s off the hang path
+                // (3 skipped devices × 3 timeouts × 15s) when the relay ERISCs were left in a
+                // corrupt mid-handshake state by a prior abrupt process termination (#42429).
+                relay_broken = true;
+                const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+                const auto& active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
+                for (const auto& [chan_id, dir] : active_channels) {
+                    probe_dead_channels.insert(chan_id);
+                }
+                log_warning(
+                    tt::LogMetal,
+                    "compile_and_configure_fabric: Device {} non-MMIO ETH relay already confirmed "
+                    "broken by prior device — skipping terminate_stale_erisc_routers() probe "
+                    "(FIX H #42429). Marking all {} ETH channel(s) as dead.",
+                    dev->id(),
+                    probe_dead_channels.size());
+            } else {
+                std::tie(probe_dead_channels, relay_broken) =
+                    terminate_stale_erisc_routers(dev, builder_context);
+            }
+
             if (relay_broken || !probe_dead_channels.empty()) {
                 dead_relay_devices_.insert(dev->id());
                 log_warning(
@@ -973,6 +1007,9 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                     dev->id(),
                     relay_broken,
                     probe_dead_channels.size());
+                if (relay_broken && is_non_mmio) {
+                    any_relay_broken = true;
+                }
             }
 
             dev->configure_fabric(probe_dead_channels);
