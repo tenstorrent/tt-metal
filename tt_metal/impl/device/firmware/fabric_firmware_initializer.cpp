@@ -94,6 +94,19 @@ void FabricFirmwareInitializer::clear_compile_fn_for_testing() {
     s_compile_fn_for_testing_ = {};
 }
 
+// Thread-local status-override seam — default-constructed (empty std::function) in all threads.
+// Only set by tests via set_status_override_fn_for_testing() before MeshDevice::create().
+thread_local FabricFirmwareInitializer::StatusOverrideFn
+    FabricFirmwareInitializer::s_status_override_fn_;
+
+void FabricFirmwareInitializer::set_status_override_fn_for_testing(StatusOverrideFn fn) {
+    s_status_override_fn_ = std::move(fn);
+}
+
+void FabricFirmwareInitializer::clear_status_override_fn_for_testing() {
+    s_status_override_fn_ = {};
+}
+
 FabricFirmwareInitializer::FabricFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor, tt::tt_fabric::ControlPlane& control_plane) :
     FirmwareInitializer(std::move(descriptor)), control_plane_(control_plane) {}
@@ -132,13 +145,19 @@ void FabricFirmwareInitializer::init(
         // the exception message and skips that device — terminate_stale_erisc_routers() will deal
         // with it properly via the relay_broken / probe_dead_channels machinery.
         try {
-            const auto& builder_context = control_plane_.get_fabric_context().get_builder_context();
+            // router_config_ is populated in FabricBuilderContext's constructor, so
+            // get_fabric_router_sync_address_and_status() is safe to call here even though
+            // write_routing_tables_to_all_chips() has not yet run.  What is NOT safe is
+            // get_num_fabric_initialized_routers(), which TT_FATALs until per-device router
+            // counts are registered by write_routing_tables_to_all_chips().  Use
+            // is_physical_chip_in_fabric_cluster() instead to skip non-fabric devices.
             const auto router_sync_address =
-                builder_context.get_fabric_router_sync_address_and_status().first;
+                control_plane_.get_fabric_context().get_builder_context()
+                    .get_fabric_router_sync_address_and_status().first;
             constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
 
             for (auto* dev : devices_) {
-                if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
+                if (!control_plane_.is_physical_chip_in_fabric_cluster(dev->id())) {
                     continue;
                 }
                 const auto fabric_node_id =
@@ -750,6 +769,20 @@ std::pair<std::unordered_set<uint32_t>, bool> FabricFirmwareInitializer::termina
         }
 
         std::vector<uint32_t> status_buf(1, 0);
+
+        // Test seam (Scenario X): if set, call the status-override function before the real
+        // L1 probe read.  If it returns a value, use that value as status_buf[0] and skip
+        // the real ReadFromDeviceL1 entirely — no hardware access, safe for CI.
+        // A test can return 0xBAADF00D to exercise the is_known_edm_status() false branch.
+        bool seam_provided_status = false;
+        if (s_status_override_fn_) {
+            auto override_val = s_status_override_fn_(dev, eth_chan_id);
+            if (override_val.has_value()) {
+                status_buf[0] = *override_val;
+                seam_provided_status = true;
+            }
+        }
+
         // Fix F5 (#42429): wrap the initial probe read in a try-catch.  On a T3K after an
         // abrupt prior-process crash, some ERISC channels are in a state where even the probe
         // L1 read hangs indefinitely (the Ethernet core service doesn't respond at all).
@@ -764,7 +797,7 @@ std::pair<std::unordered_set<uint32_t>, bool> FabricFirmwareInitializer::termina
         // hangs for >10 minutes without triggering the timeout — suspected lock contention
         // or kernel blocking state accumulated from the prior three timeouts.  Skipping the
         // call entirely for pre-confirmed dead channels avoids this indefinite hang.
-        try {
+        if (!seam_provided_status) try {
             detail::ReadFromDeviceL1(dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
         } catch (const std::exception& read_ex) {
             log_error(

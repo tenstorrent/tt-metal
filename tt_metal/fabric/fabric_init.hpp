@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <functional>
 #include <unordered_set>
 
 #include "device.hpp"
@@ -40,5 +41,34 @@ struct FabricCoresHealth {
 FabricCoresHealth configure_fabric_cores(
     tt::tt_metal::IDevice* device,
     const std::unordered_set<uint32_t>& pre_known_dead_channels = {});
+
+// ---------------------------------------------------------------------------
+// Test seam: fault-injection into configure_fabric_cores() for Scenario W
+//
+// When set (non-null), configure_fabric_cores() calls this function instead of
+// (or immediately before) cluster.assert_risc_reset_at_core() for each active
+// ETH channel.  If the function throws, the catch block is exercised:
+//   - dead_channels.insert(router_chan)
+//   - newly_dead_channels.insert(router_chan)
+//   - all_channels_healthy = false
+//
+// Signature: void(tt::tt_metal::IDevice* device, uint32_t eth_chan_id)
+// The function may throw any std::exception to trigger the catch path.
+//
+// Thread-local so parallel test workers on different threads do not interfere.
+// Set before MeshDevice::create(), cleared immediately after via
+// clear_configure_cores_inject_fn().
+//
+// PRODUCTION: s_configure_cores_inject_fn_ is default-constructed (empty
+// std::function) on every thread — the if-check is a single bool on an
+// inline-initialized thread_local, zero overhead in non-test builds.
+// ---------------------------------------------------------------------------
+using ConfigureFabricCoresInjectFn = std::function<void(tt::tt_metal::IDevice*, uint32_t /*eth_chan_id*/)>;
+
+// Set/clear the per-thread configure-cores inject seam.
+// NOT thread-safe with concurrent callers on the same thread (tests call this
+// single-threaded before MeshDevice::create()).
+void set_configure_cores_inject_fn(ConfigureFabricCoresInjectFn fn);
+void clear_configure_cores_inject_fn();
 
 }  // namespace tt::tt_fabric

@@ -7,6 +7,7 @@
 #include <atomic>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <unordered_set>
 #include <utility>
@@ -62,6 +63,30 @@ public:
     // on the same thread (tests call this single-threaded before MeshDevice::create()).
     static void set_compile_fn_for_testing(CompileFabricFn fn);
     static void clear_compile_fn_for_testing();
+
+    // ---------------------------------------------------------------------------
+    // Test seam: L1 status-read override for Scenario X
+    //
+    // When set (non-null), terminate_stale_erisc_routers() calls this function
+    // instead of (and before) the real ReadFromDeviceL1() probe read for each
+    // active ETH channel.  If the function returns a value, that value replaces
+    // the L1 read result (status_buf[0]); if it returns std::nullopt, the real
+    // L1 read is performed normally.
+    //
+    // Signature: std::optional<uint32_t>(Device*, uint32_t eth_chan_id)
+    // A test can return 0xBAADF00D to simulate a corrupt EDMStatus value without
+    // writing anything to hardware — exercising the is_known_edm_status() false
+    // branch and the probe_dead_channels insertion path, safely.
+    //
+    // Thread-local — same rationale as CompileFabricFn above.
+    // PRODUCTION: s_status_override_fn_ is default-constructed (empty std::function)
+    // on every thread — zero overhead in non-test builds.
+    // ---------------------------------------------------------------------------
+    using StatusOverrideFn = std::function<std::optional<uint32_t>(Device*, uint32_t /*eth_chan_id*/)>;
+
+    // Set/clear the per-thread status-override seam.
+    static void set_status_override_fn_for_testing(StatusOverrideFn fn);
+    static void clear_status_override_fn_for_testing();
 
 private:
     // Compile fabric on all devices, parallelized via async.
@@ -122,6 +147,10 @@ private:
     // Thread-local compile seam (see set_compile_fn_for_testing / clear_compile_fn_for_testing).
     // Default-constructed (empty std::function) — not set in production builds.
     static thread_local CompileFabricFn s_compile_fn_for_testing_;
+
+    // Thread-local status-override seam (see set_status_override_fn_for_testing).
+    // Default-constructed (empty std::function) — not set in production builds.
+    static thread_local StatusOverrideFn s_status_override_fn_;
 };
 
 }  // namespace tt::tt_metal

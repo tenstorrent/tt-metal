@@ -24,6 +24,18 @@ bool isFabricUnitTest() { return false; }
 
 namespace tt::tt_fabric {
 
+// Thread-local configure-cores inject seam — default-constructed (empty std::function) on every
+// thread.  Only set by tests via set_configure_cores_inject_fn() before MeshDevice::create().
+thread_local ConfigureFabricCoresInjectFn s_configure_cores_inject_fn_;
+
+void set_configure_cores_inject_fn(ConfigureFabricCoresInjectFn fn) {
+    s_configure_cores_inject_fn_ = std::move(fn);
+}
+
+void clear_configure_cores_inject_fn() {
+    s_configure_cores_inject_fn_ = {};
+}
+
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::tt_metal::IDevice* device) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -156,6 +168,16 @@ FabricCoresHealth configure_fabric_cores(
             }
 
             try {
+                // Test seam (Scenario W): if set, call the inject function instead of (or
+                // before) the real assert_risc_reset_at_core().  If it throws, the catch
+                // block below is exercised identically to a real UMD failure.
+                if (s_configure_cores_inject_fn_) {
+                    s_configure_cores_inject_fn_(device, router_chan);
+                    // If the inject fn returned without throwing, skip the real hardware
+                    // call — the seam fully replaces assert/deassert for this channel.
+                    continue;
+                }
+
                 // get_virtual_eth_core_from_channel returns the virtual CoreCoord needed
                 // for tt_cxy_pair, which is what assert/deassert_risc_reset_at_core expect.
                 auto virtual_core = cluster.get_virtual_eth_core_from_channel(chip_id, router_chan);
