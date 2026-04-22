@@ -67,6 +67,11 @@ from models.experimental.speecht5_vc.demo_ttnn import (
     load_audio_16khz_mono,
     load_speaker_embedding,
 )
+from models.experimental.speecht5_vc.ttnn_speech_prenet import (
+    TTNNSpeechEncoderPrenet,
+    TTNNSpeechEncoderPrenetConfig,
+    preprocess_speech_encoder_prenet_parameters,
+)
 
 
 @dataclass
@@ -253,12 +258,19 @@ def _build_ttnn_modules(
         speaker_embeddings,
     )
     postnet_params = preprocess_postnet_parameters(hf_model.speech_decoder_postnet, postnet_config, device)
+    speech_prenet_config = TTNNSpeechEncoderPrenetConfig.from_hf_config(cfg)
+    speech_prenet_params = preprocess_speech_encoder_prenet_parameters(
+        hf_model.speecht5.encoder.prenet,
+        speech_prenet_config,
+        device,
+    )
 
+    ttnn_speech_prenet = TTNNSpeechEncoderPrenet(device, speech_prenet_params, speech_prenet_config)
     ttnn_encoder = TTNNSpeechT5Encoder(device, encoder_params, encoder_config)
     ttnn_decoder = TTNNSpeechT5Decoder(device, decoder_params, decoder_config, max_sequence_length=max_steps + 16)
     ttnn_postnet = TTNNSpeechT5SpeechDecoderPostnet(device, postnet_params, postnet_config)
 
-    return ttnn_encoder, ttnn_decoder, ttnn_postnet, decoder_config
+    return ttnn_speech_prenet, ttnn_encoder, ttnn_decoder, ttnn_postnet, decoder_config
 
 
 def _open_ttnn_device(
@@ -467,7 +479,7 @@ def main():
     )
 
     try:
-        ttnn_encoder, ttnn_decoder, ttnn_postnet, decoder_config = _build_ttnn_modules(
+        ttnn_speech_prenet, ttnn_encoder, ttnn_decoder, ttnn_postnet, decoder_config = _build_ttnn_modules(
             hf_model=hf_model,
             speaker_embeddings=speaker_embeddings,
             device=device,
@@ -493,7 +505,7 @@ def main():
                     tt_mel, tt_stats = generate_mel_with_ttnn(
                         input_values=input_values,
                         attention_mask=attention_mask,
-                        hf_model=hf_model,
+                        ttnn_speech_prenet=ttnn_speech_prenet,
                         ttnn_encoder=ttnn_encoder,
                         ttnn_decoder=ttnn_decoder,
                         ttnn_postnet=ttnn_postnet,
@@ -532,7 +544,7 @@ def main():
                         open_device_retries=args.open_device_retries,
                         open_device_retry_sleep_s=args.open_device_retry_sleep_s,
                     )
-                    ttnn_encoder, ttnn_decoder, ttnn_postnet, decoder_config = _build_ttnn_modules(
+                    ttnn_speech_prenet, ttnn_encoder, ttnn_decoder, ttnn_postnet, decoder_config = _build_ttnn_modules(
                         hf_model=hf_model,
                         speaker_embeddings=speaker_embeddings,
                         device=device,
@@ -719,6 +731,7 @@ def main():
                 "speaker_index": args.speaker_index,
                 "target_speaker_wavs": args.target_speaker_wavs,
                 "speaker_metric_mode": speaker_metric_mode,
+                "speech_prenet_backend": "ttnn",
                 "device_id": args.device_id,
                 "l1_small_size": current_l1_small_size,
                 "trace_region_size": args.trace_region_size,

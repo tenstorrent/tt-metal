@@ -4,14 +4,14 @@ This directory contains an initial SpeechT5 voice-conversion bring-up path using
 
 ## Stage-1 Status (As Of Now)
 
-Current status: **Partially complete**.
+Current status: **Bring-up path complete; hardware validation pending**.
 
 The implementation path exists end-to-end, but Stage-1 bounty acceptance is **not yet fully satisfied**
 until cloud validation/performance/accuracy checks are completed.
 
 ### Stage-1 Checklist
 
-- [x] Speech pre-net input processing path is integrated (currently via HF reference path in the demo).
+- [x] Speech pre-net input processing path is executed on TTNN (`feature_encoder + feature_projection + positional conv + sinusoidal`).
 - [x] Shared encoder is executed on TTNN.
 - [x] Shared decoder with speaker conditioning is executed on TTNN.
 - [x] Speech post-net is executed on TTNN.
@@ -29,7 +29,7 @@ until cloud validation/performance/accuracy checks are completed.
 
 Pipeline in `demo_ttnn.py`:
 
-1. Speech encoder prenet (`feature_encoder + feature_projection + positional conv/sinusoidal`) on CPU (HuggingFace reference)
+1. Speech encoder prenet (`feature_encoder + feature_projection + positional conv/sinusoidal`) on TTNN
 2. Shared SpeechT5 encoder on TTNN (`TTNNSpeechT5Encoder.forward_from_hidden_states`)
 3. Shared SpeechT5 decoder on TTNN (with speaker conditioning)
 4. Speech decoder postnet on TTNN
@@ -101,6 +101,16 @@ MESH_DEVICE=N150 python models/experimental/speecht5_vc/validate_stage1.py \
   --report_json ./vc_stage1_report.json
 ```
 
+Strict Stage-1 gate mode (uses the Stage-1 acceptance checks for pass/fail):
+
+```bash
+MESH_DEVICE=N150 python models/experimental/speecht5_vc/validate_stage1.py \
+  --input_wavs /path/a.wav /path/b.wav \
+  --target_speaker_wavs /path/target_speaker.wav \
+  --strict_stage1 \
+  --report_json ./vc_stage1_report.json
+```
+
 Optional transcript-aware WER mode (if you already have reference text):
 
 ```bash
@@ -153,5 +163,4 @@ Planned optimization work:
 1. Run cloud validation on N150/N300 and attach logs.
 2. Use `validate_stage1.py` report outputs as Stage-1 closeout evidence.
 3. Generate and attach perf report with throughput + RTF.
-4. Port speech encoder prenet fully to TTNN (if required by final acceptance interpretation).
-5. Stage-2 optimization: sharding/trace/cache and fused-op tuning.
+4. Stage-2 optimization: sharding/trace/cache and fused-op tuning.
