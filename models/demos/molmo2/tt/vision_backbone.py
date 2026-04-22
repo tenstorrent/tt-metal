@@ -29,7 +29,7 @@ MAX_FRAMES_FOR_SINGLE_POOL = 32
 # Fixed upper bound for pre-alloc vision trace + pool feature buffers (729 patches/frame).
 # 80 frames = 58320 tokens × 1152 × 2 bytes ≈ 134 MB for embedded trace slice per device.
 # Must cover max demo/video frame count used with --use-vision-trace (e.g. 70×729=51030).
-MAX_VIT_FRAMES_FOR_POOL = 80
+MAX_VIT_FRAMES_FOR_POOL = 120
 
 # Upper bounds for buffers created once in VisionBackbone.__init__ (pooling mask + vision trace I/O).
 DEFAULT_PATCHES_PER_FRAME = (378 // 14) ** 2  # 729
