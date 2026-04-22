@@ -30,17 +30,13 @@ FORCE_INLINE uint32_t float_to_scaler_bits(float value) {
         data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
         "float_to_scaler_bits only supports Float16_b (bfloat16) and Float32 formats");
 
-    union {
-        float f;
-        uint32_t bits;
-    } f32_to_bits;
-    f32_to_bits.f = value;
+    const uint32_t bits = __builtin_bit_cast(uint32_t, value);
 
     if constexpr (data_format == DataFormat::Float32) {
-        return f32_to_bits.bits;
+        return bits;
     } else {
         // Float16_b (bfloat16): pack two bf16 values into one uint32
-        uint16_t bf16 = static_cast<uint16_t>(f32_to_bits.bits >> 16);
+        uint16_t bf16 = static_cast<uint16_t>(bits >> 16);
         return (static_cast<uint32_t>(bf16) << 16) | bf16;
     }
 }
@@ -55,17 +51,13 @@ FORCE_INLINE uint32_t float_to_col0_scaler_bits(float value) {
         data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
         "float_to_col0_scaler_bits only supports Float16_b (bfloat16) and Float32 formats");
 
-    union {
-        float f;
-        uint32_t bits;
-    } f32_to_bits;
-    f32_to_bits.f = value;
+    const uint32_t bits = __builtin_bit_cast(uint32_t, value);
 
     if constexpr (data_format == DataFormat::Float32) {
-        return f32_to_bits.bits;
+        return bits;
     } else {
         // Float16_b (bfloat16): return lower 16 bits only (col 0 in the u32 pair)
-        return static_cast<uint32_t>(static_cast<uint16_t>(f32_to_bits.bits >> 16));
+        return static_cast<uint32_t>(static_cast<uint16_t>(bits >> 16));
     }
 }
 
