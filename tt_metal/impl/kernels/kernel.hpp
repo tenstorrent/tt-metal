@@ -6,8 +6,10 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
@@ -228,7 +230,7 @@ protected:
 
     virtual std::string config_hash() const = 0;
 
-    std::vector<std::string> file_paths(IDevice& device) const;
+    std::vector<std::filesystem::path> file_paths(IDevice& device) const;
 
 private:
     void register_kernel_with_watcher();

@@ -170,7 +170,14 @@ void Kernel::register_kernel_elf_paths_with_watcher(IDevice& device) const {
         return;
     }
     TT_ASSERT(!this->kernel_full_name_.empty(), "Kernel full name not set!");
-    auto paths = this->file_paths(device);
+    // Convert to string paths because watcher doesn't support
+    // std::filesystem::paths yet
+    const auto file_paths = this->file_paths(device);
+    std::vector<std::string> paths;
+    paths.reserve(file_paths.size());
+    for (const std::filesystem::path& p : file_paths) {
+        paths.push_back(p.string());
+    }
     watcher->register_kernel_elf_paths(this->watcher_kernel_id_, paths);
 }
 
@@ -291,7 +298,7 @@ bool Kernel::binaries_exist_on_disk(const IDevice* device) const {
     const uint32_t core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
-    std::optional<std::string> output_path = std::nullopt;
+    std::optional<std::filesystem::path> output_path = std::nullopt;
     for (int i = 0; i < this->expected_num_binaries(); ++i) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), core_type, processor_class, this->get_kernel_processor_type(i));
@@ -301,21 +308,20 @@ bool Kernel::binaries_exist_on_disk(const IDevice* device) const {
             output_path = build_state.get_out_path();
         }
     }
-    // Note: this->get_full_kernel_name() already has a '/' at the end.
-    const std::string build_success_marker_path =
-        fmt::format("{}{}{}", output_path.value(), this->get_full_kernel_name(), SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
+    const auto build_success_marker_path =
+        output_path.value() / this->get_full_kernel_name() / SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
     return std::filesystem::exists(build_success_marker_path);
 }
 
-std::vector<std::string> Kernel::file_paths(IDevice& device) const {
-    std::vector<std::string> file_paths;
+std::vector<std::filesystem::path> Kernel::file_paths(IDevice& device) const {
+    std::vector<std::filesystem::path> file_paths;
     const auto& hal = MetalContext::instance().hal();
     uint32_t core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
     for (int i = 0; i < this->expected_num_binaries(); i++) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device.build_id(), core_type, processor_class, this->get_kernel_processor_type(i));
-        file_paths.push_back(build_state.get_target_out_path(this->kernel_full_name_));
+        file_paths.emplace_back(build_state.get_target_out_path(this->kernel_full_name_));
     }
     return file_paths;
 }
@@ -733,7 +739,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
     int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->config_.processor);
     auto load_type =
         MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id).memory_load;
-    const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[0], load_type);
+    const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[0].string(), load_type);
     binaries.push_back(&binary_mem);
     [[maybe_unused]] uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_size);
@@ -771,7 +777,7 @@ void EthernetKernel::read_binaries(IDevice* device) {
     auto load_type =
         MetalContext::instance().hal().get_jit_build_config(erisc_core_type, k_EthDmClassIndex, erisc_id).memory_load;
     const ll_api::memory& binary_mem =
-        llrt::get_risc_binary(paths[0], load_type, [this](ll_api::memory& binary_mem) {
+        llrt::get_risc_binary(paths[0].string(), load_type, [this](ll_api::memory& binary_mem) {
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_erisc_iram_enabled() &&
                 this->config_.eth_mode != Eth::IDLE) {
                 // text_addr and some of span's addr point to IRAM base address.
@@ -804,7 +810,7 @@ void ComputeKernel::read_binaries(IDevice* device) {
                              .hal()
                              .get_jit_build_config(tensix_core_type, compute_class_idx, trisc_id)
                              .memory_load;
-        const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[trisc_id], load_type);
+        const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[trisc_id].string(), load_type);
         binaries.push_back(&binary_mem);
     }
     this->set_binaries(
@@ -966,7 +972,7 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
             auto load_type =
                 MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id)
                     .memory_load;
-            const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[i], load_type);
+            const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[i].string(), load_type);
             binaries.push_back(&binary_mem);
         }
     } else {
@@ -974,7 +980,7 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
         auto load_type =
             MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, canonical_id)
                 .memory_load;
-        const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[0], load_type);
+        const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[0].string(), load_type);
         binaries.push_back(&binary_mem);
     }
     this->set_binaries(
@@ -1063,7 +1069,7 @@ void QuasarComputeKernel::read_binaries(IDevice* device) {
                              .hal()
                              .get_jit_build_config(tensix_core_type, compute_class_idx, trisc_id)
                              .memory_load;
-        const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[i], load_type);
+        const ll_api::memory& binary_mem = llrt::get_risc_binary(paths[i].string(), load_type);
         binaries.push_back(&binary_mem);
     }
     this->set_binaries(
