@@ -43,10 +43,6 @@ const DataMovementConfig kReaderDmConfig{
     .processor = DataMovementProcessor::RISCV_0,
     .noc = NOC::RISCV_0_default,
 };
-const ComputeConfig kBasicComputeConfig{
-    .math_fidelity = MathFidelity::HiFi4,
-    .compile_args = {1},
-};
 
 experimental::PrecompiledKernelConfig make_precompiled_config(const std::string& root, BinaryPolicy policy) {
     return experimental::PrecompiledKernelConfig{.precompiled_dir = root, .fallback_policy = policy};
