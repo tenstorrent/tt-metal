@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     // Constexpr
@@ -21,11 +22,13 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<1>();
     const auto s = TensorAccessor(dst_args, dst_addr);
 
+    experimental::CircularBuffer cb_out(cb_id_out0);
+
     uint64_t base_dst_noc_addr[tile_height];
 
     auto write_tiles = [&](const uint32_t& num_tiles, const uint32_t& width_size, const uint32_t& stride_size) {
-        cb_wait_front(cb_id_out0, num_tiles);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        cb_out.wait_front(num_tiles);
+        uint32_t l1_read_addr = cb_out.get_read_ptr();
         for (uint32_t k = 0; k < tile_height; k++) {
             uint64_t dst_noc_addr = base_dst_noc_addr[k];
             noc_async_write(l1_read_addr, dst_noc_addr, width_size);
@@ -33,7 +36,7 @@ void kernel_main() {
             base_dst_noc_addr[k] += width_size + stride_size;
         }
         noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_tiles);
+        cb_out.pop_front(num_tiles);
     };
 
     uint32_t stick_id = start_stick_id;
