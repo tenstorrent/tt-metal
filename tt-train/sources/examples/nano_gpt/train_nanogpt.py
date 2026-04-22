@@ -47,7 +47,7 @@ from ttml.models.llama import (
 )
 from ttml.modules import Parameter
 from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer
-from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
+from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig, DeviceConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 from ttml.common.profiler_utils import profiler_marker
 
@@ -130,6 +130,8 @@ class ModelConfig:
     high_freq_factor: float = 4.0
     low_freq_factor: float = 1.0
     original_context_length: int = 0  # 0 means no scaling
+    # Mirrors device_config.enable_tp; set at runtime after the mesh is parsed.
+    use_tp: bool = False
 
 
 class LossAverageMeter:
@@ -386,6 +388,9 @@ def train_step(
     should_step = gradient_accumulator.should_step()
 
     if should_step:
+        # All-reduce grads across DP axes; no-op when no mesh or no dp axis of size > 1.
+        ttml.sync_gradients(model.parameters())
+
         # Gradient clipping
         if use_clip_grad_norm:
             # Use ttml.core.clip_grad_norm which works with model parameters directly
@@ -774,6 +779,7 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
             runner_type=model_config.runner_type,
             weight_tying=model_config.weight_tying,
             rope_scaling=rope_scaling_config,
+            use_tp=model_config.use_tp,
         )
         return Llama(llama_config)
     else:
@@ -1108,8 +1114,16 @@ def main():
     # Check if we're in inference-only mode (prompt + explicit model_path).
     inference_only = args.prompt and args.model_path
 
-    # Initialize device early (needed for both training and inference)
-    ttml.autograd.AutoContext.get_instance().open_device()
+    # Initialize device(s) early (needed for both training and inference)
+    device_config = DeviceConfig(yaml_config)
+    model_config.use_tp = device_config.enable_tp
+    mesh_shape = tuple(device_config.mesh_shape)
+    if mesh_shape != (1, 1):
+        # Axis 0 = dp, axis 1 = tp (matches device_config.enable_ddp/enable_tp positions)
+        device_ids = tuple(device_config.device_ids) if device_config.device_ids else None
+        ttml.open_device_mesh(ttml.Mesh(mesh_shape, ("dp", "tp")), device_ids)
+    else:
+        ttml.autograd.AutoContext.get_instance().open_device()
     ttml.autograd.AutoContext.get_instance().get_device()
 
     # Start memory tracking if enabled
