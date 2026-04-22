@@ -21,6 +21,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "chain_llk.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_math.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -176,39 +178,28 @@ void kernel_main() {
 
         cb_push_back(cb_mean_squared, 1);
 
-        /*
-         * E[x**2] - E[x]**2
-         */
-        reconfig_data_format(cb_stats_reduced, cb_mean_squared);
-        pack_reconfig_data_format(cb_var);
-        sub_tiles_init(cb_stats_reduced, cb_mean_squared);
+        // Stage 3 — cb_var = cb_stats_reduced[0] - cb_mean_squared
+        // cb_stats_reduced is waited/popped by the enclosing scope (NoWaitNoPop).
+        // cb_mean_squared is produced by the preceding E[x]² stage and consumed here.
+        compute_kernel_lib::sub<
+            compute_kernel_lib::BroadcastDim::NONE,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
+            cb_stats_reduced, cb_mean_squared, cb_var, compute_kernel_lib::BinaryInputBlockShape::single());
 
-        cb_reserve_back(cb_var, onetile);
-        cb_wait_front(cb_mean_squared, 1);
-        ACQ();
-        sub_tiles(cb_stats_reduced, cb_mean_squared, 0, 0, 0);
-        pack_tile(0, cb_var);
-        REL();
-        cb_push_back(cb_var, 1);
-        cb_pop_front(cb_mean_squared, 1);
-
-        /*
-         * 1/sqrt(var + eps)
-         */
-        cb_wait_front(cb_var, 1);
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_var, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
-
-        add_tiles_init(cb_var, cb_eps);
-        ACQ();
-        add_tiles(cb_var, cb_eps, 0, 0, 0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        REL();
-        cb_push_back(cb_recip_sqrt_var, 1);
-        cb_pop_front(cb_var, 1);
+        // Stage 4 — cb_recip_sqrt_var = rsqrt(cb_var + cb_eps)
+        // cb_var streams (produced by stage 3); cb_eps is persistent (waited once before loop).
+        compute_kernel_lib::add<
+            compute_kernel_lib::BroadcastDim::NONE,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+            cb_var,
+            cb_eps,
+            cb_recip_sqrt_var,
+            compute_kernel_lib::BinaryInputBlockShape::single(),
+            compute_kernel_lib::sfpu_chain(
+                compute_kernel_lib::Rsqrt<
+                    LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off>{}));
 
         if constexpr (do_gamma && do_beta) {
             /*
