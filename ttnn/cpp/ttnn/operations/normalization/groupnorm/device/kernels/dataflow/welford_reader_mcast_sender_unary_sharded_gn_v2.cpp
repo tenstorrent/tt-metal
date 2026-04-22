@@ -139,7 +139,7 @@ void kernel_main() {
                 self_ep,
                 experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
-                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
+                {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = src_addr_in0},
                 {});
             src_addr_in0 += per_core_N_bytes;
             l1_write_addr_repack += per_core_N_bytes_with_stride;
@@ -179,17 +179,20 @@ void kernel_main() {
                 reduce_receiver_sem.wait(num_mcast_cores - 1);
                 reduce_receiver_sem.set(0);
 
+                experimental::UnicastEndpoint remote_ep;
                 for (uint32_t i = 1; i < num_mcast_cores; ++i) {
-                    uint64_t src_noc_addr = get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_means_ptr);
-                    noc_async_read_one_packet(
-                        src_noc_addr,
-                        global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES,
-                        NOC_L1_READ_ALIGNMENT_BYTES);
-                    src_noc_addr = get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_vars_ptr);
-                    noc_async_read_one_packet(
-                        src_noc_addr,
-                        global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES,
-                        NOC_L1_READ_ALIGNMENT_BYTES);
+                    noc.async_read<Noc::TxnIdMode::DISABLED, NOC_L1_READ_ALIGNMENT_BYTES>(
+                        remote_ep,
+                        experimental::CoreLocalMem<uint32_t>(global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
+                        NOC_L1_READ_ALIGNMENT_BYTES,
+                        {.noc_x = noc_coord_x[i], .noc_y = noc_coord_y[i], .addr = global_means_ptr},
+                        {});
+                    noc.async_read<Noc::TxnIdMode::DISABLED, NOC_L1_READ_ALIGNMENT_BYTES>(
+                        remote_ep,
+                        experimental::CoreLocalMem<uint32_t>(global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
+                        NOC_L1_READ_ALIGNMENT_BYTES,
+                        {.noc_x = noc_coord_x[i], .noc_y = noc_coord_y[i], .addr = global_vars_ptr},
+                        {});
                 }
                 noc.async_read_barrier();
             }
@@ -296,7 +299,7 @@ void kernel_main() {
                 self_ep,
                 experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
-                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
+                {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = src_addr_in0},
                 {});
             src_addr_in0 += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;
