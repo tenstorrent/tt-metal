@@ -324,14 +324,11 @@ void kernel_main() {
                 uint32_t in2_offset = 0, in2_index = 0;
 
                 tile_regs_acquire();
-                if constexpr (has_bias) {
-                    // w2_blocks_per_four_mm2_tile already accounts for the bias row; equals the
-                    // per-A2A-iteration block count (w2_blocks_per_expert / num_a2a_iters).
-                    uint32_t w2_k_tracker = 0;
-
-                    for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
-                        cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
-                        for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
+                uint32_t w2_k_tracker = 0;
+                for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
+                    cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+                    for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
+                        if constexpr (has_bias) {
                             if (w2_k_tracker == num_w2_tiles_h) {
                                 // Bias addition: matmul(ones_tile, bias_row); padding K slots do not consume in2/dm1.
                                 matmul_block(
@@ -346,73 +343,35 @@ void kernel_main() {
                                     /*kt_dim=*/1);
                                 w2_k_tracker++;
                                 continue;
-                            } else if (w2_k_tracker > num_w2_tiles_h) {
-                                w2_k_tracker++;
-                                continue;  // skip padding K slots after bias
                             }
-                            if (dm1_tiles_remaining == 0) {
-                                cb_pop_front(cb_w2c_rdy, 1);
-                                cb_wait_front(cb_w2c_rdy, 1);
-                                dm1_tiles_remaining =
-                                    moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][++dm1_step];
-                                in2_offset += tiles_per_step;
-                                in2_index = in2_offset;
-                            }
-                            dm1_tiles_remaining--;
-
-                            matmul_block(
-                                cb_s2c_in2,
-                                cb_r2c_w2,
-                                in2_index++,
-                                /*in1_index=*/k,
-                                /*idst=*/0,
-                                /*transpose=*/false,
-                                /*ct_dim=*/4,
-                                /*rt_dim=*/1,
-                                /*kt_dim=*/1);
-                            w2_k_tracker++;
                         }
-                        cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
-                    }
-
-                    // Pop cb_w2c_rdy once after all blocks in this iteration complete.
-                    // Matches GPT-OSS pattern (compute.cpp:326).
-                    cb_pop_front(cb_w2c_rdy, 1);
-                } else {
-                    for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
-                        cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
-
-                        for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                            // The last block has only 4 tiles of interest, so we exit early.
-                            if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
-                                cb_pop_front(cb_w2c_rdy, 1);
-                                break;
-                            }
-
-                            if (dm1_tiles_remaining == 0) {
-                                cb_pop_front(cb_w2c_rdy, 1);
-                                cb_wait_front(cb_w2c_rdy, 1);
-                                dm1_tiles_remaining =
-                                    moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][++dm1_step];
-                                in2_offset += tiles_per_step;
-                                in2_index = in2_offset;
-                            }
-                            dm1_tiles_remaining--;
-
-                            matmul_block(
-                                cb_s2c_in2,
-                                cb_r2c_w2,
-                                in2_index++,
-                                /*in1_index=*/k,
-                                /*idst=*/0,
-                                /*transpose=*/false,
-                                /*ct_dim=*/4,
-                                /*rt_dim=*/1,
-                                /*kt_dim=*/1);
+                        if (w2_k_tracker >= num_w2_tiles_h) {
+                            continue;  // skip padding K slots (bias: after bias tile; no_bias: at/past logical K)
                         }
-                        cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+                        if (dm1_tiles_remaining == 0) {
+                            cb_pop_front(cb_w2c_rdy, 1);
+                            cb_wait_front(cb_w2c_rdy, 1);
+                            dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][++dm1_step];
+                            in2_offset += tiles_per_step;
+                            in2_index = in2_offset;
+                        }
+                        dm1_tiles_remaining--;
+
+                        matmul_block(
+                            cb_s2c_in2,
+                            cb_r2c_w2,
+                            in2_index++,
+                            /*in1_index=*/k,
+                            /*idst=*/0,
+                            /*transpose=*/false,
+                            /*ct_dim=*/4,
+                            /*rt_dim=*/1,
+                            /*kt_dim=*/1);
+                        w2_k_tracker++;
                     }
+                    cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
+                cb_pop_front(cb_w2c_rdy, 1);
                 tile_regs_commit();
 
                 tile_regs_wait();
