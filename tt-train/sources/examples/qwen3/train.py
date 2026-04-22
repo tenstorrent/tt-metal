@@ -78,7 +78,6 @@ from tqdm import tqdm
 
 import ttml
 
-from utils.sharded_loss import sharded_cross_entropy_loss
 from utils.lora import LORA_TARGETS_ALL, inject_adapter_in_model
 from utils.memory import MemoryUsageTracker, finalize_memory
 from ttml.common.utils import no_grad
@@ -155,10 +154,12 @@ def evaluate(
             input_tensor = create_input_tensor(x_np, dp_mapper)
 
             logits = model(input_tensor, causal_mask, input_ids_np=x_np)
+            target_tensor = create_target_tensor(y_np, dp_mapper)
             if sharded_loss:
-                loss = sharded_cross_entropy_loss(logits, y_np, vocab_padded, tp_size, tp_axis=shard_dim)
+                loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                    logits, target_tensor, cluster_axis=shard_dim
+                )
             else:
-                target_tensor = create_target_tensor(y_np, dp_mapper)
                 loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
             losses.append(get_loss_value(loss, distributed))
             ctx.reset_graph()
@@ -822,10 +823,12 @@ def main():
                 MemoryUsageTracker.snapshot("FORWARD_PASS")
 
             # Cross-entropy loss
+            target_tensor = create_target_tensor(y_np, dp_mapper)
             if args.sharded_loss:
-                loss = sharded_cross_entropy_loss(logits, y_np, vocab_padded, tp_size, tp_axis=shard_dim)
+                loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                    logits, target_tensor, cluster_axis=shard_dim
+                )
             else:
-                target_tensor = create_target_tensor(y_np, dp_mapper)
                 loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
             t0 = _tlog(step, "loss_compute", t0)
 
