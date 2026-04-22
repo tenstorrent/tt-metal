@@ -3,70 +3,79 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/eltwise_unary/log1p.h"
-#include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t approx_arg = get_arg_val<uint32_t>(1);
     const bool use_approx = (approx_arg != 0u);
 
-    constexpr auto cb_input = tt::CBIndex::c_0;
-    constexpr auto cb_output = tt::CBIndex::c_2;
-
-    experimental::CircularBuffer cb_in(cb_input);
-    experimental::CircularBuffer cb_out(cb_output);
+    constexpr uint32_t cb_input = static_cast<uint32_t>(tt::CBIndex::c_0);
+    constexpr uint32_t cb_output = static_cast<uint32_t>(tt::CBIndex::c_2);
 
     init_sfpu(cb_input, cb_output);
 
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-        tile_regs_acquire();
-
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 0);
-
-        if (use_approx) {
-            exp_tile_init<true>();
-            exp_tile<true>(0);
-            log1p_tile_init<true>();
-            log1p_tile<true>(0);
-        } else {
-            exp_tile_init<false>();
-            exp_tile<false>(0);
-            log1p_tile_init<false>();
-            log1p_tile<false>(0);
-        }
-        tanh_tile_init<false>();
-        tanh_tile<false>(0);
-
+    // mish(x) = x * tanh(log1p(exp(x)))
+    // Output CB has capacity 2 → use PerTile output policy.
+    // use_approx is runtime: dispatch to two statically-typed chains.
+    if (use_approx) {
 #ifdef INP_FLOAT32
-        copy_tile(cb_input, 0, 1);
-        mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);
+        auto chain = sfpu_chain(
+            Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+            Load<cb_input, Dst::D1, LoadPolicy::NoWaitPop>{},
+            Exp<Approx::Fast, Approx::Fast, Dst::D0>{},
+            Log1p<Approx::Fast, Dst::D0>{},
+            Tanh<Approx::Exact, Dst::D0>{},
+            SfpuMul<Dst::D0, Dst::D1, Dst::D0>{});
 #endif
 #ifdef INP_FLOAT
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input);
-        binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input, 0, 0);
+        auto chain = sfpu_chain(
+            Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+            Exp<Approx::Fast, Approx::Fast, Dst::D0>{},
+            Log1p<Approx::Fast, Dst::D0>{},
+            Tanh<Approx::Exact, Dst::D0>{},
+            DestReuseOp<
+                cb_input,
+                EltwiseBinaryType::ELWMUL,
+                EltwiseBinaryReuseDestType::DEST_TO_SRCA,
+                Dst::D0,
+                LoadPolicy::WaitAndPop>{});
 #endif
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-        tile_regs_release();
-
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
+        sfpu_pipeline<
+            SfpuBatching::Disabled,
+            SfpuInputPolicy::WaitAndPopPerTile,
+            SfpuOutputPolicy::PerTile,
+            SfpuDataFormatReconfig::NONE>(chain, cb_output, num_tiles);
+    } else {
+#ifdef INP_FLOAT32
+        auto chain = sfpu_chain(
+            Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+            Load<cb_input, Dst::D1, LoadPolicy::NoWaitPop>{},
+            Exp<Approx::Exact, Approx::Fast, Dst::D0>{},
+            Log1p<Approx::Exact, Dst::D0>{},
+            Tanh<Approx::Exact, Dst::D0>{},
+            SfpuMul<Dst::D0, Dst::D1, Dst::D0>{});
+#endif
+#ifdef INP_FLOAT
+        auto chain = sfpu_chain(
+            Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+            Exp<Approx::Exact, Approx::Fast, Dst::D0>{},
+            Log1p<Approx::Exact, Dst::D0>{},
+            Tanh<Approx::Exact, Dst::D0>{},
+            DestReuseOp<
+                cb_input,
+                EltwiseBinaryType::ELWMUL,
+                EltwiseBinaryReuseDestType::DEST_TO_SRCA,
+                Dst::D0,
+                LoadPolicy::WaitAndPop>{});
+#endif
+        sfpu_pipeline<
+            SfpuBatching::Disabled,
+            SfpuInputPolicy::WaitAndPopPerTile,
+            SfpuOutputPolicy::PerTile,
+            SfpuDataFormatReconfig::NONE>(chain, cb_output, num_tiles);
     }
 }
