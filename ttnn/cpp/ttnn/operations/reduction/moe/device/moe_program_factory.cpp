@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/reduction/moe/device/moe_program_factory.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -55,6 +57,16 @@ MoeProgramFactory::cached_program_t MoeProgramFactory::create(
     auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
     uint32_t Wt = input_shape[3] / tile_width;
+    // Top-k mask is only consumed after all rows are processed; reader streams Kt tiles per merged-height row.
+    uint32_t Kt = (k + tile_width - 1) / tile_width;
+    uint32_t topk_mask_cb_num_pages = Ht * Kt;
+    // Expert is popped per merged-height row on compute, but the reader can prefetch later rows while compute
+    // runs topk on an earlier row — need space for up to Ht * Wt tiles (same worst case as before expert was fused).
+    uint32_t expert_mask_cb_num_pages = Ht * Wt;
+    // top_k pushes Kt value tiles and Kt index tiles per merged-height row with no pops until all Ht rows finish.
+    uint32_t values_and_topk_indices_cb_num_pages = Ht * Kt;
+    // Index tiles from reader track input rows; allow full prefetch same as expert.
+    uint32_t index_from_reader_cb_num_pages = Ht * Wt;
     // for streaming in input
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;
@@ -64,21 +76,22 @@ MoeProgramFactory::cached_program_t MoeProgramFactory::create(
     // tiles of space
     uint32_t input_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig input_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_in_units * input_tile_size, {{input_cb_index, input_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            std::max(cb_in_units, Ht * Wt) * input_tile_size, {{input_cb_index, input_cb_data_format}})
             .set_page_size(input_cb_index, input_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core, input_cb_config);
 
     uint32_t expert_mask_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig expert_mask_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_in_units * expert_mask_tile_size, {{expert_mask_cb_index, expert_mask_cb_data_format}})
+            expert_mask_cb_num_pages * expert_mask_tile_size, {{expert_mask_cb_index, expert_mask_cb_data_format}})
             .set_page_size(expert_mask_cb_index, expert_mask_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core, expert_mask_cb_config);
 
     uint32_t topk_mask_cb_index = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig topk_mask_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_in_units * topk_mask_tile_size, {{topk_mask_cb_index, topk_mask_cb_data_format}})
+            topk_mask_cb_num_pages * topk_mask_tile_size, {{topk_mask_cb_index, topk_mask_cb_data_format}})
             .set_page_size(topk_mask_cb_index, topk_mask_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core, topk_mask_cb_config);
 
@@ -94,7 +107,8 @@ MoeProgramFactory::cached_program_t MoeProgramFactory::create(
     // tiles of space This CB carries the indices that are created in the reader kernel
     uint32_t index_cb_index = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig index_input_intermed0_config =
-        tt::tt_metal::CircularBufferConfig(cb_in_units * index_tile_size, {{index_cb_index, index_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            index_from_reader_cb_num_pages * index_tile_size, {{index_cb_index, index_cb_data_format}})
             .set_page_size(index_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core, index_input_intermed0_config);
 
@@ -115,14 +129,16 @@ MoeProgramFactory::cached_program_t MoeProgramFactory::create(
     // topk values
     uint32_t values_cb_index = tt::CBIndex::c_7;
     tt::tt_metal::CircularBufferConfig values_cb_config =
-        tt::tt_metal::CircularBufferConfig(num_cb_unit * value_tile_size, {{values_cb_index, value_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            values_and_topk_indices_cb_num_pages * value_tile_size, {{values_cb_index, value_cb_data_format}})
             .set_page_size(values_cb_index, value_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core, values_cb_config);
 
     // topk indices
     uint32_t output_ind_cb_index = tt::CBIndex::c_8;
     tt::tt_metal::CircularBufferConfig output_ind_cb_config =
-        tt::tt_metal::CircularBufferConfig(num_cb_unit * index_tile_size, {{output_ind_cb_index, index_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            values_and_topk_indices_cb_num_pages * index_tile_size, {{output_ind_cb_index, index_cb_data_format}})
             .set_page_size(output_ind_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core, output_ind_cb_config);
 

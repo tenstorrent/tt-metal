@@ -82,7 +82,17 @@ void kernel_main() {
     uint32_t tile_id_topk = 0;
     uint32_t tile_id_expert = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
-        // input
+        // Expert mask first so compute can wait expert then input for this merged-height row without deadlock.
+        cb_expert.reserve_back(Wt);
+        for (uint32_t j = 0; j < Wt; ++j) {
+            noc.async_read(
+                s2, cb_expert, tile_bytes_expert, {.page_id = tile_id_expert}, {.offset_bytes = j * tile_bytes_expert});
+            tile_id_expert++;
+        }
+        noc.async_read_barrier();
+        cb_expert.push_back(Wt);
+
+        // input + per-tile indices (same order as before)
         cb_in0.reserve_back(Wt);
         for (uint32_t j = 0; j < Wt; ++j) {
             noc.async_read(s0, cb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = j * tile_bytes_input});
@@ -101,15 +111,5 @@ void kernel_main() {
         }
         noc.async_read_barrier();
         cb_topk.push_back(Kt);
-
-        // expert mask
-        cb_expert.reserve_back(Wt);
-        for (uint32_t j = 0; j < Wt; ++j) {
-            noc.async_read(
-                s2, cb_expert, tile_bytes_expert, {.page_id = tile_id_expert}, {.offset_bytes = j * tile_bytes_expert});
-            tile_id_expert++;
-        }
-        noc.async_read_barrier();
-        cb_expert.push_back(Wt);
     }
 }

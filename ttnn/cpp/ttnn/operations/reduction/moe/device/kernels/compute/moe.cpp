@@ -82,6 +82,31 @@ void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     }
     cb_pop_front(in1_cb, cols);
 }
+
+// One merged-height row: Wt input tiles + Wt expert mask tiles (ROW broadcast), same math as one row of
+// add_block_bcast_rows_inplace(..., rows=Ht, cols=Wt) but matches reader streaming one row at a time.
+void add_block_bcast_rows_one_merged_ht_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t cols, bool first_call) {
+    const uint32_t num_tiles = cols;
+    if (first_call) {
+        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_cb, in1_cb, in0_cb);
+    } else {
+        reconfig_data_format(in0_cb, in1_cb);
+        add_bcast_rows_init_short(in0_cb, in1_cb);
+    }
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, cols);
+    for (uint32_t j = 0; j < cols; ++j) {
+        acquire_dst();
+        add_tiles_bcast_rows(in0_cb, in1_cb, 0, j, 0);
+        cb_pop_front(in0_cb, 1);
+        cb_reserve_back(in0_cb, 1);
+        pack_reconfig_data_format(in0_cb);
+        pack_tile(0, in0_cb);
+        cb_push_back(in0_cb, 1);
+        release_dst();
+    }
+    cb_pop_front(in1_cb, cols);
+}
 void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
@@ -212,6 +237,7 @@ template <
     uint32_t logWt,
     uint32_t logk,
     uint32_t input_cb_index,
+    uint32_t expert_mask_cb_index,
     uint32_t index_cb_index,
     uint32_t input_transposed_cb_index,
     uint32_t index_transposed_cb_index,
@@ -228,10 +254,13 @@ void top_k() {
     constexpr uint32_t index_dest_end = 3;
     ckernel::topk_tile_init();
 
-    if (first_call) {
-        transpose_wh_init(input_cb_index, input_transposed_cb_index);
-    }
     for (uint32_t ht = 0; ht < Ht; ++ht) {
+        // Reader pushes expert tiles for this row before input (see reader kernel). Apply the same broadcast add as
+        // the full-tensor path, one merged-height row at a time, then initialize transpose on the first row only.
+        add_block_bcast_rows_one_merged_ht_inplace(input_cb_index, expert_mask_cb_index, Wt, first_call && (ht == 0));
+        if (first_call && ht == 0) {
+            transpose_wh_init(input_cb_index, input_transposed_cb_index);
+        }
         bool ascending = false;
         cb_reserve_back(input_transposed_cb_index, Wt);
         cb_reserve_back(index_transposed_cb_index, Wt);
@@ -385,11 +414,7 @@ void kernel_main() {
 
     constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
-    // mask out invalid experts
-    // TODO: fix the bug that makes this give bad results
-    // add_block_bcast_rows_inplace(input_cb_index, expert_mask_cb_index, Ht,Wt, true);
-
-    // top-k
+    // top-k (applies expert mask per merged-height row before local topk on that row)
     top_k<
         Ht,
         Wt,
@@ -397,6 +422,7 @@ void kernel_main() {
         logWt,
         logk,
         input_cb_index,
+        expert_mask_cb_index,
         index_cb_index,
         input_transposed_cb_index,
         index_transposed_cb_index,
