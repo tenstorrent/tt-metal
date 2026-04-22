@@ -1427,28 +1427,47 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         // Create the kernel object
         std::shared_ptr<Kernel> kernel;
 
+        // Kernel creation APIs accept a "is_metal2_kernel" bool, which fences Metal 2.0 JIT machinery
+        constexpr bool is_metal2_kernel = true;
+
         if (is_gen2_arch()) {
             uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
             if (kernel_spec.is_dm_kernel()) {
                 auto config = MakeQuasarDataMovementConfig(kernel_spec);
                 auto processors = GetDMProcessorSet(DMProcessorMask{(uint8_t)(risc_mask & 0xFF)});
                 kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
-                    kernel_src, node_ranges, config, processors, dfb_handles, named_rtas, named_crtas, args_ns);
+                    kernel_src,
+                    node_ranges,
+                    config,
+                    processors,
+                    is_metal2_kernel,
+                    dfb_handles,
+                    named_rtas,
+                    named_crtas,
+                    args_ns);
             } else {
                 auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
-                    kernel_src, node_ranges, config, processors, dfb_handles, named_rtas, named_crtas, args_ns);
+                    kernel_src,
+                    node_ranges,
+                    config,
+                    processors,
+                    is_metal2_kernel,
+                    dfb_handles,
+                    named_rtas,
+                    named_crtas,
+                    args_ns);
             }
         } else {  // gen1
             if (kernel_spec.is_dm_kernel()) {
                 auto config = MakeGen1DataMovementConfig(kernel_spec);
                 kernel = std::make_shared<DataMovementKernel>(
-                    kernel_src, node_ranges, config, dfb_handles, named_rtas, named_crtas, args_ns);
+                    kernel_src, node_ranges, config, is_metal2_kernel, dfb_handles, named_rtas, named_crtas, args_ns);
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
                 kernel = std::make_shared<ComputeKernel>(
-                    kernel_src, node_ranges, config, dfb_handles, named_rtas, named_crtas, args_ns);
+                    kernel_src, node_ranges, config, is_metal2_kernel, dfb_handles, named_rtas, named_crtas, args_ns);
             }
         }
 

@@ -151,6 +151,7 @@ public:
         return named_common_runtime_args_;
     }
     const std::string& get_args_namespace() const override { return args_namespace_; }
+    bool is_metal2_kernel() const override { return is_metal2_kernel_; }
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     void validate_runtime_args_size(
@@ -202,6 +203,9 @@ protected:
         const std::vector<uint32_t>& compile_args,
         const std::map<std::string, std::string>& defines,
         const std::unordered_map<std::string, uint32_t>& named_compile_args,
+        // Metal 2.0-only parameters below. is_metal2_kernel leads the group so the
+        // boundary is obvious at a glance; the others are ignored when it is false.
+        bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {},
@@ -216,10 +220,12 @@ protected:
     CoreRangeSet core_range_set_;
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
+    // Metal 2.0-only members below. is_metal2_kernel_ leads the group; the others are
+    // populated only when is_metal2_kernel_ is true. Order of named_runtime_args_ /
+    // named_common_runtime_args_ determines byte-offset layout in the dispatch buffer;
+    // args_namespace_ controls the C++ namespace emitted into kernel_args_generated.h.
+    const bool is_metal2_kernel_;
     const DataflowBufferLocalAccessorHandleMap dataflow_buffer_local_accessor_handles_;
-    // Metal 2.0 named-args schema. Order of these vectors determines byte-offset layout
-    // in the dispatch buffer; args_namespace_ controls the C++ namespace emitted into
-    // kernel_args_generated.h.
     const std::vector<std::string> named_runtime_args_;
     const std::vector<std::string> named_common_runtime_args_;
     const std::string args_namespace_;
@@ -254,6 +260,8 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const DataMovementConfig& config,
+        // Metal 2.0-only parameters below.
+        bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {},
@@ -266,6 +274,7 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
+            is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
             named_runtime_args,
             named_common_runtime_args,
@@ -383,6 +392,8 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const ComputeConfig& config,
+        // Metal 2.0-only parameters below.
+        bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {},
@@ -395,6 +406,7 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
+            is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
             named_runtime_args,
             named_common_runtime_args,
@@ -461,6 +473,8 @@ public:
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
         const std::set<DataMovementProcessor>& dm_processors,
+        // Metal 2.0-only parameters below.
+        bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {},
@@ -473,6 +487,7 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
+            is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
             named_runtime_args,
             named_common_runtime_args,
@@ -525,6 +540,8 @@ public:
         const CoreRangeSet& cr_set,
         const QuasarComputeConfig& config,
         const std::set<QuasarComputeProcessor>& compute_processors,
+        // Metal 2.0-only parameters below.
+        bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {},
@@ -537,6 +554,7 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
+            is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
             named_runtime_args,
             named_common_runtime_args,

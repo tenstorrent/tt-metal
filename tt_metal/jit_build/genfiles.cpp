@@ -61,11 +61,14 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
 }
 
 // Generates TRISC prolog: #define + includes for JIT-generated headers and defines_generated.h
-string build_trisc_prolog(const char* trisc_define) {
+// Kernels using Metal 2.0 get additional JIT-generated headers (not included for legacy kernels)
+string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
-    prolog << "#include \"kernel_bindings_generated.h\"\n";
-    prolog << "#include \"kernel_args_generated.h\"\n";
+    if (is_metal2_kernel) {
+        prolog << "#include \"kernel_bindings_generated.h\"\n";
+        prolog << "#include \"kernel_args_generated.h\"\n";
+    }
     prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
@@ -199,14 +202,19 @@ void jit_build_genfiles_kernel_include(
 
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
 
-    write_kernel_bindings_generated_header(out_dir, settings);
-    write_kernel_args_generated_header(out_dir, settings);
+    // Metal 2.0 generated headers and their includes are emitted only for Metal 2.0 kernels.
+    // Legacy kernels created via the old host API are fenced out of this code path.
+    const bool is_metal2 = settings.is_metal2_kernel();
+    string kernel_header_content;
+    if (is_metal2) {
+        write_kernel_bindings_generated_header(out_dir, settings);
+        write_kernel_args_generated_header(out_dir, settings);
+        kernel_header_content =
+            string("#include \"kernel_bindings_generated.h\"\n") + string("#include \"kernel_args_generated.h\"\n");
+    }
+    kernel_header_content += get_kernel_source_to_include(kernel_src);
 
     string kernel_header = out_dir + "kernel_includes.hpp";
-
-    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
-    const string kernel_header_content = string("#include \"kernel_bindings_generated.h\"\n") +
-                                         string("#include \"kernel_args_generated.h\"\n") + kernel_src_to_include;
     write_file(kernel_header, kernel_header_content);
 }
 
@@ -217,8 +225,12 @@ void jit_build_genfiles_triscs_src(
 
     const string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
 
-    write_kernel_bindings_generated_header(out_dir, settings);
-    write_kernel_args_generated_header(out_dir, settings);
+    // Metal 2.0 generated headers are emitted and referenced only for Metal 2.0 kernels.
+    const bool is_metal2 = settings.is_metal2_kernel();
+    if (is_metal2) {
+        write_kernel_bindings_generated_header(out_dir, settings);
+        write_kernel_args_generated_header(out_dir, settings);
+    }
 
     const string unpack_cpp = out_dir + "chlkc_unpack.cpp";
     const string math_cpp = out_dir + "chlkc_math.cpp";
@@ -226,10 +238,10 @@ void jit_build_genfiles_triscs_src(
     const string isolate_sfpu_cpp = out_dir + "chlkc_isolate_sfpu.cpp";
 
     // Build prologs for each TRISC
-    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK");
-    const string math_prolog = build_trisc_prolog("TRISC_MATH");
-    const string pack_prolog = build_trisc_prolog("TRISC_PACK");
-    const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU");
+    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK", is_metal2);
+    const string math_prolog = build_trisc_prolog("TRISC_MATH", is_metal2);
+    const string pack_prolog = build_trisc_prolog("TRISC_PACK", is_metal2);
+    const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU", is_metal2);
 
     // All TRISCs get the same kernel source (differentiated by TRISC_* defines)
     const string kernel_src_to_include = get_kernel_source_to_include(kernel_src);
