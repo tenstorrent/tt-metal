@@ -5,7 +5,6 @@ import copy
 import math
 import warnings
 from dataclasses import dataclass
-from dataclasses import replace as _dataclass_replace
 from enum import Enum
 from typing import Callable, Dict, List, Optional, Set, Union
 
@@ -400,10 +399,7 @@ class OperandSpecs:
 
     def __post_init__(self) -> None:
         if self.spec_B is None:
-            # Copy the top-level spec so spec_A and spec_B are distinct
-            # StimuliSpec instances. Nested fields (e.g. face_specs) are
-            # still shared because this is a shallow copy.
-            self.spec_B = _dataclass_replace(self.spec_A)
+            self.spec_B = copy.deepcopy(self.spec_A)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1072,17 +1068,23 @@ def _get_integer_bounds(stimuli_format: DataFormat) -> tuple[int, int]:
     """Return the valid integer range (min, max) inclusive for *stimuli_format*."""
     bounds: Dict[DataFormat, tuple[int, int]] = {
         DataFormat.Int8: (torch.iinfo(torch.int8).min + 1, torch.iinfo(torch.int8).max),
-        DataFormat.UInt8: (0, 255),
+        DataFormat.UInt8: (torch.iinfo(torch.uint8).min, torch.iinfo(torch.uint8).max),
         DataFormat.Int16: (
             torch.iinfo(torch.int16).min + 1,
             torch.iinfo(torch.int16).max,
         ),
-        DataFormat.UInt16: (0, 65535),
+        DataFormat.UInt16: (
+            torch.iinfo(torch.uint16).min,
+            torch.iinfo(torch.uint16).max,
+        ),
         DataFormat.Int32: (
             torch.iinfo(torch.int32).min + 1,
             torch.iinfo(torch.int32).max,
         ),
-        DataFormat.UInt32: (0, 2**32 - 1),
+        DataFormat.UInt32: (
+            torch.iinfo(torch.uint32).min,
+            torch.iinfo(torch.uint32).max,
+        ),
     }
     return bounds.get(
         stimuli_format, (torch.iinfo(torch.int8).min + 1, torch.iinfo(torch.int8).max)
@@ -1454,19 +1456,19 @@ def _generate_source_tensor_v2(
 
 
 def _default_bfp8b_face(
-    size: int, dtype: torch.dtype, gen: Optional[torch.Generator]
+    size: int, dtype: torch.dtype, gen: Optional[torch.Generator] = None
 ) -> torch.Tensor:
-    integer_part = torch.randint(0, 3, (size,))
-    fraction = torch.randint(0, 16, (size,)).to(dtype=torch.bfloat16) / 16.0
-    return integer_part.to(dtype=torch.bfloat16) + fraction
+    integer_part = torch.randint(0, 3, (size,), generator=gen)
+    fraction = torch.randint(0, 16, (size,), generator=gen).to(torch.bfloat16) / 16.0
+    return integer_part.to(torch.bfloat16) + fraction
 
 
 def _default_bfp4b_face(
-    size: int, dtype: torch.dtype, gen: Optional[torch.Generator]
+    size: int, dtype: torch.dtype, gen: Optional[torch.Generator] = None
 ) -> torch.Tensor:
-    integer_part = torch.randint(0, 3, (size,))
-    fraction = torch.randint(0, 8, (size,)).to(dtype=torch.bfloat16) / 8.0
-    return integer_part.to(dtype=torch.bfloat16) + fraction
+    integer_part = torch.randint(0, 3, (size,), generator=gen)
+    fraction = torch.randint(0, 8, (size,), generator=gen).to(torch.bfloat16) / 8.0
+    return integer_part.to(torch.bfloat16) + fraction
 
 
 def _default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
