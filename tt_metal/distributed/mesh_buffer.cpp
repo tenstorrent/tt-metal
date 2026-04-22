@@ -169,9 +169,19 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 }
 
 void MeshBuffer::initialize_device_buffers() {
-    auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
+    // If we have a backing buffer, create lightweight device views instead of full Buffer::create.
+    // For per-core allocation or externally-owned buffers, fall back to the full path.
+    auto* backing = get_backing_buffer();
+    bool use_fast_path =
+        backing != nullptr && !per_core_allocation::is_per_core_allocation(device_local_config_.sharding_args);
+
+    auto init_device_buffer_at_address = [this, backing, use_fast_path](const MeshCoordinate& coord) {
+        auto* physical_device = device()->impl().get_device(coord);
+        if (use_fast_path) {
+            return Buffer::create_device_view(physical_device, *backing);
+        }
         std::shared_ptr<Buffer> buffer = Buffer::create(
-            device()->impl().get_device(coord),
+            physical_device,
             address_,
             device_local_size_,
             device_local_config_.page_size,

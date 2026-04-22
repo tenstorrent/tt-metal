@@ -89,21 +89,26 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
 
     // ---- Kernels ----
 
-    const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/";
+    static constexpr const char* READER_KERNEL_PATH =
+        "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/reader_bernoulli.cpp";
+    static constexpr const char* WRITER_KERNEL_PATH =
+        "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/writer_bernoulli.cpp";
+    static constexpr const char* COMPUTE_KERNEL_PATH =
+        "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/compute_bernoulli.cpp";
 
     // Reader kernel
-    std::vector<uint32_t> reader_compile_time_args{in_cb_id};
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args{in_cb_id};
     TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
-    reader_desc.kernel_source = kernels_dir_path + "reader_bernoulli.cpp";
+    reader_desc.kernel_source = READER_KERNEL_PATH;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = reader_compile_time_args;
     reader_desc.config = ReaderConfigDescriptor{};
 
     // Writer kernel
-    std::vector<uint32_t> writer_compile_time_args{in_cb_id, intermed_cb_id, intermed1_cb_id};
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args{in_cb_id, intermed_cb_id, intermed1_cb_id};
     TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     KernelDescriptor::Defines writer_defines;
@@ -119,7 +124,7 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
     }
 
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kernels_dir_path + "writer_bernoulli.cpp";
+    writer_desc.kernel_source = WRITER_KERNEL_PATH;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = writer_compile_time_args;
@@ -127,13 +132,13 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
 
     // Compute kernel
-    const std::vector<uint32_t> compute_compile_time_args{intermed_cb_id};
+    const KernelDescriptor::CompileTimeArgs compute_compile_time_args{intermed_cb_id};
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     KernelDescriptor compute_desc;
-    compute_desc.kernel_source = kernels_dir_path + "compute_bernoulli.cpp";
+    compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
     compute_desc.compile_time_args = compute_compile_time_args;

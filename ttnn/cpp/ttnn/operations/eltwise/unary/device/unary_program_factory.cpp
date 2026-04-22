@@ -211,8 +211,8 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     reader_defines["SRC_SHARDED"] = src_sharded ? "1" : "0";
     reader_defines["RM_INTERLEAVED"] = rm_interleaved ? "1" : "0";
 
-    std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> reader_common_runtime_args;
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args;
+    KernelDescriptor::CommonRuntimeArgs reader_common_runtime_args;
     TensorAccessorArgs(*src_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_compile_time_args, reader_common_runtime_args);
 
@@ -230,8 +230,8 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     writer_defines["DST_SHARDED"] = dst_sharded ? "1" : "0";
     writer_defines["RM_INTERLEAVED"] = rm_interleaved ? "1" : "0";
 
-    std::vector<uint32_t> writer_compile_time_args;
-    std::vector<uint32_t> writer_common_runtime_args;
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args;
+    KernelDescriptor::CommonRuntimeArgs writer_common_runtime_args;
     TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_compile_time_args, writer_common_runtime_args);
 

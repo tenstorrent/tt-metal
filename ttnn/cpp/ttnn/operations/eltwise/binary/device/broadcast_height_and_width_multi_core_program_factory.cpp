@@ -157,7 +157,7 @@ tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::BroadcastHeightAndWidthMu
     // ---- Kernel compile-time args and defines ----
 
     std::map<std::string, std::string> reader_defines;
-    std::vector<uint32_t> reader_compile_time_args;
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args;
     std::map<std::string, std::string> bcast_compute_defines = bcast_op_utils::get_defines(BcastOpDim::HW, bcast_math);
     if (bnc1) {
         reader_defines["BCAST_SCALAR"] = "1";
@@ -186,7 +186,7 @@ tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::BroadcastHeightAndWidthMu
     if (output_sharded) {
         writer_defines["OUT_SHARDED"] = "1";
     }
-    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {output_cb_index};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // ---- Reader kernel ----

@@ -82,11 +82,11 @@ ProgramDescriptor TanhBwProgramFactory::create_descriptor(
 
     // ---- Kernel compile-time args ----
 
-    std::vector<uint32_t> reader_compile_time_args = {0};
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {0};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     bool fp32_dest_acc_en = (dst_cb_data_format == tt::DataFormat::Float32) ||

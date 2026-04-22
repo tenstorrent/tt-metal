@@ -270,7 +270,7 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
 
     // --- Reader Kernel Descriptor ---
     // CB index via named compile-time arg (essential for fusion CB remapping).
-    std::vector<uint32_t> reader_compile_time_args = {num_dims};
+    tt::tt_metal::KernelDescriptor::CompileTimeArgs reader_compile_time_args = {num_dims};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     // Reader common runtime args: [src_addr, num_unpadded_per_dim..., num_padded_per_dim...]
@@ -285,7 +285,7 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
     accumulated_total_per_dim[0] = num_total_Xt;
     accumulated_total_per_dim[1] = num_total_Yt * num_total_Xt;
 
-    std::vector<uint32_t> reader_common_args(1 + (num_dims * 2));
+    tt::tt_metal::KernelDescriptor::CommonRuntimeArgs reader_common_args(1 + (num_dims * 2));
     reader_common_args[0] = src0_buffer->address();
     uint32_t* num_unpadded_tiles_per_dim = reader_common_args.data() + 1;
     uint32_t* num_padded_tiles_per_dim = num_unpadded_tiles_per_dim + num_dims;
@@ -315,12 +315,12 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             // no-op core
-            std::vector<uint32_t> reader_args(2 + num_dims, 0);
+            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs reader_args(2 + num_dims, 0);
             reader_runtime_args.emplace_back(core, std::move(reader_args));
             continue;
         }
 
-        std::vector<uint32_t> reader_args(2 + num_dims);
+        tt::tt_metal::KernelDescriptor::CoreRuntimeArgs reader_args(2 + num_dims);
         // Compute per-dim indices for this core's starting position
         reader_args[2] = num_tiles_written % num_unpadded_tiles_per_dim[0];
         uint32_t unpadded_written = num_tiles_written / num_unpadded_tiles_per_dim[0];
@@ -352,7 +352,7 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
 
     // --- Writer Kernel Descriptor ---
     // CB index via named compile-time arg (essential for fusion CB remapping).
-    std::vector<uint32_t> writer_compile_time_args = {};
+    tt::tt_metal::KernelDescriptor::CompileTimeArgs writer_compile_time_args = {};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Writer per-core runtime args: [dst_addr, num_tiles, start_id]
@@ -366,12 +366,14 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             // no-op core
-            writer_runtime_args.emplace_back(core, std::vector<uint32_t>{0, 0, 0});
+            writer_runtime_args.emplace_back(core, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{0, 0, 0});
             continue;
         }
 
         writer_runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+            core,
+            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
+                dst_buffer->address(), num_tiles_per_core, num_tiles_written});
         num_tiles_written += num_tiles_per_core;
     }
 

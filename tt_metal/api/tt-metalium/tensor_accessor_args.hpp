@@ -36,8 +36,10 @@ public:
     static TensorAccessorArgs create_dram_interleaved();
     static TensorAccessorArgs create_l1_interleaved();
 
-    void append_to(std::vector<uint32_t>& compile_time_args) const;
-    void append_to(std::vector<uint32_t>& compile_time_args, std::vector<uint32_t>& common_runtime_args) const;
+    template <typename ArgsVec>
+    void append_to(ArgsVec& compile_time_args) const;
+    template <typename ArgsVec1, typename ArgsVec2>
+    void append_to(ArgsVec1& compile_time_args, ArgsVec2& common_runtime_args) const;
 
     std::vector<uint32_t> get_compile_time_args() const;
     std::vector<uint32_t> get_common_runtime_args() const;

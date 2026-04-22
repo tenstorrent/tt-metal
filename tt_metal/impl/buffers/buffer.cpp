@@ -379,6 +379,26 @@ std::shared_ptr<Buffer> Buffer::create(
     return buffer;
 }
 
+std::shared_ptr<Buffer> Buffer::create_device_view(IDevice* device, const Buffer& source) {
+    // Route through the standard Buffer::create(...) factory so all side effects of
+    // construction are preserved — validation, LightMetal CaptureBufferCreate trace,
+    // Inspector global-id registration. The earlier lightweight ctor skipped these,
+    // which broke per-device alias buffer tracking and caused CCL all-gather/all-reduce
+    // hangs on multi-card Blackhole. The address-supplied form of Buffer::create()
+    // doesn't allocate (just sets address_ and allocation_status_), so the cost is
+    // essentially a few TT_FATAL checks plus one Inspector trace call — a few
+    // hundred nanoseconds, well within the noise of the descriptor-prep perf budget.
+    return Buffer::create(
+        device,
+        source.address_,
+        source.size_,
+        source.page_size_,
+        source.buffer_type_,
+        BufferShardingArgs(source.buffer_distribution_spec_, source.shard_spec_, source.buffer_layout_),
+        source.bottom_up_,
+        /*sub_device_id=*/std::nullopt);
+}
+
 std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
     TT_FATAL(region.offset % page_size() == 0, "Region offset must be a multiple of page size");
     TT_FATAL(region.size % page_size() == 0, "Region size must be a multiple of page size");
