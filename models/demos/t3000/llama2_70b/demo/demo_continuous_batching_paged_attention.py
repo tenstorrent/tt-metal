@@ -196,7 +196,7 @@ def run_decode(
 
     sampling_func = get_sampling_func(data_args.top_k, data_args.top_p, data_args.temperature)
 
-    # intialize continuous batching data structures
+    # initialize continuous batching data structures
     prompts_q = Queue()
     output_q = []
     for user_id, (p, t) in enumerate(zip(prompts, prompt_tokens)):
