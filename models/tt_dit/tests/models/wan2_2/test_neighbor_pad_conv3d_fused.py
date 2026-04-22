@@ -111,6 +111,7 @@ def _run_one_seed(
     seed,
     force_pipelining=False,
     run_standalone=False,
+    use_ones_input=False,
 ):
     """Run one inference call with a specific seed; return (torch_output, tt_fused_output, tt_standalone_output)."""
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
@@ -175,7 +176,11 @@ def _run_one_seed(
     )
 
     torch.manual_seed(seed + 999)
-    torch_input = torch.randn(B, C_in, T, H, W, dtype=torch_dtype)
+    if use_ones_input:
+        torch_input = torch.ones(B, C_in, T, H, W, dtype=torch_dtype)
+        logger.info("Using all-ones input (replicates decoder bug-triggering condition)")
+    else:
+        torch_input = torch.randn(B, C_in, T, H, W, dtype=torch_dtype)
 
     tt_input = torch_input.permute(0, 2, 3, 4, 1)
     tt_input = conv_pad_in_channels(tt_input)
@@ -198,8 +203,11 @@ def _run_one_seed(
     # --- Run standalone NP + conv3d FIRST (clean device state) ---
     standalone_output_torch = None
     if run_standalone:
-        torch.manual_seed(seed + 999)
-        torch_input_sa = torch.randn(B, C_in, T, H, W, dtype=torch_dtype)
+        if use_ones_input:
+            torch_input_sa = torch.ones(B, C_in, T, H, W, dtype=torch_dtype)
+        else:
+            torch.manual_seed(seed + 999)
+            torch_input_sa = torch.randn(B, C_in, T, H, W, dtype=torch_dtype)
         tt_input_sa = torch_input_sa.permute(0, 2, 3, 4, 1)
         tt_input_sa = conv_pad_in_channels(tt_input_sa)
         tt_input_sa, _ = conv_pad_height(tt_input_sa, parallel_config.height_parallel.factor)
@@ -374,6 +382,24 @@ def _diagnose_pcc_failure(torch_ref, tt_out, h_factor, w_factor, pad_h=1, pad_w=
         (1, 384, 192, 41, 184, 320, (1, 3, 3), (0, 1, 1), (4, 8), 0, 1, 2),
         (1, 384, 192, 81, 368, 640, (1, 3, 3), (0, 1, 1), (4, 8), 0, 1, 2),
         (1, 192, 96, 81, 736, 1280, (1, 3, 3), (0, 1, 1), (4, 8), 0, 1, 2),
+        # --- BH 2x2 480p WanCausalConv3d (3,3,3) shapes ---
+        # T_param = T_latent_chunk (T_input_to_fused = T_param + 2 zero-pad causal frames).
+        # For t_chunk_size=7, cached: T_param=7 → T_input=9 (matches decoder).
+        # conv_in: C_in=32, C_in_block=32 → 1 C_in block (baseline, should be clean)
+        (1, 32, 384, 7, 60, 104, 3, 1, (2, 2), 0, 1, 1),
+        # mid_block resnet: C_in=384, C_in_block=96 → 4 C_in blocks (bug condition)
+        (1, 384, 384, 7, 60, 104, 3, 1, (2, 2), 0, 1, 1),
+        # up1_res (stage1): C_in=384, T_res=16, C_in_block=96 → 4 C_in blocks
+        (1, 384, 384, 14, 120, 208, 3, 1, (2, 2), 0, 1, 1),
+        # up2_res (stage2): C_in=192, T_res=30, C_in_block=96 → 2 C_in blocks
+        (1, 192, 192, 28, 240, 416, 3, 1, (2, 2), 0, 1, 1),
+        # up3_res (stage3, full res): C_in=96, C_in_block=96 → 1 C_in block (should be clean)
+        (1, 96, 96, 28, 480, 832, 3, 1, (2, 2), 0, 1, 1),
+        # --- BH 2x4 480p WanCausalConv3d (3,3,3) shapes (requires 8-device 2x4 mesh) ---
+        # mid_block resnet: C_in=384, C_in_block=96 → 4 C_in blocks, H_out_block=32 (exact table)
+        (1, 384, 384, 7, 60, 104, 3, 1, (2, 4), 0, 1, 1),
+        # up1_res (stage1): C_in=384, T_res=16
+        (1, 384, 384, 14, 120, 208, 3, 1, (2, 4), 0, 1, 1),
     ],
     ids=[
         "conv_in_4x8",
@@ -386,6 +412,13 @@ def _diagnose_pcc_failure(torch_ref, tt_out, h_factor, w_factor, pad_h=1, pad_w=
         "up0_spatial_4x8",
         "up1_spatial_4x8",
         "up2_spatial_4x8",
+        "conv_in_2x2_480p",
+        "mid_res_2x2_480p",
+        "up1_res_2x2_480p",
+        "up2_res_2x2_480p",
+        "up3_res_2x2_480p",
+        "mid_res_2x4_480p",
+        "up1_res_2x4_480p",
     ],
     indirect=["mesh_device"],
 )
@@ -552,4 +585,89 @@ def test_fused_production_shapes(
             f"Fused op diverges from standalone NP+conv3d."
         )
 
+    logger.info("PASSED")
+
+
+# ---------------------------------------------------------------------------
+# All-ones input seam test
+# Reproduces the exact bug condition: all-ones input exposes fused vs standalone
+# boundary divergence that random input masks (PCC averages it out).
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "B, C_in, C_out, T, H, W, kernel_size, padding, mesh_device, h_axis, w_axis, num_links",
+    [
+        # --- 2x2 480p mid_block resnet: 4 C_in blocks, T_param=7 → T_input=9 (matches decoder) ---
+        (1, 384, 384, 7, 60, 104, 3, 1, (2, 2), 0, 1, 1),
+        # --- conv_in (1 C_in block, should be clean baseline) ---
+        (1, 32, 384, 7, 60, 104, 3, 1, (2, 2), 0, 1, 1),
+        # --- 2x2 with W=52: W_dev=26 per device matches the 2x4 480p geometry ---
+        # On a 2x4 mesh, W=104 → W_dev=26. Here we use W=52 on 2x2 to get W_dev=26.
+        (1, 384, 384, 7, 60, 52, 3, 1, (2, 2), 0, 1, 1),
+    ],
+    ids=["mid_res_2x2_480p_ones", "conv_in_2x2_480p_ones", "mid_res_2x2_Wdev26_ones"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16], ids=["bf16"])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.timeout(300)
+def test_fused_ones_input_seam(
+    mesh_device, B, C_in, C_out, T, H, W, kernel_size, padding, h_axis, w_axis, num_links, dtype
+):
+    """Fused NP+Conv3d with all-ones input vs standalone: boundary PCC must be 100%.
+
+    With all-ones input any seam artifact manifests as a detectable value
+    discontinuity at W-boundaries (rather than being buried in random noise).
+    This test reproduces the full-decoder bug condition in a single-layer context.
+    """
+    torch_model, ccl_manager, parallel_config, h_factor, w_factor = _make_model_and_manager(
+        mesh_device, B, C_in, C_out, kernel_size, padding, h_axis, w_axis, num_links, dtype
+    )
+
+    torch_ref, tt_out, standalone_out = _run_one_seed(
+        mesh_device,
+        torch_model,
+        ccl_manager,
+        parallel_config,
+        B,
+        C_in,
+        C_out,
+        T,
+        H,
+        W,
+        kernel_size,
+        padding,
+        h_axis,
+        w_axis,
+        h_factor,
+        w_factor,
+        dtype,
+        seed=0,
+        force_pipelining=True,
+        run_standalone=True,
+        use_ones_input=True,
+    )
+
+    pad_h = padding[1] if isinstance(padding, tuple) else padding
+    pad_w = padding[2] if isinstance(padding, tuple) else padding
+    bnd_mask = _boundary_mask(H, W, h_factor, w_factor, pad_h, pad_w)
+
+    if standalone_out is not None:
+        fvs_global_pcc = _compute_pcc(standalone_out, tt_out)
+        bnd_fused = tt_out[..., bnd_mask].flatten() if bnd_mask.any() else None
+        bnd_sa = standalone_out[..., bnd_mask].flatten() if bnd_mask.any() else None
+        fvs_bnd_pcc = _compute_pcc(bnd_sa, bnd_fused) if bnd_fused is not None and bnd_fused.numel() > 1 else 1.0
+        max_diff_bnd = (tt_out - standalone_out).abs()[..., bnd_mask].max().item() if bnd_mask.any() else 0.0
+        logger.info(
+            f"=== ONES INPUT — FUSED vs STANDALONE: Global={fvs_global_pcc*100:.4f}%  "
+            f"Boundary={fvs_bnd_pcc*100:.4f}%  max_diff_bnd={max_diff_bnd:.6g} ==="
+        )
+        if max_diff_bnd > 0:
+            logger.error(
+                f"SEAM DETECTED with all-ones input! max_diff at boundary = {max_diff_bnd:.6g}. "
+                f"Fused op produces boundary errors invisible to random-input PCC."
+            )
+        assert max_diff_bnd == 0, (
+            f"Fused vs standalone boundary max_diff={max_diff_bnd:.6g} > 0 with all-ones input. "
+            f"Seam artifact confirmed in fused path."
+        )
     logger.info("PASSED")

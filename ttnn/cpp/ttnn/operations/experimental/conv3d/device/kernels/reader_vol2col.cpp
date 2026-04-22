@@ -608,6 +608,12 @@ void kernel_main() {
 #if defined(CONV3D_INPUT_PROGRESS_SEM)
     if (input_progress_signal_count > 0) {
         noc_semaphore_wait_min(progress_sem_ptr, input_progress_signal_count);
+        // Reset so the next dispatch starts at 0 and must wait again.
+        // The W-readers signal this core's L1 address, but
+        // reset_global_semaphore_value() only resets the NP fabric cores (ccl_cores),
+        // not the conv3d reader cores. Without this reset the reader skips the wait
+        // on every subsequent dispatch, racing against the W-halo writes.
+        noc_semaphore_set(progress_sem_ptr, 0);
     }
 #endif
     // Process each batch element

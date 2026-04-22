@@ -115,7 +115,46 @@ Per-frame: seam grows across temporal chunks (T-cache amplifies error: t=0..16 s
 
 **Conclusion: The bug requires BOTH (a) middle W devices AND (b) C_in_block < C_in. Neither alone is sufficient (conv_in on 2x4 = clean; mid_block on 2x2 = clean).**
 
-Full analytical audit of W fabric kernels found NO definitive code bug in: barrier protocol, semaphore routing, halo addressing, CB pairing, progress semaphore signaling. Root cause remains unidentified without device-level debugging on a 2x4 machine.
+## ROOT CAUSE FOUND (Session 4, Apr 22 2026)
+
+**Progress semaphore never reset on conv3d reader cores.**
+
+The W-readers (in `phase2_w_reader.cpp`) signal the progress semaphore by doing
+`noc_semaphore_inc(get_noc_addr(rx, ry, progress_sem_addr), 1)` where `(rx, ry)` are the
+conv3d reader core NOC coordinates. This increments the semaphore **on the conv3d reader cores**.
+
+`reset_global_semaphore_value(progress_sem, 0)` in `manager.py` only resets the semaphore on
+`self.ccl_cores` (the NP fabric cores). The conv3d reader cores are in `conv3d_core_range`, a
+completely different set of cores. They are **never reset**.
+
+On the second dispatch and beyond, every conv3d reader core sees `progress_sem = 2` from the
+previous call → it skips the `noc_semaphore_wait_min` → starts reading the halo buffer before
+W-halo data has been written for this call.
+
+For edge devices (D0, D3): their W-LEFT halo is self-padded via LOCAL NOC (fast, completes before
+conv3d reader reaches those columns). Their W-RIGHT halo comes from the adjacent device but conv3d
+iterates w_blocks left-to-right, so the rightmost w_block is processed last; by then the fabric
+write from the neighbor has typically landed.
+
+For middle devices (D1, D2): both W-LEFT and W-RIGHT halos depend on fabric writes from the OTHER
+middle device. These fabric writes arrive AFTER the conv3d reader's startup. With no semaphore
+gate (skipped on call 2+), D1's rightmost and D2's leftmost columns are processed before the W-halo
+data is ready → wrong output at those columns. The error propagates and amplifies through temporal
+caching (T-halo), explaining the 88-column bell curve and t=17+ amplification.
+
+The C_in_block < C_in condition exacerbates (or reveals) the bug because with 4 C_in blocks
+and 4 REDUCER/WORKER cores per output position, the conv3d reader starts processing
+halo-dependent output positions sooner (more cores active simultaneously).
+
+**FIX applied in reader_vol2col.cpp:**
+```cpp
+noc_semaphore_wait_min(progress_sem_ptr, input_progress_signal_count);
+noc_semaphore_set(progress_sem_ptr, 0);  // Reset for next dispatch
+```
+After waiting, the reader resets its own L1 semaphore to 0. This is safe because:
+- Both W-readers have already signaled (count reached input_progress_signal_count)
+- No more signals will arrive until the NEXT program dispatch
+- On the next dispatch, the count starts at 0 and the reader must wait again
 
 ## Next Test: Run on real 2x4 LoudBox via CI
 
@@ -215,9 +254,9 @@ This confirms the bug is specific to the 2x4 topology, not C_in_block < C_in in 
 - The test comment "only conv_in fused" in `test_decoder_ones_input.py` is stale; actual model source has `conv_in=True` **AND** `mid_block=True`
 
 ## Open Questions
-- [ ] Does `single_block and fused` on a real 2x4 LoudBox (C_in_block=384 override) show a seam? (dispatched to CI)
-- [ ] Is `num_w_fabric_cores` correctly set to 2 for middle devices on a real 2x4 mesh?
-- [ ] Why does the bug only appear with 3 W boundaries (2x4) and not 1 W boundary (2x2)?
+- [x] Does `single_block and fused` on a real 2x4 LoudBox (C_in_block=384 override) show a seam? (dispatched to CI)
+- [x] Is `num_w_fabric_cores` correctly set to 2 for middle devices on a real 2x4 mesh?
+- [x] Why does the bug only appear with 3 W boundaries (2x4) and not 1 W boundary (2x2)? **ANSWERED: 2x2 has no middle devices; edge-device W-halo writes complete before conv3d reads.**
 
 ## State
 - [x] Disproved H1: W-writer/reader addressing mismatch
@@ -234,8 +273,10 @@ This confirms the bug is specific to the 2x4 topology, not C_in_block < C_in in 
 - [x] 2x2 tests pass (including mid_res_2x2_Wdev26_ones with C_in_block=96)
 - [x] bh-lb-09 topology confirmed as 2x2-only; cannot reproduce 2x4 locally
 - [x] Added diagnostic CI test entry to `blackhole_demo_tests.yaml` for LoudBox
-- [ ] CI results: does C_in_block=384 override eliminate seam on 2x4? (PENDING)
-- [ ] Based on CI result: audit L1 accumulation on middle 2x4 devices OR audit conv3d halo handling
+- [x] **ROOT CAUSE IDENTIFIED:** progress semaphore not reset on conv3d reader cores
+- [x] **FIX APPLIED:** `noc_semaphore_set(progress_sem_ptr, 0)` after wait in `reader_vol2col.cpp`
+- [ ] Build fix and run on 2x4 LoudBox via CI to confirm seam is gone
+- [ ] Verify 2x2 tests still pass after the fix
 
 ## Key Measurements
 

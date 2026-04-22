@@ -142,8 +142,9 @@ def _print_column_seam_profile(
     "mesh_device, h_axis, w_axis, num_links",
     [
         ((2, 4), 0, 1, 1),
+        ((2, 2), 0, 1, 1),  # fallback for 4-device (2x2) mesh
     ],
-    ids=["2x4_h0_w1"],
+    ids=["2x4_h0_w1", "2x2_h0_w1"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
