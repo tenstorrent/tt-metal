@@ -2,47 +2,74 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-  host_mem_profiler.py — Host-side memory profiler for model tests
-  ===============================================================
++"""
+host_mem_profiler.py — Host-side memory profiler for model tests
+===============================================================
 
-  Wraps a pytest run with `memory_profiler` to record host process memory
-  over time, then saves a PNG plot with peak and baseline annotations.
+What this script does
+---------------------
+Wraps a pytest run with `memory_profiler` to record the host process
+memory (RSS) at 100 ms intervals while the model test executes.
+After the run it produces a PNG plot showing memory over time with a
+peak-memory reference line.  The script exits with pytest's own return
+code, so CI pipelines see failures correctly and no plot is saved for a
+failed run.
 
-  Dependencies
-  ------------
-  `memory-profiler` and `matplotlib` are auto-installed if absent.
-  All other dependencies must be available in the active environment.
+Measured memory includes all child processes spawned by the test
+(e.g. the TT device runtime), giving a realistic view of total host
+footprint during inference.
 
-  Usage
-  -----
-      python host_mem_profiler.py \\
-          --name        "Llama-3.1-8B"                          \\
-          --mesh-device T3K                                      \\
-          --hf-model    meta-llama/Llama-3.1-8B-Instruct        \\
-          --test        models/tt_transformers/demo/simple_text_demo.py \\
-          -k            performance-ci-token-matching
+Dependencies
+------------
+`memory-profiler` and `matplotlib` are auto-installed at startup if
+absent.  Everything else must already be present in the active
+environment (loguru, pytest, and the tt-metal Python stack).
 
-  Arguments
-  ---------
-    --name          Display name shown in the plot title and used to name
-                    the output directory. Default: Llama-3.2-1B-Instruct
-    --mesh-device   Value passed as MESH_DEVICE env var (e.g. N150, T3K).
-                    Default: N150
-    --hf-model      Hugging Face model ID passed as HF_MODEL env var.
-                    Default: meta-llama/Llama-3.2-1B-Instruct
-    --test          Pytest target (file, directory, or node id).
-                    Default: models/tt_transformers/demo/simple_text_demo.py
-    -k              Optional pytest -k filter expression.
+    pip install memory-profiler matplotlib   # manual one-time install
 
-  Output
-  ------
-  Results are written to:
+Arguments
+---------
+  --name          Display name used in the plot title and output directory.
+                   Default: Llama-3.2-1B-Instruct
+  --mesh-device   Value forwarded as the MESH_DEVICE environment variable
+                  to the test process (e.g. N150, N300, T3K, TG).
+                  Default: N150
+  --hf-model      Hugging Face model ID forwarded as HF_MODEL.
+                  Default: meta-llama/Llama-3.2-1B-Instruct
+  --test          Pytest target — a file path, directory, or node id.
+                  Default: models/tt_transformers/demo/simple_text_demo.py
+  -k              Optional pytest -k filter expression to select a subset
+                  of tests within the target.
 
-      profiling_results/<name>_<YYYYMMDD_HHMMSS>/memory_profile.png
+Output
+------
+A timestamped directory is created under profiling_results/:
 
-  The script exits with pytest's return code; no plot is saved on failure.
-"""
+    profiling_results/<name>_<YYYYMMDD_HHMMSS>/
+        memory_profile.png   ← time-series plot (peak annotated in red)
+
+The script exits with pytest's return code; no plot is saved on failure.
+
+Usage examples
+--------------
+# Minimal — profile the default Llama-3.2-1B demo on a single N150 card:
+    python host_mem_profiler.py
+
+# Llama-3.1-8B on a T3K (8-chip) host, full test file:
+     python host_mem_profiler.py \\
+        --name        "Llama-3.1-8B" \\
+        --mesh-device T3K \\
+         --hf-model    meta-llama/Llama-3.1-8B-Instruct \\
+         --test        models/tt_transformers/demo/simple_text_demo.py
+
+# Same model but only the decode token accuracy test case:
+     python host_mem_profiler.py \\
+         --name        "Llama-3.1-8B-decode" \\
+         --mesh-device T3K \\
+        --hf-model    meta-llama/Llama-3.1-8B-Instruct \\
+        --test        models/tt_transformers/demo/simple_text_demo.py \\
+        -k            performance-ci-token-mathcing
+ """
 
 import argparse
 import importlib
