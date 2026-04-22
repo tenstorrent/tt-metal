@@ -60,9 +60,9 @@ void kernel_main() {
                 volatile tt_l1_ptr uint32_t* reduce_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sem_addr);
                 uint32_t M_start = m_sub * M_block;
-                uint32_t current_M_block = (M_block < Mpc - M_start) ? M_block : (Mpc - M_start);
+                uint32_t current_M_block = std::min(M_block, Mpc - M_start);
                 uint32_t N_start = n_sub * N_block;
-                uint32_t current_N = (N_block < Mpc - N_start) ? N_block : (Mpc - N_start);
+                uint32_t current_N = std::min(N_block, Mpc - N_start);
                 uint32_t block_tiles = current_M_block * current_N;
                 cb_reserve_back(reduce_cb, block_tiles);
                 noc_semaphore_wait(reduce_sem_ptr, 1);

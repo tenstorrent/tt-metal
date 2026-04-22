@@ -200,9 +200,9 @@ void kernel_main() {
 #ifdef SENDER_REDUCE_SEND
             {
                 uint32_t M_start = m_sub * rows_per_block;
-                uint32_t current_M_block = (rows_per_block < Mpc - M_start) ? rows_per_block : (Mpc - M_start);
+                uint32_t current_M_block = std::min(rows_per_block, Mpc - M_start);
                 uint32_t N_start = n_sub * rows_per_block;
-                uint32_t current_N = (rows_per_block < Mpc - N_start) ? rows_per_block : (Mpc - N_start);
+                uint32_t current_N = std::min(rows_per_block, Mpc - N_start);
                 uint32_t block_tiles = current_M_block * current_N;
 
                 uint32_t partner_reduce_addr = get_write_ptr(reduce_cb);

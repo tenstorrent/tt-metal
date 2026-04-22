@@ -67,11 +67,11 @@ void kernel_main() {
 
     for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
         uint32_t M_start = m_sub * M_block;
-        uint32_t current_M_block = (M_block < Mpc - M_start) ? M_block : (Mpc - M_start);
+        uint32_t current_M_block = std::min(M_block, Mpc - M_start);
 
         for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
             uint32_t N_start = n_sub * N_block;
-            uint32_t current_N = (N_block < Mpc - N_start) ? N_block : (Mpc - N_start);
+            uint32_t current_N = std::min(N_block, Mpc - N_start);
             uint32_t block_tiles = current_M_block * current_N;
 
             // --- Receive K-blocks via multicast ---
