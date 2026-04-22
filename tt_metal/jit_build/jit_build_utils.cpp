@@ -100,10 +100,35 @@ bool run_command(const std::string& cmd, const std::filesystem::path& log_file, 
         system_line = redirected.c_str();
     }
 
-    int ret = ::system(system_line);
+    std::error_code system_ec;
+    int ret = -1;
+    const bool system_ok = tt::filesystem::retry_on_estale_ec(
+        [&](std::error_code& inner_ec) {
+            errno = 0;
+            ret = ::system(system_line);
+            // Only ret == -1 means system(3) failed (errno valid). Any other value is a wait
+            // status: nonzero usually means the shell exited nonzero, but system() still
+            // succeeded — errno is not meaningful there (see POSIX system()).
+            if (ret == -1) {
+                const int sys_errno = errno;
+                if (sys_errno != 0) {
+                    inner_ec.assign(sys_errno, std::system_category());
+                } else {
+                    inner_ec = std::make_error_code(std::errc::io_error);
+                }
+                return false;
+            }
+            return true;
+        },
+        system_ec);
 
-    if (ret != 0) {
-        log_warning(tt::LogBuildKernels, "System command failed: {} (system() returned {})", system_line, ret);
+    if (!system_ok || ret != 0) {
+        log_warning(
+            tt::LogBuildKernels,
+            "System command failed: {} (system() returned {}, error: {})",
+            system_line,
+            ret,
+            !system_ok ? system_ec.message() : std::string{"-"});
     }
 
     return (ret == 0);
