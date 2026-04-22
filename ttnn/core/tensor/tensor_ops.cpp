@@ -289,7 +289,12 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
 
     auto new_spec = tt::tt_metal::TensorSpec(
         new_logical_shape,
-        TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_memory_config));
+        TensorLayout::fromPaddedShape(
+            input_tensor.dtype(),
+            input_tensor.tensor_spec().page_config(),
+            output_memory_config,
+            new_logical_shape,
+            new_padded_shape));
 
     // TODO (#25340): Review tensor topology logic for reshape
     if (input_tensor.layout() != Layout::ROW_MAJOR || !changing_last_dim) {
