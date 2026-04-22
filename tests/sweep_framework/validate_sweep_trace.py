@@ -45,6 +45,72 @@ IGNORED_KEYS = frozenset(
 )
 
 
+def _normalize_tensor_placement(tp: dict) -> dict:
+    """Normalize tensor_placement to a canonical form.
+
+    The C++ tensor topology may report distribution as 1-D ``[32]`` or 2-D
+    ``[4, 8]`` depending on how the mesh mapper was constructed, even when the
+    functional behaviour is identical.  Collapse to a single product so that
+    ``[4, 8]`` and ``[32]`` compare equal, and reduce placement lists to a
+    canonical ``shard``/``replicate`` per-dimension tag.
+    """
+    result = dict(tp)
+
+    # Normalize distribution_shape → product
+    ds = result.get("distribution_shape")
+    if isinstance(ds, str):
+        import ast as _ast
+        try:
+            ds = _ast.literal_eval(ds)
+        except Exception:
+            ds = None
+    if isinstance(ds, (list, tuple)) and ds:
+        product = 1
+        for d in ds:
+            product *= int(d)
+        result["distribution_shape"] = product
+    elif isinstance(ds, int):
+        result["distribution_shape"] = ds
+
+    # Normalize mesh_device_shape → product (same reason)
+    ms = result.get("mesh_device_shape")
+    if isinstance(ms, str):
+        import ast as _ast
+        try:
+            ms = _ast.literal_eval(ms)
+        except Exception:
+            ms = None
+    if isinstance(ms, (list, tuple)) and ms:
+        product = 1
+        for d in ms:
+            product *= int(d)
+        result["mesh_device_shape"] = product
+    elif isinstance(ms, int):
+        result["mesh_device_shape"] = ms
+
+    # Normalize placement list → frozenset of types (order/count independent)
+    # e.g. "['PlacementReplicate', 'PlacementShard(-1)']" → {"replicate", "shard"}
+    pl = result.get("placement", "")
+    if isinstance(pl, str):
+        tags = set()
+        if "PlacementShard" in pl:
+            tags.add("shard")
+        if "PlacementReplicate" in pl:
+            tags.add("replicate")
+        result["placement"] = sorted(tags)
+    elif isinstance(pl, list):
+        tags = set()
+        for entry in pl:
+            entry_s = str(entry)
+            if "Shard" in entry_s:
+                tags.add("shard")
+            if "Replicate" in entry_s:
+                tags.add("replicate")
+        result["placement"] = sorted(tags)
+
+    return result
+
+
 def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     """Recursively normalize a config dict for comparison.
 
@@ -53,6 +119,12 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     meaningful configuration difference.
     """
     if isinstance(obj, dict):
+        # Normalize tensor_placement dicts before general processing
+        if _parent_key == "tensor_placement" or (
+            "distribution_shape" in obj and "placement" in obj
+        ):
+            obj = _normalize_tensor_placement(obj)
+
         result = {}
         for k, v in sorted(obj.items()):
             if k in IGNORED_KEYS:
