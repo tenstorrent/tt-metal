@@ -43,7 +43,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("cb_in0_num_pages"),
         get_named_compile_time_arg_val("sram_fmt_l1_addr"),
         get_named_compile_time_arg_val("num_active_experts"),
-        get_named_compile_time_arg_val("table_idx_l1_addr"),
         get_named_compile_time_arg_val("index_l1_addr"),
         get_named_compile_time_arg_val("sram_k_per_core"),
         get_named_compile_time_arg_val("sram_k_offset")>;
@@ -60,23 +59,31 @@ void kernel_main() {
         get_named_compile_time_arg_val("per_core_n"),
         get_named_compile_time_arg_val("bank_id"),
         get_named_compile_time_arg_val("vc"),
-        get_named_compile_time_arg_val("meta_l1_addr"),
+        get_named_compile_time_arg_val("expert_offsets_l1_addr"),
+        get_named_compile_time_arg_val("block_sizes_l1_addr"),
         get_named_compile_time_arg_val("cb_in1_dram_size_bytes"),
         get_named_compile_time_arg_val("noc_max_page_size"),
         get_named_compile_time_arg_val("core_in_bank_idx"),
-        get_named_compile_time_arg_val("pipeline_sem_id"),
+        get_named_compile_time_arg_val("pipeline_sem_addr"),
         get_named_compile_time_arg_val("next_core_noc_x"),
         get_named_compile_time_arg_val("next_core_noc_y"),
         get_named_compile_time_arg_val("cores_per_dram_bank"),
         get_named_compile_time_arg_val("num_active_experts"),
-        get_named_compile_time_arg_val("table_idx_l1_addr"),
         get_named_compile_time_arg_val("index_l1_addr"),
         get_named_compile_time_arg_val("cb_fmt_dram"),
         get_named_compile_time_arg_val("fmt_dram_addr"),
         get_named_compile_time_arg_val("fmt_per_expert_bytes"),
         get_named_compile_time_arg_val("fmt_per_core_bytes"),
+        get_named_compile_time_arg_val("fmt_cb_l1_addr"),
+        get_named_compile_time_arg_val("fmt_cb_page_size"),
+        get_named_compile_time_arg_val("fmt_sem_addr_0"),
+        get_named_compile_time_arg_val("fmt_sem_addr_1"),
         get_named_compile_time_arg_val("accum_experts"),
-        get_named_compile_time_arg_val("index_offset")>;
+        get_named_compile_time_arg_val("index_offset"),
+        get_named_compile_time_arg_val("k_parallel_per_bank"),
+        get_named_compile_time_arg_val("k_slice_idx"),
+        get_named_compile_time_arg_val("num_subblocks_k_local"),
+        get_named_compile_time_arg_val("partial_sem_addr")>;
 
 #elif defined(COMPILE_FOR_BRISC)
     using SRAMArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::WriterCTArgs;
@@ -94,8 +101,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("out_w"),
         get_named_compile_time_arg_val("sram_fmt_l1_addr"),
         get_named_compile_time_arg_val("num_active_experts"),
-        get_named_compile_time_arg_val("table_idx_l1_addr"),
         get_named_compile_time_arg_val("index_l1_addr"),
+        get_named_compile_time_arg_val("sram_base_addrs_l1_addr"),
+        get_named_compile_time_arg_val("sram_meta_words_per_expert"),
+        get_named_compile_time_arg_val("in0_page_size"),
         get_named_compile_time_arg_val("accum_experts"),
         get_named_compile_time_arg_val("sram_k_per_core"),
         get_named_compile_time_arg_val("sram_k_offset"),
@@ -113,12 +122,23 @@ void kernel_main() {
         get_named_compile_time_arg_val("per_core_n"),
         get_named_compile_time_arg_val("dram_fmt_l1_addr"),
         get_named_compile_time_arg_val("num_active_experts"),
-        get_named_compile_time_arg_val("table_idx_l1_addr"),
         get_named_compile_time_arg_val("index_l1_addr"),
         get_named_compile_time_arg_val("cb_fmt_dram"),
+        get_named_compile_time_arg_val("dram_meta_words_per_block"),
+        get_named_compile_time_arg_val("in0_page_size"),
+        get_named_compile_time_arg_val("fmt_cb_l1_addr"),
+        get_named_compile_time_arg_val("fmt_cb_page_size"),
+        get_named_compile_time_arg_val("fmt_sem_addr_0"),
+        get_named_compile_time_arg_val("fmt_sem_addr_1"),
         get_named_compile_time_arg_val("accum_experts"),
         get_named_compile_time_arg_val("dram_fuse_silu"),
-        get_named_compile_time_arg_val("index_offset")>;
+        get_named_compile_time_arg_val("index_offset"),
+        get_named_compile_time_arg_val("k_parallel_per_bank"),
+        get_named_compile_time_arg_val("k_slice_idx"),
+        get_named_compile_time_arg_val("num_subblocks_k_local"),
+        get_named_compile_time_arg_val("partial_sem_addr"),
+        get_named_compile_time_arg_val("cb_out_silu"),
+        get_named_compile_time_arg_val("silu_tile_h")>;
 #endif
 
     constexpr bool sram_active = get_named_compile_time_arg_val("sram_active") != 0;
@@ -127,10 +147,63 @@ void kernel_main() {
     // cb_in0/cb_index — DRAM still needs them.
     constexpr bool sram_pop_in0 = sram_active && !dram_active;
     constexpr bool sram_pop_index = sram_active && !dram_active;
-    deepseek_b1_ops::MatmulExpertCompressedSRAM::
-        Op<SRAMArgs, sram_active, sram_pop_in0, /*pop_in1=*/true, sram_pop_index>
+
+    // Looping support: replay the Op num_loop_iters times in a single kernel
+    // invocation. Local state inside each Op is per-instance so reconstructing
+    // fresh Ops each iter resets it. cb_in1_dram's triple-buffer wrap window
+    // needs its compile-time L1 base (cb_in1_dram_buf_addr) when looping so the
+    // wrap boundary stays anchored; single-iter path continues using the runtime
+    // wr_ptr (ResetCBIn1=false).
+    constexpr uint32_t num_loop_iters = get_named_compile_time_arg_val("num_loop_iters");
+    constexpr uint32_t cb_in1_dram_buf_addr = get_named_compile_time_arg_val("cb_in1_dram_buf_addr");
+    constexpr bool reset_cb_in1 = (num_loop_iters > 1);
+
+    // pop_out: when looping, each Op drains its own cb_out pushes at the end
+    // so the next iter's cb_reserve_back has free space. Single-iter path
+    // leaves cb_out populated for downstream consumers.
+    constexpr bool pop_out = (num_loop_iters > 1);
+
+    for (uint32_t iter = 0; iter < num_loop_iters; iter++) {
+        deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
+            SRAMArgs,
+            sram_active,
+            sram_pop_in0,
+            /*pop_in1=*/true,
+            sram_pop_index,
+            pop_out>
             sram_mm;
-    deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<DRAMArgs, dram_active> dram_mm;
-    sram_mm();
-    dram_mm();
+        deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<
+            DRAMArgs,
+            dram_active,
+            /*pop_in0=*/true,
+            /*pop_index=*/true,
+            reset_cb_in1,
+            cb_in1_dram_buf_addr,
+            pop_out>
+            dram_mm;
+        sram_mm();
+        dram_mm();
+
+#if defined(COMPILE_FOR_NCRISC)
+        // Between iters: cb_in0 / cb_index / cb_in1 (SRAM) were popped by the
+        // Ops above; re-arm their sharded-buffer state so the next iter's
+        // cb_wait_front calls see the pre-loaded pages again. cb_out drain is
+        // handled by the Ops themselves via pop_out.
+        if constexpr (num_loop_iters > 1) {
+            if (iter < num_loop_iters - 1) {
+                unified_kernels::setup_sharded_buffer(cb_in0, cb_in0_pages);
+                unified_kernels::setup_sharded_buffer(cb_index, 1);
+                if constexpr (get_named_compile_time_arg_val("sram_active") != 0) {
+                    constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
+                    unified_kernels::setup_sharded_buffer(cb_in1, 1);
+                }
+            }
+        }
+#endif
+    }
+
+    // Add barrier here to prevent watcher assert
+#if defined(COMPILE_FOR_NCRISC)
+    noc_async_atomic_barrier();
+#endif
 }
