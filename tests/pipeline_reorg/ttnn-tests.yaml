@@ -11,7 +11,7 @@
 
 - name: "ttnn data movement group"
   cmd: >-
-    pytest --timeout 300 -v
+    pytest --timeout 60 -v
     tests/ttnn/unit_tests/operations/data_movement/test_tilize.py::test_tilize_test
     tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_padding.py::test_run_tilize_with_val_padding_test
     tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_single_core_interleaved_to_interleaved
