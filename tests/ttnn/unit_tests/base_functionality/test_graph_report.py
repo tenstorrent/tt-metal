@@ -108,6 +108,62 @@ def single_relu_mock_graph():
     ]
 
 
+class TestInnermostStackFrame:
+    """Unit tests for graph_report._innermost_stack_frame."""
+
+    def test_none_input_returns_none_pair(self):
+        assert graph_report._innermost_stack_frame(None) == (None, None)
+
+    def test_empty_string_returns_none_pair(self):
+        assert graph_report._innermost_stack_frame("") == (None, None)
+
+    def test_malformed_text_with_no_file_line_returns_none_pair(self):
+        assert graph_report._innermost_stack_frame("Traceback (most recent call last):\n  random text\n") == (
+            None,
+            None,
+        )
+
+    def test_single_frame(self):
+        trace = '  File "/path/to/model.py", line 42, in forward\n    out = self.layer(x)\n'
+        fname, lineno = graph_report._innermost_stack_frame(trace)
+        assert fname == "/path/to/model.py"
+        assert lineno == 42
+
+    def test_multiple_frames_returns_first_innermost(self):
+        # _capture_python_stack_trace orders frames innermost-first.
+        # The first File/line entry should be the callsite nearest the op.
+        trace = (
+            '  File "/inner/op.py", line 5, in run\n'
+            "    result = ttnn.relu(x)\n"
+            '  File "/middle/wrapper.py", line 20, in call\n'
+            "    return self.op(x)\n"
+            '  File "/outer/demo.py", line 99, in main\n'
+            "    wrapper(t)\n"
+        )
+        fname, lineno = graph_report._innermost_stack_frame(trace)
+        assert fname == "/inner/op.py"
+        assert lineno == 5
+
+    def test_multiple_frames_does_not_return_outermost(self):
+        # Regression guard: the original bug used matches[-1] (outermost) which
+        # pinned every tensor to the same demo.py entry point.
+        trace = (
+            '  File "/inner/op.py", line 5, in run\n'
+            "    result = ttnn.relu(x)\n"
+            '  File "/outer/demo.py", line 99, in main\n'
+            "    wrapper(t)\n"
+        )
+        fname, lineno = graph_report._innermost_stack_frame(trace)
+        assert fname != "/outer/demo.py"
+        assert lineno != 99
+
+    def test_line_number_parsed_as_int(self):
+        trace = '  File "model.py", line 123, in forward\n'
+        _, lineno = graph_report._innermost_stack_frame(trace)
+        assert isinstance(lineno, int)
+        assert lineno == 123
+
+
 class TestTensorLifetime:
     """Tensor lifetime metadata for late-deallocation analysis (tt-metal#27868)."""
 
