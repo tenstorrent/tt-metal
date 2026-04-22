@@ -92,6 +92,31 @@ The bug manifests **only on 2x4 mesh, not on 2x2**, even with identical C_in_blo
 2. **W-reader `outer_dim_size` vs actual sender count:** The W reader waits for `w_neighbor_sem_addr >= outer_dim_size`. If `outer_dim_size` is set inconsistently (e.g., `B*T*h_total` from one direction but the semaphore counts `B*T*h_total` from the other), the W reader might signal conv3d readers before the second direction's data arrives.
 3. **Partial sum reduction with halo from two sources simultaneously:** On 2x2, each device has at most 1 active W neighbor. On 2x4, middle devices have 2. This additional W halo exchange may expose a partial-sum ordering issue in `compute.cpp` that only surfaces with both left and right halos active.
 
+## Session 3 Findings: .pt Numerical Analysis (Apr 22 2026)
+
+**Seam is EXCLUSIVELY at the D1-D2 boundary (both middle devices).**
+
+Analysis of fused_multiblk.pt vs standalone_multiblk.pt (81×3×480×832):
+- Global: max_diff=1.40, mean_diff=0.012, PCC=0.9913
+- Background error (BF16 path difference, NOT seam): 0.004241 — uniform across ALL columns
+- D0-D1 boundary (col 208): 0.004241 mean — ZERO seam above background
+- **D1-D2 boundary (col 416): 0.251492 mean — 60× above background, 88-column bell curve**
+- D2-D3 boundary (col 624): 0.004241 mean — ZERO seam above background
+
+Right-edge / left-edge breakdown:
+- D1 rightmost col 415: 0.246 (WRONG)  |  D1 leftmost col 208: 0.004 (correct)
+- D2 leftmost col 416: 0.251 (WRONG)   |  D2 rightmost col 623: 0.004 (correct)
+→ **D1's rightmost output and D2's leftmost output are mutually corrupted.**
+→ D0's rightmost col 207 and D3's leftmost col 624 are clean.
+
+Error shape: bell curve centered ~col 418-419, left_spread=47 cols into D1, right_spread=41 cols into D2. Spread is consistent with mid_block seam propagating through many subsequent standalone up_block conv layers.
+
+Per-frame: seam grows across temporal chunks (T-cache amplifies error: t=0..16 small, t=17+ jumps 0.6+).
+
+**Conclusion: The bug requires BOTH (a) middle W devices AND (b) C_in_block < C_in. Neither alone is sufficient (conv_in on 2x4 = clean; mid_block on 2x2 = clean).**
+
+Full analytical audit of W fabric kernels found NO definitive code bug in: barrier protocol, semaphore routing, halo addressing, CB pairing, progress semaphore signaling. Root cause remains unidentified without device-level debugging on a 2x4 machine.
+
 ## Next Test: Run on real 2x4 LoudBox via CI
 
 **Status: DISPATCHED** (see dispatch command below)
@@ -104,14 +129,14 @@ Test in `test_decoder_ones_input.py`:
 - `single_block=True` → calls `_override_mid_block_full_cin()` which sets `C_in_block=384` for all mid_block resnet convolutions
 - Compares output `.pt` against standalone reference; logs PCC + max_err + per-column seam jumps
 
-**If seam disappears with single_block:** Bug confirmed in C_in parallelism. Investigate:
-- How partial sums from different C_in block cores are combined on middle 2x4 devices
-- Whether `fp32_dest_acc_en` + `use_fp32_partials` behave differently with 2 active W halo sources
-- Specifically: weight-tile index offset for halo input positions when C_in is split
+**If seam disappears with single_block:** Bug confirmed in C_in parallelism. Then:
+- Check `reader_vol2col.cpp` `gather_rows_halo`: does the `c_in_offset_bytes` correctly index into the halo sticks when the halo was written by D1 (a middle device with 2 active W writers)?
+- Specifically: look at whether the W-LEFT halo sticks written by D1's FORWARD W WRITER use a different stride/offset than what conv3d's reader expects per C_in block
+- Check `w_section_wleft_base` used by the W WRITER vs what `reader_vol2col` computes as `halo_page`
 
 **If seam persists with single_block:** Bug is NOT in C_in splitting. Investigate:
-- `conv3d` compute kernel behavior at W-boundary halo positions regardless of C_in splitting
-- Whether `num_w_fabric_cores` is correctly set to 2 for middle 2x4 devices
+- Whether `num_w_fabric_cores` is correctly set to 2 for middle 2x4 devices (vs just 1 for 2x2 devices)
+- Whether the barrier semaphore wait on middle devices races with the W halo arriving
 
 ## Operational Notes
 
