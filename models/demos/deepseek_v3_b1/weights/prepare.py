@@ -742,8 +742,13 @@ def prepare_attention_weights(
             else:
                 gate_mm = torch.zeros(D.HIDDEN_SIZE, D.GATE_NUM_INDICES, dtype=torch.bfloat16, device=o_proj.device)
             q_a = t[q_a_key].T.contiguous()
+            attn_norm_w = t[attn_norm_key].T.contiguous()
+            q_a = q_a * attn_norm_w.unsqueeze(-1)
             q_b = deinterleave_q_b_proj(t[q_b_key])
             kv_a = t[kv_a_key].T.contiguous()
+            kv_a = kv_a * attn_norm_w.unsqueeze(-1)
+            q_norm_w = t[q_norm_key].T.contiguous()
+            q_b = q_b * q_norm_w.unsqueeze(-1)
             q_ab_kv_a = preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
             return {
                 "o_proj": o_proj,
