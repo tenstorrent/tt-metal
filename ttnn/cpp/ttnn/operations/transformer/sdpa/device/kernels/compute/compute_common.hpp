@@ -237,7 +237,7 @@ void calculate_recip_first_column() {
             if constexpr (DST_ACCUM_MODE || APPROX) {
                 sfpi::dst_reg[0] = out;
             } else {
-                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, RoundMode::NearestEven));
             }
             sfpi::dst_reg += 2;
         }
@@ -252,7 +252,7 @@ void calculate_recip_first_column() {
                     sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
                 } else {
                     sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-                    sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+                    sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, RoundMode::NearestEven));
                 }
             }
 
@@ -263,8 +263,7 @@ void calculate_recip_first_column() {
 
 template <bool legacy_compat = true>
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROXIMATE*/>(
-        calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
+    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
 }
 #endif
 
@@ -850,7 +849,7 @@ void calculate_exponential_first_column() {
 
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
 void exp_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_(
         calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, (int)VectorMode::C);
 }
 #endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
@@ -945,7 +944,7 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
 
 template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
-    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_(
         calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE>, idst, vector_mode, scale_bf16);
 }
 #endif
@@ -1113,7 +1112,7 @@ void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
 }
 
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_(
         calculate_softplus_first_column<APPROX>, idst, (int)VectorMode::C, beta, beta_reciprocal, threshold);
 }
 #endif
@@ -1440,10 +1439,11 @@ void apply_causal_mask_lightweight(
 
 /**
  * Context for lightweight mask application in ring joint SDPA.
- * All mask tiles reside in a single CB. A default-constructed instance disables lightweight masking.
+ * All mask tiles reside in a single CB. This struct stores the pre-resolved mask metadata used when
+ * lightweight masking is enabled; enablement itself is controlled by the `lightweight_mask_enabled`
+ * template parameter(s), not by default-constructing this context.
  */
 struct LightweightMaskContext {
-    bool enabled = false;
     bool is_causal = false;                  // True only on ring_iter 0 for causal configs
     uint32_t neginf_tile_idx = 0;            // Index of -inf tile in the mask CB
     uint32_t causal_diag_tile_idx = 0;       // Index of causal diagonal tile in the mask CB
@@ -1588,6 +1588,7 @@ enum SDPAType {
  * @tparam is_chunked - Whether query is chunked
  * @tparam scale_fp32 - FP32 scale factor
  * @tparam sliding_window_size - Sliding window attention size
+ * @tparam lightweight_mask_enabled - Enables the lightweight mask path (compile-time gated)
  *
  * Runtime Parameters:
  * @param Skt - Sequence length in tiles
@@ -1661,7 +1662,8 @@ template <
     bool use_joint_mask,
     bool is_chunked,
     uint32_t scale_fp32,
-    uint32_t sliding_window_size>
+    uint32_t sliding_window_size,
+    bool lightweight_mask_enabled = false>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1860,7 +1862,7 @@ void sdpa_inner_loop(
             if (apply_mask) {
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
-                if (lw_mask.enabled) {
+                if constexpr (lightweight_mask_enabled) {
                     // Re-enter reserved state on cb_qk_im so the lightweight mask can be stamped in-place.
                     // matmul_blocks above already pushed the QK tiles, so tiles_received has been bumped;
                     // without the pop+push cycle below, reduce_c's cb_wait_front would return immediately
@@ -2143,7 +2145,8 @@ template <
     bool use_padded_mask,
     bool is_chunked,
     uint32_t scale_fp32,
-    uint32_t sliding_window_size>
+    uint32_t sliding_window_size,
+    bool lightweight_mask_enabled = false>
 void sdpa_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2200,7 +2203,8 @@ void sdpa_standard(
         false,  // use_joint_mask (not used)
         is_chunked,
         scale_fp32,
-        sliding_window_size>(
+        sliding_window_size,
+        lightweight_mask_enabled>(
         Skt,
         qk_in0_block_w,
         qk_subblock_w,
@@ -2392,7 +2396,8 @@ template <
     uint32_t NH,
     uint32_t DHt,
     uint32_t vDHt,
-    uint32_t scale_fp32>
+    uint32_t scale_fp32,
+    bool lightweight_mask_enabled = false>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
@@ -2465,8 +2470,9 @@ void sdpa_ring(
         false,  // use_joint_mask (not used)
         false,  // is_chunked (not used)
         scale_fp32,
-        0>(  // sliding_window_size (not used)
-        0,   // Skt (not used)
+        0,  // sliding_window_size (not used)
+        lightweight_mask_enabled>(
+        0,  // Skt (not used)
         qk_in0_block_w,
         qk_subblock_w,
         qk_subblock_h,

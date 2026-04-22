@@ -1,4 +1,4 @@
-name: "[Tier 1] Models Device Perf Tests"
+name: "(Tier 1) Models Device Perf Tests"
 
 on:
   workflow_dispatch:

@@ -339,7 +339,7 @@ def create_decoder_block_tensors(
     trans_mat_replicated = torch_trans_mat.repeat(1, 1, qrope_num_cores + kv_cache_branch_rope_crs.num_cores(), 1)
     ttnn_trans_mat = ttnn.from_torch(
         trans_mat_replicated,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=trans_mem,
@@ -731,20 +731,22 @@ class DecoderStage(StageKind):
         self._num_routed_experts = num_routed_experts
         self._use_hardcoded_expert_index = use_hardcoded_expert_index
         self._enable_routing = enable_routing
+        self._num_links_bcast = 1
+        self._num_links_allreduce = 2
         self._state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
         pipeline_config = ctx.pipeline_config
-        my_mesh_id = ctx.my_mesh_id
+        my_stage_idx = ctx.my_stage_idx
 
         gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
         gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
         shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
         aggregator_core = shard_cores_list[0]
 
-        stage_entry_device = pipeline_config[my_mesh_id].entry_node_coord
-        reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
+        stage_entry_device = pipeline_config[my_stage_idx].entry_node_coord
+        reduce_root_coord = pipeline_config[my_stage_idx].exit_node_coord
 
         exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
 
@@ -758,6 +760,9 @@ class DecoderStage(StageKind):
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=exit_upstream_cores,
             exit_upstream_page_size=ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list),
+            my_stage_idx=my_stage_idx,
+            stages_metadata=ctx.stages_metadata,
+            pipeline_config=pipeline_config,
         )
 
     def _build_decoder_program_context(self) -> tuple[Any, Any, Any]:
@@ -835,8 +840,8 @@ class DecoderStage(StageKind):
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             reduce_cluster_axis=1,
             sdpa_cluster_axis=0,
-            num_links_bcast=1,
-            num_links_allreduce=1,
+            num_links_bcast=self._num_links_bcast,
+            num_links_allreduce=self._num_links_allreduce,
             skip_ccl=False,
             upstream_socket=self._state["recv_socket"],
             downstream_sockets=self._state["downstream_sockets"],
@@ -848,17 +853,19 @@ class DecoderStage(StageKind):
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         mesh_device = ctx.mesh_device
         pipeline_config = ctx.pipeline_config
-        my_mesh_id = ctx.my_mesh_id
+        my_stage_idx = ctx.my_stage_idx
 
-        sender_coord = pipeline_config[my_mesh_id].entry_node_coord
-        reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
+        sender_coord = pipeline_config[my_stage_idx].entry_node_coord
+        reduce_root_coord = pipeline_config[my_stage_idx].exit_node_coord
 
         num_cores = mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y
         available_cores = ttnn.num_cores_to_corerangeset(
             num_cores, mesh_device.compute_with_storage_grid_size(), row_wise=True
         )
 
-        attn_semaphores = AttentionBlock.create_semaphores(mesh_device)
+        attn_semaphores = AttentionBlock.create_semaphores(
+            mesh_device, num_links_bcast=self._num_links_bcast, num_links_allreduce=self._num_links_allreduce
+        )
         moe_semaphores = MoeOp.create_semaphores(mesh_device)
         reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
         persistent_next_iter_semaphore = (
@@ -910,7 +917,7 @@ class DecoderStage(StageKind):
 
         self._state["decoder_program_context"] = self._build_decoder_program_context()
 
-        logger.info(f"[rank={my_mesh_id}] {type(self).__name__} setup complete")
+        logger.info(f"[rank={my_stage_idx}] {type(self).__name__} setup complete")
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         DecoderBlock.execute(*self._state["decoder_program_context"])
