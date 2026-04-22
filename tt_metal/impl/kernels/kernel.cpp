@@ -291,7 +291,7 @@ bool Kernel::binaries_exist_on_disk(const IDevice* device) const {
     const uint32_t core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
-    std::optional<std::string> output_path = std::nullopt;
+    std::optional<std::filesystem::path> output_path = std::nullopt;
     for (int i = 0; i < this->expected_num_binaries(); ++i) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), core_type, processor_class, this->get_kernel_processor_type(i));
@@ -301,9 +301,8 @@ bool Kernel::binaries_exist_on_disk(const IDevice* device) const {
             output_path = build_state.get_out_path();
         }
     }
-    // Note: this->get_full_kernel_name() already has a '/' at the end.
-    const std::string build_success_marker_path =
-        fmt::format("{}{}{}", output_path.value(), this->get_full_kernel_name(), SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
+    const auto build_success_marker_path =
+        output_path.value() / this->get_full_kernel_name() / SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
     return std::filesystem::exists(build_success_marker_path);
 }
 
@@ -315,7 +314,7 @@ std::vector<std::string> Kernel::file_paths(IDevice& device) const {
     for (int i = 0; i < this->expected_num_binaries(); i++) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device.build_id(), core_type, processor_class, this->get_kernel_processor_type(i));
-        file_paths.push_back(build_state.get_target_out_path(this->kernel_full_name_));
+        file_paths.push_back(build_state.get_target_out_path(this->kernel_full_name_).string());
     }
     return file_paths;
 }
