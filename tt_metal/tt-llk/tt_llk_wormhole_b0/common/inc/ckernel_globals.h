@@ -4,6 +4,7 @@
 
 #pragma once
 
+// ndivnic: PR gate LLK path probe (wormhole)
 #include <cstdint>
 
 #include "ckernel_structs.h"
