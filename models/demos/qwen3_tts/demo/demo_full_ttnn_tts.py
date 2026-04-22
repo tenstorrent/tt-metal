@@ -542,22 +542,17 @@ def sample_from_tt_vocab_logits(
 ) -> int:
     """Argmax or sample from on-device logits [..., seq, vocab].
 
-        **Greedy** uses full-vocab ``to_torch`` then CPU ``argmax`` (same sequence-axis
-        handling as sampling). The previous ``untilize`` + on-device ``argmax`` path
-        could return invalid token IDs for some sliced / trace-backed logits tensors,
-        which then broke ``F.embedding`` in the CP decode loop.
+    **Greedy** uses full-vocab ``to_torch`` then CPU ``argmax`` (same sequence-axis
+    handling as sampling). The previous ``untilize`` + on-device ``argmax`` path
+    could return invalid token IDs for some sliced / trace-backed logits tensors,
+    which then broke ``F.embedding`` in the CP decode loop.
 
-    <<<<<<< Updated upstream
-        **Sampling** (temperature / top_k / multinomial) uses full-vocab ``to_torch`` +
-        :func:`sample_token` on the host (on-device topk/pad paths were slower than bf16
-        logits D2H for this demo's vocab width and trace count).
-    =======
-        **Sampling** (temperature / top_k / multinomial) uses ``to_torch`` +
-        :func:`sample_token` on the host.
-    >>>>>>> Stashed changes
+    **Sampling** (temperature / top_k / multinomial) uses full-vocab ``to_torch`` +
+    :func:`sample_token` on the host (on-device topk/pad paths were slower than bf16
+    logits D2H for this demo's vocab width and trace count).
 
-        If ``prof_acc`` is set, adds seconds to keys ``device_logits`` (full logits
-        ``to_torch``) and ``cpu_sample`` (:func:`sample_token` only).
+    If ``prof_acc`` is set, adds seconds to keys ``device_logits`` (full logits
+    ``to_torch``) and ``cpu_sample`` (:func:`sample_token` only).
     """
     _pc = time.perf_counter
     t0 = _pc() if prof_acc is not None else 0.0
