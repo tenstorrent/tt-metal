@@ -99,7 +99,7 @@ using IntraMeshConnectivity = std::vector<std::vector<std::unordered_map<ChipId,
 // by reverse-looking-up the peer's possibly-reassigned port_id), which silently mis-pairs
 // cables when the same chip has cables to multiple peer chips.
 using AnnotatedIntermeshConnections = std::vector<
-    std::tuple<std::pair<uint32_t, port_id_t>, std::pair<uint32_t, port_id_t>, std::size_t /*connection_hash*/>>;
+    std::tuple<std::pair<uint32_t, port_id_t>, std::pair<uint32_t, port_id_t>, std::uint64_t /*connection_hash*/>>;
 
 // Parsed from the Mesh Graph Descriptor. The user can specify the number of channels between meshes (relaxed mode)
 // or pin connectiosn to specific exit nodes (strict mode).

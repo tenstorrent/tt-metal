@@ -2926,7 +2926,8 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
 
     std::vector<PortDescriptor> ports_to_neighbor;
 
-    std::unordered_map<uint64_t, RoutingDirection> curr_exit_node_direction;  // One RoutingDirection per physical link.
+    std::unordered_map<std::uint64_t, RoutingDirection>
+        curr_exit_node_direction;  // One RoutingDirection per physical link.
     std::size_t z_fallback_count = 0;
 
     std::unordered_map<uint64_t, std::unordered_map<ChipId, std::size_t>> cables_per_src_chip_per_dst_chip;
@@ -2963,9 +2964,10 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
             continue;
         }
 
-        auto assoc_connection_hash = std::hash<tt::tt_metal::ExitNodeConnection>{}(exit_node);
+        auto assoc_connection_hash =
+            static_cast<std::uint64_t>(std::hash<tt::tt_metal::ExitNodeConnection>{}(exit_node));
         auto exit_node_hash = (*exit_node.src_exit_node) + (*exit_node.dst_exit_node);
-        auto exit_node_chip = exit_node_fabric_node_id.chip_id;
+        const auto exit_node_chip = exit_node_fabric_node_id.chip_id;
 
         // Deferred intermesh_* updates until after rank-0 pairing (Z/NESW may change).
         auto try_assign_port = [&](bool use_z_direction) -> bool {
@@ -3356,7 +3358,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
             }
 
             // Match src proposals to the dst-side proposal with the same connection_hash.
-            std::unordered_map<std::size_t, port_id_t> dst_port_id_by_cable_hash;
+            std::unordered_map<std::uint64_t, port_id_t> dst_port_id_by_cable_hash;
             for (const auto& dst_proposal : port_descriptors.at(dst_mesh).at(src_mesh)) {
                 dst_port_id_by_cable_hash.emplace(dst_proposal.connection_hash, dst_proposal.port_id);
             }

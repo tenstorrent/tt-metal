@@ -18,6 +18,7 @@
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <unordered_map>
@@ -81,7 +82,7 @@ enum class MeshScope {
 
 struct PortDescriptor {
     port_id_t port_id = {RoutingDirection::NONE, 0};
-    std::size_t connection_hash = 0;
+    std::uint64_t connection_hash = 0;
 };
 
 // Stores the logical ports (routing direction, logical channel id and connection hash) between the src mesh and its

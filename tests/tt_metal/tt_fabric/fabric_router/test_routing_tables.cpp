@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <algorithm>
+#include <optional>
 #include <unordered_set>
 #include <yaml-cpp/yaml.h>
 
@@ -1326,9 +1327,9 @@ struct Sp5BlitzPipelineStage {
     MeshCoordinate exit_node_coord;
 };
 
-// Split out of TEST_F to satisfy clang-tidy readability-function-cognitive-complexity for TestBody.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- consolidated pipeline validation checks
-void validate_sp5_blitz_decode_pipeline_stages(
+// Split out of TEST_F: pipeline validation in stages for clang-tidy cognitive-complexity limits.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- many independent EXPECT (stage 1..MGD)
+void validate_sp5_blitz_stages_shape_through_mgd(
     const tt::tt_fabric::ControlPlane& control_plane,
     const tt::tt_fabric::MeshGraph& mesh_graph,
     const std::vector<MeshId>& mesh_ids,
@@ -1428,16 +1429,6 @@ void validate_sp5_blitz_decode_pipeline_stages(
     };
     auto eth_dirs_match_kind = [&](EthDir a, EthDir b) {
         return (is_z_eth_dir(a) && is_z_eth_dir(b)) || (is_nesw_eth_dir(a) && is_nesw_eth_dir(b));
-    };
-    auto eth_chan_dir_cstr = [](EthDir d) -> const char* {
-        switch (d) {
-            case EthDir::EAST: return "EAST";
-            case EthDir::WEST: return "WEST";
-            case EthDir::NORTH: return "NORTH";
-            case EthDir::SOUTH: return "SOUTH";
-            case EthDir::Z: return "Z";
-            default: return "UNKNOWN";
-        }
     };
 
     // 3b. Stage exit -> next stage entry (full ring): Z-Z or NESW-NESW on each fabric hop.
@@ -1585,6 +1576,39 @@ void validate_sp5_blitz_decode_pipeline_stages(
             }
         }
     }
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- inter-mesh matrix expect checks; split from main test
+// helper
+void validate_sp5_blitz_stages_intermesh_exhaustive(
+    const tt::tt_fabric::ControlPlane& control_plane,
+    const tt::tt_fabric::MeshGraph& mesh_graph,
+    const std::vector<MeshId>& mesh_ids,
+    const std::vector<Sp5BlitzPipelineStage>& stages) {
+    const auto num_meshes = mesh_ids.size();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+    const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
+    const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
+
+    using EthDir = tt::tt_fabric::eth_chan_directions;
+    auto is_z_eth_dir = [](EthDir d) { return d == EthDir::Z; };
+    auto is_nesw_eth_dir = [](EthDir d) {
+        return d == EthDir::NORTH || d == EthDir::SOUTH || d == EthDir::EAST || d == EthDir::WEST;
+    };
+    auto eth_dirs_match_kind = [&](EthDir a, EthDir b) {
+        return (is_z_eth_dir(a) && is_z_eth_dir(b)) || (is_nesw_eth_dir(a) && is_nesw_eth_dir(b));
+    };
+    auto eth_chan_dir_cstr = [](EthDir d) -> const char* {
+        switch (d) {
+            case EthDir::EAST: return "EAST";
+            case EthDir::WEST: return "WEST";
+            case EthDir::NORTH: return "NORTH";
+            case EthDir::SOUTH: return "SOUTH";
+            case EthDir::Z: return "Z";
+            default: return "UNKNOWN";
+        }
+    };
 
     // ===== Comprehensive inter-mesh router configuration validation =====
     //
@@ -2074,6 +2098,16 @@ void validate_sp5_blitz_decode_pipeline_stages(
             }
         }
     }
+}
+
+// Orchestrates validate_pipeline-equivalent tests for a constructed Blitz-style ring (see blitz_decode_pipeline.cpp).
+void validate_sp5_blitz_decode_pipeline_stages(
+    const tt::tt_fabric::ControlPlane& control_plane,
+    const tt::tt_fabric::MeshGraph& mesh_graph,
+    const std::vector<MeshId>& mesh_ids,
+    const std::vector<Sp5BlitzPipelineStage>& stages) {
+    validate_sp5_blitz_stages_shape_through_mgd(control_plane, mesh_graph, mesh_ids, stages);
+    validate_sp5_blitz_stages_intermesh_exhaustive(control_plane, mesh_graph, mesh_ids, stages);
 }
 
 }  // namespace

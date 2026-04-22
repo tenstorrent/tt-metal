@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <vector>
+#include <cstdint>
 #include <stdexcept>
+#include <vector>
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include "protobuf/intermesh_connection_table.pb.h"
 
@@ -33,7 +34,7 @@ std::vector<uint8_t> serialize_intermesh_connections_to_bytes(const AnnotatedInt
 
         // Symmetric hash of the physical cable. Used by every host to deterministically
         // map this broadcast connection back to its local (chip, chan, peer) cable record.
-        connection_pair->set_connection_hash(static_cast<uint64_t>(connection_hash));
+        connection_pair->set_connection_hash(connection_hash);
     }
 
     // Serialize to bytes
@@ -78,7 +79,7 @@ AnnotatedIntermeshConnections deserialize_intermesh_connections_from_bytes(const
         }
 
         result.emplace_back(
-            first_endpoint, second_endpoint, static_cast<std::size_t>(connection_pair.connection_hash()));
+            first_endpoint, second_endpoint, static_cast<std::uint64_t>(connection_pair.connection_hash()));
     }
 
     return result;
