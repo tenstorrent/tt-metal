@@ -501,7 +501,6 @@ class ModelArgs:
         self.device_name = determine_device_name(self.mesh_device) if mesh_device is not None else "CPU"
 
         logger.info(f"Inferring device name: {self.device_name}")
-        device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else None
         self.is_galaxy = self.num_devices == 32
 
@@ -634,7 +633,7 @@ class ModelArgs:
         if self.prefetcher is not None:
             self.use_qk_fused = False
 
-        if device is not None:  # Avoid issue with test_torch.py not having a device
+        if self.mesh_device is not None:  # Avoid issue with test_torch.py not having a device
             # ============================================================================
             # Parameter initialization
             # ============================================================================
@@ -666,7 +665,7 @@ class ModelArgs:
             # Core Grid Configurations for DRAM weight sharding, LM Head and MLP
             # ============================================================================
             # DRAM weight grid specs for dram sharding matmuls
-            grid = device.compute_with_storage_grid_size()
+            grid = self.mesh_device.compute_with_storage_grid_size()
             self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
             self.dram_weight_grid = ttnn.CoreRangeSet(
                 {
