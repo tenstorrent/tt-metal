@@ -328,14 +328,17 @@ class TtSuperPoint:
         ttnn.copy_host_to_device_tensor(host, tt_in, cq_id=cq_id)
 
     def run_device_compute(self, tt_in: ttnn.Tensor, b: int = 1):
-        """Device-only forward; returns (s_softmax, d_norm) device tensors in TILE layout.
+        """Device-only forward; returns (s_softmax, d_norm) in TILE layout.
 
-        Softmax over the 65-dim channel axis is run on device — ttnn.softmax
-        respects the logical shape so the tile padding does not corrupt the
-        distribution (verified to PCC 0.9975 vs torch).
+        Softmax over the 65-dim channel axis is run on device.
 
-        Keeps `tt_in` alive for trace replay (does not deallocate).
+        If SP_TRACE_NMS=1, also fold and run 9×9 max-pool on device and
+        return a 3-tuple (s_softmax, s_pooled, d_norm). Pins intermediates
+        to DRAM with explicit ``memory_config`` to avoid ttnn's implicit
+        sharded reshape path.
         """
+        import os as _os
+
         h, w = self.input_height, self.input_width
         encoded, enc_h, enc_w = self._encoder_forward(tt_in, h, w, b)
 
@@ -356,7 +359,68 @@ class TtSuperPoint:
         ttnn.deallocate(d)
         ttnn.deallocate(encoded)
 
+        if _os.environ.get("SP_TRACE_NMS", "0") == "1":
+            s_pooled = self._device_fold_and_nms(s_sm, b, enc_h, enc_w)
+            return s_sm, s_pooled, d_norm
         return s_sm, d_norm
+
+    def _get_nms_zero_pad(self, b: int) -> ttnn.Tensor:
+        """Persistent zero-padding tensor reused across trace replays.
+
+        ``ttnn.zeros`` performs a device write which trace capture rejects,
+        so we materialise this exactly once during warmup and keep the
+        handle alive for the trace to reference.
+        """
+        H, W = self.input_height, self.input_width
+        cached = getattr(self, "_zeros_pad_cache", None)
+        if cached is not None:
+            return cached
+        pad = ttnn.zeros(
+            [1, 1, b * H * W, 31],
+            dtype=ttnn.bfloat16,
+            device=self.device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._zeros_pad_cache = pad
+        return pad
+
+    def _device_fold_and_nms(self, s_sm: ttnn.Tensor, b: int, enc_h: int, enc_w: int):
+        """Fold softmax (b,1,enc_h*enc_w,65) to dense (b,H,W,1) and run 9×9
+        max-pool NMS, all on device. Keeps every reshape DRAM-interleaved to
+        avoid ttnn's sharded page-alignment check.
+        """
+        H, W = enc_h * 8, enc_w * 8
+        DRAM = ttnn.DRAM_MEMORY_CONFIG
+        s64 = ttnn.slice(s_sm, [0, 0, 0, 0], [b, 1, enc_h * enc_w, 64], memory_config=DRAM)
+        s64_rm = ttnn.to_layout(s64, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        ttnn.deallocate(s64)
+        s_nhwc = ttnn.reshape(s64_rm, [b, enc_h, enc_w, 64], memory_config=DRAM)
+        ttnn.deallocate(s64_rm)
+        s5d = ttnn.reshape(s_nhwc, [b, enc_h, enc_w, 8, 8], memory_config=DRAM)
+        ttnn.deallocate(s_nhwc)
+        s_perm = ttnn.permute(s5d, (0, 1, 3, 2, 4), memory_config=DRAM)
+        ttnn.deallocate(s5d)
+        s_dense = ttnn.reshape(s_perm, [b, H, W, 1], memory_config=DRAM)
+        ttnn.deallocate(s_perm)
+        s_flat = ttnn.reshape(s_dense, [1, 1, b * H * W, 1], memory_config=DRAM)
+        ttnn.deallocate(s_dense)
+        zeros_pad = self._get_nms_zero_pad(b)  # persistent, trace-compatible
+        s_padded = ttnn.concat([s_flat, zeros_pad], dim=-1, memory_config=DRAM)
+        ttnn.deallocate(s_flat)
+        s_pooled = ttnn.max_pool2d(
+            input_tensor=s_padded,
+            batch_size=b,
+            input_h=H,
+            input_w=W,
+            channels=32,
+            kernel_size=[self.nms_radius * 2 + 1, self.nms_radius * 2 + 1],
+            stride=[1, 1],
+            padding=[self.nms_radius, self.nms_radius],
+            dilation=[1, 1],
+        )
+        ttnn.deallocate(s_padded)
+        return s_pooled
 
     def _run_device(self, pixel_values: torch.Tensor):
         """Untraced path: allocate input, compute, read back, host post-proc."""

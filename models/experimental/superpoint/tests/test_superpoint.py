@@ -91,6 +91,26 @@ def _device_to_host_post(tt_model, s_sm, d_norm, b, h, w):
     return scores_nchw, descriptors_nchw
 
 
+def _device_to_host_post_with_nms(tt_model, s_sm, s_pooled, d_norm, b, h, w):
+    """Pull softmax, device-pooled (32-ch padded) NMS map, and descriptors.
+    Host picks channel 0 from pooled, compares to re-folded dense scores,
+    and applies the bf16 mask. (ttnn.slice on the channel dim of a row-major
+    tensor hits a 'bad optional access' code path; masking on host is fine.)
+    """
+    enc_h, enc_w = h // 8, w // 8
+    scores_nhwc = ttnn.to_torch(s_sm).reshape(b, enc_h, enc_w, KEYPOINT_DIM)
+    descriptors_nhwc = ttnn.to_torch(d_norm).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
+    pooled_padded = ttnn.to_torch(s_pooled).reshape(b, h, w, 32)
+    scores_pooled = pooled_padded[..., 0]  # drop padding
+
+    scores_nchw = scores_nhwc.permute(0, 3, 1, 2).contiguous().float()
+    descriptors_nchw = descriptors_nhwc.permute(0, 3, 1, 2).contiguous().float()
+    dense = tt_model._decode_keypoints(scores_nchw, apply_nms=False)
+    mask = dense.to(torch.bfloat16) == scores_pooled.to(torch.bfloat16)
+    nms_scores = torch.where(mask, dense, torch.zeros_like(dense))
+    return dense, nms_scores, descriptors_nchw
+
+
 @pytest.mark.parametrize("height,width", [(480, 640)])
 @pytest.mark.parametrize("input_kind", ["random", "natural"])
 @pytest.mark.parametrize(
@@ -122,15 +142,31 @@ def test_superpoint_benchmark(device, height, width, input_kind):
     # Persistent device input tensor (filled via copy_host_to_device_tensor).
     tt_in = tt_model.allocate_input(batch_size=b)
 
+    # A.1 device fold+NMS exists but is opt-in — the ~6 ms device fold
+    # overhead doesn't pay off in Python-composed form vs the 24-36 ms
+    # host single-pass NMS. A fused C++ kernel would flip this.
+    trace_nms = os.environ.get("SP_TRACE_NMS", "0") == "1"
+    # Propagate the flag so run_device_compute (which reads the env var at
+    # call time) returns the 3-tuple (s, s_pooled, d_norm) we expect here.
+    os.environ["SP_TRACE_NMS"] = "1" if trace_nms else "0"
+
+    def _do_warmup():
+        out = tt_model.run_device_compute(tt_in, b=b)
+        if trace_nms:
+            sw, pw, dw = out
+            ttnn.synchronize_device(device)
+            ttnn.deallocate(sw); ttnn.deallocate(pw); ttnn.deallocate(dw)
+        else:
+            sw, dw = out
+            ttnn.synchronize_device(device)
+            ttnn.deallocate(sw); ttnn.deallocate(dw)
+
     # Warmup/compile: first full forward compiles the graph.
     t0 = time.perf_counter()
     tt_model.load_input(tt_in, pixel_values)
-    s_warm, d_warm = tt_model.run_device_compute(tt_in, b=b)
-    ttnn.synchronize_device(device)
+    _do_warmup()
     t_compile = time.perf_counter() - t0
-    logger.info(f"compile/warmup time: {t_compile:.3f}s")
-    ttnn.deallocate(s_warm)
-    ttnn.deallocate(d_warm)
+    logger.info(f"compile/warmup time: {t_compile:.3f}s (SP_TRACE_NMS={int(trace_nms)})")
 
     use_trace = os.environ.get("SP_NO_TRACE", "0") != "1"
 
@@ -138,7 +174,12 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         # Capture trace of the device compute graph.
         tt_model.load_input(tt_in, pixel_values)
         tid = ttnn.begin_trace_capture(device, cq_id=0)
-        s, d_norm = tt_model.run_device_compute(tt_in, b=b)
+        out = tt_model.run_device_compute(tt_in, b=b)
+        if trace_nms:
+            s, s_pooled, d_norm = out
+        else:
+            s, d_norm = out
+            s_pooled = None
         ttnn.end_trace_capture(device, tid, cq_id=0)
 
         # Warmup the trace execution once (allocator setup).
@@ -157,9 +198,7 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         n_iter = int(os.environ.get("SP_N_ITER", "10"))
 
         # Pure-compute upper bound: input already resident on device, timed
-        # loop is just traced replay. Matches the paper's "forward pass"
-        # timing definition (the paper doesn't re-upload input per frame
-        # during its throughput measurement either).
+        # loop is just traced replay.
         tt_model.load_input_prepared(tt_in, host_input)
         ttnn.synchronize_device(device)
         t0 = time.perf_counter()
@@ -189,12 +228,21 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         for _ in range(n_iter):
             tt_model.load_input_prepared(tt_in, host_input)
             ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-            scores_host, desc_host = _device_to_host_post(tt_model, s, d_norm, b, height, width)
-            scores_full = tt_model._decode_keypoints(scores_host, apply_nms=True)
-            for i in range(b):
-                kp, sc = tt_model._extract_keypoints_single(scores_full[i : i + 1])
-                if kp.shape[0] > 0:
-                    _ = tt_model._sample_descriptors(kp[None], desc_host[i : i + 1], scale=8)
+            if trace_nms:
+                dense, nms_scores, desc_host = _device_to_host_post_with_nms(
+                    tt_model, s, s_pooled, d_norm, b, height, width
+                )
+                for i in range(b):
+                    kp, sc = tt_model._extract_keypoints_single(nms_scores[i : i + 1])
+                    if kp.shape[0] > 0:
+                        _ = tt_model._sample_descriptors(kp[None], desc_host[i : i + 1], scale=8)
+            else:
+                scores_host, desc_host = _device_to_host_post(tt_model, s, d_norm, b, height, width)
+                scores_full = tt_model._decode_keypoints(scores_host, apply_nms=True)
+                for i in range(b):
+                    kp, sc = tt_model._extract_keypoints_single(scores_full[i : i + 1])
+                    if kp.shape[0] > 0:
+                        _ = tt_model._sample_descriptors(kp[None], desc_host[i : i + 1], scale=8)
         elapsed_e2e = time.perf_counter() - t0
         fps_e2e = n_iter / elapsed_e2e
 
@@ -215,6 +263,8 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         fps_match_paper = n_iter / elapsed_match
     else:
         # Fallback for profilers: no trace, so per-op markers are visible.
+        # Force SP_TRACE_NMS=0 here to keep the 2-tuple return shape.
+        os.environ["SP_TRACE_NMS"] = "0"
         tt_model.load_input(tt_in, pixel_values)
         s, d_norm = tt_model.run_device_compute(tt_in, b=b)
         ttnn.synchronize_device(device)
