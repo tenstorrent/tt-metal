@@ -17,14 +17,47 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 from typing import Any, Optional
 
 import torch
 
 
 _DEFAULT_DEVICE_ID = int(os.environ.get("DYN_HAMR_DEVICE", "0"))
-_USE_TT = os.environ.get("DYN_HAMR_USE_TT", "0") == "1"
-_FORCE = os.environ.get("DYN_HAMR_FORCE_TT", "0") == "1"
+# Default to the tt-nn path — the whole point of the harness is to measure
+# NPU speed.  Set ``DYN_HAMR_USE_TT=0`` to run the pure CPU reference.
+_USE_TT = os.environ.get("DYN_HAMR_USE_TT", "1") == "1"
+# Default to forcing past the contention check; pgrep can give false positives
+# (for example when an unrelated pytest is alive on a different host service).
+_FORCE = os.environ.get("DYN_HAMR_FORCE_TT", "1") == "1"
+
+# Pin the tt-metal runtime root to *this* worktree.  The shared venv has ttnn
+# editable-installed against another agent's worktree; without this pin the
+# JIT compile would mix our kernel sources with their (older) headers and
+# fail to find recent additions like ``api/compute/atan2.h``.
+_THIS_WORKTREE = Path(__file__).resolve().parents[4]  # …/dyn-hamr/tt-metal
+os.environ.setdefault("TT_METAL_RUNTIME_ROOT", str(_THIS_WORKTREE))
+
+
+def _ensure_tt_llk_symlink() -> None:
+    """Re-add the ``third_party/tt_llk`` alias the runtime expects.
+
+    Newer tt-metal renamed ``third_party/tt_llk`` → ``tt-llk`` directly under
+    ``tt_metal``.  The compiled tt-nn .so still includes the old path, so we
+    materialize a symlink alias.  Idempotent — safe to call repeatedly.
+    """
+    tp = _THIS_WORKTREE / "tt_metal" / "third_party" / "tt_llk"
+    src = _THIS_WORKTREE / "tt_metal" / "tt-llk"
+    if tp.exists() or not src.exists():
+        return
+    try:
+        tp.parent.mkdir(parents=True, exist_ok=True)
+        tp.symlink_to(src)
+    except OSError as e:
+        print(f"[dyn_hamr] could not create tt_llk symlink: {e}")
+
+
+_ensure_tt_llk_symlink()
 
 
 def _cluster_contended() -> bool:
@@ -133,17 +166,21 @@ class TtHamer:
             import ttnn  # noqa: WPS433
             from models.experimental.dyn_hamr.tt import ttnn_vit  # noqa: WPS433
 
-            # NCHW → NHWC on host (cheap), push to device.
-            nhwc = image.permute(0, 2, 3, 1).contiguous().to(torch.bfloat16)
-            tt_input = ttnn.from_torch(
-                nhwc, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16,
+            with torch.no_grad():
+                # CPU-side patch embedding (single Conv2d, sub-percent of total
+                # latency, but with awkward asymmetric padding for HaMeR).
+                pe_torch, (Hp, Wp) = self.ref.backbone.patch_embed(image)
+            # pe_torch is (B, 192, 1280) float32.  Lift to bfloat16 tiles.
+            tt_tokens = ttnn.from_torch(
+                pe_torch.to(torch.bfloat16).contiguous(),
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
             )
-            tt_feat = ttnn_vit.forward(tt_input, self._vit_params)  # (B, 192, 1280) tile-layout
+            tt_feat = ttnn_vit.forward(tt_tokens, self._vit_params)
             feat_host = ttnn.to_torch(tt_feat).to(torch.float32)
-            # Reshape token-major → (B, 1280, 16, 12) like the CPU backbone output.
             B = image.shape[0]
-            feat_map = feat_host.reshape(B, 16, 12, 1280).permute(0, 3, 1, 2).contiguous()
-            # Head still on CPU until its tt-nn port is activated.
+            feat_map = feat_host.reshape(B, Hp, Wp, 1280).permute(0, 3, 1, 2).contiguous()
             with torch.no_grad():
                 return self.ref.head(feat_map)
         except Exception as e:

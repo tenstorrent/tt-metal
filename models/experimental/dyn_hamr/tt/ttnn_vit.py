@@ -65,14 +65,15 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
     ``models.experimental.dyn_hamr.reference.hamer``.  This converts every
     backbone weight to bfloat16 tiles and returns a nested dict matching the
     structure the functional ops below consume.
+
+    Patch embedding stays CPU-resident — it's one Conv2d that contributes
+    sub-percent latency but has awkward asymmetric padding (256×192 with
+    pad=4) that doesn't decompose cleanly into ``ttnn.fold``.  We push the
+    already-flattened patch tokens to the device instead.
     """
     assert ttnn is not None, "ttnn runtime not available"
     backbone = ref.backbone
     params: Dict[str, Any] = {
-        "patch_embed": {
-            "weight": _t(_patch_embed_weight(backbone.patch_embed.proj), device),
-            "bias": _t(backbone.patch_embed.proj.bias, device),
-        },
         "pos_embed": _t(backbone.pos_embed.squeeze(0), device),  # (N+1, C)
         "last_norm": {
             "weight": _t(backbone.last_norm.weight, device),
@@ -118,25 +119,45 @@ def patch_embed(pixel_values, params: Dict[str, Any], pad: int = 4, patch: int =
     return x
 
 
+def _split_qkv(qkv, num_heads: int, head_dim: int):
+    """Split fused (B, N, 3·h·d) into ((B, h, N, d), (B, h, d, N), (B, h, N, d)).
+
+    Avoids ``ttnn.transformer.split_query_key_value_and_split_heads`` because
+    that helper asserts head_dim is a multiple of TILE_WIDTH (32), which
+    HaMeR's 80-d heads are not.  Manual reshape+permute lets the tile-padded
+    matmul handle the misaligned head dim transparently.
+    """
+    B, N, _ = qkv.shape
+    qkv = ttnn.reshape(qkv, (B, N, 3, num_heads, head_dim))
+    qkv = ttnn.permute(qkv, (2, 0, 3, 1, 4))  # (3, B, h, N, d)
+    q = qkv[0]
+    k = qkv[1]
+    v = qkv[2]
+    k = ttnn.permute(k, (0, 1, 3, 2))  # (B, h, d, N) for q @ k
+    return q, k, v
+
+
+def _merge_heads(ctx, num_heads: int, head_dim: int):
+    B = ctx.shape[0]
+    N = ctx.shape[2]
+    out = ttnn.permute(ctx, (0, 2, 1, 3))  # (B, N, h, d)
+    return ttnn.reshape(out, (B, N, num_heads * head_dim))
+
+
 def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
     """One ViT-H transformer block (pre-norm, fused qkv, MLP with GELU)."""
-    B, N, C = hidden.shape
-
     # --- self-attention ---
     h = ttnn.layer_norm(hidden, weight=block_params["norm1"]["weight"], bias=block_params["norm1"]["bias"])
     qkv = h @ block_params["attn"]["qkv_w"]
     qkv = qkv + block_params["attn"]["qkv_b"]
 
-    # (B, N, 3C) → split into Q, K, V on device.
-    q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-        qkv, num_heads=num_heads, transpose_key=True
-    )
+    q, k, v = _split_qkv(qkv, num_heads, head_dim)
     scale = head_dim ** -0.5
     attn = q @ k
     attn = attn * scale
     attn = ttnn.softmax(attn, dim=-1)
     ctx = attn @ v
-    ctx = ttnn.transformer.concatenate_heads(ctx)
+    ctx = _merge_heads(ctx, num_heads, head_dim)
 
     attn_out = ctx @ block_params["attn"]["proj_w"]
     attn_out = attn_out + block_params["attn"]["proj_b"]
@@ -154,19 +175,28 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
 
 
 def forward(
-    pixel_values_nhwc,
+    patch_tokens,
     params: Dict[str, Any],
     num_heads: int = 16,
     head_dim: int = 80,
     depth: int = 32,
 ):
-    """End-to-end ViT-H forward producing the (B, 1280, 16, 12) feature map."""
-    x = patch_embed(pixel_values_nhwc, params["patch_embed"])  # (B, 192, 1280) on tile grid
-    # Positional embedding: HaMeR adds pos_embed[:, 1:] + pos_embed[:, :1] to every token.
+    """ViT-H body forward.
+
+    ``patch_tokens`` is a tt-nn tensor of shape ``(B, 192, 1280)`` carrying the
+    *already-projected* patch embeddings (the CPU does the asymmetric Conv2d
+    patch projection for us — that's a one-shot, sub-percent op that doesn't
+    decompose cleanly to ``ttnn.fold``).  Output is the post-LN feature map at
+    ``(B, 192, 1280)`` token-major.
+    """
+    x = patch_tokens
     pos = params["pos_embed"]
-    # Broadcast add via ttnn.add.
-    x = x + pos[1:]  # positional part
-    x = x + pos[:1]  # (effectively the CLS slot added back uniformly)
+    # HaMeR adds pos_embed[:, 1:] + pos_embed[:, :1] to every token; we
+    # collapsed pos_embed to (193, C) at upload, so reuse the same split.
+    pos_patches = pos[1:]
+    pos_cls = pos[:1]
+    x = x + pos_patches
+    x = x + pos_cls
 
     for i in range(depth):
         x = block(x, params["blocks"][i], num_heads=num_heads, head_dim=head_dim)
