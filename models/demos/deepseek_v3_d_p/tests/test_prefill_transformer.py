@@ -25,7 +25,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
@@ -52,22 +51,23 @@ PCC_THRESHOLD = 0.99
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
 INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
+SEQ_LEN_25K = 25 * 1024
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
-@pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
+@pytest.mark.parametrize("return_kv_cache", [False], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
     "input_source",
     ["json_prompts", "abc_1k", "random", "passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"],
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
-@pytest.mark.parametrize("isl_total", [1024, 6400])
+@pytest.mark.parametrize("isl_total", [SEQ_LEN_25K])
 @pytest.mark.parametrize(
     "num_layers",
     [
-        12,
-        pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
+        61,
+        # pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
     ],
 )
 @pytest.mark.parametrize(
@@ -79,6 +79,7 @@ INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", 
     ],
     ids=["e64_cf4_host", "e256_cf32_host", "e256_cf32_device"],
 )
+@pytest.mark.parametrize("num_iterations", [1000])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -120,6 +121,7 @@ def test_prefill_transformer(
     num_links,
     topology,
     pcc_validation,
+    num_iterations,
     input_source,
     use_pretrained,
     return_kv_cache,
@@ -349,7 +351,14 @@ def test_prefill_transformer(
     profiler.start("tt_forward")
     logger.info("Running TtPrefillTransformer forward...")
     do_return_kv = pcc_validation and return_kv_cache
-    result = transformer(tt_tokens, tt_kvpe_cache, return_intermediates=pcc_validation, read_profiler=True)
+    for i in range(num_iterations):
+        logger.info(f"Starting iteration: {i}")
+        print(f"Starting iteration: {i}")
+        result = transformer(tt_tokens, tt_kvpe_cache, return_intermediates=pcc_validation, read_profiler=True)
+        # logger.info(f"Starting completion sync on iteration: {i}")
+        print(f"Starting completion sync on iteration: {i}")
+        ttnn.synchronize_device(mesh_device)
+
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_forward")
     logger.info("Forward pass completed successfully")

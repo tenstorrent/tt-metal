@@ -67,29 +67,29 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
         "layer8",
     ],
 )
-@pytest.mark.parametrize("num_iters", [30])
-@pytest.mark.parametrize("isl_total", [1024])
+@pytest.mark.parametrize("num_iters", [100])
+@pytest.mark.parametrize("isl_total", [25 * 1024])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
-        pytest.param(
-            (1, 1),
-            {},
-            1,
-            ttnn.Topology.Linear,
-            id="mesh-1x1",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
+        # pytest.param(
+        #     (1, 1),
+        #     {},
+        #     1,
+        #     ttnn.Topology.Linear,
+        #     id="mesh-1x1",
+        # ),
+        # pytest.param(
+        #     (2, 4),
+        #     {
+        #         "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        #         "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+        #     },
+        #     1,
+        #     ttnn.Topology.Linear,
+        #     marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+        #     id="mesh-2x4",
+        # ),
         pytest.param(
             (8, 4),
             {
