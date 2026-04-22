@@ -3,7 +3,7 @@ training_config:
   seed: 5489
   model_save_interval: 500
   batch_size: 4
-  gradient_accumulation_steps: 2
+  gradient_accumulation_steps: 4
   num_epochs: 1
   max_steps: 5000
   use_clip_grad_norm: false
@@ -24,7 +24,7 @@ training_config:
 device_config:
   enable_ddp: true
   enable_tp: true
-  mesh_shape: [4, 8]
+  mesh_shape: [2, 4]  # DDP=2 x TP=4 = 8 devices
 
 eval_config:
   repetition_penalty: 1.0
