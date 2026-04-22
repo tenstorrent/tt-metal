@@ -33,28 +33,33 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
         return ConcatS2IProgramFactory{};
     }
 
-    // specific cases for 2 tensors
-    if (input_tensors.size() == 2) {
-        if (input_tensors[0].layout() == input_tensors[1].layout()) {
-            if (3 == args.dim) {
-                if (input_tensors[0].layout() == Layout::ROW_MAJOR &&
-                    0 == input_tensors[0].padded_shape()[-1] % args.groups &&
-                    0 == input_tensors[1].padded_shape()[-1] % args.groups) {
-                    return ConcatS2SRMProgramFactory{};
-                }
-                if (input_tensors[0].shard_spec().has_value() && input_tensors[1].shard_spec().has_value()) {
-                    return ConcatS2STiledProgramFactory{};
+    const bool input_nd_sharded = (TensorMemoryLayout::ND_SHARDED == input_tensors[0].memory_config().memory_layout());
+    const bool output_nd_sharded = (TensorMemoryLayout::ND_SHARDED == args.output_mem_config.memory_layout());
+    if (!input_nd_sharded && !output_nd_sharded) {
+        // specific cases for 2 tensors
+        if (input_tensors.size() == 2) {
+            if (input_tensors[0].layout() == input_tensors[1].layout()) {
+                if (3 == args.dim) {
+                    if (input_tensors[0].layout() == Layout::ROW_MAJOR &&
+                        0 == input_tensors[0].padded_shape()[-1] % args.groups &&
+                        0 == input_tensors[1].padded_shape()[-1] % args.groups) {
+                        return ConcatS2SRMProgramFactory{};
+                    }
+                    if (input_tensors[0].shard_spec().has_value() && input_tensors[1].shard_spec().has_value()) {
+                        return ConcatS2STiledProgramFactory{};
+                    }
                 }
             }
         }
-    }
 
-    // specific cases sharded to sharded for dim 2 and 3 (no ND sharding)
-    if (2 == args.dim || 3 == args.dim) {
-        return ConcatS2SMultiProgramFactory{};
+        // specific cases sharded to sharded for dim 2 and 3 (no ND sharding)
+        if (2 == args.dim || 3 == args.dim) {
+            return ConcatS2SMultiProgramFactory{};
+        }
     }
 
     // default factory
+    // including ND sharded tensors
     return ConcatProgramFactory{};
 }
 
