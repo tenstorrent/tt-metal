@@ -340,6 +340,51 @@ These are structural to how the blocked sub-tile computation works across all no
 
 ---
 
+### `sfpu_chain + DestReuseOp` pattern — evaluated and blocked
+
+The following kernels were found during fresh independent investigation. They use
+`binary_dest_reuse_tiles` or multi-DEST SFPU ops, but all are blocked:
+
+- **`eltwise/unary/hardshrink_kernel.cpp`** / **`unary/hardshrink_kernel_sfpu.cpp`**:
+  Multiple `binary_dest_reuse_tiles` per DEST window (3 in one window); `hardshrink_kernel_sfpu`
+  uses `fill_tile(*lambd)` with runtime value → not expressible in chain.
+- **`eltwise/unary/logsigmoid_kernel.cpp`** / **`unary_ng/logsigmoid_kernel.cpp`**:
+  `logsigmoid_tile(dst0, dst1, dst_out)` takes 3 DST args — multi-slot coordination
+  not expressible as a single-slot `sfpu_chain` element.
+- **`eltwise/unary_backward/tanh_bw/eltwise_bw_tanh_deriv.cpp`**:
+  Pattern is `sfpu_chain(Load<D0>, Load<D1>, TanhDerivative<D1>, SfpuMul<D0,D1,D0>)` — clean
+  in principle. Blocked by `TanhDerivative` not existing in `sfpu_helpers`. Also needs
+  WaitUpfrontNoPop + indexed Load (tile i from a pre-waited batch) which sfpu_pipeline's
+  default `cb_tile_idx=0` doesn't support.
+- **`experimental/unary_backward/gelu_backward/eltwise_bw_gelu_approx_tanh.cpp`** and `.._poly.cpp`:
+  8+ DEST slots with fill_tile(runtime constant) steps throughout; complex multi-register algebra.
+- **`reduction/generic/reduce_h_neg.cpp`**:
+  Chunked multi-tile reduction (`copy+neg` then `reduce`) with self-feeding cb_acc and
+  variable `ntiles` per chunk. sfpu_pipeline's Load uses `cb_tile_idx=0` always — can't
+  read tile i from a pre-waited block of N tiles.
+- **`experimental/topk_router_gpt/compute.cpp`** /
+  **`experimental/deepseek/mla/compute_collector.cpp`** /
+  **`experimental/deepseek/moe/moe_gate_mm/compute.cpp`**:
+  DestReuse interleaved with matmul, topk, transpose inside a long DEST window.
+- **Macro-parameterized families (bulk entry)**:
+  `binary_ng/eltwise_binary_sfpu_*.cpp`, `ternary/ternary_sfpu_*.cpp`, `ternary_addc_ops_sfpu*.cpp`,
+  `copy/typecast/eltwise_typecast.cpp`, `unary/eltwise_sfpu.cpp`, `unary_ng/eltwise_sfpu.cpp`,
+  `unary/where_tss_kernel.cpp`, `unary_ng/where_tss_kernel.cpp`:
+  All use SFPU ops through preprocessor macros (`SFPU_OP_CHAIN_0`, `BINARY_SFPU_OP`,
+  `TERNARY_SFPU_OP_FUNC`, `TYPECAST_LLK`, `FILL_LLK`). C++ types are not available at the
+  migration call site — would require either changing how ops are parameterized or writing
+  per-op wrappers.
+- **`data_movement/clone/compute_kernel.cpp`**: runtime CB IDs from `get_compile_time_arg_val`
+  (not constexpr `uint32_t` usable as template params).
+- **`data_movement/sharded/eltwise_copy.cpp`**: uses `acquire_dst()`/`release_dst()` (full-sync
+  mode) vs sfpu_pipeline's `tile_regs_acquire()` (half-sync mode). Mixing modes risks
+  undefined behavior; not worth the risk for a pure copy kernel.
+- **`lgamma_fast_kernel.cpp`** / **`lgamma_kernel.cpp`** (both `unary/` and `unary_ng/`):
+  Multi-slot SFPU ops (floor, frac, sin, mul_binary_tile on different DST slots), runtime
+  fill values, complex conditionals.
+
+---
+
 ## DEFERRED (evaluated, migration possible, deprioritized)
 
 *(none yet)*
