@@ -11,11 +11,6 @@
 #include "llk_memory_checks.h"
 #include "sfpu_stub.h"
 
-// Globals
-std::uint32_t unp_cfg_context          = 0;
-std::uint32_t pack_sync_tile_dst_ptr   = 0;
-std::uint32_t math_sync_tile_dst_index = 0;
-
 // Buffer descriptor IDs for TDMA engines - these are indices into the hardware buffer descriptor table
 constexpr std::uint32_t buf_desc_id_src_a = 29; // Source A matrix input buffer
 constexpr std::uint32_t buf_desc_id_src_b = 30; // Source B matrix input buffer
@@ -86,8 +81,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false>(
-        static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
     _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, false, false>(CT_DIM, RT_DIM); // disable flags for matmul with indexing and mxfp_2x not part
                                                                                                 // of P0 test suite
 

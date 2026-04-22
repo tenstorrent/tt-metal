@@ -9,11 +9,6 @@
 #include "llk_defs.h"
 #include "sfpu_stub.h"
 
-// Globals
-std::uint32_t unp_cfg_context          = 0;
-std::uint32_t pack_sync_tile_dst_ptr   = 0;
-std::uint32_t math_sync_tile_dst_index = 0;
-
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_binary_operands.h"
@@ -75,12 +70,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-#ifdef FORMAT_INT32
-const bool is_int_fpu_en = true;
-#else
-const bool is_int_fpu_en = false;
-#endif
-
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary.h"
 #include "params.h"
@@ -98,7 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Configure math hardware with proper Quasar API
     DataFormat src_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
 
     // Initialize eltwise binary operation with default 32x32 tensor shape
     _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY>(ckernel::DEFAULT_TENSOR_SHAPE, ACC_TO_DEST); // tiny-tile testing not yet supported

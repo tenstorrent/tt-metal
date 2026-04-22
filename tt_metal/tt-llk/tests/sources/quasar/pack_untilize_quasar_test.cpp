@@ -33,19 +33,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
 
-        DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-        if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
-        {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
-        }
-        else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-        {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
-        }
-        else
-        {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
-        }
+        const DataFormat unpack_dst_format = static_cast<DataFormat>(formats.unpack_A_dst);
+        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(unpack_dst_format);
     }
     else
     {
@@ -114,20 +103,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Setup data valid scheme
         set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-        DataFormat math_format     = static_cast<DataFormat>(formats.math);
-        DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-        if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        }
-        else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        }
+        const DataFormat math_format = static_cast<DataFormat>(formats.math);
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
 
         _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
         for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
