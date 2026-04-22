@@ -71,6 +71,10 @@ class ModelArgs(TTModelArgs):
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.padded_vocab_size = 262400
 
+        # Full prefill trace during warmup runs two 27B prefills per seq length and stalls demos. For gemma-3-27b,
+        # warmup uses untraced prefill only to compile kernels; trace records on the first real prefill.
+        self.warmup_prefill_capture_trace = self.base_model_name != "gemma-3-27b"
+
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
 
