@@ -36,7 +36,16 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Pass the session ID explicitly when the orchestrator saved it at startup.
+# Without this, session_cost.py falls back to PID-based discovery, which picks
+# the wrong session after a few hours when other claude sessions have started.
+_SESSION_ARGS=""
+if [[ -n "${SESSION_ID:-}" && -n "${PROJECT_CWD:-}" ]]; then
+    _SESSION_ARGS="--session-id ${SESSION_ID} --project-cwd ${PROJECT_CWD}"
+fi
+
 python "${SCRIPT_DIR}/session_cost.py" \
     --since "${START_TIME}" \
     ${MODEL:+--model "${MODEL}"} \
+    ${_SESSION_ARGS:+${_SESSION_ARGS}} \
     --log-dir "${LOG_DIR}" >/dev/null 2>&1 || true

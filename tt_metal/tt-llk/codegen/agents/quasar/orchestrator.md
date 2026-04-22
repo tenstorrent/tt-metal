@@ -184,6 +184,19 @@ export START_TIME="${START_TIME}"
 export LOG_DIR="${LOG_DIR}"
 export MODEL="${MODEL}"
 _STATE_EOF
+
+# Discover the session ID NOW — at startup it is still the most recently
+# started session, so the fallback in session_cost.py is reliable.  Saving it
+# here means refresh_cost.sh and extract_run_transcripts.py can pass it
+# explicitly on all later calls (hours later, other sessions may have started
+# and the fallback picks the wrong one).
+_SESSION_PAIR=$(python codegen/scripts/session_cost.py --print-session 2>/dev/null || echo "")
+SESSION_ID=$(echo "$_SESSION_PAIR" | awk '{print $1}')
+PROJECT_CWD=$(echo "$_SESSION_PAIR" | cut -d' ' -f2-)
+if [ -n "$SESSION_ID" ]; then
+    echo "export SESSION_ID=\"${SESSION_ID}\"" >> /tmp/codegen_run_state.sh
+    echo "export PROJECT_CWD=\"${PROJECT_CWD}\"" >> /tmp/codegen_run_state.sh
+fi
 ```
 
 Note: `--phases-total` starts at `1` (we always run at least one writer-tester
@@ -525,6 +538,7 @@ Agent tool:
     Kernel path: tt_llk_{target_arch}/{kernel_path}
     Flow: new-kernel
     Spec: codegen/artifacts/{op}_analysis.md
+    Cycle: ${CYCLE}
 
     You own the full test-and-fix loop with a hard cap of 10 test runs. Each
     run = compile-producer + simulator-consumer. Diagnose and fix between runs.
@@ -625,8 +639,8 @@ Agent tool:
     Target architecture: {target_arch}
     Kernel path: tt_llk_{target_arch}/{kernel_path}
     Original analysis: codegen/artifacts/{op}_analysis.md
-    Tester log: {LOG_DIR}/agent_tester.md
-    Writer log: {LOG_DIR}/agent_writer.md
+    Tester log: {LOG_DIR}/agent_tester_cycle${CYCLE}.md
+    Writer log: {LOG_DIR}/agent_writer_cycle${CYCLE}.md
     Test files: ${TEST_FILES}
     Previous failure: ${FAILURE_SUMMARY}
 
@@ -885,7 +899,7 @@ cp tests/sources/{target_arch}/{op}_{target_arch}_test.cpp            "$LOG_DIR/
 cp tests/python_tests/{target_arch}/test_{op}_{target_arch}.py        "$LOG_DIR/" 2>/dev/null || true
 cp tests/python_tests/{target_arch}/test_sfpu_{op}_{target_arch}.py   "$LOG_DIR/" 2>/dev/null || true
 
-# Simulator logs
+# Simulator logs — copy BEFORE cleanup_worktree or they are gone permanently
 cp tests/python_tests/{target_arch}/emu_*_.log      "$LOG_DIR/" 2>/dev/null || true
 cp tests/python_tests/{target_arch}/tt-exalens.log  "$LOG_DIR/" 2>/dev/null || true
 ```
@@ -897,8 +911,10 @@ The following files MUST be present in `$LOG_DIR` (write a placeholder noting
 missing logs are visible rather than silently absent):
 
 - `agent_analyzer.md` (always)
-- `agent_writer.md` (always)
-- `agent_tester.md` (always)
+- `agent_writer_cycle1.md` (always — cycle 1 writer)
+- `agent_writer_cycle2.md`, `agent_writer_cycle3.md` (only when those cycles ran)
+- `agent_tester_cycle1.md` (always — cycle 1 tester)
+- `agent_tester_cycle2.md`, `agent_tester_cycle3.md` (only when those cycles ran)
 - `agent_analysis_refiner_v1.md`, `agent_analysis_refiner_v2.md` (only when the refiner ran)
 - `agent_optimizer.md` (only if the optimizer was invoked)
 
@@ -927,7 +943,9 @@ Non-fatal: if no session is found (e.g., running outside the claude CLI),
 the extractor logs and exits 1 without blocking the run.
 
 ```bash
+source /tmp/codegen_run_state.sh 2>/dev/null || true
 python codegen/scripts/extract_run_transcripts.py --log-dir "$LOG_DIR" \
+    ${SESSION_ID:+--session-id "$SESSION_ID" --project-cwd "$PROJECT_CWD"} \
     || echo "extract_run_transcripts: skipped (non-fatal)"
 ```
 
@@ -959,7 +977,7 @@ sibling files to understand what happened.
 Aggregation rules:
 
 - **Assumptions**: concatenate the `## Assumptions` section from
-  `agent_analyzer.md`, `agent_writer.md`, and `agent_tester.md` (plus
+  `agent_analyzer.md`, `agent_writer_cycle*.md`, and `agent_tester_cycle*.md` (plus
   refiner / optimizer when they ran). If an agent wrote "none", skip that
   agent's section entry. Preserve the agent-origin prefix (e.g., `[analyzer] ...`).
 - **Reasoning highlights**: first paragraph (up to 5 sentences) of each
@@ -1036,8 +1054,8 @@ Assumptions made during the run:
 ----------------------------------------
 Reasoning highlights:
   [analyzer] {first paragraph of agent_analyzer.md § Reasoning summary}
-  [writer]   {first paragraph of agent_writer.md § Reasoning summary}
-  [tester]   {first paragraph of agent_tester.md § Reasoning summary}
+  [writer]   {first paragraph of agent_writer_cycle{N}.md § Reasoning summary (per cycle)}
+  [tester]   {first paragraph of agent_tester_cycle{N}.md § Reasoning summary (per cycle)}
   [refiner]  {...}  (if it ran)
   [optimizer]{...}  (if it ran)
 ----------------------------------------
@@ -1076,8 +1094,8 @@ Artifacts:
     - codegen/artifacts/{op}_failed_attempt_v*/ (if refinement occurred)
   Agent self-logs:
     - {LOG_DIR}/agent_analyzer.md
-    - {LOG_DIR}/agent_writer.md
-    - {LOG_DIR}/agent_tester.md
+    - {LOG_DIR}/agent_writer_cycle*.md (one per cycle that ran: cycle1, cycle2, cycle3)
+    - {LOG_DIR}/agent_tester_cycle*.md (one per cycle that ran)
     - {LOG_DIR}/agent_analysis_refiner_v*.md (if refinement occurred)
     - {LOG_DIR}/agent_optimizer.md (if optimizer ran)
   Subagent transcripts (raw chronology — assistant text + tool calls + results):
@@ -1108,9 +1126,9 @@ cp codegen/artifacts/{op}_report.md "$LOG_DIR/"
 |-----------|----------|-------------------|
 | Analyzer → Writer, Tester, Refiner | `artifacts/{op}_analysis.md` | Problem Statement, Target Pattern Survey, Available Instructions, Semantic→Instruction Mapping, Instruction Encoding Constraints, Solution Approach (§6a–§6e), Format Applicability, Complexity & Phases |
 | Writer → Tester | kernel file at `tt_llk_{target_arch}/{kernel_path}` | File must exist and compile successfully |
-| Writer → Refiner (on compile failure) | kernel file + `$LOG_DIR/agent_writer.md` + compile stderr | Refiner reads the writer log to distinguish faithful-writer-bad-plan from unfaithful-writer-OK-plan |
+| Writer → Refiner (on compile failure) | kernel file + `$LOG_DIR/agent_writer_cycle{N}.md` + compile stderr | Refiner reads the writer log to distinguish faithful-writer-bad-plan from unfaithful-writer-OK-plan |
 | Tester → Optimizer (on PASS) | tested kernel + test files | Kernel passes every variant |
-| Tester → Refiner (on STUCK) | `$LOG_DIR/agent_tester.md` (10-attempt fix log) + test files | Refiner forensically reconstructs what structural assumption in the analysis misled the writer |
+| Tester → Refiner (on STUCK) | `$LOG_DIR/agent_tester_cycle{N}.md` (10-attempt fix log) + test files | Refiner forensically reconstructs what structural assumption in the analysis misled the writer |
 | Refiner → Writer | `artifacts/{op}_analysis.md` overwritten in place, with `Refinement History` section at the top | Writer follows the refined plan; prior attempt archived under `artifacts/{op}_failed_attempt_v*/` |
 | Optimizer → Report | optimized (or reverted) kernel file | Kernel compiles and all tests still pass |
 

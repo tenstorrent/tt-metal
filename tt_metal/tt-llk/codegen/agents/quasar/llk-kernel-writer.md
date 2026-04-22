@@ -393,7 +393,7 @@ Your task is complete when:
 
 ## Self-Logging (MANDATORY — STRUCTURED TEMPLATE)
 
-**Before returning, write `{LOG_DIR}/agent_writer.md` using the `Write` tool.**
+**Before returning, write `{LOG_DIR}/agent_writer_cycle{N}.md` using the `Write` tool**, where `{N}` is the cycle number passed in this prompt (1, 2, or 3). Never write to `agent_writer.md` directly — each cycle must produce its own file so prior cycles' logs are not overwritten.
 The file MUST contain the sections below in order. The orchestrator's Step 5f
 concatenates the structured sections from every agent log into the final run
 report; missing sections break the report. Raw chronology (assistant text +
@@ -407,6 +407,7 @@ If no `LOG_DIR` was provided, skip logging.
 
 ```markdown
 # Agent: llk-kernel-writer — {kernel} ({target_arch}) — Cycle {N}
+<!-- File: agent_writer_cycle{N}.md -->
 
 ## Inputs received
 - Kernel / kernel_type / target arch / kernel path

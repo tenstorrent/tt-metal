@@ -22,8 +22,8 @@ Required:
 - **KERNEL_PATH** — path to the failed kernel file (e.g. `tt_llk_quasar/common/inc/sfpu/ckernel_sfpu_{op}.h`)
 - **ORIGINAL_ANALYSIS_PATH** — `codegen/artifacts/{op}_analysis.md`
 - **ARCH_RESEARCH_PATH** — `codegen/artifacts/{op}_arch_research.md`
-- **TESTER_LOG_PATH** — `{LOG_DIR}/agent_tester.md` (contains the 10-attempt fix log)
-- **WRITER_LOG_PATH** — `{LOG_DIR}/agent_writer.md`
+- **TESTER_LOG_PATH** — `{LOG_DIR}/agent_tester_cycle{N}.md` (the failing cycle's tester log)
+- **WRITER_LOG_PATH** — `{LOG_DIR}/agent_writer_cycle{N}.md` (the failing cycle's writer log)
 - **TEST_FILES** — list of test source/python files the tester used or created
 - **WORKTREE_DIR** — `cd` here before any file I/O
 - **LOG_DIR** — where to write the self-log

@@ -603,7 +603,7 @@ Whatever the outcome, the kernel path and test paths must be stated literally so
 
 ## Self-Logging (MANDATORY — STRUCTURED TEMPLATE)
 
-**Before returning, write `{LOG_DIR}/agent_tester.md` using the `Write` tool.**
+**Before returning, write `{LOG_DIR}/agent_tester_cycle{N}.md` using the `Write` tool**, where `{N}` is the cycle number passed in this prompt. Never write to `agent_tester.md` directly — each cycle must produce its own file so prior cycles' logs are not overwritten.
 The file MUST contain the sections below in order. The orchestrator's Step 5f
 concatenates the structured sections from every agent log into the final run
 report; missing sections break the report. Raw chronology (assistant text +
