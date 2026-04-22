@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -101,19 +102,15 @@ void kernel_main() {
                 cb_pop_front(cos_cb, Wt);
 #endif
 
-                cb_wait_front(sin_interm_cb, Wt);
-                cb_wait_front(cos_interm_cb, Wt);
-                add_tiles_init(cos_interm_cb, sin_interm_cb);
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    // out = cos_interim + sin_interim
-                    add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
-                    pack_tile(j, out_cb, j);
-                }
-                REL();
-                cb_push_back(out_cb, Wt);
-                cb_pop_front(sin_interm_cb, Wt);
-                cb_pop_front(cos_interm_cb, Wt);
+                // out = cos_interim + sin_interim (sequential NONE-bcast, full Wt block)
+                // Both operands are produced by this kernel just above, waited upfront and
+                // popped at end; output is reserved bulk and pushed once.
+                compute_kernel_lib::add<
+                    compute_kernel_lib::BroadcastDim::NONE,
+                    compute_kernel_lib::BinaryInputPolicy::WaitUpfrontPopAtEnd,
+                    compute_kernel_lib::BinaryInputPolicy::WaitUpfrontPopAtEnd,
+                    compute_kernel_lib::BinaryOutputPolicy::Bulk>(
+                    cos_interm_cb, sin_interm_cb, out_cb, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter
