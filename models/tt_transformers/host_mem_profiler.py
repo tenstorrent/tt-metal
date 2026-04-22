@@ -1,15 +1,33 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
+
 import argparse
+import importlib
 import os
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 from loguru import logger
+
+
+def _require(package, import_name=None):
+    import_name = import_name or package
+    try:
+        importlib.import_module(import_name)
+    except ImportError:
+        print(f"Installing missing dependency: {package}")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+        importlib.invalidate_caches()  # flush finder cache so the new package is visible
+
+
+_require("memory-profiler", "memory_profiler")
+_require("matplotlib")
+
+import matplotlib.pyplot as plt
 from memory_profiler import memory_usage
 
 PYTEST_EXTRA_ARGS = ["-v", "-s"]
@@ -40,12 +58,12 @@ def plot_results(name, elapsed, mib, out_dir):
 
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Memory (MiB)")
-    ax.set_title("Memory Usage Over Time — Model Comparison")
+    ax.set_title("Memory Usage Over Time")
     ax.legend()
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, "memory_profile_comparison.png"), dpi=150)
+    fig.savefig(os.path.join(out_dir, "memory_profile.png"), dpi=150)
     plt.close(fig)
-    logger.info(f"Saved at {os.path.join(out_dir, 'memory_profile_comparison.png')}")
+    logger.info(f"Saved at {os.path.join(out_dir, 'memory_profile.png')}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -69,13 +87,16 @@ if __name__ == "__main__":
 
     logger.info(f"\n{'='*60}\nProfiling: {model['name']}\n{'='*60}")
 
-    mem_ts, _ = memory_usage(
+    mem_ts, returncode = memory_usage(
         (make_runner(model, args.k), [], {}),
         interval=0.1,
         retval=True,
         timestamps=True,
         include_children=True,
     )
+    if returncode:
+        logger.info(f"pytest exited with code {returncode} — skipping plot", file=sys.stderr)
+        sys.exit(returncode)
 
     mib = [m for m, _ in mem_ts]
     ts = [t for _, t in mem_ts]
@@ -87,8 +108,10 @@ if __name__ == "__main__":
 
     safe_name = args.name.replace("/", "_").replace(" ", "_")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = Path(os.path.abspath(os.path.join(OUTPUT_ROOT, f"{safe_name}_{timestamp}")))
-    if out_dir.is_relative_to(OUTPUT_ROOT.resolve()):
-        out_dir.mkdir(parents=True, exist_ok=True)
+    output_root = OUTPUT_ROOT.resolve()
+    out_dir = (output_root / f"{safe_name}_{timestamp}").resolve()
+    if not out_dir.is_relative_to(output_root):
+        raise ValueError(f"Refusing to write outside output root: {out_dir}")
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     plot_results(model["name"], elapsed, mib, out_dir)
