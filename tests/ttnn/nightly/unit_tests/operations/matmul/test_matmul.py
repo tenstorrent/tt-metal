@@ -355,7 +355,7 @@ def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
             128,
             128,
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=1,
                 out_subblock_h=2,
                 out_subblock_w=2,
@@ -373,7 +373,7 @@ def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
             128,
             128,
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(2, 1),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
                 in0_block_w=1,
                 out_subblock_h=2,
                 out_subblock_w=2,
@@ -391,7 +391,7 @@ def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
             128,
             128,
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(2, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))}),
                 in0_block_w=1,
                 out_subblock_h=2,
                 out_subblock_w=2,

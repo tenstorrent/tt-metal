@@ -468,7 +468,14 @@ class ttMLA:
             "memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "dtype": self.MM_DEFAULT_DTYPES[weight_name],
             "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(self.ring_sdpa_compute_grid[0] - 1, self.ring_sdpa_compute_grid[1] - 1),
+                        )
+                    }
+                ),
                 in0_block_w=in0_block_w,
                 out_subblock_h=out_subblock_h,
                 out_subblock_w=out_subblock_w,
@@ -486,7 +493,14 @@ class ttMLA:
         q_chunk_size = cfg["q_chunk_size"] if cfg else 32
         k_chunk_size = cfg["k_chunk_size"] if cfg else 32
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(self.ring_sdpa_compute_grid[0] - 1, self.ring_sdpa_compute_grid[1] - 1),
+                    )
+                }
+            ),
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,

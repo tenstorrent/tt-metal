@@ -497,13 +497,13 @@ class cross_attention:
         if num_cores_softmax > 64:
             num_cores_softmax = 64
             end_grid = ttnn.CoreCoord(7, 7)
-            compute_with_storage_grid_size = (8, 8)
+            compute_with_storage_grid_size = ttnn.CoreCoord(8, 8)
         elif num_cores_softmax == 48:
             end_grid = ttnn.CoreCoord(7, 5)
-            compute_with_storage_grid_size = (8, 6)
+            compute_with_storage_grid_size = ttnn.CoreCoord(8, 6)
         elif num_cores_softmax == 32:
             end_grid = ttnn.CoreCoord(7, 3)
-            compute_with_storage_grid_size = (8, 4)
+            compute_with_storage_grid_size = ttnn.CoreCoord(8, 4)
 
         height_per_core = num_heads * seq_len // num_cores_softmax
         orig_mem_config = attention_scores.memory_config()

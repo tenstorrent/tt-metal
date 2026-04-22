@@ -43,7 +43,7 @@ class TtMoEGateConfig:
             # Keyed by (sp_dim, per_device_emb_dim); forward() looks up the tuple.
             # Missing key → TTNN auto-picks program config.
             (4096, DeepSeekV3Config.EMB_SIZE // 4): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, 9))}),
                 in0_block_w=56,
                 out_subblock_h=2,
                 out_subblock_w=4,

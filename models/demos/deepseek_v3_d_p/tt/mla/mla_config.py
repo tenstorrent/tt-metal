@@ -15,13 +15,16 @@ import ttnn
 
 # Available core grid is 12x10, but due to di/dt and throttling problems, use 11x10 temporarily
 COMPUTE_GRID = (11, 10)
+compute_cores_11x10 = ttnn.CoreRangeSet(
+    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(COMPUTE_GRID[0] - 1, COMPUTE_GRID[1] - 1))}
+)
 
 MLA_MATMUL_CONFIG = {
     # hidden_states @ q_a_proj_weight
     "q_a_proj": {
         4096: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=COMPUTE_GRID,
+                allowed_worker_cores=compute_cores_11x10,
                 in0_block_w=14,
                 out_subblock_h=1,
                 out_subblock_w=5,
@@ -37,7 +40,7 @@ MLA_MATMUL_CONFIG = {
         },
         3200: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=COMPUTE_GRID,
+                allowed_worker_cores=compute_cores_11x10,
                 in0_block_w=14,
                 out_subblock_h=5,
                 out_subblock_w=1,
@@ -56,7 +59,7 @@ MLA_MATMUL_CONFIG = {
     "q_b_proj": {
         4096: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=COMPUTE_GRID,
+                allowed_worker_cores=compute_cores_11x10,
                 in0_block_w=4,
                 out_subblock_h=1,
                 out_subblock_w=6,
@@ -72,7 +75,7 @@ MLA_MATMUL_CONFIG = {
         },
         3200: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=COMPUTE_GRID,
+                allowed_worker_cores=compute_cores_11x10,
                 in0_block_w=4,
                 out_subblock_h=1,
                 out_subblock_w=6,
@@ -91,7 +94,7 @@ MLA_MATMUL_CONFIG = {
     "wkv_b1": {
         4096: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=COMPUTE_GRID,
+                allowed_worker_cores=compute_cores_11x10,
                 in0_block_w=4,
                 out_subblock_h=1,
                 out_subblock_w=8,
@@ -106,7 +109,7 @@ MLA_MATMUL_CONFIG = {
         },
         3200: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=COMPUTE_GRID,
+                allowed_worker_cores=compute_cores_11x10,
                 in0_block_w=4,
                 out_subblock_h=1,
                 out_subblock_w=8,
@@ -124,7 +127,7 @@ MLA_MATMUL_CONFIG = {
     "kv_a_proj_with_mqa": {
         4096: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=COMPUTE_GRID,
+                allowed_worker_cores=compute_cores_11x10,
                 in0_block_w=8,
                 out_subblock_h=1,
                 out_subblock_w=2,
@@ -140,7 +143,7 @@ MLA_MATMUL_CONFIG = {
         },
         3200: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=COMPUTE_GRID,
+                allowed_worker_cores=compute_cores_11x10,
                 in0_block_w=8,
                 out_subblock_h=2,
                 out_subblock_w=2,
@@ -159,7 +162,7 @@ MLA_MATMUL_CONFIG = {
     "wkv_b2": {
         4096: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=COMPUTE_GRID,
+                allowed_worker_cores=compute_cores_11x10,
                 in0_block_w=8,
                 out_subblock_h=2,
                 out_subblock_w=4,
@@ -175,7 +178,7 @@ MLA_MATMUL_CONFIG = {
         },
         3200: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=COMPUTE_GRID,
+                allowed_worker_cores=compute_cores_11x10,
                 in0_block_w=16,
                 out_subblock_h=1,
                 out_subblock_w=4,
@@ -194,7 +197,7 @@ MLA_MATMUL_CONFIG = {
     "o_proj": {
         4096: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=COMPUTE_GRID,
+                allowed_worker_cores=compute_cores_11x10,
                 in0_block_w=8,
                 out_subblock_h=1,
                 out_subblock_w=7,
@@ -210,7 +213,7 @@ MLA_MATMUL_CONFIG = {
         },
         3200: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=COMPUTE_GRID,
+                allowed_worker_cores=compute_cores_11x10,
                 in0_block_w=8,
                 out_subblock_h=1,
                 out_subblock_w=7,

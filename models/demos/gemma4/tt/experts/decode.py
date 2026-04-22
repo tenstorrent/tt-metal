@@ -38,7 +38,9 @@ def _build_sparse_matmul_config(m, n, in0_block_w=1):
     per_core_N = n_tiles // best_cores
 
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(best_cx, best_cy),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(best_cx - 1, best_cy - 1))}
+        ),
         in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=1,

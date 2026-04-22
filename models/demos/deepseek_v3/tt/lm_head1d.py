@@ -140,7 +140,9 @@ class LMHead1D(AbstractModule):
             out_subblock_w -= 1
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(grid_size.x, grid_size.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             in0_block_w=in0_block_w,
             out_subblock_h=1,
             out_subblock_w=out_subblock_w,
