@@ -11,7 +11,6 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tile.hpp>
 
 namespace tt::tt_metal {
 class Program;

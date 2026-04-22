@@ -28,7 +28,10 @@ using BinaryPolicy = experimental::PrecompiledKernelConfig::FallbackPolicy;
 
 struct ScopedCopiedPrecompiledRoot {
     explicit ScopedCopiedPrecompiledRoot(fs::path root) : root_(std::move(root)) {}
-    ~ScopedCopiedPrecompiledRoot() { fs::remove_all(root_); }
+    ~ScopedCopiedPrecompiledRoot() {
+        std::error_code ec;
+        fs::remove_all(root_, ec);
+    }
 
     fs::path root_;
 };
