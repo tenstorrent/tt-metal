@@ -7,6 +7,7 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 // Pre-zero CB pages via NOC DMA from MEM_ZEROS so tile-alignment padding is zero.
+// Uses MEM_ZEROS_SIZE-aligned transactions (same pattern as zero_out_tiles in conv_reader_common.hpp).
 // padded_page_bytes must be a multiple of 16 to guarantee remainder alignment.
 template <uint32_t padded_page_bytes, typename Dst>
 FORCE_INLINE void pre_zero_pages(experimental::Noc noc, const Dst& dst, uint32_t offset, uint32_t num_pages) {
@@ -27,6 +28,7 @@ FORCE_INLINE void pre_zero_pages(experimental::Noc noc, const Dst& dst, uint32_t
 }
 
 inline int32_t clampIndex(int32_t idx, int32_t lower_bound, int32_t upper_bound) {
+    // If we're doing replicate padding, clamp idx into [lower_bound, upper_bound].
     if (idx < lower_bound) {
         return lower_bound;
     }
@@ -38,6 +40,7 @@ inline int32_t clampIndex(int32_t idx, int32_t lower_bound, int32_t upper_bound)
 
 template <uint32_t in_row_size_bytes, typename Dst>
 inline void zeroPad(experimental::Noc noc, const Dst& dst, uint32_t offset) {
+    // Zero-fill from MEM_ZEROS
     constexpr uint32_t num_full_reads = in_row_size_bytes / MEM_ZEROS_SIZE;
     constexpr uint32_t partial_read_size = in_row_size_bytes % MEM_ZEROS_SIZE;
 
@@ -66,6 +69,7 @@ FORCE_INLINE void read_input_row(
     if constexpr (Reader::DSpec::tensor_shape_static) {
         if constexpr ((reader.dspec().rank() > 1) && (reader.dspec().tensor_shape()[1] > 1)) {
             // Width/block sharded RowMajor tensors may split a logical row across multiple pages.
+            // Height-sharded inputs keep a single page per row and should use the direct path below.
             constexpr uint32_t width_in_pages = reader.dspec().tensor_shape()[1];
             const uint32_t col_page_idx = c_in_offset_bytes / in_row_size_bytes;
             const uint32_t in_offset_bytes = c_in_offset_bytes - (col_page_idx * in_row_size_bytes);
@@ -89,6 +93,8 @@ FORCE_INLINE void read_input_row(
         {.offset_bytes = dst_offset});
 }
 
+// Manages chunked CB writes: reserves TILE_HEIGHT pages, tracks patches written,
+// pushes when full, and flushes remaining at the end of a block.
 template <uint32_t cb_id, uint32_t padded_page_bytes, uint32_t patch_pad_bytes>
 struct ChunkWriter {
     static constexpr uint32_t chunk_max = 32;  // TILE_HEIGHT
