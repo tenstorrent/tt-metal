@@ -15,8 +15,10 @@ Owner:
     adjordjevic-TT
 """
 
+import io
 import os
 import threading
+from elftools.elf.elffile import ELFFile
 from triage import triage_singleton, ScriptConfig, run_script, TTTriageError
 from ttexalens.context import Context
 from ttexalens.hardware.risc_debug import ParsedElfFile
@@ -25,6 +27,36 @@ from ttexalens.tt_exalens_lib import parse_elf
 script_config = ScriptConfig(
     data_provider=True,
 )
+
+
+def _release_elf_file_descriptor(parsed_elf: ParsedElfFile) -> None:
+    """
+    Replace the ParsedElfFile's ELFFile object with a fresh one backed by an
+    in-memory BytesIO buffer, then close the original OS file descriptor.
+
+    pyelftools' ELFFile reads sections and DWARF data lazily from its stream,
+    and also caches internal objects (e.g. _section_header_stringtable) that
+    hold direct references to that stream.  Simply swapping elf_obj.stream
+    leaves those stale references pointing at the now-closed fd, causing
+    "ValueError: seek of closed file" on the next section or DWARF access.
+
+    The safe approach is to slurp the file into BytesIO, construct a brand-new
+    ELFFile from that buffer (so all internal stream references are fresh), and
+    replace parsed_elf.elf atomically before any @cached_property has been
+    evaluated.  parse_elf() opens each ELF with open(path, "rb"), and the
+    resulting fd stays alive as long as the ParsedElfFile is in the cache.
+    With ~500 unique ELF files in a typical triage run this exhausts the OS fd
+    limit (ulimit -n), causing [Errno 24] Too many open files.
+    """
+    stream = parsed_elf.elf.stream
+    if stream is None or isinstance(stream, io.BytesIO):
+        return  # Already in-memory or no stream to close
+    try:
+        stream.seek(0)
+        content = stream.read()
+        parsed_elf.elf = ELFFile(io.BytesIO(content))
+    finally:
+        stream.close()
 
 
 class ElfsCache:
@@ -69,6 +101,7 @@ class ElfsCache:
                     raise TTTriageError(
                         f"Failed to extract DWARF info from ELF file {elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
                     )
+                _release_elf_file_descriptor(parsed_elf)
                 self._cache[elf_path] = parsed_elf
             return self._cache[elf_path]
 
