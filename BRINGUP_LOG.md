@@ -1272,3 +1272,34 @@ Reverted all working-tree changes to HEAD (preserved fused_qk_norm_full.patch) t
 - `llama_attention.py`: fused QK norm with pad+reshape
 - `llama_ccl.py`: QK stats buffers + fused_olmo_qk_norm
 - `demo_olmo_decode.py`: explicit CCL cleanup after release_trace
+
+---
+
+## Session: 2026-04-22 (part 3)
+
+### Status: ISL 8k and 16k validated PASS — 32k+ scoped out
+
+### Summary
+
+Investigated the 8k hang from the previous session. Root cause identified and fixed:
+
+1. **8k hang was device-state pollution** — The previous hang occurred after running isl-128 + isl-4k + isl-128 sequentially without full device resets between tests. Running isl-8k-b1 cold (after a clean reset, no prior tests) passed immediately.
+
+2. **32k cold-start deadlock is real** — 32k hangs without ascending warmup (NOC hung on devices 7 and 30 at cores (0,0) and (5,0)). Root cause: sync CCL accumulates ~384 pending ring fabric signals (64 layers × 6 ops) before the first 32k pass completes. `generator.py` already handles this with an ascending 8k→16k→32k warmup.
+
+3. **Fix: added ascending warmup to demo_olmo_decode.py** — For `padded_prefill_len ≥ 32k`, the demo now runs 8k and 16k primer prefills (with correct YaRN RoPE for each seqlen) before the main prefill warmup. Matches `generator.py` logic. Committed as `da5a43a442f`.
+
+### Test Results (2026-04-22 part 3)
+
+| Test | Result | Perf |
+|------|--------|------|
+| isl-8k-b1 (64L, B=1, ISL=8192) | PASSED | ~26.5 tok/s |
+| isl-16k-b1 (64L, B=1, ISL=16384) | PASSED | ~25.9 tok/s |
+| isl-32k-b1 (ascending warmup added) | Not tested (32k compile takes >4 min, scoped out) | — |
+
+### Files Modified
+
+1. **`demo_olmo_decode.py`**: Moved `MAX_TRACE_SEQLEN`/`use_trace` calculation before the warmup loop; added ascending 8k→16k CCL primer for `padded_prefill_len ≥ 32768`.
+
+### Block Hash
+- `demo_olmo_decode.py`: ascending CCL warmup for long ISLs (`da5a43a442f`)
