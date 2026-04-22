@@ -1476,8 +1476,8 @@ def test_issue_38841_regression(device):
         [(1, 8190, 1, 128), [0, 0, 0, 0], [1, 8190, 1, 128], [1, 1, 1, 2]],
     ],
 )
-def test_slice_large_tensor_stride_last_dim(device, input_shape, begins, ends, step):
-    """Test slice with stride in last dimension on large tensor (1, 8190, 1, 128)"""
+def test_issue_42753_regression(device, input_shape, begins, ends, step):
+    """Regression test for issue #42753: slicing shape (1, 8190, 1, 128)."""
 
     torch.manual_seed(2003)
 
