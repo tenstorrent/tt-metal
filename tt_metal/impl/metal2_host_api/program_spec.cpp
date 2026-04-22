@@ -743,7 +743,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // it says "hey, your input was malformed, fix it". This is a developer-facing, active
     // documentation of the code's assumptions.
     // We REALLY shouldn't be using TT_FATAL for both flavors.
-    TT_FATAL(spec.workers.has_value(), "Interal Error: spec.workers must be populated.");
+    TT_FATAL(spec.workers.has_value(), "Internal Error: spec.workers must be populated.");
     const auto& workers = spec.workers.value();
     TT_FATAL(!workers.empty(), "At least one WorkerSpec is required");
 
@@ -1552,7 +1552,7 @@ Program MakeProgramFromSpec(const ProgramSpec& user_spec, bool skip_validation) 
             runtime_schema.num_runtime_args_per_node[node_coord] = num_args;
         }
         runtime_schema.num_common_runtime_args = user_schema.num_common_runtime_args;
-        program_impl->register_kernel_rta_schema(kernel_spec.unique_id, std::move(runtime_schema));
+        program_impl->register_kernel_rta_schema(kernel_spec.unique_id, runtime_schema);
     }
 
     return Program(std::move(program_impl));

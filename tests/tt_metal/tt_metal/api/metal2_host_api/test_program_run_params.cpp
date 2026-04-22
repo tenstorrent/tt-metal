@@ -210,7 +210,7 @@ TEST_F(ProgramRunParamsTestQuasar, MissingNodeRTAsFails) {
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/0);
     Program program = MakeProgramFromSpec(spec);
 
-    // Don't provide the per-node RTAs (empty runtime_args)
+    // Don't provide the per-node RTAs (empty runtime_varargs)
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
@@ -275,7 +275,7 @@ TEST_F(ProgramRunParamsTestQuasar, DuplicateNodeCoordInRuntimeArgsFails) {
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/0);
     Program program = MakeProgramFromSpec(spec);
 
-    // Provide runtime_args with duplicate node_coord entries
+    // Provide runtime_varargs with duplicate node_coord entries
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
@@ -710,11 +710,11 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyRTAsMissingNodeCoverageFails) {
     });
     EXPECT_THAT(
         [&] { SetProgramRunParameters(program, params); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("missing vararg runtime_args for node")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("missing vararg runtime args for node")));
 }
 
 TEST_F(ProgramRunParamsTestQuasar, VarargOnlyUnknownNodeFails) {
-    // Host passes runtime_args for a node the kernel doesn't run on. Regression canary for
+    // Host passes runtime_varargs for a node the kernel doesn't run on. Regression canary for
     // the domain check added alongside named-RTA validation.
     NodeCoord node{0, 0};
     NodeCoord wrong_node{3, 3};
@@ -826,7 +826,7 @@ TEST_F(ProgramRunParamsTestGen1, WrongRuntimeArgsCountFails) {
     EXPECT_THAT(
         [&] { SetProgramRunParameters(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("expects 3 vararg runtime_args, but 2 were provided")));
+            ::testing::HasSubstr("expects 3 vararg runtime args, but 2 were provided")));
 }
 
 }  // namespace
