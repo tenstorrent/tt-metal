@@ -8,8 +8,8 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
 
@@ -84,17 +84,18 @@ ttnn::Tensor routed_expert_ffn_bh(
     ttnn::Tensor gate_result;
     ttnn::Tensor up_result;
     if (use_routed) {
-        auto gate_config_silu = gate_up_config;
-        gate_config_silu.fused_activation =
-            ttnn::operations::unary::UnaryWithParam{ttnn::operations::unary::UnaryOpType::SILU};
+        // SiLU is applied as a separate op after the matmul (not fused). The fused
+        // activation path on the routed matmul was measurably slower than running
+        // matmul + standalone silu.
         gate_result = routed_matmul(
             /*a=*/x,
             /*b=*/gate_proj,
             /*max_iter=*/max_iter.value(),
             /*expert_iter=*/expert_iter,
-            /*program_config=*/gate_config_silu,
+            /*program_config=*/gate_up_config,
             /*compute_kernel_config=*/compute_kernel_config.value(),
             /*output_memory_config=*/gate_up_mem);
+        gate_result = ttnn::silu(gate_result);
         up_result = routed_matmul(
             /*a=*/x,
             /*b=*/up_proj,
