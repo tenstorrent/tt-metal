@@ -8,8 +8,6 @@ from loguru import logger
 from typing import List
 
 from collections import defaultdict
-from dataclasses import fields, replace
-
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
     num_blocks_in_seq,
@@ -24,6 +22,7 @@ from models.common.llama_models import (
 )
 
 from models.common.sampling import SamplingParams, format_sampling_params
+from models.common.sampling.generator import _scatter_sampling_params_to_slots
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
 
@@ -570,34 +569,11 @@ class Generator(WarmupForwardMixin):
             # Setting sampling module up after switch to decode mode
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
 
-            # Reorder sampling params so values sit in their slot positions (except seed).
-            def _scatter_params_to_slots(params, slots):
-                max_batch = self.model_args.max_batch_size
-
-                def _scatter_list(values):
-                    if not isinstance(values, list):
-                        return values
-                    values = list(values)
-                    # Broadcast single-entry lists to match user count
-                    if len(values) == 1 and len(slots) > 1:
-                        values = values * len(slots)
-                    user_vals = values[: len(slots)]
-                    filler = values[len(slots)] if len(values) > len(slots) else values[-1]
-                    scattered = [filler for _ in range(max_batch)]
-                    for val, slot_idx in zip(user_vals, slots):
-                        scattered[slot_idx] = val
-                    return scattered
-
-                updates = {}
-                for f in fields(params):
-                    if f.name == "seed":
-                        # Seeds stay in original order; no reordering to slot indices.
-                        updates[f.name] = getattr(params, f.name)
-                        continue
-                    updates[f.name] = _scatter_list(getattr(params, f.name))
-                return replace(params, **updates)
-
-            sampling_params = _scatter_params_to_slots(sampling_params, empty_slots)
+            sampling_params = _scatter_sampling_params_to_slots(
+                sampling_params,
+                empty_slots,
+                self.model_args.max_batch_size,
+            )
             # print("sampling_params_scattered", sampling_params, "empty_slots", empty_slots)
             sampling_module = self.model.sampling
 
@@ -1119,6 +1095,32 @@ class Generator(WarmupForwardMixin):
 
         return tt_tok, tt_log_probs
 
+    def _decode_logits_no_trace_text(
+        self,
+        tokens,
+        current_pos,
+        page_table=None,
+        kv_cache=None,
+        tt_out_logits_saved=None,
+        is_cur_pos_sharded=False,
+        is_page_table_sharded=False,
+        return_logits=False,
+    ):
+        """Run the decode model forward pass without applying sampling."""
+        tt_tokens, tt_current_pos, rot_mat_idxs, tt_page_table = self.model.prepare_inputs_decode(
+            tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
+        )
+        return self.model.ttnn_decode_forward(
+            tt_tokens,
+            tt_current_pos,
+            rot_mat_idxs=rot_mat_idxs,
+            page_table=tt_page_table,
+            kv_cache=kv_cache,
+            tt_out_logits_saved=tt_out_logits_saved,
+            is_cur_pos_sharded=is_cur_pos_sharded,
+            return_logits=return_logits,
+        )
+
     def _decode_forward_no_trace_text(
         self,
         tokens,
@@ -1134,17 +1136,14 @@ class Generator(WarmupForwardMixin):
         Performs text decode step.
         Returns `(tt_output, tt_log_probs)` on device.
         """
-        tt_tokens, tt_current_pos, rot_mat_idxs, tt_page_table = self.model.prepare_inputs_decode(
-            tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
-        )
-        tt_tok = self.model.ttnn_decode_forward(
-            tt_tokens,
-            tt_current_pos,
-            rot_mat_idxs=rot_mat_idxs,
-            page_table=tt_page_table,
+        tt_tok = self._decode_logits_no_trace_text(
+            tokens,
+            current_pos,
+            page_table=page_table,
             kv_cache=kv_cache,
             tt_out_logits_saved=tt_out_logits_saved,
             is_cur_pos_sharded=is_cur_pos_sharded,
+            is_page_table_sharded=is_page_table_sharded,
             return_logits=return_logits,
         )
 
@@ -1170,7 +1169,7 @@ class Generator(WarmupForwardMixin):
         """
 
         # Compile run
-        self._decode_forward_no_trace_text(
+        self._decode_logits_no_trace_text(
             tokens,
             current_pos,
             page_table=page_table,
@@ -1199,6 +1198,12 @@ class Generator(WarmupForwardMixin):
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        if not return_logits:
+            sampling_module = getattr(self.model, "sampling", None)
+            if sampling_module is not None and getattr(sampling_module, "enable_internal_trace", False):
+                # Pre-capture the split sampling trace so the first live decode
+                # step does not lazily enter sampling trace capture.
+                sampling_module.capture_trace(logits=tt_out_tok[0], tt_out_tok=tokens_tt)
         logger.info("Done Capturing Decode Trace")
 
         return trace_id, tt_out_tok, tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt
