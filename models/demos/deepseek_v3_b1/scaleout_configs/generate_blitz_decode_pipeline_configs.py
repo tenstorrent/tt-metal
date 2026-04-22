@@ -120,7 +120,7 @@ def generate_slice_to_pcie_device_mapping(
     return actual_mapping_file
 
 
-def generate_rank_bindings(pipeline_config, physical_mapping_file, worker_tt_metal_home=None):
+def generate_rank_bindings(pipeline_config, physical_mapping_file, worker_tt_metal_home=None, output_dir=None):
     with open(physical_mapping_file, "r") as f:
         slice_to_pcie_device_mapping = yaml.safe_load(f)
 
@@ -159,13 +159,23 @@ def generate_rank_bindings(pipeline_config, physical_mapping_file, worker_tt_met
             "TT_MESH_GRAPH_DESC_PATH": str(Path(worker_tt_metal_home) / mgd_path),
         }
 
-    with open(pipeline_config["rank_binding_file"], "w") as f:
+    # When --output-dir is set, mpirun uses --wdir there for the mapping file; write
+    # rank binding here too so outputs match cwd-agnostic CI (e.g. working-directory: /ci/tt-metal).
+    rank_binding_path = (
+        str(Path(output_dir) / Path(pipeline_config["rank_binding_file"]).name)
+        if output_dir
+        else pipeline_config["rank_binding_file"]
+    )
+    with open(rank_binding_path, "w") as f:
         yaml.dump(rank_binding_configs, f, default_flow_style=False, sort_keys=False)
 
 
-def generate_rank_file(pipeline_config):
+def generate_rank_file(pipeline_config, output_dir=None):
     num_pipeline_stages = len(pipeline_config["stage_to_slice_mapping"])
-    with open(pipeline_config["rank_file"], "w") as f:
+    rank_file_path = (
+        str(Path(output_dir) / Path(pipeline_config["rank_file"]).name) if output_dir else pipeline_config["rank_file"]
+    )
+    with open(rank_file_path, "w") as f:
         for stage in range(num_pipeline_stages):
             host = pipeline_config["stage_to_slice_mapping"][stage]["host"]
             f.write(f"rank {stage}={host} slot=0-31\n")
@@ -217,8 +227,8 @@ def generate_pipeline_config_files(
     actual_mapping_file = generate_slice_to_pcie_device_mapping(
         physical_mapping_file, host_vector, mpi_user, worker_tt_metal_home, output_dir
     )
-    generate_rank_bindings(config, actual_mapping_file, worker_tt_metal_home)
-    generate_rank_file(config)
+    generate_rank_bindings(config, actual_mapping_file, worker_tt_metal_home, output_dir)
+    generate_rank_file(config, output_dir)
 
 
 if __name__ == "__main__":
