@@ -2156,10 +2156,27 @@ jobs:
               team_files=$(echo "$team_entry" | cut -d':' -f2-)
               sorted_files=$(echo "$team_files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
 
-              # Check combined approval for this file set
-              has_approval="${FILES_HAS_APPROVAL[$sorted_files]}"
-              if [ "$has_approval" = "true" ]; then
-                echo "Team $team already approved (combined check), skipping"
+              # Check if a member of THIS SPECIFIC TEAM has approved
+              # (not just any reviewer who covers overlapping files)
+              team_has_approval=false
+              if [ -n "$TEAM_MEMBERS" ]; then
+                team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
+                if [ -n "$team_members_entry" ]; then
+                  team_member_list=$(echo "$team_members_entry" | cut -d':' -f2)
+                  if [ -n "$team_member_list" ] && [ "$team_member_list" != "insufficient-permissions" ] && [ "$team_member_list" != "team-not-found" ] && [ "$team_member_list" != "unauthorized" ] && [ "$team_member_list" != "api-error" ] && [ "$team_member_list" != "no-members" ]; then
+                    IFS=',' read -ra TEAM_CHECK_ARRAY <<< "$team_member_list"
+                    for member in "${TEAM_CHECK_ARRAY[@]}"; do
+                      [ -z "$member" ] && continue
+                      if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                        team_has_approval=true
+                        echo "Team $team approved by member $member, skipping"
+                        break
+                      fi
+                    done
+                  fi
+                fi
+              fi
+              if [ "$team_has_approval" = "true" ]; then
                 continue
               fi
 
