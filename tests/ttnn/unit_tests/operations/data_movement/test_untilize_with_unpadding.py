@@ -226,7 +226,22 @@ def test_untilize_with_unpadding_block_sharded(device, dtype, shape, output_end,
         ([4, 4, 256, 512], [2, 1, 255, 511]),
         ([4, 4, 256, 512], [2, 1, 126, 255]),
         ([4, 3, 64, 64], [2, 0, 31, 31]),
-        ([4, 4, 3, 64, 64], [2, 3, 0, 31, 31]),
+        # Blocked until reshape supports ND-sharded tensors without going through
+        # ttnn::experimental::view. The rank>4 wrapper in untilize_with_unpadding
+        # (build_ndiml_untilize_val -> squeeze_from_ND_to_4D -> ttnn::reshape) routes
+        # through PerformView -> view_device, which rejects ND-sharded inputs for any
+        # rank change other than 0D/1D -> 2D expansion. See:
+        #   - ttnn/core/tensor/tensor_ops.cpp view_device (TT_FATAL on ND_SHARDED)
+        #   - ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.cpp PerformView
+        #   - ttnn/cpp/ttnn/operations/data_movement/common/common.cpp squeeze_from_ND_to_4D
+        # GitHub issue: #36172
+        pytest.param(
+            [4, 4, 3, 64, 64],
+            [2, 3, 0, 31, 31],
+            marks=pytest.mark.skip(
+                reason="blocked until reshape supports ND-sharded tensors without using ttnn::experimental::view"
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize(

@@ -78,6 +78,9 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_tensor_a.shard_spec().has_value()) {
+            TT_FATAL(
+                operation_attributes.output_mem_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::ND_SHARDED,
+                "Output memory config layout must not be ND_SHARDED when input has a legacy 2d shard_spec");
             if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
                 TT_FATAL(
                     input_tensor_a.shard_spec().value().grid.ranges().size() == 1,
