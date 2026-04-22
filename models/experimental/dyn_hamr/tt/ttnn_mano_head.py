@@ -1,23 +1,34 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Functional tt-nn port of the HaMeR MANO cross-attention head.
+"""tt-nn port of the HaMeR MANO cross-attention regression head.
 
-Consumes the ViT feature map from ``ttnn_vit.forward`` (token-major,
-``(B, 192, 1280)``) and emits a ``(B, 157)`` tensor matching the torch
-reference contract: 16 flattened 3×3 rotation matrices + 10 shape +
-3 weak-perspective camera.  Inference-only, random weights materialized via
-``build_parameters_from_reference``.
+Consumes the ViT feature map produced on device (token-major
+``(B, 192, 1280)``) and emits the same flat ``(B, 157)`` regressor output
+(16 flattened 3×3 rotation matrices + 10 shape + 3 weak-perspective camera)
+that the torch reference produces.
+
+Self- and cross-attention both use ``ttnn.transformer.scaled_dot_product_
+attention`` — head_dim=64 is already tile-aligned so no head padding is
+needed.  The 6-D → rotmat post-processing stays on the host because it's
+sub-millisecond and uses cross-products / L2 normalization that aren't on
+the NPU-critical path.
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import torch
+import torch.nn.functional as F
 
 try:
     import ttnn
 except Exception:  # noqa: BLE001
     ttnn = None
+
+
+HEAD_DIM = 64
+NUM_HEADS = 8
+INNER_DIM = HEAD_DIM * NUM_HEADS  # 512
 
 
 def _t(weight: torch.Tensor, device: Any) -> Any:
@@ -34,10 +45,10 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
     td = head.transformer
     params: Dict[str, Any] = {
         "to_token_embedding": {
-            "weight": _t(td.to_token_embedding.weight.t(), device),
-            "bias": _t(td.to_token_embedding.bias, device),
+            "weight": _t(td.to_token_embedding.weight.t(), device),  # (1, 1024)
+            "bias": _t(td.to_token_embedding.bias, device),          # (1024,)
         },
-        "pos_embedding": _t(td.pos_embedding.squeeze(0), device),  # (1, dim)
+        "pos_embedding": _t(td.pos_embedding.squeeze(0), device),    # (1, 1024)
         "layers": [],
         "decpose": {
             "weight": _t(head.decpose.weight.t(), device),
@@ -51,97 +62,91 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
             "weight": _t(head.deccam.weight.t(), device),
             "bias": _t(head.deccam.bias, device),
         },
-        "init_hand_pose": _t(head.init_hand_pose, device),
-        "init_betas": _t(head.init_betas, device),
-        "init_cam": _t(head.init_cam, device),
     }
     for blk in td.layers:
         params["layers"].append({
             "norm_sa": {"weight": _t(blk.norm_sa.weight, device), "bias": _t(blk.norm_sa.bias, device)},
-            "sa": {
-                "qkv_w": _t(blk.sa.to_qkv.weight.t(), device),
-                "out_w": _t(blk.sa.to_out.weight.t(), device),
-                "out_b": _t(blk.sa.to_out.bias, device),
-            },
+            "sa_qkv_w": _t(blk.sa.to_qkv.weight.t(), device),        # (1024, 3*512)
+            "sa_out_w": _t(blk.sa.to_out.weight.t(), device),        # (512, 1024)
+            "sa_out_b": _t(blk.sa.to_out.bias, device),
             "norm_ca": {"weight": _t(blk.norm_ca.weight, device), "bias": _t(blk.norm_ca.bias, device)},
-            "ca": {
-                "q_w": _t(blk.ca.to_q.weight.t(), device),
-                "kv_w": _t(blk.ca.to_kv.weight.t(), device),
-                "out_w": _t(blk.ca.to_out.weight.t(), device),
-                "out_b": _t(blk.ca.to_out.bias, device),
-            },
+            "ca_q_w": _t(blk.ca.to_q.weight.t(), device),            # (1024, 512)
+            "ca_kv_w": _t(blk.ca.to_kv.weight.t(), device),          # (1280, 2*512)
+            "ca_out_w": _t(blk.ca.to_out.weight.t(), device),        # (512, 1024)
+            "ca_out_b": _t(blk.ca.to_out.bias, device),
             "norm_ff": {"weight": _t(blk.norm_ff.weight, device), "bias": _t(blk.norm_ff.bias, device)},
-            "ff": {
-                "fc1_w": _t(blk.ff.net[0].weight.t(), device),
-                "fc1_b": _t(blk.ff.net[0].bias, device),
-                "fc2_w": _t(blk.ff.net[3].weight.t(), device),
-                "fc2_b": _t(blk.ff.net[3].bias, device),
-            },
+            "ff_fc1_w": _t(blk.ff.net[0].weight.t(), device),        # (1024, 1024)
+            "ff_fc1_b": _t(blk.ff.net[0].bias, device),
+            "ff_fc2_w": _t(blk.ff.net[2].weight.t(), device),        # (1024, 1024)
+            "ff_fc2_b": _t(blk.ff.net[2].bias, device),
         })
     return params
 
 
-def _self_attn(x, sa_p, heads: int, dim_head: int):
-    qkv = x @ sa_p["qkv_w"]
-    q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-        qkv, num_heads=heads, transpose_key=True
-    )
-    attn = (q @ k) * (dim_head ** -0.5)
-    attn = ttnn.softmax(attn, dim=-1)
-    out = attn @ v
-    out = ttnn.transformer.concatenate_heads(out)
-    out = out @ sa_p["out_w"]
-    out = out + sa_p["out_b"]
-    return out
+def _split_qkv_sdpa(qkv, num_heads: int = NUM_HEADS, head_dim: int = HEAD_DIM):
+    """(B, N, 3·h·d) → triple of (B, h, N, d) for SDPA."""
+    B, N, _ = qkv.shape
+    qkv = ttnn.reshape(qkv, (B, N, 3, num_heads, head_dim))
+    qkv = ttnn.permute(qkv, (2, 0, 3, 1, 4))
+    return qkv[0], qkv[1], qkv[2]
 
 
-def _cross_attn(x, context, ca_p, heads: int, dim_head: int):
-    q = x @ ca_p["q_w"]
-    kv = context @ ca_p["kv_w"]
-    # Split K/V by halving the last dim.
-    inner = kv.shape[-1] // 2
-    k, v = ttnn.split(kv, [inner, inner], dim=-1)
-    # Reshape into heads.
-    q = ttnn.transformer.split_query_key_value_and_split_heads(
-        ttnn.concat([q, k, v], dim=-1), num_heads=heads, transpose_key=True
-    )
-    # ``split_query_key_value_and_split_heads`` expected a fused QKV; if the
-    # returned triple is (q_h, k_h, v_h), use directly.
-    q_h, k_h, v_h = q
-    attn = (q_h @ k_h) * (dim_head ** -0.5)
-    attn = ttnn.softmax(attn, dim=-1)
-    out = attn @ v_h
-    out = ttnn.transformer.concatenate_heads(out)
-    out = out @ ca_p["out_w"]
-    out = out + ca_p["out_b"]
-    return out
+def _split_qk_qv_sdpa(q, kv, num_heads: int = NUM_HEADS, head_dim: int = HEAD_DIM):
+    """Cross-attn variant: Q is already a single token tensor; KV is fused.
 
-
-def _ffn(x, ff_p):
-    h = x @ ff_p["fc1_w"]
-    h = h + ff_p["fc1_b"]
-    h = ttnn.gelu(h)
-    h = h @ ff_p["fc2_w"]
-    h = h + ff_p["fc2_b"]
-    return h
-
-
-def decoder_block(x, context, block_params: Dict[str, Any], heads: int = 8, dim_head: int = 64):
-    h = ttnn.layer_norm(x, weight=block_params["norm_sa"]["weight"], bias=block_params["norm_sa"]["bias"])
-    x = x + _self_attn(h, block_params["sa"], heads, dim_head)
-    h = ttnn.layer_norm(x, weight=block_params["norm_ca"]["weight"], bias=block_params["norm_ca"]["bias"])
-    x = x + _cross_attn(h, context, block_params["ca"], heads, dim_head)
-    h = ttnn.layer_norm(x, weight=block_params["norm_ff"]["weight"], bias=block_params["norm_ff"]["bias"])
-    x = x + _ffn(h, block_params["ff"])
-    return x
-
-
-def rot6d_to_rotmat_torch(x6: torch.Tensor) -> torch.Tensor:
-    """Host-side post-processing — kept on CPU because 6D → rotmat is tiny
-    and needs cross product / L2 normalization that aren't on the NPU-critical
-    path.  Runs on the (B, 96) tensor copied back from the device.
+    Returns (q_h, k_h, v_h) all in (B, h, N, d) layout.
     """
-    import torch.nn.functional as F
+    Bq, Nq, _ = q.shape
+    q_h = ttnn.permute(ttnn.reshape(q, (Bq, Nq, num_heads, head_dim)), (0, 2, 1, 3))
+    Bk, Nk, _ = kv.shape
+    kv = ttnn.reshape(kv, (Bk, Nk, 2, num_heads, head_dim))
+    kv = ttnn.permute(kv, (2, 0, 3, 1, 4))
+    k_h = kv[0]
+    v_h = kv[1]
+    return q_h, k_h, v_h
+
+
+def _merge_heads(ctx, num_heads: int = NUM_HEADS, head_dim: int = HEAD_DIM):
+    B = ctx.shape[0]
+    N = ctx.shape[2]
+    out = ttnn.permute(ctx, (0, 2, 1, 3))
+    return ttnn.reshape(out, (B, N, num_heads * head_dim))
+
+
+def _decoder_block(x, context, p: Dict[str, Any]):
+    # --- self-attention via SDPA ---
+    h = ttnn.layer_norm(x, weight=p["norm_sa"]["weight"], bias=p["norm_sa"]["bias"])
+    qkv = h @ p["sa_qkv_w"]
+    q, k, v = _split_qkv_sdpa(qkv)
+    sa = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False, scale=HEAD_DIM ** -0.5)
+    sa = _merge_heads(sa)
+    sa = sa @ p["sa_out_w"]
+    sa = sa + p["sa_out_b"]
+    x = x + sa
+
+    # --- cross-attention via SDPA ---
+    h = ttnn.layer_norm(x, weight=p["norm_ca"]["weight"], bias=p["norm_ca"]["bias"])
+    q = h @ p["ca_q_w"]                                  # (B, 1, 512)
+    kv = context @ p["ca_kv_w"]                          # (B, 192, 1024)
+    q_h, k_h, v_h = _split_qk_qv_sdpa(q, kv)
+    ca = ttnn.transformer.scaled_dot_product_attention(q_h, k_h, v_h, is_causal=False, scale=HEAD_DIM ** -0.5)
+    ca = _merge_heads(ca)                                # (B, 1, 512)
+    ca = ca @ p["ca_out_w"]
+    ca = ca + p["ca_out_b"]
+    x = x + ca
+
+    # --- FFN ---
+    h = ttnn.layer_norm(x, weight=p["norm_ff"]["weight"], bias=p["norm_ff"]["bias"])
+    h = h @ p["ff_fc1_w"]
+    h = h + p["ff_fc1_b"]
+    h = ttnn.gelu(h)
+    h = h @ p["ff_fc2_w"]
+    h = h + p["ff_fc2_b"]
+    return x + h
+
+
+def _rot6d_to_rotmat_torch(x6: torch.Tensor) -> torch.Tensor:
+    """Host-side post-processing — sub-millisecond, kept off the NPU."""
     x = x6.reshape(-1, 3, 2)
     b1 = F.normalize(x[..., 0], dim=-1)
     b2 = F.normalize(x[..., 1] - (b1 * x[..., 1]).sum(-1, keepdim=True) * b1, dim=-1)
@@ -149,40 +154,53 @@ def rot6d_to_rotmat_torch(x6: torch.Tensor) -> torch.Tensor:
     return torch.stack((b1, b2, b3), dim=-1)
 
 
-def forward(feature_map_bchw, params: Dict[str, Any], depth: int = 6, heads: int = 8, dim_head: int = 64,
-            num_hand_joints: int = 15):
-    """MANO head forward on device, returning host torch tensors post head."""
-    # Input is (B, 1280, Hp, Wp) feature map from ViT; token-major for cross-attn.
-    b, c, hp, wp = feature_map_bchw.shape
-    context = ttnn.reshape(feature_map_bchw, (b, c, hp * wp))
-    context = ttnn.permute(context, (0, 2, 1))  # (B, N, C)
+def forward(
+    feature_tokens,
+    params: Dict[str, Any],
+    device: Any,
+    init_hand_pose: torch.Tensor,
+    init_betas: torch.Tensor,
+    init_cam: torch.Tensor,
+    num_hand_joints: int = 15,
+    depth: int = 6,
+    cached_token: Tuple[Any, ...] = (),
+) -> torch.Tensor:
+    """MANO head forward on device → returns (B, 157) flat regression result.
 
-    # Zero query token lifted to device, then embedded.
-    token_torch = torch.zeros(b, 1, 1, dtype=torch.bfloat16)
-    token = ttnn.from_torch(token_torch, device=context.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    ``feature_tokens`` is ``(B, 192, 1280)`` already on device.  ``cached_token``
+    can be a length-1 tuple holding a previously-uploaded zero query token
+    (per-batch reuse) — a fresh upload is allocated when empty.
+    """
+    B = feature_tokens.shape[0]
+
+    # Zero query token (B, 1, 1).  Caller can cache one for reuse.
+    if cached_token and cached_token[0].shape[0] == B:
+        token = cached_token[0]
+    else:
+        token = ttnn.from_torch(
+            torch.zeros(B, 1, 1, dtype=torch.bfloat16),
+            device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+        )
+
     x = token @ params["to_token_embedding"]["weight"]
     x = x + params["to_token_embedding"]["bias"]
     x = x + params["pos_embedding"]
 
     for i in range(depth):
-        x = decoder_block(x, context, params["layers"][i], heads=heads, dim_head=dim_head)
+        x = _decoder_block(x, feature_tokens, params["layers"][i])
 
-    # Regression readouts (all fused on device).
-    x_sq = ttnn.squeeze(x, dim=1)  # (B, dim)
-    pose = x_sq @ params["decpose"]["weight"]
+    # Three regression heads stay on device, then squeeze + add init params on host.
+    pose = x @ params["decpose"]["weight"]
     pose = pose + params["decpose"]["bias"]
-    pose = pose + params["init_hand_pose"]
-    betas = x_sq @ params["decshape"]["weight"]
+    betas = x @ params["decshape"]["weight"]
     betas = betas + params["decshape"]["bias"]
-    betas = betas + params["init_betas"]
-    cam = x_sq @ params["deccam"]["weight"]
+    cam = x @ params["deccam"]["weight"]
     cam = cam + params["deccam"]["bias"]
-    cam = cam + params["init_cam"]
 
-    # Copy back to host for the 6D → rotmat conversion (tiny tensor, not worth on-NPU).
-    pose_host = ttnn.to_torch(pose).to(torch.float32)
-    betas_host = ttnn.to_torch(betas).to(torch.float32)
-    cam_host = ttnn.to_torch(cam).to(torch.float32)
-    rotmats = rot6d_to_rotmat_torch(pose_host).view(b, num_hand_joints + 1, 3, 3)
-    out = torch.cat([rotmats.reshape(b, -1), betas_host, cam_host], dim=-1)  # (B, 157)
-    return out
+    # Pull tiny tensors back to host (each is (B, 1, dim_out)) — total ~1KB.
+    pose_h = ttnn.to_torch(pose).to(torch.float32).reshape(B, -1) + init_hand_pose
+    betas_h = ttnn.to_torch(betas).to(torch.float32).reshape(B, -1) + init_betas
+    cam_h = ttnn.to_torch(cam).to(torch.float32).reshape(B, -1) + init_cam
+
+    rotmats = _rot6d_to_rotmat_torch(pose_h).view(B, num_hand_joints + 1, 3, 3)
+    return torch.cat([rotmats.reshape(B, -1), betas_h, cam_h], dim=-1)  # (B, 157)

@@ -141,20 +141,33 @@ class TtHamer:
             self.device = None
 
     def _build_vit_params(self) -> None:
-        """Lift the reference ViT-H weights into bfloat16 tile tensors on
-        DRAM.  Runs once at construction; the 670M-parameter upload is
-        amortized over every subsequent forward.
+        """Lift the reference ViT-H + MANO head weights into bfloat16 tile
+        tensors on DRAM.  Runs once at construction; the 670M-parameter
+        upload is amortized over every subsequent forward.
         """
         try:
             from models.experimental.dyn_hamr.tt import ttnn_vit  # noqa: WPS433
+            from models.experimental.dyn_hamr.tt import ttnn_mano_head  # noqa: WPS433
             self._vit_params = ttnn_vit.build_parameters_from_reference(self.ref, self.device)
-            # Rough bookkeeping of bytes pushed to DRAM.
+            self._head_params = ttnn_mano_head.build_parameters_from_reference(self.ref, self.device)
+            # Pre-upload the zero query token used by the head — saves a tiny
+            # per-call ttnn.from_torch on the hot path.
+            import ttnn  # noqa: WPS433
+            self._head_token = ttnn.from_torch(
+                torch.zeros(1, 1, 1, dtype=torch.bfloat16),
+                device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+            )
+            # Cache MANO init params (host-side, used to add back final regressions).
+            self._init_pose = self.ref.head.init_hand_pose.detach().clone()
+            self._init_betas = self.ref.head.init_betas.detach().clone()
+            self._init_cam = self.ref.head.init_cam.detach().clone()
             self.peak_dram_bytes = sum(
-                p.numel() * p.element_size() for p in self.ref.backbone.parameters()
+                p.numel() * p.element_size() for p in self.ref.parameters()
             ) // 2  # bfloat16 halves fp32
         except Exception as e:
             print(f"[dyn_hamr] vit param upload failed: {e}; forward will use CPU ref")
             self._vit_params = None
+            self._head_params = None
 
     def _forward_device(self, image: torch.Tensor) -> Optional[torch.Tensor]:
         """NPU forward: ViT on device, MANO head on CPU (head port is still
@@ -165,24 +178,28 @@ class TtHamer:
         try:
             import ttnn  # noqa: WPS433
             from models.experimental.dyn_hamr.tt import ttnn_vit  # noqa: WPS433
+            from models.experimental.dyn_hamr.tt import ttnn_mano_head  # noqa: WPS433
 
             with torch.no_grad():
-                # CPU-side patch embedding (single Conv2d, sub-percent of total
-                # latency, but with awkward asymmetric padding for HaMeR).
-                pe_torch, (Hp, Wp) = self.ref.backbone.patch_embed(image)
-            # pe_torch is (B, 192, 1280) float32.  Lift to bfloat16 tiles.
+                # CPU patch embedding (single Conv2d, sub-millisecond) followed
+                # by upload to device.
+                pe_torch, (_Hp, _Wp) = self.ref.backbone.patch_embed(image)
             tt_tokens = ttnn.from_torch(
                 pe_torch.to(torch.bfloat16).contiguous(),
                 device=self.device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
             )
-            tt_feat = ttnn_vit.forward(tt_tokens, self._vit_params)
-            feat_host = ttnn.to_torch(tt_feat).to(torch.float32)
-            B = image.shape[0]
-            feat_map = feat_host.reshape(B, Hp, Wp, 1280).permute(0, 3, 1, 2).contiguous()
-            with torch.no_grad():
-                return self.ref.head(feat_map)
+            tt_feat = ttnn_vit.forward(tt_tokens, self._vit_params)  # (B, 192, 1280)
+            return ttnn_mano_head.forward(
+                tt_feat,
+                self._head_params,
+                device=self.device,
+                init_hand_pose=self._init_pose,
+                init_betas=self._init_betas,
+                init_cam=self._init_cam,
+                cached_token=(self._head_token,),
+            )
         except Exception as e:
             print(f"[dyn_hamr] tt-nn forward failed: {e}; falling back to CPU ref for this call")
             return None
