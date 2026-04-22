@@ -160,6 +160,8 @@ def create_decoder_golden_tensors(
     golden_torch_dkv_matmul_weights = golden_torch_dkv_matmul_weights * attn_norm.T
     # Fold q_norm into q_b weights (matching prepare.py weight folding)
     golden_torch_matmul2_weights = golden_torch_matmul2_weights * q_norm.T
+    # kv_norm gamma is disabled in kernel (do_gamma=false)
+    golden_torch_dkv_rmsnorm_gamma = torch.ones_like(golden_torch_dkv_rmsnorm_gamma)
 
     total_kv_heads = golden_kv_b1.shape[0] // QNOPE_HEAD_DIM
     kv_lora_rank = golden_kv_b1.shape[1]
@@ -1191,6 +1193,14 @@ def test_decoder_mlp(
     logger.info(f"MLP PCC (decoder vs golden): {pcc}")
     logger.info(f"Golden MLP output: {moe_output.flatten()[:8]}")
     logger.info(f"DecoderBlock MLP output: {decoder_mlp_output_valid.flatten()[:8]}")
+
+    torch.set_printoptions(profile="full")
+    torch.set_printoptions(sci_mode=False)
+    with open("tensor_output.txt", "w") as f:
+        f.write(str(moe_output.flatten()))
+    with open("torch_tensor_output.txt", "w") as f:
+        f.write(str(decoder_mlp_output_valid.float().flatten()))
+
     assert passing, f"DecoderBlock MLP Output PCC check failed: {pcc}"
 
     logger.info("✓ DecoderBlock MLP mesh test passed!")
