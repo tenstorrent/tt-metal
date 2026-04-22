@@ -19,23 +19,29 @@ using namespace ckernel;
 
 template <uint32_t CB, Dst Slot, LoadPolicy Policy, LoadReconfig Reconfig>
 ALWI void Load<CB, Slot, Policy, Reconfig>::init() const {
-    // No-op: copy_tile_to_dst_init is handled once by the pipeline before the tile loop.
-    // This keeps init() uniform with compute ops but avoids redundant re-initialization.
+    // Program the copy_tile MOP for this CB, and (optionally) the SRCA data format.
+    // The pipeline hoists this call out of the tile loop when the chain is
+    // hoist-safe (see chain_is_hoist_safe_v). Otherwise apply() fires it per tile.
+    copy_tile_to_dst_init_short(CB);
+    if constexpr (do_reconfig) {
+        reconfig_data_format_srca(CB);
+    }
 }
 
 template <uint32_t CB, Dst Slot, LoadPolicy Policy, LoadReconfig Reconfig>
-ALWI void Load<CB, Slot, Policy, Reconfig>::exec(uint32_t offset) const {
+ALWI void Load<CB, Slot, Policy, Reconfig>::exec() const {
     if constexpr (do_wait) {
-        // Wait for enough tiles to cover cb_tile_idx (minimum 1 tile for index 0).
-        cb_wait_front(CB, cb_tile_idx + 1);
+        cb_wait_front(CB, cb_tile_idx_ + 1);
     }
-    if constexpr (Reconfig == LoadReconfig::Input) {
-        // Load always reads through unpack A (copy_tile).
-        reconfig_data_format_srca(CB);
-    }
-    copy_tile(CB, cb_tile_idx, static_cast<uint32_t>(Slot) + offset);
+    copy_tile(CB, cb_tile_idx_, static_cast<uint32_t>(Slot));
     if constexpr (do_pop) {
         cb_pop_front(CB, 1);
+    }
+    // WaitUpfrontPopAtEnd: pipeline bulk-waits N tiles before the loop and
+    // bulk-pops N after via wait_upfront/pop_upfront. Here we only advance the
+    // rising index into the pre-waited block.
+    if constexpr (is_upfront) {
+        cb_tile_idx_++;
     }
 }
 
@@ -49,22 +55,6 @@ constexpr bool sfpu_reconfig_output(SfpuDataFormatReconfig mode) {
     return mode == SfpuDataFormatReconfig::OUTPUT;
 }
 
-/** @brief Get the CB of the first Load in a chain (for input reconfig) */
-template <typename Chain>
-struct FirstLoadCB {
-    static constexpr uint32_t value = 0;
-};
-// Non-load first element: recurse
-template <typename First, typename... Rest>
-struct FirstLoadCB<SfpuChain<First, Rest...>> {
-    static constexpr uint32_t value = FirstLoadCB<SfpuChain<Rest...>>::value;
-};
-// Load first element: found it
-template <uint32_t CB, Dst Slot, LoadPolicy Policy, LoadReconfig Reconfig, typename... Rest>
-struct FirstLoadCB<SfpuChain<Load<CB, Slot, Policy, Reconfig>, Rest...>> {
-    static constexpr uint32_t value = CB;
-};
-
 }  // namespace detail
 
 // =============================================================================
@@ -74,83 +64,73 @@ struct FirstLoadCB<SfpuChain<Load<CB, Slot, Policy, Reconfig>, Rest...>> {
 template <
     SfpuOutputPolicy output_policy,
     SfpuDataFormatReconfig reconfig,
-    SfpuBatching batching,
     typename Chain>
 ALWI void sfpu_pipeline(
-    Chain chain,
+    Chain& chain,
     uint32_t ocb,
     uint32_t num_tiles,
     Dst pack_slot) {
+    static_assert(
+        !chain_has_duplicate_upfront_cbs_v<Chain>,
+        "sfpu_pipeline: chain contains two or more WaitUpfrontPopAtEnd Loads on the same CB; "
+        "the pipeline would double-pop. Use a single upfront Load per CB, or duplicate via "
+        "WaitNoPop/NoWaitPop fan-out.");
     ASSERT(num_tiles > 0);
+    ASSERT(static_cast<uint32_t>(pack_slot) < Chain::stride);
 
-    constexpr uint32_t chain_stride = Chain::stride;
-    constexpr uint32_t batch_size = (batching == SfpuBatching::Disabled)
-        ? 1 : (DEST_AUTO_LIMIT / chain_stride);
-    static_assert(batch_size >= 1, "chain stride exceeds DEST capacity");
-
-    ASSERT(static_cast<uint32_t>(pack_slot) < chain_stride);
-
-    // Packer reconfiguration (once before the tile loop).
-    // Input reconfig is handled per-Load via LoadReconfig::Input.
+    // Packer reconfiguration once before the loop.
     if constexpr (detail::sfpu_reconfig_output(reconfig)) {
         pack_reconfig_data_format(ocb);
     }
 
-    // Determine whether any chain element (e.g. DestReuseOp) calls
-    // binary_dest_reuse_tiles_init, which clobbers the copy_tile_to_dst_init_short
-    // MOP state.  When true, copy_tile_to_dst_init_short must be called at the start
-    // of every tile iteration; when false the one-time init before the loop suffices.
-    constexpr bool needs_copy_reinit_per_tile = chain_has_non_load_fpu_clash_v<Chain>;
-
-    if constexpr (!needs_copy_reinit_per_tile) {
-        // Normal path: init once before the tile loop.
-        copy_tile_to_dst_init_short(detail::FirstLoadCB<Chain>::value);
+    // Hoist Load::init once before the tile loop when safe. Otherwise Load::apply
+    // (init+exec) fires per tile inside the cascade — required when the chain
+    // clobbers copy_tile state (e.g. DestReuseOp) or Loads use multiple CBs.
+    constexpr bool hoist_load_init = chain_is_hoist_safe_v<Chain>;
+    if constexpr (hoist_load_init) {
+        chain.init_any_load();
     }
 
-    // Bulk output: reserve all tiles upfront
+    // Bulk wait for every WaitUpfrontPopAtEnd Load's CB (no-op for other policies).
+    chain.wait_upfront(num_tiles);
+
+    // Bulk output: reserve all tiles upfront.
     if constexpr (output_policy == SfpuOutputPolicy::Bulk) {
         cb_reserve_back(ocb, num_tiles);
     }
 
-    // Tile loop: full init+exec (apply) every tile. Multi-op chains require per-op
-    // re-init anyway (SFPU inits interfere), and the single-op case is rare enough
-    // that amortising it across tiles via exec_only isn't worth the extra complexity.
-    // Batched path packs multiple tiles per acquire/release cycle.
-    for (uint32_t i = 0; i < num_tiles; i += batch_size) {
-        if constexpr (needs_copy_reinit_per_tile) {
-            // DestReuseOp in the chain clobbered copy_tile init state last iteration.
-            // Re-init here so the Load ops in this iteration find the right unpacker state.
-            copy_tile_to_dst_init_short(detail::FirstLoadCB<Chain>::value);
-        }
-        const uint32_t actual =
-            (batch_size == 1) ? 1 : (((i + batch_size) <= num_tiles) ? batch_size : (num_tiles - i));
-
+    // One tile per acquire cycle — DEST slots are fixed at compile time.
+    for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
-
-        for (uint32_t k = 0; k < actual; ++k) {
-            chain.apply(k * chain_stride);
+        if constexpr (hoist_load_init) {
+            chain.apply_no_load_init();
+        } else {
+            chain.apply();
         }
-
         tile_regs_commit();
         tile_regs_wait();
 
-        for (uint32_t k = 0; k < actual; ++k) {
-            if constexpr (output_policy == SfpuOutputPolicy::PerTile) {
-                cb_reserve_back(ocb, 1);
-            }
-            pack_tile(static_cast<uint32_t>(pack_slot) + k * chain_stride, ocb);
-            if constexpr (output_policy == SfpuOutputPolicy::PerTile) {
-                cb_push_back(ocb, 1);
-            }
+        if constexpr (output_policy == SfpuOutputPolicy::PerTile) {
+            cb_reserve_back(ocb, 1);
+        }
+        pack_tile(static_cast<uint32_t>(pack_slot), ocb);
+        if constexpr (output_policy == SfpuOutputPolicy::PerTile) {
+            cb_push_back(ocb, 1);
         }
 
         tile_regs_release();
     }
 
-    // Bulk output: push all tiles at end
+    // Bulk output: push all tiles at end.
     if constexpr (output_policy == SfpuOutputPolicy::Bulk) {
         cb_push_back(ocb, num_tiles);
     }
+
+    // Bulk pop every WaitUpfrontPopAtEnd Load's CB (no-op for other policies).
+    chain.pop_upfront(num_tiles);
+
+    // Reset WaitUpfrontPopAtEnd Load indices so the chain can be reused across blocks.
+    chain.reset_tile_idx();
 }
 
 // =============================================================================
@@ -161,11 +141,10 @@ template <
     uint32_t ICB,
     SfpuOutputPolicy output_policy,
     SfpuDataFormatReconfig reconfig,
-    SfpuBatching batching,
     typename Op>
 ALWI void sfpu_op(uint32_t ocb, uint32_t num_tiles, Op op) {
     auto chain = sfpu_chain(Load<ICB, Dst::D0>{}, op);
-    sfpu_pipeline<output_policy, reconfig, batching>(chain, ocb, num_tiles);
+    sfpu_pipeline<output_policy, reconfig>(chain, ocb, num_tiles);
 }
 
 }  // namespace compute_kernel_lib

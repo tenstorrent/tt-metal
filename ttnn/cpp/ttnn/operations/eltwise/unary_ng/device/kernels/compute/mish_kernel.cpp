@@ -44,8 +44,7 @@ void kernel_main() {
                 Dst::D0,
                 LoadPolicy::WaitAndPop>{});
 #endif
-        sfpu_pipeline<SfpuOutputPolicy::PerTile, SfpuDataFormatReconfig::NONE, SfpuBatching::Disabled>(
-            chain, cb_output, num_tiles);
+        sfpu_pipeline<SfpuOutputPolicy::PerTile, SfpuDataFormatReconfig::NONE>(chain, cb_output, num_tiles);
     } else {
 #ifdef INP_FLOAT32
         auto chain = sfpu_chain(
@@ -69,7 +68,6 @@ void kernel_main() {
                 Dst::D0,
                 LoadPolicy::WaitAndPop>{});
 #endif
-        sfpu_pipeline<SfpuOutputPolicy::PerTile, SfpuDataFormatReconfig::NONE, SfpuBatching::Disabled>(
-            chain, cb_output, num_tiles);
+        sfpu_pipeline<SfpuOutputPolicy::PerTile, SfpuDataFormatReconfig::NONE>(chain, cb_output, num_tiles);
     }
 }

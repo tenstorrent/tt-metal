@@ -41,13 +41,10 @@ void kernel_main() {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 // Negate input tile: cb_input -> -x -> cb_ineg
                 // OUTPUT reconfig needed: packer was configured for cb_output/cb_acc by startup/reduce
-                compute_kernel_lib::sfpu_op<
-                    cb_DisabledFIXME,
-                    compute_kernel_lib::SfpuOutputPolicy::PerTile,
+                compute_kernel_lib::sfpu_op < cb_DisabledFIXME, compute_kernel_lib::SfpuOutputPolicy::PerTile,
                     compute_kernel_lib::SfpuDataFormatReconfig::OUTPUT,
-                    compute_kernel_lib::SfpuBatching::Disabled>(cb_ineg, 1, compute_kernel_lib::Neg<>{});
 
-                acquire_dst();
+                    acquire_dst();
                 if (wt > 0 || ht > 0) {
                     cb_acc_obj.wait_front(onetile);
                     copy_tile_init(cb_acc);

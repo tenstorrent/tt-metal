@@ -31,17 +31,17 @@ ALWI void Logsigmoid<In0, In1, Out>::call(uint32_t a, uint32_t b, uint32_t c) co
 }
 
 // Aliases
-template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
-ALWI void sfpu_erf(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Erf<>{}); }
-template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
-ALWI void sfpu_erfc(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Erfc<>{}); }
-template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
-ALWI void sfpu_erfinv(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Erfinv<>{}); }
-template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
-ALWI void sfpu_i0(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, I0<>{}); }
-template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
-ALWI void sfpu_i1(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, I1<>{}); }
-template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
-ALWI void sfpu_lgamma(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Lgamma<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
+ALWI void sfpu_erf(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R>(ocb, num_tiles, Erf<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
+ALWI void sfpu_erfc(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R>(ocb, num_tiles, Erfc<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
+ALWI void sfpu_erfinv(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R>(ocb, num_tiles, Erfinv<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
+ALWI void sfpu_i0(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R>(ocb, num_tiles, I0<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
+ALWI void sfpu_i1(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R>(ocb, num_tiles, I1<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
+ALWI void sfpu_lgamma(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R>(ocb, num_tiles, Lgamma<>{}); }
 
 }  // namespace compute_kernel_lib

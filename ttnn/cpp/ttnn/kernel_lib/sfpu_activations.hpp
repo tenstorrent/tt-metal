@@ -152,32 +152,27 @@ struct Prelu : UnaryOp<Prelu<Slot>, Slot> {
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_sigmoid(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_tanh(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_gelu(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_silu(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_relu(uint32_t ocb, uint32_t num_tiles);
 
 }  // namespace compute_kernel_lib

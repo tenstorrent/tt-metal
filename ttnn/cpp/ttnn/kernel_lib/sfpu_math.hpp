@@ -156,10 +156,10 @@ struct CopyDest {
     static_assert(src_idx < 8 && dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
 
     ALWI void init() const;
-    ALWI void exec(uint32_t offset = 0) const;
-    ALWI void apply(uint32_t offset = 0) const {
+    ALWI void exec() const;
+    ALWI void apply() const {
         init();
-        exec(offset);
+        exec();
     }
 };
 
@@ -215,50 +215,42 @@ struct TanhDerivative : UnaryOp<TanhDerivative<approx, Slot>, Slot> {
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_exp(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_log(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_log1p(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_sqrt(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_rsqrt(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_recip(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_abs(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_neg(uint32_t ocb, uint32_t num_tiles);
 
 }  // namespace compute_kernel_lib

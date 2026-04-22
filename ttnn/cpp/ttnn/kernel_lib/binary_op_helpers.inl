@@ -168,13 +168,10 @@ ALWI void apply_post_chain_batched_impl(
 template <typename... Ops>
 ALWI void apply_post_chain_batched(
     const SfpuChain<Ops...>& chain, uint32_t base_dst, uint32_t chunk_size) {
-    // If the chain has Load ops, init the unpacker for the first Load's CB before
-    // running. (The chain tracks load CBs via FirstLoadCB; future work: track ALL
-    // load CBs to handle format reconfig when a chain loads from multiple CBs
-    // with different data formats.)
-    if constexpr ((is_load_op_v<Ops> || ...)) {
-        copy_tile_to_dst_init_short(FirstLoadCB<SfpuChain<Ops...>>::value);
-    }
+    // apply_post_chain_batched_impl already runs each op's init() once and then
+    // exec() chunk_size times — so Load::init (which programs copy_tile_to_dst_init_short
+    // and any SRCA reconfig) is automatically hoisted across the chunk. Each Load
+    // inits its own CB, correctly supporting multi-CB chains.
     apply_post_chain_batched_impl(chain, base_dst, chunk_size, std::index_sequence_for<Ops...>{});
 }
 

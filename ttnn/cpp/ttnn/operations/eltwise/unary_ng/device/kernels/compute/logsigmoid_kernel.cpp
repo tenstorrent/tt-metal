@@ -24,6 +24,5 @@ void kernel_main() {
         Exp<Approx::Fast, Approx::Fast, Dst::D1>{},
         Logsigmoid<Dst::D0, Dst::D1, Dst::D0>{});
 
-    sfpu_pipeline<SfpuOutputPolicy::PerTile, SfpuDataFormatReconfig::NONE, SfpuBatching::Disabled>(
-        chain, cb_output, num_tiles);
+    sfpu_pipeline<SfpuOutputPolicy::PerTile, SfpuDataFormatReconfig::NONE>(chain, cb_output, num_tiles);
 }

@@ -18,13 +18,13 @@ template <Dst Slot> ALWI void StochasticRound<Slot>::init() const { rounding_op_
 template <Dst Slot> ALWI void StochasticRound<Slot>::call(uint32_t d0) const { stochastic_round_tile(d0); }
 
 // Aliases
-template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
-ALWI void sfpu_floor(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Floor<>{}); }
-template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
-ALWI void sfpu_ceil(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Ceil<>{}); }
-template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
-ALWI void sfpu_trunc(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Trunc<>{}); }
-template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
-ALWI void sfpu_frac(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Frac<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
+ALWI void sfpu_floor(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R>(ocb, num_tiles, Floor<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
+ALWI void sfpu_ceil(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R>(ocb, num_tiles, Ceil<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
+ALWI void sfpu_trunc(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R>(ocb, num_tiles, Trunc<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
+ALWI void sfpu_frac(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R>(ocb, num_tiles, Frac<>{}); }
 
 }  // namespace compute_kernel_lib

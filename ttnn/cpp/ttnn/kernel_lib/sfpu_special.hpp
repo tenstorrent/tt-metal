@@ -77,38 +77,32 @@ struct Logsigmoid : BinaryOp<Logsigmoid<In0, In1, Out>, In0, In1, Out> {
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_erf(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_erfc(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_erfinv(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_i0(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_i1(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
-    SfpuBatching B = SfpuBatching::Disabled>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE>
 ALWI void sfpu_lgamma(uint32_t ocb, uint32_t num_tiles);
 
 }  // namespace compute_kernel_lib

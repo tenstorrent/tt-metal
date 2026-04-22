@@ -100,17 +100,8 @@ enum class SfpuOutputPolicy { PerTile, Bulk };
  */
 enum class SfpuDataFormatReconfig { NONE = 0, OUTPUT = 2 };
 
-/**
- * @brief Controls DEST batching behavior in sfpu_pipeline
- *
- * When Auto, the pipeline automatically fills DEST with as many chain iterations
- * as possible (DEST_AUTO_LIMIT / chain_stride), calling each op's init() once
- * and exec() multiple times. This amortizes init overhead.
- *
- * - Auto: batch_size = DEST_AUTO_LIMIT / chain_stride (maximizes throughput)
- * - Disabled: batch_size = 1 (original per-tile behavior, init+exec each tile)
- */
-enum class SfpuBatching { Auto, Disabled };
+// SfpuBatching removed — pipeline always processes one tile per acquire cycle.
+// Will be re-introduced when batching is needed.
 
 // =============================================================================
 // CRTP Base Templates — eliminate per-op boilerplate
@@ -122,16 +113,19 @@ enum class SfpuBatching { Auto, Disabled };
  * Provides: dst_idx, max_dst, static_assert, exec(), apply().
  * Derived must define: init(), call(uint32_t d0).
  * call() receives the already-offset-adjusted slot index.
+ *
+ * tile_step is forwarded from sfpu_pipeline for chains that contain a
+ * WaitUpfrontPopAtEnd Load; pure compute ops ignore it.
  */
 template <typename Derived, Dst Slot>
 struct UnaryOp {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static constexpr uint32_t max_dst = dst_idx;
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void exec(uint32_t offset = 0) const { static_cast<const Derived*>(this)->call(dst_idx + offset); }
-    ALWI void apply(uint32_t offset = 0) const {
+    ALWI void exec() const { static_cast<const Derived*>(this)->call(dst_idx); }
+    ALWI void apply() const {
         static_cast<const Derived*>(this)->init();
-        exec(offset);
+        exec();
     }
 };
 
@@ -150,12 +144,10 @@ struct BinaryOp {
     static_assert(in0 < 8, "DEST slot In0 exceeds maximum capacity (8)");
     static_assert(in1 < 8, "DEST slot In1 exceeds maximum capacity (8)");
     static_assert(out < 8, "DEST slot Out exceeds maximum capacity (8)");
-    ALWI void exec(uint32_t offset = 0) const {
-        static_cast<const Derived*>(this)->call(in0 + offset, in1 + offset, out + offset);
-    }
-    ALWI void apply(uint32_t offset = 0) const {
+    ALWI void exec() const { static_cast<const Derived*>(this)->call(in0, in1, out); }
+    ALWI void apply() const {
         static_cast<const Derived*>(this)->init();
-        exec(offset);
+        exec();
     }
 };
 
@@ -175,12 +167,10 @@ struct TernaryOp {
                                             ? ((in0 > in2) ? ((in0 > out) ? in0 : out) : ((in2 > out) ? in2 : out))
                                             : ((in1 > in2) ? ((in1 > out) ? in1 : out) : ((in2 > out) ? in2 : out));
     static_assert(in0 < 8 && in1 < 8 && in2 < 8 && out < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void exec(uint32_t offset = 0) const {
-        static_cast<const Derived*>(this)->call(in0 + offset, in1 + offset, in2 + offset, out + offset);
-    }
-    ALWI void apply(uint32_t offset = 0) const {
+    ALWI void exec() const { static_cast<const Derived*>(this)->call(in0, in1, in2, out); }
+    ALWI void apply() const {
         static_cast<const Derived*>(this)->init();
-        exec(offset);
+        exec();
     }
 };
 
@@ -209,30 +199,34 @@ inline constexpr uint32_t cx_max_v = CxMax<Vs...>::value;
 // =============================================================================
 
 /**
- * @brief Per-Load CB lifecycle policy — 2x2 matrix over {wait?} x {pop?}.
+ * @brief Per-Load CB lifecycle policy.
  *
  * The Load op owns the decision of whether to wait on the CB and whether to pop
- * after copying. The pipeline does NOT override this.
+ * after copying. The pipeline does NOT override per-tile wait/pop.
  *
- * - WaitAndPop:  wait for tile, copy, pop (default; streaming input)
- * - WaitNoPop:   wait for tile, copy, don't pop (persistent tile reused across
- *                iterations, e.g. a mask or scaler, or the first of a fan-out pair)
- * - NoWaitPop:   don't wait, copy, pop (caller pre-waited a batch of tiles upfront
- *                and wants this Load to consume one; or the last of a fan-out pair
- *                where the first already waited — OR use WaitAndPop since
- *                cb_wait_front is idempotent)
- * - NoWaitNoPop: don't wait, don't pop (caller owns CB lifecycle externally,
- *                e.g. sharded / pre-loaded inputs)
+ * - WaitAndPop:         wait for tile, copy tile 0, pop (streaming input)
+ * - WaitNoPop:          wait for tile, copy tile 0, no pop (persistent / fan-out first)
+ * - NoWaitPop:          no wait, copy tile 0, pop (fan-out last / pre-waited single)
+ * - NoWaitNoPop:        no wait, no pop (caller owns CB lifecycle externally)
+ * - WaitUpfrontPopAtEnd: pipeline issues cb_wait_front(CB, num_tiles) once before the
+ *                        tile loop and cb_pop_front(CB, num_tiles) once after. Load::exec
+ *                        self-advances cb_tile_idx each call (rising index into the
+ *                        pre-waited block). Pipeline resets the index at end of call so
+ *                        the chain can be reused across blocks.
+ *                        Fix for GAP-11 (pre-waited block access).
+ *                        Static assert: at most one upfront Load per CB in a chain.
  */
 enum class LoadPolicy {
     WaitAndPop,
     WaitNoPop,
     NoWaitPop,
     NoWaitNoPop,
+    WaitUpfrontPopAtEnd,
 };
 
 constexpr bool load_does_wait(LoadPolicy p) { return p == LoadPolicy::WaitAndPop || p == LoadPolicy::WaitNoPop; }
 constexpr bool load_does_pop(LoadPolicy p) { return p == LoadPolicy::WaitAndPop || p == LoadPolicy::NoWaitPop; }
+constexpr bool load_is_upfront(LoadPolicy p) { return p == LoadPolicy::WaitUpfrontPopAtEnd; }
 
 /**
  * @brief Data-format reconfig mode for Load.
@@ -256,11 +250,10 @@ enum class LoadReconfig {
  *   Load<cb, Dst::D0, LoadPolicy::WaitNoPop>{},   // wait once
  *   Load<cb, Dst::D1, LoadPolicy::NoWaitPop>{},   // no redundant wait; pop once
  *
- * The CB tile index defaults to 0 (streaming) but is a runtime field so callers
- * with a pre-waited batch can pick a specific tile:
- *   auto load = Load<cb, Dst::D0, LoadPolicy::NoWaitNoPop>{};
- *   load.cb_tile_idx = 3;
- *   sfpu_chain(load, SomeOp{});
+ * To index into a pre-waited block of tiles, use WaitUpfrontPopAtEnd — the
+ * pipeline bulk-waits N upfront, exec() advances the index (0, 1, 2, ...), and
+ * the pipeline bulk-pops N at the end. Do not set the tile index externally;
+ * it is internal pipeline state.
  *
  * @tparam CB        Circular buffer index
  * @tparam Slot      DEST slot receiving the tile
@@ -276,16 +269,46 @@ struct Load : LoadTag {
     static constexpr LoadPolicy policy = Policy;
     static constexpr bool do_wait = load_does_wait(Policy);
     static constexpr bool do_pop = load_does_pop(Policy);
+    static constexpr bool is_upfront = load_is_upfront(Policy);
+    static constexpr bool do_reconfig = (Reconfig == LoadReconfig::Input);
     static_assert(static_cast<uint32_t>(Slot) < 8, "DEST slot exceeds maximum capacity (8)");
 
-    uint32_t cb_tile_idx = 0;
-
+    // init() programs the copy_tile MOP and (optionally) the SRCA data format.
+    // The pipeline hoists this across the tile loop when the chain is hoist-safe
+    // (see chain_is_hoist_safe_v); otherwise it fires per tile via apply().
     ALWI void init() const;
-    ALWI void exec(uint32_t offset = 0) const;
-    ALWI void apply(uint32_t offset = 0) const {
+    ALWI void exec() const;
+    ALWI void apply() const {
         init();
-        exec(offset);
+        exec();
     }
+
+    // Reset internal tile counter back to 0. Called by sfpu_pipeline after all
+    // tiles are processed so the chain can be reused across blocks.
+    ALWI void reset_tile_idx() const {
+        if constexpr (is_upfront) {
+            cb_tile_idx_ = 0;
+        }
+    }
+
+    // Upfront CB lifecycle: pipeline bulk-waits N tiles before the tile loop and
+    // bulk-pops N tiles after. Only fires for WaitUpfrontPopAtEnd loads.
+    ALWI void wait_upfront(uint32_t n) const {
+        if constexpr (is_upfront) {
+            cb_wait_front(CB, n);
+        }
+    }
+    ALWI void pop_upfront(uint32_t n) const {
+        if constexpr (is_upfront) {
+            cb_pop_front(CB, n);
+        }
+    }
+
+private:
+    // Internal tile counter. Meaningful only for WaitUpfrontPopAtEnd: exec()
+    // self-advances it each call, pipeline zeroes it at the end of a call.
+    // For every other policy it stays 0 — callers cannot override.
+    mutable uint32_t cb_tile_idx_ = 0;
 };
 
 // =============================================================================
@@ -297,6 +320,35 @@ template <typename T>
 constexpr T cx_max(T a, T b) {
     return (a > b) ? a : b;
 }
+
+// -----------------------------------------------------------------------------
+// Chain-protocol method detectors
+//
+// Only Load (and any future upfront-capable op) implements wait_upfront /
+// pop_upfront / reset_tile_idx. For every other chain element the call is a
+// no-op, so the chain cascade guards each call with `if constexpr` and these
+// traits. No per-element boilerplate required.
+// -----------------------------------------------------------------------------
+
+namespace detail {
+
+template <typename T, typename = void>
+struct has_wait_upfront : std::false_type {};
+template <typename T>
+struct has_wait_upfront<T, std::void_t<decltype(std::declval<const T&>().wait_upfront(uint32_t{}))>> : std::true_type {
+};
+
+template <typename T, typename = void>
+struct has_pop_upfront : std::false_type {};
+template <typename T>
+struct has_pop_upfront<T, std::void_t<decltype(std::declval<const T&>().pop_upfront(uint32_t{}))>> : std::true_type {};
+
+template <typename T, typename = void>
+struct has_reset_tile_idx : std::false_type {};
+template <typename T>
+struct has_reset_tile_idx<T, std::void_t<decltype(std::declval<const T&>().reset_tile_idx())>> : std::true_type {};
+
+}  // namespace detail
 
 /**
  * @brief Variadic chain of ops (Load + compute)
@@ -312,9 +364,16 @@ template <>
 struct SfpuChain<> {
     static constexpr uint32_t max_dst = 0;
     static constexpr uint32_t stride = 1;
-
-    ALWI void apply(uint32_t = 0) const {}
+    ALWI void apply() const {}
+    ALWI void apply_no_load_init() const {}
+    ALWI void init_any_load() const {}
+    ALWI void reset_tile_idx() const {}
+    ALWI void wait_upfront(uint32_t) const {}
+    ALWI void pop_upfront(uint32_t) const {}
 };
+// Note: SfpuChain<> keeps the methods so the recursive cascade in the
+// non-empty specialization can call them unconditionally on `rest` without
+// needing to detect the terminator.
 
 /** @brief Recursive case: first op + rest of chain */
 template <typename First, typename... Rest>
@@ -328,10 +387,57 @@ struct SfpuChain<First, Rest...> {
     constexpr SfpuChain() = default;
     constexpr SfpuChain(First f, Rest... r) : first(f), rest(r...) {}
 
-    /** @brief Execute all elements in sequence: init+exec per element */
-    ALWI void apply(uint32_t offset = 0) const {
-        first.apply(offset);
-        rest.apply(offset);
+    ALWI void apply() const {
+        first.apply();
+        rest.apply();
+    }
+
+    // Hoisted-init path: Load elements skip their init() (already done once
+    // before the tile loop); every other element runs full apply(). Used by
+    // sfpu_pipeline when chain_is_hoist_safe_v<Chain>.
+    ALWI void apply_no_load_init() const {
+        if constexpr (is_load_op_v<First>) {
+            first.exec();
+        } else {
+            first.apply();
+        }
+        rest.apply_no_load_init();
+    }
+
+    // Call init() on the first Load found (walking the chain). Used to perform
+    // the hoisted copy_tile MOP/reconfig setup once before the tile loop. Any
+    // Load's init programs the same state when all Loads share a CB, which is
+    // the precondition for the hoist path.
+    ALWI void init_any_load() const {
+        if constexpr (is_load_op_v<First>) {
+            first.init();
+        } else {
+            rest.init_any_load();
+        }
+    }
+
+    // Reset cb_tile_idx on all WaitUpfrontPopAtEnd Load elements so the chain
+    // can be reused across blocks without re-construction.
+    ALWI void reset_tile_idx() const {
+        if constexpr (detail::has_reset_tile_idx<First>::value) {
+            first.reset_tile_idx();
+        }
+        rest.reset_tile_idx();
+    }
+
+    // Bulk CB wait/pop for all WaitUpfrontPopAtEnd Load elements.
+    // Called by sfpu_pipeline once before the tile loop (wait) and once after (pop).
+    ALWI void wait_upfront(uint32_t n) const {
+        if constexpr (detail::has_wait_upfront<First>::value) {
+            first.wait_upfront(n);
+        }
+        rest.wait_upfront(n);
+    }
+    ALWI void pop_upfront(uint32_t n) const {
+        if constexpr (detail::has_pop_upfront<First>::value) {
+            first.pop_upfront(n);
+        }
+        rest.pop_upfront(n);
     }
 };
 
@@ -394,6 +500,119 @@ template <typename T>
 inline constexpr bool chain_has_non_load_fpu_clash_v =
     chain_has_non_load_fpu_clash<std::remove_cv_t<std::remove_reference_t<T>>>::value;
 
+/** @brief True if Chain contains at least one Load element. */
+template <typename Chain>
+struct chain_has_any_load : std::false_type {};
+template <typename... Ops>
+struct chain_has_any_load<SfpuChain<Ops...>> : std::bool_constant<(is_load_op_v<Ops> || ...)> {};
+template <typename T>
+inline constexpr bool chain_has_any_load_v = chain_has_any_load<std::remove_cv_t<std::remove_reference_t<T>>>::value;
+
+namespace detail {
+
+/** @brief CB of the first Load in a chain, or 0 if none (sentinel). */
+template <typename Chain>
+struct FirstLoadCB {
+    static constexpr uint32_t value = 0;
+};
+template <typename First, typename... Rest>
+struct FirstLoadCB<SfpuChain<First, Rest...>> {
+    static constexpr uint32_t value = FirstLoadCB<SfpuChain<Rest...>>::value;
+};
+template <uint32_t CB, Dst Slot, LoadPolicy Policy, LoadReconfig Reconfig, typename... Rest>
+struct FirstLoadCB<SfpuChain<Load<CB, Slot, Policy, Reconfig>, Rest...>> {
+    static constexpr uint32_t value = CB;
+};
+
+// All Loads in Chain have CB == Target (or Chain has no Loads).
+template <uint32_t Target, typename Chain>
+struct chain_all_loads_cb_eq;
+
+template <uint32_t Target>
+struct chain_all_loads_cb_eq<Target, SfpuChain<>> : std::true_type {};
+
+// Load first element: check match, recurse.
+template <uint32_t Target, uint32_t CB, Dst Slot, LoadPolicy Policy, LoadReconfig Reconfig, typename... Rest>
+struct chain_all_loads_cb_eq<Target, SfpuChain<Load<CB, Slot, Policy, Reconfig>, Rest...>>
+    : std::bool_constant<(CB == Target) && chain_all_loads_cb_eq<Target, SfpuChain<Rest...>>::value> {};
+
+// Non-Load first element: skip and recurse.
+template <uint32_t Target, typename First, typename... Rest>
+struct chain_all_loads_cb_eq<Target, SfpuChain<First, Rest...>> : chain_all_loads_cb_eq<Target, SfpuChain<Rest...>> {};
+
+}  // namespace detail
+
+/** @brief True if every Load in Chain reads from the same CB (or Chain has no Loads). */
+template <typename Chain>
+inline constexpr bool chain_loads_share_cb_v = detail::chain_all_loads_cb_eq<
+    detail::FirstLoadCB<std::remove_cv_t<std::remove_reference_t<Chain>>>::value,
+    std::remove_cv_t<std::remove_reference_t<Chain>>>::value;
+
+/** @brief True when Load::init() can be safely hoisted out of the per-tile cascade.
+ *
+ * Hoist is safe when: chain has at least one Load, no non-Load element clobbers
+ * the copy_tile MOP (no DestReuseOp), and every Load reads the same CB (one
+ * hoisted init programs the MOP for all).
+ */
+template <typename Chain>
+inline constexpr bool chain_is_hoist_safe_v =
+    chain_has_any_load_v<Chain> && !chain_has_non_load_fpu_clash_v<Chain> && chain_loads_share_cb_v<Chain>;
+
+// -----------------------------------------------------------------------------
+// Upfront-CB duplicate detection
+//
+// An "upfront Load" is Load<CB, Slot, WaitUpfrontPopAtEnd, ...>. The pipeline
+// bulk-waits and bulk-pops `num_tiles` on each upfront CB, once per chain call.
+// Two upfront Loads sharing the same CB would double-pop and desync the CB.
+// We statically forbid it.
+// -----------------------------------------------------------------------------
+
+namespace detail {
+
+// Does any upfront Load in Chain reference TargetCB?
+template <uint32_t TargetCB, typename Chain>
+struct chain_has_upfront_cb : std::false_type {};
+
+template <uint32_t TargetCB>
+struct chain_has_upfront_cb<TargetCB, SfpuChain<>> : std::false_type {};
+
+// Non-Load first element: skip and recurse.
+template <uint32_t TargetCB, typename First, typename... Rest>
+struct chain_has_upfront_cb<TargetCB, SfpuChain<First, Rest...>> : chain_has_upfront_cb<TargetCB, SfpuChain<Rest...>> {
+};
+
+// Load first element: match if upfront and CB equals TargetCB, else recurse.
+template <uint32_t TargetCB, uint32_t CB, Dst Slot, LoadPolicy Policy, LoadReconfig Reconfig, typename... Rest>
+struct chain_has_upfront_cb<TargetCB, SfpuChain<Load<CB, Slot, Policy, Reconfig>, Rest...>>
+    : std::bool_constant<
+          (load_is_upfront(Policy) && CB == TargetCB) || chain_has_upfront_cb<TargetCB, SfpuChain<Rest...>>::value> {};
+
+// Does Chain contain two upfront Loads that share the same CB?
+// (For every upfront Load, check if any later upfront Load reuses its CB.)
+template <typename Chain>
+struct chain_has_duplicate_upfront_cbs : std::false_type {};
+
+template <>
+struct chain_has_duplicate_upfront_cbs<SfpuChain<>> : std::false_type {};
+
+// Non-Load first element: skip and recurse.
+template <typename First, typename... Rest>
+struct chain_has_duplicate_upfront_cbs<SfpuChain<First, Rest...>>
+    : chain_has_duplicate_upfront_cbs<SfpuChain<Rest...>> {};
+
+// Load first element: if upfront, check the rest for the same CB; always recurse.
+template <uint32_t CB, Dst Slot, LoadPolicy Policy, LoadReconfig Reconfig, typename... Rest>
+struct chain_has_duplicate_upfront_cbs<SfpuChain<Load<CB, Slot, Policy, Reconfig>, Rest...>>
+    : std::bool_constant<
+          (load_is_upfront(Policy) && chain_has_upfront_cb<CB, SfpuChain<Rest...>>::value) ||
+          chain_has_duplicate_upfront_cbs<SfpuChain<Rest...>>::value> {};
+
+}  // namespace detail
+
+template <typename Chain>
+inline constexpr bool chain_has_duplicate_upfront_cbs_v =
+    detail::chain_has_duplicate_upfront_cbs<std::remove_cv_t<std::remove_reference_t<Chain>>>::value;
+
 // =============================================================================
 // Pipeline Function Declaration
 // =============================================================================
@@ -401,9 +620,8 @@ inline constexpr bool chain_has_non_load_fpu_clash_v =
 template <
     SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
     SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::NONE,
-    SfpuBatching batching = SfpuBatching::Disabled,
     typename Chain>
-ALWI void sfpu_pipeline(Chain chain, uint32_t ocb, uint32_t num_tiles, Dst pack_slot = Dst::D0);
+ALWI void sfpu_pipeline(Chain& chain, uint32_t ocb, uint32_t num_tiles, Dst pack_slot = Dst::D0);
 
 // =============================================================================
 // Convenience: Single Unary Op Declaration
@@ -413,7 +631,6 @@ template <
     uint32_t ICB,
     SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
     SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::NONE,
-    SfpuBatching batching = SfpuBatching::Disabled,
     typename Op>
 ALWI void sfpu_op(uint32_t ocb, uint32_t num_tiles, Op op);
 
