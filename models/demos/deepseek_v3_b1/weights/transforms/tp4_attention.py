@@ -88,16 +88,19 @@ def _region(*lane: tuple[str, OverlappedTensorSpec]) -> RegionSpec:
 def build_merged_main_tp4_spec(
     *,
     name: str = "o_proj_tp4_norms_q_ab_kv_a",
-    o_proj_dtype: ttnn.DataType = ttnn.DataType.BFLOAT8_B,
-    q_ab_dtype: ttnn.DataType = ttnn.DataType.BFLOAT8_B,
-    kv_a_dtype: ttnn.DataType = ttnn.DataType.BFLOAT8_B,
+    o_proj_dtype: ttnn.DataType = ttnn.DataType.BFLOAT4_B,
+    q_ab_dtype: ttnn.DataType = ttnn.DataType.BFLOAT4_B,
+    kv_a_dtype: ttnn.DataType = ttnn.DataType.BFLOAT4_B,
     transform_version: int = 0,
 ) -> FusionGroupSpec:
     """Main TP4-merged decoder spec: o_proj + norms + q_ab + kv_a, per-core.
 
-    Dtypes are plumbed per-lane so that MLA projections can be flipped to
-    BFP4 independently of ``kv_a_proj`` (whose packing order currently
-    requires BFP8 fidelity).
+    Defaults match upstream's BFP4 attention flip (#41931): every MLA
+    matmul weight (``q_a_proj``, ``q_b_proj``, ``kv_a_proj``, ``o_proj``,
+    ``kv_b1/kv_b2_proj``) lives in the same dtype + tile so the shared
+    circular buffers in :mod:`~fused_ops.attention_block.op` agree.
+    Dtypes are still plumbed per-lane in case a future experiment wants to
+    revert individual lanes to BFP8.
     """
     o_cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
     q_cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
