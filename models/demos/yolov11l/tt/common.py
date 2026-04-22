@@ -254,6 +254,8 @@ class TtnnConv:
         activation="",
         deallocate_activation=False,
         shard_layout=None,
+        config_override=None,
+        activation_dtype=ttnn.bfloat8_b,
     ):
         self.enable_act = enable_act
         if self.enable_act:
@@ -267,6 +269,8 @@ class TtnnConv:
             activation=activation,
             deallocate_activation=deallocate_activation,
             shard_layout=shard_layout,
+            config_override=config_override,
+            activation_dtype=activation_dtype,
         )
 
     def __call__(self, device, x):

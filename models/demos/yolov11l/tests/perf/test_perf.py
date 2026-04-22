@@ -13,8 +13,8 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "name_suffix,batch_size,resolution,expected_perf,test_filter",
     [
-        ["b1_640", 1, 640, 27.8, "test_yolov11 and resolution1 and not dp_batch8"],
-        # ["b1_1280", 1, 1280, 8.3, "test_yolov11 and resolution0 and not dp_batch8"],
+        ["b1_640", 1, 640, 37.9, "test_yolov11 and resolution1 and not dp_batch8"],
+        # ["b1_1280", 1, 1280, 10.5, "test_yolov11 and resolution0 and not dp_batch8"],
         # ["b8_640", 8, 640, 27.8, "test_yolov11_dp_batch8 and 640"],
         # ["b8_1280", 8, 1280, 8.3, "test_yolov11_dp_batch8 and 1280"],
     ],
