@@ -325,7 +325,6 @@ class Attention(LightweightModule):
             (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
         )
 
-
         def get_wo_mesh_mapper():
             if self.use_fused_all_gather_matmul or self.TG:
                 return ttnn.ShardTensor2dMesh(

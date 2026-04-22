@@ -55,9 +55,7 @@ def test_mha_wo_sharding(mesh_device):
     )
 
     expected_sharded_dim = (n_heads * head_dim) // num_devices
-    assert wo.shape[-2] == expected_sharded_dim, (
-        f"wo dim 2 should be {expected_sharded_dim}, got {wo.shape[-2]}"
-    )
+    assert wo.shape[-2] == expected_sharded_dim, f"wo dim 2 should be {expected_sharded_dim}, got {wo.shape[-2]}"
 
     attn_output = ttnn.as_tensor(
         torch.randn(1, 1, seq_len, qkv_inner),
