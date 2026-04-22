@@ -170,11 +170,13 @@ def _rope_device(tt_t, tt_cos, tt_sin, B: int, H: int, N: int, dh: int):
 def _preload_enc_block_weights(state: dict, i: int, device) -> dict:
     """Upload weights for one encoder block.
 
-    Linear weights use BFLOAT8_B (tile-level block-float8) for compute speedup,
-    while biases and LayerNorm params stay in BFLOAT16 for numeric margin.
+    Linear weights use BFLOAT16 (was BFLOAT8_B) — bf8's tile-scaled quantisation
+    drops head1 pointmap PCC to 0.98 on real CO3D images; bf16 weights keep
+    PCC > 0.99 at ~2× weight DRAM traffic but the matmul is already compute-
+    bound, not bandwidth-bound, so wall clock is barely affected.
     """
     def mat8(t):
-        return ttnn.from_torch(t.t().contiguous(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.from_torch(t.t().contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     tt = {}
     tt["g1"] = _t2d(state[f"enc_blocks.{i}.norm1.weight"].reshape(1, 1, -1), device)
     tt["b1"] = _t2d(state[f"enc_blocks.{i}.norm1.bias"].reshape(1, 1, -1), device)
@@ -515,7 +517,7 @@ def _preload_dec_block_weights(state: dict, idx: int, branch: int, device) -> di
     def vec(t):
         return _t2d(t.reshape(1, 1, -1), device)
     def mat(t):
-        return ttnn.from_torch(t.t().contiguous(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.from_torch(t.t().contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     # Fuse cross-attn K and V projections into one linear so we can use
     # split_query_key_value_and_split_heads(qc, kv_input_tensor=kvc, ...).
     ck_w_t = w("cross_attn.projk.weight")
