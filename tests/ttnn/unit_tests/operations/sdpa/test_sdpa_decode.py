@@ -18,6 +18,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     run_test_sdpa_decode_single_iter,
     run_test_sdpa_decode_multi_pos,
     run_test_sdpa_decode_paged_attention,
+    run_test_sdpa_decode_broadcast_mask_batch,
 )
 
 
@@ -386,3 +387,24 @@ def test_sdpa_decode_sliding_window(
             start_indices=[cur_pos + i for i in range(b)],  # test a batch with different start positions
             sliding_window_size=sliding_window_size,
         )
+
+
+@pytest.mark.parametrize("mask_dtype", [ttnn.bfloat16, ttnn.bfloat4_b])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, dtype, grid_size",
+    [
+        (32, 8, 1, 2048, 128, ttnn.bfloat8_b, (8, 8)),
+    ],
+)
+def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, dtype, grid_size, mask_dtype):
+    run_test_sdpa_decode_broadcast_mask_batch(
+        device,
+        b=b,
+        nh=nh,
+        nkv=nkv,
+        s=s,
+        d=d,
+        dtype=dtype,
+        grid_size=grid_size,
+        mask_dtype=mask_dtype,
+    )

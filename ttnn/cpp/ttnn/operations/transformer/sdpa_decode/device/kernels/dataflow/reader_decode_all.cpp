@@ -51,8 +51,9 @@ void kernel_main() {
     constexpr uint32_t k_mcast_semaphore_id = get_compile_time_arg_val(32);
     constexpr bool q_locally_available = get_compile_time_arg_val(33) == 1;
     constexpr bool use_k_mcast = get_compile_time_arg_val(34) == 1;
+    constexpr uint32_t Bmask = get_compile_time_arg_val(35);
 
-    constexpr auto q_args = TensorAccessorArgs<35>();
+    constexpr auto q_args = TensorAccessorArgs<36>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -86,6 +87,7 @@ void kernel_main() {
     if (q_addr == 0) {
         return;
     }
+
     // Get cur_pos
     constexpr uint32_t cur_pos_base = St * 32 - 1;
     uint32_t cur_pos = cur_pos_base;  // default to non-causal, which we do attention on the entire kv cache. In this
@@ -241,7 +243,7 @@ void kernel_main() {
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
-        const uint32_t mask_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bkv) * PNHt * St;
+        const uint32_t mask_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bmask) * PNHt * St;
         const uint32_t mask_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic;
         uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
         // Setup multicast parameters for K streaming (vertical multicast)
