@@ -132,39 +132,59 @@ def test_superpoint_benchmark(device, height, width, input_kind):
     ttnn.deallocate(s_warm)
     ttnn.deallocate(d_warm)
 
-    # Capture trace of the device compute graph.
-    tt_model.load_input(tt_in, pixel_values)
-    tid = ttnn.begin_trace_capture(device, cq_id=0)
-    s, d_norm = tt_model.run_device_compute(tt_in, b=b)
-    ttnn.end_trace_capture(device, tid, cq_id=0)
+    use_trace = os.environ.get("SP_NO_TRACE", "0") != "1"
 
-    # Warmup the trace execution once (allocator setup).
-    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    if use_trace:
+        # Capture trace of the device compute graph.
+        tt_model.load_input(tt_in, pixel_values)
+        tid = ttnn.begin_trace_capture(device, cq_id=0)
+        s, d_norm = tt_model.run_device_compute(tt_in, b=b)
+        ttnn.end_trace_capture(device, tid, cq_id=0)
 
-    # Produce one forward result via the traced path for PCC comparison.
-    tt_model.load_input(tt_in, pixel_values)
-    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-    tt_scores_nchw, tt_desc_nchw = _device_to_host_post(tt_model, s, d_norm, b, height, width)
+        # Warmup the trace execution once (allocator setup).
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
 
-    # Timed iterations — traced replay with H2D overlapped on CQ1.
-    # CQ0 runs the trace (compute); CQ1 loads the next frame. Events keep the
-    # compute and DMA queues correctly ordered around the shared input tensor.
-    n_iter = int(os.environ.get("SP_N_ITER", "10"))
-    t0 = time.perf_counter()
-    write_event = None
-    for _ in range(n_iter):
-        if write_event is not None:
-            ttnn.wait_for_event(0, write_event)
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        compute_event = ttnn.record_event(device, 0)
-        ttnn.wait_for_event(1, compute_event)
-        tt_model.load_input(tt_in, pixel_values, cq_id=1)
-        write_event = ttnn.record_event(device, 1)
-    ttnn.synchronize_device(device)
-    # One D2H per batch (the post-proc is identical across iters for this test).
-    _ = _device_to_host_post(tt_model, s, d_norm, b, height, width)
-    elapsed = time.perf_counter() - t0
-    fps = n_iter / elapsed
+        # Produce one forward result via the traced path for PCC comparison.
+        tt_model.load_input(tt_in, pixel_values)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        tt_scores_nchw, tt_desc_nchw = _device_to_host_post(tt_model, s, d_norm, b, height, width)
+
+        # Timed iterations — traced replay with H2D overlapped on CQ1.
+        n_iter = int(os.environ.get("SP_N_ITER", "10"))
+        t0 = time.perf_counter()
+        write_event = None
+        for _ in range(n_iter):
+            if write_event is not None:
+                ttnn.wait_for_event(0, write_event)
+            ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+            compute_event = ttnn.record_event(device, 0)
+            ttnn.wait_for_event(1, compute_event)
+            tt_model.load_input(tt_in, pixel_values, cq_id=1)
+            write_event = ttnn.record_event(device, 1)
+        ttnn.synchronize_device(device)
+        _ = _device_to_host_post(tt_model, s, d_norm, b, height, width)
+        elapsed = time.perf_counter() - t0
+        fps = n_iter / elapsed
+    else:
+        # Fallback for profilers: no trace, so per-op markers are visible.
+        tt_model.load_input(tt_in, pixel_values)
+        s, d_norm = tt_model.run_device_compute(tt_in, b=b)
+        ttnn.synchronize_device(device)
+        tt_scores_nchw, tt_desc_nchw = _device_to_host_post(tt_model, s, d_norm, b, height, width)
+        ttnn.deallocate(s)
+        ttnn.deallocate(d_norm)
+        tid = None
+
+        n_iter = int(os.environ.get("SP_N_ITER", "10"))
+        t0 = time.perf_counter()
+        for _ in range(n_iter):
+            tt_model.load_input(tt_in, pixel_values)
+            s, d_norm = tt_model.run_device_compute(tt_in, b=b)
+            ttnn.deallocate(s)
+            ttnn.deallocate(d_norm)
+        ttnn.synchronize_device(device)
+        elapsed = time.perf_counter() - t0
+        fps = n_iter / elapsed
 
     # Build full SuperPoint output structure for accuracy comparison.
     tt_scores_pre_nms = tt_model._decode_keypoints(tt_scores_nchw, apply_nms=False)
@@ -210,4 +230,5 @@ def test_superpoint_benchmark(device, height, width, input_kind):
     assert torch.isfinite(tt_scores_pre_nms).all()
     assert torch.isfinite(tt_desc_nchw).all()
 
-    ttnn.release_trace(device, tid)
+    if tid is not None:
+        ttnn.release_trace(device, tid)
