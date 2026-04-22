@@ -184,7 +184,7 @@ void write_dependency_hashes(
     const std::filesystem::path& out_dir,
     const std::filesystem::path& obj,
     std::ostream& hash_file) {
-    auto iter = dependencies.find(obj);
+    auto iter = dependencies.find(obj.string());
     if (iter == dependencies.end()) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, no dependencies found for {}.", obj);
         hash_file.setstate(std::ios::badbit);
