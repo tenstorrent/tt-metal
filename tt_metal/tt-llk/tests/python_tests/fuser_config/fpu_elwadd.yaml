@@ -5,7 +5,6 @@ operands:
   - name: "input_B"
     dims: [256, 256]
     format: "Float16_b"
-    const_value: 1.0
   - name: "elwadd_out"
     dims: [256, 256]
     format: "Float16_b"

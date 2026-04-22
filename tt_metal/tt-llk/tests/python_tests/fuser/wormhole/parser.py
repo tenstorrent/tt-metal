@@ -425,8 +425,12 @@ class OperationSchema(BaseModel):
     def to_fused_operation(self, operands):
         output = operands.get(name=self.output)
         math_ops = [m.to_compute_node(operands) for m in self.math]
-        max_out_dims = self._calculate_max_output_dimensions(operands)
         output.is_output = True
+
+        max_out_dims = self._calculate_max_output_dimensions(operands)
+        resolved_max_out_dims = (
+            max_out_dims if max_out_dims is not None else output.dimensions
+        )
 
         if (
             self.block_size[0] > output.dimensions[0]
@@ -441,12 +445,11 @@ class OperationSchema(BaseModel):
             kwargs["dest_sync"] = self.dest_sync
         if self.block_size:
             kwargs["block_size"] = self.block_size
-        if max_out_dims:
-            kwargs["max_output_dimensions"] = max_out_dims
 
         return FusedOperation(
             math=ComputePipeline(math_ops, self.packer.to_runtime()),
             output=output,
+            max_output_dimensions=resolved_max_out_dims,
             **kwargs,
         )
 
