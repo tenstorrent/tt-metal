@@ -49,17 +49,6 @@ void kernel_main() {
         cb_push_back(in_cb, Wt);
         cb_wait_front(in_cb, Wt);
 
-        // Create rotated input: [-x_second_half, x_first_half]
-        // First, process first half: just copy (multiplied by 1, which we'll skip)
-        // Second half: multiply by -1 scalar
-
-        ACQ();
-        for (uint32_t j = 0; j < half_Wt; ++j) {
-            // Copy first half tiles to rotated buffer (no multiplication needed yet)
-            // These will be used as-is for input*cos later
-        }
-        REL();
-
         // Process second half: multiply by -1 and store in rotated buffer
         mul_tiles_bcast_scalar_init_short(in_cb, scalar_cb);
         ACQ();
