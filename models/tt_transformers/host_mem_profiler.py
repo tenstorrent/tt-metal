@@ -29,8 +29,6 @@ environment (loguru, pytest, and the tt-metal Python stack).
 
 Arguments
 ---------
-  --name          Display name used in the plot title and output directory.
-                   Default: Llama-3.2-1B-Instruct
   --mesh-device   Value forwarded as the MESH_DEVICE environment variable
                   to the test process (e.g. N150, N300, T3K, TG).
                   Default: N150
@@ -57,14 +55,12 @@ Usage examples
 
 # Llama-3.1-8B on a T3K (8-chip) host, full test file:
      python host_mem_profiler.py \\
-        --name        "Llama-3.1-8B" \\
         --mesh-device T3K \\
          --hf-model    meta-llama/Llama-3.1-8B-Instruct \\
          --test        models/tt_transformers/demo/simple_text_demo.py
 
 # Same model but only the decode token accuracy test case:
      python host_mem_profiler.py \\
-         --name        "Llama-3.1-8B-decode" \\
          --mesh-device T3K \\
         --hf-model    meta-llama/Llama-3.1-8B-Instruct \\
         --test        models/tt_transformers/demo/simple_text_demo.py \\
@@ -137,15 +133,18 @@ def plot_results(name, elapsed, mib, out_dir):
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Profile host-side memory usage of a model test")
-    parser.add_argument("--name", default="Llama-3.2-1B-Instruct", help="Model display name (e.g. Llama-3.1-8B)")
     parser.add_argument("--mesh-device", default="N150", help="MESH_DEVICE value (e.g. N150, T3K)")
     parser.add_argument("--hf-model", default="meta-llama/Llama-3.2-1B-Instruct", help="Hugging Face model ID")
     parser.add_argument("--test", default="models/tt_transformers/demo/simple_text_demo.py", help="Pytest target path")
     parser.add_argument("-k", default=None, help="pytest -k filter expression")
     args = parser.parse_args()
 
+    name = args.hf_model.split("/")[-1] if "/" in args.hf_model else args.hf_model
+    if args.k:
+        name = f"{name}_{args.k}"
+
     model = {
-        "name": args.name,
+        "name": name,
         "env": {
             "MESH_DEVICE": args.mesh_device,
             "HF_MODEL": args.hf_model,
@@ -174,7 +173,7 @@ if __name__ == "__main__":
     logger.info(f"  Peak:     {max(mib):.1f} MiB")
     logger.info(f"  Baseline: {min(mib):.1f} MiB")
 
-    safe_name = args.name.replace("/", "_").replace(" ", "_")
+    safe_name = name.replace("/", "_").replace(" ", "_")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_root = OUTPUT_ROOT.resolve()
     out_dir = (output_root / f"{safe_name}_{timestamp}").resolve()
