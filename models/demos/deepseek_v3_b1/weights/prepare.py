@@ -399,6 +399,7 @@ def _mtp_norm_target(name: str) -> TensorTarget:
 
 
 def _mtp_eh_proj_target(K: int, N: int) -> TensorTarget:
+    k_per_device = K // 8
     n_per_bank = N // _MTP_NUM_DRAM_BANKS
     eh_shard_grid = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_MTP_NUM_DRAM_BANKS - 1, 0))}
@@ -410,9 +411,10 @@ def _mtp_eh_proj_target(K: int, N: int) -> TensorTarget:
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(eh_shard_grid, (K, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(eh_shard_grid, (k_per_device, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
         ),
         transform_version=1,
+        mesh_mapper_config=ShardMeshMapper(dim=0),
     )
 
 
@@ -1604,12 +1606,19 @@ def prepare_lm_head_weights(
 def _transform_eh_proj(eh_proj_weight_T: torch.Tensor) -> torch.Tensor:
     """Pad to DRAM bank alignment and tile-shuffle. Input: already transposed (K, N)."""
     K, N = eh_proj_weight_T.shape
+    num_devices = 8
+    k_per_device = K // num_devices
+    assert K % num_devices == 0, f"eh_proj K={K} must be divisible by {num_devices} devices"
     assert N % _MTP_NUM_DRAM_BANKS == 0, f"eh_proj N={N} must be divisible by {_MTP_NUM_DRAM_BANKS} DRAM banks"
     n_per_bank = N // _MTP_NUM_DRAM_BANKS
     padded_N = _MTP_NUM_DRAM_BANKS * n_per_bank
-    eh_padded = torch.zeros((K, padded_N), dtype=eh_proj_weight_T.dtype)
-    eh_padded[:, :N] = eh_proj_weight_T
-    return shuffle_dram_tiles(eh_padded, 32, _MTP_NUM_DRAM_BANKS).contiguous()
+    device_slices = []
+    for d in range(num_devices):
+        slice_d = eh_proj_weight_T[d * k_per_device : (d + 1) * k_per_device, :]
+        padded_d = torch.zeros((k_per_device, padded_N), dtype=slice_d.dtype)
+        padded_d[:, :N] = slice_d
+        device_slices.append(shuffle_dram_tiles(padded_d, 32, _MTP_NUM_DRAM_BANKS))
+    return torch.cat(device_slices, dim=0).contiguous()
 
 
 def _mtp_eh_proj_preprocess(raw: dict[str, torch.Tensor], src_key: str, target_name: str) -> dict[str, torch.Tensor]:

@@ -9,8 +9,6 @@
 #include "api/dataflow/dataflow_api.h"
 #endif
 
-#include "api/debug/dprint.h"
-
 namespace deepseek_b1_ops {
 
 // ============================================================================
@@ -99,45 +97,32 @@ FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_lo
     constexpr uint32_t num_dests =
         loopback ? mcast_num_cores : (is_part_of_receiver_grid ? mcast_num_cores - 1 : mcast_num_cores);
 
-    uint32_t total_packets = (len_bytes + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE;
-    uint32_t iters = 0;
-    while (len_bytes >= 0) {
-        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-            uint32_t num_packets = 1;
-            if constexpr (posted) {
-                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, num_packets);
-            } else {
-                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, num_packets);
-                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests * num_packets);
-            }
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        if constexpr (posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        } else {
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
         }
+    }
 
-        if constexpr (noc_mode == DM_DEDICATED_NOC) {
-            uint32_t num_pkts = 1;
-            if constexpr (posted) {
-                noc_posted_writes_num_issued[noc] += num_pkts;
-            } else {
-                noc_nonposted_writes_num_issued[noc] += num_pkts;
-                noc_nonposted_writes_acked[noc] += num_dests * num_pkts;
-            }
-        }
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
 
-        uint32_t send_size = (len_bytes > NOC_MAX_BURST_SIZE) ? NOC_MAX_BURST_SIZE : len_bytes;
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
-        if constexpr (set_size) {
-            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, send_size);
-        }
-        if constexpr (set_addresses) {
-            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
-            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
-        }
-        src_local_addr += send_size;
-        dst_local_addr += send_size;
-        len_bytes -= send_size;
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-        iters++;
-        if (len_bytes == 0) {
-            break;
+    if constexpr (set_size) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    }
+    if constexpr (set_addresses) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        if constexpr (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += 1;
+            noc_nonposted_writes_acked[noc] += num_dests;
         }
     }
 }

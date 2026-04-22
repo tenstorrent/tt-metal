@@ -31,8 +31,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MESH_LEAF, MESH_ROOT1, MESH_ROOT2, MESH_ROOT3
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul.op import get_max_page_size_and_num_pages
+from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import get_device_role as get_reduce_device_role
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
@@ -203,6 +205,53 @@ class LMHeadSampling:
         return selected_index.reshape(1, 1), mtp_output
 
     @staticmethod
+    def _build_reduce_brisc_per_core_args(enable, rp, device_role, device, device_idx):
+        if not enable:
+            return []
+        role_name = {MESH_LEAF: "LEAF", MESH_ROOT3: "ROOT3", MESH_ROOT2: "ROOT2", MESH_ROOT1: "ROOT1"}
+        intermediate_base = rp["intermediate_per_device"][device_idx].buffer_address()
+        payload = rp["payload_size_bytes"]
+        if device_role == MESH_LEAF:
+            dst_l1, dst_sem = intermediate_base, rp["sem_addrs"][0]
+        elif device_role == MESH_ROOT3:
+            dst_l1, dst_sem = intermediate_base + payload, rp["sem_addrs"][1]
+        elif device_role == MESH_ROOT2:
+            dst_l1, dst_sem = intermediate_base + 2 * payload, rp["sem_addrs"][2]
+        else:
+            dst_l1, dst_sem = 0, rp["sem_addrs"][3]
+        print(
+            f"[REDUCE_BRISC] dev{device_idx} role={role_name.get(device_role,'?')} "
+            f"dst_sem={hex(dst_sem)} recv_sem_round1={hex(rp['sem_addrs'][0])} "
+            f"recv_sem_round2={hex(rp['sem_addrs'][1])} recv_sem_round3={hex(rp['sem_addrs'][2])}",
+            flush=True,
+        )
+        out_addr = rp["output_per_device"][device_idx].buffer_address()
+        args = []
+        for core in rp["worker_cores"]:
+            fc = rp["col_to_fabric"][core.x]
+            fc_phys = device.worker_core_from_logical_core(fc)
+            slot = rp["core_to_slot"][(core.x, core.y)]
+            shard = rp["core_to_shard"][(core.x, core.y)]
+            args.append(
+                (
+                    core,
+                    [
+                        int(fc_phys.x),
+                        int(fc_phys.y),
+                        slot,
+                        rp["wf_sem_addrs"][slot],
+                        int(dst_l1),
+                        int(dst_sem),
+                        int(out_addr),
+                        shard,
+                    ],
+                )
+            )
+        for fc in rp["fabric_cores"]:
+            args.append((fc, list(rp["wf_sem_addrs"])))
+        return args
+
+    @staticmethod
     def op(
         input_tensor_mesh,
         intermediate_tensor_mesh,
@@ -241,6 +290,11 @@ class LMHeadSampling:
         metadata_tensor=None,
         eh_subblock_k=None,
         eh_gather_output_buf_tensor=None,
+        reduce_semaphores=None,
+        reduce_intermediate_tensor=None,
+        reduce_output_tensor=None,
+        mtp_bcast_semaphores=None,
+        base_token_buffer=None,
     ):
         logger.debug(f"broadcast sender_coord={sender_coord}")
         """
@@ -296,6 +350,8 @@ class LMHeadSampling:
             and e_gamma_tensor is not None
             and eh_projection_tensor is not None
         )
+        # Reduce is always on for MTP (ReduceToOneB1 replaces the old single-device Gather)
+        enable_reduce_to_one = is_mtp_base_stage
         # MTP Verify stage is enabled if the verification tensors are provided
         is_mtp_verify_stage = is_mtp_verify_stage and metadata_tensor is not None
         assert not (
@@ -373,6 +429,11 @@ class LMHeadSampling:
         h_gamma_tensors_per_device = ttnn.get_device_tensors(h_gamma_tensor) if is_mtp_base_stage else None
         e_gamma_tensors_per_device = ttnn.get_device_tensors(e_gamma_tensor) if is_mtp_base_stage else None
         eh_proj_tensors_per_device = ttnn.get_device_tensors(eh_projection_tensor) if is_mtp_base_stage else None
+        base_token_tensors_per_device = (
+            ttnn.get_device_tensors(base_token_buffer)
+            if (is_mtp_base_stage and base_token_buffer is not None)
+            else None
+        )
         scratch_tensors_per_device = (
             ttnn.get_device_tensors(fabric_scratch_tensor) if (enable_argmax and not skip_ccl) else None
         )
@@ -450,7 +511,6 @@ class LMHeadSampling:
             eh_weights_shard_spec = eh_projection_tensor_sample.memory_config().shard_spec
             eh_n_per_core = eh_weights_shard_spec.shape[1]
             eh_out_w_per_core = eh_n_per_core // eh_projection_tensor_sample.get_tile().tile_shape[1]
-
             # Embedding CB size (single row from DRAM embedding table)
             embedding_tensor_sample = embedding_tensors_per_device[0]
             embedding_shape = embedding_tensor_sample.shape
@@ -460,18 +520,23 @@ class LMHeadSampling:
             # EH matmul k dimension: concat [h_norm | e_norm] has shape [1, hidden_dim + embedding_dim]
             # eh_concat_rms_tiles: packed (32x32) tile count for concat/mcast source CB
             # eh_num_tiles_k: standard tile count for the matmul K dimension (must match weight tile-rows)
-            eh_concat_rms_tiles = rms_num_tiles * 2
-            eh_num_tiles_k = (2 * embedding_dim) // in0_tile.tile_shape[1]
-            eh_mcast_data_size_bytes = eh_concat_rms_tiles * rms_tile_size
+            eh_concat_rms_tiles = 2  # device K dim by number of devices in stage (8)
+            eh_num_tiles_k = (2 * embedding_dim // 8) // in0_tile.tile_shape[
+                1
+            ]  # device K dim by number of devices in stage (8)
+            print(f"[lm_head_sampling] eh_num_tiles_k={eh_num_tiles_k}", flush=True)
+            eh_mcast_data_size_bytes = eh_num_tiles_k * input_tile_size  # per-device K slice: 56 * 64 = 3584 bytes
+            print(f"[lm_head_sampling] eh_mcast_data_size_bytes={eh_mcast_data_size_bytes}", flush=True)
 
             # EH matmul DRAM streaming parameters
             eh_projection_tensor_sample = eh_proj_tensors_per_device[0]
             eh_dtype = eh_projection_tensor_sample.dtype
             eh_proj_tile = eh_projection_tensor_sample.get_tile()
             eh_proj_tile_size = eh_proj_tile.get_tile_size(eh_dtype)
-            eh_subblock_k = eh_concat_rms_tiles
-            eh_num_subblocks_k = eh_num_tiles_k // eh_subblock_k
+            eh_subblock_k = 28  # 14336 / 8 / 32 = 28
+            eh_num_subblocks_k = 2
             eh_out_num_tiles = eh_out_w_per_core  # M=1, so out tiles = per_core_n
+
             # Compute subblock_w: max dest tiles that evenly divide per_core_n
             # With fp32_dest_acc_en: max_dest=4 (half sync), else max_dest=8
             _max_dest = 4 if fp32_dest_acc_en else 8
@@ -484,7 +549,7 @@ class LMHeadSampling:
                 sample_device, eh_subblock_k, eh_proj_tile_size
             )
             eh_in1_block_size_bytes = eh_subblock_k * eh_proj_tile_size
-            eh_num_in1_buffers = 3  # Triple buffering (must match NumBuffers=3 in dram_streaming_matmul.hpp)
+            eh_num_in1_buffers = 2  # Double buffering (must match NumBuffers=2 in dram_streaming_matmul.hpp)
             eh_in1_CB_tiles = eh_subblock_k * eh_num_in1_buffers
             eh_in1_CB_size = eh_in1_CB_tiles * eh_proj_tile_size
         else:
@@ -517,9 +582,16 @@ class LMHeadSampling:
             18  # [MTP] Second mcast destination (concat [h_norm|e_norm]) on all mcast cores (intermediate)
         )
         eh_gather_dst_cb = 19  # [MTP] EH output gather destination on argmax_final_core
+        # [Reduce] CB indices — reuse existing CBs where possible to save L1
+        reduce_local_cb = 21  # Aliased to CB17's L1 but with payload_size page_size for reduce
+        reduce_received_cb = 20  # tensor-backed by reduce_intermediate_tensor
+        reduce_scratch_cb = 23  # Dedicated scratch for reduce (CANNOT reuse CB18: BRISC races TRISC's DSMM)
+        reduce_output_cb = reduce_scratch_cb  # alias; compute packs to scratch, writer reads scratch
+        reduce_packet_cb = 22  # new: fabric send staging buffer
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
         bcast_pkt_cb = 30  # Packet buffer for CCL broadcast
+        mtp_bcast_pkt_cb = 13  # [MTP] Packet buffer for MTP token broadcast
 
         # ====================================================================
         # Semaphore IDs (for intra-device mcast)
@@ -537,7 +609,7 @@ class LMHeadSampling:
         mcast_eh_data_receiver_semaphore_id = 8
         mtp_done_semaphore_id = 9
         eh_matmul_done_semaphore_id = 10
-        eh_gather_receiver_semaphore_id = 11
+        reduce_gate_semaphore_id = 11
         # [MTP] Semaphore IDs for singalling metadata unicast in spec stage
         metadata_ready_semaphore_id = 12
 
@@ -556,11 +628,125 @@ class LMHeadSampling:
             broadcast_topology_override=broadcast_topology_override,
         )
 
+        # ====================================================================
+        # MTP token broadcast config (exit device → all devices, 4-byte token)
+        # ====================================================================
+        mtp_bcast_config = None
+        if is_mtp_base_stage and not skip_ccl:
+            if mtp_bcast_semaphores is None:
+                raise ValueError("mtp_bcast_semaphores required when is_mtp_base_stage=True and skip_ccl=False")
+            mtp_bcast_config = DeepseekMinimalBroadcast.configure(
+                mesh_device=mesh_device,
+                input_tensor_mesh=base_token_buffer,
+                output_tensor=base_token_buffer,
+                sender_coord=argmax_final_mesh_coord,
+                semaphores=mtp_bcast_semaphores,
+                skip_ccl=False,
+                chunk_size_bytes=None,
+                bcast_cb_id=mtp_bcast_pkt_cb,
+                num_links=1,
+                fabric_config=fabric_config,
+                broadcast_topology_override=broadcast_topology_override,
+                tensor_size_bytes=32,
+            )
+
+        # ====================================================================
+        # ReduceToOne setup (cross-device reduce for TP EH matmul)
+        # ====================================================================
+        reduce_params = {}
+        if enable_reduce_to_one:
+            reduce_root_coord = argmax_final_mesh_coord
+            reduce_sem_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in reduce_semaphores]
+            print(f"[lm_head_sampling] reduce_sem_addrs={[hex(a) for a in reduce_sem_addrs]}", flush=True)
+            reduce_intermediate_per_device = ttnn.get_device_tensors(reduce_intermediate_tensor)
+            reduce_output_per_device = ttnn.get_device_tensors(reduce_output_tensor)
+
+            reduce_sample = reduce_intermediate_per_device[0]
+            reduce_shard_spec = reduce_sample.memory_config().shard_spec
+            reduce_full_shape = reduce_shard_spec.shape
+            reduce_shard_shape = [reduce_full_shape[0], reduce_full_shape[1] // 3]
+            reduce_element_size = 2  # bfloat16
+            reduce_shard_elements = reduce_shard_shape[0] * reduce_shard_shape[1]
+            reduce_payload_size_bytes = reduce_shard_elements * reduce_element_size
+            print(f"[lm_head_sampling] reduce_payload_size_bytes={reduce_payload_size_bytes}", flush=True)
+            print(f"[lm_head_sampling] reduce_shard_elements={reduce_shard_elements}", flush=True)
+            reduce_compute_tile_size = 32 * 32 * reduce_element_size
+            print(f"[lm_head_sampling] reduce_compute_tile_size={reduce_compute_tile_size}", flush=True)
+            reduce_num_tiles = (reduce_shard_elements + 32 * 32 - 1) // (32 * 32)
+
+            print(f"[lm_head_sampling] reduce_num_tiles={reduce_num_tiles}", flush=True)
+            reduce_packet_header_size = 96
+            reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
+
+            # Worker cores = eh_matmul cores (same on every device)
+            eh_matmul_sample_grid = output_mtp_tensors_per_device[0].memory_config().shard_spec.grid
+            reduce_worker_cores = ttnn.corerange_to_cores(eh_matmul_sample_grid, row_wise=True)
+            reduce_col_to_cores = {}
+            for c in reduce_worker_cores:
+                reduce_col_to_cores.setdefault(c.x, []).append(c)
+            reduce_sorted_cols = sorted(reduce_col_to_cores.keys())
+            for x in reduce_sorted_cols:
+                reduce_col_to_cores[x].sort(key=lambda c: c.y)
+            reduce_num_workers_per_column = len(reduce_col_to_cores[reduce_sorted_cols[0]])
+
+            # Fabric cores: one per column, placed to the right of the bottom worker
+            reduce_fabric_cores = []
+            reduce_col_to_fabric = {}
+            for x in reduce_sorted_cols:
+                bottom = max(reduce_col_to_cores[x], key=lambda c: c.y)
+                fc = ttnn.CoreCoord(bottom.x + 1, bottom.y)
+                reduce_fabric_cores.append(fc)
+                reduce_col_to_fabric[x] = fc
+
+            # Slot and shard index maps
+            reduce_core_to_slot = {}
+            for x in reduce_sorted_cols:
+                for si, c in enumerate(reduce_col_to_cores[x]):
+                    reduce_core_to_slot[(c.x, c.y)] = si
+            reduce_core_to_shard = {(c.x, c.y): i for i, c in enumerate(reduce_worker_cores)}
+
+            # Output core from reduce_output_tensor
+            reduce_output_core = reduce_output_per_device[0].memory_config().shard_spec.grid.ranges()[0].start
+
+            # Worker→fabric global semaphores (created once, shared across devices)
+            device_grid_size = mesh_device.compute_with_storage_grid_size()
+            reduce_wf_sem_cores = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+            )
+            reduce_wf_sems = [
+                ttnn.create_global_semaphore(mesh_device, reduce_wf_sem_cores, 0)
+                for _ in range(reduce_num_workers_per_column)
+            ]
+            reduce_wf_sem_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in reduce_wf_sems]
+
+            reduce_params = dict(
+                sem_addrs=reduce_sem_addrs,
+                intermediate_per_device=reduce_intermediate_per_device,
+                output_per_device=reduce_output_per_device,
+                num_tiles=reduce_num_tiles,
+                payload_size_bytes=reduce_payload_size_bytes,
+                slot_size_bytes=reduce_slot_size_bytes,
+                compute_tile_size=reduce_compute_tile_size,
+                worker_cores=reduce_worker_cores,
+                num_workers_per_column=reduce_num_workers_per_column,
+                num_columns=len(reduce_sorted_cols),
+                fabric_cores=reduce_fabric_cores,
+                col_to_fabric=reduce_col_to_fabric,
+                core_to_slot=reduce_core_to_slot,
+                core_to_shard=reduce_core_to_shard,
+                output_core=reduce_output_core,
+                wf_sem_addrs=reduce_wf_sem_addrs,
+                root_coord=reduce_root_coord,
+            )
+
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         eh_gather_per_device = (
             ttnn.get_device_tensors(eh_gather_output_buf_tensor) if eh_gather_output_buf_tensor is not None else None
         )
+        device_programs = []
+        worker_ncrisc_arg_refs = []
+        print("[lm_head_sampling] before device loop", flush=True)
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
@@ -571,8 +757,28 @@ class LMHeadSampling:
                     is_exit_device = True
                 else:
                     is_exit_device = row == int(argmax_final_mesh_coord[0]) and col == int(argmax_final_mesh_coord[1])
-                enable_mtp_on_device = is_mtp_base_stage and is_exit_device
 
+                enable_mtp_on_device = is_mtp_base_stage
+
+                num_devices_in_stage = mesh_rows * mesh_cols
+                is_e_norm_device = enable_mtp_on_device and (device_idx < num_devices_in_stage // 2)
+                print(
+                    f"[lm_head_sampling] device_idx={device_idx}, num_devices_in_stage={num_devices_in_stage}, is_e_norm_device={is_e_norm_device}",
+                    flush=True,
+                )
+                eh_norm_slice_idx = (
+                    device_idx
+                    if is_e_norm_device
+                    else (device_idx - num_devices_in_stage // 2)
+                    if enable_mtp_on_device
+                    else 0
+                )
+                print(f"[lm_head_sampling] eh_norm_slice_idx={eh_norm_slice_idx}", flush=True)
+                eh_norm_slice_offset_bytes = (
+                    eh_norm_slice_idx * eh_num_tiles_k * input_tile_size if enable_mtp_on_device else 0
+                )
+                print(f"[lm_head_sampling] eh_norm_slice_offset_bytes={eh_norm_slice_offset_bytes}", flush=True)
+                print(f"[lm_head_sampling] grabbing all the tensors", flush=True)
                 # Get per-device tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
@@ -615,6 +821,7 @@ class LMHeadSampling:
                 input_socket_mode = input_socket_mode_selected if recv_socket_on_this_device else input_socket_mode_none
                 # Matmul cores: from vocab_tensor (multiple cores with weight shards)
                 matmul_core_grid = vocab_tensor_device.memory_config().shard_spec.grid
+                print(f"[lm_head_sampling] matmul_core_grid={matmul_core_grid}", flush=True)
                 argmax_core_grid = matmul_core_grid
                 argmax_cores_row_wise = ttnn.corerange_to_cores(argmax_core_grid, row_wise=True)
                 matmul_bbox = matmul_core_grid.bounding_box()
@@ -830,18 +1037,13 @@ class LMHeadSampling:
                 # Must match the core set that has is_eh_matmul_core=1 (matmul_core_grid on exit device).
                 eh_matmul_num_cores = eh_matmul_core_grid.num_cores() if enable_mtp_on_device else 0
 
-                # [MTP] EH output gather parameters
+                # [MTP] EH output parameters (used by socket send for gather_dst_cb sizing)
                 eh_output_tile_size = out_tile.get_tile_size(data_format) if enable_mtp_on_device else 0
-                eh_gather_data_size_bytes = eh_out_w_per_core * eh_output_tile_size if enable_mtp_on_device else 0
-                eh_gather_src_num_pages = eh_out_w_per_core if enable_mtp_on_device else 0
                 eh_gather_dst_num_pages = eh_matmul_num_cores * eh_out_w_per_core if enable_mtp_on_device else 0
                 eh_gather_send_total_bytes = (
                     (eh_gather_dst_num_pages + 1) * eh_output_tile_size if enable_mtp_on_device else 0
                 )
-                eh_gather_receiver_data_addr = 0
                 eh_gather_output_tensor = eh_gather_per_device[device_idx] if eh_gather_per_device is not None else None
-                if enable_mtp_on_device and eh_gather_output_tensor is not None:
-                    eh_gather_receiver_data_addr = int(eh_gather_output_tensor.buffer_address())
 
                 # MTP metadata landing buffer on argmax final core (NCRISC unicast from exit input core).
                 metadata_output_l1_addr = 0
@@ -851,26 +1053,71 @@ class LMHeadSampling:
 
                 sender_core_phys_for_mtp = device.worker_core_from_logical_core(mcast_sender_core)
                 mtp_embedding_dram_base = (
-                    int(embedding_tensors_per_device[device_idx].buffer_address())
-                    if is_mtp_base_stage and enable_mtp_on_device
-                    else 0
+                    int(embedding_tensors_per_device[device_idx].buffer_address()) if enable_mtp_on_device else 0
                 )
-                mtp_token_l1_addr = (
-                    int(intermediate_tensor_device.buffer_address())
-                    if is_mtp_base_stage and enable_mtp_on_device
-                    else 0
+                base_token_device = (
+                    base_token_tensors_per_device[device_idx] if base_token_tensors_per_device is not None else None
                 )
-                mtp_input_core_noc_x = (
-                    int(sender_core_phys_for_mtp.x) if is_mtp_base_stage and enable_mtp_on_device else 0
-                )
-                mtp_input_core_noc_y = (
-                    int(sender_core_phys_for_mtp.y) if is_mtp_base_stage and enable_mtp_on_device else 0
-                )
+                if enable_mtp_on_device:
+                    if base_token_device is not None:
+                        mtp_token_l1_addr = int(base_token_device.buffer_address())
+                    else:
+                        mtp_token_l1_addr = int(intermediate_tensor_device.buffer_address())
+                else:
+                    mtp_token_l1_addr = 0
+                mtp_input_core_noc_x = int(sender_core_phys_for_mtp.x) if enable_mtp_on_device else 0
+                mtp_input_core_noc_y = int(sender_core_phys_for_mtp.y) if enable_mtp_on_device else 0
                 mtp_argmax_output_l1_addr = (
-                    int(output_index_tensor_device.buffer_address())
-                    if is_mtp_base_stage and enable_mtp_on_device
+                    int(output_index_tensor_device.buffer_address()) if enable_mtp_on_device else 0
+                )
+
+                # ================================================================
+                # ReduceToOne per-device setup
+                # ================================================================
+                reduce_device_role = 0
+                reduce_dest_coord = coord
+                reduce_dest_fabric_node_id = None
+                reduce_output_core_phys_x = 0
+                reduce_output_core_phys_y = 0
+                if enable_reduce_to_one:
+                    reduce_root_row = int(reduce_params["root_coord"][0])
+                    reduce_use_torus = reduce_root_row in [0, 3]
+                    reduce_device_role = get_reduce_device_role(coord, reduce_params["root_coord"], reduce_use_torus)
+                    if reduce_device_role == MESH_LEAF:
+                        if reduce_use_torus:
+                            reduce_dest_coord = ttnn.MeshCoordinate(row - 1 if row == 1 else row + 1, col)
+                        else:
+                            reduce_dest_coord = ttnn.MeshCoordinate(row + 1 if row == 0 else row - 1, col)
+                    elif reduce_device_role == MESH_ROOT3:
+                        reduce_dest_coord = ttnn.MeshCoordinate(int(reduce_params["root_coord"][0]), col)
+                    elif reduce_device_role == MESH_ROOT2:
+                        reduce_dest_coord = reduce_params["root_coord"]
+                    else:
+                        reduce_dest_coord = reduce_params["root_coord"]
+                    reduce_dest_fabric_node_id = mesh_device.get_fabric_node_id(reduce_dest_coord)
+                    roc_phys = device.worker_core_from_logical_core(reduce_params["output_core"])
+                    reduce_output_core_phys_x = int(roc_phys.x)
+                    reduce_output_core_phys_y = int(roc_phys.y)
+                    role_name = {MESH_LEAF: "LEAF", MESH_ROOT3: "ROOT3", MESH_ROOT2: "ROOT2", MESH_ROOT1: "ROOT1"}
+                    print(
+                        f"[REDUCE_TREE] dev{device_idx} ({row},{col}) role={role_name.get(reduce_device_role,'?')} "
+                        f"dest=({int(reduce_dest_coord[0])},{int(reduce_dest_coord[1])}) "
+                        f"workers={[(c.x,c.y) for c in reduce_params['worker_cores']]} "
+                        f"fcs={[(c.x,c.y) for c in reduce_params['fabric_cores']]}",
+                        flush=True,
+                    )
+
+                reduce_num_fabric_and_worker_cores = (
+                    len(reduce_params["fabric_cores"]) + len(reduce_params["worker_cores"])
+                    if (enable_reduce_to_one and enable_mtp_on_device)
                     else 0
                 )
+
+                reduce_fc_nocs = [(0, 0)] * 2
+                if enable_reduce_to_one and enable_mtp_on_device:
+                    for i, fc in enumerate(reduce_params["fabric_cores"][:2]):
+                        fc_phys = device.worker_core_from_logical_core(fc)
+                        reduce_fc_nocs[i] = (int(fc_phys.x), int(fc_phys.y))
 
                 # ================================================================
                 # NCRISC compile-time args
@@ -963,32 +1210,16 @@ class LMHeadSampling:
                         mcast_eh_data_sender_semaphore_id if enable_mtp_on_device else 0,
                     ),
                     ("mcast_eh_data_receiver_semaphore", mcast_eh_data_receiver_semaphore_id),
-                    ("mcast_eh_src_num_pages", eh_concat_rms_tiles if enable_mtp_on_device else 0),
+                    ("mcast_eh_src_num_pages", rms_num_tiles if enable_mtp_on_device else 0),
                     ("mcast_eh_dst_num_pages", eh_num_tiles_k if enable_mtp_on_device else 0),
                     ("rmsnorm_h_num_tiles", rms_num_tiles),
                     ("rmsnorm_e_num_tiles", e_num_tiles if enable_mtp_on_device else 0),
-                    ("mcast_eh_tile_size_bytes", 2048 if enable_mtp_on_device else 0),
                     ("embedding_size_bytes", embedding_dim * 2 if enable_mtp_on_device else 0),
                     # Sender core NOC for L1-to-L1 copy (embedding region in mcast_eh_src_cb -> embedding_cb)
-                    ("mtp_done_semaphore_id", mtp_done_semaphore_id if enable_mtp_on_device else 0),
-                    ("eh_matmul_done_semaphore_id", eh_matmul_done_semaphore_id if enable_mtp_on_device else 0),
+                    ("reduce_gate_semaphore_id", reduce_gate_semaphore_id if enable_mtp_on_device else 0),
                     ("argmax_defer_socket_output", 1 if enable_socket_output else 0),
                     ("argmax_core_noc_x", argmax_core_noc_x if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("argmax_core_noc_y", argmax_core_noc_y if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
-                    # [MTP] Output gather sender args (NCRISC on EH matmul cores)
-                    ("gather_dest_noc_x", argmax_core_noc_x if enable_mtp_on_device else 0),
-                    ("gather_dest_noc_y", argmax_core_noc_y if enable_mtp_on_device else 0),
-                    ("gather_data_size_bytes", eh_gather_data_size_bytes),
-                    ("gather_receiver_semaphore_id", eh_gather_receiver_semaphore_id),
-                    ("gather_src_cb", matmul_out_eh_cb if enable_mtp_on_device else 0),
-                    ("gather_src_num_pages", eh_gather_src_num_pages),
-                    # NOTE: these grid coords are not used since we use per-core sender indices
-                    ("gather_sender_grid_start_x", 0),
-                    ("gather_sender_grid_start_y", 0),
-                    ("gather_sender_grid_end_x", 0),
-                    ("gather_sender_grid_end_y", 0),
-                    ("gather_row_major", 1),
-                    ("gather_receiver_data_addr", eh_gather_receiver_data_addr),
                     ("has_bypass_socket_output", 0),
                     ("has_bypass_socket_input", 0),
                     ("mtp_embedding_dram_base", mtp_embedding_dram_base),
@@ -997,8 +1228,37 @@ class LMHeadSampling:
                     ("mtp_input_core_noc_y", mtp_input_core_noc_y),
                     ("mtp_argmax_output_addr", mtp_argmax_output_l1_addr),
                     ("metadata_output_l1_addr", metadata_output_l1_addr),
+                    ("is_e_norm_device", 1 if is_e_norm_device else 0),
+                    # [Reduce] NCRISC CT args
+                    ("reduce_device_role", reduce_device_role),
+                    ("reduce_num_tiles", reduce_params["num_tiles"] if enable_reduce_to_one else 0),
+                    ("reduce_local_cb", reduce_local_cb),
+                    ("reduce_received_cb", reduce_received_cb),
+                    # [Reduce] Pre-reduce gate: BRISC on argmax_final_core signals 2 fabric cores after sampling
+                    ("reduce_fc_noc_0_x", reduce_fc_nocs[0][0]),
+                    ("reduce_fc_noc_0_y", reduce_fc_nocs[0][1]),
+                    ("reduce_fc_noc_1_x", reduce_fc_nocs[1][0]),
+                    ("reduce_fc_noc_1_y", reduce_fc_nocs[1][1]),
                 ]
                 ncrisc_named_compile_time_args.extend(bcast_config.get_ncrisc_named_ct_args(coord))
+                if mtp_bcast_config is not None:
+                    ncrisc_named_compile_time_args.extend(
+                        [(f"mtp_{k}", v) for k, v in mtp_bcast_config.get_ncrisc_named_ct_args(coord)]
+                    )
+                else:
+                    ncrisc_named_compile_time_args.extend(
+                        [
+                            ("mtp_bcast_data_cb_id", 0),
+                            ("mtp_bcast_num_pages_to_read", 0),
+                            ("mtp_bcast_tensor0_page_size", 0),
+                            ("mtp_bcast_num_neighbors", 0),
+                            ("mtp_bcast_num_links", 1),
+                            ("mtp_bcast_is_root", 0),
+                            ("mtp_bcast_chunk_size_bytes", 1),
+                            ("mtp_bcast_last_chunk_size_bytes", 1),
+                            ("mtp_bcast_num_chunks", 1),
+                        ]
+                    )
 
                 # ================================================================
                 # BRISC compile-time args
@@ -1056,26 +1316,61 @@ class LMHeadSampling:
                     ("mcast_eh_dst_cb", mcast_eh_dst_cb if enable_mtp_on_device else 0),
                     ("mcast_eh_dst_num_pages", eh_num_tiles_k if enable_mtp_on_device else 0),
                     ("mcast_eh_data_size_bytes", eh_mcast_data_size_bytes if enable_mtp_on_device else 0),
-                    ("mcast_eh_src_num_pages", eh_concat_rms_tiles if enable_mtp_on_device else 0),
-                    ("mtp_done_semaphore_id", mtp_done_semaphore_id if enable_mtp_on_device else 0),
-                    ("eh_matmul_done_semaphore_id", eh_matmul_done_semaphore_id if enable_mtp_on_device else 0),
+                    ("mcast_eh_src_num_pages", rms_num_tiles if enable_mtp_on_device else 0),
+                    ("reduce_gate_semaphore_id", reduce_gate_semaphore_id if enable_mtp_on_device else 0),
+                    ("reduce_gate_num_targets", reduce_num_fabric_and_worker_cores),
                     ("argmax_defer_socket_output", 1 if enable_socket_output else 0),
                     ("argmax_core_noc_x", argmax_core_noc_x if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("argmax_core_noc_y", argmax_core_noc_y if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("eh_matmul_num_cores", eh_matmul_num_cores if enable_mtp_on_device else 0),
                     ("mtp_ready_semaphore_id", mtp_ready_semaphore_id),
                     ("metadata_ready_semaphore_id", metadata_ready_semaphore_id),
-                    # [MTP] Output gather receiver args (BRISC on argmax_final_core)
-                    ("gather_noc0_num_senders", eh_matmul_num_cores if enable_mtp_on_device else 0),
-                    ("gather_noc1_num_senders", 0),
-                    ("gather_noc0_receiver_semaphore_id", eh_gather_receiver_semaphore_id),
-                    ("gather_noc1_receiver_semaphore_id", 0),
                     ("gather_dst_cb", eh_gather_dst_cb if enable_mtp_on_device else 0),
                     ("gather_dst_num_pages", eh_gather_dst_num_pages),
                     ("gather_send_total_bytes", eh_gather_send_total_bytes),
                     ("metadata_output_l1_addr", metadata_output_l1_addr),
+                    ("is_e_norm_device", 1 if is_e_norm_device else 0),
+                    ("eh_norm_slice_offset_bytes", eh_norm_slice_offset_bytes),
+                    # [Reduce] BRISC CT args
+                    ("reduce_device_role", reduce_device_role),
+                    ("reduce_num_tiles", reduce_params["num_tiles"] if enable_reduce_to_one else 0),
+                    ("reduce_payload_size_bytes", reduce_params["payload_size_bytes"] if enable_reduce_to_one else 0),
+                    ("reduce_local_cb", reduce_local_cb),
+                    ("reduce_scratch_cb", reduce_scratch_cb),
+                    ("reduce_packet_cb", reduce_packet_cb),
+                    ("reduce_num_hops", 1),
+                    (
+                        "reduce_dst_fabric_node_chip_id",
+                        int(reduce_dest_fabric_node_id.chip_id) if enable_reduce_to_one else 0,
+                    ),
+                    (
+                        "reduce_dst_fabric_node_mesh_id",
+                        int(reduce_dest_fabric_node_id.mesh_id) if enable_reduce_to_one else 0,
+                    ),
+                    ("reduce_output_core_noc_x", reduce_output_core_phys_x),
+                    ("reduce_output_core_noc_y", reduce_output_core_phys_y),
+                    ("reduce_num_workers", reduce_params["num_workers_per_column"] if enable_reduce_to_one else 0),
+                    ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"] if enable_reduce_to_one else 0),
+                    # [Reduce] Pre-reduce gate: BRISC on argmax_final_core signals 2 fabric cores after sampling
+                    ("reduce_fc_noc_0_x", reduce_fc_nocs[0][0]),
+                    ("reduce_fc_noc_0_y", reduce_fc_nocs[0][1]),
+                    ("reduce_fc_noc_1_x", reduce_fc_nocs[1][0]),
+                    ("reduce_fc_noc_1_y", reduce_fc_nocs[1][1]),
                 ]
                 brisc_named_compile_time_args.extend(bcast_config.get_brisc_named_ct_args(coord))
+                if mtp_bcast_config is not None:
+                    brisc_named_compile_time_args.extend(
+                        [(f"mtp_{k}", v) for k, v in mtp_bcast_config.get_brisc_named_ct_args(coord)]
+                    )
+                else:
+                    brisc_named_compile_time_args.extend(
+                        [
+                            ("mtp_bcast_data_cb_id", 0),
+                            ("mtp_bcast_num_pages_to_read", 0),
+                            ("mtp_bcast_is_root", 0),
+                            ("mtp_bcast_use_socket", 0),
+                        ]
+                    )
 
                 # ================================================================
                 # TRISC compile-time args
@@ -1125,10 +1420,17 @@ class LMHeadSampling:
                     ("matmul_eh_subblock_w", eh_subblock_w if enable_mtp_on_device else 0),
                     ("matmul_eh_subblock_k", eh_subblock_k if enable_mtp_on_device else 0),
                     ("matmul_eh_num_subblocks_k", eh_num_subblocks_k if enable_mtp_on_device else 0),
-                    ("mtp_done_semaphore_id", mtp_done_semaphore_id if enable_mtp_on_device else 0),
-                    ("eh_matmul_done_semaphore_id", eh_matmul_done_semaphore_id if enable_mtp_on_device else 0),
+                    ("reduce_gate_semaphore_id", reduce_gate_semaphore_id if enable_mtp_on_device else 0),
                     ("argmax_core_noc_x", argmax_core_noc_x if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("argmax_core_noc_y", argmax_core_noc_y if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
+                    # [Reduce] TRISC CT args
+                    ("reduce_device_role", reduce_device_role),
+                    ("reduce_num_tiles", reduce_params["num_tiles"] if enable_reduce_to_one else 0),
+                    ("reduce_local_cb", reduce_local_cb),
+                    ("reduce_received_cb", reduce_received_cb),
+                    ("reduce_output_cb", reduce_output_cb),
+                    ("reduce_scratch_cb", reduce_scratch_cb),
+                    ("is_e_norm_device", 1 if is_e_norm_device else 0),
                 ]
 
                 # ================================================================
@@ -1138,28 +1440,41 @@ class LMHeadSampling:
                     int(scratch_tensors_per_device[device_idx].buffer_address()) if not skip_ccl else 0
                 )
 
-                ncrisc_bcast_common_args = bcast_config.get_ncrisc_common_rt_args(coord) + [
-                    int(indices_tensor_device.buffer_address()),
-                    int(output_index_tensor_device.buffer_address()),
-                    int(final_core_phys.x),
-                    int(final_core_phys.y),
-                    argmax_scratch_addr,
-                    global_sem_addr,
-                    global_stage2_sem_addr,
-                ]
+                ncrisc_bcast_common_args = (
+                    bcast_config.get_ncrisc_common_rt_args(coord)
+                    + [
+                        int(indices_tensor_device.buffer_address()),
+                        int(output_index_tensor_device.buffer_address()),
+                        int(final_core_phys.x),
+                        int(final_core_phys.y),
+                        argmax_scratch_addr,
+                        global_sem_addr,
+                        global_stage2_sem_addr,
+                    ]
+                    + (reduce_params["sem_addrs"][:3] if enable_reduce_to_one else [0, 0, 0])
+                    + (
+                        mtp_bcast_config.get_ncrisc_common_rt_args(coord)
+                        if mtp_bcast_config is not None
+                        else [0, 0, 0, 0, 0]
+                    )
+                )
 
-                brisc_bcast_common_args = bcast_config.get_brisc_common_rt_args(coord) + [
-                    int(final_core_phys.x),
-                    int(final_core_phys.y),
-                    argmax_scratch_addr,
-                    int(socket_output.get_config_buffer_address()) if enable_socket_output else 0,
-                    persistent_enable,
-                    int(persistent_target_input_core_phys.x),
-                    int(persistent_target_input_core_phys.y),
-                    int(persistent_target_node.mesh_id),
-                    int(persistent_target_node.chip_id),
-                    persistent_next_iter_global_sem_addr,
-                ]
+                brisc_bcast_common_args = (
+                    bcast_config.get_brisc_common_rt_args(coord)
+                    + [
+                        int(final_core_phys.x),
+                        int(final_core_phys.y),
+                        argmax_scratch_addr,
+                        int(socket_output.get_config_buffer_address()) if enable_socket_output else 0,
+                        persistent_enable,
+                        int(persistent_target_input_core_phys.x),
+                        int(persistent_target_input_core_phys.y),
+                        int(persistent_target_node.mesh_id),
+                        int(persistent_target_node.chip_id),
+                        persistent_next_iter_global_sem_addr,
+                    ]
+                    + (mtp_bcast_config.get_brisc_common_rt_args(coord) if mtp_bcast_config is not None else [0, 0, 0])
+                )
 
                 # ================================================================
                 # Circular buffer descriptors
@@ -1229,36 +1544,41 @@ class LMHeadSampling:
                 # [MTP] CB descriptors (only if is_mtp_base_stage)
                 mtp_cb_descriptors = []
                 if enable_mtp_on_device:
-                    # CB 11: h_gamma - tensor-backed on sender core
-                    h_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        h_gamma_cb, h_gamma_tensors_per_device[device_idx]
-                    )
-                    h_gamma_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
-                    h_gamma_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
+                    print(f"[OP:{device_idx}:I4] MTP CB section enter", flush=True)
+                    # CB 11: h_gamma - tensor-backed on sender core (h_norm devices only)
+                    h_gamma_cb_descriptor = None
+                    if not is_e_norm_device:
+                        h_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                            h_gamma_cb, h_gamma_tensors_per_device[device_idx]
+                        )
+                        h_gamma_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
+                        h_gamma_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
 
-                    # CB 12: e_gamma - tensor-backed on sender core
-                    e_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        e_gamma_cb, e_gamma_tensors_per_device[device_idx]
-                    )
-                    e_gamma_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
-                    e_gamma_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
+                    # CB 12: e_gamma - tensor-backed on sender core (e_norm devices only)
+                    e_gamma_cb_descriptor = None
+                    embedding_cb_descriptor = None
+                    if is_e_norm_device:
+                        e_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                            e_gamma_cb, e_gamma_tensors_per_device[device_idx]
+                        )
+                        e_gamma_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
+                        e_gamma_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
 
-                    embedding_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
-                    embedding_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=embedding_cb,
-                        data_format=data_format,
-                        page_size=rms_tile_size,
-                        tile=embedding_tile_descriptor,
-                    )
-                    embedding_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=rms_num_tiles * rms_tile_size,
-                        core_ranges=mcast_sender_core_grid,
-                        format_descriptors=[embedding_cb_format],
-                    )
+                        embedding_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
+                        embedding_cb_format = ttnn.CBFormatDescriptor(
+                            buffer_index=embedding_cb,
+                            data_format=data_format,
+                            page_size=rms_tile_size,
+                            tile=embedding_tile_descriptor,
+                        )
+                        embedding_cb_descriptor = ttnn.CBDescriptor(
+                            total_size=rms_num_tiles * rms_tile_size,
+                            core_ranges=mcast_sender_core_grid,
+                            format_descriptors=[embedding_cb_format],
+                        )
 
-                    # CB 15: mcast_eh_src - fused [h_norm|e_norm] on sender core
-                    # Both h_rmsnorm and e_rmsnorm write directly here (no separate e_norm_cb needed)
-                    # Uses packed RMS tile format (7+7=14 tiles of 32x32) matching RMSNorm output format
+                    # CB 15: mcast_eh_src - single norm output (h_norm or e_norm) on sender core
+                    # Sized for 7 tiles of 32x32; mcast sends a 1792-datum slice via byte offset
                     mcast_eh_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
                     mcast_eh_src_cb_format = ttnn.CBFormatDescriptor(
                         buffer_index=mcast_eh_src_cb,
@@ -1267,7 +1587,7 @@ class LMHeadSampling:
                         tile=mcast_eh_tile_descriptor,
                     )
                     mcast_eh_src_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=eh_concat_rms_tiles * rms_tile_size,
+                        total_size=rms_num_tiles * rms_tile_size,
                         core_ranges=mcast_sender_core_grid,
                         format_descriptors=[mcast_eh_src_cb_format],
                     )
@@ -1285,6 +1605,9 @@ class LMHeadSampling:
                         core_ranges=all_cores,
                         format_descriptors=[mcast_eh_dst_cb_format],
                     )
+                    print(f"[lm_head_sampling] eh_dst_tile_descriptor={eh_dst_tile_descriptor}", flush=True)
+                    print(f"[lm_head_sampling] eh_dst_tile page size={input_tile_size}", flush=True)
+                    print(f"[lm_head_sampling] eh_dst_tile total size={eh_num_tiles_k * input_tile_size}", flush=True)
 
                     # CB 9: EH projection weights (in1) buffer - CB-backed working buffer for DRAM streaming
                     eh_cb_format = ttnn.CBFormatDescriptor(
@@ -1311,15 +1634,18 @@ class LMHeadSampling:
                     )
 
                     mtp_cb_descriptors = [
-                        h_gamma_cb_descriptor,
-                        e_gamma_cb_descriptor,
                         mcast_eh_src_cb_descriptor,
                         mcast_eh_dst_cb_descriptor,
                         matmul_eh_cb_descriptor,
                         matmul_out_eh_cb_descriptor,
                         eh_gather_cb_descriptor,
-                        embedding_cb_descriptor,
                     ]
+                    if h_gamma_cb_descriptor is not None:
+                        mtp_cb_descriptors.append(h_gamma_cb_descriptor)
+                    if e_gamma_cb_descriptor is not None:
+                        mtp_cb_descriptors.append(e_gamma_cb_descriptor)
+                    if embedding_cb_descriptor is not None:
+                        mtp_cb_descriptors.append(embedding_cb_descriptor)
 
                 # CB list
                 cbs_list = [
@@ -1380,7 +1706,87 @@ class LMHeadSampling:
                 if bcast_pkt_cb_descriptor is not None:
                     cbs_list.append(bcast_pkt_cb_descriptor)
 
-                # CB 30: CCL broadcast packet buffer (only in multi-device mode)
+                if mtp_bcast_config is not None:
+                    mtp_bcast_cb_descriptor = mtp_bcast_config.get_cb_descriptor(coord)
+                    if mtp_bcast_cb_descriptor is not None:
+                        cbs_list.append(mtp_bcast_cb_descriptor)
+
+                # [Reduce] CB descriptors
+                if enable_reduce_to_one:
+                    rp = reduce_params
+                    reduce_worker_cores_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in rp["worker_cores"]])
+                    reduce_all_cores_set = ttnn.CoreRangeSet(
+                        [ttnn.CoreRange(c, c) for c in rp["worker_cores"]]
+                        + [ttnn.CoreRange(c, c) for c in rp["fabric_cores"]]
+                    )
+                    reduce_tile_desc = ttnn.TileDescriptor(32, 32)
+                    # CB 20: received (3 pages for 3 reduce rounds) — worker cores only, tensor-backed
+                    reduce_cb_recv = ttnn.cb_descriptor_from_sharded_tensor(
+                        reduce_received_cb, rp["intermediate_per_device"][device_idx]
+                    )
+                    reduce_cb_recv.core_ranges = reduce_worker_cores_set
+                    reduce_cb_recv.total_size = 3 * rp["payload_size_bytes"]
+                    reduce_cb_recv.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=reduce_received_cb,
+                            data_format=ttnn.bfloat16,
+                            page_size=rp["payload_size_bytes"],
+                            tile=reduce_tile_desc,
+                        )
+                    ]
+                    # CB 18 (scratch) already allocated as mcast_eh_dst_cb — reused, no new descriptor
+                    # CB 22: packet (fabric send buffer) — both worker + fabric cores
+                    reduce_cb_pkt = ttnn.CBDescriptor(
+                        total_size=rp["slot_size_bytes"] * rp["num_workers_per_column"],
+                        core_ranges=reduce_all_cores_set,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=reduce_packet_cb,
+                                data_format=ttnn.bfloat16,
+                                page_size=rp["slot_size_bytes"],
+                            )
+                        ],
+                    )
+                    # CB 21: reduce local — aliased to CB17's L1 (same tensor backing),
+                    # but with page_size=payload_size_bytes so reduce sees full shard as 1 page.
+                    # The TRISC bridge pops CB17 (28 tiles) and pushes CB21 (1 page) between
+                    # the EH matmul and reduce, so reduce operates with num_compute_tiles=1.
+                    reduce_local_cb_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                        reduce_local_cb, output_mtp_tensors_per_device[device_idx]
+                    )
+                    reduce_local_cb_desc.core_ranges = reduce_worker_cores_set
+                    reduce_local_cb_desc.total_size = rp["payload_size_bytes"]
+                    reduce_local_cb_desc.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=reduce_local_cb,
+                            data_format=ttnn.bfloat16,
+                            page_size=rp["payload_size_bytes"],
+                            tile=reduce_tile_desc,
+                        )
+                    ]
+                    # CB 23: reduce scratch — dedicated intermediate for reduce TRISC→BRISC handoff.
+                    # Cannot reuse CB18 (mcast_eh_dst_cb): BRISC enters reduce before TRISC's
+                    # DSMM consumes the mcast data in CB18, causing a race condition.
+                    print(f"[OP:{device_idx}:I9] reduce scratch cb enter", flush=True)
+                    print(f"[OP:{device_idx}:I9] reduce scratch cb reduce tile desc={reduce_tile_desc}", flush=True)
+                    print(f"[OP:{device_idx}:I9] reduce scratch cb page size={rp['compute_tile_size']}", flush=True)
+                    print(
+                        f"[OP:{device_idx}:I9] reduce scratch cb total_size={rp['num_tiles'] * rp['compute_tile_size']}",
+                        flush=True,
+                    )
+                    reduce_scratch_cb_desc = ttnn.CBDescriptor(
+                        total_size=rp["num_tiles"] * rp["compute_tile_size"],
+                        core_ranges=reduce_worker_cores_set,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=reduce_scratch_cb,
+                                data_format=ttnn.bfloat16,
+                                page_size=rp["compute_tile_size"],
+                                tile=reduce_tile_desc,
+                            )
+                        ],
+                    )
+                    cbs_list.extend([reduce_cb_recv, reduce_cb_pkt, reduce_local_cb_desc, reduce_scratch_cb_desc])
 
                 # ================================================================
                 # Semaphore descriptors (for intra-device mcast)
@@ -1423,7 +1829,7 @@ class LMHeadSampling:
                         ]
                     )
                 # Semaphores for MTP in Base Stage
-                if is_mtp_base_stage and enable_mtp_on_device:
+                if enable_mtp_on_device:
                     semaphore_descriptors.extend(
                         [
                             ttnn.SemaphoreDescriptor(
@@ -1437,18 +1843,8 @@ class LMHeadSampling:
                                 initial_value=0,
                             ),
                             ttnn.SemaphoreDescriptor(
-                                id=mtp_done_semaphore_id,
+                                id=reduce_gate_semaphore_id,
                                 core_ranges=all_cores,
-                                initial_value=0,
-                            ),
-                            ttnn.SemaphoreDescriptor(
-                                id=eh_matmul_done_semaphore_id,
-                                core_ranges=all_cores,
-                                initial_value=0,
-                            ),
-                            ttnn.SemaphoreDescriptor(
-                                id=eh_gather_receiver_semaphore_id,
-                                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(argmax_final_core, argmax_final_core)]),
                                 initial_value=0,
                             ),
                         ]
@@ -1530,6 +1926,23 @@ class LMHeadSampling:
                             value=1 if enable_argmax else 0,
                             other_value=0,
                         ),
+                        # reduce to one core descriptors
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="is_reduce_worker_core",
+                            core_range=eh_matmul_core_grid if enable_reduce_to_one else ttnn.CoreRangeSet([]),
+                            value=1,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="is_reduce_fabric_core",
+                            core_range=(
+                                ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in reduce_params["fabric_cores"]])
+                                if enable_reduce_to_one
+                                else ttnn.CoreRangeSet([])
+                            ),
+                            value=1,
+                            other_value=0,
+                        ),
                         UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_argmax_final_core",
                             core_range=argmax_final_core,
@@ -1575,12 +1988,6 @@ class LMHeadSampling:
                                 value=1,
                                 other_value=0,
                             ),
-                            UnifiedCompileTimeCoreDescriptor(
-                                named_compile_time_arg="gather_use_per_core_sender_idx",
-                                core_range=eh_matmul_core_grid,
-                                value=1,
-                                other_value=0,
-                            ),
                         ]
                         if enable_mtp_on_device
                         else []
@@ -1611,24 +2018,16 @@ class LMHeadSampling:
                                 core_values=eh_vc_core_values if enable_mtp_on_device else [],
                                 other_value=0,
                             ),
-                            PerCoreCompileTimeDescriptor(
-                                named_compile_time_arg="gather_sender_idx",
-                                core_values=(
-                                    [
-                                        (core, idx)
-                                        for idx, core in enumerate(ttnn.corerange_to_cores(eh_matmul_core_grid))
-                                    ]
-                                    if enable_mtp_on_device
-                                    else []
-                                ),
-                                other_value=0,
-                            ),
                         ]
                     ),
                     # Per-core runtime args: mesh argmax senders get BRISC sender metadata.
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         ncrisc_args=[(worker_core, [])],
-                        brisc_args=[(worker_core, [])] + per_core_brisc_runtime_args,
+                        brisc_args=[(worker_core, [])]
+                        + per_core_brisc_runtime_args
+                        + LMHeadSampling._build_reduce_brisc_per_core_args(
+                            enable_reduce_to_one, reduce_params, reduce_device_role, device, device_idx
+                        ),
                     ),
                 )
 
@@ -1641,6 +2040,7 @@ class LMHeadSampling:
                 matmul_role_cores = set()
                 argmax_role_cores = set()
                 argmax_final_role_cores = set()
+                print(f"[OP] kernel_result.groups: {kernel_result.groups}", flush=True)
                 for group in kernel_result.groups:
                     group_cores = ttnn.corerange_to_cores(group.core_range_set)
                     if group.compile_time_arg_values.get("is_input_core", 0) == 1:
@@ -1717,6 +2117,13 @@ class LMHeadSampling:
                     writer_rt_args_ref = program.kernels[writer_kernel_idx].runtime_args[worker_core.x][worker_core.y]
                     writer_rt_args_ref.extend(bcast_config.get_ncrisc_per_core_rt_args(coord, program, worker_core))
 
+                # [MTP] Append MTP broadcast tree per-core routing args
+                if mtp_bcast_config is not None:
+                    mtp_bcast_worker = mtp_bcast_config.get_worker_core(coord)
+                    writer_rt_args_ref.extend(
+                        mtp_bcast_config.get_ncrisc_per_core_rt_args(coord, program, mtp_bcast_worker)
+                    )
+
                 if not skip_ccl and is_argmax_mesh_sender_core:
                     sender_group = kernel_result.get_group_by_arg("is_argmax_mesh_sender_core", 1)
                     if sender_group is None:
@@ -1748,7 +2155,56 @@ class LMHeadSampling:
                         argmax_final_core.y
                     ].extend(persistent_fabric_rt_args)
 
-                mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
+                # [Reduce] Setup fabric connections for reduce fabric cores (non-ROOT1 only)
+                if enable_reduce_to_one and reduce_device_role != MESH_ROOT1:
+                    src_node = mesh_device.get_fabric_node_id(coord)
+                    num_cols = reduce_params["num_columns"]
+                    for fc_i, fc in enumerate(reduce_params["fabric_cores"]):
+                        fc_group = None
+                        for g in kernel_result.groups:
+                            if g.compile_time_arg_values.get(
+                                "is_reduce_fabric_core", 0
+                            ) == 1 and g.core_range_set.contains(fc):
+                                fc_group = g
+                                break
+                        rfk_idx = fc_group.brisc_kernel_index
+                        link = 0 if fc_i < num_cols // 2 else 1
+                        rf_args = ttnn.setup_fabric_connection(
+                            src_node,
+                            reduce_dest_fabric_node_id,
+                            link,
+                            program,
+                            fc,
+                        )
+                        print(
+                            f"[OP] dev{device_idx} reduce fc_i={fc_i} fc=({fc.x},{fc.y}) "
+                            f"link={link} src_node={src_node} dst_node={reduce_dest_fabric_node_id} "
+                            f"rf_args={list(rf_args)}",
+                            flush=True,
+                        )
+                        program.kernels[rfk_idx].runtime_args[fc.x][fc.y].extend(rf_args)
+
+                input_group_for_pad = kernel_result.get_group_by_arg("is_input_core", 1)
+                if input_group_for_pad is not None:
+                    pad_ncrisc_idx = input_group_for_pad.ncrisc_kernel_index
+                    worker_ncrisc_arg_refs.append(
+                        program.kernels[pad_ncrisc_idx].runtime_args[worker_core.x][worker_core.y]
+                    )
+                device_programs.append((coord, program))
+
+        if worker_ncrisc_arg_refs:
+            max_ncrisc_len = max(len(ref) for ref in worker_ncrisc_arg_refs)
+            for ref in worker_ncrisc_arg_refs:
+                pad_count = max_ncrisc_len - len(ref)
+                if pad_count > 0:
+                    ref.extend([0] * pad_count)
+                    print(
+                        f"[OP] padded worker_core NCRISC per-core args by {pad_count} to {max_ncrisc_len}", flush=True
+                    )
+
+        for dp_coord, dp_program in device_programs:
+            mesh_program_descriptor[ttnn.MeshCoordinateRange(dp_coord, dp_coord)] = dp_program
+        print("[OP] all devices done, building io_tensors", flush=True)
         io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, gamma_tensor, vocab_tensor, output_tensor]
         io_tensors.extend([indices_tensor, output_index_tensor])
         if is_mtp_base_stage:
@@ -1761,6 +2217,11 @@ class LMHeadSampling:
             io_tensors.append(metadata_tensor)
         if not skip_ccl:
             io_tensors.append(fabric_scratch_tensor)
+        if enable_reduce_to_one:
+            io_tensors.extend([reduce_intermediate_tensor, reduce_output_tensor])
+        if base_token_buffer is not None:
+            io_tensors.append(base_token_buffer)
+        print(f"[OP] calling generic_op with {len(io_tensors)} io_tensors", flush=True)
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         logger.debug("[OP] generic_op returned")
         return result

@@ -575,7 +575,6 @@ class BaseLMHeadStage(StageKind):
         argmax_final_core_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(BaseLMHeadStage.ARGMAX_FINAL_CORE, BaseLMHeadStage.ARGMAX_FINAL_CORE)]
         )
-
         input_a_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
@@ -675,6 +674,20 @@ class BaseLMHeadStage(StageKind):
             mesh_mapper=mesh_mapper,
         )
 
+        base_token_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(mcast_core_grid, (1, 8), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        base_token_buffer = ttnn.from_torch(
+            torch.zeros((num_devices, 1, 8), dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=base_token_mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
         METADATA_ELEMS = TOKEN_META_PAGE_SIZE_BYTES // 4
         metadata_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -711,6 +724,29 @@ class BaseLMHeadStage(StageKind):
                 tile=BaseLMHeadStage.OUT_TILE,
                 mesh_mapper=mesh_mapper,
             )
+
+            # Reduce-to-one intermediate tensor for TP EH matmul (3x shard width for 3 rounds)
+            reduce_intermediate_mem = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    compute_core_grid, (BaseLMHeadStage.M, 3 * mtp_n_per_core), ttnn.ShardOrientation.ROW_MAJOR
+                ),
+            )
+            reduce_intermediate_tensor = ttnn.from_torch(
+                torch.zeros((num_devices, BaseLMHeadStage.M, 3 * mtp_padded_dim), dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=reduce_intermediate_mem,
+                tile=BaseLMHeadStage.OUT_TILE,
+                mesh_mapper=mesh_mapper,
+            )
+            dg = mesh_device.compute_with_storage_grid_size()
+            reduce_sem_crs = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dg.x - 1, dg.y - 1))]
+            )
+            reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, reduce_sem_crs, 0) for _ in range(4)]
 
         sender = BaseLMHeadStage.LMHEAD_INPUT_CORE
         matmul_bbox = matmul_core_grid.bounding_box()
@@ -792,13 +828,20 @@ class BaseLMHeadStage(StageKind):
             "global_semaphore": global_semaphore,
             "global_stage2_semaphore": global_stage2_semaphore,
             "eh_gather_output_buf": eh_gather_output_buf,
+            "base_token_buffer": base_token_buffer,
         }
         if self._enable_mtp:
             self._lmhead_state["ttnn_mtp_output"] = ttnn_mtp_output
-            self._lmhead_state["ttnn_embedding"] = self._embedding_weights.embedding
-            self._lmhead_state["ttnn_h_gamma"] = self._mtp_weights.h_gamma
-            self._lmhead_state["ttnn_e_gamma"] = self._mtp_weights.e_gamma
-            self._lmhead_state["ttnn_eh_proj"] = self._mtp_weights.eh_projection
+            self._lmhead_state["ttnn_embedding"] = self._embedding_weights.embedding  # replicated on ecah device
+            self._lmhead_state["ttnn_h_gamma"] = self._mtp_weights.h_gamma  # replicated on each device
+            self._lmhead_state["ttnn_e_gamma"] = self._mtp_weights.e_gamma  # replicated on each device
+            self._lmhead_state["ttnn_eh_proj"] = self._mtp_weights.eh_projection  # width sharded on each device
+            self._lmhead_state["reduce_intermediate_tensor"] = reduce_intermediate_tensor
+            self._lmhead_state["reduce_semaphores"] = reduce_semaphores
+            compute_grid_size = mesh_device.compute_with_storage_grid_size()
+            num_cores = compute_grid_size.x * compute_grid_size.y
+            available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
+            self._lmhead_state["mtp_bcast_semaphores"] = [ttnn.create_global_semaphore(mesh_device, available_cores, 0)]
         if self._persistent_mode:
             persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
             self._lmhead_state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
@@ -842,6 +885,11 @@ class BaseLMHeadStage(StageKind):
             is_mtp_base_stage=True,
             eh_gather_output_buf_tensor=d.get("eh_gather_output_buf"),
             metadata_tensor=d.get("metadata_tensor"),
+            reduce_semaphores=d.get("reduce_semaphores"),
+            reduce_intermediate_tensor=d.get("reduce_intermediate_tensor"),
+            reduce_output_tensor=d.get("eh_gather_output_buf"),
+            mtp_bcast_semaphores=d.get("mtp_bcast_semaphores"),
+            base_token_buffer=d.get("base_token_buffer"),
         )
 
 
