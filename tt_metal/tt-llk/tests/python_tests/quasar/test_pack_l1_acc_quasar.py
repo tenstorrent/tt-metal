@@ -6,11 +6,7 @@ from typing import List
 import pytest
 import torch
 from helpers.format_config import DataFormat, FormatConfig
-from helpers.golden_generators import (
-    PackGolden,
-    apply_l1_accumulation,
-    get_golden_generator,
-)
+from helpers.golden_generators import PackGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -173,7 +169,9 @@ def test_pack_l1_acc_quasar(
         full_golden[block * elements_per_block : (block + 1) * elements_per_block]
         for block in range(output_num_blocks)
     ]
-    golden_tensor = apply_l1_accumulation(partials, data_format=formats.output_format)
+    golden_tensor = generate_golden.accumulate_l1(
+        partials, data_format=formats.output_format
+    )
 
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
