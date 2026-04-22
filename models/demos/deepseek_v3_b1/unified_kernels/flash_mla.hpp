@@ -127,6 +127,7 @@ struct FlashMLADecode {
     struct ReaderArgs {
         uint32_t k_addr;
         uint32_t local_cur_pos;
+        uint32_t slot_id;
         uint32_t cur_batch;
         uint32_t core_num_in_reduce;
         uint32_t is_mcast_sender;
@@ -153,6 +154,7 @@ struct FlashMLADecode {
 
     struct WriterArgs {
         uint32_t local_cur_pos;
+        uint32_t slot_id;
         uint32_t cur_batch;
         uint32_t core_num_in_reduce;
         uint32_t is_output_core;
@@ -194,6 +196,7 @@ struct FlashMLADecode {
         uint32_t local_cur_pos;
         uint32_t do_reduce;
         uint32_t do_output;
+        uint32_t slot_id;
         uint32_t cur_batch;
         uint32_t core_num_in_reduce;
         uint32_t is_sender_after_reduce;
@@ -217,7 +220,10 @@ struct FlashMLADecode {
             }
         }
 
-        void set_local_cur_pos(RTArgs& args, uint32_t local_cur_pos) { args.local_cur_pos = local_cur_pos; }
+        void set_pos_and_slot(RTArgs& args, uint32_t local_cur_pos, uint32_t slot_id) {
+            args.local_cur_pos = local_cur_pos;
+            args.slot_id = slot_id;
+        }
 
         /**
          * Push dummy tiles into the hand-off CBs (cb_out_o, cb_out_ms) so that
@@ -296,8 +302,6 @@ struct FlashMLADecode {
             const uint64_t sender_receiver_ready_noc_addr = get_noc_addr(
                 args.mcast_start_x, args.mcast_start_y, args.receiver_ready_semaphore_addr, ATOMIC_NOC_INDEX);
 
-            constexpr uint32_t kv_batch = 0;
-
             const uint64_t brisc_mcast_noc_addr = get_noc_multicast_addr<MCAST_NOC_INDEX>(
                 args.mcast_start_x, args.mcast_start_y, args.mcast_end_x, args.mcast_end_y, 0);
             const uint64_t brisc_mcast_sem_addr = brisc_mcast_noc_addr | args.mcast_semaphore_addr;
@@ -315,7 +319,7 @@ struct FlashMLADecode {
 
                     if (is_mcast_sender && loop_iter < BRISC_MCAST_LOOPS) {
                         DeviceZoneScopedN("mcast-sender-serialized-read-and-mcast");
-                        const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
+                        const uint32_t shard_id = args.slot_id * num_chunks_per_batch + k_chunk;
                         uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
 
                         if (wait_for_kv_cache_ready && (k_chunk + args.num_cores_per_head) >= k_chunk_end) {
@@ -355,7 +359,7 @@ struct FlashMLADecode {
                         }
                     } else if (is_mcast_sender) {
                         DeviceZoneScopedN("mcast-sender-sharded-read");
-                        const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
+                        const uint32_t shard_id = args.slot_id * num_chunks_per_batch + k_chunk;
                         uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
 
                         if (loop_iter == BRISC_MCAST_LOOPS) {
