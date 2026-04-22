@@ -166,7 +166,7 @@ void matmul_single_core(
     uint32_t dst_addr = dst_dram_buffer->address();
     tt_metal::SetRuntimeArgs(program, reader_id, core, {src0_addr, src1_addr, Mt, Kt, Nt});
 
-    tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, Mt, Kt, Nt});
+    tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, Mt, Nt});
     // NOTE: Note that we never set the runtime arguments for the compute kernel. This is because everything needed has
     // been set at compile time. The compute kernel does not need any runtime arguments to execute. And so we can skip
     // this step.
