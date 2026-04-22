@@ -2177,6 +2177,7 @@ def test_hybrid_expert_irregular_sram_gate_grid_multi_device(bh_2d_mesh_device):
         n_parallel_per_bank=1,
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
+        num_loop_iters=100,
     )
 
 
@@ -2214,6 +2215,7 @@ def test_hybrid_expert_irregular_sram_up_grid_multi_device(bh_2d_mesh_device):
         n_parallel_per_bank=1,
         k_parallel_per_bank=2,
         fmt_distribution="uniform",
+        num_loop_iters=100,
     )
 
 
