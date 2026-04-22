@@ -1156,10 +1156,20 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
 // ----------------------------------------------------------------------------
 
 KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
-    KernelSource::SourceType source_type = (kernel_spec.source_type == KernelSpec::SourceType::FILE_PATH)
-                                               ? KernelSource::SourceType::FILE_PATH
-                                               : KernelSource::SourceType::SOURCE_CODE;
-    return KernelSource(kernel_spec.source, source_type);
+    return std::visit(
+        [&](const auto& src) -> KernelSource {
+            using T = std::decay_t<decltype(src)>;
+            if constexpr (std::is_same_v<T, KernelSpec::SourceFilePath>) {
+                TT_FATAL(!src.path.empty(), "KernelSpec '{}' has empty source file path", kernel_spec.unique_id);
+                return KernelSource(src.path.string(), KernelSource::SourceType::FILE_PATH);
+            } else if constexpr (std::is_same_v<T, KernelSpec::SourceCode>) {
+                TT_FATAL(!src.code.empty(), "KernelSpec '{}' has empty inline source code", kernel_spec.unique_id);
+                return KernelSource(src.code, KernelSource::SourceType::SOURCE_CODE);
+            } else {
+                static_assert(!sizeof(T*), "Unhandled KernelSpec::source alternative");
+            }
+        },
+        kernel_spec.source);
 }
 
 // ----------------------------------------------------------------------------

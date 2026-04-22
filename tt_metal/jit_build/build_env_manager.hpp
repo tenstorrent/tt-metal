@@ -4,7 +4,8 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
+#include <filesystem>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
@@ -68,7 +69,7 @@ public:
     void build_firmware(ChipId device_id, bool ignore_precompiled = false);
 
     // Get the path to a firmware binary for loading/linking. Uses pre-compiled path if available.
-    std::string get_firmware_binary_path(
+    std::filesystem::path get_firmware_binary_path(
         ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
 
     // Helper function to get the unique build id and number of states for a given programmable_core and
