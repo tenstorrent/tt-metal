@@ -93,15 +93,16 @@ def _device_to_host_post(tt_model, s_sm, d_norm, b, h, w):
 
 def _device_to_host_post_with_nms(tt_model, s_sm, s_pooled, d_norm, b, h, w):
     """Pull softmax, device-pooled (32-ch padded) NMS map, and descriptors.
-    Host picks channel 0 from pooled, compares to re-folded dense scores,
-    and applies the bf16 mask. (ttnn.slice on the channel dim of a row-major
-    tensor hits a 'bad optional access' code path; masking on host is fine.)
+    Host picks channel 0 from pooled, re-folds softmax, compares bf16, and
+    applies the mask.  Closing the mask on device via ttnn.slice + eq +
+    multiply was tried and net-negative (~6 ms of per-op Python dispatch
+    overhead eats the savings).
     """
     enc_h, enc_w = h // 8, w // 8
     scores_nhwc = ttnn.to_torch(s_sm).reshape(b, enc_h, enc_w, KEYPOINT_DIM)
     descriptors_nhwc = ttnn.to_torch(d_norm).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
     pooled_padded = ttnn.to_torch(s_pooled).reshape(b, h, w, 32)
-    scores_pooled = pooled_padded[..., 0]  # drop padding
+    scores_pooled = pooled_padded[..., 0]
 
     scores_nchw = scores_nhwc.permute(0, 3, 1, 2).contiguous().float()
     descriptors_nchw = descriptors_nhwc.permute(0, 3, 1, 2).contiguous().float()

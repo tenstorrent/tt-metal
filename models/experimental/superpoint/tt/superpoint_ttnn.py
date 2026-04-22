@@ -420,6 +420,11 @@ class TtSuperPoint:
             dilation=[1, 1],
         )
         ttnn.deallocate(s_padded)
+        # Return the 32-channel pooled map; host picks channel 0 and compares.
+        # A prior attempt closed the loop on device (ttnn.slice + eq + multiply)
+        # but each extra Python-composed op added ~1.5 ms, giving a net loss
+        # vs. 19 MB D2H + host bf16 compare. The fused C++ kernel path would
+        # finish the NMS without intermediate materialisation.
         return s_pooled
 
     def _run_device(self, pixel_values: torch.Tensor):
