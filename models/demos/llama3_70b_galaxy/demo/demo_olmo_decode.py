@@ -313,6 +313,13 @@ def run_olmo_demo(
         encoded_prompts[b] + [eos_token_id] * (padded_prefill_len - len(encoded_prompts[b])) for b in range(batch_size)
     ]
 
+    # For seqlens with pre-allocated CCL buffers (≤ MAX_TRACE_SEQLEN), use traced prefill.
+    # For larger seqlens (8k, 16k, 32k, 64k), skip trace and run in eager mode — the CCL
+    # barrier-sync fallback works in eager but deadlocks inside a captured trace.
+    MAX_TRACE_SEQLEN = max(tt_model.tt_ccl.support_seqlens)
+    use_trace = padded_prefill_len <= MAX_TRACE_SEQLEN
+    logger.info(f"Prefill seqlen={padded_prefill_len}, MAX_TRACE_SEQLEN={MAX_TRACE_SEQLEN}, use_trace={use_trace}")
+
     # --- Prefill with trace: warmup (compile), capture, execute ---
     first_decode_tokens = []
     all_outputs_per_user = [[] for _ in range(batch_size)]
@@ -327,6 +334,51 @@ def run_olmo_demo(
         else:
             pt_user = None
         return user_tokens, pt_user
+
+    # OLMo ascending warmup for long ISLs (≥ 32k) in eager mode.
+    # Root cause: sync CCL cold-start deadlocks at 32k+ — ring fabric accumulates pending
+    # signals from 384 sequential ops (64 layers × 6 CCL each). Progressive primer runs at
+    # ascending seqlens drain signals before the full-length pass. Matches generator.py logic.
+    if not use_trace and getattr(model_args, "is_olmo", False) and padded_prefill_len >= 32768:
+        primer_seqlens = [sl for sl in [8192, 16384] if sl < padded_prefill_len]
+        for wsl in primer_seqlens:
+            logger.info(
+                f"OLMo long-ISL ascending warmup at seqlen={wsl} (primes ring fabric for {padded_prefill_len})..."
+            )
+            w_position_ids = torch.arange(wsl)
+            w_cos, w_sin = gather_cos_sin(w_position_ids, ttnn_cos, ttnn_sin)
+            w_rot_mats = [
+                ttnn.from_torch(
+                    w_cos,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+                ttnn.from_torch(
+                    w_sin,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+            ]
+            tt_model.tt_rot_mats_prefill = w_rot_mats
+            w_tokens = torch.zeros(1, wsl, dtype=torch.long)
+            if paged_attention:
+                w_n_blocks = math.ceil(wsl / block_size)
+                w_pt = torch.ones(32, w_n_blocks, dtype=torch.int32) * -1
+                w_pt[0, :] = page_table[0, :w_n_blocks]
+            else:
+                w_pt = None
+            w_host = tt_model.prepare_prefill_inputs_host(w_tokens, user_id=0, page_table=w_pt)
+            w_device = copy_host_to_device(w_host, mesh_device=mesh_device)
+            w_transformed = tt_model.transform_prefill_inputs_device(*w_device)
+            w_out = tt_model.ttnn_prefill_forward(*w_transformed, kv_cache=kv_cache, batch_size=1)
+            ttnn.synchronize_device(mesh_device)
+            del w_out
+            logger.info(f"OLMo ascending warmup done at seqlen={wsl}.")
+        tt_model.tt_rot_mats_prefill = rot_mats_prefill
 
     # Step 1: Warmup / compile run (eager, first user)
     logger.info("Prefill warmup (compile)...")
@@ -343,13 +395,6 @@ def run_olmo_demo(
     ttnn.synchronize_device(mesh_device)
     profiler.end("compile_prefill")
     logger.info("Prefill warmup done.")
-
-    # For seqlens with pre-allocated CCL buffers (≤ 16384), use traced prefill.
-    # For larger seqlens (32k, 64k), skip trace and run in eager mode — the CCL
-    # barrier-sync fallback works in eager but deadlocks inside a captured trace.
-    MAX_TRACE_SEQLEN = max(tt_model.tt_ccl.support_seqlens)
-    use_trace = padded_prefill_len <= MAX_TRACE_SEQLEN
-    logger.info(f"Prefill seqlen={padded_prefill_len}, MAX_TRACE_SEQLEN={MAX_TRACE_SEQLEN}, use_trace={use_trace}")
 
     if use_trace:
         # Step 2: Capture prefill trace
