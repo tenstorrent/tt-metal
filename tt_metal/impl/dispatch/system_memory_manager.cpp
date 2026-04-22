@@ -247,8 +247,7 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
 }
 
 bool SystemMemoryManager::is_mock_device() const {
-    return tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().get_target_device_type() ==
-           tt::TargetDevice::Mock;
+    return tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().is_mock_or_emulated();
 }
 
 uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
@@ -552,6 +551,10 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
     uint32_t issue_q_wr_ptr = ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
 
+    // Capture before advancing: issue_fifo_wr_ptr points to the slot just written; after the advance below it points to
+    // the next slot.
+    const uint32_t wr_ptr_bytes = cq_interface.issue_fifo_wr_ptr << 4;
+
     if (cq_interface.issue_fifo_wr_ptr + push_size_16B >= cq_interface.issue_fifo_limit) {
         cq_interface.issue_fifo_wr_ptr = (cq_interface.cq_start + cq_interface.offset) >> 4;  // In 16B words
         cq_interface.issue_fifo_wr_toggle = not cq_interface.issue_fifo_wr_toggle;            // Flip the toggle
@@ -563,13 +566,13 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
         const IDevice* device = ctx.device_manager()->get_active_device(this->device_id);
         const uint32_t dram_channel =
             device->allocator_impl()->get_dram_channel_from_bank_id(this->get_dram_region_bank_id());
+        const uint32_t dram_target_addr = wr_ptr_bytes - this->channel_offset;
         ctx.get_cluster().write_dram_vec(
-            this->cq_sysmem_start + (cq_interface.offset - this->get_dram_region_base_addr() - this->channel_offset) +
-                cq_interface.cq_start,
-            this->get_issue_queue_size(cq_id),
+            this->cq_sysmem_start + (dram_target_addr - this->get_dram_region_base_addr()),
+            push_size_16B << 4,
             this->device_id,
             dram_channel,
-            this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + cq_interface.cq_start);
+            dram_target_addr);
         ctx.get_cluster().write_dram_vec(
             &cq_interface.issue_fifo_wr_ptr,
             sizeof(uint32_t),
