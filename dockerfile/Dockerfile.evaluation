@@ -14,9 +14,9 @@ COPY tt_metal/python_env/requirements-dev.txt tt_metal/python_env/
 COPY docs/requirements-docs.txt docs/
 COPY tests/sweep_framework/requirements-sweeps.txt tests/sweep_framework/
 COPY tools/triage/requirements.txt tools/triage/
-RUN uv pip install --system --no-cache setuptools
-RUN uv pip install --system --no-cache -r tt_metal/python_env/requirements-dev.txt
-RUN uv pip install --system --no-cache -r tools/triage/requirements.txt
+RUN uv pip install --system --break-system-packages --no-cache setuptools==80 wheel
+RUN uv pip install --system --break-system-packages --index-strategy unsafe-best-match --no-build-isolation --no-cache -r tt_metal/python_env/requirements-dev.txt
+RUN uv pip install --system --break-system-packages --index-strategy unsafe-best-match --no-build-isolation --no-cache -r tools/triage/requirements.txt
 
 ## Install Metal dependencies
 COPY install_dependencies.sh .
@@ -42,14 +42,19 @@ RUN --mount=type=cache,target=/tt-metal/.cpmcache,sharing=locked,id=cpm \
     ./build_metal.sh $BUILD_METAL_ARGS --configure-only --cpm-source-cache /tt-metal/.cpmcache --build-dir /usr --enable-ccache
 
 # Build & install with CCACHE_REMOTE_STORAGE secret and CPM non-locking mount
-RUN --mount=type=secret,id=CCACHE_REMOTE_STORAGE \
+RUN --mount=type=secret,id=CCACHE_REMOTE_STORAGE,required=false \
     --mount=type=cache,target=/tt-metal/.cpmcache,sharing=shared,id=cpm \
-    export CCACHE_REMOTE_STORAGE=$(cat /run/secrets/CCACHE_REMOTE_STORAGE) && \
-    export CCACHE_REMOTE_ONLY=1 && \
+    if [ -f /run/secrets/CCACHE_REMOTE_STORAGE ]; then \
+        export CCACHE_REMOTE_STORAGE=$(cat /run/secrets/CCACHE_REMOTE_STORAGE) && \
+        export CCACHE_REMOTE_ONLY=true; \
+    else \
+        echo "CCACHE_REMOTE_STORAGE secret not provided; continuing without remote cache." && \
+        unset CCACHE_REMOTE_ONLY CCACHE_REMOTE_STORAGE; \
+    fi && \
     cmake --build /usr --target install
 
 # Build & install Python package
-RUN uv pip install --system --no-cache -e .
+RUN uv pip install --system --break-system-packages --no-cache -e .
 
 # Add permissions for all users (MPI uses non-root users and some tests write here)
 RUN chmod -R 777 /usr/libexec/tt-metalium
