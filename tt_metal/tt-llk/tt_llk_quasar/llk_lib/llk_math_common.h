@@ -21,8 +21,7 @@ using namespace ckernel::math;
 inline bool _is_src_fmt_fp32_dest_compatible_(const DataFormat src_reg_fmt)
 {
     return src_reg_fmt == DataFormat::Float16_b || src_reg_fmt == DataFormat::Float16 || src_reg_fmt == DataFormat::Tf32 ||
-           src_reg_fmt == DataFormat::Float32 || src_reg_fmt == DataFormat::MxFp4_2x_A || src_reg_fmt == DataFormat::MxFp4_2x_B ||
-           src_reg_fmt == DataFormat::Int32;
+           src_reg_fmt == DataFormat::MxFp4_2x_A || src_reg_fmt == DataFormat::MxFp4_2x_B;
 }
 
 /**
@@ -109,8 +108,8 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
 inline void _llk_math_upk_to_dest_hw_configure_(DataFormat unpack_dst_format)
 {
-    const bool EN_FP32_DEST_FORMAT  = _is_src_fmt_fp32_dest_compatible_(unpack_dst_format);
-    const bool EN_INT32_DEST_FORMAT = _is_src_fmt_int32_dest_compatible_(unpack_dst_format);
+    const bool EN_FP32_DEST_FORMAT  = _is_src_fmt_fp32_dest_compatible_(unpack_dst_format) || unpack_dst_format == DataFormat::Float32;
+    const bool EN_INT32_DEST_FORMAT = _is_src_fmt_int32_dest_compatible_(unpack_dst_format) || unpack_dst_format == DataFormat::Int32;
     LLK_ASSERT(!(EN_FP32_DEST_FORMAT && EN_INT32_DEST_FORMAT), "Cannot have Int32 dest & Float32 dest at the same time");
 
     // Set implied math dest format mode
