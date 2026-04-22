@@ -1771,8 +1771,10 @@ class TestDeepSeekV3:
         from models.experimental.ops.descriptors.normalization import rms_norm
 
         s = self._setup_mla_norm_configs(device)
-        N_TRIALS = 100
-        N_ITERS = 100
+        # Numbers of trials and iterations reduced to 1 for CI efficiency.
+        # For reasonable perf estimates, increase these to e.g. 100.
+        N_TRIALS = 1
+        N_ITERS = 1
 
         torch_q_in = torch.rand(1, 1, s["bsz"], s["q_lora_rank"], dtype=torch.bfloat16)
         torch_kv_in = torch.rand(1, 1, s["bsz"], s["kv_lora_rank"], dtype=torch.bfloat16)
