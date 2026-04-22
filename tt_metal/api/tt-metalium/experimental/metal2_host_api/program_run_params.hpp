@@ -105,11 +105,11 @@ struct ProgramRunParams {
 //
 struct ProgramRunParamsView {
     struct KernelRunParamsView {
-        // Direct views into per-node runtime args
-        std::vector<std::pair<NodeCoord, std::span<uint32_t>>> runtime_args;
+        // Direct views into per-node vararg runtime args
+        std::vector<std::pair<NodeCoord, std::span<uint32_t>>> runtime_varargs;
 
-        // Direct view into common runtime args
-        std::span<uint32_t> common_runtime_args;
+        // Direct view into common vararg runtime args
+        std::span<uint32_t> common_runtime_varargs;
     };
     // TODO: Better to just expose the multi-dim dispatch vectors directly?
     //       Would eliminate the lookup indirection.

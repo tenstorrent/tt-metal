@@ -61,13 +61,13 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
             auto [it_node, node_inserted] = nodes_with_vararg_params.insert(node_coord);
             TT_FATAL(
                 node_inserted,
-                "Duplicate node_coord {} in runtime_args for kernel '{}'.",
+                "Duplicate node_coord {} in runtime_varargs for kernel '{}'.",
                 node_coord.str(),
                 kernel_name);
 
             TT_FATAL(
                 kernel_nodes.contains(node_coord),
-                "Kernel '{}' is setting runtime_args for node {}, but the kernel does not run on that node.",
+                "Kernel '{}' is setting runtime_varargs for node {}, but the kernel does not run on that node.",
                 kernel_name,
                 node_coord.str());
 
@@ -76,7 +76,7 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
                 (it_schema != schema->num_runtime_args_per_node.end()) ? it_schema->second : 0;
             TT_FATAL(
                 args.size() == expected_varargs,
-                "Kernel '{}' node {} expects {} vararg runtime_args, but {} were provided",
+                "Kernel '{}' node {} expects {} vararg runtime args, but {} were provided",
                 kernel_name,
                 node_coord.str(),
                 expected_varargs,
@@ -86,7 +86,7 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
         for (const auto& [node_coord, expected_count] : schema->num_runtime_args_per_node) {
             TT_FATAL(
                 nodes_with_vararg_params.contains(node_coord),
-                "Kernel '{}' is missing vararg runtime_args for node {} (expected {} args)",
+                "Kernel '{}' is missing vararg runtime args for node {} (expected {} args)",
                 kernel_name,
                 node_coord.str(),
                 expected_count);
@@ -95,7 +95,7 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
         // Validate vararg CRTA count
         TT_FATAL(
             kernel_params.common_runtime_varargs.size() == schema->num_common_runtime_args,
-            "Kernel '{}' expects {} vararg common_runtime_args, but {} were provided",
+            "Kernel '{}' expects {} vararg common runtime args, but {} were provided",
             kernel_name,
             schema->num_common_runtime_args,
             kernel_params.common_runtime_varargs.size());

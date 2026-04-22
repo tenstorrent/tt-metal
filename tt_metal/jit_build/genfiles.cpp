@@ -141,8 +141,8 @@ void write_kernel_bindings_generated_header(const std::filesystem::path& out_dir
 // Kernel::compute_hash() from the input data (kernel source, schema, CTA bindings, etc).
 // So we don't need to massage the generation order for hash stability — we just emit what
 // we're given.
-void write_kernel_args_generated_header(const string& out_dir, const JitBuildSettings& settings) {
-    const string path = out_dir + "kernel_args_generated.h";
+void write_kernel_args_generated_header(const std::filesystem::path& out_dir, const JitBuildSettings& settings) {
+    const fs::path path = out_dir / "kernel_args_generated.h";
 
     // Named RTAs/CRTAs come straight from the settings as ordered vectors.
     const vector<string>& rta_names = settings.get_named_runtime_args();
