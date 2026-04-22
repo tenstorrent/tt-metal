@@ -54,21 +54,19 @@ void kernel_main() {
 
     auto write_block = [&](uint32_t base_stick_id, uint32_t num_rows, uint32_t offset, uint32_t block_size) {
         cb_out0.wait_front(num_tiles_block_c);
-        uint32_t l1_read_addr = cb_out0.get_read_ptr();
+        uint32_t l1_read_addr_offset = 0;
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
             // Write out tmp buffer
-            uint32_t src_offset = l1_read_addr - cb_out0.get_read_ptr();
             noc.async_write(
                 cb_out0,
                 s,
                 block_size,
-                {.offset_bytes = src_offset},
+                {.offset_bytes = l1_read_addr_offset},
                 {.page_id = curr_stick_id, .offset_bytes = offset});
 
-            l1_read_addr += block_row_size;
+            l1_read_addr_offset += block_row_size;
             curr_stick_id++;
-
             // Block write
             noc.async_write_barrier();
         }

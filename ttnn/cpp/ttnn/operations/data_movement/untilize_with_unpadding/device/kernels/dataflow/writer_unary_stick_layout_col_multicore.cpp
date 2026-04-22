@@ -36,7 +36,7 @@ void kernel_main() {
         bool has_rows = (num_rows) > 0;
 
         cb_out0.wait_front(onetile * has_rows);
-        uint32_t l1_read_addr = cb_out0.get_read_ptr();
+        uint32_t l1_read_addr_offset = 0;
 
         for (uint32_t k = 0; k < num_rows; k++) {
             uint32_t total_size = mul * size_per_row_per_block + start_id + width_size;
@@ -47,12 +47,11 @@ void kernel_main() {
                 write_size = width_size - padded_size;
             }
 
-            uint32_t src_offset = l1_read_addr - cb_out0.get_read_ptr();
             noc.async_write(
                 cb_out0,
                 s,
                 write_size,
-                {.offset_bytes = src_offset},
+                {.offset_bytes = l1_read_addr_offset},
                 {.page_id = size_2d + k, .offset_bytes = start_id + mul * size_per_row_per_block});
 
             noc.async_write_barrier();
@@ -60,8 +59,11 @@ void kernel_main() {
             if (k > 0 && (k % tile_width == 0)) {
                 cb_out0.pop_front(onetile * has_rows);
                 cb_out0.wait_front(onetile * has_rows);
+                l1_read_addr_offset = 0;
+            } else {
+                // Advance the read pointer for the next write
+                l1_read_addr_offset += width_size;
             }
-            l1_read_addr += width_size;
         }
 
         cb_out0.pop_front(onetile * has_rows);
