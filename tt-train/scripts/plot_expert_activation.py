@@ -19,6 +19,10 @@ Example::
     # Single-layer output
     python tt-train/scripts/plot_expert_activation.py \\
         --input moe_activation.csv --output layer0.png --layer 0
+
+    # Custom colormap
+    python tt-train/scripts/plot_expert_activation.py \\
+        --input moe_activation.csv --output moe_activation.png --cmap plasma
 """
 
 from __future__ import annotations
@@ -52,22 +56,6 @@ def _parse_args() -> argparse.Namespace:
         help="Matplotlib colormap name (default: viridis).",
     )
     parser.add_argument(
-        "--mode",
-        choices=("prob", "active"),
-        default="prob",
-        help=(
-            "prob: continuous P(activation) per (expert, step). "
-            "active: binary 'any-token-active' view (1 if prob > --active-threshold else 0). "
-            "Useful for cross-checking the per-step ``activated_experts`` debug log."
-        ),
-    )
-    parser.add_argument(
-        "--active-threshold",
-        type=float,
-        default=0.0,
-        help="Probability strictly above this counts as 'active' in --mode active (default: 0.0).",
-    )
-    parser.add_argument(
         "--dpi",
         type=int,
         default=150,
@@ -95,7 +83,6 @@ def _plot_layer(
     experts: list[int],
     layer_idx: int,
     cmap: str,
-    mode: str,
 ) -> None:
     im = ax.imshow(
         matrix,
@@ -129,19 +116,12 @@ def _plot_layer(
     ax.set_xlabel("step")
     ax.set_ylabel("expert")
     uniform = 1.0 / max(num_experts, 1)  # purely informational
-    if mode == "active":
-        ax.set_title(
-            f"MoE layer {layer_idx}  (binary: any-token-active per step)",
-            fontsize=9,
-        )
-        plt.colorbar(im, ax=ax, label="active (0/1)")
-    else:
-        ax.set_title(
-            f"MoE layer {layer_idx}  (uniform target = n_activated/num_experts)\n"
-            f"fully-balanced lower bound ~ {uniform:.3f}",
-            fontsize=9,
-        )
-        plt.colorbar(im, ax=ax, label="P(activation)")
+    ax.set_title(
+        f"MoE layer {layer_idx}  (uniform target = n_activated/num_experts)\n"
+        f"fully-balanced lower bound ~ {uniform:.3f}",
+        fontsize=9,
+    )
+    plt.colorbar(im, ax=ax, label="P(activation)")
 
 
 def main() -> int:
@@ -177,22 +157,14 @@ def main() -> int:
         r, c = divmod(idx, ncols)
         ax = axes[r][c]
         matrix, steps, experts = _pivot_layer(df[df["layer"] == layer_id])
-        if args.mode == "active":
-            matrix = (matrix > args.active_threshold).astype(np.float32)
-        _plot_layer(ax, matrix, steps, experts, layer_id, args.cmap, args.mode)
+        _plot_layer(ax, matrix, steps, experts, layer_id, args.cmap)
 
     # Hide any unused subplot slots.
     for idx in range(n, nrows * ncols):
         r, c = divmod(idx, ncols)
         axes[r][c].set_visible(False)
 
-    if args.mode == "active":
-        fig.suptitle(
-            "MoE expert any-token-active per training step " f"(threshold > {args.active_threshold})",
-            fontsize=12,
-        )
-    else:
-        fig.suptitle("MoE expert activation probability per training step", fontsize=12)
+    fig.suptitle("MoE expert activation probability per training step", fontsize=12)
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
     os.makedirs(os.path.dirname(os.path.abspath(args.output)) or ".", exist_ok=True)
     fig.savefig(args.output, dpi=args.dpi, bbox_inches="tight")

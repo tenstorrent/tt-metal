@@ -22,7 +22,9 @@
 
 ## Purpose
 
-Expert routing in Mixture-of-Experts models can collapse silently: a small subset of experts absorbs most tokens while others go unused. This tool makes that visible by logging per-expert activation probabilities at training time and rendering them as heatmaps.
+The goal of Mixture-of-Experts is to balance tokens across multiple experts (as opposed to just one).
+To work well, we must make sure that all experts are being activated: if a small subset of experts absorbed most tokens while other went unused then MoE model would collapse silently.
+This tool makes that visible by logging per-expert activation probabilities at training time and rendering them as heatmaps.
 
 Use it to:
 
@@ -111,8 +113,6 @@ python tt-train/scripts/plot_expert_activation.py \
 | `--output` | (required) | Destination PNG path |
 | `--layer` | all layers | If set, plot only this MoE layer index |
 | `--cmap` | `viridis` | Matplotlib colormap name |
-| `--mode` | `prob` | `prob`: continuous P(activation); `active`: binary any-token-active view |
-| `--active-threshold` | `0.0` | Probability above which an expert counts as active in `--mode active` |
 | `--dpi` | `150` | Figure DPI |
 
 ### Single-layer plot
@@ -122,28 +122,14 @@ python tt-train/scripts/plot_expert_activation.py \
     --input moe_activation.csv --output layer0.png --layer 0
 ```
 
-### Binary active view
-
-The `--mode active` flag converts probabilities to a binary `0/1` grid (1 = any token activated this expert at this step). This is useful for cross-checking the `activated_experts` debug log printed by the trainer.
-
-```bash
-python tt-train/scripts/plot_expert_activation.py \
-    --input moe_activation.csv \
-    --output moe_active.png \
-    --mode active \
-    --active-threshold 0.01
-```
-
 ---
 
 ## Output
 
-The script generates a single PNG with one subplot per MoE layer, arranged in a square grid.
-
-Each subplot is a heatmap where:
+The script generates a single PNG heatmap where each subplot (= MoE layer) is a heatmap in which:
 - **x-axis** — training step (up to 16 tick labels; steps are sampled evenly if there are more)
 - **y-axis** — expert index
-- **color** — P(activation) in `[0, 1]` (or binary `0/1` in `--mode active`)
+- **color** — P(activation) in `[0, 1]`
 - **title** — layer index and the fully-balanced lower bound (`~ 1 / num_experts`)
 
 A colorbar on the right of each subplot maps color to activation probability.
