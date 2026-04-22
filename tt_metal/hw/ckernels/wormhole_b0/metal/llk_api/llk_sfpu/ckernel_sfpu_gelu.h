@@ -407,7 +407,7 @@ inline void calculate_gelu_derivative_polynomial() {
 template <bool APPROXIMATION_MODE>
 inline void gelu_derivative_polynomial_init() {
     if constexpr (!APPROXIMATION_MODE) {
-        _init_reciprocal_<false, false>();
+        _init_sfpu_reciprocal_<false>();
     }
 }
 
