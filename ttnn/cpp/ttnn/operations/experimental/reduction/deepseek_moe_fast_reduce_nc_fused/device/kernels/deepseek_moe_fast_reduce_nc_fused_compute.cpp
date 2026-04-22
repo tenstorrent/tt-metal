@@ -44,6 +44,8 @@ void kernel_main() {
     MATH((llk_math_eltwise_binary_init_with_operands<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
         compute_input_cb_id_0, compute_input_cb_id_1, 1 /*acc_to_dest*/)));
 
+    reconfig_data_format(compute_input_cb_id_0, compute_input_cb_id_1);
+
     // Wait for all score tiles — they are pre-loaded once by the reader prologue
     // and remain resident for the entire kernel invocation.
     cb_wait_front(compute_input_cb_id_1, reduction_dim_size);
@@ -52,7 +54,6 @@ void kernel_main() {
 
         for (uint32_t j = 0; j < num_input_tiles_iter; ++j) {
             cb_wait_front(compute_input_cb_id_0, input_granularity);
-            reconfig_data_format(compute_input_cb_id_0, compute_input_cb_id_1);
 
             for (uint32_t k = 0; k < input_granularity; ++k) {
                 // expert_tile = linear expert index for this tile
