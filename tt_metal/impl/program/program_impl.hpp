@@ -347,9 +347,11 @@ public:
         std::vector<std::string> named_runtime_args;
         std::vector<std::string> named_common_runtime_args;
 
-        // Vararg counts. RTA vararg count is per-node; CRTA vararg is a single broadcast count.
-        std::unordered_map<CoreCoord, size_t> num_runtime_args_per_node;
-        size_t num_common_runtime_args = 0;
+        // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
+        // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
+        // broadcast count.
+        std::unordered_map<CoreCoord, size_t> num_runtime_varargs_per_node;
+        size_t num_common_runtime_varargs = 0;
     };
 
     // Metal 2.0: Runtime argument schema registration and lookup

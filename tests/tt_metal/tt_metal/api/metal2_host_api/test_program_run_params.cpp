@@ -37,6 +37,10 @@ using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorker;
 
+// Shorthand for the per-node-override vararg type (needed at call sites because
+// std::optional<T> can't be brace-init from an initializer-list of T's elements).
+using NumVarargsPerNode = KernelSpec::RuntimeArgSchema::NumVarargsPerNode;
+
 // ============================================================================
 // Test Fixtures
 // ============================================================================
@@ -57,23 +61,21 @@ protected:
 
 // Create a ProgramSpec with specified RTA schema for the DM kernel
 // (The compute kernel has no RTAs)
-inline ProgramSpec MakeSpecWithRTAs(const NodeCoord& node, size_t num_per_node_rtas, size_t num_common_rtas) {
+inline ProgramSpec MakeSpecWithRTAs(const NodeCoord& /*node*/, size_t num_per_node_rtas, size_t num_common_rtas) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Set the RTA schema on the dm_kernel (first kernel)
-    spec.kernels[0].runtime_arguments_schema.num_runtime_args_per_node = {{node, num_per_node_rtas}};
-    spec.kernels[0].runtime_arguments_schema.num_common_runtime_args = num_common_rtas;
+    spec.kernels[0].runtime_arguments_schema.num_runtime_varargs = num_per_node_rtas;
+    spec.kernels[0].runtime_arguments_schema.num_common_runtime_varargs = num_common_rtas;
 
-    // compute_kernel has no RTAs
-    spec.kernels[1].runtime_arguments_schema.num_runtime_args_per_node = {{node, 0}};
-    spec.kernels[1].runtime_arguments_schema.num_common_runtime_args = 0;
+    // compute_kernel has no RTAs (defaults: 0 / 0)
 
     return spec;
 }
 
 // Create a ProgramSpec with RTA schemas for DM and compute kernels
 inline ProgramSpec MakeSpecWithBothKernelRTAs(
-    const NodeCoord& node,
+    const NodeCoord& /*node*/,
     size_t dm_per_node_rtas,
     size_t dm_common_rtas,
     size_t compute_per_node_rtas,
@@ -81,12 +83,12 @@ inline ProgramSpec MakeSpecWithBothKernelRTAs(
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // dm_kernel RTAs
-    spec.kernels[0].runtime_arguments_schema.num_runtime_args_per_node = {{node, dm_per_node_rtas}};
-    spec.kernels[0].runtime_arguments_schema.num_common_runtime_args = dm_common_rtas;
+    spec.kernels[0].runtime_arguments_schema.num_runtime_varargs = dm_per_node_rtas;
+    spec.kernels[0].runtime_arguments_schema.num_common_runtime_varargs = dm_common_rtas;
 
     // compute_kernel RTAs
-    spec.kernels[1].runtime_arguments_schema.num_runtime_args_per_node = {{node, compute_per_node_rtas}};
-    spec.kernels[1].runtime_arguments_schema.num_common_runtime_args = compute_common_rtas;
+    spec.kernels[1].runtime_arguments_schema.num_runtime_varargs = compute_per_node_rtas;
+    spec.kernels[1].runtime_arguments_schema.num_common_runtime_varargs = compute_common_rtas;
 
     return spec;
 }
@@ -447,12 +449,11 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     auto producer = MakeMinimalDMKernel("producer", all_nodes);
     auto consumer = MakeMinimalDMKernel("consumer", all_nodes);
 
-    // Set RTA schema for both nodes
-    producer.runtime_arguments_schema.num_runtime_args_per_node = {{node0, 2}, {node1, 2}};
-    producer.runtime_arguments_schema.num_common_runtime_args = 1;
+    // Uniform vararg count across both nodes — scalar.
+    producer.runtime_arguments_schema.num_runtime_varargs = 2;
+    producer.runtime_arguments_schema.num_common_runtime_varargs = 1;
 
-    consumer.runtime_arguments_schema.num_runtime_args_per_node = {{node0, 0}, {node1, 0}};
-    consumer.runtime_arguments_schema.num_common_runtime_args = 0;
+    // consumer has no varargs (defaults)
 
     // Single DFB spanning all nodes
     auto dfb = MakeMinimalDFB("dfb", all_nodes);
@@ -494,12 +495,9 @@ TEST_F(ProgramRunParamsTestQuasar, MultiNode_MissingOneNodeFails) {
     auto producer = MakeMinimalDMKernel("producer", all_nodes);
     auto consumer = MakeMinimalDMKernel("consumer", all_nodes);
 
-    // Set RTA schema for both nodes
-    producer.runtime_arguments_schema.num_runtime_args_per_node = {{node0, 2}, {node1, 2}};
-    producer.runtime_arguments_schema.num_common_runtime_args = 0;
-
-    consumer.runtime_arguments_schema.num_runtime_args_per_node = {{node0, 0}, {node1, 0}};
-    consumer.runtime_arguments_schema.num_common_runtime_args = 0;
+    // Uniform vararg count across both nodes — scalar.
+    producer.runtime_arguments_schema.num_runtime_varargs = 2;
+    // consumer has no varargs (defaults)
 
     // Single DFB spanning all nodes
     auto dfb = MakeMinimalDFB("dfb", all_nodes);
@@ -652,8 +650,9 @@ TEST_F(ProgramRunParamsTestQuasar, NamedCRTACountMismatchFails) {
 // strongest regression canaries in this file; breaking them will break migration.
 
 TEST_F(ProgramRunParamsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
-    // A kernel on two nodes with DIFFERENT vararg counts per node. The RTA dispatch buffer
-    // must be sized per-node, which is a common failure mode for layout bugs.
+    // A kernel on two nodes with DIFFERENT vararg counts per node. Exercises the advanced
+    // num_runtime_varargs_per_node override path. The RTA dispatch buffer must be sized
+    // per-node, which is a common failure mode for layout bugs.
     NodeCoord node_a{0, 0};
     NodeCoord node_b{1, 0};
     NodeRangeSet nodes{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
@@ -661,7 +660,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
     ProgramSpec spec;
     spec.program_id = "vararg_differing_counts";
     auto kernel = MakeMinimalDMKernel("dm_kernel", nodes);
-    kernel.runtime_arguments_schema.num_runtime_args_per_node = {{node_a, 2}, {node_b, 5}};
+    kernel.runtime_arguments_schema.num_runtime_varargs_per_node = NumVarargsPerNode{{node_a, 2}, {node_b, 5}};
     spec.kernels = {kernel};
     spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", nodes, {"dm_kernel"})};
     Program program = MakeProgramFromSpec(spec);
@@ -674,15 +673,108 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
     EXPECT_NO_THROW(SetProgramRunParameters(program, params));
 }
 
+TEST_F(ProgramRunParamsTestQuasar, VarargPerNodeOverrideMixedEntryTypesSucceeds) {
+    // Per-node override with a MIX of entry shapes: one entry groups two nodes via a
+    // NodeRangeSet, another names a single NodeCoord. Exercises the schema-side expansion
+    // from heterogeneous Nodes variants into per-coord validation entries — if the expansion
+    // is wrong for either shape, some node won't be checked and validation will either fail
+    // to require its values or fail to validate their count.
+    NodeCoord node_a{0, 0};
+    NodeCoord node_b{1, 0};
+    NodeCoord node_c{2, 0};
+    NodeRangeSet ab{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
+    NodeRangeSet all_nodes{
+        std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}, NodeRange{node_c, node_c}}};
+
+    ProgramSpec spec;
+    spec.program_id = "vararg_mixed_entry_types";
+    auto kernel = MakeMinimalDMKernel("dm_kernel", all_nodes);
+    // Nodes a and b share count 3 (declared via a NodeRangeSet entry).
+    // Node c has count 5 (declared via a NodeCoord entry).
+    kernel.runtime_arguments_schema.num_runtime_varargs_per_node = NumVarargsPerNode{{ab, 3}, {node_c, 5}};
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", all_nodes, {"dm_kernel"})};
+    Program program = MakeProgramFromSpec(spec);
+
+    ProgramRunParams params;
+    params.kernel_run_params.push_back({
+        .kernel_spec_name = "dm_kernel",
+        .runtime_varargs = {{node_a, {1, 2, 3}}, {node_b, {10, 20, 30}}, {node_c, {100, 200, 300, 400, 500}}},
+    });
+    EXPECT_NO_THROW(SetProgramRunParameters(program, params));
+}
+
+TEST_F(ProgramRunParamsTestQuasar, VarargScalarDefaultWithSparseOverrideSucceeds) {
+    // Scalar provides the default count for every node the kernel runs on; the per-node
+    // override covers only specific nodes. Unlisted nodes fall back to the scalar value.
+    // This is the "3 on most nodes, 5 on the edges" shape that motivates the sparse
+    // override design.
+    NodeCoord node_a{0, 0};
+    NodeCoord node_b{1, 0};
+    NodeCoord node_c{2, 0};
+    NodeRangeSet all_nodes{
+        std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}, NodeRange{node_c, node_c}}};
+
+    ProgramSpec spec;
+    spec.program_id = "vararg_scalar_with_sparse_override";
+    auto kernel = MakeMinimalDMKernel("dm_kernel", all_nodes);
+    kernel.runtime_arguments_schema.num_runtime_varargs = 2;  // default for unlisted nodes
+    kernel.runtime_arguments_schema.num_runtime_varargs_per_node =
+        NumVarargsPerNode{{node_c, 5}};  // node_c is the exception
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", all_nodes, {"dm_kernel"})};
+    Program program = MakeProgramFromSpec(spec);
+
+    ProgramRunParams params;
+    params.kernel_run_params.push_back({
+        .kernel_spec_name = "dm_kernel",
+        .runtime_varargs =
+            {
+                {node_a, {1, 2}},                     // scalar default (2 args)
+                {node_b, {10, 20}},                   // scalar default (2 args)
+                {node_c, {100, 200, 300, 400, 500}},  // override (5 args)
+            },
+    });
+    EXPECT_NO_THROW(SetProgramRunParameters(program, params));
+}
+
+TEST_F(ProgramRunParamsTestQuasar, VarargSparseOverrideZeroErasesScalarDefault) {
+    // An explicit override of 0 on a node erases the scalar default for that node.
+    // Regression canary for the expansion logic: if the erase is missing, the node would
+    // carry the scalar-default count and run-params validation would either require an
+    // empty value list or error on count mismatch.
+    NodeCoord node_a{0, 0};
+    NodeCoord node_b{1, 0};
+    NodeRangeSet both{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
+
+    ProgramSpec spec;
+    spec.program_id = "vararg_zero_override";
+    auto kernel = MakeMinimalDMKernel("dm_kernel", both);
+    kernel.runtime_arguments_schema.num_runtime_varargs = 3;
+    kernel.runtime_arguments_schema.num_runtime_varargs_per_node =
+        NumVarargsPerNode{{node_b, 0}};  // node_b: no varargs despite scalar default
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", both, {"dm_kernel"})};
+    Program program = MakeProgramFromSpec(spec);
+
+    // node_b is treated as having no varargs — run-params needs no entry for it.
+    ProgramRunParams params;
+    params.kernel_run_params.push_back({
+        .kernel_spec_name = "dm_kernel",
+        .runtime_varargs = {{node_a, {1, 2, 3}}},
+    });
+    EXPECT_NO_THROW(SetProgramRunParameters(program, params));
+}
+
 TEST_F(ProgramRunParamsTestQuasar, VarargOnlyAcrossMultipleKernelsSucceeds) {
     // Two kernels, each with only vararg RTAs / CRTAs — the shape of a whole-program
     // migration where nothing has been upgraded to named args yet.
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].runtime_arguments_schema.num_runtime_args_per_node = {{node, 3}};
-    spec.kernels[0].runtime_arguments_schema.num_common_runtime_args = 1;
-    spec.kernels[1].runtime_arguments_schema.num_runtime_args_per_node = {{node, 2}};
-    spec.kernels[1].runtime_arguments_schema.num_common_runtime_args = 2;
+    spec.kernels[0].runtime_arguments_schema.num_runtime_varargs = 3;
+    spec.kernels[0].runtime_arguments_schema.num_common_runtime_varargs = 1;
+    spec.kernels[1].runtime_arguments_schema.num_runtime_varargs = 2;
+    spec.kernels[1].runtime_arguments_schema.num_common_runtime_varargs = 2;
     Program program = MakeProgramFromSpec(spec);
 
     ProgramRunParams params;
@@ -701,7 +793,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyRTAsMissingNodeCoverageFails) {
     ProgramSpec spec;
     spec.program_id = "vararg_missing_node";
     auto kernel = MakeMinimalDMKernel("dm_kernel", nodes);
-    kernel.runtime_arguments_schema.num_runtime_args_per_node = {{node_a, 2}, {node_b, 2}};
+    kernel.runtime_arguments_schema.num_runtime_varargs = 2;  // uniform across both nodes
     spec.kernels = {kernel};
     spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", nodes, {"dm_kernel"})};
     Program program = MakeProgramFromSpec(spec);
@@ -721,7 +813,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyUnknownNodeFails) {
     NodeCoord node{0, 0};
     NodeCoord wrong_node{3, 3};
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].runtime_arguments_schema.num_runtime_args_per_node = {{node, 1}};
+    spec.kernels[0].runtime_arguments_schema.num_runtime_varargs = 1;
     Program program = MakeProgramFromSpec(spec);
 
     ProgramRunParams params;
@@ -745,7 +837,8 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyUnknownNodeFails) {
 TEST_F(ProgramRunParamsTestQuasar, AllEmptySchemaSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     // spec.kernels already default to empty named_runtime_args / named_common_runtime_args /
-    // compile_time_arg_bindings / num_runtime_args_per_node / num_common_runtime_args.
+    // compile_time_arg_bindings, num_runtime_varargs = 0, num_common_runtime_varargs = 0,
+    // num_runtime_varargs_per_node = nullopt.
     Program program = MakeProgramFromSpec(spec);
 
     ProgramRunParams params;
@@ -756,11 +849,11 @@ TEST_F(ProgramRunParamsTestQuasar, AllEmptySchemaSucceeds) {
 }
 
 TEST_F(ProgramRunParamsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
-    // A kernel with both named RTAs (schema) and varargs (num_runtime_args_per_node).
+    // A kernel with both named RTAs (schema) and varargs (num_runtime_varargs).
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"input_ptr"};
-    spec.kernels[0].runtime_arguments_schema.num_runtime_args_per_node = {{node, 3}};
+    spec.kernels[0].runtime_arguments_schema.num_runtime_varargs = 3;
     Program program = MakeProgramFromSpec(spec);
 
     ProgramRunParams params;
@@ -785,14 +878,13 @@ protected:
 };
 
 // Create a gen1 ProgramSpec with a specified RTA schema on the DM kernel
-inline ProgramSpec MakeGen1SpecWithRTAs(const NodeCoord& node, size_t num_per_node_rtas, size_t num_common_rtas) {
+inline ProgramSpec MakeGen1SpecWithRTAs(const NodeCoord& /*node*/, size_t num_per_node_rtas, size_t num_common_rtas) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
-    spec.kernels[0].runtime_arguments_schema.num_runtime_args_per_node = {{node, num_per_node_rtas}};
-    spec.kernels[0].runtime_arguments_schema.num_common_runtime_args = num_common_rtas;
+    spec.kernels[0].runtime_arguments_schema.num_runtime_varargs = num_per_node_rtas;
+    spec.kernels[0].runtime_arguments_schema.num_common_runtime_varargs = num_common_rtas;
 
-    spec.kernels[1].runtime_arguments_schema.num_runtime_args_per_node = {{node, 0}};
-    spec.kernels[1].runtime_arguments_schema.num_common_runtime_args = 0;
+    // kernels[1] has no varargs (defaults)
 
     return spec;
 }

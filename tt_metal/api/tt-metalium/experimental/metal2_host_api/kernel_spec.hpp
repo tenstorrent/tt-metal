@@ -175,12 +175,29 @@ struct KernelSpec {
         // Named CRTAs: names in declaration order. Must be unique valid C++ identifiers.
         std::vector<std::string> named_common_runtime_args;
 
-        // Vararg RTAs: per-node count (unnamed, uint32_t, indexed from 0).
-        using NumRTAsPerNode = std::vector<std::pair<NodeCoord, size_t>>;  // {node, num_rtas}
-        NumRTAsPerNode num_runtime_args_per_node;                          // default: empty
+        //----------------------
+        // Advanced options
 
-        // Vararg CRTAs: count (unnamed, uint32_t, indexed from 0).
-        size_t num_common_runtime_args = 0;
+        // Vararg RTAs: dynamic number of RTAs
+        // The RTA varargs count is dynamic with respect to the kernel source code, but immutable
+        // with respect to the Program. (It cannot be changed in ProgramRunParams.)
+        // Every node the kernel runs on gets this same vararg count, but unique vararg values.
+        // Values are specified in the ProgramRunParams.
+        // NOTE: RTA varargs can also also be useful for legacy migration.
+        size_t num_runtime_varargs = 0;
+
+        // Per-node RTA vararg override: different per-node vararg counts
+        // Still immutable with respect to the Program, but varargs count can be specified per-node.
+        // Any kernel target node not specified in the override defaults to num_runtime_varargs.
+        using NumVarargsPerNode = std::vector<std::pair<Nodes, size_t>>;  // {nodes, num_varargs}
+        std::optional<NumVarargsPerNode> num_runtime_varargs_per_node = std::nullopt;
+
+        // Vararg CRTAs: dynamic number of CRTAs
+        // The CTRA varargs count is dynamic with respect to the kernel source code, but immutable
+        // with respect to the Program. (It cannot be changed in ProgramRunParams.)
+        // Values are specified in the ProgramRunParams; they are common to all kernel nodes.
+        // NOTE: RTA varargs can also also be useful for legacy migration.
+        size_t num_common_runtime_varargs = 0;
     };
     RuntimeArgSchema runtime_arguments_schema{};
 

@@ -71,9 +71,9 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
                 kernel_name,
                 node_coord.str());
 
-            auto it_schema = schema->num_runtime_args_per_node.find(node_coord);
+            auto it_schema = schema->num_runtime_varargs_per_node.find(node_coord);
             const size_t expected_varargs =
-                (it_schema != schema->num_runtime_args_per_node.end()) ? it_schema->second : 0;
+                (it_schema != schema->num_runtime_varargs_per_node.end()) ? it_schema->second : 0;
             TT_FATAL(
                 args.size() == expected_varargs,
                 "Kernel '{}' node {} expects {} vararg runtime args, but {} were provided",
@@ -83,7 +83,7 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
                 args.size());
         }
         // Every node with a schema vararg entry must have values provided.
-        for (const auto& [node_coord, expected_count] : schema->num_runtime_args_per_node) {
+        for (const auto& [node_coord, expected_count] : schema->num_runtime_varargs_per_node) {
             TT_FATAL(
                 nodes_with_vararg_params.contains(node_coord),
                 "Kernel '{}' is missing vararg runtime args for node {} (expected {} args)",
@@ -94,10 +94,10 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
 
         // Validate vararg CRTA count
         TT_FATAL(
-            kernel_params.common_runtime_varargs.size() == schema->num_common_runtime_args,
+            kernel_params.common_runtime_varargs.size() == schema->num_common_runtime_varargs,
             "Kernel '{}' expects {} vararg common runtime args, but {} were provided",
             kernel_name,
-            schema->num_common_runtime_args,
+            schema->num_common_runtime_varargs,
             kernel_params.common_runtime_varargs.size());
 
         // Validate named RTAs: every declared name set per-node, no extras, no duplicate node entries.

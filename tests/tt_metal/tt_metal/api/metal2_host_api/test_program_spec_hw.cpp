@@ -99,13 +99,13 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     auto producer = MakeMinimalGen1DMKernel("producer", node, DataMovementProcessor::RISCV_0);
     producer.source =
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_producer.cpp"};
-    producer.runtime_arguments_schema.num_runtime_args_per_node = {{node, 3}};
+    producer.runtime_arguments_schema.num_runtime_varargs = 3;
 
     // Consumer: NCRISC reads DFB → DRAM
     auto consumer = MakeMinimalGen1DMKernel("consumer", node, DataMovementProcessor::RISCV_1);
     consumer.source =
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp"};
-    consumer.runtime_arguments_schema.num_runtime_args_per_node = {{node, 3}};
+    consumer.runtime_arguments_schema.num_runtime_varargs = 3;
 
     // DFB: both kernels bind it, with different local accessor names
     auto dfb = MakeMinimalDFB("loopback_dfb", node, entry_size, num_entries);
@@ -216,7 +216,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_producer.cpp"};
     producer.runtime_arguments_schema.named_runtime_args = {"src_addr"};
     producer.runtime_arguments_schema.named_common_runtime_args = {"num_entries"};
-    producer.runtime_arguments_schema.num_runtime_args_per_node = {{node, 1}};  // 1 vararg
+    producer.runtime_arguments_schema.num_runtime_varargs = 1;  // 1 vararg
     producer.compile_time_arg_bindings = {{"bank_id", 0}, {"entry_size", entry_size}};
 
     // Consumer: NCRISC reads DFB → DRAM, using named RTA (dst_addr) + named CRTA (num_entries)

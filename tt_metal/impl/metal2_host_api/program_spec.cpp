@@ -1478,14 +1478,53 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         // Register the RTA+CRTA schema (named lists + vararg counts) with the ProgramImpl.
         // Used by ValidateProgramRunParams and SetProgramRunParameters to validate and serialize
         // the user-provided values at dispatch time.
+        //
+        // User-facing vararg RTA specification (see kernel_spec.hpp):
+        //   - num_runtime_varargs (scalar): default count applied to every node the kernel
+        //     runs on.
+        //   - num_runtime_varargs_per_node (optional): sparse per-node overrides on top of
+        //     the scalar default. Unlisted nodes fall back to the scalar.
+        // We apply the scalar first across target_nodes, then overlay each override entry.
+        // An explicit override of 0 erases the scalar-default entry so run-params treats
+        // that node as having no varargs (rather than requiring an "empty" value list).
+        // Overlapping override entries (two entries covering the same node) are an error.
         const auto& user_schema = kernel_spec.runtime_arguments_schema;
         detail::ProgramImpl::KernelRTASchema runtime_schema;
         runtime_schema.named_runtime_args = user_schema.named_runtime_args;
         runtime_schema.named_common_runtime_args = user_schema.named_common_runtime_args;
-        for (const auto& [node_coord, num_args] : user_schema.num_runtime_args_per_node) {
-            runtime_schema.num_runtime_args_per_node[node_coord] = num_args;
+        if (user_schema.num_runtime_varargs > 0) {
+            const NodeRangeSet target_nodes = to_node_range_set(kernel_spec.target_nodes);
+            for (const NodeRange& range : target_nodes.ranges()) {
+                for (const NodeCoord& node : range) {
+                    runtime_schema.num_runtime_varargs_per_node[node] = user_schema.num_runtime_varargs;
+                }
+            }
         }
-        runtime_schema.num_common_runtime_args = user_schema.num_common_runtime_args;
+        if (user_schema.num_runtime_varargs_per_node.has_value()) {
+            std::unordered_set<NodeCoord> seen_overrides;
+            for (const auto& [nodes_spec, num_varargs] : *user_schema.num_runtime_varargs_per_node) {
+                const NodeRangeSet expanded = to_node_range_set(nodes_spec);
+                for (const NodeRange& range : expanded.ranges()) {
+                    for (const NodeCoord& node : range) {
+                        const bool inserted = seen_overrides.insert(node).second;
+                        TT_FATAL(
+                            inserted,
+                            "KernelSpec '{}' num_runtime_varargs_per_node has overlapping entries "
+                            "for node {}",
+                            kernel_spec.unique_id,
+                            node.str());
+                        if (num_varargs > 0) {
+                            runtime_schema.num_runtime_varargs_per_node[node] = num_varargs;
+                        } else {
+                            // Explicit zero override: drop any scalar-default entry so
+                            // run-params treats this node as missing (→ 0 expected).
+                            runtime_schema.num_runtime_varargs_per_node.erase(node);
+                        }
+                    }
+                }
+            }
+        }
+        runtime_schema.num_common_runtime_varargs = user_schema.num_common_runtime_varargs;
         program_impl->register_kernel_rta_schema(kernel_spec.unique_id, std::move(runtime_schema));
     }
 
