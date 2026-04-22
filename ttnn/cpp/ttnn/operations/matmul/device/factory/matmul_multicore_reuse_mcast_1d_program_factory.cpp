@@ -3806,6 +3806,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             (std::uint32_t)M * K,  // MtKt
             (std::uint32_t)B,      // batch
             (std::uint32_t)B,      // batch
+            (std::uint32_t)false,  // reuse_in0_in_CB
             // sparsity args
             (std::uint32_t)0,     // batchB
             (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
@@ -4138,6 +4139,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         {"cb_in0_intermediate", tt::CBIndex::c_8},
         {"cb_in1_intermediate", tt::CBIndex::c_9},
         {"cb_in0_transposed", tt::CBIndex::c_10},
+        {"bias_ntiles", in1_per_core_w},
     };
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
@@ -4667,6 +4669,10 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
     const auto in1_tensor_start_tile_id_stride = per_core_N * in1_tensor_stride_w;
 
+    bool reuse_in0_in_CB =
+        ((in0_B == 1 && in1_B > 1) && !in0_is_sharded && !output_is_sharded && !bcast_batch &&
+         !fused_activation.has_value());
+
     std::vector<uint32_t> in0_sender_compile_time_args = {
         // in0 tensor args
         (std::uint32_t)in0_tensor_stride_w,
@@ -4693,9 +4699,10 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         (std::uint32_t)0,  // in0_mcast_num_dests
         (std::uint32_t)0,  // in0_mcast_num_cores
         // batch args
-        (std::uint32_t)M * K,  // MtKt
-        (std::uint32_t)in0_B,  // batch
-        (std::uint32_t)in1_B,  // batch
+        (std::uint32_t)M * K,            // MtKt
+        (std::uint32_t)in0_B,            // batch
+        (std::uint32_t)in1_B,            // batch
+        (std::uint32_t)reuse_in0_in_CB,  // reuse_in0_in_CB
 
         // sparsity args
         (std::uint32_t)0,     // batchB
@@ -4780,7 +4787,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)in1_B,  // batch
+        (std::uint32_t)(reuse_in0_in_CB ? in1_B : in0_B),  // batch
 
         // WRITER
         // out tensor args
@@ -4990,6 +4997,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         {"cb_in0_intermediate", tt::CBIndex::c_8},
         {"cb_in1_intermediate", tt::CBIndex::c_9},
         {"cb_in0_transposed", tt::CBIndex::c_10},
+        {"bias_ntiles", in1_per_core_w},
     };
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
