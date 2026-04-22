@@ -4,6 +4,9 @@
 
 #include <functional>
 
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
@@ -25,13 +28,6 @@ struct UpperRepeatDims {
 
 ttnn::Tensor repeat_upper_dims_rm(
     const ttnn::Tensor& tensor, const uint32_t dim, const uint32_t repetitions, const MemoryConfig& output_mem_config) {
-    // collapse upper dims to 4D or append 1s
-    // collapse lower dims or insert 1s
-    // op
-    // un-collaps to expected size
-
-    // figure out the shape of the input tensor for the op. dims before and after rep dim get collapsed, not including
-    // page size.
     const auto& input_shape = tensor.logical_shape();
     ttnn::SmallVector<uint32_t> collapsed_shape_vector(4);
 
@@ -42,7 +38,6 @@ ttnn::Tensor repeat_upper_dims_rm(
         std::accumulate(input_shape.cbegin() + dim + 1, input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
     collapsed_shape_vector[UpperRepeatDims::page_size] = input_shape[-1];
 
-    // use ttnn::view to check logic
     auto input_tensor = ttnn::view(tensor, ttnn::Shape(collapsed_shape_vector));
 
     constexpr bool is_final_dim = false;
@@ -55,9 +50,6 @@ ttnn::Tensor repeat_upper_dims_rm(
 
 ttnn::Tensor repeat_last_dim_rm(
     const ttnn::Tensor& tensor, const uint32_t repetitions, const MemoryConfig& output_mem_config) {
-    // collapse to 2D
-    // op
-    // un-collapse
     const auto& input_shape = tensor.logical_shape();
     ttnn::SmallVector<uint32_t> collapsed_shape_vector(2);
 
@@ -65,7 +57,6 @@ ttnn::Tensor repeat_last_dim_rm(
         std::accumulate(input_shape.cbegin(), input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
     collapsed_shape_vector[1] = input_shape[-1];
 
-    // use ttnn:view
     auto input_tensor = ttnn::view(tensor, ttnn::Shape(collapsed_shape_vector));
 
     constexpr bool is_final_dim = true;
@@ -114,6 +105,53 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
     return std::tie(working_tensor, working_repetition_vector);
 }
 
+bool is_tile_repeat_eligible(const ttnn::Tensor& tensor) {
+    if (tensor.layout() != ttnn::TILE_LAYOUT) {
+        return false;
+    }
+    const auto& shape = tensor.logical_shape();
+    if (shape.rank() < 2) {
+        return false;
+    }
+    return (shape[-1] % tt::constants::TILE_WIDTH == 0) && (shape[-2] % tt::constants::TILE_HEIGHT == 0);
+}
+
+ttnn::Tensor repeat_dim_tile(
+    const ttnn::Tensor& tensor, const uint32_t dim, const uint32_t repetitions, const MemoryConfig& output_mem_config) {
+    const auto& shape = tensor.logical_shape();
+    const auto rank = shape.rank();
+
+    uint32_t h_tiles = shape[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t w_tiles = shape[-1] / tt::constants::TILE_WIDTH;
+
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    uint32_t tile_page_size = tt::tile_size(cb_data_format);
+
+    uint32_t higher, rep_dim_pages, lower;
+
+    if (dim == rank - 1) {
+        // W dimension: each tile-row's w_tiles get repeated
+        higher = std::accumulate(shape.cbegin(), shape.cend() - 2, 1u, std::multiplies<uint32_t>()) * h_tiles;
+        rep_dim_pages = w_tiles;
+        lower = 1;
+    } else if (dim == rank - 2) {
+        // H dimension: tile-rows get repeated
+        higher = std::accumulate(shape.cbegin(), shape.cend() - 2, 1u, std::multiplies<uint32_t>());
+        rep_dim_pages = h_tiles;
+        lower = w_tiles;
+    } else {
+        // Upper dimensions (batch, channel, etc.): groups of tiles get repeated
+        higher = std::accumulate(shape.cbegin(), shape.cbegin() + dim, 1u, std::multiplies<uint32_t>());
+        uint32_t lower_elements =
+            std::accumulate(shape.cbegin() + dim + 1, shape.cend() - 2, 1u, std::multiplies<uint32_t>());
+        rep_dim_pages = shape[dim];
+        lower = lower_elements * h_tiles * w_tiles;
+    }
+
+    return ttnn::prim::repeat_tile(
+        tensor, repetitions, dim, output_mem_config, higher, rep_dim_pages, lower, tile_page_size);
+}
+
 }  // namespace ttnn::operations::data_movement::detail
 
 namespace ttnn {
@@ -157,33 +195,39 @@ ttnn::Tensor repeat(
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_mem_config.buffer_type()};
     }
 
-    // tiled -> RM
-    if (working_tensor.layout() == ttnn::TILE_LAYOUT) {
-        working_tensor = ttnn::to_layout(working_tensor, ttnn::ROW_MAJOR_LAYOUT);
-    }
-
-    // loop over dims in repetition vector, backwards because repeat pages first is faster
-    for (auto it = working_repetition_vector.crbegin(); it != working_repetition_vector.crend(); ++it) {
-        // no op for unit repetitions
-        if (*it == 1) {
-            continue;
-        }
-        // if last dim
-        if (it == working_repetition_vector.crbegin()) {
+    if (operations::data_movement::detail::is_tile_repeat_eligible(working_tensor)) {
+        // Tile-native path: operate directly on tiles, skip TILE->RM->TILE conversion
+        for (auto it = working_repetition_vector.crbegin(); it != working_repetition_vector.crend(); ++it) {
+            if (*it == 1) {
+                continue;
+            }
+            auto dim = working_repetition_vector.crend() - it - 1;
             working_tensor =
-                operations::data_movement::detail::repeat_last_dim_rm(working_tensor, *it, working_output_mem_config);
+                operations::data_movement::detail::repeat_dim_tile(working_tensor, dim, *it, working_output_mem_config);
         }
-        // if not last dim
-        else {
-            auto i = working_repetition_vector.crend() - it - 1;  // forward index
-            working_tensor = operations::data_movement::detail::repeat_upper_dims_rm(
-                working_tensor, i, *it, working_output_mem_config);
+    } else {
+        // ROW_MAJOR path: convert TILE->RM if needed, repeat, convert back
+        if (working_tensor.layout() == ttnn::TILE_LAYOUT) {
+            working_tensor = ttnn::to_layout(working_tensor, ttnn::ROW_MAJOR_LAYOUT);
         }
-    }
 
-    // RM -> OG page layout
-    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-        working_tensor = ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, input_tensor.dtype());
+        for (auto it = working_repetition_vector.crbegin(); it != working_repetition_vector.crend(); ++it) {
+            if (*it == 1) {
+                continue;
+            }
+            if (it == working_repetition_vector.crbegin()) {
+                working_tensor = operations::data_movement::detail::repeat_last_dim_rm(
+                    working_tensor, *it, working_output_mem_config);
+            } else {
+                auto i = working_repetition_vector.crend() - it - 1;
+                working_tensor = operations::data_movement::detail::repeat_upper_dims_rm(
+                    working_tensor, i, *it, working_output_mem_config);
+            }
+        }
+
+        if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+            working_tensor = ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, input_tensor.dtype());
+        }
     }
 
     // Interleaved to OG mem layout
