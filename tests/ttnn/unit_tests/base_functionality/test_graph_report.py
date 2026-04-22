@@ -28,11 +28,7 @@ import graph_report
 # Now import ttnn for device tests
 import ttnn
 
-try:
-    from models.common.utility_functions import is_wormhole_b0
-except ImportError:
-    # Full tree (e.g. ttnn.device) not on PYTHONPATH in some dev environments
-    is_wormhole_b0 = None
+from models.common.utility_functions import is_wormhole_b0
 
 
 @pytest.fixture
@@ -2448,7 +2444,7 @@ class TestResNet50Patterns:
         conn.close()
 
 
-@pytest.mark.skipif(is_wormhole_b0 is None or not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
 class TestLinearModelE2E:
     """
     End-to-end test: run ttnn.ones + ttnn.linear on real hardware,
@@ -2546,7 +2542,7 @@ def imagenet_label_dict():
         return ast.literal_eval(f.read())
 
 
-@pytest.mark.skipif(is_wormhole_b0 is None or not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
