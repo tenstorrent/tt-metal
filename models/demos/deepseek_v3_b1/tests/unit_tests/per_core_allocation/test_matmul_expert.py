@@ -2260,6 +2260,107 @@ def test_hybrid_expert_irregular_sram_down_grid_multi_device(bh_2d_mesh_device):
 
 
 # ---------------------------------------------------------------------------
+# Benchmark tests — DRAM-only, 8 experts, production MoE shapes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "formats_per_device, fmt_ratios",
+    [
+        (["bfp4", "bfp0"], {"bfp4": 77.8, "bfp0": 22.2}),
+        (["bfp4", "bfp2", "bfp0"], {"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3}),
+    ],
+    ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
+)
+def test_benchmark_gate_proj(device, formats_per_device, fmt_ratios):
+    """MoE gate-proj shape: 256 experts, 8 selected (1 per device), K=7168, N=256, DRAM-only, fuse_silu.
+
+    cores_per_dram_bank=2, k_parallel_per_bank=2 → 2 cores per bank split K (n_parallel=1).
+    Each K-slice core produces a partial matmul; partial-K PCC validator checks each core.
+    """
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[formats_per_device],
+        dram_fuse_silu=True,
+        num_subblocks_k=4,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
+        fmt_distribution="uniform",
+        fmt_ratios=fmt_ratios,
+        num_loop_iters=100,
+    )
+
+
+@pytest.mark.parametrize(
+    "formats_per_device, fmt_ratios",
+    [
+        (["bfp4", "bfp0"], {"bfp4": 77.8, "bfp0": 22.2}),
+        (["bfp4", "bfp2", "bfp0"], {"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3}),
+    ],
+    ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
+)
+def test_benchmark_up_proj(device, formats_per_device, fmt_ratios):
+    """MoE up-proj shape: 8 experts, 8 selected (1 per device), K=7168, N=256, DRAM-only."""
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[formats_per_device],
+        num_subblocks_k=4,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
+        fmt_distribution="uniform",
+        fmt_ratios=fmt_ratios,
+        num_loop_iters=100,
+    )
+
+
+@pytest.mark.parametrize(
+    "formats_per_device, fmt_ratios",
+    [
+        (["bfp4", "bfp0"], {"bfp4": 77.8, "bfp0": 22.2}),
+        (["bfp4", "bfp2", "bfp0"], {"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3}),
+    ],
+    ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
+)
+def test_benchmark_down_proj(device, formats_per_device, fmt_ratios):
+    """MoE down-proj shape: 8 experts, 8 selected (1 per device), K=256, N=7168, DRAM-only."""
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=256,
+        N=7168,
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[formats_per_device],
+        accum_experts=True,
+        num_subblocks_k=1,
+        num_subblocks_n=2,
+        n_parallel_per_bank=2,
+        k_parallel_per_bank=1,
+        fmt_distribution="uniform",
+        fmt_ratios=fmt_ratios,
+        num_loop_iters=100,
+    )
+
+
+# ---------------------------------------------------------------------------
 # BSPM real-assignment tests — Step 2.3
 # ---------------------------------------------------------------------------
 
@@ -2536,105 +2637,4 @@ def test_matmul_expert_bspm_sparse_activation(bh_2d_mesh_device):
         bspm_expert_configs=[(0, 0), (1, 0), (2, 0), (3, 0)],  # 4 registered experts
         active_expert_ids=[0, 2],  # sparse: only experts 0 and 2 selected this step
         pcc_threshold=0.90,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Benchmark tests — DRAM-only, 8 experts, production MoE shapes
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "formats_per_device, fmt_ratios",
-    [
-        (["bfp4", "bfp0"], {"bfp4": 77.8, "bfp0": 22.2}),
-        (["bfp4", "bfp2", "bfp0"], {"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3}),
-    ],
-    ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
-)
-def test_benchmark_gate_proj(device, formats_per_device, fmt_ratios):
-    """MoE gate-proj shape: 256 experts, 8 selected (1 per device), K=7168, N=256, DRAM-only, fuse_silu.
-
-    cores_per_dram_bank=2, k_parallel_per_bank=2 → 2 cores per bank split K (n_parallel=1).
-    Each K-slice core produces a partial matmul; partial-K PCC validator checks each core.
-    """
-    _run_hybrid_expert_multi_device(
-        device,
-        M=1,
-        K=7168,
-        N=256,
-        num_experts=8,
-        sram_expert_ids=[],
-        dram_expert_ids=list(range(8)),
-        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
-        formats_per_device=[formats_per_device],
-        dram_fuse_silu=True,
-        num_subblocks_k=4,
-        num_subblocks_n=1,
-        n_parallel_per_bank=1,
-        k_parallel_per_bank=2,
-        fmt_distribution="uniform",
-        fmt_ratios=fmt_ratios,
-        num_loop_iters=100,
-    )
-
-
-@pytest.mark.parametrize(
-    "formats_per_device, fmt_ratios",
-    [
-        (["bfp4", "bfp0"], {"bfp4": 77.8, "bfp0": 22.2}),
-        (["bfp4", "bfp2", "bfp0"], {"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3}),
-    ],
-    ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
-)
-def test_benchmark_up_proj(device, formats_per_device, fmt_ratios):
-    """MoE up-proj shape: 8 experts, 8 selected (1 per device), K=7168, N=256, DRAM-only."""
-    _run_hybrid_expert_multi_device(
-        device,
-        M=1,
-        K=7168,
-        N=256,
-        num_experts=8,
-        sram_expert_ids=[],
-        dram_expert_ids=list(range(8)),
-        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
-        formats_per_device=[formats_per_device],
-        num_subblocks_k=4,
-        num_subblocks_n=1,
-        n_parallel_per_bank=1,
-        k_parallel_per_bank=2,
-        fmt_distribution="uniform",
-        fmt_ratios=fmt_ratios,
-        num_loop_iters=100,
-    )
-
-
-@pytest.mark.parametrize(
-    "formats_per_device, fmt_ratios",
-    [
-        (["bfp4", "bfp0"], {"bfp4": 77.8, "bfp0": 22.2}),
-        (["bfp4", "bfp2", "bfp0"], {"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3}),
-    ],
-    ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
-)
-def test_benchmark_down_proj(device, formats_per_device, fmt_ratios):
-    """MoE down-proj shape: 8 experts, 8 selected (1 per device), K=256, N=7168, DRAM-only."""
-    _run_hybrid_expert_multi_device(
-        device,
-        M=1,
-        K=256,
-        N=7168,
-        num_experts=8,
-        sram_expert_ids=[],
-        dram_expert_ids=list(range(8)),
-        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
-        formats_per_device=[formats_per_device],
-        accum_experts=True,
-        num_subblocks_k=1,
-        num_subblocks_n=2,
-        n_parallel_per_bank=2,
-        k_parallel_per_bank=1,
-        fmt_distribution="uniform",
-        fmt_ratios=fmt_ratios,
-        num_loop_iters=100,
     )
