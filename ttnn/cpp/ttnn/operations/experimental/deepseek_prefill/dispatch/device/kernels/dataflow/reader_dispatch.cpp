@@ -83,8 +83,11 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(46);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(47);
 
-    // TensorAccessorArgs for all 7 tensors (starting at index 48)
-    constexpr auto input_args = TensorAccessorArgs<48>();
+    // Batch configuration (index 48)
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(48);
+
+    // TensorAccessorArgs for all 7 tensors (starting at index 49)
+    constexpr auto input_args = TensorAccessorArgs<49>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
@@ -148,8 +151,11 @@ void kernel_main() {
     noc_async_read_barrier();
     int32_t* expert_dispatch_table = (int32_t*)dispatch_table_base_addr;
 
-    // Set up batched scratch buffers
-    constexpr uint32_t read_batch_size = 8;
+    // Reserve scratch space once — these CBs are not used as FIFOs. Each batch
+    // overwrites the same region at offsets [0, batch_count) without push/pop.
+    // DRAM reads are batched to saturate DRAM bandwidth, while the L1-to-writer-CB
+    // copies below are done one page at a time — this avoids CB FIFO pointer wrapping
+    // and measured faster in practice.
     cb_reserve_back(cb_indices_id, read_batch_size);
     uint32_t indices_base = get_write_ptr(cb_indices_id);
     cb_reserve_back(cb_weights_id, read_batch_size);
@@ -215,16 +221,15 @@ void kernel_main() {
                 }
                 auto page_idx = expert_index_within_chip * max_dispatched_tokens_per_expert + offset;
 
-                // Construct metadata
-                volatile tt_l1_ptr int32_t* metadata =
-                    reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_temp_addr);
-                metadata[0] = linearized_mesh_coord;
-                metadata[1] = token_idx;
-                metadata[2] = k;
-                metadata[3] = routed_expert;
-                metadata[4] = static_cast<int16_t>(weights[k]);
-
                 if (expert_chip == linearized_mesh_coord) {
+                    volatile tt_l1_ptr int32_t* metadata =
+                        reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_temp_addr);
+                    metadata[0] = linearized_mesh_coord;
+                    metadata[1] = token_idx;
+                    metadata[2] = k;
+                    metadata[3] = routed_expert;
+                    metadata[4] = static_cast<int16_t>(weights[k]);
+
                     noc_async_write_page(page_idx, output_addr_gen, input_scratch_addr);
                     noc_async_write_page(page_idx, metadata_addr_gen, metadata_temp_addr);
                     noc_async_writes_flushed();
@@ -254,9 +259,13 @@ void kernel_main() {
 
                         // Push metadata to writer
                         cb_reserve_back(cb_metadata_for_writer_id, 1);
-                        uint32_t metadata_dst = get_write_ptr(cb_metadata_for_writer_id);
-                        noc_async_read(get_noc_addr(metadata_temp_addr), metadata_dst, aligned_metadata_page_size);
-                        noc_async_read_barrier();
+                        volatile tt_l1_ptr int32_t* meta_dst =
+                            reinterpret_cast<volatile tt_l1_ptr int32_t*>(get_write_ptr(cb_metadata_for_writer_id));
+                        meta_dst[0] = linearized_mesh_coord;
+                        meta_dst[1] = token_idx;
+                        meta_dst[2] = k;
+                        meta_dst[3] = routed_expert;
+                        meta_dst[4] = static_cast<int16_t>(weights[k]);
                         cb_push_back(cb_metadata_for_writer_id, 1);
                     }
                 }

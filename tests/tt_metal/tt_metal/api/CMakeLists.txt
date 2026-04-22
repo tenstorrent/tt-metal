@@ -62,3 +62,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+
+if(TT_METAL_USE_EMULE)
+    target_link_options(unit_tests_api PRIVATE -rdynamic)
+endif()
