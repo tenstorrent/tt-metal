@@ -288,9 +288,7 @@ jobs:
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-glx-4x
-      - arch-wormhole_b0
-      - bare-metal
-      - in-service
+      - g08glx03
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
