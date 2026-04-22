@@ -24,7 +24,7 @@ Tensor rotary_embedding_hf(
     const Tensor& input_tensor,
     const Tensor& cos_cache,
     const Tensor& sin_cache,
-    const bool is_decode,
+    const bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto output_mem_config = memory_config.value_or(
@@ -36,7 +36,7 @@ Tensor rotary_embedding_hf(
         arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
 
     return ttnn::prim::rotary_embedding_hf(
-        input_tensor, cos_cache, sin_cache, is_decode, output_mem_config, kernel_config);
+        input_tensor, cos_cache, sin_cache, is_decode_mode, output_mem_config, kernel_config);
 }
 
 }  // namespace ttnn::experimental

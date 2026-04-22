@@ -15,7 +15,7 @@ ttnn::Tensor rotary_embedding_hf(
     const Tensor& input_tensor,
     const Tensor& cos_cache,
     const Tensor& sin_cache,
-    bool is_decode,
+    bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
