@@ -34,54 +34,6 @@ def _chunk_eye(size):
     return _EYE_CACHE[size]
 
 
-def _recurrent_outer_product_program_config(device, K, V):
-    """
-    Build MatmulMultiCoreReuseProgramConfig for the outer-product matmul:
-
-        k_col [B*H, K, 1] @ d_row [B*H, 1, V]  ->  [B*H, K, V]
-
-    TTNN constraints (from matmul_device_operation.cpp MatmulMultiCoreReuseProgramConfig):
-      - N == per_core_N  (N is total N in tiles; no split along N)
-      - M % per_core_M == 0 when per_core_M <= M; else total_M % per_core_M == 0
-      - in0_block_w divides K (inner dim in tiles)
-    Tensor dims (per batch): M_tiles = ceil(K/32), K_inner = 1, N_tiles = ceil(V/32).
-    """
-    grid = device.compute_with_storage_grid_size()
-    if hasattr(grid, "x"):
-        grid_x, grid_y = int(grid.x), int(grid.y)
-    else:
-        grid_x, grid_y = int(grid[0]), int(grid[1])
-
-    M_tiles = (K + _TILE_H - 1) // _TILE_H
-    N_tiles = (V + _TILE_W - 1) // _TILE_W
-    K_tiles_inner = max(1, (1 + _TILE_W - 1) // _TILE_W)  # 1
-
-    # N == per_core_N (mandatory)
-    per_core_N = N_tiles
-    # in0_block_w: inner dim in tiles
-    in0_block_w = K_tiles_inner
-
-    # per_core_M must divide M_tiles
-    per_core_M = M_tiles
-    while per_core_M > 1 and (M_tiles % per_core_M != 0 or (grid_x * grid_y) < (M_tiles // per_core_M)):
-        per_core_M -= 1
-    if per_core_M < 1:
-        per_core_M = 1
-
-    # out_subblock must divide per_core; profiler suggests out_subblock_h * out_subblock_w >= 2
-    out_subblock_h = min(2, per_core_M) if per_core_M >= 2 else 1
-    out_subblock_w = min(2, per_core_N) if per_core_N >= 2 else 1
-
-    return ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        per_core_M=per_core_M,
-        per_core_N=per_core_N,
-    )
-
-
 def _recurrent_read_query_program_config(device, K, V):
     """
     Build MatmulMultiCoreReuseProgramConfig for read/query matmuls:

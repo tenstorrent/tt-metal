@@ -277,8 +277,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     assert not torch.isnan(logits_torch).any(), "NaN in prefill logits"
     next_token = logits_torch.argmax().item()
 
-    # Enable trace + capture
-    model.enable_trace_paged(batch_size=1)
+    # Capture decode trace
     model.capture_decode_trace_paged(device, page_table)
 
     generated = [next_token]
