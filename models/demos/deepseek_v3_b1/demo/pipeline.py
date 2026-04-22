@@ -117,7 +117,6 @@ def create_single_galaxy_pipeline_spec_stage_only_configuration(
     *,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
-    enable_mtp: bool = False,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
     fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META
@@ -577,9 +576,7 @@ class Pipeline:
 
     def configure_block(self) -> None:
         """Phase 1: Create the PipelineBlock (socket wiring)."""
-        print(f"[PIPE P{self._my_stage_idx}] phase1: configure_block", flush=True)
         self._pipeline_block = self._stage_kind.create_pipeline_block(self._ctx)
-        print(f"[PIPE P{self._my_stage_idx}] phase1: done", flush=True)
 
     def setup(self) -> None:
         """Phase 2: Allocate tensors, weights, semaphores on device.
@@ -589,27 +586,20 @@ class Pipeline:
         """
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before setup()")
-        print(f"[PIPE P{self._my_stage_idx}] phase2: setup tensors", flush=True)
         self._stage_kind.setup(self._ctx, self._pipeline_block)
-        print(f"[PIPE P{self._my_stage_idx}] phase2: done", flush=True)
 
     def start_pipeline(self) -> None:
         """Phase 3: Start pipeline block kernels (socket interfaces + auxiliary bypass sockets)."""
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before start_pipeline()")
-        print(f"[PIPE P{self._my_stage_idx}] phase3: pipeline_block.run()", flush=True)
         self._pipeline_block.run()
-        print(f"[PIPE P{self._my_stage_idx}] phase3: run_auxiliary_sockets()", flush=True)
         self._stage_kind.run_auxiliary_sockets()
-        print(f"[PIPE P{self._my_stage_idx}] phase3: done", flush=True)
 
     def start_compute(self) -> None:
         """Phase 4: Launch stage compute (e.g. ``LMHeadSampling.op``, ``DecoderBlock.execute``)."""
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before start_compute()")
-        print(f"[PIPE P{self._my_stage_idx}] phase4: launch_compute", flush=True)
         self._stage_kind.launch_compute(self._ctx, self._pipeline_block)
-        print(f"[PIPE P{self._my_stage_idx}] phase4: done", flush=True)
 
     def setup_and_run(self) -> None:
         """Run all four phases in order."""
@@ -652,12 +642,9 @@ class Pipeline:
 
     def terminate(self) -> None:
         """Terminate the pipeline block and any auxiliary sockets."""
-        print(f"[PIPE P{self._my_stage_idx}] terminate: terminate_auxiliary", flush=True)
         self._stage_kind.terminate_auxiliary()
-        print(f"[PIPE P{self._my_stage_idx}] terminate: pipeline_block.terminate", flush=True)
         if self._pipeline_block is not None:
             self._pipeline_block.terminate()
-        print(f"[PIPE P{self._my_stage_idx}] terminate: done", flush=True)
 
 
 def create_single_pod_spec_decode_pipeline_configuration(

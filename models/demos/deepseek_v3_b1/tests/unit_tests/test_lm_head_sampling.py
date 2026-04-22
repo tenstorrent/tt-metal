@@ -4534,7 +4534,7 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
     # generate_blitz_decode_pipeline() and the submesh-aware code paths added
     # in #42002 can produce inconsistent entry/exit MeshCoordinates across
     # ranks, causing the inter-mesh MeshSocket handshake in
-    # _CombinedPipelineBlock.__init__'s h2d_host_io to time out.
+    # SpecEmbeddingPipelineBlock.__init__'s h2d_host_io to time out.
     pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
     stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
     pipeline = config.build_pipeline(
