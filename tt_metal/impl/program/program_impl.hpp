@@ -353,7 +353,7 @@ public:
     };
 
     // Metal 2.0: Runtime argument schema registration and lookup
-    void register_kernel_rta_schema(const KernelSpecName& name, KernelRTASchema schema);
+    void register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema);
     const KernelRTASchema* get_kernel_rta_schema(const KernelSpecName& name) const;
 
     // Metal 2.0: Get all registered kernel names (for completeness validation)
