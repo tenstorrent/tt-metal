@@ -208,7 +208,7 @@ void kernel_main() {
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type =
         static_cast<KernelActivation>(get_named_compile_time_arg_val("activation_type"));
-    init_sfpu_activaction_pack<activation_type>();
+    init_sfpu_activation_pack<activation_type>();
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
@@ -347,7 +347,7 @@ void kernel_main() {
                                     DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                                    sfpu_activaction_pack<activation_type>(i);
+                                    sfpu_activation_pack<activation_type>(i);
                                 }
 
                                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -491,7 +491,7 @@ void kernel_main() {
                             DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            sfpu_activaction_pack<activation_type>(i);
+                            sfpu_activation_pack<activation_type>(i);
                         }
 
                         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));

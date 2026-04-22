@@ -8,7 +8,7 @@
 #include "internal/risc_attribs.h"
 
 template <KernelActivation ACT>
-FORCE_INLINE void init_sfpu_activaction_pack() {
+FORCE_INLINE void init_sfpu_activation_pack() {
     if constexpr (ACT == KernelActivation::SILU) {
         return silu_tile_init_pack();
     } else if (ACT == KernelActivation::TANH) {
@@ -19,7 +19,7 @@ FORCE_INLINE void init_sfpu_activaction_pack() {
 }
 
 template <KernelActivation ACT>
-FORCE_INLINE void sfpu_activaction_pack(uint32_t tile_index) {
+FORCE_INLINE void sfpu_activation_pack(uint32_t tile_index) {
     if constexpr (ACT == KernelActivation::SILU) {
         return silu_tile_pack(tile_index);
     } else if (ACT == KernelActivation::TANH) {

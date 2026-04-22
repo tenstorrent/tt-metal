@@ -239,7 +239,7 @@ void kernel_main() {
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
 #ifdef SFPU_ACTIVATION
-    init_sfpu_activaction_pack<activation_type>();
+    init_sfpu_activation_pack<activation_type>();
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
@@ -398,7 +398,7 @@ void kernel_main() {
                             DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            sfpu_activaction_pack<activation_type>(i);
+                            sfpu_activation_pack<activation_type>(i);
                         }
 
                         // Wait for SFPU completion before packing
