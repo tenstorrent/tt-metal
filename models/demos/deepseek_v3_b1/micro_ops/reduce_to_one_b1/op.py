@@ -111,6 +111,8 @@ class ReduceToOneB1:
         agg_output_size_bytes: int = 0,
         num_iterations: int = 1,
         is_torus: bool = False,
+        forward_metadata_size_bytes: int = 0,
+        metadata_l1_addr: int = 0,
     ) -> ttnn.Tensor:
         """
         Execute reduce-to-one operation using generic_op.
@@ -370,6 +372,9 @@ class ReduceToOneB1:
                     total_num_workers_count if (is_root1 and downstream_sockets is not None) else 0
                 )
                 device_agg_output_size = agg_output_size_bytes if (is_root1 and downstream_sockets is not None) else 0
+                device_forward_metadata_size = (
+                    forward_metadata_size_bytes if (is_root1 and downstream_sockets is not None) else 0
+                )
                 writer_ct_args = [
                     ("device_role", role),
                     ("num_tiles", num_compute_tiles),
@@ -386,6 +391,7 @@ class ReduceToOneB1:
                     ("slot_size_bytes", slot_size_bytes),
                     ("total_num_workers", device_total_num_workers),
                     ("agg_output_size_bytes", device_agg_output_size),
+                    ("forward_metadata_size_bytes", device_forward_metadata_size),
                     ("num_loop_iters", num_iterations),
                 ]
 
@@ -418,6 +424,9 @@ class ReduceToOneB1:
                     persistent_core_noc_x = persistent_core_phys.x
                     persistent_core_noc_y = persistent_core_phys.y
 
+                # Resolve metadata L1 address for ROOT1 last-worker forwarding
+                device_metadata_l1_addr = metadata_l1_addr if (is_root1 and forward_metadata_size_bytes > 0) else 0
+
                 # Build per-core BRISC args for worker cores
                 brisc_per_core_args = []
                 for core_idx, core in enumerate(input_cores_list):
@@ -440,6 +449,7 @@ class ReduceToOneB1:
                         output_tensor_device.buffer_address(),
                         shard_idx,
                         socket_config_addr,
+                        device_metadata_l1_addr,
                     ]
                     if is_root1 and downstream_sockets is not None:
                         worker_args.extend([agg_sem_addr, persistent_core_noc_x, persistent_core_noc_y])
