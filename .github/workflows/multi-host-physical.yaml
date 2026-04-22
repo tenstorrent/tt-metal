@@ -290,7 +290,7 @@ jobs:
       - multi-host-glx-4x
       - arch-wormhole_b0
       - bare-metal
-      - UF-EV-C4-GWH01
+      - g08glx03
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
