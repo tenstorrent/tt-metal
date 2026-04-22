@@ -18,7 +18,6 @@ on:
         options:
           - N150
           - N300
-          - N300-civ1
           - P100a
           - P150b
           - n300-llmbox
@@ -179,17 +178,17 @@ jobs:
           # CIv2 pool (tt-ubuntu-2204-<label>-viommu-stable) resolves HF weights
           # via the in-cluster large file cache. Bare-metal labels run on CIv1
           # with /mnt/MLPerf (Weka) instead.
+          # N300 is routed to CIv1 bare-metal runners because CIv2 N300
+          # containers cannot reach huggingface.co (restricted proxy blocks it,
+          # and LFC doesn't serve all models). N150/P100a/P150b stay on CIv2.
           case "$RUNNER" in
-            N150|N300|P100a|P150b)
+            N150|P100a|P150b)
               CI_VERSION="civ2"
               ;;
             *)
               CI_VERSION="civ1"
               ;;
           esac
-          # Normalise runner label for runs-on (strip -civ1 suffix)
-          RUNNER_NORMALIZED="${RUNNER%-civ1}"
-          echo "runner_normalized=$RUNNER_NORMALIZED" >> $GITHUB_OUTPUT
           echo "arch=$ARCH" >> $GITHUB_OUTPUT
           echo "platform=Ubuntu 22.04" >> $GITHUB_OUTPUT
           echo "ci_version=$CI_VERSION" >> $GITHUB_OUTPUT
@@ -227,6 +226,9 @@ jobs:
         # CIv1 points HF at the Weka-backed cache; CIv2 resolves through TT_GH_CI_INFRA
         # + LFC so HF_HOME is left unset (falls back to the container default).
         HF_HOME: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '/mnt/MLPerf/tt_dnn-models/hf_home' || '' }}
+        # Prevent transformers from attempting network downloads on CIv1 runners
+        # where weights are pre-cached on MLPerf. CIv2 needs online access via LFC.
+        HF_HUB_OFFLINE: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -246,7 +248,7 @@ jobs:
     timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'N300-civ1') && fromJSON('["N300", "in-service", "cloud-virtual-machine"]')
+        (inputs.runner-label == 'N300') && fromJSON('["N300", "in-service", "cloud-virtual-machine"]')
         || (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
