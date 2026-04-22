@@ -249,12 +249,28 @@ DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
     return this->dtype.value_or(this->input_dtype);
 }
 
+BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    (void)args;
+    (void)tensor_args;
+    if (!program::BinaryNgDramOptimizedProgram::validate_program(args, tensor_args).has_value()) {
+        log_info(tt::LogOp, "Using BinaryNgDramOptimizedProgram");
+        return program::BinaryNgDramOptimizedProgram{};
+    }
+    log_info(tt::LogOp, "Using BinaryNgProgramFactory");
+    return program::BinaryNgProgramFactory{};
+}
+
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // We don't support sharding for now
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& output_tensor = tensor_args.output_tensor;
+
+    if (attributes.is_quant_op) {
+        TT_FATAL(attributes.is_sfpu, "Quantization op is SFPU-only");
+    }
 
     // Validate storage type for input tensors
     TT_FATAL(
@@ -453,8 +469,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
 
     // If not sharded, use the memory config from input a that is interleaved
     return TensorSpec(
-        output_shape,
-        TensorLayout(output_dtype, PageConfig(attributes.output_layout), attributes.memory_config));
+        output_shape, TensorLayout(output_dtype, PageConfig(attributes.output_layout), attributes.memory_config));
 }
 
 BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_output_tensors(
@@ -481,8 +496,10 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
         const auto shard_volumes = get_shard_volumes(
             input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), compute_output_specs(attributes, tensor_args));
 
+        auto program_factory = select_program_factory(attributes, tensor_args);
         return operation::hash_operation<BinaryNgDeviceOperation>(
             attributes,
+            program_factory.index(),
             input_tensor_a.dtype(),
             input_tensor_a.memory_config(),
             input_tensor_b->dtype(),

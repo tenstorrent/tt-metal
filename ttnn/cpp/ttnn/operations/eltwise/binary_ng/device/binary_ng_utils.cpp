@@ -502,16 +502,14 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case LT:
             if (dtype == DataType::FLOAT32) {
                 return {"lt_binary_tile_init();", "lt_binary_tile"};
-            }
-            else if (dtype == DataType::UINT16) {
+            } else if (dtype == DataType::UINT16) {
                 return {"lt_uint16_tile_init();", "lt_uint16_tile"};
             }
             return {"lt_int32_tile_init();", "lt_int32_tile"};
         case GT:
             if (dtype == DataType::FLOAT32) {
                 return {"gt_binary_tile_init();", "gt_binary_tile"};
-            }
-            else if (dtype == DataType::UINT16) {
+            } else if (dtype == DataType::UINT16) {
                 return {"gt_uint16_tile_init();", "gt_uint16_tile"};
             }
             return {"gt_int32_tile_init();", "gt_int32_tile"};
@@ -877,4 +875,63 @@ MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const
         input_tensor_a.memory_config().buffer_type(),
         adjusted_shard_spec);
 }
+
+std::optional<AllShardVolumes> get_shard_volumes(
+    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
+    const auto shard_specs = get_shard_specs(a, b, c);
+
+    if (not shard_specs.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto a_sharded = a.memory_config().is_sharded();
+    const auto b_sharded = b.has_value() and b->memory_config().is_sharded();
+    const auto c_sharded = c.memory_config().is_sharded();
+    const auto tile_hw = c.tile().get_tile_hw();
+
+    return AllShardVolumes{
+        .a_shard_volume = a_sharded ? shard_specs->a_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+        .b_shard_volume = b_sharded ? shard_specs->b_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+        .c_shard_volume = c_sharded ? shard_specs->c_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+    };
+}
+
+std::optional<AllShardSpecs> get_shard_specs(
+    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
+    bool a_sharded = a.memory_config().is_sharded();
+    bool b_sharded = b.has_value() && b->memory_config().is_sharded();
+    bool c_sharded = c.memory_config().is_sharded();
+
+    if ((!a_sharded && !b_sharded) && !c_sharded) {
+        return std::nullopt;
+    }
+
+    if (!is_native_L1_sharding(a, b, c.memory_config())) {
+        return std::nullopt;
+    }
+
+    // If the output is unevenly sharded, only allow when all tensors share the same shard spec
+    // (each core sees identical tile counts for a, b, c -- no deadlock risk).
+    if (is_uneven(c)) {
+        bool all_specs_match =
+            b.has_value() && a_sharded && b_sharded && c_sharded && a.memory_config().shard_spec().has_value() &&
+            b->memory_config().shard_spec().has_value() && c.memory_config().shard_spec().has_value() &&
+            *a.memory_config().shard_spec() == *b->memory_config().shard_spec() &&
+            *a.memory_config().shard_spec() == *c.memory_config().shard_spec();
+        if (!all_specs_match) {
+            return std::nullopt;
+        }
+    }
+
+    const auto& a_shape = a.padded_shape();
+    auto b_shape = b.has_value() ? b->padded_shape() : ttnn::Shape{1, 1};
+    const auto& c_shape = c.padded_shape();
+
+    TT_FATAL(get_shard_spec(c).has_value(), "C must have a shard spec");
+    return AllShardSpecs{
+        a_sharded ? *get_shard_spec(a) : adjust_to_shape(*get_shard_spec(c), c_shape, a_shape),
+        b_sharded ? *get_shard_spec(*b) : adjust_to_shape(*get_shard_spec(c), c_shape, b_shape),
+        *get_shard_spec(c)};
+}
+
 }  // namespace ttnn::operations::binary_ng

@@ -1,0 +1,135 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include "elemwise_args_kernel.hpp"
+#include "ttnn/kernel/kernel_utils.hpp"
+
+#include <tools/profiler/kernel_profiler.hpp>
+
+// #include "api/debug/dprint_pages.h"
+
+// inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+//     DPRINT << "======" << ENDL();
+//     for (uint32_t r = 0; r < 32; ++r) {
+//         SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+//         DPRINT_DATA0({ DPRINT << r << ": " << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL(); });
+//     }
+//     DPRINT << "++++++" << ENDL();
+// }
+
+// #define ARCH_GRAYSKULL
+constexpr uint32_t num_trids = 3;  // NOC_MAX_TRANSACTION_ID - 1;
+uint32_t get_prev_trid(uint32_t trid) { return trid == 1 ? num_trids : (trid - 1); }
+uint32_t get_next_trid(uint32_t trid) { return trid == num_trids ? 1 : (trid + 1); }
+
+void kernel_main() {
+    using namespace ttnn::kernel_utils;
+    using namespace eltwise_dram_optimized;
+    auto args = make_runtime_struct_from_args<EltwiseReaderArgs>();
+    constexpr auto c_args = make_compile_time_struct_from_args<EltwiseReaderCTArgs>();
+
+    constexpr auto a_tensor_args = TensorAccessorArgs<amount_of_fields<EltwiseReaderCTArgs>()>();
+    constexpr auto b_tensor_args = TensorAccessorArgs<a_tensor_args.next_compile_time_args_offset()>();
+
+    const auto a_tensor = TensorAccessor(a_tensor_args, args.a_tensor_base_addr, get_tile_size(c_args.a_tensor_cb));
+    const auto b_tensor = TensorAccessor(b_tensor_args, args.b_tensor_base_addr, get_tile_size(c_args.b_tensor_cb));
+
+    constexpr uint32_t num_tiles_per_cycle = 1;  // c_args.num_tiles_per_cycle;
+    const uint32_t a_tile_size = get_tile_size(c_args.a_tensor_cb);
+    const uint32_t b_tile_size = get_tile_size(c_args.b_tensor_cb);
+
+    uint64_t a_noc_addr = a_tensor.get_noc_addr(args.tile_ofs);
+    uint64_t b_noc_addr = b_tensor.get_noc_addr(args.tile_ofs);
+
+    uint32_t a_addr_ofs = 0;
+    uint32_t b_addr_ofs = 0;
+    uint32_t trid = 1u;  // MUST START WITH ONE
+    uint32_t trid_to_wait = trid;
+
+    constexpr uint32_t num_batches = c_args.num_batches;  // noc transcations must be overlapped
+    const uint32_t num_tiles_per_batch = c_args.num_tiles_per_batch;
+
+    const uint32_t large_chunk = num_batches * num_tiles_per_batch;
+    uint32_t remaining = args.num_tiles;
+    bool first_iter = true;
+    uint32_t prev_chunk = 0;
+
+    cb_reserve_back(c_args.a_tensor_cb, large_chunk);
+    cb_reserve_back(c_args.b_tensor_cb, large_chunk);
+
+    // get_write_ptr must be called after reserve_back
+    uint32_t a_write_base_ptr = get_write_ptr(c_args.a_tensor_cb);
+    uint32_t b_write_base_ptr = get_write_ptr(c_args.b_tensor_cb);
+
+    uint32_t a_write_ptr = a_write_base_ptr;
+    uint32_t b_write_ptr = b_write_base_ptr;
+
+    uint32_t a_write_end_ptr = a_write_base_ptr + CB_PAGE_COUNT(c_args.a_tensor_cb) * a_tile_size;
+    uint32_t b_write_end_ptr = b_write_base_ptr + CB_PAGE_COUNT(c_args.a_tensor_cb) * b_tile_size;
+
+    auto next_a_cb_addr = [&](uint32_t addr, uint32_t num_tiles = 1) {
+        for (auto j = 0u; j < num_tiles; j++) {
+            addr += a_tile_size;
+            if (addr >= a_write_end_ptr) {
+                addr = a_write_base_ptr;
+            }
+        }
+
+        return addr;
+    };
+
+    auto next_b_cb_addr = [&](uint32_t addr, uint32_t num_tiles = 1) {
+        for (auto j = 0u; j < num_tiles; j++) {
+            addr += b_tile_size;
+            if (addr >= b_write_end_ptr) {
+                addr = b_write_base_ptr;
+            }
+        }
+        return addr;
+    };
+
+    while (remaining > 0) {
+        uint32_t chunk;
+        if (remaining >= large_chunk) {
+            chunk = large_chunk;
+        } else if (remaining >= num_tiles_per_batch) {
+            chunk = num_tiles_per_batch;
+        } else {
+            chunk = remaining;
+        }
+
+        uint32_t transfer_sz = chunk * a_tile_size;
+        noc_async_read_set_trid(trid);
+
+        noc_async_read_one_packet_set_state<true>(a_noc_addr, transfer_sz, args.vc);
+        noc_async_read_one_packet_with_state_with_trid(a_noc_addr, a_addr_ofs, a_write_ptr, trid);
+        a_addr_ofs += transfer_sz;
+        a_write_ptr = next_a_cb_addr(a_write_ptr, chunk);
+
+        noc_async_read_one_packet_set_state<true>(b_noc_addr, transfer_sz, args.vc);
+        noc_async_read_one_packet_with_state_with_trid(b_noc_addr, b_addr_ofs, b_write_ptr, trid);
+        b_addr_ofs += transfer_sz;
+        b_write_ptr = next_b_cb_addr(b_write_ptr, chunk);
+
+        if (!first_iter) {
+            noc_async_read_barrier_with_trid(trid_to_wait);
+            trid_to_wait = get_next_trid(trid_to_wait);
+            cb_push_back(c_args.a_tensor_cb, prev_chunk);
+            cb_push_back(c_args.b_tensor_cb, prev_chunk);
+            cb_reserve_back(c_args.a_tensor_cb, prev_chunk);
+            cb_reserve_back(c_args.b_tensor_cb, prev_chunk);
+        }
+
+        trid = get_next_trid(trid);
+        first_iter = false;
+        prev_chunk = chunk;
+        remaining -= chunk;
+    }
+
+    noc_async_read_barrier_with_trid(trid_to_wait);
+    cb_push_back(c_args.a_tensor_cb, prev_chunk);
+    cb_push_back(c_args.b_tensor_cb, prev_chunk);
+}

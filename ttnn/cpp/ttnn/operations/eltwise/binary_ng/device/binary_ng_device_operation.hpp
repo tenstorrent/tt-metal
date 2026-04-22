@@ -9,64 +9,24 @@
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
-namespace ttnn::operations::binary_ng {
 
-enum class SubtileBroadcastType {
-    NONE,         // both tensors have equal tile dimensions (H & W)
-    SCALAR_A,     // a is a scalar (H = 1, W = 1)
-    SCALAR_B,     // b is a scalar (H = 1, W = 1)
-    ROW_A_COL_B,  // a has a single tile row, b has a single tile column
-    ROW_B_COL_A,  // b has a single tile row, a has a single tile column
-    ROW_A,        // a has a single tile row, b is full
-    ROW_B,        // b has a single tile row, a is full
-    COL_A,        // a has a single tile column, b is full
-    COL_B,        // b has a single tile column, a is full
-};
+#include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation_types.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/programs/binary_ng_program_factory.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/programs/binary_ng_dram_optimized_factory.hpp"
+
+namespace ttnn::operations::binary_ng {
 
 SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w);
 
 struct BinaryNgDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
+    using operation_attributes_t = BinaryNgParams;
+    using tensor_args_t = BinaryNgInputs;
 
-    struct operation_attributes_t {
-        BinaryOpType binary_op_type;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations;
-        std::optional<unary::ScalarVariant> scalar;
-        tt::tt_metal::MemoryConfig memory_config;
-        DataType input_dtype;
-        std::optional<DataType> dtype;
-        const CoreRangeSet worker_grid;
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config;
-        std::optional<CoreRangeSet> sub_core_grids;
-        SubtileBroadcastType subtile_broadcast_type = SubtileBroadcastType::NONE;
-        bool is_sfpu = false;
-        bool is_quant_op = false;
-        bool is_where_op = false;
-        Layout input_layout_a = Layout::TILE;
-        Layout input_layout_b = Layout::TILE;
-        Layout output_layout = Layout::TILE;
-
-        ttsl::hash::hash_t to_hash() const;
-        DataType get_dtype() const;
-    };
-
-    struct tensor_args_t {
-        const Tensor& input_tensor_a;
-        std::optional<Tensor> input_tensor_b;
-        std::optional<Tensor> output_tensor;
-    };
-
-    struct ProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& c);
-    };
-
-    using program_factory_t = std::variant<ProgramFactory>;
+    using program_factory_t = std::variant<program::BinaryNgProgramFactory, program::BinaryNgDramOptimizedProgram>;
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
