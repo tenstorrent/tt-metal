@@ -243,6 +243,20 @@ class TensorCache:
         meta: dict | None = None,
     ) -> dict[str, "OverlappedTensor"]:
         fused = ttnn.load_tensor(paths.data_path, device=device)
+        # If the loaded fused buffer ended up per-core allocated, verify that its
+        # L1 base address is the same on every core it spans.  Downstream kernel
+        # setup (e.g. attention_block/op.py::_fused_base_addr) queries a single
+        # core and broadcasts that address to all cores via CB setup; non-uniform
+        # addresses would silently corrupt matmul loads rather than fail loudly.
+        # `overlap_tensors` runs this same guard on the cold pack path only when
+        # `move_to_device=True`, which the cache path does not use, so without
+        # this check warm (and cache-path cold) loads would be unguarded.
+        if fused.is_per_core_allocated():
+            from models.demos.deepseek_v3_b1.weights.overlap.packing import assert_uniform_per_core_addresses
+            from models.demos.deepseek_v3_b1.weights.overlap.spec import _core_list
+
+            cores = _core_list(fused.memory_config().shard_spec.grid)
+            assert_uniform_per_core_addresses(fused, cores)
         if meta is None:
             with open(paths.object_dir / "metadata.json") as f:
                 meta = json.load(f)
@@ -460,7 +474,7 @@ class TensorCache:
             elapsed,
             artifact_id[:12],
         )
-        return self._load_fused(paths, device, meta={"views": views_dict_from_overlapped(views)})
+        return self._load_fused(paths, device)
 
 
 class EphemeralTensorCache:
