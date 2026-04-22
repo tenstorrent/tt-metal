@@ -1763,7 +1763,7 @@ class TestDeepSeekV3:
             )
 
     def test_q_kv_rms_norm_profile(self, device):
-        """Profile fused-inline vs fused-persistent vs unfused (100 trials × 100 iters)."""
+        """Profile fused-inline vs fused-persistent vs unfused (n trials × n iters)."""
         import statistics
         import time
 
@@ -1771,7 +1771,7 @@ class TestDeepSeekV3:
         from models.experimental.ops.descriptors.normalization import rms_norm
 
         s = self._setup_mla_norm_configs(device)
-        # Numbers of trials and iterations reduced to 1 for CI efficiency.
+        # Number of trials and iterations reduced to 1 for CI efficiency.
         # For reasonable perf estimates, increase these to e.g. 100.
         N_TRIALS = 1
         N_ITERS = 1
