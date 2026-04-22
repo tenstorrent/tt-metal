@@ -70,8 +70,13 @@ Alignment legacyShapeToAlignment(
     // INTERLEAVED with (deprecated) non-height/width padding
     // NOTE: Rank > 2 is guaranteed in this case
     ttsl::SmallVector<uint32_t> values(padded_rank);
-    values[padded_rank - 1] = legacy_padded_shape[-1];
-    values[padded_rank - 2] = legacy_padded_shape[-2];
+    if (page_config.get_layout() == Layout::TILE) {
+        values[padded_rank - 1] = page_config.get_tile().get_width();
+        values[padded_rank - 2] = page_config.get_tile().get_height();
+    } else {
+        values[padded_rank - 1] = legacy_padded_shape[-1];
+        values[padded_rank - 2] = legacy_padded_shape[-2];
+    }
 
     for (int i = padded_rank - 3; i >= 0; i--) {
         values[i] = legacy_padded_shape[i] * values[i + 1];
