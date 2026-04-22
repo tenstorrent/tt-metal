@@ -13,6 +13,7 @@
 #include <enchantum/enchantum.hpp>
 #include <filesystem>
 #include <fstream>
+#include <unordered_set>
 #include <fmt/base.h>
 #include <google/protobuf/text_format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -307,48 +308,55 @@ bool try_merge_torus_compatible_template(
     return true;
 }
 
+// All boards in a valid node share an architecture, so the first board is sufficient.
+std::optional<tt::ARCH> get_template_architecture(const Node& node_template) {
+    if (node_template.boards.empty()) {
+        return std::nullopt;
+    }
+    return node_template.boards.begin()->second.get_arch();
+}
+
 void validate_and_merge_node_templates(
     std::unordered_map<std::string, Node>& this_node_desc_name_to_node,
     const std::unordered_map<std::string, Node>& other_node_desc_name_to_node,
     const std::string& existing_source_file,
     const std::string& new_source_file) {
-    // Forward pass: validate/merge templates that exist in both
+    // Union templates across files. Same-name templates must agree on structure;
+    // disjoint templates are carried over (so e.g. REV_AB-only + REV_C-only merges work),
+    // but mixing architectures (e.g. WH + BH) is still rejected.
+    // Genuine same-instance-name conflicts are caught later in merge_resolved_graph_instances.
     for (const auto& [node_desc_name, other_template] : other_node_desc_name_to_node) {
         if (this_node_desc_name_to_node.contains(node_desc_name)) {
-            // Template exists in both - validate it matches
             const auto& this_template = this_node_desc_name_to_node.at(node_desc_name);
             validate_node_structure(this_template, other_template, node_desc_name, new_source_file);
             validate_inter_board_connections(
                 this_template, other_template, node_desc_name, existing_source_file, new_source_file);
+        } else if (try_merge_torus_compatible_template(
+                       this_node_desc_name_to_node,
+                       node_desc_name,
+                       other_template,
+                       existing_source_file,
+                       new_source_file)) {
+            // Folded into an existing torus variant (e.g. X_TORUS + Y_TORUS -> XY_TORUS).
         } else {
-            // Template missing in 'this' - try torus-compatible merge or throw error
-            bool merged = try_merge_torus_compatible_template(
-                this_node_desc_name_to_node, node_desc_name, other_template, existing_source_file, new_source_file);
-
-            if (!merged) {
-                throw std::runtime_error(fmt::format(
-                    "Node template '{}' exists in {} but not in {} - structural mismatch",
-                    node_desc_name,
-                    get_source_description(new_source_file),
-                    get_source_description(existing_source_file)));
+            auto other_arch = get_template_architecture(other_template);
+            if (other_arch.has_value()) {
+                for (const auto& [existing_name, existing_template] : this_node_desc_name_to_node) {
+                    auto existing_arch = get_template_architecture(existing_template);
+                    if (existing_arch.has_value() && *existing_arch != *other_arch) {
+                        throw std::runtime_error(fmt::format(
+                            "Node template '{}' from {} has architecture {} which conflicts with "
+                            "existing template '{}' from {} (architecture {}) - structural mismatch",
+                            node_desc_name,
+                            get_source_description(new_source_file),
+                            enchantum::to_string(*other_arch),
+                            existing_name,
+                            get_source_description(existing_source_file),
+                            enchantum::to_string(*existing_arch)));
+                    }
+                }
             }
-        }
-    }
-
-    // Backward pass: check for templates in 'this' that don't exist in 'other'
-    for (const auto& [node_desc_name, this_template] : this_node_desc_name_to_node) {
-        if (!other_node_desc_name_to_node.contains(node_desc_name)) {
-            // Check if this is a torus type that can be merged with another torus variant
-            bool found_compatible =
-                find_torus_compatible_template(other_node_desc_name_to_node, node_desc_name).has_value();
-
-            if (!found_compatible) {
-                throw std::runtime_error(fmt::format(
-                    "Node template '{}' exists in {} but not in {} - structural mismatch",
-                    node_desc_name,
-                    get_source_description(existing_source_file),
-                    get_source_description(new_source_file)));
-            }
+            this_node_desc_name_to_node[node_desc_name] = other_template;
         }
     }
 }
@@ -675,6 +683,85 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
     return build_graph_instance_impl(graph_instance, cluster_descriptor, nullptr, instance_name, node_templates);
 }
 
+// Collects (host_id -> hostname) for every leaf node by walking the graph recursively.
+// Child `name` matches the host's `host` field in the deployment descriptor by convention.
+void collect_host_id_to_hostname(
+    const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
+    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+    std::map<HostId, std::string>& out) {
+    auto template_it = cluster_descriptor.graph_templates().find(graph_instance.template_name());
+    if (template_it == cluster_descriptor.graph_templates().end()) {
+        return;  // Missing template will be flagged by build_graph_instance_impl later.
+    }
+    const auto& template_def = template_it->second;
+    for (const auto& child_def : template_def.children()) {
+        const std::string& child_name = child_def.name();
+        auto mapping_it = graph_instance.child_mappings().find(child_name);
+        if (mapping_it == graph_instance.child_mappings().end()) {
+            continue;
+        }
+        const auto& mapping = mapping_it->second;
+        if (child_def.has_node_ref()) {
+            if (mapping.mapping_case() ==
+                tt::scaleout_tools::cabling_generator::proto::ChildMapping::kHostId) {
+                out[HostId(mapping.host_id())] = child_name;
+            }
+        } else if (child_def.has_graph_ref()) {
+            if (mapping.mapping_case() ==
+                tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
+                collect_host_id_to_hostname(mapping.sub_instance(), cluster_descriptor, out);
+            }
+        }
+    }
+}
+
+// Returns a deployment slice containing only the hosts referenced by `cluster_descriptor`,
+// ordered by host_id so positional (host_id -> hosts[i]) indexing in the per-file ctor lines up.
+tt::scaleout_tools::deployment::proto::DeploymentDescriptor filter_deployment_for_cabling(
+    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& full_deployment,
+    const std::string& cabling_source) {
+    std::map<HostId, std::string> host_id_to_hostname;
+    collect_host_id_to_hostname(cluster_descriptor.root_instance(), cluster_descriptor, host_id_to_hostname);
+
+    tt::scaleout_tools::deployment::proto::DeploymentDescriptor filtered;
+    filtered.set_rack_capacity(full_deployment.rack_capacity());
+    if (host_id_to_hostname.empty()) {
+        return filtered;
+    }
+
+    // Per-file host_ids must be contiguous 0..N-1; positional indexing breaks otherwise.
+    HostId expected_id{0};
+    for (const auto& [hid, _] : host_id_to_hostname) {
+        if (*hid != *expected_id) {
+            throw std::runtime_error(fmt::format(
+                "Cabling file '{}' has non-contiguous host_ids (expected {} but found {}); "
+                "merge requires each file to use a 0..N-1 host_id space",
+                cabling_source,
+                *expected_id,
+                *hid));
+        }
+        expected_id = HostId(*expected_id + 1);
+    }
+
+    std::unordered_map<std::string, const tt::scaleout_tools::deployment::proto::Host*> hostname_to_host;
+    hostname_to_host.reserve(full_deployment.hosts().size());
+    for (const auto& host : full_deployment.hosts()) {
+        hostname_to_host[host.host()] = &host;
+    }
+
+    for (const auto& [hid, hostname] : host_id_to_hostname) {
+        auto it = hostname_to_host.find(hostname);
+        if (it == hostname_to_host.end()) {
+            throw std::runtime_error(
+                "Cabling file '" + cabling_source + "' references host '" + hostname +
+                "' which is not present in the deployment descriptor");
+        }
+        *filtered.add_hosts() = *(it->second);
+    }
+    return filtered;
+}
+
 void populate_deployment_hosts(
     const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
     const std::unordered_map<std::string, Node>& node_templates,
@@ -804,6 +891,58 @@ CablingGenerator build_from_directory(const std::string& dir_path, const Deploym
     return merged;
 }
 
+// Same as above, but slices the pre-parsed deployment per cabling file so each per-file
+// ctor sees only the hosts it can validate against its own templates and host_id space.
+CablingGenerator build_from_directory(
+    const std::string& dir_path,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor) {
+    auto descriptor_files = CablingGenerator::find_descriptor_files(dir_path);
+
+    log_info(
+        tt::LogDistributed, "Found {} cabling descriptor files in directory: {}", descriptor_files.size(), dir_path);
+    for (const auto& file : descriptor_files) {
+        log_info(tt::LogDistributed, "  - {}", file);
+    }
+
+    auto slice = [&](const std::string& cabling_file) {
+        auto cluster = load_cluster_descriptor(cabling_file);
+        return filter_deployment_for_cabling(cluster, deployment_descriptor, cabling_file);
+    };
+
+    auto first_slice = slice(descriptor_files[0]);
+    CablingGenerator merged(descriptor_files[0], first_slice);
+    std::string merged_source_description = descriptor_files[0];
+
+    for (size_t i = 1; i < descriptor_files.size(); ++i) {
+        auto next_slice = slice(descriptor_files[i]);
+        merged.merge(descriptor_files[i], next_slice, merged_source_description);
+        merged_source_description += ", " + descriptor_files[i];
+    }
+
+    // Catch hosts orphaned by per-file slicing (typo / wrong file picked).
+    std::unordered_set<std::string> claimed;
+    claimed.reserve(merged.deployment_hosts_.size());
+    for (const auto& host : merged.deployment_hosts_) {
+        claimed.insert(host.hostname);
+    }
+    std::vector<std::string> orphans;
+    for (const auto& host : deployment_descriptor.hosts()) {
+        if (!claimed.contains(host.host())) {
+            orphans.push_back(host.host());
+        }
+    }
+    if (!orphans.empty()) {
+        std::string msg = "Deployment descriptor contains hosts not referenced by any cabling file in '" + dir_path +
+                          "': " + orphans[0];
+        for (size_t i = 1; i < orphans.size(); ++i) {
+            msg += ", " + orphans[i];
+        }
+        throw std::runtime_error(msg);
+    }
+
+    return merged;
+}
+
 // Helper: Deep copy a ResolvedGraphInstance (including all nested subgraphs)
 static std::unique_ptr<ResolvedGraphInstance> clone_resolved_graph(const ResolvedGraphInstance& source) {
     auto cloned = std::make_unique<ResolvedGraphInstance>();
@@ -833,6 +972,26 @@ void ResolvedGraphInstance::add_connection(PortType port_type, const PortConnect
     connection_pairs.insert(normalized);
 }
 
+// Single-file init shared by the (path, path) and (path, DeploymentDescriptor) ctors.
+void CablingGenerator::initialize_from_single_file(
+    const std::string& cluster_descriptor_path,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor) {
+    auto cluster_descriptor = load_cluster_descriptor(cluster_descriptor_path);
+    initialize_cluster(cluster_descriptor, deployment_descriptor);
+    populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
+    // Ensure deployment_hosts_ is ordered by DFS-assigned host_id, not deployment file order.
+    std::unordered_map<std::string, Host> all_hosts;
+    for (const auto& host : deployment_hosts_) {
+        all_hosts[host.hostname] = host;
+    }
+    const auto saved_hosts = deployment_hosts_;
+    rebuild_deployment_hosts_in_dfs_order(all_hosts);
+    // Fall back to original order when node names don't match hostnames (e.g. test fixtures).
+    if (deployment_hosts_.size() != saved_hosts.size()) {
+        deployment_hosts_ = saved_hosts;
+    }
+}
+
 // Constructor with full deployment descriptor
 // cluster_descriptor_path can be a single file or a directory
 CablingGenerator::CablingGenerator(
@@ -841,29 +1000,35 @@ CablingGenerator::CablingGenerator(
         throw std::runtime_error("Path does not exist: " + cluster_descriptor_path);
     }
     if (std::filesystem::is_directory(cluster_descriptor_path)) {
-        auto merged = build_from_directory(cluster_descriptor_path, deployment_descriptor_path);
+        // Dispatch to the parsed-deployment overload, which slices the deployment per cabling file.
+        auto deployment_descriptor = load_deployment_descriptor(deployment_descriptor_path);
+        auto merged = build_from_directory(cluster_descriptor_path, deployment_descriptor);
         node_templates_ = std::move(merged.node_templates_);
         root_instance_ = std::move(merged.root_instance_);
         host_id_to_node_ = std::move(merged.host_id_to_node_);
         chip_connections_ = std::move(merged.chip_connections_);
         deployment_hosts_ = std::move(merged.deployment_hosts_);
     } else {
-        auto cluster_descriptor = load_cluster_descriptor(cluster_descriptor_path);
-        auto deployment_descriptor = load_deployment_descriptor(deployment_descriptor_path);
-        initialize_cluster(cluster_descriptor, deployment_descriptor);
-        populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
-        // Ensure deployment_hosts_ is ordered by DFS-assigned host_id, not deployment file order.
-        std::unordered_map<std::string, Host> all_hosts;
-        for (const auto& host : deployment_hosts_) {
-            all_hosts[host.hostname] = host;
-        }
-        const auto saved_hosts = deployment_hosts_;
-        rebuild_deployment_hosts_in_dfs_order(all_hosts);
-        // Fall back to original order when node names don't match hostnames (e.g. test fixtures).
-        if (deployment_hosts_.size() != saved_hosts.size()) {
-            deployment_hosts_ = saved_hosts;
-        }
+        initialize_from_single_file(
+            cluster_descriptor_path, load_deployment_descriptor(deployment_descriptor_path));
     }
+}
+
+// Same as (path, path) single-file branch but takes a parsed deployment.
+// Used by build_from_directory after slicing.
+CablingGenerator::CablingGenerator(
+    const std::string& cluster_descriptor_path,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor) {
+    if (!std::filesystem::exists(cluster_descriptor_path)) {
+        throw std::runtime_error("Path does not exist: " + cluster_descriptor_path);
+    }
+    if (std::filesystem::is_directory(cluster_descriptor_path)) {
+        throw std::runtime_error(
+            "CablingGenerator(path, DeploymentDescriptor) does not support directory paths; "
+            "use build_from_directory directly: " +
+            cluster_descriptor_path);
+    }
+    initialize_from_single_file(cluster_descriptor_path, deployment_descriptor);
 }
 
 // Constructor with just hostnames (no physical location info)
@@ -986,6 +1151,22 @@ static void merge_resolved_graph_instances(
                 // Check if this is a torus-compatible merge scenario
                 auto target_template_key = find_template_key_for_node(target.nodes[name], node_templates);
                 auto source_template_key = find_template_key_for_node(source_node, node_templates);
+
+                // Same instance name, different node type across files (e.g. host declared as
+                // WH_GALAXY in one and BH_GALAXY in another) - real conflict; fail with a clear
+                // message instead of a downstream inter_board_connections mismatch.
+                if (target_template_key && source_template_key &&
+                    *target_template_key != *source_template_key &&
+                    !are_torus_compatible_for_merge(*target_template_key, *source_template_key)) {
+                    throw std::runtime_error(fmt::format(
+                        "Node '{}' has conflicting node types across cabling descriptors: "
+                        "'{}' from {} vs '{}' from {} - structural mismatch",
+                        name,
+                        *target_template_key,
+                        get_source_description(existing_source_file),
+                        *source_template_key,
+                        get_source_description(new_source_file)));
+                }
 
                 bool is_torus_merge =
                     (target_template_key && source_template_key &&
@@ -1110,12 +1291,9 @@ static void merge_resolved_graph_instances(
     }
 }
 
-template <typename DeploymentArg>
-void CablingGenerator::merge(
-    const std::string& new_file_path, const DeploymentArg& deployment_arg, const std::string& existing_sources) {
-    // Create CablingGenerator for the new file
-    CablingGenerator other(new_file_path, deployment_arg);
-
+// Post-construction merge logic shared by both merge() entry points.
+void CablingGenerator::merge_other(
+    CablingGenerator& other, const std::string& new_file_path, const std::string& existing_sources) {
     if (!root_instance_ || !other.root_instance_) {
         throw std::runtime_error("Cannot merge: both CablingGenerators must have root_instance_");
     }
@@ -1203,6 +1381,21 @@ void CablingGenerator::merge(
     rebuild_deployment_hosts_in_dfs_order(all_hosts);
 
     generate_logical_chip_connections();
+}
+
+template <typename DeploymentArg>
+void CablingGenerator::merge(
+    const std::string& new_file_path, const DeploymentArg& deployment_arg, const std::string& existing_sources) {
+    CablingGenerator other(new_file_path, deployment_arg);
+    merge_other(other, new_file_path, existing_sources);
+}
+
+void CablingGenerator::merge(
+    const std::string& new_file_path,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
+    const std::string& existing_sources) {
+    CablingGenerator other(new_file_path, deployment_descriptor);
+    merge_other(other, new_file_path, existing_sources);
 }
 
 // Getters for all data
