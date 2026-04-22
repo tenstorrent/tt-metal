@@ -17,8 +17,8 @@ on:
         default: "tenstorrent/tt-metal"
       max-issues:
         description: "Maximum issues to create (0 = unlimited, useful for testing)"
-        type: string
-        default: "0"
+        type: number
+        default: 0
 
 permissions:
   contents: read
