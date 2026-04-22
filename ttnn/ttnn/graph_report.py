@@ -58,14 +58,19 @@ def _tid_int(tid):
 
 
 def _is_tensor_deallocate_operation(name: str) -> bool:
-    """Return True if this trace op name corresponds to freeing device storage for a tensor."""
-    if not name:
-        return False
-    # Python-registered op uses a dot: register_python_operation(name="ttnn.deallocate", ...).
-    # Synthetic buffer-only frees use :: (see buffer_deallocate import path).
-    if name in ("ttnn::deallocate", "ttnn.deallocate", "Tensor::deallocate"):
-        return True
-    return name.endswith("::deallocate") or name.endswith(".deallocate")
+    """Return True if this trace op name corresponds to freeing device storage for a tensor.
+
+    Only the three known op names are matched — no suffix heuristics.  Extend this set
+    deliberately if a new dealloc op is ever added:
+
+    - ``"Tensor::deallocate"``  — C++ tracker in tensor.cpp
+      (``GraphTracker::instance().track_function_start("Tensor::deallocate")``)
+    - ``"ttnn.deallocate"``     — Python-registered op
+      (``ttnn.register_python_operation(name="ttnn.deallocate", ...)``)
+    - ``"ttnn::deallocate"``    — synthesized by the importer for bare ``buffer_deallocate``
+      graph nodes that are not wrapped in a function_start/end pair
+    """
+    return name in ("ttnn::deallocate", "ttnn.deallocate", "Tensor::deallocate")
 
 
 def _innermost_stack_frame(trace_text: str | None):

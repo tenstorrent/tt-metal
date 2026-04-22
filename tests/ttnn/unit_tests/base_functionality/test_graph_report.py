@@ -198,9 +198,17 @@ class TestTensorLifetime:
         assert by_id[101]["last_use_source_file"] == "consumer_ctx.py"
         assert by_id[101]["last_use_source_line"] == 3
 
-    def test_deallocate_operation_id_matches_python_op_name(self):
-        """Python registers the op as ttnn.deallocate (dot), not ttnn::deallocate."""
-        operations = [(10, "ttnn.deallocate", 0.0)]
+    @pytest.mark.parametrize(
+        "op_name",
+        [
+            "ttnn.deallocate",  # Python-registered (dot separator)
+            "ttnn::deallocate",  # synthesized by importer for bare buffer_deallocate nodes
+            "Tensor::deallocate",  # C++ GraphTracker in tensor.cpp
+        ],
+    )
+    def test_deallocate_operation_id_matched_for_all_known_names(self, op_name):
+        """All three known dealloc op names must be recognised."""
+        operations = [(10, op_name, 0.0)]
         input_tensors = [(10, 0, 999)]
         output_tensors = []
         stack_traces = []
@@ -208,8 +216,31 @@ class TestTensorLifetime:
             operations, input_tensors, output_tensors, stack_traces, {999}
         )
         assert len(recs) == 1
-        assert recs[0]["tensor_id"] == 999
-        assert recs[0]["deallocate_operation_id"] == 10
+        assert recs[0]["deallocate_operation_id"] == 10, f"{op_name!r} not treated as deallocate"
+
+    @pytest.mark.parametrize(
+        "op_name",
+        [
+            "ComplexTensor::deallocate",  # lookalike — not a tensor-dealloc op
+            "MeshTensor::deallocate",
+            "ttnn::partial_deallocate",
+            "ttnn.some_deallocate",
+            "buffer_deallocate",  # graph node type, not an op name
+        ],
+    )
+    def test_deallocate_operation_id_not_matched_for_lookalikes(self, op_name):
+        """Suffix-matching lookalikes must NOT be treated as dealloc ops."""
+        operations = [(10, op_name, 0.0)]
+        input_tensors = [(10, 0, 999)]
+        output_tensors = []
+        stack_traces = []
+        recs = graph_report.compute_tensor_lifetime_records(
+            operations, input_tensors, output_tensors, stack_traces, {999}
+        )
+        assert len(recs) == 1
+        assert recs[0]["deallocate_operation_id"] is None, f"{op_name!r} incorrectly treated as deallocate"
+        # The op should appear as last_use_operation_id since it consumed the tensor as input
+        assert recs[0]["last_use_operation_id"] == 10
 
     def test_tensor_lifetime_table_populated_on_import(self, tmp_path, single_relu_mock_graph):
         report = _make_report(single_relu_mock_graph)
