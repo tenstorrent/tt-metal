@@ -35,6 +35,16 @@ if TYPE_CHECKING:
 
 CACHE_T = 2
 
+# Hybrid-dispatch threshold: below this input-T, the fused neighbor_pad+conv3d op
+# degrades to serial NP+Conv3d + sync overhead (Tracy-confirmed: when conv3d's
+# t_out_parallel ≥ T_out, each core handles 1 t_out block, so the progress-sem
+# wait covers the entire NP transfer and pipelining can't amortize it).
+# Above the threshold, each conv3d core handles multiple t_out blocks and
+# pipelining starts to hide NP behind compute.
+# Measured crossover on 2x2 blackhole: T=14 still regresses by ~1.16x, T=28
+# slightly wins (~0.98x). 20 is a conservative cutoff.
+MIN_T_FOR_FUSED = 20
+
 
 def conv3d_to_linear_weight(state):
     weight = state["weight"]
@@ -311,7 +321,9 @@ class WanCausalConv3d(Module):
         self._needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
             self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
         )
-        self._use_fused = use_fused and self._needs_halo
+        # Hybrid dispatch: fused is only net-faster than standalone when pipelining
+        # can hide NP behind conv3d compute. That requires T_in ≥ MIN_T_FOR_FUSED.
+        self._use_fused = use_fused and self._needs_halo and conv_dims.T >= MIN_T_FOR_FUSED
         if self._use_fused:
             self.conv_config.use_h_halo_buffer = True
             self.conv_config.input_progress_t_batch_size = self.conv_config.T_out_block
@@ -790,7 +802,9 @@ class WanConv2d(Module):
         self._needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
             self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
         )
-        self._use_fused = use_fused and self._needs_halo
+        # Hybrid dispatch: fused is only net-faster than standalone when pipelining
+        # can hide NP behind conv3d compute. That requires T_in ≥ MIN_T_FOR_FUSED.
+        self._use_fused = use_fused and self._needs_halo and conv_dims.T >= MIN_T_FOR_FUSED
         if self._use_fused:
             self.conv_config.use_h_halo_buffer = True
             self.conv_config.input_progress_t_batch_size = self.conv_config.T_out_block

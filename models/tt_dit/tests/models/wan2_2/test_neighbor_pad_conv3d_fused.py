@@ -166,6 +166,13 @@ def _run_one_seed(
 
     assert tt_model._needs_halo, "Fused path not enabled — test shapes must require spatial halo exchange."
 
+    # Hybrid dispatch may have disabled fused for small-T shapes in production, but the
+    # correctness test must exercise the fused kernel for ALL shapes to catch regressions.
+    # Bypass the threshold here.
+    if not is_spatial_only and not tt_model._use_fused:
+        tt_model._use_fused = True
+        tt_model.conv_config.use_h_halo_buffer = True
+
     if force_pipelining and tt_model.conv_config.T_out_block > 0:
         tt_model.conv_config.input_progress_t_batch_size = tt_model.conv_config.T_out_block
 

@@ -33,7 +33,21 @@ NUM_MEASURED_DISPATCHES = 5
 
 
 def _build_model(
-    mesh_device, B, C_in, C_out, T, H, W, kernel_size, padding, h_axis, w_axis, num_links, dtype, *, use_fused
+    mesh_device,
+    B,
+    C_in,
+    C_out,
+    T,
+    H,
+    W,
+    kernel_size,
+    padding,
+    h_axis,
+    w_axis,
+    num_links,
+    dtype,
+    *,
+    use_fused,
 ):
     h_factor = tuple(mesh_device.shape)[h_axis]
     w_factor = tuple(mesh_device.shape)[w_axis]
@@ -83,8 +97,15 @@ def _build_model(
     if kernel_tuple[0] == 1 and "weight" in state and state["weight"].ndim == 5:
         state["weight"] = state["weight"].squeeze(2)
     model.load_torch_state_dict(state)
-    if use_fused and isinstance(model, WanCausalConv3d) and model.conv_config.T_out_block > 0:
-        model.conv_config.input_progress_t_batch_size = model.conv_config.T_out_block
+    if use_fused and isinstance(model, WanCausalConv3d):
+        # Bypass the MIN_T_FOR_FUSED hybrid-dispatch threshold — the perf test exists
+        # specifically to measure fused kernel perf across all shapes, including below
+        # the production threshold.
+        if not model._use_fused and model._needs_halo:
+            model._use_fused = True
+            model.conv_config.use_h_halo_buffer = True
+        if model.conv_config.T_out_block > 0:
+            model.conv_config.input_progress_t_batch_size = model.conv_config.T_out_block
     return model, h_factor, w_factor, parallel_config
 
 
@@ -127,13 +148,13 @@ def _measure(model, input_tensor, logical_h, mesh_device, *, n):
     "B, C_in, C_out, T, H, W, kernel_size, padding, mesh_device, h_axis, w_axis, num_links, shape_id",
     [
         # 2x2 mid_block (C_in=C_out=384 3x3x3)
-        (1, 384, 384, 7, 60, 104, 3, 1, (2, 2), 0, 1, 1, "mid_res_2x2_480p"),
+        (1, 384, 384, 7, 60, 104, 3, 1, (2, 2), 0, 1, 2, "mid_res_2x2_480p"),
         # 2x2 conv_in (C_in=32 → C_out=384 3x3x3)
-        (1, 32, 384, 7, 60, 104, 3, 1, (2, 2), 0, 1, 1, "conv_in_2x2_480p"),
+        (1, 32, 384, 7, 60, 104, 3, 1, (2, 2), 0, 1, 2, "conv_in_2x2_480p"),
         # 2x2 up1 residual (C_in=C_out=384 3x3x3, T=14)
-        (1, 384, 384, 14, 120, 208, 3, 1, (2, 2), 0, 1, 1, "up1_res_2x2_480p"),
+        (1, 384, 384, 14, 120, 208, 3, 1, (2, 2), 0, 1, 2, "up1_res_2x2_480p"),
         # 2x2 up2 residual (C_in=C_out=192 3x3x3, T=28)
-        (1, 192, 192, 28, 240, 416, 3, 1, (2, 2), 0, 1, 1, "up2_res_2x2_480p"),
+        (1, 192, 192, 28, 240, 416, 3, 1, (2, 2), 0, 1, 2, "up2_res_2x2_480p"),
     ],
     ids=["mid_res_2x2_480p", "conv_in_2x2_480p", "up1_res_2x2_480p", "up2_res_2x2_480p"],
     indirect=["mesh_device"],
