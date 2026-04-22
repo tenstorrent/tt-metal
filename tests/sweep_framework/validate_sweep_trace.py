@@ -123,6 +123,18 @@ def _normalize_tensor_placement(tp: dict) -> dict:
     return result
 
 
+def _normalize_original_shape(shape: list) -> list:
+    """Strip leading dimensions of 1 from original_shape.
+
+    Model traces may record 4-D shapes like ``[1, 1, 131072, 64]`` for tensors
+    that the sweep recreates as 2-D ``[131072, 64]``.  Stripping leading 1s
+    makes them compare equal.
+    """
+    while len(shape) > 1 and shape[0] == 1:
+        shape = shape[1:]
+    return shape
+
+
 def normalize(obj: Any, *, _parent_key: str = "", _depth: int = 0) -> Any:
     """Recursively normalize a config dict for comparison.
 
@@ -151,13 +163,16 @@ def normalize(obj: Any, *, _parent_key: str = "", _depth: int = 0) -> Any:
             # sub_core_grids: None is noise
             if k == "sub_core_grids" and v is None:
                 continue
-            # Strip keys with None values — treat missing vs None as equivalent
-            # (kwargs with default values may appear as None in one trace but be absent in the other)
-            if v is None:
+            # Strip keys with None or default-zero values — treat missing vs None/0 as equivalent
+            # (kwargs with default values may appear in one trace but be absent in the other)
+            if v is None or v == 0 or v == 0.0:
                 continue
             result[k] = normalize(v, _parent_key=k, _depth=_depth + 1)
         return result
     if isinstance(obj, list):
+        # Normalize original_shape lists by stripping leading 1s
+        if _parent_key == "original_shape":
+            obj = _normalize_original_shape(obj)
         return [normalize(item, _parent_key=_parent_key, _depth=_depth + 1) for item in obj]
     return obj
 

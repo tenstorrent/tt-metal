@@ -145,7 +145,7 @@ def run(
         )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.pad(input_tensor, padding, value=value, **op_kwargs)
+    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
