@@ -122,6 +122,68 @@ share this pattern.)
   the producer-consumer contract. Scope would bleed beyond just the
   compute kernel.
 
+### `ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama.cpp`
+(Representative of **Batch C** rotary embedding family — 4 similar files.)
+- **Blockers**:
+  1. **Matmul** — `matmul_tiles(in_cb, trans_mat_cb, j, in1_index, j)` is out
+     of scope for binary_op helpers (FPU binary only).
+  2. **Variable B-tile offset** — `mul_tiles(rotated_in_interm_cb, sin_cb, j, j + (sin_cos_row_cnt * Wt), j)`
+     reads tile `j + sin_cos_row_cnt*Wt` from cb_sin; sin_cos_row_cnt is
+     a runtime counter that resets per head_num. Helper's binary_op B
+     side always uses tile index 0 (streaming) or wt_base+wt (COL/ROW
+     bcast with upfront waits) — not an arbitrary runtime offset.
+  3. Only the final `add_tiles(cos_interm_cb, sin_interm_cb, j, j, j)` is
+     cleanly migratable; partial migration isn't worth it.
+
+### `ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax.cpp`
+- **Blockers**:
+  1. **Cumulative wait** — `cb_fused_attn_obj.wait_front(wt + ndst)` inside
+     the streaming loop (same pattern as rmsnorm_pre_allgather).
+  2. **Non-zero B tile index** — `add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, wt8, wt + wt8, wt8)`
+     reads B at absolute `wt + wt8` across iterations.
+  3. **Mixed SFPU+FPU in one DEST window** — `add_tiles(...)` then
+     `exp_tile(...)` then `pack_tile(...)` interleaved with
+     `cb_scale_mask_obj.pop_front(ndst)` mid-window. `reduce(...)` with an
+     sfpu_chain lambda-style PostOp already handles the reduce-with-recip
+     piece; rest of softmax is not cleanly expressible.
+  4. Multiple `#ifdef` branches (FUSED_SCALE_MASK / CAUSAL_MASK /
+     NUMERIC_STABLE / mask_padded_data) with subtly different flow.
+- **Partial migration possible** only for the reduce (already migrated
+  upstream) and maybe the final `mul_bcast_cols`, but the non-zero B-tile
+  index blocker applies there too.
+
+### `ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/compute/accumulation_compute.cpp`
+- **Blockers**:
+  1. **Runtime op selection** — `if (accumulation_op == CUMPROD) mul_tiles(...); else add_tiles(...);`
+     dispatches at runtime. Helper's binary_op takes compile-time `BinaryOpType`.
+     Per HQ migration guidance this could be handled with two helper calls
+     in branches, BUT:
+  2. **Self-feeding accumulator** — each iteration's output is packed to
+     cb_acc, then IMMEDIATELY `cb_wait_front(cb_acc, 1)` + `copy_tile` +
+     `pack_tile(..., cb_out)` inside the same acquire window. The enable_reload
+     ternary switches the B operand between cb_start (first iter) and cb_acc
+     (rest). The pack-wait-copy-pack pattern doesn't fit binary_op's
+     single-output contract.
+  3. **CUMSUM_USE_INT32 `#ifdef` path** — int32-specific `add_int_tile(INT32_TILE_DEST, INT32_TILE_ACC, INT32_TILE_DEST)`
+     is a DEST-to-DEST SFPU op operating on pre-loaded DEST slots, not a
+     CB-based binary_op.
+
+### `ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp`
+- **Blockers**:
+  1. **Absolute tile index on A operand** — `sub_tiles_bcast_cols(cb_in0, cb_ex_global, index, 0, w)`
+     where `index = w + index_subblock_w_offset` reads arbitrary tile
+     positions in cb_in0. Same as the "runtime cb_tile_idx on A side"
+     that no current policy supports; the helper's `waits_upfront` gives
+     `tile_a = ht*Wt + wt_base + wt` which is sequential, not arbitrary.
+  2. **Variable chunk/subblock iteration** — nested `(block_h, num_subblocks_w, subblock_w)`
+     loops pack absolute indices; each inner iteration has its own
+     acquire/release around a `subblock_w`-tile DEST window.
+  3. Stage 1 rsqrt (the one stage that matches batch_norm's pattern)
+     is gated behind `is_allgather_worker && enable_sqrt` — partial
+     migration of just that stage is possible but low value.
+  4. Pre-existing `layernorm_binary_helpers_feasibility.md` in this dir
+     already concluded these same issues for the sister `layernorm.cpp`.
+
 ---
 
 ## DEFERRED (evaluated, migration possible, deprioritized)
