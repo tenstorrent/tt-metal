@@ -26,7 +26,7 @@ namespace ttnn::graph {
 // distribution (shard/replicate) when creating tensors in query_op_constraints.
 struct DistributedTensorSpec {
     TensorSpec tensor_spec;
-    TensorTopology tensor_topology;
+    tt::tt_metal::TensorTopology tensor_topology;
 };
 
 namespace detail {
