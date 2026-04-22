@@ -267,7 +267,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
     const auto& input_memory_config = input_tensor.memory_config();
     auto output_memory_config = input_memory_config;
     bool is_row_major = input_tensor.layout() == Layout::ROW_MAJOR;
-    bool changing_last_dim = new_padded_shape[-1] != input_tensor.padded_shape()[-1];
+    bool changing_last_dim = false;
 
     if (input_memory_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
         const auto old_rank = input_tensor.padded_shape().rank();
@@ -285,8 +285,8 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
                                                           : ttsl::SmallVector<uint32_t>{1, old_nd_spec.shard_shape[-1]};
         output_memory_config =
             MemoryConfig(input_memory_config.buffer_type(), old_nd_spec.with_shard_shape(Shape(new_shard_shape)));
-        changing_last_dim = false;
     } else {
+        changing_last_dim = new_padded_shape[-1] != input_tensor.padded_shape()[-1];
         TT_FATAL(
             !input_memory_config.is_sharded() || !changing_last_dim ||
                 input_memory_config.shard_spec()->shape[1] == input_tensor.padded_shape()[-1],
@@ -296,7 +296,6 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
             input_tensor.padded_shape(),
             new_padded_shape,
             input_memory_config.shard_spec()->shape[1]);
-
         if (is_row_major && input_memory_config.is_sharded() && changing_last_dim) {
             auto shard_spec = input_memory_config.shard_spec().value();
             auto shard_volume = shard_spec.numel();
