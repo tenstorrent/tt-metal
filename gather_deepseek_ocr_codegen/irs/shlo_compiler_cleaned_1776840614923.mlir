@@ -1,0 +1,16 @@
+#loc = loc(unknown)
+module @SyncTensorsGraph.15 attributes {mhlo.cross_program_prefetches = [], mhlo.input_output_alias = [], mhlo.is_dynamic = false, mhlo.use_auto_spmd_partitioning = false} {
+  func.func @main(%arg0: tensor<913x1280xi64> loc(unknown), %arg1: tensor<903x1280xbf16> loc(unknown)) -> tensor<913x1280xbf16> {
+    %0 = stablehlo.reshape %arg1 : (tensor<903x1280xbf16>) -> tensor<1x903x1280xbf16> loc(#loc)
+    %1 = stablehlo.reshape %0 : (tensor<1x903x1280xbf16>) -> tensor<903x1280xbf16> loc(#loc)
+    %2 = stablehlo.reshape %arg0 : (tensor<913x1280xi64>) -> tensor<1x913x1280xi64> loc(#loc)
+    %3 = stablehlo.reshape %2 : (tensor<1x913x1280xi64>) -> tensor<913x1280xi64> loc(#loc)
+    %4 = stablehlo.convert %3 : (tensor<913x1280xi64>) -> tensor<913x1280xui32> loc(#loc)
+    %5 = stablehlo.reshape %4 : (tensor<913x1280xui32>) -> tensor<913x1280x1xui32> loc(#loc)
+    %6 = stablehlo.iota dim = 0 : tensor<1280xui32> loc(#loc)
+    %7 = stablehlo.broadcast_in_dim %6, dims = [1] : (tensor<1280xui32>) -> tensor<913x1280x1xui32> loc(#loc)
+    %8 = stablehlo.concatenate %5, %7, dim = 2 : (tensor<913x1280x1xui32>, tensor<913x1280x1xui32>) -> tensor<913x1280x2xui32> loc(#loc)
+    %9 = "stablehlo.gather"(%1, %8) <{dimension_numbers = #stablehlo.gather<collapsed_slice_dims = [0, 1], start_index_map = [0, 1], index_vector_dim = 2>, slice_sizes = array<i64: 1, 1>}> : (tensor<903x1280xbf16>, tensor<913x1280x2xui32>) -> tensor<913x1280xbf16> loc(#loc)
+    return %9 : tensor<913x1280xbf16> loc(#loc)
+  } loc(#loc)
+} loc(#loc)
