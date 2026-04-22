@@ -30,7 +30,10 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import (
+    TT_PREFILL_TRANSFORMER_L1_SMALL,
+    TtPrefillTransformer,
+)
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import save_norm_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
@@ -87,6 +90,7 @@ INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", 
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             1,
             ttnn.Topology.Linear,
@@ -98,6 +102,7 @@ INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", 
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             2,
             ttnn.Topology.Linear,

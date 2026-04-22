@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -131,10 +132,12 @@ def run_mla_inference(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+            "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
         },
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+            "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
         },
     ],
     ids=["line", "ring"],
