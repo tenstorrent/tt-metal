@@ -34,6 +34,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/debug/dprint.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 using namespace ckernel;
@@ -120,7 +121,8 @@ struct MatmulExpertCompressedDRAM {
         uint32_t cb_fmt_,
         uint32_t accum_experts_ = 0,
         uint32_t fuse_silu_ = 0,
-        uint32_t index_offset_ = 0>
+        uint32_t index_offset_ = 0,
+        uint32_t in0_core_offset_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -138,11 +140,24 @@ struct MatmulExpertCompressedDRAM {
         static constexpr bool accum_experts = accum_experts_ != 0;
         static constexpr bool fuse_silu = fuse_silu_ != 0;
         static constexpr uint32_t index_offset = index_offset_;
+        static constexpr uint32_t in0_core_offset = in0_core_offset_;
     };
 
     struct WriterCTArgs {};
 
-    template <typename CTArgs, bool IsActiveCore, bool pop_in0 = true, bool pop_index = true>
+    // ResetCBIn1: When true, uses CBIn1ResetAddr as the fixed cb_in1_base for the
+    //             software write-pointer wrap logic. Required when cb_in1 is shared
+    //             across sequential invocations (e.g. gate_proj → up_proj) because
+    //             GP leaves the HW write_ptr at a non-physical-start position; the
+    //             default `get_write_ptr()`-seeded base would then misalign the
+    //             software wrap boundary with the CB's physical wrap boundary.
+    template <
+        typename CTArgs,
+        bool IsActiveCore,
+        bool pop_in0 = true,
+        bool pop_index = true,
+        bool ResetCBIn1 = false,
+        uint32_t CBIn1ResetAddr = 0>
     class Op {
     public:
         void operator()() {
@@ -162,9 +177,14 @@ struct MatmulExpertCompressedDRAM {
             constexpr uint32_t extra_blocks_in_flight = 1;
             constexpr uint32_t max_subblock_bytes = CTArgs::cb_in1_size_bytes / num_buffers;
 
-            // Read index array from L1 (direct address, no CB API needed).
+            // Sync point: wait until the index CB's front slot is populated before
+            // reading indices. In the fused MoE kernel the indices arrive via NOC
+            // mcast into cb_index; in standalone tests they are pre-pushed.  Either
+            // way get_read_ptr(cb_index) yields the correct L1 address after the wait.
+            cb_wait_front(CTArgs::cb_index, 1);
+
             volatile tt_l1_ptr uint16_t* index_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::cb_index));
             const volatile uint32_t* meta_base = reinterpret_cast<const volatile uint32_t*>(CTArgs::meta_l1_addr);
 
             // Pipeline semaphore for cores_per_bank > 1.
@@ -190,6 +210,8 @@ struct MatmulExpertCompressedDRAM {
                 uint32_t expert_in1_addr = expert_meta[0];
                 uint32_t dram_read_offset = expert_meta[1];
                 const volatile uint32_t* block_size_ptr = expert_meta + 2;
+                DPRINT << "NCDP exp_i=" << exp_i << " eid=" << expert_idx << " addr=" << expert_in1_addr
+                       << " off=" << dram_read_offset << ENDL();
 
                 if constexpr (CTArgs::cores_per_bank > 1 && CTArgs::core_in_bank_idx > 0) {
                     noc_semaphore_wait(sem_ptr, 1);
@@ -202,7 +224,11 @@ struct MatmulExpertCompressedDRAM {
                 cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
 
                 if (first_dram_expert) {
-                    cb_in1_base = get_write_ptr(CTArgs::cb_in1);
+                    if constexpr (ResetCBIn1) {
+                        cb_in1_base = CBIn1ResetAddr;
+                    } else {
+                        cb_in1_base = get_write_ptr(CTArgs::cb_in1);
+                    }
                     cb_in1_end = cb_in1_base + CTArgs::cb_in1_size_bytes;
                     first_dram_expert = false;
                 }
@@ -314,6 +340,12 @@ struct MatmulExpertCompressedDRAM {
 
             cb_wait_front(CTArgs::cb_index, 1);
 
+            // Read index from the static CTArgs::index_l1_addr. The caller sets
+            // this to the cb_index CB's L1 allocation (same address the NOC mcast
+            // writes to in the fused MoE kernel). Using the static addr avoids
+            // touching get_local_cb_interface(), whose cb_interface symbol is not
+            // linked on the MATH TRISC thread (cb_interface is extern-declared but
+            // only defined when !UCK_CHLKC_MATH).
             volatile tt_l1_ptr uint16_t* index_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
 
@@ -367,6 +399,49 @@ struct MatmulExpertCompressedDRAM {
                 }));
 
                 if constexpr (CTArgs::accum_experts) {
+                    UNPACK(({
+                        DPRINT << HEX() << "DPCFG face_r=" << static_cast<uint32_t>(in0_face_r_dim)
+                               << " tile_sz=" << static_cast<uint32_t>(in0_tile_size)
+                               << " subblock_k=" << static_cast<uint32_t>(CTArgs::subblock_k)
+                               << " num_sb_k=" << static_cast<uint32_t>(CTArgs::num_subblocks_k)
+                               << " per_core_n=" << static_cast<uint32_t>(CTArgs::per_core_n) << DEC() << ENDL();
+                    }));
+                }
+
+                // (removed DPIN / DPINK0 debug prints — cb_in0 already verified)
+                if constexpr (CTArgs::accum_experts && false) {
+                    UNPACK(({
+                        uint32_t in0_id = get_operand_id(CTArgs::cb_in0);
+                        uint32_t base_l1 = get_local_cb_interface(in0_id).fifo_rd_ptr << 4;
+                        uint32_t page_size_bytes = get_local_cb_interface(in0_id).fifo_page_size << 4;
+                        for (uint32_t i = 0; i < num_dram_experts; i++) {
+                            for (uint32_t c = 0; c < 8; c++) {
+                                uint32_t slot_l1 = base_l1 + (dram_act_tile_offset[i] + c) * page_size_bytes;
+                                volatile tt_l1_ptr uint16_t* v =
+                                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(slot_l1);
+                                DPRINT << HEX() << "DPIN e=" << i << " c=" << c << " v=" << static_cast<uint32_t>(v[0])
+                                       << "," << static_cast<uint32_t>(v[1]) << DEC() << ENDL();
+                            }
+                        }
+                        for (uint32_t c = 0; c < 8; c++) {
+                            uint32_t slotc_l1 = base_l1 + (dram_act_tile_offset[0] + c) * page_size_bytes;
+                            volatile tt_l1_ptr uint16_t* vc = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(slotc_l1);
+                            for (uint32_t row = 0; row < 4; row++) {
+                                DPRINT << HEX() << "DPINK0 i=0 c=" << c << " r=" << row << ":"
+                                       << static_cast<uint32_t>(vc[row * 8 + 0]) << ","
+                                       << static_cast<uint32_t>(vc[row * 8 + 1]) << ","
+                                       << static_cast<uint32_t>(vc[row * 8 + 2]) << ","
+                                       << static_cast<uint32_t>(vc[row * 8 + 3]) << ","
+                                       << static_cast<uint32_t>(vc[row * 8 + 4]) << ","
+                                       << static_cast<uint32_t>(vc[row * 8 + 5]) << ","
+                                       << static_cast<uint32_t>(vc[row * 8 + 6]) << ","
+                                       << static_cast<uint32_t>(vc[row * 8 + 7]) << DEC() << ENDL();
+                            }
+                        }
+                    }));
+                }
+
+                if constexpr (CTArgs::accum_experts) {
                     // Packer L1 accumulation: each expert packs per_core_n tiles sequentially.
                     // Each expert uses a distinct activation at its index-tensor position.
                     for (uint32_t i = 0; i < num_dram_experts; i++) {
@@ -390,6 +465,11 @@ struct MatmulExpertCompressedDRAM {
 
                             for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
                                 cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
+
+                                // WDMP: dump first 4 uint32 words of weight tile 0
+                                // for ALL experts at n=0, sb_k=0. Lets us see if each
+                                // expert's weight in DRAM is distinct.
+                                // (removed WDMP debug print — weights already verified)
 
                                 if (!fmt_waited) {
                                     cb_wait_front(CTArgs::cb_fmt, 1);
@@ -429,6 +509,8 @@ struct MatmulExpertCompressedDRAM {
                         cb_pop_front(CTArgs::cb_fmt, 1);
                         cb_push_back(CTArgs::cb_out, CTArgs::per_core_n);
 
+                        // (removed DPEI per-expert debug print — accumulation verified)
+
                         // Reset write pointer for next expert's L1_ACC accumulation.
                         if (i < num_dram_experts - 1) {
                             cb_wait_front(CTArgs::cb_out, CTArgs::per_core_n);
@@ -437,6 +519,8 @@ struct MatmulExpertCompressedDRAM {
                     }
 
                     PACK((llk_pack_reconfig_l1_acc(0)));
+
+                    // DP DPRINT disabled — causes hang (CB state during accum path).
                 } else {
                     for (uint32_t i = 0; i < num_dram_experts; i++) {
                         uint32_t fmt_l1_addr = 0;
@@ -502,6 +586,43 @@ struct MatmulExpertCompressedDRAM {
 
                         cb_pop_front(CTArgs::cb_fmt, 1);
                     }
+
+                    // Dump ALL 32 cols for each of 8 experts. Only runs for ei=0..7.
+                    // DISABLED to reduce DPRINT buffer volume (GP/UP already PCC-validated).
+#if 0
+                    UNPACK(({
+                        uint32_t cb_out_op_id = get_operand_id(CTArgs::cb_out);
+                        cb_wait_front(CTArgs::cb_out, num_dram_experts);
+                        uint32_t base_l1 = get_local_cb_interface(cb_out_op_id).fifo_rd_ptr << 4;
+                        constexpr uint32_t tile_bytes = 32 * 2;
+                        const char* tag = CTArgs::fuse_silu ? "GP" : "UP";
+                        DPRINT << tag << " nde=" << num_dram_experts << " nae=" << num_active_experts << ENDL();
+                        for (uint32_t ei = 0; ei < num_dram_experts; ei++) {
+                            volatile tt_l1_ptr uint16_t* ti =
+                                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base_l1 + ei * tile_bytes);
+                            DPRINT << HEX() << tag << " ei=" << ei << " 0-15:"
+                                   << static_cast<uint32_t>(ti[0]) << "," << static_cast<uint32_t>(ti[1]) << ","
+                                   << static_cast<uint32_t>(ti[2]) << "," << static_cast<uint32_t>(ti[3]) << ","
+                                   << static_cast<uint32_t>(ti[4]) << "," << static_cast<uint32_t>(ti[5]) << ","
+                                   << static_cast<uint32_t>(ti[6]) << "," << static_cast<uint32_t>(ti[7]) << ","
+                                   << static_cast<uint32_t>(ti[8]) << "," << static_cast<uint32_t>(ti[9]) << ","
+                                   << static_cast<uint32_t>(ti[10]) << "," << static_cast<uint32_t>(ti[11]) << ","
+                                   << static_cast<uint32_t>(ti[12]) << "," << static_cast<uint32_t>(ti[13]) << ","
+                                   << static_cast<uint32_t>(ti[14]) << "," << static_cast<uint32_t>(ti[15])
+                                   << DEC() << ENDL();
+                            DPRINT << HEX() << tag << " ei=" << ei << " 16-31:"
+                                   << static_cast<uint32_t>(ti[16]) << "," << static_cast<uint32_t>(ti[17]) << ","
+                                   << static_cast<uint32_t>(ti[18]) << "," << static_cast<uint32_t>(ti[19]) << ","
+                                   << static_cast<uint32_t>(ti[20]) << "," << static_cast<uint32_t>(ti[21]) << ","
+                                   << static_cast<uint32_t>(ti[22]) << "," << static_cast<uint32_t>(ti[23]) << ","
+                                   << static_cast<uint32_t>(ti[24]) << "," << static_cast<uint32_t>(ti[25]) << ","
+                                   << static_cast<uint32_t>(ti[26]) << "," << static_cast<uint32_t>(ti[27]) << ","
+                                   << static_cast<uint32_t>(ti[28]) << "," << static_cast<uint32_t>(ti[29]) << ","
+                                   << static_cast<uint32_t>(ti[30]) << "," << static_cast<uint32_t>(ti[31])
+                                   << DEC() << ENDL();
+                        }
+                    }));
+#endif
                 }
 
                 custom_mm_block_uninit<false>();

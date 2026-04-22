@@ -89,6 +89,10 @@ def upload_per_core_uint32_tensor(device, all_cores, per_core_data, entries_per_
     raw_size = entries_per_core * 4
     dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
     aligned_size = _align(max(raw_size, dram_alignment), dram_alignment)
+    logger.info(
+        f"    upload_per_core_uint32_tensor: entries_per_core={entries_per_core}, "
+        f"raw_size={raw_size}, aligned_size={aligned_size}, num_cores={len(all_cores)}"
+    )
     tensors = {}
     for core_idx, core in enumerate(all_cores):
         data_np = np.array(per_core_data[core_idx], dtype=np.uint32).view(np.uint8)
@@ -624,11 +628,22 @@ def create_dram_expert_tensors_multi_device(
     num_total_experts: int,
     is_dram_flags: list,
     num_in1_buffers: int = 3,
+    allocate_in1_backing: bool = True,
+    primary_cores_list=None,
 ) -> dict:
     """Create per-device tensors for ExpertKernel.mesh_op.
 
     Calls create_dram_expert_metadata once per device in the mesh.
     Assumes homogeneous DRAM bank topology across all devices.
+
+    When ``allocate_in1_backing=False`` the L1 backing tensor for cb_in1 is NOT
+    allocated (caller provides their own — e.g. the fused MoE kernel overlays
+    cb_in1 on the SDPA KV buffer). The returned tuple has ``in1_backing=None``.
+
+    primary_cores_list: if provided, use this list of DRAM-bank-to-worker-core
+    coordinates (one per bank). If None, use mesh_device.get_optimal_dram_bank_to_logical_worker_assignment.
+    Caller must pass the same list that its compute kernels use to derive bank_id,
+    otherwise the DRAM shard index won't match the bank_id the kernel reads from.
 
     Returns:
         {MeshCoordinate: (in1_backing, meta_tensors, fmt_tensors,
@@ -639,7 +654,9 @@ def create_dram_expert_tensors_multi_device(
     logger.info(
         f"create_dram_expert_tensors_multi_device: {num_devices} devices, {num_total_experts} total experts, {len(cts)} DRAM CTs"
     )
-    primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    if primary_cores_list is None:
+        primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    logger.info(f"  primary_cores_list (bank order): {[(c.x, c.y) for c in primary_cores_list]}")
     compute_cores_list = []
     for primary_core in primary_cores_list:
         for offset in range(cores_per_dram_bank):
@@ -648,29 +665,36 @@ def create_dram_expert_tensors_multi_device(
         [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores_list]
     )
 
-    logger.info("  Creating in1_backing_tensor (replicated mesh tensor)...")
     num_cores = len(compute_cores_list)
     max_tile_size = _TILE_SIZES[0]
-    in1_cb_tiles = subblock_k * num_in1_buffers
-    in1_backing_shard_shape = (32, in1_cb_tiles * 32)
-    in1_backing_total_width = in1_cb_tiles * 32 * num_cores
-    in1_backing_shard_spec = ttnn.ShardSpec(compute_core_grid, in1_backing_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    in1_backing_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, in1_backing_shard_spec
-    )
-    in1_backing_tensor = ttnn.from_torch(
-        torch.zeros([1, 1, 32, in1_backing_total_width]).bfloat16().float(),
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=in1_backing_mem_config,
-        tile=ttnn.Tile([32, 32]),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    cb_in1_base_shifted = (in1_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
-    max_subblock_bytes_shifted = (subblock_k * max_tile_size) >> _CB_ADDR_SHIFT
 
-    logger.info(f"  in1_backing created, addr={in1_backing_tensor.buffer_address()}")
+    if allocate_in1_backing:
+        logger.info("  Creating in1_backing_tensor (replicated mesh tensor)...")
+        in1_cb_tiles = subblock_k * num_in1_buffers
+        in1_backing_shard_shape = (32, in1_cb_tiles * 32)
+        in1_backing_total_width = in1_cb_tiles * 32 * num_cores
+        in1_backing_shard_spec = ttnn.ShardSpec(
+            compute_core_grid, in1_backing_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
+        )
+        in1_backing_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, in1_backing_shard_spec
+        )
+        in1_backing_tensor = ttnn.from_torch(
+            torch.zeros([1, 1, 32, in1_backing_total_width]).bfloat16().float(),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=in1_backing_mem_config,
+            tile=ttnn.Tile([32, 32]),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        cb_in1_base_shifted = (in1_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
+        max_subblock_bytes_shifted = (subblock_k * max_tile_size) >> _CB_ADDR_SHIFT
+        logger.info(f"  in1_backing created, addr={in1_backing_tensor.buffer_address()}")
+    else:
+        in1_backing_tensor = None
+        cb_in1_base_shifted = 0
+        max_subblock_bytes_shifted = 0
 
     # --- Phase 1: compute per-device metadata and pack fmt bank data ---
     _DRAM_ALIGNMENT = 64
