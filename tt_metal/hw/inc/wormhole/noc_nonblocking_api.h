@@ -59,14 +59,16 @@ const uint32_t NOC_COORDINATE_MASK = 0xFFFFFFFF;
 extern uint32_t noc_reads_num_issued[NUM_NOCS];
 extern uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
 extern uint32_t noc_nonposted_writes_acked[NUM_NOCS];
-extern uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
+// Previously noc_nonposted_atomics_acked; repurposed for posted atomics tracking (see issue #40699).
+// Non-posted semaphore NOC functions are deprecated; use posted variants instead.
+extern uint32_t noc_posted_atomics_num_issued[NUM_NOCS];
 extern uint32_t noc_posted_writes_num_issued[NUM_NOCS];
 
 enum class NocBarrierType : uint8_t {
     READS_NUM_ISSUED,
     NONPOSTED_WRITES_NUM_ISSUED,
     NONPOSTED_WRITES_ACKED,
-    NONPOSTED_ATOMICS_ACKED,
+    POSTED_ATOMICS_NUM_ISSUED,  // Previously NONPOSTED_ATOMICS_ACKED; repurposed (see issue #40699)
     POSTED_WRITES_NUM_ISSUED,
     COUNT
 };
@@ -312,15 +314,21 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_trans
     return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
 }
 
-inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_atomics_flushed(uint32_t noc) {
-    uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED);
-    uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc);
-    uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc);
-    return (status_reg_val == (self_risc_acked + other_risc_acked));
+// ncrisc_dynamic_noc_posted_atomics_sent: checks whether all posted atomics have departed.
+// Replaces the deprecated ncrisc_dynamic_noc_nonposted_atomics_flushed (non-posted atomics).
+// See issue #40699.
+inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_posted_atomics_sent(uint32_t noc) {
+    uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_ATOMIC_SENT);
+    uint32_t self_risc_issued = get_noc_counter_val<proc_type, NocBarrierType::POSTED_ATOMICS_NUM_ISSUED>(noc);
+    uint32_t other_risc_issued = get_noc_counter_val<1 - proc_type, NocBarrierType::POSTED_ATOMICS_NUM_ISSUED>(noc);
+    return (status_reg_val == (self_risc_issued + other_risc_issued));
 }
 
-inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(uint32_t noc) {
-    return (NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED) == noc_nonposted_atomics_acked[noc]);
+// ncrisc_noc_posted_atomics_sent: checks whether all posted atomics have departed.
+// Replaces the deprecated ncrisc_noc_nonposted_atomics_flushed (non-posted atomics).
+// See issue #40699.
+inline __attribute__((always_inline)) bool ncrisc_noc_posted_atomics_sent(uint32_t noc) {
+    return (NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_ATOMIC_SENT) == noc_posted_atomics_num_issued[noc]);
 }
 
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
@@ -393,13 +401,13 @@ inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
     uint32_t reads_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
     uint32_t nonposted_writes_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
     uint32_t nonposted_writes_acked = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
-    uint32_t nonposted_atomics_acked = NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED);
+    uint32_t posted_atomics_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_ATOMIC_SENT);
     uint32_t posted_writes_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
 
     noc_reads_num_issued[noc] = reads_num_issued;
     noc_nonposted_writes_num_issued[noc] = nonposted_writes_num_issued;
     noc_nonposted_writes_acked[noc] = nonposted_writes_acked;
-    noc_nonposted_atomics_acked[noc] = nonposted_atomics_acked;
+    noc_posted_atomics_num_issued[noc] = posted_atomics_num_issued;
     noc_posted_writes_num_issued[noc] = posted_writes_num_issued;
 }
 
@@ -426,8 +434,8 @@ inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
     uint32_t noc1_nonposted_writes_num_issued = NOC_STATUS_READ_REG(NOC_1, NIU_MST_NONPOSTED_WR_REQ_SENT);
     uint32_t noc0_nonposted_writes_acked = NOC_STATUS_READ_REG(NOC_0, NIU_MST_WR_ACK_RECEIVED);
     uint32_t noc1_nonposted_writes_acked = NOC_STATUS_READ_REG(NOC_1, NIU_MST_WR_ACK_RECEIVED);
-    uint32_t noc0_nonposted_atomics_acked = NOC_STATUS_READ_REG(NOC_0, NIU_MST_ATOMIC_RESP_RECEIVED);
-    uint32_t noc1_nonposted_atomics_acked = NOC_STATUS_READ_REG(NOC_1, NIU_MST_ATOMIC_RESP_RECEIVED);
+    uint32_t noc0_posted_atomics_num_issued = NOC_STATUS_READ_REG(NOC_0, NIU_MST_POSTED_ATOMIC_SENT);
+    uint32_t noc1_posted_atomics_num_issued = NOC_STATUS_READ_REG(NOC_1, NIU_MST_POSTED_ATOMIC_SENT);
     uint32_t noc0_posted_writes_num_issued = NOC_STATUS_READ_REG(NOC_0, NIU_MST_POSTED_WR_REQ_SENT);
     uint32_t noc1_posted_writes_num_issued = NOC_STATUS_READ_REG(NOC_1, NIU_MST_POSTED_WR_REQ_SENT);
     dynamic_noc_local_barrier_init<NocBarrierType::READS_NUM_ISSUED, NIU_MST_RD_RESP_RECEIVED>(
@@ -436,8 +444,8 @@ inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
         noc0_nonposted_writes_num_issued, noc1_nonposted_writes_num_issued);
     dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_WRITES_ACKED, NIU_MST_WR_ACK_RECEIVED>(
         noc0_nonposted_writes_acked, noc1_nonposted_writes_acked);
-    dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_ATOMICS_ACKED, NIU_MST_ATOMIC_RESP_RECEIVED>(
-        noc0_nonposted_atomics_acked, noc1_nonposted_atomics_acked);
+    dynamic_noc_local_barrier_init<NocBarrierType::POSTED_ATOMICS_NUM_ISSUED, NIU_MST_POSTED_ATOMIC_SENT>(
+        noc0_posted_atomics_num_issued, noc1_posted_atomics_num_issued);
     dynamic_noc_local_barrier_init<NocBarrierType::POSTED_WRITES_NUM_ISSUED, NIU_MST_POSTED_WR_REQ_SENT>(
         noc0_posted_writes_num_issued, noc1_posted_writes_num_issued);
 }
@@ -448,13 +456,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
         uint32_t reads_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
         uint32_t nonposted_writes_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
         uint32_t nonposted_writes_acked = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
-        uint32_t nonposted_atomics_acked = NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED);
+        uint32_t posted_atomics_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_ATOMIC_SENT);
         uint32_t posted_writes_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
 
         noc_reads_num_issued[noc] = reads_num_issued;
         noc_nonposted_writes_num_issued[noc] = nonposted_writes_num_issued;
         noc_nonposted_writes_acked[noc] = nonposted_writes_acked;
-        noc_nonposted_atomics_acked[noc] = nonposted_atomics_acked;
+        noc_posted_atomics_num_issued[noc] = posted_atomics_num_issued;
         noc_posted_writes_num_issued[noc] = posted_writes_num_issued;
     }
 }
@@ -464,7 +472,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_full_sync() {
         while (!ncrisc_noc_reads_flushed(n));
         while (!ncrisc_noc_nonposted_writes_sent(n));
         while (!ncrisc_noc_nonposted_writes_flushed(n));
-        while (!ncrisc_noc_nonposted_atomics_flushed(n));
+        while (!ncrisc_noc_posted_atomics_sent(n));
         while (!ncrisc_noc_posted_writes_sent(n));
     }
 }
@@ -624,11 +632,11 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     uint32_t incr,
     uint32_t wrap,
     bool linked,
-    bool posted = false,
+    bool posted = true,  // Default changed to posted=true; non-posted atomics deprecated (see issue #40699)
     uint32_t atomic_ret_val = 0) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        if (!posted) {
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc, 1);
+        if (posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_ATOMICS_NUM_ISSUED>(noc, 1);
         }
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
@@ -655,8 +663,8 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, incr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        if (!posted) {
-            noc_nonposted_atomics_acked[noc] += 1;
+        if (posted) {
+            noc_posted_atomics_num_issued[noc] += 1;
         }
     }
 }

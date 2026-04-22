@@ -1452,6 +1452,28 @@ void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
 }
 
 /**
+ * This blocking call waits for all outstanding enqueued NOC semaphore atomic increments
+ * (noc_semaphore_inc) issued on the current Tensix core to depart or complete.
+ * For posted atomics (the default), this waits until they are sent.
+ * On Blackhole, all atomics are forced non-posted by hardware, so this waits for acks.
+ *
+ * Return value: None
+ */
+FORCE_INLINE
+void noc_async_posted_atomics_flushed(uint8_t noc_idx = noc_index) {
+    WAYPOINT("NAPW");
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        while (!ncrisc_dynamic_noc_posted_atomics_sent(noc_idx)) {
+            invalidate_l1_cache();
+        }
+    } else {
+        while (!ncrisc_noc_posted_atomics_sent(noc_idx));
+    }
+    invalidate_l1_cache();
+    WAYPOINT("NAPD");
+}
+
+/**
  * This blocking call waits for all the outstanding enqueued *noc_async_write*
  * calls issued on the current Tensix core to complete. After returning from
  * this call the *noc_async_write* queue will be empty for the current Tensix
@@ -1465,11 +1487,11 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
 
     WAYPOINT("NABW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx)) {
+        while (!ncrisc_dynamic_noc_posted_atomics_sent(noc_idx)) {
             invalidate_l1_cache();
         }
     } else {
-        while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
+        while (!ncrisc_noc_posted_atomics_sent(noc_idx));
     }
     invalidate_l1_cache();
     WAYPOINT("NABD");
@@ -1495,7 +1517,7 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
         WAYPOINT("NFDW");
         while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc_idx));
         WAYPOINT("NFEW");
-        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx));
+        while (!ncrisc_dynamic_noc_posted_atomics_sent(noc_idx));
         WAYPOINT("NFFW");
         while (!ncrisc_dynamic_noc_posted_writes_sent(noc_idx));
         WAYPOINT("NFBD");
@@ -1507,7 +1529,7 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
         WAYPOINT("NFDW");
         while (!ncrisc_noc_nonposted_writes_flushed(noc_idx));
         WAYPOINT("NFEW");
-        while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
+        while (!ncrisc_noc_posted_atomics_sent(noc_idx));
         WAYPOINT("NFFW");
         while (!ncrisc_noc_posted_writes_sent(noc_idx));
         WAYPOINT("NFBD");
@@ -1763,6 +1785,11 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
  * address is used as a semaphore of size 4 Bytes, as a synchronization
  * mechanism. Refer to <arch>/noc/noc.h for the documentation of noc_atomic_increment.
  *
+ * The default behaviour is a posted atomic increment. Non-posted semaphore increments
+ * (posted=false) are deprecated and may be removed in a future release. Future hardware
+ * architectures may not support non-posted atomics. Use noc_async_atomic_barrier() if
+ * you need to ensure the posted increment has been sent.
+ *
  * Return value: None
  *
  * | Argument                   | Description                                                      | Type     | Valid Range                      | Required |
@@ -1771,12 +1798,21 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
  * | incr                       | The value to increment by                                        | uint32_t | Any uint32_t value               | True     |
  * | noc_id                     | Which NOC to use for the transaction                             | uint8_t  | 0 or 1                           | False    |
  * | vc                         | Which NOC to use for the transaction                             | uint8_t  | 0-3 (Unicast VCs)                | False    |
- * | posted (template argument) | Whether the call is posted or nonposted (i.e. needs to be acked) | uint32_t | true or false                    | False    |
+ * | posted (template argument) | Whether the call is posted (default: true). Non-posted (posted=false) is deprecated. | bool | true or false | False    |
  */
 // clang-format on
-template <bool posted = false>
+template <bool posted = true>
 FORCE_INLINE void noc_semaphore_inc(
     uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    // DEPRECATED: noc_semaphore_inc<posted=false> (non-posted) is deprecated.
+    // Non-posted semaphore writes provide no benefit over posted writes and future
+    // hardware may not support non-posted atomics. Use posted=true (the default) instead.
+    // If you need to ensure the increment has departed, use noc_async_posted_writes_flushed().
+    static_assert(
+        posted,
+        "[DEPRECATED] noc_semaphore_inc<posted=false> is deprecated. "
+        "Non-posted semaphore NOC functions provide no real benefit and future HW may not support them. "
+        "Switch to noc_semaphore_inc<posted=true> (or the default). See GitHub issue #40699.");
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, addr, 0, vc);
 
     WAYPOINT("NSIW");

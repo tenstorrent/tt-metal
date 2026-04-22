@@ -256,7 +256,7 @@ enum debug_assert_type_t {
     DebugAssertTripped = 3,
     DebugAssertNCriscNOCReadsFlushedTripped = 4,
     DebugAssertNCriscNOCNonpostedWritesSentTripped = 5,
-    DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped = 6,
+    DebugAssertNCriscNOCPostedAtomicsSentTripped = 6,
     DebugAssertNCriscNOCPostedWritesSentTripped = 7
 };
 
