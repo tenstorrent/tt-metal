@@ -10,6 +10,7 @@ Frozen dataclasses for fingerprinting and tensor target specifications.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Literal, Union
 
 import numpy as np
@@ -49,6 +50,15 @@ class Shard2dMeshMapper:
 
 
 MeshMapperConfig = Union[ReplicateMeshMapper, ShardMeshMapper, Shard2dMeshMapper]
+
+
+class BspmVariant(str, Enum):
+    """BSPM allocation variant letter."""
+
+    B = "B"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 @dataclass(frozen=True)
@@ -111,23 +121,27 @@ class CompressedTensorTarget:
     K: int = 0  # weight inner dimension (rows in logical K×N layout)
     N_padded: int = 0  # padded weight outer dimension (multiple of num_banks * tile_hw)
     num_banks: int = 0  # DRAM bank count (device.dram_grid_size().x)
-    bspm_variant: str = "B"  # allocation variant letter
+    bspm_variant: BspmVariant = BspmVariant.B  # allocation variant letter
     bspm_budget: float = 3.5  # bits-per-element budget
-    transform_version: int = 3  # bumped: invalidate entries written with correct version but buggy reshape code
+    assignment_hash: str = ""  # sha256[:16] of assignment bytes; invalidates cache when allocation changes
+    transform_version: int = 4  # bumped: store DRAM-shuffled data on disk (faster load, same footprint)
 
 
 @dataclass
 class CompressedTensorBuildInputs:
-    """Pre-shuffle weight matrix and assignment for a single expert projection.
+    """Weight matrix and tile-format assignment for a single expert projection.
 
-    Returned by the ``preprocess`` callback on the :class:`CompressedTensorTarget`
-    path.  Stored compact to disk by :class:`TensorCache` (tile bytes in logical
-    row-major order); reconstructed to the DRAM-sharded on-device layout on load.
+    When returned from the ``preprocess`` callback passed to
+    :func:`~models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache.get_or_create_bspm_expert`,
+    ``w`` and ``assignment`` are in logical (pre-DRAM-shuffle) tile order.
+    :class:`TensorCache` stores them in DRAM-shuffled order (same byte footprint,
+    no re-shuffle needed at load time).  The ``reconstruct`` callback receives
+    DRAM-shuffled data and calls ``CompressedTensor.from_bspm`` directly.
     Not frozen: numpy arrays are not hashable.
     """
 
-    w_logical: np.ndarray  # (K, N_padded) float32, logical tile order (pre-DRAM-shuffle)
-    assignment_logical: np.ndarray  # (tiles_h, tiles_w) int8, logical tile order
+    w: np.ndarray  # (K, N_padded) float32
+    assignment: np.ndarray  # (tiles_h, tiles_w) int8 tile format codes
 
 
 ArtifactTarget = TensorTarget | FusionGroupSpec | CompressedTensorTarget

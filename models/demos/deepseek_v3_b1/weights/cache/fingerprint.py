@@ -98,6 +98,7 @@ def canonical(fingerprint: Fingerprint) -> dict:
             "num_banks": target.num_banks,
             "bspm_variant": target.bspm_variant,
             "bspm_budget": target.bspm_budget,
+            "assignment_hash": target.assignment_hash,
             "transform_version": target.transform_version,
         }
     else:
