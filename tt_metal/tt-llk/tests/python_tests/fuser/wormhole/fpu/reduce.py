@@ -128,7 +128,19 @@ class ReduceFpu(Fpu):
         )
 
         return (
-            f"    _llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}, {enforce_fp32_accumulation}>(\n"
-            f"        {block.tile_id_block}, {tensor_shape_instantiation}\n"
-            f"    );\n"
+            f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}, {enforce_fp32_accumulation}>(\n"
+            f"{block.tile_id_block}, {tensor_shape_instantiation}\n"
+            f");\n"
         )
+
+    def uninit(
+        self,
+        operation: FusedOperation,
+        config: GlobalConfig,
+        compute_unit: ComputeNode,
+        block: BlockData,
+    ) -> str:
+        enforce_fp32_accumulation = (
+            compute_unit.enforce_fp32_accumulation.cpp_enum_value
+        )
+        return f"_llk_math_reduce_uninit_<{enforce_fp32_accumulation}>();\n"
