@@ -299,6 +299,7 @@ class WanAttention(Module):
         spatial_1BND: ttnn.Tensor,
         N: int,
         prompt_1BLP: ttnn.Tensor | None = None,
+        attn_mask: ttnn.Tensor | None = None,
         rope_cos: ttnn.Tensor | None = None,
         rope_sin: ttnn.Tensor | None = None,
         trans_mat: ttnn.Tensor | None = None,
@@ -458,6 +459,7 @@ class WanAttention(Module):
                 k_BHNE,
                 v_BHNE,
                 is_causal=False,
+                attn_mask=attn_mask,
                 program_config=self.sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
