@@ -44,6 +44,18 @@ IGNORED_KEYS = frozenset(
     }
 )
 
+# Infrastructure kwargs that the sweep framework intentionally filters out
+# (handled separately via output_memory_config, etc.).  Only stripped at the
+# top level of the arguments dict — NOT inside tensor arg sub-dicts.
+TOP_LEVEL_INFRA_KWARGS = frozenset(
+    {
+        "memory_config",
+        "dtype",
+        "layout",
+        "compute_kernel_config",
+    }
+)
+
 
 def _normalize_tensor_placement(tp: dict) -> dict:
     """Normalize tensor_placement to a canonical form.
@@ -111,7 +123,7 @@ def _normalize_tensor_placement(tp: dict) -> dict:
     return result
 
 
-def normalize(obj: Any, *, _parent_key: str = "") -> Any:
+def normalize(obj: Any, *, _parent_key: str = "", _depth: int = 0) -> Any:
     """Recursively normalize a config dict for comparison.
 
     Strips keys that are expected to vary between a master trace (from the
@@ -129,6 +141,10 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
         for k, v in sorted(obj.items()):
             if k in IGNORED_KEYS:
                 continue
+            # At the top level of the arguments dict, strip infrastructure kwargs
+            # that the sweep framework intentionally handles separately
+            if _depth == 0 and k in TOP_LEVEL_INFRA_KWARGS:
+                continue
             # memory_config.hash is a device pointer — always differs between runs; skip numeric values only
             if k == "hash" and isinstance(v, (int, float)):
                 continue
@@ -139,10 +155,10 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
             # (kwargs with default values may appear as None in one trace but be absent in the other)
             if v is None:
                 continue
-            result[k] = normalize(v, _parent_key=k)
+            result[k] = normalize(v, _parent_key=k, _depth=_depth + 1)
         return result
     if isinstance(obj, list):
-        return [normalize(item, _parent_key=_parent_key) for item in obj]
+        return [normalize(item, _parent_key=_parent_key, _depth=_depth + 1) for item in obj]
     return obj
 
 
