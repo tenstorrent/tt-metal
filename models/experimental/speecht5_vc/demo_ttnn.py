@@ -6,7 +6,7 @@
 SpeechT5 Voice Conversion (VC) bring-up on TTNN.
 
 Stage-1 baseline pipeline:
-1. Speech encoder prenet (HF reference, CPU)
+1. Speech encoder prenet (TTNN)
 2. Shared SpeechT5 encoder (TTNN)
 3. Shared SpeechT5 decoder with speaker conditioning (TTNN)
 4. Speech decoder postnet (TTNN)
@@ -45,6 +45,11 @@ from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import (
     TTNNPostNetConfig,
     TTNNSpeechT5SpeechDecoderPostnet,
     preprocess_postnet_parameters,
+)
+from models.experimental.speecht5_vc.ttnn_speech_prenet import (
+    TTNNSpeechEncoderPrenet,
+    TTNNSpeechEncoderPrenetConfig,
+    preprocess_speech_encoder_prenet_parameters,
 )
 
 
@@ -144,7 +149,7 @@ def build_encoder_masks(
 def generate_mel_with_ttnn(
     input_values: torch.Tensor,
     attention_mask: Optional[torch.Tensor],
-    hf_model: SpeechT5ForSpeechToSpeech,
+    ttnn_speech_prenet: TTNNSpeechEncoderPrenet,
     ttnn_encoder: TTNNSpeechT5Encoder,
     ttnn_decoder: TTNNSpeechT5Decoder,
     ttnn_postnet: TTNNSpeechT5SpeechDecoderPostnet,
@@ -154,25 +159,16 @@ def generate_mel_with_ttnn(
     stop_threshold: float,
     min_steps: int,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
-    """Generate mel spectrogram autoregressively using TTNN shared encoder/decoder/postnet."""
+    """Generate mel spectrogram autoregressively using TTNN prenet/encoder/decoder/postnet."""
     generation_start = time.time()
 
-    with torch.no_grad():
-        prenet_hidden_states, reduced_attention_mask = hf_model.speecht5.encoder.prenet(
-            input_values=input_values,
-            attention_mask=attention_mask,
-        )
+    ttnn_prenet_hidden, reduced_attention_mask = ttnn_speech_prenet(
+        input_values=input_values,
+        attention_mask=attention_mask,
+    )
 
     encoder_self_mask_ttnn, decoder_cross_mask_ttnn = build_encoder_masks(reduced_attention_mask, device)
-
-    ttnn_prenet_hidden = ttnn.from_torch(
-        prenet_hidden_states,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        # Keep large encoder inputs in DRAM to reduce L1 pressure on long utterances.
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    ttnn_prenet_hidden = ttnn.to_memory_config(ttnn_prenet_hidden, ttnn.DRAM_MEMORY_CONFIG)
 
     encoder_start = time.time()
     encoder_output = ttnn_encoder.forward_from_hidden_states(
@@ -185,7 +181,7 @@ def generate_mel_with_ttnn(
     encoder_output = ttnn.unsqueeze(encoder_output, dim=1)
 
     batch_size = input_values.shape[0]
-    encoder_seq_len = prenet_hidden_states.shape[1]
+    encoder_seq_len = ttnn_prenet_hidden.shape[1]
 
     kv_cache, cross_attn_cache = init_kv_cache(
         decoder_config,
@@ -364,15 +360,22 @@ def convert_voice(
         postnet_params = preprocess_postnet_parameters(hf_model.speech_decoder_postnet, postnet_config, device)
 
         print("Creating TTNN modules...")
+        speech_prenet_config = TTNNSpeechEncoderPrenetConfig.from_hf_config(cfg)
+        speech_prenet_params = preprocess_speech_encoder_prenet_parameters(
+            hf_model.speecht5.encoder.prenet,
+            speech_prenet_config,
+            device,
+        )
         ttnn_encoder = TTNNSpeechT5Encoder(device, encoder_params, encoder_config)
         ttnn_decoder = TTNNSpeechT5Decoder(device, decoder_params, decoder_config, max_sequence_length=max_steps + 16)
         ttnn_postnet = TTNNSpeechT5SpeechDecoderPostnet(device, postnet_params, postnet_config)
+        ttnn_speech_prenet = TTNNSpeechEncoderPrenet(device, speech_prenet_params, speech_prenet_config)
 
         print("Running TTNN voice conversion pipeline...")
         mel_spectrogram, stats = generate_mel_with_ttnn(
             input_values=input_values,
             attention_mask=attention_mask,
-            hf_model=hf_model,
+            ttnn_speech_prenet=ttnn_speech_prenet,
             ttnn_encoder=ttnn_encoder,
             ttnn_decoder=ttnn_decoder,
             ttnn_postnet=ttnn_postnet,
