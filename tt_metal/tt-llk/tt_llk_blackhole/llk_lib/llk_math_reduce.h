@@ -45,7 +45,11 @@ inline void reduce_row_perform_transpose()
         // BH Issue #449 HW bug, which affects dest_32b_lo=1).
         constexpr std::uint32_t LO16_STAGE = 144;
 
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+        // v6: cfg_rmw(Fp32=0) dropped. The BH HW bug (#449) only affects MOV* with
+        // dest_32b_lo=1. Since we only use dest_32b_lo=0 (DEST_NORM), keeping Fp32=1
+        // is safe. dst_32bit_addr_en=1 toggle around Phase 2 hi is still needed to
+        // make ttsim's MOVD2B/MOVB2D route through Adj32 (ttsim models Adj16=identity
+        // in Fp32=0 mode, but our MOV*s run with Fp32 unchanged which may differ).
 
         // Phase 1: SFPU extracts lo16 only (hi16 read directly from face by Phase 2 hi).
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
@@ -92,8 +96,6 @@ inline void reduce_row_perform_transpose()
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 4);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 12);
-
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
 
         // Phase 3 (v5): write transposed lo16 to face lo16 rows via SFPSTORE HI16_ONLY.
         // Phase 2 hi wrote transposed hi16 to face hi16 rows (and zeroed lo16 as side
