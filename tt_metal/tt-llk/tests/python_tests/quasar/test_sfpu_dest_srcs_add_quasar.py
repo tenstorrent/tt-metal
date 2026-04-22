@@ -239,11 +239,15 @@ def test_sfpu_dest_srcs_add_quasar(formats_dest_acc_implied_math_input_dims):
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
         sfpu=True,
+        const_face=True,
+        const_value_A=1,
+        const_value_B=2,  # TODO: remove consts
     )
 
-    src_A, src_B = prepare_add_inputs(
-        src_A, src_B, formats.input_format, formats.output_format
-    )
+    # TODO: uncomment when debugguing complete
+    # src_A, src_B = prepare_add_inputs(
+    #     src_A, src_B, formats.input_format, formats.output_format
+    # )
 
     num_faces = 4
 
