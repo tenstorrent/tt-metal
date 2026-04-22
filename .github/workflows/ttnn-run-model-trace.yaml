@@ -226,6 +226,9 @@ jobs:
         # CIv1 points HF at the Weka-backed cache; CIv2 resolves through TT_GH_CI_INFRA
         # + LFC so HF_HOME is left unset (falls back to the container default).
         HF_HOME: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '/mnt/MLPerf/tt_dnn-models/hf_home' || '' }}
+        # Point the HF hub cache at the MLPerf-backed model store (matches
+        # the models-e2e CI which uses HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub).
+        HF_HUB_CACHE: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '/mnt/MLPerf/huggingface/hub' || '' }}
         # Prevent transformers from attempting network downloads on CIv1 runners
         # where weights are pre-cached on MLPerf. CIv2 needs online access via LFC.
         HF_HUB_OFFLINE: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '1' || '0' }}
