@@ -24,8 +24,6 @@ using on-device token count accumulation.
 
 from __future__ import annotations
 
-import os
-
 import numpy as np
 import ttnn
 import ttml
@@ -38,16 +36,6 @@ from .autograd_ops import (
     autograd_softmax,
     moe_routing_normalize,
 )
-
-
-# Set ``MOE_DEBUG_EQ=1`` in the environment to compare two evaluations of
-# ``ttnn.eq(topk_indices, float(expert_idx))`` per expert per forward:
-# one read on the host (used to populate ``activated_experts``) versus the
-# downstream device chain that feeds ``_token_counts`` and ``mask_narrow``.
-# Any disagreement is printed on its own line and points at non-deterministic
-# / re-execution behaviour of ``ttnn.eq`` on UINT16 + non-zero float scalars
-# at the production tile shape.
-_MOE_DEBUG_EQ = os.environ.get("MOE_DEBUG_EQ", "0") == "1"
 
 
 class Expert(AbstractModuleBase):

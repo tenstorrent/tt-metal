@@ -1527,7 +1527,9 @@ def main():
                         # Read activation probabilities BEFORE update_expert_bias
                         # (which resets the underlying _token_counts buffer).
                         if args.log_expert_activations and moe_activation_logger.should_log_step(global_step):
-                            moe_activation_logger.log_step(args.log_expert_activations, global_step, moe_layers)
+                            moe_activation_logger.log_step_expert_balance(
+                                args.log_expert_activations, global_step, moe_layers
+                            )
                         for moe_layer in moe_layers:
                             moe_layer.update_expert_bias()
 

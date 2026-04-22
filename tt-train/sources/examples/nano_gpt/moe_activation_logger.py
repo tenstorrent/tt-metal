@@ -6,13 +6,13 @@
 
 Usage from the training loop::
 
-    from moe_activation_logger import should_log_step, log_step
+    from moe_activation_logger import should_log_step, log_step_expert_balance
 
     if args.log_expert_activations and should_log_step(global_step):
-        log_step(args.log_expert_activations, global_step, model.get_moe_layers())
+        log_step_expert_balance(args.log_expert_activations, global_step, model.get_moe_layers())
 
 The logger is intentionally minimal and side-effect free beyond the CSV
-append: no device calls, no torch imports, no global state. It relies onrun_nano_deepseek_training_eqdiag.log
+append: no device calls, no torch imports, no global state. It relies on
 ``MoE.read_activation_probabilities()`` which must be called *before*
 ``update_expert_bias()`` (which resets the underlying ``_token_counts``).
 
@@ -29,7 +29,6 @@ the step (``[0, 1]``, uniform target ``n_activated / num_experts``).
 from __future__ import annotations
 
 import csv
-import os
 from typing import Iterable
 
 
@@ -48,7 +47,7 @@ def should_log_step(step: int) -> bool:
     return step % 100 == 0
 
 
-def log_step(csv_path: str, step: int, moe_layers: Iterable) -> None:
+def log_step_expert_balance(csv_path: str, step: int, moe_layers: Iterable) -> None:
     """Append per-expert activation probabilities for ``step`` to ``csv_path``.
 
     Writes the CSV header on first call (when the file does not yet exist).
