@@ -76,7 +76,6 @@ void check_tile(
 TEST_F(KSplitGramMatmulTest, Verification4096x4096) {
     auto input = make_random_tensor(4096, 4096);
     auto output = ttml::metal::gram_matmul(input);
-    tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
 
     auto in_vec = input.to_vector<float>();
     auto out_vec = output.to_vector<float>();
@@ -90,7 +89,6 @@ TEST_F(KSplitGramMatmulTest, Verification4096x4096) {
 TEST_F(KSplitGramMatmulTest, Verification4096x11008) {
     auto input = make_random_tensor(4096, 11008);
     auto output = ttml::metal::gram_matmul(input);
-    tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
 
     auto in_vec = input.to_vector<float>();
     auto out_vec = output.to_vector<float>();
@@ -103,7 +101,6 @@ TEST_F(KSplitGramMatmulTest, Verification4096x11008) {
 TEST_F(KSplitGramMatmulTest, VerificationMirror) {
     auto input = make_random_tensor(640, 640);
     auto output = ttml::metal::gram_matmul(input, ttml::metal::OutputMode::Full);
-    tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
 
     auto in_vec = input.to_vector<float>();
     auto out_vec = output.to_vector<float>();
@@ -135,7 +132,6 @@ TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
 
     auto output =
         ttml::metal::gram_matmul(input, ttml::metal::OutputMode::UpperTriangle, MathFidelity::HiFi4, preallocated);
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
 
     EXPECT_EQ(output.buffer()->address(), preallocated.buffer()->address());
 
@@ -155,18 +151,15 @@ TEST_F(KSplitGramMatmulTest, SmokeAllShapes) {
     for (auto& s : shapes) {
         auto input = make_random_tensor(s.M, s.K);
         auto output = ttml::metal::gram_matmul(input);
-        tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
     }
     SUCCEED();
 }
 
 TEST_F(KSplitGramMatmulTest, NIGHTLY_StressTest8192x8192) {
-    auto* device = &ttml::autograd::ctx().get_device();
     auto input = make_random_tensor(8192, 8192);
     constexpr int N = 5;
     for (int i = 0; i < N; i++) {
         auto out = ttml::metal::gram_matmul(input);
-        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
         out.deallocate();
     }
     SUCCEED();
