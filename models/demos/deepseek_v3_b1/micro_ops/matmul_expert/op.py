@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op i
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import _CB_ADDR_SHIFT
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreCompileTimeDescriptor, UnifiedKernelDescriptor
+from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 _KERNEL_SOURCE = "models/demos/deepseek_v3_b1/micro_ops/matmul_expert/kernels/matmul_expert_kernel.cpp"
 
@@ -901,11 +902,19 @@ def create_dram_expert_tensors_multi_device(
     num_in1_buffers: int = 3,
     subblock_n: int = 1,
     k_parallel_per_bank: int = 1,
+    allocate_in1_backing: bool = True,
+    primary_worker_cores=None,
 ) -> dict:
     """Create per-device tensors for ExpertKernel.mesh_op.
 
     Calls create_dram_expert_metadata once per device in the mesh.
     Assumes homogeneous DRAM bank topology across all devices.
+    ``primary_worker_cores`` can override the canonical bank-worker order; callers
+    that pass per-core bank IDs must use the same order here.
+
+    When ``allocate_in1_backing=False`` the L1 backing tensor for cb_in1 is NOT
+    allocated (caller provides their own — e.g. the fused MoE kernel overlays
+    cb_in1 on the SDPA KV buffer). The returned tuple has ``in1_backing=None``.
 
     Returns:
         {MeshCoordinate: (in1_backing, meta_tensors, fmt_tensors,
@@ -917,7 +926,14 @@ def create_dram_expert_tensors_multi_device(
     logger.info(
         f"create_dram_expert_tensors_multi_device: {num_devices} devices, {num_total_experts} total experts, {len(cts)} DRAM CTs"
     )
-    primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    if primary_worker_cores is None:
+        primary_cores_list = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
+    else:
+        primary_cores_list = list(primary_worker_cores)
+    expected_num_banks = mesh_device.dram_grid_size().x * mesh_device.dram_grid_size().y
+    assert len(primary_cores_list) == expected_num_banks, (
+        f"primary_worker_cores length ({len(primary_cores_list)}) must match " f"DRAM bank count ({expected_num_banks})"
+    )
     compute_cores_list = []
     for primary_core in primary_cores_list:
         for offset in range(cores_per_dram_bank):

@@ -405,6 +405,7 @@ def test_decoder(
         ROUTED_EXPERT_LAYER_IDX,
         num_routed_experts=effective_num_routed_experts,
         move_to_device=True,
+        compressed_tp8=True,
     )
 
     logger.info("Creating decoder block tensors...")
