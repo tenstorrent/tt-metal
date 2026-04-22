@@ -346,16 +346,15 @@ def prepare_w2_tensor_for_moe_compute(
     Kt = K // ttnn.TILE_SIZE
     num_cores = len(w2_shard_map)
     w2_groups_per_core = math.ceil(Kt / (num_cores * sum(w2_shard_map[0])))
-    print(f"{w2_groups_per_core=}")
 
-    # Separate the tensor into 4 groups of 4 * 32 tiles and then 1 group of 2/3 * 32 tiles.
+    # Separate the tensor into groups of 4 * 32 tiles and then 1 group of 2/3 * 32 tiles.
     each_shard = []
 
     start_col = 0
     for last_group_tiles, last_group_pad_tiles in w2_shard_map:
         # Get the first 4 groups of 4 * 32 tiles.
-        each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * 4 * ttnn.TILE_SIZE])
-        start_col += 4 * 4 * ttnn.TILE_SIZE
+        each_shard.append(torch_w2[:, :, :, start_col : start_col + (w2_groups_per_core - 1) * 4 * ttnn.TILE_SIZE])
+        start_col += (w2_groups_per_core - 1) * 4 * ttnn.TILE_SIZE
         each_shard.append(torch_w2[:, :, :, start_col : start_col + last_group_tiles * ttnn.TILE_SIZE])
         start_col += last_group_tiles * ttnn.TILE_SIZE
 

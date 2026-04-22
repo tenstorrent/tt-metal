@@ -283,12 +283,8 @@ def prepare_output_tensor_from_combine_writer(
     combine_output_shards = [all_output_shards[c.x, c.y] for c in output_shard_cores]
     output_shard_tensor = torch.stack(combine_output_shards)
 
-    buffer_size_total_tokens = 512
-    # Validate that hardcoded buffer_size_total_tokens matches the actual tensor dimensions
-    # The view operation requires: output_shard_tensor.numel() == experts_per_device * buffer_size_total_tokens * hidden
-    assert buffer_size_total_tokens == output_shard_tensor.numel() // (
-        experts_per_device * hidden
-    ), f"buffer_size_total_tokens ({buffer_size_total_tokens}) doesn't match computed value from tensor shape"
+    # Consistent with token_offset logic in program factories
+    buffer_size_total_tokens = output_shard_tensor.numel() // (experts_per_device * hidden)
 
     output_shape = (
         output_shard_height_dim,
@@ -491,7 +487,7 @@ def create_torch_w0(L, E, K, N):
         torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w0: RANDOM - mode={mode}")
 
-    return torch.ones_like(torch_w0)
+    # return torch.ones_like(torch_w0) *0.001
 
     return torch_w0
 
@@ -526,7 +522,7 @@ def create_torch_w1(L, E, K, N):
         torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w1: RANDOM - mode={mode}")
 
-    return torch.ones_like(torch_w1)
+    # return torch.ones_like(torch_w1) *0.001
 
     return torch_w1
 
@@ -561,7 +557,7 @@ def create_torch_w2(L, E, N, K):
         torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w2: RANDOM - mode={mode}")
 
-    return torch.ones_like(torch_w2)
+    # return torch.ones_like(torch_w2) *0.001
 
     return torch_w2
 

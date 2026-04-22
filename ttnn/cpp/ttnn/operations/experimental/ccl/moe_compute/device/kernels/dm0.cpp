@@ -117,7 +117,8 @@ void kernel_main() {
     constexpr uint32_t w0_w1_total_size_per_layer = num_experts * w0_w1_total_size_per_expert;
     constexpr uint32_t w0_w1_layer_offset = layer_id * w0_w1_total_size_per_layer;
 
-    constexpr uint32_t w2_total_size_per_expert = 70 * 20 * w2_tile_size;  // We pad 64 to 70 tiles
+    constexpr uint32_t w2_total_size_per_expert =
+        config_t::W2_TILES_PER_EXPERT_W * config_t::W2_TILES_PER_EXPERT_H * w2_tile_size;  // Padded sizes
     constexpr uint32_t w2_total_size_per_layer = num_experts * w2_total_size_per_expert;
     constexpr uint32_t w2_layer_offset = layer_id * w2_total_size_per_layer;
 
