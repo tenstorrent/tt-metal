@@ -37,7 +37,18 @@ inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1
     LLK_ASSERT(
         (ckernel::math::get_dest_max_matmul_tiles(dst_index, ct_dim, rt_dim) <
          get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
-        "");
+        "llk_math_matmul: computed matmul dest tile range exceeds available dest register "
+        "capacity. Uncomment the DPRINT block below and enable DPRINT support to inspect "
+        "the calculated and max dest tile values.");
+
+    // To debug the assert above, uncomment the DPRINT block below and enable DPRINT support
+    // so the calculated and max dest tile values are printed at runtime.
+    // DPRINT << "llk_math_matmul: calculated dest tiles = "
+    //        << ckernel::math::get_dest_max_matmul_tiles(dst_index, ct_dim, rt_dim)
+    //        << ", max dest tiles = "
+    //        << get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()
+    //        << " (dst_index=" << dst_index << ", ct_dim=" << ct_dim << ", rt_dim=" << rt_dim
+    //        << ")" << ENDL();
 
     _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL>(dst_index, ct_dim, rt_dim);
 }

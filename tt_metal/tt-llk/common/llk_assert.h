@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <type_traits> // For std::void_t and std::declval
 
 #ifdef ENABLE_LLK_ASSERT
+
+#define LLK_ASSERT_BLOCK(block_call) block_call
 
 #if defined(ENV_LLK_INFRA) || defined(ENABLE_LLK_ASSERT_ONLY)
 
@@ -33,5 +36,13 @@
 // sizeof creates an unevaluated context: the condition is fully compiled
 // (type-checked, name-resolved) but never executed at runtime.
 #define LLK_ASSERT(condition, message) ((void)sizeof((condition)))
+
+// Comma with 0: block_call is type-checked (incl. void returns); void is
+// not a valid sizeof operand, so (void) cast then discard via comma.
+#define LLK_ASSERT_BLOCK(block_call)                     \
+    do                                                   \
+    {                                                    \
+        (void)sizeof(decltype(((void)(block_call), 0))); \
+    } while (0)
 
 #endif // ENABLE_LLK_ASSERT

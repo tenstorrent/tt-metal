@@ -2,6 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import sys
+
 import pytest
 import torch
 from loguru import logger
@@ -135,6 +138,23 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
         scaling_factor,
         enable_sigmoid,
     )
+    ttnn.synchronize_device(device)
+
+    if os.environ.get("TT_METAL_DPRINT_CORES") or os.environ.get("TT_METAL_DEVICE_PRINT") == "1":
+        dprint_path = os.environ.get("TT_METAL_DPRINT_FILE", "")
+        where = f"file {dprint_path}" if dprint_path else "process stdout (not loguru; may mix with Metal logs)"
+        logger.info(
+            f"DEVICE_PRINT/DPRINT output goes to {where}. "
+            "Search for 'deepseek_moe_gate' in that stream. "
+            "Use TT_METAL_DPRINT_CORES=all (lowercase) and pytest -s if you see nothing. "
+            "Optional: TT_METAL_DPRINT_FILE=/tmp/tt_dprint.log"
+        )
+        # One unmissable line: C++ dprint uses std::cout, same fd as this print.
+        print(
+            "TT_DPRINT_SMOKE: look for deepseek_moe_gate lines in stdout above/below (not logger).",
+            file=sys.stdout,
+            flush=True,
+        )
 
     # Convert back to torch for verification
     output_torch = ttnn.to_torch(ttnn_result)
