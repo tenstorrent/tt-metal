@@ -158,20 +158,14 @@ pack and packs to the same slot repeatedly. Very hardware-specific; not a genera
 
 ## sfpu_chain / sfpu_pipeline gaps
 
-### GAP-9: Runtime constant fill_tile in chain
-`fill_tile(*lambd)` with a runtime float value cannot be a compile-time chain element.
-Chain elements take only `uint32_t dst_idx` at exec time; constants must be baked in at
-construction.
+### ~~GAP-9: Runtime constant fill_tile in chain~~ — FIXED (commit `31f3de5460e`)
+`FillScalar<Dst>` stores a runtime `float value` field; `FillConst<Bits, Dst>` handles
+compile-time constants via `fill_tile_bitcast`. Both in `sfpu_math.hpp`.
 
-**Blocked kernels** (4):
-- eltwise/unary/hardshrink_kernel.cpp
-- eltwise/unary/hardshrink_kernel_sfpu.cpp
-- eltwise/unary_ng/hardshrink_kernel.cpp
-- experimental/unary_backward/gelu_backward/eltwise_bw_gelu_approx_tanh.cpp
-
-**Fix**: Add `FillScalar<Dst, float runtime_val>` chain element that stores the value in a
-runtime field (similar to `Load::cb_tile_idx`). The fill is issued at exec time.
-**Complexity**: Medium — needs a new sfpu_chain element with a runtime field.
+**Remaining blockers for hardshrink** (even with FillScalar available):
+- 3 `DestReuseOp` calls in one DEST window still require multiple FPU reinits per window;
+  the current `sfpu_chain` calling convention re-inits only after the full chain. Need
+  either per-element reinit support or manually managed windows.
 
 ---
 
@@ -212,16 +206,13 @@ mode that auto-increments.
 
 ---
 
-### GAP-12: Missing `TanhDerivative` sfpu_chain element
-`tanh_derivative_tile<false>(dst)` wraps the `tanh_derivative` LLK. No corresponding
-`compute_kernel_lib::TanhDerivative<Legacy, Dst>` struct exists in sfpu_helpers.
+### ~~GAP-12: Missing `TanhDerivative` sfpu_chain element~~ — FIXED (commit `31f3de5460e`)
+`TanhDerivative<Approx, Dst>` added to `sfpu_math.hpp`, wrapping
+`tanh_derivative_tile_init<fast>()` and `tanh_derivative_tile<fast>(d0)`.
 
-**Blocked kernels** (1):
-- eltwise/unary_backward/tanh_bw/eltwise_bw_tanh_deriv.cpp
-
-**Fix**: Add `TanhDerivative<Legacy L = Legacy::Off, Dst Slot = Dst::D0>` to sfpu_math.hpp,
-wrapping `tanh_derivative_tile_init<L>()` and `tanh_derivative_tile<L>(dst)`.
-**Complexity**: Very low — 10 lines, same pattern as Rsqrt/Recip.
+**Remaining blocker for tanh_bw**: GAP-11 (indexed Load) — the kernel pre-waits
+`per_core_block_size` tiles from two CBs and accesses them at index i; `sfpu_pipeline`
+currently always uses `cb_tile_idx=0` inside batched loops.
 
 ---
 
@@ -298,10 +289,10 @@ refactor of the op framework), or accept these as permanently macro-driven.
 | GAP-6 | EltwiseBinaryType → BinaryOpType | 4 |
 | GAP-7 | Self-feeding accumulator | 3 |
 | GAP-8 | L1 accumulation pack | 2 |
-| GAP-9 | Runtime fill_tile in chain | 4 |
+| ~~GAP-9~~ | ~~Runtime fill_tile in chain~~ | ~~4~~ | **FIXED**: FillScalar + FillConst |
 | GAP-10 | Multi-DST SFPU (3+ slots) | 4 |
 | GAP-11 | Indexed Load in pipeline | 4 |
-| GAP-12 | Missing TanhDerivative element | 1 |
+| ~~GAP-12~~ | ~~Missing TanhDerivative element~~ | ~~1~~ | **FIXED**: TanhDerivative |
 | STRUCT-1 | Matmul fused | 8 |
 | STRUCT-2 | moreh *_to_cb layer | ~15 |
 | STRUCT-3 | Runtime bcast dispatch | 3 |
