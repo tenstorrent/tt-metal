@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_unary/i0.h"
 #include "api/compute/eltwise_unary/i1.h"
 #include "api/compute/eltwise_unary/lgamma.h"
+#include "api/compute/logsigmoid.h"
 
 namespace compute_kernel_lib {
 
@@ -47,6 +48,29 @@ template <Dst Slot = Dst::D0>
 struct Lgamma : UnaryOp<Lgamma<Slot>, Slot> {
     ALWI void init() const;
     ALWI void call(uint32_t d0) const;
+};
+
+/**
+ * @brief logsigmoid(x) = -softplus(-x) using two pre-loaded DEST slots.
+ *
+ * Requires In1 to hold exp(-x) before exec() is called. Typical chain usage:
+ *
+ *   sfpu_chain(
+ *       Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},    // x → D0
+ *       Neg<Dst::D0>{},                                       // D0 = -x
+ *       Exp<Approx::Fast, Approx::Fast, Dst::D0>{},           // D0 = exp(-x)
+ *       Load<cb_input, Dst::D1, LoadPolicy::NoWaitPop>{},     // D1 = x (original)
+ *       Logsigmoid<Dst::D0, Dst::D1, Dst::D0>{})             // D0 = logsigmoid(x)
+ *       // Note: Logsigmoid(in0=exp(-x), in1=x, out=result)
+ *
+ * @tparam In0  DEST slot holding exp(-x)
+ * @tparam In1  DEST slot holding x
+ * @tparam Out  DEST slot for result
+ */
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct Logsigmoid : BinaryOp<Logsigmoid<In0, In1, Out>, In0, In1, Out> {
+    ALWI void init() const;
+    ALWI void call(uint32_t a, uint32_t b, uint32_t c) const;
 };
 
 // --- Special function aliases ---

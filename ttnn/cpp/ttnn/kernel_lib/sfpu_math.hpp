@@ -13,6 +13,7 @@
 #include "api/compute/eltwise_unary/log1p.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/tanh_derivative.h"
+#include "api/compute/copy_dest_values.h"
 
 namespace compute_kernel_lib {
 
@@ -128,6 +129,38 @@ struct Rpow : UnaryOp<Rpow<Slot>, Slot> {
     uint32_t base_val;
     ALWI void init() const;
     ALWI void call(uint32_t d0) const;
+};
+
+/**
+ * @brief Copy values from one DEST slot to another within the same acquire window.
+ *
+ * Wraps `copy_dest_values<DF>(src, dst)`. No CB access — purely DEST-to-DEST.
+ * Useful for saving an intermediate result before overwriting the source slot.
+ *
+ *   sfpu_chain(
+ *       ...,
+ *       Tanh<Approx::Exact, Dst::D0>{},     // D0 = tanh(x)
+ *       CopyDest<Dst::D0, Dst::D1>{},        // D1 = tanh(x)  (save before squaring)
+ *       Square<Dst::D0>{},                   // D0 = tanh²(x)
+ *       ...)
+ *
+ * @tparam Src  DEST slot to copy from
+ * @tparam Dst_ DEST slot to copy to
+ * @tparam DF   Data format (default Float16_b)
+ */
+template <Dst Src, Dst Dst_, DataFormat DF = DataFormat::Float16_b>
+struct CopyDest {
+    static constexpr uint32_t src_idx = static_cast<uint32_t>(Src);
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Dst_);
+    static constexpr uint32_t max_dst = (src_idx > dst_idx) ? src_idx : dst_idx;
+    static_assert(src_idx < 8 && dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+
+    ALWI void init() const;
+    ALWI void exec(uint32_t offset = 0) const;
+    ALWI void apply(uint32_t offset = 0) const {
+        init();
+        exec(offset);
+    }
 };
 
 /**

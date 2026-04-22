@@ -23,6 +23,13 @@ template <Dst Slot> ALWI void I1<Slot>::call(uint32_t d0) const { i1_tile(d0); }
 template <Dst Slot> ALWI void Lgamma<Slot>::init() const { lgamma_stirling_tile_init(); }
 template <Dst Slot> ALWI void Lgamma<Slot>::call(uint32_t d0) const { lgamma_stirling_tile(d0); }
 
+template <Dst In0, Dst In1, Dst Out>
+ALWI void Logsigmoid<In0, In1, Out>::init() const { logsigmoid_tile_init(); }
+template <Dst In0, Dst In1, Dst Out>
+ALWI void Logsigmoid<In0, In1, Out>::call(uint32_t a, uint32_t b, uint32_t c) const {
+    logsigmoid_tile(a, b, c);
+}
+
 // Aliases
 template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
 ALWI void sfpu_erf(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Erf<>{}); }
