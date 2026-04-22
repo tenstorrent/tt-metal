@@ -169,6 +169,8 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_prefetch.hpp
     impl/dispatch/kernels/cq_relay.hpp
     impl/dispatch/kernels/cq_helpers.hpp
+    impl/dispatch/kernels/realtime_profiler.hpp
+    impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp
     soc_descriptors/blackhole_140_arch.yaml
     soc_descriptors/wormhole_b0_80_arch.yaml
     tools/profiler/kernel_profiler.hpp
@@ -179,7 +181,10 @@ set(JITAPI_FILES
     tools/profiler/cpp_device_analyses.json
     impl/dispatch/kernels/cq_dispatch.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate.cpp
+    impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp
     impl/dispatch/kernels/cq_prefetch.cpp
+    impl/dispatch/kernels/cq_realtime_profiler.cpp
+    impl/dispatch/kernels/cq_realtime_profiler_push.cpp
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
     kernels/compute/blank.cpp
