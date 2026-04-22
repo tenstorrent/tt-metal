@@ -543,7 +543,12 @@ static void run_quasar_tilize_untilize_test(
     bool is_8bit_integer = (data_format == tt::DataFormat::Int8 || data_format == tt::DataFormat::UInt8);
     uint32_t num_tiles = num_tiles_r * num_tiles_c;
     uint32_t input_single_tile_size = tt::tile_size(data_format);
-    tt::DataFormat output_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : (is_8bit_integer ? tt::DataFormat::Int32 : data_format);
+    tt::DataFormat output_format = data_format;
+    if (fp32_dest_acc_en) {
+        output_format = tt::DataFormat::Float32;
+    } else if (is_8bit_integer) {
+        output_format = tt::DataFormat::Int32;
+    }
     uint32_t output_single_tile_size = tt::tile_size(output_format);
     uint32_t src_dram_buffer_size = input_single_tile_size * num_tiles;
     uint32_t dst_dram_buffer_size = output_single_tile_size * num_tiles;
