@@ -153,4 +153,6 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_and_call_(
 
 // Bare init: no callback.
 //   SFPU_TERNARY_INIT(addcmul);
-#define SFPU_TERNARY_INIT(OP) ::ckernel::_llk_math_eltwise_ternary_sfpu_init_<::ckernel::SfpuType::OP>()
+// Note: SfpuType lives in the global namespace (see llk_sfpu_types.h), so the
+// fully-qualified path is `::SfpuType::OP`, not `::ckernel::SfpuType::OP`.
+#define SFPU_TERNARY_INIT(OP) ::ckernel::_llk_math_eltwise_ternary_sfpu_init_<::SfpuType::OP>()
