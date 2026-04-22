@@ -10,8 +10,9 @@ No database operations happen during model execution - everything is offline.
 
 Workflow:
     1. C++ captures graph to JSON: ttnn::graph::end_graph_capture_to_file("report.json")
-    2. Optional sidecars next to the report: ``*.python_io.json`` (Python I/O), ``*.tensor_lifetime.json``
-       (producer / last-use / deallocate ops + optional source locations for #27868-style analysis).
+    2. Optional sidecars: ``*.python_io.json`` lives next to the report (written by ``end_graph_capture_to_file``).
+       ``*.tensor_lifetime.json`` (producer / last-use / deallocate ops + optional source locations for
+       #27868-style analysis) is written into the output directory by ``import_report`` (only when non-empty).
        Tables ``tensor_consumers`` / ``tensor_producers`` mirror ``input_tensors`` / ``output_tensors``
        as tensor-centric consumer and producer lists.
        Source file/line columns require Python stack traces in the capture; ``ttnn.graph.begin_graph_capture``
@@ -1522,9 +1523,10 @@ def import_report(
                 total_stats["tensor_producer_rows"] = total_stats.get("tensor_producer_rows", 0) + stats.get(
                     "tensor_producers", 0
                 )
-                tl_path = rpath.with_name(rpath.stem + ".tensor_lifetime.json")
-                with open(tl_path, "w") as f:
-                    json.dump(tl, f, indent=2)
+                if tl:
+                    tl_path = output_dir / (rpath.stem + ".tensor_lifetime.json")
+                    with open(tl_path, "w") as f:
+                        json.dump(tl, f, indent=2)
 
                 # Generate SVG if requested
                 if generate_svgs and graphs_dir:
@@ -1678,7 +1680,7 @@ def import_report(
             summary.append(f"  - {total_stats['stack_traces']} stack traces captured")
         if total_stats.get("tensor_lifetime_records", 0) > 0:
             summary.append(
-                f"  - {total_stats['tensor_lifetime_records']} tensor lifetime rows (also in *.tensor_lifetime.json)"
+                f"  - {total_stats['tensor_lifetime_records']} tensor lifetime rows (also in {output_dir}/*.tensor_lifetime.json)"
             )
         if total_stats.get("tensor_consumer_rows", 0) > 0:
             summary.append(f"  - {total_stats['tensor_consumer_rows']} tensor_consumers rows")
