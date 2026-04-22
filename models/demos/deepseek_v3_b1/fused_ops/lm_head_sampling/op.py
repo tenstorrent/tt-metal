@@ -219,12 +219,6 @@ class LMHeadSampling:
             dst_l1, dst_sem = intermediate_base + 2 * payload, rp["sem_addrs"][2]
         else:
             dst_l1, dst_sem = 0, rp["sem_addrs"][3]
-        print(
-            f"[REDUCE_BRISC] dev{device_idx} role={role_name.get(device_role,'?')} "
-            f"dst_sem={hex(dst_sem)} recv_sem_round1={hex(rp['sem_addrs'][0])} "
-            f"recv_sem_round2={hex(rp['sem_addrs'][1])} recv_sem_round3={hex(rp['sem_addrs'][2])}",
-            flush=True,
-        )
         out_addr = rp["output_per_device"][device_idx].buffer_address()
         args = []
         for core in rp["worker_cores"]:
@@ -524,9 +518,7 @@ class LMHeadSampling:
             eh_num_tiles_k = (2 * embedding_dim // 8) // in0_tile.tile_shape[
                 1
             ]  # device K dim by number of devices in stage (8)
-            print(f"[lm_head_sampling] eh_num_tiles_k={eh_num_tiles_k}", flush=True)
             eh_mcast_data_size_bytes = eh_num_tiles_k * input_tile_size  # per-device K slice: 56 * 64 = 3584 bytes
-            print(f"[lm_head_sampling] eh_mcast_data_size_bytes={eh_mcast_data_size_bytes}", flush=True)
 
             # EH matmul DRAM streaming parameters
             eh_projection_tensor_sample = eh_proj_tensors_per_device[0]
@@ -657,7 +649,6 @@ class LMHeadSampling:
         if enable_reduce_to_one:
             reduce_root_coord = argmax_final_mesh_coord
             reduce_sem_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in reduce_semaphores]
-            print(f"[lm_head_sampling] reduce_sem_addrs={[hex(a) for a in reduce_sem_addrs]}", flush=True)
             reduce_intermediate_per_device = ttnn.get_device_tensors(reduce_intermediate_tensor)
             reduce_output_per_device = ttnn.get_device_tensors(reduce_output_tensor)
 
@@ -668,13 +659,9 @@ class LMHeadSampling:
             reduce_element_size = 2  # bfloat16
             reduce_shard_elements = reduce_shard_shape[0] * reduce_shard_shape[1]
             reduce_payload_size_bytes = reduce_shard_elements * reduce_element_size
-            print(f"[lm_head_sampling] reduce_payload_size_bytes={reduce_payload_size_bytes}", flush=True)
-            print(f"[lm_head_sampling] reduce_shard_elements={reduce_shard_elements}", flush=True)
             reduce_compute_tile_size = 32 * 32 * reduce_element_size
-            print(f"[lm_head_sampling] reduce_compute_tile_size={reduce_compute_tile_size}", flush=True)
             reduce_num_tiles = (reduce_shard_elements + 32 * 32 - 1) // (32 * 32)
 
-            print(f"[lm_head_sampling] reduce_num_tiles={reduce_num_tiles}", flush=True)
             reduce_packet_header_size = 96
             reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
 
@@ -746,7 +733,6 @@ class LMHeadSampling:
         )
         device_programs = []
         worker_ncrisc_arg_refs = []
-        print("[lm_head_sampling] before device loop", flush=True)
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
@@ -762,10 +748,6 @@ class LMHeadSampling:
 
                 num_devices_in_stage = mesh_rows * mesh_cols
                 is_e_norm_device = enable_mtp_on_device and (device_idx < num_devices_in_stage // 2)
-                print(
-                    f"[lm_head_sampling] device_idx={device_idx}, num_devices_in_stage={num_devices_in_stage}, is_e_norm_device={is_e_norm_device}",
-                    flush=True,
-                )
                 eh_norm_slice_idx = (
                     device_idx
                     if is_e_norm_device
@@ -773,12 +755,9 @@ class LMHeadSampling:
                     if enable_mtp_on_device
                     else 0
                 )
-                print(f"[lm_head_sampling] eh_norm_slice_idx={eh_norm_slice_idx}", flush=True)
                 eh_norm_slice_offset_bytes = (
                     eh_norm_slice_idx * eh_num_tiles_k * input_tile_size if enable_mtp_on_device else 0
                 )
-                print(f"[lm_head_sampling] eh_norm_slice_offset_bytes={eh_norm_slice_offset_bytes}", flush=True)
-                print(f"[lm_head_sampling] grabbing all the tensors", flush=True)
                 # Get per-device tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
@@ -821,7 +800,6 @@ class LMHeadSampling:
                 input_socket_mode = input_socket_mode_selected if recv_socket_on_this_device else input_socket_mode_none
                 # Matmul cores: from vocab_tensor (multiple cores with weight shards)
                 matmul_core_grid = vocab_tensor_device.memory_config().shard_spec.grid
-                print(f"[lm_head_sampling] matmul_core_grid={matmul_core_grid}", flush=True)
                 argmax_core_grid = matmul_core_grid
                 argmax_cores_row_wise = ttnn.corerange_to_cores(argmax_core_grid, row_wise=True)
                 matmul_bbox = matmul_core_grid.bounding_box()
@@ -1099,13 +1077,6 @@ class LMHeadSampling:
                     reduce_output_core_phys_x = int(roc_phys.x)
                     reduce_output_core_phys_y = int(roc_phys.y)
                     role_name = {MESH_LEAF: "LEAF", MESH_ROOT3: "ROOT3", MESH_ROOT2: "ROOT2", MESH_ROOT1: "ROOT1"}
-                    print(
-                        f"[REDUCE_TREE] dev{device_idx} ({row},{col}) role={role_name.get(reduce_device_role,'?')} "
-                        f"dest=({int(reduce_dest_coord[0])},{int(reduce_dest_coord[1])}) "
-                        f"workers={[(c.x,c.y) for c in reduce_params['worker_cores']]} "
-                        f"fcs={[(c.x,c.y) for c in reduce_params['fabric_cores']]}",
-                        flush=True,
-                    )
 
                 reduce_num_fabric_and_worker_cores = (
                     len(reduce_params["fabric_cores"]) + len(reduce_params["worker_cores"])
@@ -1544,7 +1515,6 @@ class LMHeadSampling:
                 # [MTP] CB descriptors (only if is_mtp_base_stage)
                 mtp_cb_descriptors = []
                 if enable_mtp_on_device:
-                    print(f"[OP:{device_idx}:I4] MTP CB section enter", flush=True)
                     # CB 11: h_gamma - tensor-backed on sender core (h_norm devices only)
                     h_gamma_cb_descriptor = None
                     if not is_e_norm_device:
@@ -1605,9 +1575,6 @@ class LMHeadSampling:
                         core_ranges=all_cores,
                         format_descriptors=[mcast_eh_dst_cb_format],
                     )
-                    print(f"[lm_head_sampling] eh_dst_tile_descriptor={eh_dst_tile_descriptor}", flush=True)
-                    print(f"[lm_head_sampling] eh_dst_tile page size={input_tile_size}", flush=True)
-                    print(f"[lm_head_sampling] eh_dst_tile total size={eh_num_tiles_k * input_tile_size}", flush=True)
 
                     # CB 9: EH projection weights (in1) buffer - CB-backed working buffer for DRAM streaming
                     eh_cb_format = ttnn.CBFormatDescriptor(
@@ -1767,13 +1734,6 @@ class LMHeadSampling:
                     # CB 23: reduce scratch — dedicated intermediate for reduce TRISC→BRISC handoff.
                     # Cannot reuse CB18 (mcast_eh_dst_cb): BRISC enters reduce before TRISC's
                     # DSMM consumes the mcast data in CB18, causing a race condition.
-                    print(f"[OP:{device_idx}:I9] reduce scratch cb enter", flush=True)
-                    print(f"[OP:{device_idx}:I9] reduce scratch cb reduce tile desc={reduce_tile_desc}", flush=True)
-                    print(f"[OP:{device_idx}:I9] reduce scratch cb page size={rp['compute_tile_size']}", flush=True)
-                    print(
-                        f"[OP:{device_idx}:I9] reduce scratch cb total_size={rp['num_tiles'] * rp['compute_tile_size']}",
-                        flush=True,
-                    )
                     reduce_scratch_cb_desc = ttnn.CBDescriptor(
                         total_size=rp["num_tiles"] * rp["compute_tile_size"],
                         core_ranges=reduce_worker_cores_set,
@@ -2040,7 +2000,6 @@ class LMHeadSampling:
                 matmul_role_cores = set()
                 argmax_role_cores = set()
                 argmax_final_role_cores = set()
-                print(f"[OP] kernel_result.groups: {kernel_result.groups}", flush=True)
                 for group in kernel_result.groups:
                     group_cores = ttnn.corerange_to_cores(group.core_range_set)
                     if group.compile_time_arg_values.get("is_input_core", 0) == 1:
@@ -2176,12 +2135,6 @@ class LMHeadSampling:
                             program,
                             fc,
                         )
-                        print(
-                            f"[OP] dev{device_idx} reduce fc_i={fc_i} fc=({fc.x},{fc.y}) "
-                            f"link={link} src_node={src_node} dst_node={reduce_dest_fabric_node_id} "
-                            f"rf_args={list(rf_args)}",
-                            flush=True,
-                        )
                         program.kernels[rfk_idx].runtime_args[fc.x][fc.y].extend(rf_args)
 
                 input_group_for_pad = kernel_result.get_group_by_arg("is_input_core", 1)
@@ -2198,13 +2151,9 @@ class LMHeadSampling:
                 pad_count = max_ncrisc_len - len(ref)
                 if pad_count > 0:
                     ref.extend([0] * pad_count)
-                    print(
-                        f"[OP] padded worker_core NCRISC per-core args by {pad_count} to {max_ncrisc_len}", flush=True
-                    )
 
         for dp_coord, dp_program in device_programs:
             mesh_program_descriptor[ttnn.MeshCoordinateRange(dp_coord, dp_coord)] = dp_program
-        print("[OP] all devices done, building io_tensors", flush=True)
         io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, gamma_tensor, vocab_tensor, output_tensor]
         io_tensors.extend([indices_tensor, output_index_tensor])
         if is_mtp_base_stage:
@@ -2221,7 +2170,6 @@ class LMHeadSampling:
             io_tensors.extend([reduce_intermediate_tensor, reduce_output_tensor])
         if base_token_buffer is not None:
             io_tensors.append(base_token_buffer)
-        print(f"[OP] calling generic_op with {len(io_tensors)} io_tensors", flush=True)
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         logger.debug("[OP] generic_op returned")
         return result
