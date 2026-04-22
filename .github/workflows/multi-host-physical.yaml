@@ -73,6 +73,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
+      use-artifacts-from-run: 24795453318
 
   multi-host-bh-lb-2x:
     if: ${{ github.event.inputs.bh_lb_2x_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
