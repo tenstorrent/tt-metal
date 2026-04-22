@@ -435,9 +435,7 @@ def run_demo_whisper_for_conditional_generation_dataset(
     # Prefer load_from_disk when HF_DATASETS_CACHE is set: it reads Arrow files
     # directly without writing lock files, which avoids EROFS on read-only mounts.
     _cache = os.environ.get("HF_DATASETS_CACHE")
-    _cached_dirs = (
-        glob.glob(os.path.join(_cache, "hf-internal-testing___parquet", "clean-*")) if _cache else []
-    )
+    _cached_dirs = glob.glob(os.path.join(_cache, "hf-internal-testing___parquet", "clean-*")) if _cache else []
     ds = (
         load_from_disk(sorted(_cached_dirs)[-1])
         if _cached_dirs
