@@ -37,7 +37,6 @@ constexpr uint32_t downstream_cb_base = DOWNSTREAM_CB_BASE;
 constexpr uint32_t downstream_cb_size = DOWNSTREAM_CB_SIZE;
 constexpr uint32_t my_downstream_cb_sem_id = MY_DOWNSTREAM_CB_SEM_ID;
 constexpr uint32_t downstream_cb_sem_id = DOWNSTREAM_CB_SEM_ID;
-constexpr uint32_t split_dispatch_page_preamble_size = SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE;
 constexpr uint32_t split_prefetch = SPLIT_PREFETCH;
 constexpr uint32_t prefetch_h_noc_xy = PREFETCH_H_NOC_XY;
 constexpr uint32_t prefetch_h_local_downstream_sem_addr = PREFETCH_H_LOCAL_DOWNSTREAM_SEM_ADDR;
@@ -382,10 +381,7 @@ CBWriter<my_downstream_cb_sem_id, 0, 0, 0> dispatch_h_cb_writer{};
 // Relay, potentially through the mux/dmux/tunneller path
 // Code below sends 1 page worth of data except at the end of a cmd
 // This means the downstream buffers are always page aligned, simplifies wrap handling
-template <uint32_t preamble_size>
 void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
-    static_assert(preamble_size == 0, "Dispatcher preamble size must be 0. This is not supported anymore with Fabric");
-
     // DPRINT << "relay_to_next_cb: " << data_ptr << " " << dispatch_cb_reader.cb_fence << " " << wlength << ENDL();
     // DEVICE_PRINT("relay_to_next_cb: data_ptr {} dispatch_cb_reader.cb_fence {} wlength {}\n", data_ptr,
     // dispatch_cb_reader.cb_fence, wlength);
@@ -411,8 +407,8 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
 
             uint32_t xfer_size;
             bool not_end_of_cmd;
-            if (length > dispatch_cb_page_size - preamble_size) {
-                xfer_size = dispatch_cb_page_size - preamble_size;
+            if (length > dispatch_cb_page_size) {
+                xfer_size = dispatch_cb_page_size;
                 not_end_of_cmd = true;
             } else {
                 xfer_size = length;
@@ -420,14 +416,6 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
             }
             length -= xfer_size;
 
-            if constexpr (preamble_size > 0) {
-                uint32_t flag;
-                relay_client.write_inline<my_noc_index>(
-                    get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr),
-                    xfer_size + preamble_size + not_end_of_cmd);
-                downstream_cb_data_ptr += preamble_size;
-                ASSERT(downstream_cb_data_ptr < downstream_cb_end);
-            }
             // Get a page if needed
             if (xfer_size > dispatch_cb_reader.available_bytes(data_ptr)) {
                 dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
@@ -478,7 +466,7 @@ void process_write_host_d() {
     uint64_t length = cmd->write_linear_host.length;
     uint32_t data_ptr = cmd_ptr;
 
-    relay_to_next_cb<split_dispatch_page_preamble_size>(data_ptr, length);
+    relay_to_next_cb(data_ptr, length);
 }
 
 void relay_write_h() {
@@ -486,10 +474,10 @@ void relay_write_h() {
     uint64_t length = sizeof(CQDispatchCmdLarge) + cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr;
 
-    relay_to_next_cb<split_dispatch_page_preamble_size>(data_ptr, length);
+    relay_to_next_cb(data_ptr, length);
 }
 
-void process_exec_buf_end_d() { relay_to_next_cb<split_dispatch_page_preamble_size>(cmd_ptr, sizeof(CQDispatchCmd)); }
+void process_exec_buf_end_d() { relay_to_next_cb(cmd_ptr, sizeof(CQDispatchCmd)); }
 
 // Note that for non-paged writes, the number of writes per page is always 1
 // This means each noc_write frees up a page
@@ -1308,7 +1296,7 @@ re_run_command:
             // DPRINT << "dispatch terminate\n";
             // DEVICE_PRINT("dispatch terminate\n");
             if (is_d_variant && !is_h_variant) {
-                relay_to_next_cb<split_dispatch_page_preamble_size>(cmd_ptr, sizeof(CQDispatchCmd));
+                relay_to_next_cb(cmd_ptr, sizeof(CQDispatchCmd));
             }
             cmd_ptr += sizeof(CQDispatchCmd);
             done = true;
@@ -1430,8 +1418,6 @@ void kernel_main() {
             -NOC_STREAM_READ_REG(index, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)
                 << REMOTE_DEST_BUF_WORDS_FREE_INC);
     }
-
-    static_assert(is_d_variant || split_dispatch_page_preamble_size == 0);
 
     uint32_t l1_cache[l1_cache_elements_rounded];
 
