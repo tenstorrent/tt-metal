@@ -175,5 +175,101 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     EXPECT_EQ(output_data, input_data);
 }
 
+// ============================================================================
+// Named RTA / CRTA / CTA Loopback Test
+// ============================================================================
+//
+// End-to-end on real WH/BH hardware:
+//   1. kernel_args_generated.h is emitted (args::src_addr, args::dst_addr, args::num_entries,
+//      args::bank_id, args::entry_size resolve at kernel compile time)
+//   2. Named RTAs + CRTAs + CTAs all route correctly through the dispatch buffer
+//   3. get_vararg(0) correctly indexes past the named RTA section
+//   4. Data flows end-to-end: DRAM → producer (named args) → DFB → consumer (named args) → DRAM
+//
+// Same shape as DFBAccessorNameLoopback but all runtime args are sourced via the new
+// named-arg accessors, plus one vararg on the producer to verify the offset mechanism.
+
+TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries_in_dfb = 4;
+    constexpr uint32_t num_transfers = 8;
+    constexpr uint32_t total_bytes = entry_size * num_transfers;
+    constexpr uint32_t producer_vararg_sentinel = 0xC0FFEEu;
+
+    const NodeCoord node{0, 0};
+
+    InterleavedBufferConfig dram_config{
+        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
+    auto input_buffer = CreateBuffer(dram_config);
+    auto output_buffer = CreateBuffer(dram_config);
+
+    ProgramSpec spec;
+    spec.program_id = "named_args_loopback";
+
+    // Producer: BRISC reads DRAM → DFB, using named RTA (src_addr) + named CRTA (num_entries)
+    // + named CTAs (bank_id, entry_size) + one vararg RTA (a sentinel for offset verification).
+    auto producer = MakeMinimalGen1DMKernel("producer", node, DataMovementProcessor::RISCV_0);
+    producer.source =
+        KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_producer.cpp"};
+    producer.runtime_arguments_schema.named_runtime_args = {"src_addr"};
+    producer.runtime_arguments_schema.named_common_runtime_args = {"num_entries"};
+    producer.runtime_arguments_schema.num_runtime_args_per_node = {{node, 1}};  // 1 vararg
+    producer.compile_time_arg_bindings = {{"bank_id", 0}, {"entry_size", entry_size}};
+
+    // Consumer: NCRISC reads DFB → DRAM, using named RTA (dst_addr) + named CRTA (num_entries)
+    // + named CTAs (bank_id, entry_size). No varargs.
+    auto consumer = MakeMinimalGen1DMKernel("consumer", node, DataMovementProcessor::RISCV_1);
+    consumer.source =
+        KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_consumer.cpp"};
+    consumer.runtime_arguments_schema.named_runtime_args = {"dst_addr"};
+    consumer.runtime_arguments_schema.named_common_runtime_args = {"num_entries"};
+    consumer.compile_time_arg_bindings = {{"bank_id", 0}, {"entry_size", entry_size}};
+
+    auto dfb = MakeMinimalDFB("loopback_dfb", node, entry_size, num_entries_in_dfb);
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    BindDFBToKernel(producer, "loopback_dfb", "loopback_dfb", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "loopback_dfb", "loopback_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.workers =
+        std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"producer", "consumer"}, {"loopback_dfb"})};
+
+    Program program = MakeProgramFromSpec(spec);
+
+    ProgramRunParams params;
+    params.kernel_run_params = {
+        ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = "producer",
+            .named_runtime_args = {{.node = node, .args = {{"src_addr", input_buffer->address()}}}},
+            .named_common_runtime_args = {{"num_entries", num_transfers}},
+            .runtime_args = {{node, {producer_vararg_sentinel}}},
+        },
+        ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = "consumer",
+            .named_runtime_args = {{.node = node, .args = {{"dst_addr", output_buffer->address()}}}},
+            .named_common_runtime_args = {{"num_entries", num_transfers}},
+        },
+    };
+    SetProgramRunParameters(program, params);
+
+    std::vector<uint32_t> input_data(total_bytes / sizeof(uint32_t));
+    for (size_t i = 0; i < input_data.size(); i++) {
+        input_data[i] = static_cast<uint32_t>(i);
+    }
+    detail::WriteToBuffer(input_buffer, input_data);
+
+    detail::LaunchProgram(device, program);
+
+    std::vector<uint32_t> output_data;
+    detail::ReadFromBuffer(output_buffer, output_data);
+
+    ASSERT_EQ(output_data.size(), input_data.size());
+    EXPECT_EQ(output_data, input_data);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental::metal2_host_api
