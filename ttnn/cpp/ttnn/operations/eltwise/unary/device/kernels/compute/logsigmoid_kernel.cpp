@@ -3,58 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/logsigmoid.h"
-#include "api/compute/eltwise_unary/negative.h"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
 
 void kernel_main() {
-    // Compile-time arguments
+    using namespace compute_kernel_lib;
+
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
-    constexpr auto cb_input = tt::CBIndex::c_0;   // Input (x)
-    constexpr auto cb_output = tt::CBIndex::c_2;  // Output
+    constexpr uint32_t cb_input = static_cast<uint32_t>(tt::CBIndex::c_0);
+    constexpr uint32_t cb_output = static_cast<uint32_t>(tt::CBIndex::c_2);
 
     init_sfpu(cb_input, cb_output);
 
+    // logsigmoid(x) = -log(1 + exp(-x))
+    // D0 = x (WaitNoPop — reused as In0 for Logsigmoid)
+    // D1 = x (NoWaitPop — fan-out, becomes exp(-x), popped after)
+    // D1 = -x  → exp(-x)
+    // D0 = logsigmoid(x) using Logsigmoid<In0=x, In1=exp(-x), Out=D0>
+    auto chain = sfpu_chain(
+        Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+        Load<cb_input, Dst::D1, LoadPolicy::NoWaitPop>{},
+        Neg<Dst::D1>{},
+        Exp<Approx::Fast, Approx::Fast, Dst::D1>{},
+        Logsigmoid<Dst::D0, Dst::D1, Dst::D0>{});
+
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        cb_reserve_back(cb_output, per_core_block_dim);
-        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            cb_wait_front(cb_input, 1);
-
-            // ===================================================================
-            // Compute logsigmoid(x) = -softplus(-x) directly in DST registers
-            // ===================================================================
-            tile_regs_acquire();
-
-            copy_tile_to_dst_init_short(cb_input);
-            copy_tile(cb_input, 0, 0);  // Load x to DST[0]
-            copy_tile(cb_input, 0, 1);  // Load x to DST[1]
-
-            // Negate DST[1]: -x (using sign-bit flip)
-            negative_tile_init();
-            negative_tile(1);
-
-            // Apply exp to DST[1]: exp(-x)
-            exp_tile_init<true>();
-            exp_tile<true>(1);
-
-            // Apply logsigmoid SFPU: logsigmoid(x) = -softplus(-x)
-            logsigmoid_tile_init();
-            logsigmoid_tile(0, 1, 0);
-
-            tile_regs_commit();
-            tile_regs_wait();
-
-            pack_tile(0, cb_output);
-            tile_regs_release();
-
-            cb_pop_front(cb_input, 1);
-        }
-        cb_push_back(cb_output, per_core_block_dim);
+        sfpu_pipeline<SfpuOutputPolicy::Bulk, SfpuDataFormatReconfig::NONE, SfpuBatching::Auto>(
+            chain, cb_output, per_core_block_dim);
     }
 }
