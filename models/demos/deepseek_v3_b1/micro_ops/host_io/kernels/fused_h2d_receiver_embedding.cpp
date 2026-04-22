@@ -2,11 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "pcie_noc_utils.h"
 #include "../../../metadata/metadata.hpp"
+
+#include "../../../unified_kernels/termination.hpp"
 
 // Get this value from MeshSocket struct on host
 constexpr uint32_t recv_socket_config_addr = get_compile_time_arg_val(0);
@@ -26,18 +29,6 @@ constexpr uint32_t embedding_page_size = get_compile_time_arg_val(13);
 constexpr uint32_t embedding_addr = get_compile_time_arg_val(14);
 // TensorAccessorArgs for embedding tensor at CT arg index 15
 constexpr auto embedding_args = TensorAccessorArgs<15>();
-
-FORCE_INLINE bool socket_wait_for_pages_with_termination(
-    const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
-    constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == termination_value) {
-            return false;
-        }
-    }
-    return true;
-}
 
 FORCE_INLINE void write_data_to_local_core_with_ack(
     SocketSenderInterface& sender_socket, uint32_t l1_read_addr, uint64_t dst_addr, uint32_t page_size) {
@@ -200,8 +191,7 @@ void kernel_main() {
 
     while (true) {
         // Wait for pages in H2D socket
-        // DPRINT << "H2D Waiting For Pages" << ENDL();
-        if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
+        if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
         // DPRINT << "H2D Waiting For Pages Done" << ENDL();

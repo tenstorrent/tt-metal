@@ -226,7 +226,9 @@ def run_demo(
                 logger.info("Shutting down launch-only pipeline after interrupt.")
 
         model_pipeline.barrier()
-        logger.info("Pod pipeline complete")
+
+        logger.info("Pod pipeline complete - terminating now...")
+        model_pipeline.terminate()
 
 
 def main(argv: list[str] | None = None) -> int:
