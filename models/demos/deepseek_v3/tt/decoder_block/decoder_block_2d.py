@@ -69,6 +69,7 @@ class DecoderBlock2D(DecoderBlock2DBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelState:
         return {}
 

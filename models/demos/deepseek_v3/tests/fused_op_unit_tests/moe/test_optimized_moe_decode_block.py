@@ -358,12 +358,12 @@ def device_mesh_iterator(mesh_shape):
             yield m0, m1, device
 
 
-def get_batch_cluster_idxr(cluster_axis, batch, batch_per_device):
+def get_batch_cluster_idxr(cluster_axis, batch, batches_per_device):
     def _idxr(m0, m1, b):
         if cluster_axis == 0:
-            return m1 * batch + m0 * batch_per_device + b
+            return m1 * batch + m0 * batches_per_device + b
         elif cluster_axis == 1:
-            return m0 * batch + m1 * batch_per_device + b
+            return m0 * batch + m1 * batches_per_device + b
         else:
             return b
 
@@ -450,6 +450,8 @@ def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_
     logger.info(f"Combine Output - Iteration: {iteration} - AllClose: {allclose_output}")
     if not allclose_passed:
         logger.warning(f"FAILED Combine Output - Iteration: {iteration} - AllClose: {allclose_output}")
+        mask = (torch_combine_output - torch_combine_golden).abs() > ATOL_THRESHOLD
+        logger.warning(f"AllClose variation result: {torch_combine_output[mask]}, ref: {torch_combine_golden[mask]}")
 
     return pcc_passed and allclose_passed
 
@@ -537,10 +539,11 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("layer_id, num_layers", [(0, 1)])
-@pytest.mark.parametrize("batches_per_device", [32])
+@pytest.mark.parametrize("batches_per_device", [3, 8, 16, 32])
 @pytest.mark.parametrize("shard_dim", [0])
-@pytest.mark.parametrize("experts", [256])
+@pytest.mark.parametrize("experts_per_device", [2])
 @pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("dispatch_persistent_buffers", [False, True])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("matmul_N", [2048])
@@ -572,7 +575,7 @@ def test_optimized_moe_decode_block(
     num_layers,
     batches_per_device,
     shard_dim,
-    experts,
+    experts_per_device,
     select_experts_k,
     seq,
     hidden_size,
@@ -585,6 +588,7 @@ def test_optimized_moe_decode_block(
     combine_data_parallel_core_dim,
     enable_trace,
     num_iterations,
+    dispatch_persistent_buffers,
 ):
     ############################################
     # initial setup
@@ -599,7 +603,8 @@ def test_optimized_moe_decode_block(
     batch = batches_per_device * num_dispatch_devices
     total_tokens = batch * seq
     tokens_per_device = batch // num_dispatch_devices
-    experts_per_device = experts // num_devices
+
+    experts = experts_per_device * num_devices
     experts_per_cluster = experts // num_replicated_devices
 
     if cluster_axis == 1:
@@ -623,7 +628,9 @@ def test_optimized_moe_decode_block(
     # NOTE: these don't have to be double buffered
     # - there is a global sync in combine after reading all dispatch output (can't loop around on dispatch semaphore)
     # - there is a global sync at the end of dispatch (can't loop around on combine semaphore)
-    dispatch_global_semaphore = ttnn.create_global_semaphore(mesh_device, worker_cores, 0)
+    dispatch_global_semaphore = (
+        ttnn.create_global_semaphore(mesh_device, worker_cores, 0) if dispatch_persistent_buffers else None
+    )
     combine_global_semaphore = ttnn.create_global_semaphore(mesh_device, worker_cores, 0)
 
     ############################################
@@ -922,9 +929,13 @@ def test_optimized_moe_decode_block(
 
     # NOTE: these don't have to be double buffered, as there is a global sync in combine after reading all dispatch output
     tt_dispatch_preallocated_output_tensors = (
-        tt_preallocated_dispatch_output_sparse_buffer,
-        tt_preallocated_dispatch_output_expert_indices,
-        tt_preallocated_dispatch_output_expert_scores,
+        (
+            tt_preallocated_dispatch_output_sparse_buffer,
+            tt_preallocated_dispatch_output_expert_indices,
+            tt_preallocated_dispatch_output_expert_scores,
+        )
+        if dispatch_persistent_buffers
+        else None
     )
 
     logger.info(f"Done creating persistent dispatch output tensors")
@@ -932,7 +943,18 @@ def test_optimized_moe_decode_block(
     ############################################
     # set post combine memory configs
     ############################################
-    tilized_combine_output_memory_config = ttnn.L1_MEMORY_CONFIG
+    post_combine_tilize_output_memory_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[32, 1024],
+            grid=ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7)),
+                }
+            ),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
 
     scaled_output_memory_config = ttnn.L1_MEMORY_CONFIG
 
@@ -1013,7 +1035,9 @@ def test_optimized_moe_decode_block(
             tt_expert_mapping,
             cluster_axis=cluster_axis,
             num_links=4,
-            drain_sync_tilizer_core=None,
+            drain_sync_tilizer_core=None
+            if dispatch_persistent_buffers
+            else (compute_tilize_drain_core.x, compute_tilize_drain_core.y),
             worker_mode=ttnn.WorkerMode.DIRECT,
             dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
             output_tensors=tt_dispatch_preallocated_output_tensors,
@@ -1067,13 +1091,25 @@ def test_optimized_moe_decode_block(
             optional_cross_device_semaphore=combine_global_semaphore,
         )
 
-        tt_tilized_compute_output = ttnn.to_layout(
-            tt_combine_output, layout=ttnn.TILE_LAYOUT, memory_config=tilized_combine_output_memory_config
-        )
-
         # unsqueeze
         # [select_experts_k, tokens_per_device, hidden_size] -> [select_experts_k, 1, tokens_per_device, hidden_size]
-        tt_unsqueezed_output = ttnn.unsqueeze(tt_tilized_compute_output, dim=1)
+        tt_unsqueezed_output = ttnn.unsqueeze(tt_combine_output, dim=1)
+
+        if batches_per_device == ttnn.TILE_SIZE:
+            tt_tilized_compute_output = ttnn.experimental.deepseek_moe_post_combine_tilize(
+                tt_unsqueezed_output,
+                output_memory_config=post_combine_tilize_output_memory_config,
+            )
+
+        else:
+            output_tensor_shape = list(tt_unsqueezed_output.shape)
+            output_tensor_shape[2] = ((output_tensor_shape[2] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            tt_tilized_compute_output = ttnn.tilize_with_val_padding(
+                tt_unsqueezed_output,
+                output_tensor_shape=output_tensor_shape,
+                pad_value=0.0,
+                memory_config=post_combine_tilize_output_memory_config,
+            )
 
         # scale with scores
         # [tokens_per_device, 1, seq, select_experts_k] -> [select_experts_k, 1, tokens_per_device, seq]
@@ -1084,7 +1120,7 @@ def test_optimized_moe_decode_block(
             topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=scaled_output_memory_config
         )
         tt_scaled_output = ttnn.mul(
-            tt_unsqueezed_output, topk_experts_weights, memory_config=scaled_output_memory_config
+            tt_tilized_compute_output, topk_experts_weights, memory_config=scaled_output_memory_config
         )
 
         tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc(
@@ -1095,14 +1131,19 @@ def test_optimized_moe_decode_block(
         )
 
         # [select_experts_k, tokens_per_device, hidden_size // num_replicated_devices] final per device shape
-        tt_final_output = ttnn.experimental.deepseek_moe_reduce_scatter(
-            tt_fast_reduce_output_tensors,
-            output_memory_config=rs_output_memory_config,
-            dim=-1,
-            num_links=4,
-            topology=ttnn.Topology.Ring,
-            cluster_axis=1,
-        )
+        if mesh_shape[1 - cluster_axis] == 8:
+            tt_final_output = ttnn.experimental.deepseek_moe_reduce_scatter(
+                tt_fast_reduce_output_tensors,
+                output_memory_config=rs_output_memory_config,
+                dim=-1,
+                num_links=4,
+                topology=ttnn.Topology.Ring,
+                cluster_axis=1,
+            )
+        elif mesh_shape[1 - cluster_axis] == 1:
+            tt_final_output = tt_fast_reduce_output_tensors[0]
+        else:
+            raise RuntimeError("Bad test config")
 
         return tt_combine_output, tt_final_output
 

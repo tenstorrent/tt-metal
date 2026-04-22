@@ -24,6 +24,12 @@ struct MoEComputeMeshWorkloadFactory {
         // Matmul cores
         std::vector<CoreCoord> matmul_cores;
 
+        // CB handle for tensor backed indices tensor
+        tt::tt_metal::CBHandle indices_cb_handle;
+
+        // CB handle for tensor backed scores tensor
+        tt::tt_metal::CBHandle scores_cb_handle;
+
         // CB handle for shared global sharded tensor
         tt::tt_metal::CBHandle sharded_output_cb_handle;
 
