@@ -88,11 +88,9 @@ void kernel_main() {
 
 #ifdef FUSE_GAMMA
     const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_stick_size);
-    const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
 #endif
 #ifdef FUSE_BETA
     const auto addrb = TensorAccessor(beta_args, beta_addr, beta_stick_size);
-    const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
 #endif
 
     // Generate constant tiles for layernorm compute
@@ -116,8 +114,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_iterations = Wt / cb_length;
     constexpr uint32_t cb_leftovers = Wt % cb_length;
-    constexpr uint32_t blk_iterations = cb_length / blk;
-    constexpr uint32_t blk_leftovers = cb_length % blk;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Read stats tiles
         cb_stats_buf.reserve_back(stats_tiles_cols);
