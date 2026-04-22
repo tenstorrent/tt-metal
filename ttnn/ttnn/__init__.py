@@ -439,13 +439,7 @@ from ttnn.operations.matmul import (
     MatmulParams,
     MatmulInputs,
     MatmulDeviceOperation,
-    MatmulMultiCoreProgramFactory,
     MatmulMultiCoreReuseOptimizedProgramFactory,
-    MatmulMultiCoreReuseMcast1DProgramFactory,
-    MatmulMultiCoreReuseMcast2DProgramFactory,
-    MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory,
-    MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory,
-    matmul_select_program_factory,
     create_matmul_attributes,
 )
 
