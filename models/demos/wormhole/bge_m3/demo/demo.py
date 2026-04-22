@@ -383,6 +383,11 @@ def bge_benchmark_results():
         (128, 1, 10),
         (256, 1, 10),
         (512, 1, 10),
+        (32, 25, 50),
+        (64, 25, 50),
+        (128, 25, 50),
+        (256, 25, 50),
+        (512, 25, 50),
     ],
 )
 @pytest.mark.parametrize("model_name", [DEFAULT_MODEL_NAME])
