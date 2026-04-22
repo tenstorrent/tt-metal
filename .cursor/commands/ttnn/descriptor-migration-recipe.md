@@ -339,6 +339,45 @@ Both must succeed with zero errors.
 
 ---
 
+## Performance best practices
+
+The ProgramDescriptor path calls `create_descriptor` on **every dispatch** (cache hit or miss).
+Everything built inside it — CBDescriptors, KernelDescriptors, CoreRangeSet copies,
+runtime arg vectors — is allocation overhead. Follow these patterns to keep it fast.
+
+### Use constexpr kernel paths
+
+Never build kernel paths with string concatenation. Always use `static constexpr const char*`:
+
+```cpp
+// BAD — heap allocation on every dispatch
+const std::string kernels_dir = "ttnn/cpp/ttnn/operations/my_op/device/kernels/";
+reader_desc.kernel_source = kernels_dir + "reader.cpp";
+
+// GOOD — zero cost
+static constexpr const char* READER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/my_op/device/kernels/reader.cpp";
+reader_desc.kernel_source = READER_KERNEL_PATH;
+```
+
+`kernel_source` is `std::string_view` — it must point to a string that outlives the descriptor.
+`static constexpr const char*` satisfies this.
+
+### Use KernelDescriptor type aliases for args
+
+Use `KernelDescriptor::CompileTimeArgs` and `KernelDescriptor::CoreRuntimeArgs` instead of
+`std::vector<uint32_t>`. These are `SmallVector` types that avoid heap allocation for small ops:
+
+```cpp
+// BAD
+std::vector<uint32_t> compile_time_args{cb_id};
+
+// GOOD
+KernelDescriptor::CompileTimeArgs compile_time_args{cb_id};
+```
+
+---
+
 ## Common pitfalls
 
 1. **Namespace resolution after moving factories.** If factories move to a different

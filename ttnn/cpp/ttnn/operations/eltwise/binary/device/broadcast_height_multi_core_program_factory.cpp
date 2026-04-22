@@ -129,11 +129,11 @@ tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::BroadcastHeightMultiCore:
 
     // ---- Kernel compile-time args ----
 
-    std::vector<uint32_t> reader_compile_time_args;
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args;
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args;
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args;
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(BcastOpDim::H, bcast_math);

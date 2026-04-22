@@ -453,30 +453,49 @@ KernelPaths KernelPaths::get(
     bool is_pre_all_gather, bool is_post_all_gather, bool use_row_major_kernel, bool use_welford) {
     KernelPaths paths;
 
-    constexpr const char* base_path = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/";
-
     if (is_pre_all_gather) {
         paths.reader_sender =
-            std::string(base_path) + "dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp";
+            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp";
         paths.reader_receiver =
-            std::string(base_path) + "dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp";
-        paths.writer = std::string(base_path) + "dataflow/writer_unary_sharded_ln_pre_all_gather.cpp";
-        paths.compute = std::string(base_path) + "compute/layernorm_sharded_pre_allgather.cpp";
+            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp";
+        paths.writer =
+            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "writer_unary_sharded_ln_pre_all_gather.cpp";
+        paths.compute =
+            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+            "layernorm_sharded_pre_allgather.cpp";
     } else if (is_post_all_gather) {
         paths.reader_sender =
-            std::string(base_path) + "dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp";
+            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "reader_mcast_sender_unary_sharded_ln_post_allgather.cpp";
         paths.reader_receiver =
-            std::string(base_path) + "dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
-        paths.writer = use_row_major_kernel ? std::string(base_path) + "dataflow/writer_unary_sharded_ln_rm_gb.cpp"
-                                            : std::string(base_path) + "dataflow/writer_unary_sharded_ln.cpp";
-        paths.compute = std::string(base_path) + "compute/layernorm_sharded_post_allgather.cpp";
+            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
+        paths.writer = use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+                                              "dataflow/writer_unary_sharded_ln_rm_gb.cpp"
+                                            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+                                              "dataflow/writer_unary_sharded_ln.cpp";
+        paths.compute =
+            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+            "layernorm_sharded_post_allgather.cpp";
     } else {
-        paths.reader_sender = std::string(base_path) + "dataflow/reader_mcast_sender_unary_sharded_ln.cpp";
-        paths.reader_receiver = std::string(base_path) + "dataflow/reader_mcast_receiver_unary_sharded_ln.cpp";
-        paths.writer = use_row_major_kernel ? std::string(base_path) + "dataflow/writer_unary_sharded_ln_rm_gb.cpp"
-                                            : std::string(base_path) + "dataflow/writer_unary_sharded_ln.cpp";
-        paths.compute = use_welford ? std::string(base_path) + "compute/layernorm_sharded_welford.cpp"
-                                    : std::string(base_path) + "compute/layernorm_sharded.cpp";
+        paths.reader_sender =
+            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "reader_mcast_sender_unary_sharded_ln.cpp";
+        paths.reader_receiver =
+            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "reader_mcast_receiver_unary_sharded_ln.cpp";
+        paths.writer = use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+                                              "dataflow/writer_unary_sharded_ln_rm_gb.cpp"
+                                            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+                                              "dataflow/writer_unary_sharded_ln.cpp";
+        paths.compute =
+            use_welford
+                ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+                  "layernorm_sharded_welford.cpp"
+                : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
     }
 
     return paths;
@@ -1235,7 +1254,7 @@ bool CoreIndices::is_all_to_all(const RuntimeArgsContext& ctx) const {
     return width_index < ctx.workers.num_cores_all_to_all;
 }
 
-std::vector<uint32_t> build_compute_args(
+tt::tt_metal::KernelDescriptor::CoreRuntimeArgs build_compute_args(
     const CoreIndices& idx, const RuntimeArgsContext& ctx, bool& is_all_to_all_out) {
     std::vector<uint32_t> args{idx.num_reduce_tiles_per_block_h};
     is_all_to_all_out = idx.is_all_to_all(ctx);
@@ -1260,10 +1279,10 @@ std::vector<uint32_t> build_compute_args(
             args.push_back((uint32_t)ctx.num_distributed_devices);
         }
     }
-    return args;
+    return tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(args.begin(), args.end());
 }
 
-std::vector<uint32_t> build_reader_sender_args(
+tt::tt_metal::KernelDescriptor::CoreRuntimeArgs build_reader_sender_args(
     const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx, IDevice* device) {
     // Compute mcast range
     CoreCoord mcast_start, mcast_end;
@@ -1317,10 +1336,10 @@ std::vector<uint32_t> build_reader_sender_args(
             args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
         }
     }
-    return args;
+    return tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(args.begin(), args.end());
 }
 
-std::vector<uint32_t> build_reader_receiver_all_to_all_args(
+tt::tt_metal::KernelDescriptor::CoreRuntimeArgs build_reader_receiver_all_to_all_args(
     const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx) {
     std::vector<uint32_t> args;
 
@@ -1355,10 +1374,11 @@ std::vector<uint32_t> build_reader_receiver_all_to_all_args(
             args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
         }
     }
-    return args;
+    return tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(args.begin(), args.end());
 }
 
-std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(const CoreIndices& idx, const RuntimeArgsContext& ctx) {
+tt::tt_metal::KernelDescriptor::CoreRuntimeArgs build_reader_receiver_not_all_to_all_args(
+    const CoreIndices& idx, const RuntimeArgsContext& ctx) {
     std::vector<uint32_t> args;
     args.push_back(false);  // is_last_all_to_all_worker
     args.push_back(idx.all_to_all_worker_tile_offset_bytes);
@@ -1378,14 +1398,14 @@ std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(const CoreIndice
             args.push_back(ctx.mcast_noc_y[0]);
         }
     }
-    return args;
+    return tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(args.begin(), args.end());
 }
 
-std::vector<uint32_t> build_write_back_args(
+tt::tt_metal::KernelDescriptor::CoreRuntimeArgs build_write_back_args(
     const RuntimeArgsContext& ctx, uint32_t& current_storage_core, uint32_t& current_storage_core_offset) {
     std::vector<uint32_t> args;
     if (!ctx.is_post_all_gather) {
-        return args;
+        return tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(args.begin(), args.end());
     }
 
     args.push_back(current_storage_core_offset * ctx.out_single_tile_size);
@@ -1415,13 +1435,13 @@ std::vector<uint32_t> build_write_back_args(
         }
     }
     args.insert(args.begin(), num_segments);
-    return args;
+    return tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(args.begin(), args.end());
 }
 
-std::vector<uint32_t> build_writer_args(
+tt::tt_metal::KernelDescriptor::CoreRuntimeArgs build_writer_args(
     const CoreIndices& idx,
     const RuntimeArgsContext& ctx,
-    const std::vector<uint32_t>& write_back_args,
+    const tt::tt_metal::KernelDescriptor::CoreRuntimeArgs& write_back_args,
     bool is_all_to_all) {
     std::vector<uint32_t> args;
 
@@ -1441,7 +1461,7 @@ std::vector<uint32_t> build_writer_args(
     args.push_back(idx.gamma_tile_start_id);
     args.push_back(idx.beta_tile_start_id);
     args.insert(args.end(), write_back_args.begin(), write_back_args.end());
-    return args;
+    return tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(args.begin(), args.end());
 }
 
 RuntimeArgsResult RuntimeArgsResult::build(

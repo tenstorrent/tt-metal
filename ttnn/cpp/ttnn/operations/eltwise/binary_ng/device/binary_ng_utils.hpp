@@ -49,7 +49,7 @@ struct BinaryNgKernelConfig {
     std::optional<uint32_t> bcast_input;
 };
 
-std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op);
+std::string_view get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op);
 
 struct OpConfig {
     enum class FpuBinaryOp { ADD, SUB, MUL };

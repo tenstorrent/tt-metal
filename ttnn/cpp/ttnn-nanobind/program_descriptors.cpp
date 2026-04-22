@@ -50,14 +50,14 @@ public:
         CoreCoord target(x_, y);
         for (auto& [coord, vec] : args_) {
             if (coord == target) {
-                vec = values;  // Update existing
+                vec.assign(values.begin(), values.end());  // Update existing
                 return;
             }
         }
-        args_.push_back({target, values});  // Append if not found
+        args_.push_back({target, {values.begin(), values.end()}});  // Append if not found
     }
 
-    std::vector<uint32_t>& get_item(size_t y) {
+    tt::tt_metal::KernelDescriptor::CoreRuntimeArgs& get_item(size_t y) {
         CoreCoord target(x_, y);
         for (auto& [coord, values] : args_) {
             if (coord == target) {
@@ -69,12 +69,12 @@ public:
     }
 
     void extend_item(size_t y, const std::vector<uint32_t>& values) {
-        std::vector<uint32_t>& target_vec = get_item(y);
+        auto& target_vec = get_item(y);
         target_vec.insert(target_vec.end(), values.begin(), values.end());
     }
 
     void append_item(size_t y, uint32_t value) {
-        std::vector<uint32_t>& target_vec = get_item(y);
+        auto& target_vec = get_item(y);
         target_vec.push_back(value);
     }
 
@@ -90,14 +90,16 @@ public:
 
     RuntimeArgsColProxy get_col(size_t x) { return RuntimeArgsColProxy(args_, x); }
 
-    void append(const CoreCoord& coord, const std::vector<uint32_t>& values) { args_.push_back({coord, values}); }
+    void append(const CoreCoord& coord, const std::vector<uint32_t>& values) {
+        args_.push_back({coord, {values.begin(), values.end()}});
+    }
 
     tt::tt_metal::KernelDescriptor::RuntimeArgs& get() { return args_; }
     const tt::tt_metal::KernelDescriptor::RuntimeArgs& get() const { return args_; }
 
     size_t size() const { return args_.size(); }
 
-    std::pair<CoreCoord, std::vector<uint32_t>>& at(size_t idx) { return args_.at(idx); }
+    auto& at(size_t idx) { return args_[idx]; }
 
     void clear() { args_.clear(); }
 

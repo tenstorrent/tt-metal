@@ -1096,8 +1096,8 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     }
 
     // ---- Reader Kernel ----
-    std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> reader_common_runtime_args;
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args;
+    KernelDescriptor::CommonRuntimeArgs reader_common_runtime_args;
 
     if (variant == TernaryVariant::TTS) {
         // TTS: c_0 = predicate, c_1 = value_true tensor
@@ -1154,8 +1154,8 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     reader_desc.common_runtime_args = reader_common_runtime_args;
 
     // ---- Writer Kernel ----
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tensor_cb};
-    std::vector<uint32_t> writer_common_runtime_args;
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(std::uint32_t)output_tensor_cb};
+    KernelDescriptor::CommonRuntimeArgs writer_common_runtime_args;
     tt::tt_metal::TensorAccessorArgs(*output.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_compile_time_args, writer_common_runtime_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
@@ -1212,7 +1212,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
 
     // All variants use the same compile args now
     uint32_t scalar_is_true_value = (variant == TernaryVariant::TST) ? 1 : 0;
-    std::vector<uint32_t> compute_kernel_args = {
+    KernelDescriptor::CompileTimeArgs compute_kernel_args = {
         num_tiles_per_cycle, scalar_is_true_value};  // {num_tiles_per_cycle, scalar_is_true_value}
 
     // Add binary_ng style defines for TTT column broadcast case
@@ -1266,10 +1266,10 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
         kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
     }
 
-    std::string compute_kernel_path = (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
-                                       operation_attributes.dtype == DataType::INT32)
-                                          ? override_addcmul_compute_kernel(compute_kernel)
-                                          : get_kernel_file_path(compute_kernel, is_fpu);
+    std::string_view compute_kernel_path = (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
+                                            operation_attributes.dtype == DataType::INT32)
+                                               ? override_addcmul_compute_kernel(compute_kernel)
+                                               : get_kernel_file_path(compute_kernel, is_fpu);
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = compute_kernel_path;

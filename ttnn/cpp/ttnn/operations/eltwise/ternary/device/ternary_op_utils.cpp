@@ -295,56 +295,96 @@ TernaryKernelConfig::TernaryKernelConfig(
     TT_FATAL(false, "Invalid ternary operation type, variant or broadcast type combination");
 }
 
-std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
-    constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels";
-    constexpr std::string_view dataflow = "{}/dataflow/{}";
-    constexpr std::string_view compute = "{}/compute/{}";
+std::string_view get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
+    // All return values are string literals with static storage duration so the returned
+    // std::string_view remains valid for the lifetime of the program.
+    static constexpr const char* READER_NOSUBTILEBCAST_TTT =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/ternary_reader_nosubtilebcast_ttt.cpp";
+    static constexpr const char* READER_NOBCAST_TST_TTS =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/ternary_reader_nobcast_tst_tts.cpp";
+    static constexpr const char* READER_OUTER_BCAST_TST_TTS =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/tst_tts_reader_outer_bcast.cpp";
+    static constexpr const char* READER_SCALAR_BCAST_TST_TTS =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/tst_tts_reader_scalar_bcast.cpp";
+    static constexpr const char* READER_SCALAR_TTT =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/ternary_reader_scalar_ttt.cpp";
+    static constexpr const char* READER_COLBCAST_TTT =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/ternary_reader_colbcast_ttt.cpp";
+    static constexpr const char* READER_COL_BCAST_TST_TTS =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/tts_tst_reader_col_bcast.cpp";
+    static constexpr const char* READER_ROWBCAST_TTT =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/ternary_reader_rowbcast_ttt.cpp";
+    static constexpr const char* READER_ROW_BCAST_TST_TTS =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/tts_tst_reader_row_bcast.cpp";
+    static constexpr const char* READER_ROW_COL_BCAST_TTT =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/ternary_reader_row_col_bcast_ttt.cpp";
+    static constexpr const char* READER_ROW_COL_BCAST_TST_TTS =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/tts_tst_reader_row_col_bcast.cpp";
+    static constexpr const char* WRITER_NOBCAST =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/ternary_writer_nobcast.cpp";
+    static constexpr const char* COMPUTE_NO_BCAST_TTT =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_no_bcast_ttt.cpp";
+    static constexpr const char* COMPUTE_BCAST_TTT =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_col_scalar_bcast_ttt.cpp";
+    static constexpr const char* COMPUTE_ROW_BCAST_TTT =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_row_bcast_ttt.cpp";
+    static constexpr const char* COMPUTE_BCAST_TTS_TST =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_col_scalar_bcast_tts_tst.cpp";
+    static constexpr const char* COMPUTE_NO_BCAST_TTS_TST =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_no_bcast_tts_tst.cpp";
+    static constexpr const char* COMPUTE_NO_BCAST_ADDC =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_addc_ops_sfpu.cpp";
+    static constexpr const char* COMPUTE_BCAST_ADDC =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_addc_ops_sfpu_bcast.cpp";
+    static constexpr const char* COMPUTE_ROW_BCAST_ADDC_FPU =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_addc_ops_fpu_rowbcast.cpp";
+    static constexpr const char* COMPUTE_ROW_BCAST_ADDC_SFPU =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_addc_ops_sfpu.cpp";
+
     switch (kernel_name) {
         case KernelName::ReaderNoBcastTTT:
-        case KernelName::ReaderOuterBcastTTT:
-            return fmt::format(dataflow, root, "ternary_reader_nosubtilebcast_ttt.cpp");
+        case KernelName::ReaderOuterBcastTTT: return READER_NOSUBTILEBCAST_TTT;
         case KernelName::ReaderNoBcastTST:
-        case KernelName::ReaderNoBcastTTS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
+        case KernelName::ReaderNoBcastTTS: return READER_NOBCAST_TST_TTS;
         case KernelName::ReaderOuterBcastTTS:
-        case KernelName::ReaderOuterBcastTST: return fmt::format(dataflow, root, "tst_tts_reader_outer_bcast.cpp");
+        case KernelName::ReaderOuterBcastTST: return READER_OUTER_BCAST_TST_TTS;
         case KernelName::ReaderScalarBcastTTS:
-        case KernelName::ReaderScalarBcastTST: return fmt::format(dataflow, root, "tst_tts_reader_scalar_bcast.cpp");
-        case KernelName::ReaderScalarBcastTTT: return fmt::format(dataflow, root, "ternary_reader_scalar_ttt.cpp");
-        case KernelName::ReaderColBcastTTT: return fmt::format(dataflow, root, "ternary_reader_colbcast_ttt.cpp");
+        case KernelName::ReaderScalarBcastTST: return READER_SCALAR_BCAST_TST_TTS;
+        case KernelName::ReaderScalarBcastTTT: return READER_SCALAR_TTT;
+        case KernelName::ReaderColBcastTTT: return READER_COLBCAST_TTT;
         case KernelName::ReaderColBcastTTS:
-        case KernelName::ReaderColBcastTST: return fmt::format(dataflow, root, "tts_tst_reader_col_bcast.cpp");
-        case KernelName::ReaderRowBcastTTT: return fmt::format(dataflow, root, "ternary_reader_rowbcast_ttt.cpp");
+        case KernelName::ReaderColBcastTST: return READER_COL_BCAST_TST_TTS;
+        case KernelName::ReaderRowBcastTTT: return READER_ROWBCAST_TTT;
         case KernelName::ReaderRowBcastTST:
-        case KernelName::ReaderRowBcastTTS: return fmt::format(dataflow, root, "tts_tst_reader_row_bcast.cpp");
-        case KernelName::ReaderRowColBcastTTT:
-            return fmt::format(dataflow, root, "ternary_reader_row_col_bcast_ttt.cpp");
+        case KernelName::ReaderRowBcastTTS: return READER_ROW_BCAST_TST_TTS;
+        case KernelName::ReaderRowColBcastTTT: return READER_ROW_COL_BCAST_TTT;
         case KernelName::ReaderRowColBcastTTS:
-        case KernelName::ReaderRowColBcastTST: return fmt::format(dataflow, root, "tts_tst_reader_row_col_bcast.cpp");
+        case KernelName::ReaderRowColBcastTST: return READER_ROW_COL_BCAST_TST_TTS;
         case KernelName::WriterNoBcastTernary:
         case KernelName::WriterNoBcast:
-        case KernelName::WriterColBcastTTT: return fmt::format(dataflow, root, "ternary_writer_nobcast.cpp");
-        case KernelName::ComputeNoBcastTTT: return fmt::format(compute, root, "ternary_sfpu_no_bcast_ttt.cpp");
-        case KernelName::ComputeBcastTTT: return fmt::format(compute, root, "ternary_sfpu_col_scalar_bcast_ttt.cpp");
-        case KernelName::ComputeRowBcastTTT: return fmt::format(compute, root, "ternary_sfpu_row_bcast_ttt.cpp");
-        case KernelName::ComputeBcastTTS_TST:
-            return fmt::format(compute, root, "ternary_sfpu_col_scalar_bcast_tts_tst.cpp");
-        case KernelName::ComputeNoBcastTTS_TST: return fmt::format(compute, root, "ternary_sfpu_no_bcast_tts_tst.cpp");
-        case KernelName::ComputeNoBcastAddcOp: return fmt::format(compute, root, "ternary_addc_ops_sfpu.cpp");
-        case KernelName::ComputeBcastAddcOp: return fmt::format(compute, root, "ternary_addc_ops_sfpu_bcast.cpp");
+        case KernelName::WriterColBcastTTT: return WRITER_NOBCAST;
+        case KernelName::ComputeNoBcastTTT: return COMPUTE_NO_BCAST_TTT;
+        case KernelName::ComputeBcastTTT: return COMPUTE_BCAST_TTT;
+        case KernelName::ComputeRowBcastTTT: return COMPUTE_ROW_BCAST_TTT;
+        case KernelName::ComputeBcastTTS_TST: return COMPUTE_BCAST_TTS_TST;
+        case KernelName::ComputeNoBcastTTS_TST: return COMPUTE_NO_BCAST_TTS_TST;
+        case KernelName::ComputeNoBcastAddcOp: return COMPUTE_NO_BCAST_ADDC;
+        case KernelName::ComputeBcastAddcOp: return COMPUTE_BCAST_ADDC;
         case KernelName::ComputeRowBcastAddcOp:
-            return fmt::format(
-                compute, root, is_fpu ? "ternary_addc_ops_fpu_rowbcast.cpp" : "ternary_addc_ops_sfpu.cpp");
+            return is_fpu ? COMPUTE_ROW_BCAST_ADDC_FPU : COMPUTE_ROW_BCAST_ADDC_SFPU;
         default: __builtin_unreachable();
     }
 }
 
-std::string override_addcmul_compute_kernel(KernelName kernel_name) {
-    constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels";
-    constexpr std::string_view compute = "{}/compute/{}";
+std::string_view override_addcmul_compute_kernel(KernelName kernel_name) {
+    static constexpr const char* ADDCMUL_INT_SFPU =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_addcmul_int_sfpu.cpp";
+    static constexpr const char* ADDCMUL_INT_SFPU_BCAST =
+        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_addcmul_int_sfpu_bcast.cpp";
     switch (kernel_name) {
-        case KernelName::ComputeNoBcastAddcOp: return fmt::format(compute, root, "ternary_addcmul_int_sfpu.cpp");
+        case KernelName::ComputeNoBcastAddcOp: return ADDCMUL_INT_SFPU;
         case KernelName::ComputeBcastAddcOp:
-        case KernelName::ComputeRowBcastAddcOp: return fmt::format(compute, root, "ternary_addcmul_int_sfpu_bcast.cpp");
+        case KernelName::ComputeRowBcastAddcOp: return ADDCMUL_INT_SFPU_BCAST;
         default: __builtin_unreachable();
     }
 }

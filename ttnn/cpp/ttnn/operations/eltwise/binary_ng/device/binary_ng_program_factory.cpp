@@ -664,8 +664,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     // WRITER KERNEL DESCRIPTOR
-    std::vector<uint32_t> writer_compile_time_args;
-    std::vector<uint32_t> writer_common_runtime_args;
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args;
+    KernelDescriptor::CommonRuntimeArgs writer_common_runtime_args;
     tt::tt_metal::TensorAccessorArgs(*c_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_compile_time_args, writer_common_runtime_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
@@ -794,8 +794,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     };
 
     // READER KERNEL DESCRIPTOR
-    std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> reader_common_runtime_args;
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args;
+    KernelDescriptor::CommonRuntimeArgs reader_common_runtime_args;
     tt::tt_metal::TensorAccessorArgs(*a_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_compile_time_args, reader_common_runtime_args);
     tt::tt_metal::TensorAccessorArgs(
