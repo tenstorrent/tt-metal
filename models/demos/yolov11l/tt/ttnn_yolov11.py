@@ -61,8 +61,16 @@ class TtnnYoloV11:
             reshard=True,
             use_block_sharded=c3k2_6_fits_block,
             cv1_config_override={"act_block_h": 32} if c3k2_6_fits_block else None,
+            
         )
-        self.conv7 = TtnnConv(device, parameters.conv_args[17], parameters.model[17], deallocate_activation=True)
+        self.conv7 = TtnnConv(
+            device,
+            parameters.conv_args[17],
+            parameters.model[17],
+            deallocate_activation=True,
+            reshard=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )
         self.c3k2_7 = TtnnC3k2(
             device,
             parameters.conv_args[19],
@@ -71,7 +79,14 @@ class TtnnYoloV11:
             reshard=True,
             use_block_sharded=True,
         )
-        self.conv8 = TtnnConv(device, parameters.conv_args[20], parameters.model[20], deallocate_activation=True)
+        self.conv8 = TtnnConv(
+            device,
+            parameters.conv_args[20],
+            parameters.model[20],
+            deallocate_activation=True,
+            reshard=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )
         self.c3k2_8 = TtnnC3k2(
             device,
             parameters.conv_args[22],

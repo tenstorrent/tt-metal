@@ -59,7 +59,7 @@ class TtnnC3k2:
                 reshard=reshard,
                 deallocate_activation=True,
                 shard_layout=cv1_shard_layout,
-                config_override=cv1_config_override,
+                # config_override=cv1_config_override,
             )
             self.cv2 = TtnnConv(
                 device,
