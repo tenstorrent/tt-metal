@@ -132,7 +132,7 @@ def test_qwen2_meta_from_dots_config_has_no_vision_keys():
     """
     Contract (no ttnn): stripping Dots OCR config to Qwen2Config yields only decoder weights on meta.
 
-    Mirrors ``qwen25_vl`` building a submodule from config instead of the full multimodal model.
+    Builds a ``Qwen2ForCausalLM`` meta model from a stripped config (text-only) like other decoder-only bring-up tests.
     """
     import torch
     from transformers import AutoConfig

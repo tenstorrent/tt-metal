@@ -57,7 +57,7 @@ class DotsOCRReference:
 
     @property
     def tokenizer(self):
-        # Many demos expect a `.tokenizer` on the reference wrapper, mirroring qwen25_vl.
+        # Expose a `.tokenizer` for API parity with other multimodal reference wrappers.
         return getattr(self.processor, "tokenizer", None)
 
     @property

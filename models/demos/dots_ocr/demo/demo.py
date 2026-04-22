@@ -8,11 +8,9 @@ Two backends, selected with ``--backend``:
 
 - ``hf``:   HuggingFace reference path (torch). Always produces full generations. Useful for
             validating output text and for comparing against the TT path.
-- ``ttnn``: Builds the qwen25_vl-style Dots TT stack (``DotsTransformer`` +
-            ``DropInVisionTransformer``) and runs prefill + decode via
-            :class:`models.tt_transformers.tt.generator.Generator`. This mirrors
-            ``models/demos/qwen25_vl/demo/demo.py`` but with the simpler single-user /
-            single-image loop Dots needs. Requires ``MESH_DEVICE`` to be set.
+- ``ttnn``: Builds the Dots TT stack (``DotsTransformer`` + optional
+            ``DropInVisionTransformer`` for ``--vision-backend ttnn``) and runs prefill + decode via
+            :class:`models.tt_transformers.tt.generator.Generator`. Requires ``MESH_DEVICE`` to be set.
 
 The TTNN path loads **real** checkpoint tensors via ``DotsModelArgs.load_real_state_dict`` /
 ``models.demos.dots_ocr.tt.load.load_dots_full_state_dict`` (filtered HF loads; no dummy weights).
@@ -166,7 +164,7 @@ def run_hf_backend(
 
 
 # ---------------------------------------------------------------------------
-# TTNN backend — mirrors qwen25_vl/demo/demo.py end-to-end flow
+# TTNN backend (prefill + host decode, same general pattern as other tt_transformers VLM demos)
 # ---------------------------------------------------------------------------
 
 
@@ -184,16 +182,15 @@ def _load_dots_ttnn_state_dict(model_args, *, text_qkv_permute: bool) -> dict:
 
 def _build_tt_stack(model_id: str, mesh_device, *, max_seq_len: int, text_qkv_permute: bool = True):
     """
-    Shared TT stack builder for demos + perf benchmark (mirrors qwen25_vl structure).
+    Shared TT stack builder for demos + perf benchmark.
 
     Returns: (ref, model_args, tt_model, generator, visual)
     """
     import ttnn
     from models.demos.dots_ocr.tt.generator import Generator
-    from models.demos.dots_ocr.tt.model import DotsTransformer
+    from models.demos.dots_ocr.tt.model import DotsTransformer, DropInVisionTransformer
     from models.demos.dots_ocr.tt.model_config import DotsModelArgs
     from models.demos.dots_ocr.tt.vision_model_config import DotsVisionModelArgs
-    from models.demos.dots_ocr.tt.vision_qwenstyle import DropInVisionTransformerQwenStyle
 
     os.environ.setdefault("HF_MODEL", model_id)
     ref = DotsOCRReference(HFLoadSpec(model_id=model_id))
@@ -209,7 +206,7 @@ def _build_tt_stack(model_id: str, mesh_device, *, max_seq_len: int, text_qkv_pe
     # Dense KV cache (max_seq_len along seq dim). Paged KV + prefill without page_table uses
     # fill_cache, which requires cache seq >= padded prefill; paged tensors only expose
     # block_size (e.g. 32) on that axis — use paged attention only when wiring page_table
-    # like qwen25_vl/demo (create_tt_page_table + paged_fill_cache).
+    # paged path (create_tt_page_table + paged_fill_cache).
     tt_model = DotsTransformer(
         args=model_args,
         dtype=ttnn.bfloat8_b,
@@ -223,7 +220,7 @@ def _build_tt_stack(model_id: str, mesh_device, *, max_seq_len: int, text_qkv_pe
     visual = None
     if hasattr(ref.model, "vision_tower") or hasattr(ref.model, "visual"):
         vision_model_args = DotsVisionModelArgs(mesh_device=mesh_device, hf_config=ref.model.config)
-        visual = DropInVisionTransformerQwenStyle(ref.model, vision_model_args, debug=False)
+        visual = DropInVisionTransformer(ref.model, vision_model_args, debug=False)
 
     return ref, model_args, tt_model, generator, visual
 
@@ -240,10 +237,8 @@ def _decode_loop(
     repetition_penalty: float | None = None,
 ) -> list[list[int]]:
     """
-    Minimal qwen25_vl-style decode loop.
-
-    Host-side argmax sampling, deallocates nothing fancy, one user per batch (Dots OCR is
-    typically batch=1). Returns per-user generated token id lists.
+    Argmax decode on the host: one user per batch (typical for Dots OCR), returns per-user
+    new token id lists. No custom device-side sampling.
     """
     batch_size = prefilled_logits.shape[0]
     current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)], dtype=torch.int32)
@@ -339,10 +334,9 @@ def run_ttnn_backend(
     from models.demos.dots_ocr.tt.common import merge_vision_tokens, preprocess_inputs_prefill, text_rope_from_hf
     from models.demos.dots_ocr.tt.generator import Generator
     from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, get_max_seq_len_cap, open_mesh_device
-    from models.demos.dots_ocr.tt.model import DotsTransformer
+    from models.demos.dots_ocr.tt.model import DotsTransformer, DropInVisionTransformer
     from models.demos.dots_ocr.tt.model_config import DotsModelArgs
     from models.demos.dots_ocr.tt.vision_model_config import DotsVisionModelArgs
-    from models.demos.dots_ocr.tt.vision_qwenstyle import DropInVisionTransformerQwenStyle
 
     # Must stay None until assigned so ``finally`` can clear mesh refs safely.
     model_args = None
@@ -386,12 +380,12 @@ def run_ttnn_backend(
         generator = Generator(tt_model, model_args, mesh_device, processor=ref.processor, tokenizer=ref.tokenizer)
 
         # Vision embeddings:
-        # - `hf`: match the working reference demo exactly (torch vision_tower)
-        # - `ttnn`: run the TT vision stack (bring-up; may not match HF yet)
+        # - `hf`: `ref.vision_forward` (full HF `vision_tower` on host)
+        # - `ttnn`: `DropInVisionTransformer` (TTNN QKV/MLP, torch RoPE+SDPA, TTNN merger; weights from ref state_dict)
         visual = None
         if vision_backend == "ttnn" and (hasattr(ref.model, "vision_tower") or hasattr(ref.model, "visual")):
             vision_model_args = DotsVisionModelArgs(mesh_device=mesh_device, hf_config=ref.model.config)
-            visual = DropInVisionTransformerQwenStyle(ref.model, vision_model_args, debug=False)
+            visual = DropInVisionTransformer(ref.model, vision_model_args, debug=False)
         else:
             vision_model_args = None
 
@@ -529,7 +523,7 @@ def run_ttnn_backend(
 
 
 def _load_prompts_from_json(path: str) -> list[tuple[str | None, str]]:
-    """Load ``[{image, prompt}, ...]`` entries. Same shape as ``qwen25_vl/demo/sample_prompts/``."""
+    """Load ``[{image, prompt}, ...]`` entries (list of dicts with optional ``image`` and ``prompt``)."""
     with open(path, "r") as f:
         data = json.load(f)
     out: list[tuple[str | None, str]] = []
@@ -593,8 +587,9 @@ def main() -> None:
         default="hf",
         choices=["hf", "ttnn"],
         help=(
-            "Vision embeddings for TTNN: 'hf' uses the HF vision tower (matches reference OCR; recommended). "
-            "'ttnn' uses the on-device vision stack (bring-up; logits/OCR often differ until PCC matches HF)."
+            "Vision for TTNN run: 'hf' uses ``ref.vision_forward`` (full HF vision_tower on host). "
+            "'ttnn' uses ``DropInVisionTransformer``: patchify on host, TTNN QKV/MLP linears, "
+            "torch RoPE+SDPA, TTNN patch merger (no HF block forward)."
         ),
     )
     parser.add_argument(

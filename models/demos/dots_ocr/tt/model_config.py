@@ -191,7 +191,7 @@ class DotsModelArgs(ModelArgs):
 
     def get_state_dict_prefix(self, module_name: str, layer_num=None, is_vision: bool = False):
         """
-        Dots OCR state_dict prefix helper — mirrors ``qwen25_vl.VisionModelArgs.get_state_dict_prefix``.
+        Dots OCR state_dict prefix helper for ``vision_tower`` / text submodules.
 
         Text decoder keys follow the same Meta-style layout as ``ModelArgs`` (``layers.{i}.attention.*``,
         ``layers.{i}.feed_forward.*``) after ``convert_*_hf_to_meta*``; vision keys live under

@@ -89,7 +89,7 @@ class LMHead(LightweightModule):
 
                 cache_file_name = (
                     None
-                    if args.dummy_weights
+                    if args.dummy_weights or weight_cache_path is None
                     else weight_cache_path
                     / f"output_lm_head_{len(split_sizes)}_split_shard_{i}_{combined_split.shape[-1]}_mode_{mode}"
                 )

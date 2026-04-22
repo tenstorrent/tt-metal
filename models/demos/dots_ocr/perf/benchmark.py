@@ -9,7 +9,7 @@ Measures:
   - ``decode_tok_s``  — steady-state decode throughput (tokens / s).
   - ``avg_latency``   — total wall time for the full iteration.
 
-Aligns with the reporting style of qwen25_vl (``models/demos/qwen25_vl/PERF.md``).
+Uses the same timing columns as other VLM/decoder TT demos (ttft, decode_tok_s, etc.).
 """
 
 from __future__ import annotations
@@ -58,7 +58,9 @@ def _summarize(backend: str, metrics: list[dict]) -> dict:
 def benchmark_hf(model_id: str, image_path: str, prompt: str, max_new_tokens: int, warmup: int, iters: int) -> dict:
     logger.info("Running HF reference benchmark...")
     ref = DotsOCRReference(HFLoadSpec(model_id=model_id))
-    image = Image.open(image_path).convert("RGB") if os.path.exists(image_path) else None
+    image = None
+    if image_path and os.path.isfile(image_path):
+        image = Image.open(image_path).convert("RGB")
     inputs = ref.preprocess_image_and_prompt(image, prompt)
 
     for _ in range(warmup):

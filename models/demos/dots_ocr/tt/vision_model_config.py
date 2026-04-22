@@ -77,7 +77,7 @@ class DotsVisionModelArgs(DotsModelArgs):
         self.vision_intermediate_size = self.vision_config.intermediate_size
         self.vision_mlp_dim = self.vision_intermediate_size
 
-        # qwen25_vl-style aliases expected by its TT vision blocks
+        # Intermediate MLP width (``vision_config.intermediate_size``), used for tile padding.
         self.vision_unpadded_hidden_dim = self.vision_intermediate_size
 
         # Patching configuration
@@ -99,7 +99,7 @@ class DotsVisionModelArgs(DotsModelArgs):
         # TTNN-specific configurations
         self.tile_size = 32  # Standard TTNN tile size
 
-        # Pad hidden dim to a tile multiple per device (same intent as qwen25_vl VisionModelArgs)
+        # Pad hidden dim to a tile multiple for TTNN matmuls
         num_dev = max(getattr(self, "num_devices", 1), 1)
         self.vision_hidden_dim = _nearest_multiple(self.vision_unpadded_hidden_dim, self.tile_size * num_dev)
         if self.vision_hidden_dim != self.vision_unpadded_hidden_dim:
@@ -112,15 +112,15 @@ class DotsVisionModelArgs(DotsModelArgs):
         if self.vision_padded_head_dim != self.vision_head_dim:
             logger.info(f"Vision: padding head dim from {self.vision_head_dim} to {self.vision_padded_head_dim}")
 
-        # qwen25_vl VisionAttention expects this aggregate qkv size
+        # Aggregate QKV size if using padded head dims (legacy bring-up field)
         self.vision_qkv_size = self.vision_padded_head_dim * (2 * self.vision_n_kv_heads + self.vision_n_heads)
 
-        # Provide defaults used by qwen25_vl attention path
+        # Long-sequence / prefill shims (optional; used by some matmul configs)
         self.MAX_QKV_MM_SEQ_LEN = getattr(self, "MAX_QKV_MM_SEQ_LEN", 1024)
         self.min_kv_prefill_shard_seqlen = getattr(self, "min_kv_prefill_shard_seqlen", 0)
         self.ccl_dtype = getattr(self, "ccl_dtype", None)
 
-        # qwen25_vl uses a VISION_WO_PREFILL_PROGCFG; mirror with a simple config derived from matmul_config helpers.
+        # Optional prefill program config for large vision sequences.
         try:
             num_rows = lambda seq_len: min(seq_len, 2048)
             k_dim = self.vision_dim
@@ -136,16 +136,13 @@ class DotsVisionModelArgs(DotsModelArgs):
         except Exception:
             pass
 
-        # qwen25_vl vision MLP expects `args.optimizations.bfp4_mlp`.
-        # Dots uses `parse_optimizations`/DecodersPrecision in other paths; provide a compatibility shim.
+        # MLP dtype hint (``bfp4_mlp``) for paths that read ``args.optimizations``.
         opt = getattr(self, "optimizations", None)
         if opt is None or not hasattr(opt, "bfp4_mlp"):
             self.optimizations = types.SimpleNamespace(bfp4_mlp=False)
 
-        # qwen25_vl vision attention/MLP blocks expect `model_config["DECODERS_OPTIMIZATIONS"]` to have
-        # entries for every vision layer index. Dots' `ModelArgs` typically sizes this for the *text*
-        # decoder (`n_layers=28`), so indexing at vision layer 28..41 will KeyError. Provide a vision
-        # compatibility shim that returns conservative defaults independent of `decoder_id`.
+        # Some TT helpers read ``model_config["DECODERS_OPTIMIZATIONS"]`` per layer; Dots text config
+        # may not index vision layer ids. Provide a small shim for vision bring-up.
         ttnn = get_ttnn()
 
         class _VisionOptimShim:
@@ -204,12 +201,10 @@ class DotsVisionModelArgs(DotsModelArgs):
         """
         Get state dict prefix for vision components.
 
-        This follows the same conventions as `qwen25_vl.tt.model_config.VisionModelArgs` so we can
-        reuse its TT vision blocks for correctness bring-up.
+        Keys follow the HF Dots ``vision_tower`` layout (``feed_forward``, ``self_attn`` → ``attention`` in maps).
         """
         layer_prefix = f"vision_tower.blocks.{layer_num}." if layer_num is not None else ""
         module_map = {
-            # qwen25_vl TT blocks expect these canonical names
             "MLP": "feed_forward",
             "VisionAttention": "attention",
             "VisionBlock": "",
@@ -218,7 +213,12 @@ class DotsVisionModelArgs(DotsModelArgs):
             "PatchEmbed": "vision_tower.patch_embed",
             "": "",
         }
-        return layer_prefix + module_map.get(module_name, "")
+        base = layer_prefix + module_map.get(module_name, "")
+        # Most call sites expect prefixes to end with "." so they can append "weight"/"bias" keys.
+        # Keep "" unchanged for modules that intentionally return empty prefix.
+        if base and not base.endswith("."):
+            base = base + "."
+        return base
 
     def prepare_residual_tensor_prefill(self, x_bsh, force_replicated: bool = False):
         """

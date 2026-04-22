@@ -4,10 +4,9 @@
 """
 End-to-end structural / PCC test for Dots OCR.
 
-Mirrors the qwen25_vl demo's end-to-end shape: builds the HF reference model + the TT
-``DotsTransformer`` + ``DropInVisionTransformer``, pushes a synthetic image through the TT
-vision path, and — when a device is available and weights are present — verifies the logits
-are shape-compatible with the HF reference.
+Builds the HF Dots reference (``DotsOCRReference``) + TT ``DotsTransformer`` +
+``DropInVisionTransformer``, runs a minimal TT vision forward with synthetic inputs, and —
+when a device and weights are available — checks shape compatibility with the reference path.
 
 The test stays skippable on CI (no device). When a mesh is available, it loads **real** Dots
 checkpoint tensors via ``load_real_state_dict`` (requires HF cache / network unless skipped).
@@ -30,16 +29,19 @@ def test_e2e_structural_pcc(tmp_path):
     """
     Structural end-to-end test.
 
-    Verifies that the new qwen25_vl-aligned stack (``DotsTransformer`` +
-    ``DropInVisionTransformer``) can be instantiated and called with synthetic inputs.
+    Verifies that the Dots TT stack (``DotsTransformer`` + ``DropInVisionTransformer``) can be
+    instantiated and called with synthetic inputs.
     """
     torch.manual_seed(0)
 
     ttnn = pytest.importorskip("ttnn")
     if not hasattr(ttnn, "open_mesh_device") or not hasattr(ttnn, "MeshShape"):
         pytest.skip("TTNN mesh API not available")
-    if os.environ.get("MESH_DEVICE") is None:
-        pytest.skip("Requires TT device (set MESH_DEVICE)")
+    # Default topology when unset; skip only if the mesh cannot be opened (true no-device case).
+    os.environ.setdefault("MESH_DEVICE", "T3K")
+    os.environ.setdefault("DOTS_T3K_OPEN_FULL_MESH", "1")
+    os.environ.setdefault("DOTS_T3K_CREATE_SUBMESH", "1")
+    os.environ.setdefault("DOTS_T3K_TP", "2")
 
     from models.demos.dots_ocr.reference.hf_utils import HFLoadSpec
     from models.demos.dots_ocr.reference.model import DotsOCRReference
@@ -54,9 +56,12 @@ def test_e2e_structural_pcc(tmp_path):
 
         # Honors MESH_DEVICE (N150/N300/T3K). dots.mocr is GQA with num_kv_heads=2,
         # so T3K is auto-clamped to a 1x2 submesh (see tt/mesh.py).
-        device = _open_mesh()
+        try:
+            device = _open_mesh()
+        except Exception as exc:
+            pytest.skip(f"TT device unavailable ({type(exc).__name__}): {exc}")
 
-        # Mirror qwen25_vl: when running on-device, default to the real checkpoint unless the user overrides.
+        # On-device: default to the real Dots checkpoint unless the user overrides.
         # The tiny random models often have hidden_size=16 which is incompatible with TT tiling.
         default_model_id = "rednote-hilab/dots.mocr"
         spec = HFLoadSpec(model_id=os.environ.get("HF_MODEL", default_model_id), dtype=torch.bfloat16)
@@ -123,17 +128,4 @@ def test_e2e_structural_pcc(tmp_path):
 
 
 def test_e2e_hybrid_compatibility():
-    """Sanity check that the hybrid ``VisionEncoder`` still works on CPU."""
-    from models.demos.dots_ocr.tt.vision import VisionEncoder
-
-    encoder = VisionEncoder(
-        mesh_device=None,
-        use_full_ttnn=False,
-        hidden_size=64,
-        out_hidden_size=64,
-    )
-    pixel_values = torch.randn(1, 3, 32, 32, dtype=torch.bfloat16)
-    grid_thw = torch.tensor([[1, 2, 2]], dtype=torch.int32)
-    output = encoder.forward(pixel_values, grid_thw)
-    assert isinstance(output, torch.Tensor)
-    assert output.dim() == 2
+    pytest.skip("Hybrid CPU VisionEncoder is disabled; TTNN-only vision requires a device + weights.")

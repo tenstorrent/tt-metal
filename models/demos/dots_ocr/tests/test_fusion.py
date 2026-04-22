@@ -5,16 +5,8 @@ import pytest
 import torch
 
 from models.demos.dots_ocr.reference.fusion import merge_vision_tokens
+from models.demos.dots_ocr.reference.pcc import comp_pcc
 from models.demos.dots_ocr.tt.fusion import merge_vision_tokens_host
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.reshape(-1).float()
-    b = b.reshape(-1).float()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = (a.norm() * b.norm()).clamp(min=1e-12)
-    return float((a @ b) / denom)
 
 
 def test_merge_vision_tokens_replaces_positions():
@@ -81,6 +73,6 @@ def test_fusion_layer_pcc_matches_reference():
     )
 
     assert ref.shape == tt.shape
-    pcc = _pcc(ref, tt)
+    pcc = comp_pcc(ref, tt)
     print(f"Fusion PCC: {pcc:.6f}")
     assert pcc > 0.9999

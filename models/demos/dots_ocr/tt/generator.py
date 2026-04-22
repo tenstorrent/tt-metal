@@ -11,13 +11,13 @@ from loguru import logger
 
 from models.common.warmup import WarmupForwardMixin
 from models.demos.dots_ocr.tt._ttnn_import import get_ttnn
-from models.demos.qwen25_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
+from models.demos.dots_ocr.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
 class Generator(WarmupForwardMixin):
     """
-    Dots OCR generator: same embedding-prefill path as Qwen2.5-VL (chunked prefill + rot_mats on host).
+    Dots OCR generator: TT Transformers prefill/decode path (chunked prefill, rot_mats on host for text).
     """
 
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):

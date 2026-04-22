@@ -154,8 +154,7 @@ def test_full_vision_transformer_smoke():
     ``DotsVisionModelArgs`` now inherits from ``DotsModelArgs``, whose base
     ``ModelArgs.__init__`` does shard/grid math that requires a real mesh device
     (``num_devices >= 1``). The legacy CPU-only smoke path is therefore upgraded to
-    require an actual device so the smoke test stays meaningful and consistent with
-    ``qwen25_vl``'s approach.
+    require an actual device so the smoke test stays meaningful.
     """
     ttnn = pytest.importorskip("ttnn")
     if not hasattr(ttnn, "open_mesh_device"):
@@ -176,8 +175,7 @@ def test_full_vision_transformer_smoke():
             )
         except KeyError as exc:
             # Building the full VisionTransformer from a truly empty state_dict fails when
-            # sub-modules (e.g. PatchMerger.feed_forward) require weights. The qwen25_vl
-            # convention is to always provide a state_dict; skip here rather than fake one.
+            # sub-modules (e.g. PatchMerger.feed_forward) require weights; skip here.
             pytest.skip(f"VisionTransformer requires a populated state_dict: {exc}")
 
         B, C, H, W = 1, 3, 56, 56
@@ -204,7 +202,7 @@ if __name__ == "__main__":
     print("\nComponents implemented:")
     print("✓ vision_model_config.py - DotsVisionModelArgs with 42-layer config")
     print("✓ vision_patch_embed.py - PatchEmbedTT for image→patch conversion")
-    print("✓ vision_attention.py - VisionAttentionTT with Qwen2 RoPE")
+    print("✓ vision_attention.py - VisionAttentionTT (HF-style vision RoPE)")
     print("✓ vision_mlp.py - VisionMLPTT feed-forward network")
     print("✓ vision_block.py - VisionBlockTT (RMSNorm + Attention + MLP)")
     print("✓ vision_transformer.py - Full 42-layer VisionTransformerTT orchestrator")

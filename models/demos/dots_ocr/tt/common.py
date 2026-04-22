@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Common TT helpers for Dots OCR — structured to mirror qwen25_vl/tt/common.py.
+Common TT helpers for Dots OCR (prefill padding, vision fusion, paging, sampling).
 
 Public API:
 - `merge_vision_tokens`         — scatter vision embeds into text embeds via `image_token_id`.
@@ -14,8 +14,7 @@ Public API:
 - `sample_host`                 — host-side sampler with optional `ttnn` up-cast.
 - `nearest_multiple` / `nearest_pow_2` — tiling helpers.
 
-These match the shapes/contracts used by `models.tt_transformers.tt.generator.Generator` so
-the Dots stack plugs into the same prefill/decode loop as qwen25_vl.
+These follow the ``models.tt_transformers.tt.generator.Generator`` prefill/decode contract.
 """
 
 from __future__ import annotations
@@ -180,7 +179,7 @@ def text_rope_from_hf(
 
 
 # ---------------------------------------------------------------------------
-# Paging helpers (identical semantics to qwen25_vl)
+# Paging helpers
 # ---------------------------------------------------------------------------
 
 
@@ -244,7 +243,7 @@ def sample_host(tt_input, mesh_device, temperature: float = 0.6, top_p: float = 
     - Otherwise assume ``tt_input`` is already a torch tensor.
 
     Returns ``(maybe_ttnn_tensor, torch_tensor)``. In ``on_host=True`` mode the ttnn tensor is
-    created without a device (host-only), matching qwen25_vl's behavior.
+    created without a device (host-only).
     """
     ttnn = get_ttnn()
     vocab_size = tt_input.shape[-1]
@@ -300,7 +299,7 @@ def nearest_multiple(x: int, multiple_of: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Debug tensor save/load (useful during bring-up, matches qwen25_vl.check_tensor)
+# Debug tensor save/load (useful during bring-up)
 # ---------------------------------------------------------------------------
 
 
