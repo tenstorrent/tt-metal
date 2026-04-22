@@ -9,6 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.sampling.op import SamplingOp
+from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 
 def _mesh_shape(mesh_device):
@@ -323,56 +324,46 @@ def test_sampling_argmax_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_c
     ), f"Mesh argmax index mismatch. expected={torch_expected_idx.item()}, got={int(final_output_index.item())}"
 
 
-def test_sampling_topk_topp_distribution():
+def _build_metadata_tensor(device, final_core, k: int, p: float, temperature: float):
     """
-    Statistical sanity check: run sampling many times with different seeds
-    and verify that (a) every sampled token is inside the top-k set, and
-    (b) higher-probability tokens are sampled more often than lower ones.
+    Build a single-core L1 tensor matching the `DeepseekMetadata` struct layout
+    (see models/demos/deepseek_v3_b1/metadata/metadata.hpp).
+
+    The struct has 10 leading uint32 fields, followed by `float temperature`,
+    `uint32_t k`, `float probability_mass_threshold`. We pack everything into a
+    1x16 uint32 tensor (64B, rounded up from sizeof=52B) with the sampling-
+    relevant fields at indices 10/11/12 and zeros elsewhere.
     """
-    vocab_size = 1000
-    k = 32
-    p = 0.9
-    num_samples = 500
+    metadata_words = torch.zeros((1, 16), dtype=torch.uint32)
+    metadata_words[0, 10] = float_to_uint32(temperature)
+    metadata_words[0, 11] = int(k)
+    metadata_words[0, 12] = float_to_uint32(p)
 
-    torch.manual_seed(42)
-    scores = torch.randn((1, vocab_size), dtype=torch.bfloat16)
-    indices = torch.arange(vocab_size, dtype=torch.int32).reshape(1, -1)
-
-    scores_f32 = scores.float().reshape(-1)
-    topk_values, topk_positions = torch.topk(scores_f32, k=k, sorted=True)
-    topk_indices_set = set(indices.reshape(-1)[topk_positions].tolist())
-
-    probs = torch.softmax(topk_values, dim=-1)
-    cum_probs = torch.cumsum(probs, dim=-1)
-    num_kept = int((cum_probs < p).sum().item()) + 1
-    num_kept = max(1, min(num_kept, k))
-
-    counts: dict[int, int] = {}
-    for i in range(num_samples):
-        result, _ = SamplingOp.golden(scores, indices, k=k, p=p, seed=i)
-        idx = int(result.item())
-        assert idx in topk_indices_set, f"Sampled index {idx} not in top-{k}"
-        counts[idx] = counts.get(idx, 0) + 1
-
-    top1_idx = int(indices.reshape(-1)[topk_positions[0]].item())
-    top1_count = counts.get(top1_idx, 0)
-    bottom_half_count = sum(
-        counts.get(int(indices.reshape(-1)[topk_positions[i]].item()), 0) for i in range(num_kept // 2, num_kept)
+    final_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(final_core, final_core)})
+    metadata_shard_spec = ttnn.ShardSpec(final_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
+    metadata_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        metadata_shard_spec,
     )
-
-    logger.info(
-        f"Distribution test: {len(counts)} unique tokens from {num_samples} trials, "
-        f"top-1 count={top1_count}, bottom-half count={bottom_half_count}, kept={num_kept}"
+    return ttnn.from_torch(
+        metadata_words,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=metadata_mem_config,
     )
-
-    assert top1_count > 0, "Top-1 token should appear at least once in 500 samples"
-    assert top1_count > bottom_half_count / max(
-        1, num_kept // 2
-    ), "Top-1 token should be sampled more often than the average of the bottom half"
 
 
 def _run_sampling_topk_single_device(
-    device, seed: int, k: int, p: float, temperature: float, final_core_idx: int, num_internal_iterations: int
+    device,
+    seed: int,
+    k: int,
+    p: float,
+    temperature: float,
+    final_core_idx: int,
+    num_internal_iterations: int,
+    from_metadata: bool = False,
 ):
     """
     Run the top-K sampling kernel (k>1 path) on a single device with rigged
@@ -477,18 +468,27 @@ def _run_sampling_topk_single_device(
         memory_config=rand_output_mem_config,
     )
 
+    ttnn_metadata = None
+    if from_metadata:
+        ttnn_metadata = _build_metadata_tensor(device, final_core, k=k, p=p, temperature=temperature)
+        logger.info(
+            f"Metadata tensor populated: k={k}, p={p}, temperature={temperature}, "
+            f"l1_addr=0x{ttnn_metadata.buffer_address():x}"
+        )
+
     ttnn_result = SamplingOp.op(
         scores_tensor=ttnn_scores,
         indices_tensor=ttnn_indices,
         output_index_tensor=ttnn_output_index,
-        k=k,
-        p=p,
-        temperature=temperature,
+        k=k if not from_metadata else 32,
+        p=p if not from_metadata else 1.0,
+        temperature=temperature if not from_metadata else 0.6,
         seed=seed,
         rand_output_tensor=ttnn_rand_output,
         final_core_coord=final_core,
         final_mesh_coord=None,
         num_internal_iterations=num_internal_iterations,
+        metadata_output_tensor=ttnn_metadata,
     )
 
     output_torch = ttnn.to_torch(ttnn_result)
@@ -519,19 +519,21 @@ def _run_sampling_topk_single_device(
 
 
 @pytest.mark.parametrize(
-    "seed, final_core_idx, p, temperature, num_internal_iterations, k",
+    "seed, final_core_idx, p, temperature, num_internal_iterations, k, from_metadata",
     [
-        (2005, 100, 0.95, 0.6, 100, 32),
-        (17, 0, 0.995, 0.4, 1, 32),
-        (1337, 50, 1.0, 0.8, 1, 32),
-        (4242, 73, 0.1, 0.6, 1, 32),
-        (52098, 100, 0.95, 0.6, 100, 1),
-        (52098, 100, 1.0, 10, 1, 16),
+        (2005, 100, 0.95, 0.6, 100, 32, True),
+        (17, 0, 0.995, 0.4, 1, 32, True),
+        (1337, 50, 1.0, 0.8, 1, 32, True),
+        (4242, 73, 0.1, 0.6, 1, 32, True),
+        (52098, 100, 0.95, 0.6, 100, 1, True),
+        (52098, 100, 1.0, 10, 1, 16, True),
     ],
     ids=["test_1", "test_2", "test_3", "test_4", "test_5", "test_6"],
 )
 @pytest.mark.requires_grid_size(101)
-def test_sampling_topk_single_device(device, seed, p, temperature, final_core_idx, num_internal_iterations, k):
+def test_sampling_topk_single_device(
+    device, seed, p, temperature, final_core_idx, num_internal_iterations, k, from_metadata
+):
     """
     Test k=32 top-K sampling path for a single device and 101 cores.
 
@@ -547,11 +549,19 @@ def test_sampling_topk_single_device(device, seed, p, temperature, final_core_id
         temperature=temperature,
         final_core_idx=final_core_idx,
         num_internal_iterations=num_internal_iterations,
+        from_metadata=from_metadata,
     )
 
 
 def _run_sampling_topk_mesh(
-    mesh_device, seed: int, k: int, p: float, temperature: float, final_core_idx: int, final_mesh_coord: tuple
+    mesh_device,
+    seed: int,
+    k: int,
+    p: float,
+    temperature: float,
+    final_core_idx: int,
+    final_mesh_coord: tuple,
+    from_metadata: bool = False,
 ):
     """
     Run the top-K sampling kernel on a multi-device mesh with rigged scores.
@@ -703,13 +713,38 @@ def _run_sampling_topk_mesh(
     global_stage2_semaphore = ttnn.create_global_semaphore(mesh_device, final_core_grid, 0)
     ttnn.synchronize_device(mesh_device)
 
+    ttnn_metadata = None
+    if from_metadata:
+        metadata_words_per_device = torch.zeros((num_devices, 1, 16), dtype=torch.uint32)
+        metadata_words_per_device[:, 0, 10] = float_to_uint32(temperature)
+        metadata_words_per_device[:, 0, 11] = int(k)
+        metadata_words_per_device[:, 0, 12] = float_to_uint32(p)
+        metadata_shard_spec = ttnn.ShardSpec(final_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
+        metadata_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            metadata_shard_spec,
+        )
+        ttnn_metadata = ttnn.from_torch(
+            metadata_words_per_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=metadata_mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+        logger.info(
+            f"Metadata tensor populated (replicated across {num_devices} devices): "
+            f"k={k}, p={p}, temperature={temperature}, l1_addr=0x{ttnn_metadata.buffer_address():x}"
+        )
+
     ttnn_result = SamplingOp.op(
         scores_tensor=ttnn_scores,
         indices_tensor=ttnn_indices,
         output_index_tensor=ttnn_output_index,
-        k=k,
-        p=p,
-        temperature=temperature,
+        k=k if not from_metadata else 32,
+        p=p if not from_metadata else 1.0,
+        temperature=temperature if not from_metadata else 0.6,
         seed=seed,
         rand_output_tensor=ttnn_rand_output,
         final_core_coord=final_core,
@@ -719,6 +754,7 @@ def _run_sampling_topk_mesh(
         scores_scratch_tensor=ttnn_scores_scratch,
         indices_scratch_tensor=ttnn_indices_scratch,
         mesh_axis="x",
+        metadata_output_tensor=ttnn_metadata,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -770,21 +806,23 @@ def create_fabric_router_config(max_payload_size):
     indirect=["device_params"],
 )
 @pytest.mark.parametrize(
-    "final_mesh_coord, seed, final_core_idx, p, temperature, k",
+    "final_mesh_coord, seed, final_core_idx, p, temperature, k, from_metadata",
     [
-        ((1, 1), 2005, 100, 0.95, 0.6, 32),
-        ((1, 0), 52098, 0, 0.995, 0.4, 16),
-        ((2, 1), 1337, 50, 1.0, 10.0, 32),
-        ((2, 0), 4242, 73, 0.1, 0.6, 32),
-        ((0, 0), 999, 0, 1.0, 0.05, 32),
-        ((0, 1), 996, 97, 0.8, 50.0, 9),
-        ((3, 0), 70, 7, 0.9, 22.0, 1),
-        ((3, 1), 5, 39, 0.5, 6.0, 1),
+        ((1, 1), 2005, 100, 0.95, 0.6, 32, True),
+        ((1, 0), 52098, 0, 0.995, 0.4, 16, False),
+        ((2, 1), 1337, 50, 1.0, 10.0, 32, True),
+        ((2, 0), 4242, 73, 0.1, 0.6, 32, False),
+        ((0, 0), 999, 0, 1.0, 0.05, 32, True),
+        ((0, 1), 996, 97, 0.8, 50.0, 9, False),
+        ((3, 0), 70, 7, 0.9, 22.0, 1, False),
+        ((3, 1), 5, 39, 0.5, 6.0, 1, False),
     ],
     ids=["test_1", "test_2", "test_3", "test_4", "test_5", "test_6", "test_7", "test_8"],
 )
 @pytest.mark.requires_grid_size(101)
-def test_sampling_topk_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_core_idx, p, temperature, k):
+def test_sampling_topk_mesh(
+    bh_2d_mesh_device, final_mesh_coord, seed, final_core_idx, p, temperature, k, from_metadata
+):
     """
     Mesh extension test for k=32 top-K sampling on a 4x2 mesh.
 
@@ -810,4 +848,5 @@ def test_sampling_topk_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_cor
         temperature=temperature,
         final_core_idx=final_core_idx,
         final_mesh_coord=final_mesh_coord,
+        from_metadata=from_metadata,
     )

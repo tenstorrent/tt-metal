@@ -115,7 +115,14 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_mesh_mode"),
         get_named_compile_time_arg_val("sampling_stage2_receiver"),
         get_named_compile_time_arg_val("sampling_output_addr"),
-        get_named_compile_time_arg_val("sampling_rand_output_addr")>;
+        get_named_compile_time_arg_val("sampling_rand_output_addr"),
+        get_named_compile_time_arg_val("sampling_inv_temp_bf16"),
+        get_named_compile_time_arg_val("sampling_softmax_in_cb"),
+        get_named_compile_time_arg_val("sampling_temp_cb"),
+        0,
+        get_named_compile_time_arg_val("sampling_enable_metadata"),
+        get_named_compile_time_arg_val("sampling_copy_probabilities"),
+        get_named_compile_time_arg_val("sampling_metadata_address")>;
 
     deepseek_b1_ops::TopKSampling::WriterArgs args{
         .final_noc_x = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),

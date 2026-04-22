@@ -128,6 +128,8 @@ class SamplingOp:
         fabric_scratch_tensor=None,
         scores_scratch_tensor=None,
         indices_scratch_tensor=None,
+        metadata_output_tensor=None,
+        copy_probabilities: bool = False,
         mesh_axis: str = "x",
         num_internal_iterations: int = 1,
     ):
@@ -182,6 +184,8 @@ class SamplingOp:
                     indices_scratch_tensor=indices_scratch_tensor,
                     mesh_axis=mesh_axis,
                     num_internal_iterations=num_internal_iterations,
+                    metadata_output_tensor=metadata_output_tensor,
+                    copy_probabilities=copy_probabilities,
                 )
         else:
             return SamplingOp._op_single_device_topk(
@@ -196,6 +200,8 @@ class SamplingOp:
                 final_core_coord=final_core_coord,
                 final_mesh_coord=final_mesh_coord,
                 num_internal_iterations=num_internal_iterations,
+                metadata_output_tensor=metadata_output_tensor,
+                copy_probabilities=copy_probabilities,
             )
 
     @staticmethod
@@ -203,14 +209,16 @@ class SamplingOp:
         scores_tensor,
         indices_tensor,
         output_index_tensor,
-        k: int,
-        p: float,
+        k: int = 32,
+        p: float = 1.0,
         temperature: float = 0.6,
         seed: int = 520,
         rand_output_tensor=None,
+        metadata_output_tensor=None,
         final_core_coord=None,
         final_mesh_coord=None,
         num_internal_iterations: int = 1,
+        copy_probabilities: bool = False,
     ):
         """
         Single-device top-K sampling path (k >= 1).
@@ -424,6 +432,15 @@ class SamplingOp:
                 int(rand_output_tensor.buffer_address()) if rand_output_tensor is not None else 0,
             ),
             ("sampling_num_internal_iterations", num_internal_iterations),
+            ("sampling_softmax_in_cb", softmax_in_cb),
+            ("sampling_temp_cb", temp_cb),
+            ("sampling_inv_temp_bf16", inv_temp_bf16),
+            ("sampling_enable_metadata", 1 if metadata_output_tensor is not None else 0),
+            ("sampling_copy_probabilities", 1 if copy_probabilities else 0),
+            (
+                "sampling_metadata_address",
+                int(metadata_output_tensor.buffer_address()) if metadata_output_tensor is not None else 0,
+            ),
         ]
 
         unified_kernel = UnifiedKernelDescriptor(
@@ -650,10 +667,6 @@ class SamplingOp:
         scores_tensor,
         indices_tensor,
         output_index_tensor,
-        k: int,
-        p: float,
-        temperature: float,
-        seed: int,
         rand_output_tensor,
         final_core_coord,
         final_mesh_coord,
@@ -661,8 +674,14 @@ class SamplingOp:
         global_stage2_semaphore,
         scores_scratch_tensor,
         indices_scratch_tensor,
-        mesh_axis: str,
-        num_internal_iterations: int,
+        seed: int = 520,
+        k: int = 32,
+        p: float = 1.0,
+        temperature: float = 0.6,
+        metadata_output_tensor=None,
+        copy_probabilities: bool = False,
+        mesh_axis: str = "x",
+        num_internal_iterations: int = 1,
     ):
         """
         Mesh (R,2) top-K sampling path (k > 1).
@@ -908,6 +927,15 @@ class SamplingOp:
                     ("sampling_output_addr", int(output_tensor_device.buffer_address())),
                     ("sampling_rand_output_addr", rand_output_addr),
                     ("sampling_num_internal_iterations", num_internal_iterations),
+                    ("sampling_softmax_in_cb", softmax_in_cb if is_final_mesh_device else 0),
+                    ("sampling_temp_cb", temp_cb if is_final_mesh_device else 0),
+                    ("sampling_inv_temp_bf16", inv_temp_bf16),
+                    ("sampling_enable_metadata", 1 if metadata_output_tensor is not None else 0),
+                    ("sampling_copy_probabilities", 1 if copy_probabilities else 0),
+                    (
+                        "sampling_metadata_address",
+                        int(metadata_output_tensor.buffer_address()) if metadata_output_tensor is not None else 0,
+                    ),
                 ]
 
                 per_core_brisc_runtime_args = []

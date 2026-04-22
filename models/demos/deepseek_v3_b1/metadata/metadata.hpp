@@ -22,6 +22,9 @@ struct DeepseekMetadata {
     uint32_t token_id;
     uint32_t position_id;
     uint32_t prefill_token_id;
+    float temperature;
+    uint32_t k;
+    float probability_mass_threshold;
 };
 
 }  // namespace deepseek_b1_ops
