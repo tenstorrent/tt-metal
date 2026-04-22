@@ -473,10 +473,10 @@ class ComputePipeline:
                 )
             else:
                 input_tensor_a = None
-            if op.src_a is not None:
+            if op.src_b is not None:
                 input_tensor_b = (
                     op.src_b.raw_data
-                    if golden_type == GoldenType.MASTER_GOLDEN
+                    if golden_type == GoldenType.L1_GOLDEN
                     else op.src_b.master_golden
                 )
             else:
