@@ -17,29 +17,15 @@ void kernel_main() {
     // Common runtime args (multicast once per kernel, not unicast per core)
     // CRTA[0] = input_addr (unused by writer, reserved for consistency with reader)
     const address_t output_tensor_address = get_common_arg_val<address_t>(1);
-    const uint32_t phase2_barrier_sem = get_common_arg_val<uint32_t>(2);
-    const uint32_t stick_start_id = get_common_arg_val<uint32_t>(3);
-    const uint32_t input_halo_dim_size = get_common_arg_val<uint32_t>(4);
-    const uint32_t output_halo_dim_size = get_common_arg_val<uint32_t>(5);
-    const uint32_t padding_left = get_common_arg_val<uint32_t>(6);
-    const uint32_t num_sticks_to_read = get_common_arg_val<uint32_t>(7);
-    const uint32_t num_sticks_per_halo_dim = get_common_arg_val<uint32_t>(8);
-    // Phase 2 barrier signal targets (uniform across all local-copy cores)
-    constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
-    const uint32_t num_phase2_signal_targets = get_common_arg_val<uint32_t>(9);
-    uint8_t signal_noc_x[MAX_PHASE2_SIGNAL_TARGETS];
-    uint8_t signal_noc_y[MAX_PHASE2_SIGNAL_TARGETS];
-    for (uint32_t t = 0; t < MAX_PHASE2_SIGNAL_TARGETS; t++) {
-        signal_noc_x[t] = get_common_arg_val<uint32_t>(10 + t * 2);
-        signal_noc_y[t] = get_common_arg_val<uint32_t>(10 + t * 2 + 1);
-    }
-
-    // Masking args: zero interior rows where global_h_index >= logical_h
-    // CRTA[26] = logical_h (0 = masking disabled), CRTA[27] = device_h_offset
-    // CRTA[28] = t_front_pad_stick_offset (0 = no T-front pad)
-    const uint32_t logical_h = get_common_arg_val<uint32_t>(26);
-    const uint32_t device_h_offset = get_common_arg_val<uint32_t>(27);
-    const uint32_t t_front_pad_stick_offset = get_common_arg_val<uint32_t>(28);
+    const uint32_t stick_start_id = get_common_arg_val<uint32_t>(2);
+    const uint32_t input_halo_dim_size = get_common_arg_val<uint32_t>(3);
+    const uint32_t output_halo_dim_size = get_common_arg_val<uint32_t>(4);
+    const uint32_t padding_left = get_common_arg_val<uint32_t>(5);
+    const uint32_t num_sticks_to_read = get_common_arg_val<uint32_t>(6);
+    const uint32_t num_sticks_per_halo_dim = get_common_arg_val<uint32_t>(7);
+    const uint32_t logical_h = get_common_arg_val<uint32_t>(8);
+    const uint32_t device_h_offset = get_common_arg_val<uint32_t>(9);
+    const uint32_t t_front_pad_stick_offset = get_common_arg_val<uint32_t>(10);
     const bool do_masking = (logical_h > 0);
 
     // Per-core runtime args (only work distribution — truly unique per core)
@@ -81,16 +67,4 @@ void kernel_main() {
         }
     }
     noc_async_write_barrier();
-
-    // Signal Phase 2 W fabric reader cores that Phase 1 writes are complete.
-    // Guard covers cores doing only Phase A (zero-fill) work, which are still counted in barrier_count.
-    if (rows_count > 0 || zero_fill_count > 0) {
-        for (uint32_t t = 0; t < num_phase2_signal_targets; t++) {
-            uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[t], signal_noc_y[t], phase2_barrier_sem);
-            noc_semaphore_inc(sem_noc_addr, 1);
-        }
-        // Flush nonposted atomics (noc_semaphore_inc) before kernel exits.
-        // noc_async_write_barrier only flushes posted writes, not atomics.
-        noc_async_atomic_barrier();
-    }
 }
