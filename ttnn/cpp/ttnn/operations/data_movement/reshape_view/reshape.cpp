@@ -5,6 +5,8 @@
 #include <functional>
 
 #include <tt-metalium/constants.hpp>
+#include <ttnn/tensor/layout/tensor_layout.hpp>
+#include <ttnn/tensor/tensor_spec.hpp>
 
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -289,6 +291,23 @@ ttnn::Tensor reshape_tiled(
         updated_mem_config = updated_mem_config.with_shard_spec(shard_spec);
     }
 
+    // If block/height-sharded output, compute the correct shard spec
+    if (updated_mem_config.is_sharded()) {
+        // Synthesize TensorLayout from padded shape
+        auto synthetic_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
+            tensor3d.dtype(),
+            tensor3d.tensor_spec().page_config(),
+            updated_mem_config,
+            requested_shape_3d,
+            requested_padded_shape_3d);
+
+        // Construct synthetic TensorSpec
+        tt::tt_metal::TensorSpec synthetic_spec(requested_shape_3d, synthetic_layout);
+
+        // Recompute the shard spec for the output tensor shape
+        updated_mem_config = detail::recompute_shard_spec_for_output(updated_mem_config, synthetic_spec);
+    }
+
     auto output_tensor_3d = ttnn::prim::reshape_view(
         tensor3d,
         requested_shape_3d,
@@ -296,20 +315,6 @@ ttnn::Tensor reshape_tiled(
         updated_mem_config,
         recreate_mapping_tensor,
         sub_core_grid);
-
-    if (updated_mem_config.is_sharded()) {
-        // Recompute the shard spec for the output tensor shape
-        auto output_mem_config =
-            detail::recompute_shard_spec_for_output(updated_mem_config, output_tensor_3d.tensor_spec());
-
-        output_tensor_3d = ttnn::prim::reshape_view(
-            tensor3d,
-            requested_shape_3d,
-            requested_padded_shape_3d,
-            output_mem_config,
-            recreate_mapping_tensor,
-            sub_core_grid);
-    }
 
     if (tensor.dtype() == DataType::BFLOAT8_B) {
         TT_FATAL(!sub_core_grid.has_value(), "Bfloat8 reshape does not support sub core grid specification\n");
