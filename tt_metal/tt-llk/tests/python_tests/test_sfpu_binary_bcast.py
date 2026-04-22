@@ -68,6 +68,7 @@ def _golden_sfpu_binary_bcast(
     src_B: torch.Tensor,
     bcast_dim: SfpuBcastDim,
     op,
+    output_format: DataFormat,
 ) -> torch.Tensor:
     """Compute the golden result matching the SFPU binary bcast kernel.
 
@@ -87,7 +88,7 @@ def _golden_sfpu_binary_bcast(
         b_bcast = b[:, 0].unsqueeze(1).expand_as(b)
 
     golden_rm = op(a, b_bcast.contiguous()).flatten()
-    return tilize(golden_rm, stimuli_format=DataFormat.Float32)
+    return tilize(golden_rm, stimuli_format=output_format)
 
 
 SUPPORTED_ELTWISE_OPS = [
@@ -96,10 +97,15 @@ SUPPORTED_ELTWISE_OPS = [
     MathOperation.SfpuElwmul,
 ]
 
+# Only same-format in/out combinations are supported by the kernel. `same=True`
+# gives us {Float32->Float32, Float16_b->Float16_b}. Float32 takes the
+# unpack-to-dest path; Float16_b routes inputs through srcA/srcB.
 SUPPORTED_FORMATS = input_output_formats(
     [
         DataFormat.Float32,
-    ]
+        DataFormat.Float16_b,
+    ],
+    same=True,
 )
 
 
@@ -126,8 +132,12 @@ def test_sfpu_binary_bcast(
     )
 
     op = _BINARY_OPS[eltwise_op]
-    golden_tensor = _golden_sfpu_binary_bcast(src_A, src_B, bcast_dim, op)
+    golden_tensor = _golden_sfpu_binary_bcast(
+        src_A, src_B, bcast_dim, op, formats.output_format
+    )
 
+    # Only Float32 (plus dest_acc=Yes) can skip srcA/srcB and unpack straight to
+    # DEST. Float16_b must flow through srcA for the SFPU to consume it.
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
