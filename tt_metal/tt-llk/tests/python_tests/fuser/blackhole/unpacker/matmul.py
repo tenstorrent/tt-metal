@@ -111,6 +111,8 @@ class MatmulUnpacker(Unpacker):
         unpack_tile_size_b = compute_unit.src_b.tile_size
         full_ct_dim = compute_unit.src_b.dimensions[1] // 32
         output_ct_dim = compute_unit.src_a.tile_count_x
+        src_a_partial_face = compute_unit.src_a.partial_face.cpp_enum_value
+        src_b_partial_face = compute_unit.src_b.partial_face.cpp_enum_value
         buffer_a = compute_unit.src_a.cpp_name
         buffer_b = compute_unit.src_b.cpp_name
 
@@ -124,7 +126,9 @@ class MatmulUnpacker(Unpacker):
             f"            _llk_unpack_AB_matmul_<>(\n"
             f"                L1_ADDRESS({buffer_a}[0]), L1_ADDRESS({buffer_b}[0]),\n"
             f"                srca_tile_idx, srcb_tile_idx,\n"
-            f"                {unpack_tile_size_a}, {unpack_tile_size_b}, false, false, {ct_dim}, {rt_dim}, {kt_dim}\n"
+            f"                {unpack_tile_size_a}, {unpack_tile_size_b},\n"
+            f"                {src_a_partial_face}, {src_b_partial_face},\n"
+            f"                {ct_dim}, {rt_dim}, {kt_dim}\n"
             f"            );\n"
             f"        }}\n"
             f"    }}\n"
