@@ -32,7 +32,7 @@ ParsedDependencies parse_dependency_file(std::istream& file) {
     enum class ParseState { Target, Dependencies };
     ParseState state = ParseState::Target;
     std::string line;
-    std::vector<std::string>* current_deps = nullptr;
+    std::vector<std::filesystem::path>* current_deps = nullptr;
     while (std::getline(file, line)) {
         size_t pos = 0;
         while ((pos = line.find_first_not_of(" \t", pos)) != std::string::npos) {
@@ -85,12 +85,6 @@ uint64_t hash_file_content(std::istream& file) {
     }
     return hasher.digest();
 }
-
-struct PathHash {
-    size_t operator()(const std::filesystem::path& p) const {
-        return std::hash<std::filesystem::path::string_type>{}(p.native());
-    }
-};
 
 class FileHashCache {
 public:
@@ -194,19 +188,16 @@ void write_dependency_hashes(
         // Need to handle two cases:
         // 1. file is an absolute path
         // 2. file is a path relative to out_dir
-        std::filesystem::path dep_path(dep);
-        if (dep_path.is_relative()) {
-            dep_path = out_dir / dep_path;
-        }
+        std::filesystem::path dep_path = dep.is_relative() ? out_dir / dep : dep;
         auto [hash, valid] = FileHashCache::instance().get_or_compute(dep_path);
         if (!valid) {
-            log_warning(tt::LogBuildKernels, "Cannot cache JIT build because {} cannot be read.", dep);
+            log_warning(tt::LogBuildKernels, "Cannot cache JIT build because {} cannot be read.", dep.string());
             hash_file.setstate(std::ios::badbit);
             return;
         }
         // Always write absolute path to the hash file, so when reading back we don't need to
         // worry about relative paths
-        hash_file << dep_path << '\t' << hash << '\n';
+        hash_file << dep_path.string() << '\t' << hash << '\n';
     }
 }
 

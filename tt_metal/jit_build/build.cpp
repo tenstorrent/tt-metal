@@ -688,9 +688,9 @@ void JitBuildState::link(
     // Elf file has dependencies other than object files:
     // 1. Linker script
     // 2. Weakened firmware elf (for kernels)
-    std::vector<std::string> link_dep_strs = {this->linker_script_.string()};
+    std::vector<std::filesystem::path> link_deps = {this->linker_script_};
     if (!this->is_fw_) {
-        link_dep_strs.push_back(this->weakened_firmware_name_.string());
+        link_deps.push_back(this->weakened_firmware_name_);
         if (!this->firmware_is_kernel_object_) {
             cmd += "-Wl,--just-symbols=";
         }
@@ -729,7 +729,7 @@ void JitBuildState::link(
             dephash_open_ec.message());
         return;
     }
-    jit_build::write_dependency_hashes({{elf_path.string(), std::move(link_dep_strs)}}, out_dir, elf_path, hash_file);
+    jit_build::write_dependency_hashes({{elf_path, std::move(link_deps)}}, out_dir, elf_path, hash_file);
     hash_file.close();
     if (hash_file.fail()) {
         // Don't leave incomplete hash file
