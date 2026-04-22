@@ -33,7 +33,6 @@ class FusedOperation:
     bh_tilize: Tilize = Tilize.No
 
     def __post_init__(self):
-        print(self.max_output_dimensions)
         num_rows = self.output.tile_shape.total_row_dim()
         num_cols = self.output.tile_shape.total_col_dim()
 
