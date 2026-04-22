@@ -377,7 +377,11 @@ void kernel_main() {
     }
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);
-#ifdef COMPILE_FOR_IDLE_ERISC
+
+// TODO: Remove this comment. Currently enabling barrier for worker cores as well. This will fail
+// due to a mismatch in the noc counter, which is expected. The current PR being worked should resolve this with a counter sync.
+//
+// #ifdef COMPILE_FOR_IDLE_ERISC
     // Wait for all transactions to complete, to avoid hitting the asserts in
     // idle_erisck.cc if there are outstanding transactions. These barriers
     // don't work on worker cores, because there cq_dispatch is on the same core
@@ -385,7 +389,7 @@ void kernel_main() {
     // counts. However, we don't have the barrier checks in brisck.cc, so we can
     // skip this for now.
     noc_async_full_barrier();
-#endif
+// #endif
     DPRINT << "dispatch_s : done" << ENDL();
     DEVICE_PRINT("dispatch_s : done\n");
     set_l1_data_cache<false>();
