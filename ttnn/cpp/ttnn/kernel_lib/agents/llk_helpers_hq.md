@@ -193,6 +193,28 @@ Before trusting a passing test:
 3. Confirm the test file calls that op (grep for `ttnn.op_name` in the test).
 4. Optional paranoid check: introduce a `static_assert(false, "sentinel")` in the kernel, run the test, confirm it FAILS to compile, then revert.
 
+### sfpu_pipeline output policy and batching
+
+`sfpu_pipeline` has two orthogonal output controls:
+
+| `SfpuOutputPolicy` | Behavior | When to use |
+|--------------------|----------|-------------|
+| `Bulk` | `cb_reserve_back(N)` upfront, pack all, `cb_push_back(N)` after loop | Output CB capacity ≥ `num_tiles` (block-level CBs) |
+| `PerTile` | `cb_reserve_back(1); pack; cb_push_back(1)` per tile, inside acquire window | Output CB capacity < `num_tiles` (streaming CBs, capacity=2) |
+
+**Critical**: `SfpuBatching::Auto` with `SfpuOutputPolicy::PerTile` **deadlocks** when
+`batch_size > output CB capacity`. The pipeline holds DEST while spin-waiting for
+`cb_reserve_back` to succeed; the writer can't free output space until DEST is
+released — circular dependency.
+
+Check the program factory for `dst_num_tiles` (or `*_num_tiles`):
+- If output CB capacity = `num_tiles` (block-level) → `Bulk` + `Auto` batching is safe.
+- If output CB capacity = 1 or 2 (streaming, e.g. `value_or(2)`) → `PerTile` + `Disabled` batching.
+
+For chains with stride > 1 (using multiple DEST slots, e.g. `D0` + `D1`), `Auto` batch_size
+= `DEST_AUTO_LIMIT / stride`. Even small strides (2) can trigger the deadlock if capacity=2
+and batch_size=4.
+
 ### Anti-patterns (do NOT do these during migration)
 
 - Migrating across a helper gap by hand-coding the missing op inline. Fix the helper first.

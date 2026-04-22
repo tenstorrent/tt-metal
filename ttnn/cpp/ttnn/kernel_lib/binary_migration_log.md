@@ -63,6 +63,20 @@ feature that does or does not fit the helper API.
   (NoWaitNoPop), runtime `in_cb`/`out_cb` from q/k selection — helpers take `uint32_t` OK
 - **Tests**: 16 decode tests passed (head_dim 128/64/256, batch 1/8/16/32, with program cache)
 
+### `ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/hardswish_kernel.cpp`
+### `ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/tanhshrink_kernel.cpp`
+### `ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/mish_kernel.cpp`
+- **Commit**: `218105480b0`
+- **Pattern**: same sfpu_chain + DestReuseOp/SfpuSub/SfpuMul as the `unary/` counterparts,
+  but per-tile loop (output CB capacity=2 requires `SfpuBatching::Disabled`).
+- **INP_FLOAT32**: `sfpu_chain(Load<D0,WaitNoPop>, [Load<D1,NoWaitPop>,] SfpuOp, SfpuMul/SfpuSub)`
+- **INP_FLOAT**: `sfpu_chain(Load<D0,WaitNoPop>, SfpuOps, DestReuseOp<WaitAndPop>)`
+- **Required fix from initial attempt**: `SfpuBatching::Auto` + `SfpuOutputPolicy::PerTile`
+  deadlocked — Auto picked batch_size > CB capacity, held DEST while waiting for output
+  space that the writer couldn't free. Fixed with `SfpuBatching::Disabled`.
+- **Discovered by**: fresh independent investigation — `unary_ng` was not in the original plan
+- **Tests**: 39 test_unary.py + 5 test_activation.py passed (bf16, fp32, approx modes)
+
 ### `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/hardswish_kernel.cpp`
 - **Commit**: `d02a44f0c89`
 - **Pattern**: `sfpu_chain(Load<WaitNoPop>, SfpuOp, DestReuseOp<WaitAndPop>)` — single CB
