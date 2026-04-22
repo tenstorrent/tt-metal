@@ -173,7 +173,7 @@ const jit_server::UploadFirmwareRequest& RemoteCompileCoordinator::get_firmware_
             }
             jit_server::FirmwareArtifact artifact;
             artifact.target_name = fw_state.get_target_name();
-            artifact.file_name = fw_path.filename().string();
+            artifact.file_name = fs::path(fw_path).filename().string();
             artifact.is_kernel_object = fw_state.get_firmware_is_kernel_object();
             artifact.data = tt::jit_build::utils::read_file_bytes(fw_path);
             req.artifacts.push_back(std::move(artifact));

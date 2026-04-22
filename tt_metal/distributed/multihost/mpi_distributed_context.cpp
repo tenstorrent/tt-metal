@@ -6,8 +6,6 @@
 #include <mpi.h>
 #include <mpi-ext.h>
 
-#include <common/filesystem_utils.hpp>
-
 #include <algorithm>
 #include <limits>
 #include <memory>
@@ -166,7 +164,6 @@ inline void init_env(int& argc, char**& argv) {
     static std::once_flag mpi_once;
 
     std::call_once(mpi_once, [&] {
-        tt::filesystem::set_nfs_safety(true);
         int provided = 0;
         if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
