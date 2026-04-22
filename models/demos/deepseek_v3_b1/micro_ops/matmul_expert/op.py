@@ -379,7 +379,6 @@ def _build_program_for_device(
         raw_silu_tile_h = num_active_experts * dram_per_core_n * tile_h
         silu_tile_h = _pad_to_face_r_dim(raw_silu_tile_h)
         silu_tile = ttnn.Tile([silu_tile_h, tile_w])
-        print(f"silu_tile_h={silu_tile_h}, tile_w={tile_w}")
         silu_tile_bytes = silu_tile.get_tile_size(out_tensor.dtype)
         cb_out_silu_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out_silu, out_tensor)
         cb_out_silu_desc.format_descriptors[0].tile = ttnn.TileDescriptor(silu_tile)

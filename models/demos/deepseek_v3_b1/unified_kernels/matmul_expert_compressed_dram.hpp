@@ -469,8 +469,12 @@ struct MatmulExpertCompressedDRAM {
                         uint32_t src_addr = get_read_ptr(CTArgs::cb_out);
                         // Reducer's cb_out is allocated at the same L1 offset as sender's cb_out
                         // (both are sharded from the output tensor → identical per-core layout).
+                        // Note: there can be a race condition if we run the same kernel back-to-back,
+                        // where the sender can issue the next iterations' writes before reducer finishes the
+                        // reduction, thus overwriting the l1 data. It should be safe in the models since we don't run
+                        // back-to-back same kernel.
                         uint64_t dst_noc = get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, src_addr);
-                        noc_async_write(src_addr, dst_noc, output_bytes);
+                        noc_async_write_one_packet(src_addr, dst_noc, output_bytes);
                         uint64_t sem_noc =
                             get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, CTArgs::partial_sem_addr);
                         noc_semaphore_inc(sem_noc, 1);
@@ -698,6 +702,7 @@ struct MatmulExpertCompressedDRAM {
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::partial_sem_addr);
                             while (*partial_sem_ptr < num_senders) {
                             }
+                            unified_kernels::sem_atomic_dec(CTArgs::partial_sem_addr, num_senders);
                         }));
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
@@ -744,13 +749,6 @@ struct MatmulExpertCompressedDRAM {
                     }
 
                     cb_push_back(CTArgs::cb_out, total_tiles);
-
-                    // Reset partial_sem on the reducer for the next program run.
-                    // UNPACK has the reliable L1 atomic path; PACK-side plain stores are buggy.
-                    if constexpr (CTArgs::is_reducer) {
-                        constexpr uint32_t num_senders = CTArgs::k_parallel_per_bank - 1;
-                        UNPACK(unified_kernels::sem_atomic_dec(CTArgs::partial_sem_addr, num_senders));
-                    }
                 } else {
                     tile_regs_release();
                 }
