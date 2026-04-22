@@ -998,6 +998,19 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
         if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
             return;
         }
+        // FIX G (#42429): skip dead-relay devices — their ETH relay path is broken, so any
+        // read through it (ReadFromDeviceL1 → l1_barrier → wait_for_non_mmio_flush) will
+        // block until UMD's relay timeout fires and then throw.  These devices had fabric
+        // firmware skipped in compile_and_configure_fabric() (FIX E2); there is no router
+        // to sync with.  Attempting the sync here is always wrong.
+        if (dead_relay_devices_.count(dev->id()) > 0) {
+            log_warning(
+                tt::LogMetal,
+                "wait_for_fabric_router_sync: Device {} is a dead-relay device — skipping router "
+                "sync (no fabric firmware loaded, relay path broken). (#42429 FIX G)",
+                dev->id());
+            return;
+        }
 
         const auto master_router_chan = builder_context.get_fabric_master_router_chan(dev->id());
         const auto master_router_logical_core =
@@ -1134,6 +1147,17 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
 
     for (auto* dev : devices_) {
         if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
+            continue;
+        }
+        // FIX G (#42429): skip dead-relay devices — no fabric firmware was loaded on them
+        // (FIX E2 skipped dispatch kernel init), so there is no router to verify.  Any
+        // read attempt through their broken relay path will timeout or throw.
+        if (dead_relay_devices_.count(dev->id()) > 0) {
+            log_warning(
+                tt::LogMetal,
+                "verify_all_fabric_channels_healthy: Device {} is a dead-relay device — "
+                "skipping channel health verification (no fabric firmware loaded). (#42429 FIX G)",
+                dev->id());
             continue;
         }
         const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
