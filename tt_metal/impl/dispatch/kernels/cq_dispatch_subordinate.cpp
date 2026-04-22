@@ -332,6 +332,12 @@ void kernel_main() {
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
     dispatch_s_atomic_cmd_buf_init();
+#ifndef COMPILE_FOR_IDLE_ERISC
+    // Issue #18881: (TEMPORARY) zero the slot used by dispatch_d to publish its NOC 1 atomic count at
+    // shutdown, so a stale value from a prior program doesn't race the merge below.
+    set_noc_counter_val<1 /* this RISC = NCRISC */, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
+        my_noc_index, 0);
+#endif
     if constexpr (distributed_dispatcher) {
         for (size_t i = 0; i < max_num_worker_sems; i++) {
             uint32_t index = i + first_stream_used;
@@ -378,18 +384,21 @@ void kernel_main() {
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);
 
-// TODO: Remove this comment. Currently enabling barrier for worker cores as well. This will fail
-// due to a mismatch in the noc counter, which is expected. The current PR being worked should resolve this with a counter sync.
-//
-// #ifdef COMPILE_FOR_IDLE_ERISC
-    // Wait for all transactions to complete, to avoid hitting the asserts in
-    // idle_erisck.cc if there are outstanding transactions. These barriers
-    // don't work on worker cores, because there cq_dispatch is on the same core
-    // and shares use of this noc, but doesn't update this risc's transaction
-    // counts. However, we don't have the barrier checks in brisck.cc, so we can
-    // skip this for now.
+#ifndef COMPILE_FOR_IDLE_ERISC
+    // Issue #18881: (TEMPORARY) dispatch_d (BRISC, on this same core) issues atomics on our NOC (NOC 1)
+    // that we never count locally. Wait for dispatch_d to publish its final NOC 1 atomic
+    // count via the shared L1 slot (see matching code in cq_dispatch.cpp), then merge it
+    // into our local noc_nonposted_atomics_acked[NOC1] so the barrier below reconciles
+    // against the NIU hardware ack count. Sentinel +1 distinguishes "ready" from "stale 0".
+    constexpr uint8_t kSelfProc = 1;  // dispatch_s runs on NCRISC
+    uint32_t handoff_val;
+    do {
+        invalidate_l1_cache();
+        handoff_val = get_noc_counter_val<kSelfProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(my_noc_index);
+    } while (handoff_val == 0);
+    noc_nonposted_atomics_acked[my_noc_index] += handoff_val - 1;
+#endif
     noc_async_full_barrier();
-// #endif
     DPRINT << "dispatch_s : done" << ENDL();
     DEVICE_PRINT("dispatch_s : done\n");
     set_l1_data_cache<false>();

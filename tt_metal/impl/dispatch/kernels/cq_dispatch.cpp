@@ -1502,6 +1502,19 @@ void kernel_main() {
 
     noc_async_full_barrier();
 
+#ifndef COMPILE_FOR_IDLE_ERISC
+    // Issue #18881: dispatch_d (BRISC) and dispatch_s (NCRISC) share this core, so dispatch_s
+    // can't see the NOC 1 (upstream) atomics dispatch_d issued (e.g. the upstream credit-return
+    // semaphore_inc). Publish our final NOC 1 atomic count via a local L1 store into a slot in
+    // dispatch_s's MEM_NOC_COUNTER_BASE storage (unused by either kernel in DM_DEDICATED_NOC
+    // mode). dispatch_s adds the value to its own noc_nonposted_atomics_acked[NOC1] before its
+    // noc_async_full_barrier() so the barrier reconciles with the NIU hardware ack count.
+    // Sentinel +1 so the slot value is always nonzero once published.
+    constexpr uint8_t kDispatchSProc = 1;  // dispatch_s runs on NCRISC
+    set_noc_counter_val<kDispatchSProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
+        upstream_noc_index, noc_nonposted_atomics_acked[upstream_noc_index] + 1);
+#endif
+
     if (is_h_variant && !is_d_variant) {
         relay_client.template teardown<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>();
     }
