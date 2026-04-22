@@ -738,7 +738,7 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_legacy_shard(
 # logical rows 28..29 of the final shard's slice get dropped instead.
 
 # For now, such cases where the upper (non last 2 dims) are > 1 and height (second last tensor dim)
-# is not tile-aligned are rejected with the TT_FATAL in the valdiate_on_program_cache_miss function
+# is not tile-aligned are rejected with the TT_FATAL in the validate_on_program_cache_miss function
 # in the untilize_with_unpadding_device_operation.cpp file, just like the existing behavior of how multi-batched width sharded
 # inputs are rejected.
 #
