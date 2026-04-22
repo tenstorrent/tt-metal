@@ -51,7 +51,10 @@ def load_cached_tensor(cache_path, name, dtype, layout, device, memory_config):
 
 def create_global_semaphores(mesh_device, cores, initial_value):
     # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+    ccl_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, cores, initial_value, buffer_type=ttnn.BufferType.L1_SMALL)
+        for _ in range(2)
+    ]
     return ccl_semaphore_handles
 
 
