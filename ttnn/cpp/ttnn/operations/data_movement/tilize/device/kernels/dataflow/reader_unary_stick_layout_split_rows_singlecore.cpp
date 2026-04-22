@@ -20,10 +20,9 @@ void kernel_main() {
     const uint32_t num_full_blocks_in_row = get_arg_val<uint32_t>(5);
     const uint32_t start_stick_id = get_arg_val<uint32_t>(8);
 
-    constexpr uint32_t stick_size = get_compile_time_arg_val(0);
     constexpr auto src_tensor_args = TensorAccessorArgs<1>();
 
-    const auto s = TensorAccessor(src_tensor_args, src_addr, stick_size);
+    const auto s = TensorAccessor(src_tensor_args, src_addr);
 
     experimental::CircularBuffer cb(cb_id_in0);
     experimental::Noc noc;
@@ -52,8 +51,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
         // Get Base Addresses
         for (uint32_t j = 0; j < tile_height; j++) {
-            base_stick_ids[j] = stick_id;
-            base_offsets[j] = 0;
+            base_src_noc_addr[j] = s.get_noc_addr(stick_id);
             stick_id++;
         }
 

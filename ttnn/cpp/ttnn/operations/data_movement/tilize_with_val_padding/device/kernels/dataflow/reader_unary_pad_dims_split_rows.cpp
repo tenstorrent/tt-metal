@@ -8,7 +8,6 @@
 
 void kernel_main() {
     constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(0);
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
 
     // Constexpr
@@ -39,7 +38,7 @@ void kernel_main() {
     const uint32_t num_tiles_block_c =
         block_row_size / bytes_per_tile_row;  // Assuming 2 bytes per datum, there are 64 bytes per tile row
 
-    const auto s = TensorAccessor(src_args, src_addr, unpadded_X_size);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     experimental::CircularBuffer cb(cb_id_in0);
 
@@ -64,7 +63,7 @@ void kernel_main() {
         uint32_t l1_write_addr = cb.get_write_ptr();
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t src_noc_addr = get_noc_addr(curr_stick_id + k, s) + offset;
+            uint64_t src_noc_addr = s.get_noc_addr(curr_stick_id + k) + offset;
 
             // Read from DRAM to tmp buffer
             noc_async_read(src_noc_addr, l1_write_addr, block_size);

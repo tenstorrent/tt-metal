@@ -33,8 +33,6 @@ void kernel_main() {
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(1);
-    constexpr uint32_t gamma_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t beta_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t gamma_is_row_major = get_compile_time_arg_val(4);
     constexpr uint32_t beta_is_row_major = get_compile_time_arg_val(5);
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
@@ -60,15 +58,15 @@ void kernel_main() {
     const uint32_t eps = get_arg_val<uint32_t>(arg_idx++);
     generate_bcast_col_scalar(cb_eps, eps);
 
-    const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
-    const auto src_stats = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
+    const auto src_a = TensorAccessor(src_args, src_addr);
+    const auto src_stats = TensorAccessor(stats_args, stats_addr);
 
 #ifdef FUSE_GAMMA
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_page_size);
+    const auto addrg = TensorAccessor(gamma_args, gamma_addr);
     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
 #endif
 #ifdef FUSE_BETA
-    const auto addrb = TensorAccessor(beta_args, beta_addr, beta_page_size);
+    const auto addrb = TensorAccessor(beta_args, beta_addr);
     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
 #endif
 

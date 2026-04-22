@@ -107,7 +107,6 @@ jobs:
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling",
               "structured-output": true,
               "sampling-tests": true,
-              "sampling-test-filter": "not test_bad_words and not test_mixed_params_batch",
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
               "co-owner-1-id": "U08TJ70UFRT",
               "co-owner-2-id": "U06F3ER8X9A"
@@ -121,7 +120,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"sample_on_device_mode\": \"all\", \"trace_region_size\": 72000000}",
+              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"sample_on_device_mode\": \"all\", \"trace_region_size\": 77000000}",
               "additional-server-args": "--async-scheduling",
               "structured-output": true,
               "sampling-tests": true,
@@ -168,7 +167,7 @@ jobs:
               "runner-label": "BH-QB-GE",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "override-tt-config": "{\"trace_region_size\": 67000000}",
+              "override-tt-config": "{\"trace_region_size\": 71000000}",
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--async-scheduling",
               "structured-output": true,
@@ -299,16 +298,16 @@ jobs:
               "co-owner-1-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-N300] NoOp test model (vLLM overhead)",
+              "name": "[WH-T3K] NoOp test model (vLLM overhead)",
               "model": "models/vllm_test_utils/no_op_test",
               "server-timeout": 2,
               "benchmark-timeout": 2,
-              "runner-label": "N300",
+              "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
-              "mesh-device": "N300",
+              "mesh-device": "(1, 2)",
               "override-tt-config": "{\"register_test_models\": true, \"sample_on_device_mode\": \"all\"}",
               "additional-server-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --input-queue-batching-delay 0 --async-scheduling",
-              "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
+              "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --temperature 0.0",
               "multimodal": false,
               "owner_id": "U08CEGF78ET"
             }

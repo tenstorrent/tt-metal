@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-
+#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 namespace tt::tt_metal {
 
 class MeshTensorImpl {
@@ -132,6 +132,12 @@ Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().compu
 void MeshTensor::update_tensor_topology(TensorTopology tensor_topology) {
     TT_FATAL(is_initialized(), "MeshTensor is in default constructed state.");
     impl->update_topology(std::move(tensor_topology));
+}
+
+MeshTensor MeshTensor::allocate_on_device(
+    distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology) {
+    auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
+    return MeshTensor(std::move(mesh_buffer), spec, topology);
 }
 
 }  // namespace tt::tt_metal

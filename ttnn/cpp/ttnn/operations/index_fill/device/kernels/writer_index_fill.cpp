@@ -37,7 +37,7 @@ void kernel_main() {
 
     IntType fill_value = static_cast<IntType>(fill_value_);
 
-    const auto s = TensorAccessor(dst_args, output_buffer_address, output_page_size);
+    const auto s = TensorAccessor(dst_args, output_buffer_address);
 
     // Performance optimization:
     // Prefill an input page (in L1) with fill_value

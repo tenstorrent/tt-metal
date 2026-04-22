@@ -58,7 +58,7 @@ void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t pad_value = get_arg_val<uint32_t>(1);
 
-    const auto s = TensorAccessor(src_args, src_addr, unpadded_X_size);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     experimental::CircularBuffer cb(cb_id_in0);
 
@@ -76,7 +76,7 @@ void kernel_main() {
 
         uint32_t original_addr = cb.get_write_ptr();
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
-            uint64_t src_noc_addr = get_noc_addr(size_2d + k, s);
+            uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);
 
             // Read from DRAM to tmp buffer
             noc_async_read(src_noc_addr + start_column_id, l1_write_addr, width_size);
