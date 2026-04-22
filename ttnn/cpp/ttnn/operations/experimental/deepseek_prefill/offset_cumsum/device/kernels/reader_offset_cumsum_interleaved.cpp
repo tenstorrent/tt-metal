@@ -7,32 +7,33 @@
 // Computes this device's global dispatch offset into each expert's token buffer.
 //
 // The global offset for each expert combines two components:
-//   1. Local offset: shifted prefix sum across the subgroup window
-//      (sum of subgroup-local rows 0..row_idx-1)
+//   1. Local offset: shifted prefix sum across the H input rows
+//      (sum of rows 0..row_idx-1)
 //   2. Expert region offset: exclusive prefix sum of total token counts within each
 //      chip's expert group (experts_per_chip stride)
 //
-// Under num_dispatch_subgroups > 1, the prefix sum is scoped to the subgroup's
-// contiguous slice [row_start, row_start + H), not the full gathered tensor.
+// The composite above already scopes its all_gather per subgroup, so the kernel
+// just sums all H rows of its input and writes the result at row_idx.
 //
 // Inputs:
-//   - input [full_H, W]: UINT32 interleaved tensor of per-device expert histograms
-//     (full_H = num_devices along cluster_axis, W = n_routed_experts). Produced
-//     by all_gather across the full mesh.
+//   - input [H, W]: UINT32 interleaved tensor of per-device expert histograms
+//     (H = dispatch_group_size, W = n_routed_experts). The composite chooses
+//     either a full-mesh all-gather (H == num_devices when no subgroups) or a
+//     subgroup-scoped gather (H == dispatch_group_size). Either way the prim
+//     sees H contiguous rows whose sum is the subgroup-wide total.
 //
 // Outputs:
 //   - offsets         [1, W]: global dispatch offsets (local_offset + expert_region_offset)
-//   - totals          [1, W]: sum of all H subgroup-rows of input
+//   - totals          [1, W]: sum of all H input rows
 //   - expert_region   [1, W]: expert region offsets only (shared component — exclusive
 //                             prefix sum of tile-aligned totals within each chip group)
 //
 // Runtime args:
 //   - src_addr, dst_offsets_addr, dst_totals_addr, dst_expert_region_addr: buffer addresses
-//   - row_idx: subgroup-local row index for this chip (0..H-1)
-//   - row_start: global row of the gathered tensor where this subgroup begins
+//   - row_idx: which row of the prefix sum this device keeps (0..H-1)
 //
-// With num_dispatch_subgroups == 1, row_start == 0 and the behavior reduces
-// exactly to the pre-subgroup implementation.
+// The kernel loops over all H rows to build the running sum; writes offsets
+// when we've accumulated exactly `row_idx` rows and totals after row H-1.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -44,7 +45,6 @@ void kernel_main() {
     uint32_t dst_totals_addr = get_arg_val<uint32_t>(2);
     uint32_t dst_expert_region_addr = get_arg_val<uint32_t>(3);
     uint32_t row_idx = get_arg_val<uint32_t>(4);
-    uint32_t row_start = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
@@ -58,8 +58,6 @@ void kernel_main() {
     constexpr uint32_t totals_page_size = get_compile_time_arg_val(9);
     constexpr uint32_t expert_region_page_size = get_compile_time_arg_val(10);
     constexpr uint32_t W = get_compile_time_arg_val(11);
-    // H is the subgroup row count (= dispatch_group_size). Under subgroups this
-    // is smaller than the gathered tensor's full height.
     constexpr uint32_t H = get_compile_time_arg_val(12);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(13);
 
@@ -94,21 +92,17 @@ void kernel_main() {
 
     uint32_t in_cb_addr = get_write_ptr(cb_id_in0);
 
-    // Iterate over the subgroup's H rows of the gathered tensor starting at row_start.
-    // Offsets output is written after accumulating `row_idx` rows (subgroup-local
-    // prefix sum); totals output is written after the full subgroup sum.
-    for (uint32_t i = 0; i < H; i++) {
-        uint32_t h = row_start + i;
+    for (uint32_t h = 0; h < H; h++) {
         noc_async_read_page(h, src_accessor, in_cb_addr);
         noc_async_read_barrier();
 
         volatile tt_l1_ptr uint32_t* stick = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in_cb_addr);
-        for (uint32_t j = 0; j < W; j++) {
-            running_sum[j] += stick[j];
+        for (uint32_t i = 0; i < W; i++) {
+            running_sum[i] += stick[i];
         }
 
-        // Save local offsets when we've accumulated exactly subgroup-local rows 0..row_idx-1
-        if (i + 1 == row_idx) {
+        // Save local offsets when we've accumulated exactly rows 0..row_idx-1
+        if (h + 1 == row_idx) {
             for (uint32_t j = 0; j < W; j++) {
                 local_off[j] = running_sum[j];
             }

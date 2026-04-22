@@ -42,4 +42,11 @@ uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const
 size_t get_num_links(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<size_t> cluster_axis = std::nullopt);
 
+// Partition a single contiguous MeshCoordinateRangeSet along `axis` into `num_subgroups`
+// equal contiguous sub-ranges. Used by MoE dispatch subgroups so that each program factory
+// can allocate per-subgroup semaphores and subgroup-scoped fabric state. Asserts the set
+// contains exactly one range (true for tensors produced by the standard mesh mappers).
+std::vector<ttnn::distributed::MeshCoordinateRange> split_into_subgroups(
+    const ttnn::distributed::MeshCoordinateRangeSet& tensor_coords, uint32_t axis, uint32_t num_subgroups);
+
 }  // namespace ttnn::operations::ccl::common

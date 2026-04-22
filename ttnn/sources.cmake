@@ -183,6 +183,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/paged_cache/paged_cache_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/subgroup_gather_histograms/subgroup_gather_histograms_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.cpp
     cpp/ttnn/operations/experimental/plusone/plusone_nanobind.cpp
