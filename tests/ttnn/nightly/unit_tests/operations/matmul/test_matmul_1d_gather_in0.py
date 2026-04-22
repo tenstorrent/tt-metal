@@ -374,6 +374,7 @@ def run_multi_core_matmul_1d(
 
     if in0_dtype == ttnn.bfloat4_b or in1_dtype == ttnn.bfloat4_b or output_dtype == ttnn.bfloat4_b:
         if activation == ttnn.UnaryOpType.TANH and packer_l1_acc and fp32_acc_mode:
+            # See issue #42856
             pcc_threshold = 0.913
         else:
             pcc_threshold = 0.99
