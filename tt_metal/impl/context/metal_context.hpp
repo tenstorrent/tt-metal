@@ -133,6 +133,7 @@ public:
     // Delegates to MetalEnv assigned to this context
     void initialize_control_plane();
     tt::tt_fabric::ControlPlane& get_control_plane();
+    bool is_control_plane_initialized() const;
     distributed::SystemMesh& get_system_mesh();
 
     const distributed::multihost::DistributedContext& global_distributed_context();

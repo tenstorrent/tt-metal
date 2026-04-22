@@ -322,6 +322,11 @@ void MetalEnvImpl::initialize_control_plane() {
     initialize_control_plane_impl();
 }
 
+bool MetalEnvImpl::is_control_plane_initialized() const noexcept {
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    return control_plane_ != nullptr;
+}
+
 void MetalEnvImpl::initialize_control_plane_impl() {
     if (custom_mesh_graph_desc_path_.has_value()) {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());

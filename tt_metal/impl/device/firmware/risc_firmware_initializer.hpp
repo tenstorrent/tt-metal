@@ -29,10 +29,16 @@ public:
 
     ~RiscFirmwareInitializer() override;
 
+    // Predicate that returns true only when the ControlPlane is currently constructed.
+    // Used to guard get_control_plane calls during teardown when the control plane
+    // may have been externally reset (e.g. by set_default_fabric_topology).
+    using IsControlPlaneInitializedFn = std::function<bool()>;
+
     // ControlPlane may change from init to teardown. use a getter function to always get the latest ControlPlane.
     RiscFirmwareInitializer(
         std::shared_ptr<const ContextDescriptor> descriptor,
         const GetControlPlaneFn& get_control_plane,
+        const IsControlPlaneInitializedFn& is_control_plane_initialized,
         dispatch_core_manager& dispatch_core_manager);
 
     void init(const std::vector<Device*>& devices, const std::unordered_set<InitializerKey>& init_done) override;
@@ -94,6 +100,7 @@ private:
     void teardown_simulator_ethernet_cores();
 
     GetControlPlaneFn get_control_plane_;
+    IsControlPlaneInitializedFn is_control_plane_initialized_;
     dispatch_core_manager& dispatch_core_manager_;
     uint8_t num_hw_cqs_;
     size_t worker_l1_unreserved_start_;

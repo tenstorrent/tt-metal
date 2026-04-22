@@ -42,9 +42,11 @@ namespace tt::tt_metal {
 RiscFirmwareInitializer::RiscFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor,
     const GetControlPlaneFn& get_control_plane,
+    const IsControlPlaneInitializedFn& is_control_plane_initialized,
     dispatch_core_manager& dispatch_core_manager) :
     FirmwareInitializer(std::move(descriptor)),
     get_control_plane_(get_control_plane),
+    is_control_plane_initialized_(is_control_plane_initialized),
     dispatch_core_manager_(dispatch_core_manager),
     num_hw_cqs_(static_cast<uint8_t>(descriptor_->num_cqs())) {
     const Hal& hal = descriptor_->hal();
@@ -193,7 +195,14 @@ void RiscFirmwareInitializer::teardown_simulator_ethernet_cores() {
 void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*init_done*/) {
     auto all_devices = cluster_.all_chip_ids();
 
-    teardown_simulator_ethernet_cores();
+    // Guard all control plane accesses: the control plane may have been externally
+    // reset (e.g. by set_default_fabric_topology in fixture TearDown) before this
+    // atexit-path teardown runs. Calling get_control_plane_() with a null control
+    // plane triggers lazy re-initialization with stale routing data → crash.
+    const bool cp_valid = is_control_plane_initialized_ && is_control_plane_initialized_();
+    if (cp_valid) {
+        teardown_simulator_ethernet_cores();
+    }
 
     if (!cluster_.is_mock_or_emulated()) {
         for (tt::ChipId device_id : all_devices) {
@@ -202,7 +211,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
         }
         // Set internal routing to false to exit active ethernet FW & go back to base FW
         // Must be last
-        if (get_control_plane_) {
+        if (get_control_plane_ && cp_valid) {
             cluster_.set_internal_routing_info_for_ethernet_cores(this->get_control_plane_(), false);
         }
     }
