@@ -16,7 +16,10 @@ Sum of (1) + (2) approximates one glx column's MoE block kernel time.
 
 import pytest
 
-from models.demos.deepseek_v3_d_p.utils.perf_utils import run_model_device_perf_test_with_merge
+from models.demos.deepseek_v3_d_p.utils.perf_utils import (
+    run_approx_galaxy_moe_perf,
+    run_model_device_perf_test_with_merge,
+)
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe"
 
@@ -26,7 +29,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn
     [
         (
             f"pytest {_TEST_PATH} -k 'perf-host-64 and linear-8'",
-            1,  # TODO: set baseline after first run
+            30_021_495,
             "deepseek_v3_moe",
             "deepseek_v3_moe_lb_8x1_dispatch_combine",
             1,
@@ -36,7 +39,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn
         ),
         (
             f"pytest {_TEST_PATH} -k 'perf-device-256 and mesh-2x4 and not linear-8 and not mesh-4x2 and not mesh-8x4'",
-            1,  # TODO: set baseline after first run
+            31_367_500,
             "deepseek_v3_moe",
             "deepseek_v3_moe_lb_2x4_gate",
             1,
@@ -46,7 +49,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn
         ),
         (
             f"pytest {_TEST_PATH} -k 'perf-device-256 and mesh-8x4 and not linear-8 and not mesh-4x2 and not mesh-2x4'",
-            1,  # TODO: set baseline after first run
+            36_771_539,
             "deepseek_v3_moe",
             "deepseek_v3_moe_glx_8x4",
             1,
@@ -81,4 +84,21 @@ def test_deepseek_v3_moe_perf(
         batch_size=batch_size,
         margin=margin,
         comments=comments,
+    )
+
+
+@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.timeout(1000)
+def test_deepseek_v3_moe_perf_approx_galaxy():
+    """
+    Approximate 8x4 galaxy MoE performance from two cheap 8-chip proxy runs.
+
+    Runs the 8x1 proxy (SP=8, TP=1) to measure dispatch + combine + expert FFN,
+    then the 2x4 proxy (SP=2, TP=4) to measure gate + TP collectives.
+    Combines results using approx.py op-selection logic and reports estimated total.
+    """
+    run_approx_galaxy_moe_perf(
+        command_8x1=f"pytest {_TEST_PATH} -k 'perf-host-64 and linear-8'",
+        command_2x4=f"pytest {_TEST_PATH} -k 'perf-device-256 and mesh-2x4 and not linear-8 and not mesh-4x2 and not mesh-8x4'",
+        subdir="deepseek_v3_moe",
     )
