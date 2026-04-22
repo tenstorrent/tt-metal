@@ -1194,13 +1194,6 @@ def test_decoder_mlp(
     logger.info(f"Golden MLP output: {moe_output.flatten()[:8]}")
     logger.info(f"DecoderBlock MLP output: {decoder_mlp_output_valid.flatten()[:8]}")
 
-    torch.set_printoptions(profile="full")
-    torch.set_printoptions(sci_mode=False)
-    with open("tensor_output.txt", "w") as f:
-        f.write(str(moe_output.flatten()))
-    with open("torch_tensor_output.txt", "w") as f:
-        f.write(str(decoder_mlp_output_valid.float().flatten()))
-
     assert passing, f"DecoderBlock MLP Output PCC check failed: {pcc}"
 
     logger.info("✓ DecoderBlock MLP mesh test passed!")
