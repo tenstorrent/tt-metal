@@ -36,7 +36,7 @@ skus:
       - arch-wormhole_b0
       - pipeline-functional
       - topology-6u
-      - OM1-01A02-STGWH01
+      - OM1-01A01-STGWH03
 
   wh_galaxy_perf:
     runs_on:
