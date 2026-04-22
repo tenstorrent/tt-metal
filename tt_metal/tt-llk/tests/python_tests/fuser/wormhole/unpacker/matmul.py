@@ -31,7 +31,8 @@ class MatmulUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        kt_dim = compute_unit.src_a.dimensions[1]
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
         return f"_perf_unpack_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
@@ -43,7 +44,8 @@ class MatmulUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        kt_dim = compute_unit.src_a.dimensions[1]
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
         return f"_perf_math_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
@@ -88,7 +90,8 @@ class MatmulUnpacker(Unpacker):
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
-        kt_dim = compute_unit.src_a.dimensions[1]
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         transpose_faces = compute_unit.unpack_transpose_faces.cpp_enum_value
 
         return f"_llk_unpack_AB_matmul_init_<>({transpose_faces}, {ct_dim}, {rt_dim}, {kt_dim}, {face_r_dim}, {face_r_dim});\n"
@@ -102,7 +105,8 @@ class MatmulUnpacker(Unpacker):
     ) -> str:
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
-        kt_dim = compute_unit.src_a.dimensions[1]
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         unpack_tile_size_a = compute_unit.src_a.tile_size
         unpack_tile_size_b = compute_unit.src_b.tile_size
         full_ct_dim = compute_unit.src_b.dimensions[1] // 32
