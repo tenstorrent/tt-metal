@@ -73,7 +73,7 @@ void kernel_main() {
 
         uint32_t original_addr = get_write_ptr(cb_id_in0);
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
-            uint64_t src_noc_addr = get_noc_addr(size_2d + k, s);
+            uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);
 
             // Read from DRAM to tmp buffer
             noc_async_read(src_noc_addr + start_column_id, l1_write_addr, width_size);
