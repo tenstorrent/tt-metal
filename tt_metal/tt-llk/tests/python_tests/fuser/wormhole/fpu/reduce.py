@@ -143,4 +143,7 @@ class ReduceFpu(Fpu):
         enforce_fp32_accumulation = (
             compute_unit.enforce_fp32_accumulation.cpp_enum_value
         )
-        return f"_llk_math_reduce_uninit_<{enforce_fp32_accumulation}>();\n"
+        srca_data_format = (
+            f"ckernel::to_underlying(DataFormat::{operation.unpack_a_out.name})"
+        )
+        return f"_llk_math_reduce_uninit_<{enforce_fp32_accumulation}>({srca_data_format});\n"
