@@ -510,7 +510,6 @@ def pack_mxfp4(
 
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
-        Layout: [32 scales (1 per block)][512 packed bytes (2 FP4/byte)]
     """
     # For now, use_srcs is not implemented for MxFp4
     # If needed in the future, implement similar to _pack_mxfp8_srcs
@@ -605,79 +604,73 @@ def pack_mxfp4(
     )
 
 
-def _round_ties_even(
-    input_mantissa: int, output_width: int, input_width: int = 23
-) -> tuple[int, int]:
-    if output_width < 0:
-        return 0, 0
-    if input_width == output_width:
-        return input_mantissa, 0
-    shift_out = input_width - output_width
-    rounded_bits = input_mantissa & ((1 << shift_out) - 1)
-    rounded_msb = (rounded_bits >> (shift_out - 1)) & 0x1
-    rounded_lsbs = rounded_bits & ((1 << (shift_out - 1)) - 1)
-    mantissa_lsb = (input_mantissa >> shift_out) & 0x1
-
-    # Round-to-nearest-even: increment on >0.5, or on exact 0.5 when the kept LSB is 1.
-    round_inc = 1 if (rounded_msb and (rounded_lsbs != 0 or mantissa_lsb == 0x1)) else 0
-
-    if output_width == 0:
-        round_inc = rounded_msb if rounded_lsbs != 0x0 else 0
-        output_width = 1
-
-    new_mantissa = (input_mantissa >> shift_out) + round_inc
-    return new_mantissa & ((1 << output_width) - 1), new_mantissa >> output_width
-
-
-def _float_to_fp4_bits_storage(value: float) -> int:
-    """Quantize to FP4 E2M1 (round-to-nearest-even)."""
-    if np.isnan(value):
-        return 0x0
-    if np.isinf(value):
-        return 0x7 if value > 0 else 0xF
-
-    ui32 = np.float32(value).view(np.uint32)
+def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
+    """Quantize scaled values to FP4 nibbles."""
+    flat = scaled_blocks.astype(np.float32).ravel()
+    ui32 = flat.view(np.uint32)
     sign = (ui32 >> 31) & 0x1
     exp_biased = (ui32 >> 23) & 0xFF
     mant = ui32 & 0x7FFFFF
 
-    # Zero (preserve sign for -0.0)
-    if exp_biased == 0 and mant == 0:
-        return int(sign << 3)
+    out = np.zeros_like(mant, dtype=np.uint8)
 
-    exp_unbiased = int(exp_biased) - 127
+    is_nan = (exp_biased == 0xFF) & (mant != 0)
+    is_inf = (exp_biased == 0xFF) & (mant == 0)
+    is_zero = (exp_biased == 0) & (mant == 0)
+    finite_nonzero = ~(is_nan | is_inf | is_zero)
 
-    mant_round, expo_inc = _round_ties_even(mant, 1, 23)
-    mant_round = int(mant_round)
-    expo_inc = int(expo_inc)
-    elem_exp_unbiased = exp_unbiased + expo_inc
+    if np.any(is_inf):
+        sat_vals = np.where(sign == 0, 0x7, 0xF).astype(np.uint8)
+        out[is_inf] = sat_vals[is_inf]
+    if np.any(is_zero):
+        out[is_zero] = sign[is_zero].astype(np.uint8) << 3
 
-    # Subnormal handling (elem_exp_min_unbiased = 0, elem_exp_bias = 1)
-    if elem_exp_unbiased < 0:
-        elem_exp_unbiased = exp_unbiased
-        mant_with_hb = mant | (1 << 23)
-        shift = abs(elem_exp_unbiased)
-        mant_exp_adjusted = mant_with_hb >> shift
-        mant_round, expo_inc = _round_ties_even(mant_exp_adjusted, 1, 23)
-        mant_round = int(mant_round)
-        expo_inc = int(expo_inc)
-        elem_exp_unbiased = -1 + expo_inc
+    if np.any(finite_nonzero):
+        exp_unbiased = exp_biased.astype(np.int32) - 127
 
-    # Saturate if exponent/mantissa overflow
-    if elem_exp_unbiased > 2 or (elem_exp_unbiased == 2 and mant_round > 1):
-        return 0x7 if sign == 0 else 0xF
+        def _round_ties_to_even(
+            input_mantissa: np.ndarray,
+        ) -> tuple[np.ndarray, np.ndarray]:
+            shift_out = 22  # 23 -> 1
+            rounded_bits = input_mantissa & ((1 << shift_out) - 1)
+            rounded_msb = (rounded_bits >> (shift_out - 1)) & 0x1
+            rounded_lsbs = rounded_bits & ((1 << (shift_out - 1)) - 1)
+            mantissa_lsb = (input_mantissa >> shift_out) & 0x1
+            round_inc = (
+                (rounded_msb == 1) & ((rounded_lsbs != 0) | (mantissa_lsb == 1))
+            ).astype(np.uint32)
+            new_mantissa = (input_mantissa >> shift_out) + round_inc
+            mant_round = new_mantissa & 0x1
+            expo_inc = new_mantissa >> 1
+            return mant_round.astype(np.int32), expo_inc.astype(np.int32)
 
-    elem_exp_biased = elem_exp_unbiased + 1
-    elem_bits = (elem_exp_biased << 1) | (mant_round & 0x1)
-    if sign:
-        elem_bits |= 0x8
-    return int(elem_bits)
+        mant_round, expo_inc = _round_ties_to_even(mant)
+        elem_exp_unbiased = exp_unbiased + expo_inc
 
+        subnormal = elem_exp_unbiased < 0
+        if np.any(subnormal):
+            mant_with_hb = mant | (1 << 23)
+            shift = np.abs(exp_unbiased).astype(np.uint32)
+            shift = np.minimum(shift, np.uint32(24))
+            mant_exp_adjusted = mant_with_hb >> shift
+            mant_round_sub, expo_inc_sub = _round_ties_to_even(mant_exp_adjusted)
+            elem_exp_unbiased_sub = -1 + expo_inc_sub
+            mant_round[subnormal] = mant_round_sub[subnormal]
+            elem_exp_unbiased[subnormal] = elem_exp_unbiased_sub[subnormal]
 
-def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
-    """Quantize scaled values to FP4 nibbles."""
-    flat = scaled_blocks.astype(np.float32).ravel()
-    out = np.empty_like(flat, dtype=np.uint8)
-    for i, v in enumerate(flat):
-        out[i] = _float_to_fp4_bits_storage(float(v)) & 0xF
+        sat_mask = (elem_exp_unbiased > 2) | (
+            (elem_exp_unbiased == 2) & (mant_round > 1)
+        )
+        sat_mask &= finite_nonzero
+        if np.any(sat_mask):
+            sat_vals = np.where(sign == 0, 0x7, 0xF).astype(np.uint8)
+            out[sat_mask] = sat_vals[sat_mask]
+
+        normal_mask = finite_nonzero & ~sat_mask
+        if np.any(normal_mask):
+            elem_exp_biased = elem_exp_unbiased + 1
+            elem_bits = ((elem_exp_biased << 1) | (mant_round & 0x1)).astype(np.uint8)
+            elem_bits |= sign.astype(np.uint8) << 3
+            out[normal_mask] = elem_bits[normal_mask]
+
     return out
