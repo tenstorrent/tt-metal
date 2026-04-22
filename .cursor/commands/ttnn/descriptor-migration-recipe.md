@@ -376,6 +376,26 @@ std::vector<uint32_t> compile_time_args{cb_id};
 KernelDescriptor::CompileTimeArgs compile_time_args{cb_id};
 ```
 
+### Use cached_split_work_to_cores instead of manual grid/split calls
+
+Never call `device->compute_with_storage_grid_size()`, `split_work_to_cores()`, and
+`grid_to_cores()` separately. Use the framework cache instead — it caches the device grid
+(which never changes) and the work split result per thread:
+
+```cpp
+// BAD — recomputes grid + split + cores on every dispatch
+auto grid = device->compute_with_storage_grid_size();
+auto [num_cores, all_cores, cg1, cg2, upcg1, upcg2] = split_work_to_cores(grid, units);
+auto cores = grid_to_cores(num_cores, grid.x, grid.y);
+
+// GOOD — one call, cached per thread
+const auto& ws = cached_split_work_to_cores(device, units_to_divide);
+// ws.num_cores, ws.all_cores, ws.core_group_1, ws.core_group_2,
+// ws.units_per_core_group_1, ws.units_per_core_group_2, ws.cores
+```
+
+See `ttnn/cpp/ttnn/operations/randn/device/randn_program_factory.cpp` for usage.
+
 ---
 
 ## Common pitfalls
