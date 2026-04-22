@@ -1454,6 +1454,8 @@ struct LightweightMaskContext {
     uint32_t joint_l_partial_col = 0;        // Column within tile where joint_l padding starts (0 = no partial)
     uint32_t global_n_partial_tile_idx = 0;  // Index of global_n partial tile in the mask CB
     uint32_t joint_l_partial_tile_idx = 0;   // Index of joint_l partial tile in the mask CB
+    uint32_t straddle_num_padded_tiles = 0;  // Trailing -inf tiles on straddle chunk (0 = inactive)
+    uint32_t straddle_mask_chunk_id = 0;     // K chunk index where straddle mask applies
 
     /**
      * Resolve which mask type applies for a given K chunk and return pre-resolved params.
@@ -1490,6 +1492,8 @@ struct LightweightMaskContext {
             out_has_partial = (joint_l_partial_col > 0);
             out_boundary_col = Sk_chunk_t - out_num_padded - (out_has_partial ? 1 : 0);
             out_partial_tile_idx = joint_l_partial_tile_idx;
+        } else if (straddle_num_padded_tiles > 0 && k_chunk == straddle_mask_chunk_id) {
+            out_num_padded = straddle_num_padded_tiles;
         }
     }
 
@@ -1841,7 +1845,8 @@ void sdpa_inner_loop(
                 (sdpa_type == RING) &&
                 ((ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) ||
                  (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
-                 (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id));
+                 (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id) ||
+                 (lw_mask.straddle_num_padded_tiles > 0 && k_chunk == lw_mask.straddle_mask_chunk_id));
             if (sdpa_type == RING && !is_causal) {
                 apply_mask = needs_padding_mask;
             } else if (is_causal || sliding_window_size > 0) {
