@@ -390,6 +390,7 @@ IMPLEMENTATIONS = [
 ]
 
 
+@pytest.mark.skip_post_commit
 @pytest.mark.parametrize(
     "M,K,N,formats,impl",
     [
@@ -419,6 +420,7 @@ def test_matmul_custom_compressed_single_core(device, M, K, N, formats, impl):
     _run_matmul_custom_compressed(device, M, K, N, impl=impl, formats=formats)
 
 
+@pytest.mark.skip_post_commit
 @pytest.mark.parametrize(
     "M,K,N_per_core,formats,num_cores,impl",
     [
@@ -448,6 +450,7 @@ def test_matmul_custom_compressed_multicore(device, M, K, N_per_core, formats, n
     _run_matmul_custom_compressed(device, M, K, N_per_core * num_cores, impl=impl, formats=formats, num_cores=num_cores)
 
 
+@pytest.mark.skip_post_commit
 @pytest.mark.parametrize("M,K,N", [s for s in SHAPES if s != (1, 7168, 256)])
 @pytest.mark.parametrize("impl", IMPLEMENTATIONS)
 def test_matmul_custom_compressed_clustered(device, M, K, N, impl):
@@ -455,6 +458,7 @@ def test_matmul_custom_compressed_clustered(device, M, K, N, impl):
     _run_matmul_custom_compressed_clustered(device, M, K, N, impl=impl)
 
 
+@pytest.mark.skip_post_commit
 @pytest.mark.parametrize("M,K,N", [s for s in SHAPES if s != (1, 7168, 256)])
 @pytest.mark.parametrize("interleave_n", [2, 4, 8, 16, 32])
 @pytest.mark.parametrize("impl", IMPLEMENTATIONS)
@@ -463,6 +467,7 @@ def test_matmul_custom_compressed_interleaved(device, M, K, N, interleave_n, imp
     _run_matmul_custom_compressed_interleaved_by_n(device, M, K, N, impl=impl, interleave_n=interleave_n)
 
 
+@pytest.mark.skip_post_commit
 @pytest.mark.parametrize("M,K,N", [s for s in SHAPES if s != (1, 7168, 256)])
 @pytest.mark.parametrize("impl", IMPLEMENTATIONS)
 def test_matmul_custom_compressed_hybrid(device, M, K, N, impl):
