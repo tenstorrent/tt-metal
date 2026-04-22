@@ -105,7 +105,10 @@ Kernel::Kernel(
     const std::vector<uint32_t>& compile_args,
     const std::map<std::string, std::string>& defines,
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
-    const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles) :
+    const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles,
+    const std::vector<std::string>& named_runtime_args,
+    const std::vector<std::string>& named_common_runtime_args,
+    const std::string& args_namespace) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
@@ -113,6 +116,9 @@ Kernel::Kernel(
     compile_time_args_(compile_args),
     named_compile_time_args_(named_compile_args),
     dataflow_buffer_local_accessor_handles_(dataflow_buffer_local_accessor_handles),
+    named_runtime_args_(named_runtime_args),
+    named_common_runtime_args_(named_common_runtime_args),
+    args_namespace_(args_namespace),
 
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
@@ -439,6 +445,18 @@ uint64_t Kernel::compute_hash() const {
     for (const auto& it : sorted_iters(this->dataflow_buffer_local_accessor_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
+    }
+    // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
+    // args_namespace is emitted as a C++ namespace in the generated header.
+    // Counts are hashed too — they keep ["a"], [] distinct from [], ["a"].
+    hasher.update(this->args_namespace_);
+    hasher.update(static_cast<uint64_t>(this->named_runtime_args_.size()));
+    for (const auto& name : this->named_runtime_args_) {
+        hasher.update(name);
+    }
+    hasher.update(static_cast<uint64_t>(this->named_common_runtime_args_.size()));
+    for (const auto& name : this->named_common_runtime_args_) {
+        hasher.update(name);
     }
     hasher.update(this->kernel_src_.source_);
     hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
