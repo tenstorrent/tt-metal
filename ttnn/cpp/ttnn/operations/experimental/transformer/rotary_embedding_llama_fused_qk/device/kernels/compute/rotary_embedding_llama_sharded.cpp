@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -69,16 +70,11 @@ void kernel_main() {
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
         cb_reserve_back(rotated_in_interm_cb, Wt);
-        cb_reserve_back(sin_interm_cb, Wt);
-        cb_reserve_back(cos_interm_cb, Wt);
-        cb_reserve_back(out_cb, Wt);
 
         // Get the input
         cb_reserve_back(in_cb, Wt);
         cb_push_back(in_cb, Wt);
         cb_wait_front(in_cb, Wt);
-
-        // Do the computation
 
         // rotated = x @ trans_mat
         mm_init_short(in_cb, trans_mat_cb);
@@ -89,42 +85,30 @@ void kernel_main() {
         }
         REL();
         cb_push_back(rotated_in_interm_cb, Wt);
-        cb_wait_front(rotated_in_interm_cb, Wt);
 
-        mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // sin_interim = rotated * sin
-            mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb, sin_cb, j, j, j);
-            pack_tile(j, sin_interm_cb, j);
-        }
-        REL();
-        cb_push_back(sin_interm_cb, Wt);
-        cb_pop_front(rotated_in_interm_cb, Wt);
+        // sin_interim = rotated * sin (ROW bcast; sin_cb pre-waited by reader, NoWaitNoPop)
+        compute_kernel_lib::mul<
+            compute_kernel_lib::BroadcastDim::ROW,
+            compute_kernel_lib::BinaryInputPolicy::WaitUpfrontPopAtEnd,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+            compute_kernel_lib::BinaryOutputPolicy::Bulk>(
+            rotated_in_interm_cb, sin_cb, sin_interm_cb, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
 
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // cos_interim = x * cos
-            mul_tiles_bcast<BroadcastType::ROW>(in_cb, cos_cb, j, j, j);
-            pack_tile(j, cos_interm_cb, j);
-        }
-        REL();
-        cb_push_back(cos_interm_cb, Wt);
-        cb_pop_front(in_cb, Wt);  // Done with input
+        // cos_interim = x * cos (ROW bcast; cos_cb pre-waited by reader, NoWaitNoPop)
+        compute_kernel_lib::mul<
+            compute_kernel_lib::BroadcastDim::ROW,
+            compute_kernel_lib::BinaryInputPolicy::WaitUpfrontPopAtEnd,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+            compute_kernel_lib::BinaryOutputPolicy::Bulk>(
+            in_cb, cos_cb, cos_interm_cb, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
 
-        cb_wait_front(sin_interm_cb, Wt);
-        cb_wait_front(cos_interm_cb, Wt);
-        add_tiles_init(cos_interm_cb, sin_interm_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // out = cos_interim + sin_interim
-            add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
-            pack_tile(j, out_cb, j);
-        }
-        REL();
-        cb_push_back(out_cb, Wt);
-        cb_pop_front(sin_interm_cb, Wt);
-        cb_pop_front(cos_interm_cb, Wt);
+        // out = cos_interim + sin_interim
+        compute_kernel_lib::add<
+            compute_kernel_lib::BroadcastDim::NONE,
+            compute_kernel_lib::BinaryInputPolicy::WaitUpfrontPopAtEnd,
+            compute_kernel_lib::BinaryInputPolicy::WaitUpfrontPopAtEnd,
+            compute_kernel_lib::BinaryOutputPolicy::Bulk>(
+            cos_interm_cb, sin_interm_cb, out_cb, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
     }
 
     /* Unnecessary CB APIs (comment out for code size)
