@@ -487,6 +487,97 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingsFail) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+// ---- Named RTA / CRTA / CTA schema validation ----
+
+TEST_F(ProgramSpecTestQuasar, NamedRuntimeArgsSucceeds) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"input_ptr", "output_ptr"};
+    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"tile_count"};
+    spec.kernels[0].compile_time_arg_bindings = {{"block_size", 64}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CustomArgsNamespaceSucceeds) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].args_namespace = "reader_args";
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"input_ptr"};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, InvalidArgsNamespaceFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].args_namespace = "9bad";  // starts with a digit
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("args_namespace '9bad' which is not a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestQuasar, EmptyArgsNamespaceFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].args_namespace = "";
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("args_namespace '' which is not a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestQuasar, InvalidNamedRtaIdentifierFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"int"};  // C++ keyword
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("named RTA name 'int' is not a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestQuasar, InvalidNamedCrtaIdentifierFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"has-dash"};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("named CRTA name 'has-dash' is not a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestQuasar, NamedRtaCrtaCollisionFails) {
+    // A single name cannot be both a named RTA and a named CRTA (they share the user namespace).
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"count"};
+    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"count"};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("naming collision: 'count' is declared as both a named RTA and a named CRTA")));
+}
+
+TEST_F(ProgramSpecTestQuasar, NamedRtaCtaCollisionFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"block_size"};
+    spec.kernels[0].compile_time_arg_bindings = {{"block_size", 64}};  // same name as CTA
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("naming collision: 'block_size' is declared as both a named RTA and a named CTA")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DifferentKernelsMayReuseArgNames) {
+    // Collision rule is per-kernel. Two different kernels may have identically-named args.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"shared_name"};
+    spec.kernels[1].runtime_arguments_schema.named_runtime_args = {"shared_name"};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
 TEST_F(ProgramSpecTestQuasar, DFBWithComputeEndpointRequiresDataFormat) {
     NodeCoord node{0, 0};
 
@@ -1381,6 +1472,40 @@ TEST(AggregateSpecTypes, WorkerSpecDesignatedInitializers) {
     EXPECT_EQ(worker.unique_id, "my_worker");
     EXPECT_EQ(worker.kernels.size(), 2u);
     EXPECT_EQ(worker.dataflow_buffers.size(), 2u);
+}
+
+TEST(AggregateSpecTypes, RuntimeArgSchemaDesignatedInitializers) {
+    // Named RTAs + CRTAs + vararg counts, all via designated initializers.
+    KernelSpec::RuntimeArgSchema schema{
+        .named_runtime_args = {"input_ptr", "output_ptr"},
+        .named_common_runtime_args = {"tile_count"},
+        .num_runtime_args_per_node = {{NodeCoord{0, 0}, 4}},
+        .num_common_runtime_args = 2,
+    };
+
+    EXPECT_EQ(schema.named_runtime_args.size(), 2u);
+    EXPECT_EQ(schema.named_common_runtime_args.size(), 1u);
+    EXPECT_EQ(schema.num_runtime_args_per_node.size(), 1u);
+    EXPECT_EQ(schema.num_common_runtime_args, 2u);
+}
+
+TEST(AggregateSpecTypes, KernelSpecArgsNamespaceDesignatedInitializers) {
+    KernelSpec k{
+        .unique_id = "k",
+        .source = KernelSpec::SourceCode{"void kernel_main() {}"},
+        .target_nodes = NodeCoord{0, 0},
+        .args_namespace = "reader_args",
+        .runtime_arguments_schema =
+            KernelSpec::RuntimeArgSchema{
+                .named_runtime_args = {"input_ptr"},
+            },
+        .config_spec =
+            DataMovementConfiguration{
+                .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+            },
+    };
+    EXPECT_EQ(k.args_namespace, "reader_args");
+    EXPECT_EQ(k.runtime_arguments_schema.named_runtime_args.size(), 1u);
 }
 
 TEST(AggregateSpecTypes, SemaphoreSpecDesignatedInitializers) {
