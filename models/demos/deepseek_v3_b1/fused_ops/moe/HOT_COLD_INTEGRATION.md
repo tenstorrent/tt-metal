@@ -2,7 +2,26 @@
 
 Integrates the `matmul_expert` (hybrid SRAM + DRAM, compressed weights) kernels
 into the fused MoE kernel (`moe_kernel.cpp`). Requires a TP8 Megatron refactor
-of the routed-expert path. Design only — implementation has not started.
+of the routed-expert path.
+
+## 0. Status (2026-04-22)
+
+**Phase 1A — TP8 plumbing: ✅ COMPLETE**
+**Phase 1B — matmul_expert DRAM swap: ✅ COMPLETE (all 8 experts, DRAM-only)**
+**Phase 2 — SRAM hot path + new index encoding: ⏳ NOT STARTED**
+
+Anchor-test results on `test_moe_fused_with_reduce[blackhole-True-
+NOC_MODE.DM_DYNAMIC_NOC-True-fabric_2d]` (100 iterations, 8 devices):
+
+| Check                 | Baseline (pre-TP8) | After Phase 1B   |
+|-----------------------|--------------------|------------------|
+| Reduce output PCC     | 0.9911             | **0.9915**       |
+| Reference MoE PCC     | 0.9911             | **0.9915**       |
+| Uniform-scale robust? | n/a                | 0.9911 (varied)  |
+
+Pre-reduce per-device check (`test_moe_fused_no_reduce`): all 8 devices
+≥ **0.9988 PCC** (was d2=0.9627, d5=0.9679 failing the 0.97 threshold
+before the shared-expert face-view fix — see §11).
 
 ## 1. Context
 
@@ -190,6 +209,13 @@ Implications:
 
 ## 5. EltwiseMul per-expert looping (option 1)
 
+**Status**: loop implementation landed in `unified_kernels/eltwise_mul.hpp`
+(BRISC scalar feed + TRISC per-expert in0*s*in1); `num_experts=1`
+default preserves old behavior. Currently `moe_kernel.cpp` instantiates
+EltwiseMul with `num_experts=1` — the loop is exercised only when a
+future refactor consolidates gate/up matmul output from 8 EP streamer
+cores to one non-accum matmul_expert call per device.
+
 ### 5.1 Problem
 Today's `eltwise_mul.hpp` handles one `(gate × up × scalar)` multiply per
 invocation — one selected expert's worth of tiles. With non-accum gate/up,
@@ -320,25 +346,32 @@ Current implementation is staged as **Phase 1A → 1B → 2**. Phase 1A defers
 the `matmul_expert` kernel swap so TP8 plumbing + reduce + EltwiseMul loop
 can be validated independently.
 
-### Phase 1A — TP8 plumbing with existing `DRAMStreamingMatmul`
+### Phase 1A — TP8 plumbing with existing `DRAMStreamingMatmul` ✅ COMPLETE
 Goal: prove TP8 sharding + cross-device reduce end-to-end. Keeps the
 existing routed matmul kernel to minimize delta.
-1. Shard routed gate/up weights column-parallel (N/8 per device) and down
-   weights row-parallel (K/8 per device). Replace `ReplicateTensorToMesh`
-   with per-shard placement.
-2. Extend `EltwiseMul` with `num_experts` looping (§5), backwards-compatible
-   default. Unit-test `num_experts=1` → unchanged; `num_experts=8` → new.
-3. Wire `enable_reduce_to_one=True` through the routed path so the
-   per-device partial routed+shared output is summed at ROOT1.
-4. Update `test_moe_fused_with_reduce` to shard weights per device and
-   compute golden per-device (mirroring `test_mlp_with_reduce` at
-   `test_moe_mlp.py:1542-1573`).
-5. Target: PCC ≥ 0.97 / 0.95, no hangs, baseline ~0.9911 for both checks.
+1. ✅ Shard routed gate/up weights column-parallel (N/8=256 per device)
+   and down weights row-parallel (K/8=256 per device). Replaced
+   `ReplicateTensorToMesh` with `ShardTensor2dMesh` via
+   `moe_routed_expert_tp8_torch_for_cache` in `weights/transforms/moe.py`.
+2. ✅ Extend `EltwiseMul` with `num_experts` looping (§5). Loop is wired
+   in `unified_kernels/eltwise_mul.hpp` (BRISC scalar feed + TRISC per-
+   expert `in0*s*in1` iteration, pushes per-group so downstream
+   consumer overlaps). `num_experts=1` default preserves old behavior.
+   **Note**: not yet wired into `moe_kernel.cpp` — today gate/up matmul
+   processes 1 expert × 8 streamer cores EP-style and the old per-expert
+   scalar broadcast path still applies. EltwiseMul sees num_experts=1.
+3. ✅ `enable_reduce_to_one=True` through routed path. Per-device
+   partial routed+shared → ReduceToOne at ROOT1.
+4. ✅ `test_moe_fused_with_reduce` computes per-device golden; residual
+   added only on ROOT1; sum equals full MoE output.
+5. ✅ **Hit**: Reduce-output PCC 0.9915 (target ≥ 0.97), Reference MoE
+   PCC 0.9915 (target ≥ 0.95), 100 iterations no hangs.
 
-### Phase 1B — swap DRAM matmuls to `matmul_expert`
+### Phase 1B — swap DRAM matmuls to `matmul_expert` ✅ COMPLETE
 Goal: use the compressed-weight expert matmul kernel for gate/up/down.
-Deferred from 1A because the kernel requires substantial new Python-side
-infrastructure (see §6 / §7).
+All three matmuls now go through `MatmulExpertCompressedDRAM` with all
+8 selected experts running on the DRAM path (no SRAM, no hot experts
+yet). Anchor test passes (see §0).
 
 New infrastructure required in `op.py`:
 - Build `CompressedTensor` for each of gate_proj / up_proj / down_proj
@@ -406,18 +439,18 @@ Kernel-side changes in `moe_kernel.cpp`:
   pop_index=true`.
 - down_proj uses `fuse_silu=0`, `accum_experts=1`, `pop_in0=true,
   pop_index=true`.
-- **Accum cap**: DRAM path reconfigures L1_ACC only for `i==0` and `i==1`
-  (see kernel lines 375-379 / 410-412 in
-  `matmul_expert_compressed_dram.hpp`). For `i>=2`, accumulation silently
-  breaks. Policy (a) from §6.2 ("≤2 cold experts per token") is a HARD
-  kernel constraint, not just a soft policy. Without SRAM coverage, we
-  must either (i) restrict topk routing to ≤2 experts for initial
-  bring-up, or (ii) accept that only 2 of topk=8 will accumulate
-  correctly (and rely on PCC slack). Decision for Phase 1B: **use all 8
-  as DRAM experts but with warning**; Phase 2 adds SRAM to reduce DRAM
-  experts to ≤2.
-- Remove the per-expert scalar broadcast after down_proj (scalar is now
-  applied inside EltwiseMul; see §6.3).
+- **Accum cap (RESOLVED in kernel)**: the DRAM matmul_expert kernel was
+  updated to reconfigure L1_ACC for every expert iteration, not just
+  `i==0..1`. All 8 topk experts accumulate correctly on down_proj.
+  Policy (a) / "≤2 cold experts per token" is no longer a kernel
+  constraint — it's purely a future perf trade-off for SRAM hit-rate.
+- **Scalar placement (not yet moved)**: today the per-expert scalar is
+  still applied through the pre-Phase-1B scalar-broadcast path (one
+  scalar per expert × 8 EP-style streamer cores). Moving the scalar
+  into EltwiseMul's num_experts loop (§6.3) is tracked as follow-up; it
+  becomes a requirement only when matmul_expert moves to non-accum
+  gate/up emitting num_experts groups into one CB (currently each
+  expert still flows through its own streamer core).
 
 ### Phase 2 — SRAM path + new index encoding
 1. Upstream encoding producer for §4.2 selection tensor (`is_sram | position`).
@@ -431,4 +464,90 @@ Kernel-side changes in `moe_kernel.cpp`:
 - Is policy (a) "≤2 cold experts per token" realistic at production-scale
   hot/cold splits? Needs measurement on real routing data.
 - For cross-device ReduceToOne: reuse existing reduce_to_one_b1 pattern,
-  or does TP8 call for a different topology?
+  or does TP8 call for a different topology? (Phase 1B shipped with
+  `reduce_to_one_b1` — answered unless a topology change is needed.)
+
+## 11. Bugs hit & fixes landed during Phase 1A/1B
+
+Chronological list of non-obvious bugs that cost real debug time. Keep
+this updated as a reference so the next person doesn't re-hit them.
+
+### 11.1 Per-device golden must sum all top-8 experts, not per-expert
+- **Symptom**: PCC 0.8629 on anchor test right after Phase 1A weight
+  sharding landed.
+- **Root cause**: initial per-device golden in `test_moe_fused_with_reduce`
+  summed only the expert assigned to that device, missing the other 7
+  selected experts whose N-slices also land on this device.
+- **Fix**: compute per-device golden as `sum_over_topk( gate[e] @
+  W_gate[e][:, device_n_slice] * up[e] @ W_up[e][:, device_n_slice] *
+  scale[e] ) @ W_down[e][device_k_slice, :]`, not just one expert.
+
+### 11.2 d=4↔6, d=5↔7 row swap on tray 3
+- **Symptom**: d4/d5/d6/d7 showed systematically lower PCC than d0-d3 on
+  the 4×2 submesh; pairs d4↔d6 and d5↔d7 matched when logical-row-swapped.
+- **Root cause**: REV_B galaxy tray 3 has device IDs 24-31 but the
+  physical row order on the 4×2 submesh is non-sequential; our per-
+  device weight preprocessor was shape-mapping by logical device index.
+- **Fix**: weight TP8 preprocessor now maps along the mesh row/col axes
+  that match the physical 4×2 layout, not `device_id` order.
+
+### 11.3 Shared-expert face-view CB30 override (most impactful)
+- **Symptom**: `test_moe_fused_no_reduce` d2=0.9627, d5=0.9679 (below 0.97
+  threshold); shared-expert output measured at ~11–47% of expected
+  magnitude on half of the devices; reduce-to-one variant still passed
+  because correlation survived.
+- **Root cause**: shared gated_reduce uses **face-view** tile format —
+  `tiles_per_k=8`, `k_num_tiles=1`, page_size=512, tile=[32,32] (each
+  "tile" slot is a 16×16 face = 256 bf16). `setup_gated_reduce` sets
+  CB30/CB31/CB32/CB33 correctly, but `_overlap_cbs_with_sdpa_buffer`
+  in `op.py` re-created CB30's format descriptor during hybrid kv_buf/
+  out_buf allocation and used the default `page_size=64, tile=[1,32]`.
+  Result: `add_tiles` read only 32 bf16 per tile slot (of 256 expected)
+  and `pack_tile` wrote only 32 bf16 — 1/8 of the shared-expert output
+  reached downstream.
+- **Fix**: `_overlap_cbs_with_sdpa_buffer` now pulls `face_tile_size`
+  and `face_tile_desc` from `shared_ctx.gated_reduce_params` for **all**
+  CBs involved (CB30 + CB32 + CB33), matching what `setup_gated_reduce`
+  configured. See `project_hot_cold_moe_shared_zero.md` memory file for
+  the full RCA and DPRINT recipe.
+- **Result**: per-device PCC went from d2=0.9627/d5=0.9679 to ≥0.9988
+  on all 8 devices.
+
+### 11.4 Expert index must be read from cb_index CB, not CTArgs::index_l1_addr
+- **Symptom**: matmul_expert reading wrong expert weights per iteration
+  after the CTArgs swap; partial/all-zero outputs.
+- **Root cause**: original `matmul_expert` test harness writes the
+  selection into an L1 array at `index_l1_addr` and the kernel reads
+  that pointer. In the fused MoE pipeline, TopK mcasts the selection
+  into `cb_index` — the L1 address is not pre-populated; the kernel
+  must consume from the CB.
+- **Fix**: kernel reads `get_read_ptr(cb_index)` per iteration; the
+  CTArgs `index_l1_addr` is now unused on the MoE path (kept for
+  standalone-test backwards compat).
+
+### 11.5 num_active_experts / tile descriptor consistency
+- **Symptom**: per-core meta-tensor indexing off by one; occasional
+  crashes or wrong weights.
+- **Root cause**: `num_active_experts` has to thread consistently from
+  `setup_matmul_expert_dram` → CTArgs → meta/fmt tensor strides → CB
+  sizes. Early wiring set `num_active_experts=1` as a temporary
+  single-expert test rig and missed updating some call sites.
+- **Fix**: `num_active_experts=8` is threaded through all three projs
+  in `op.py` lines 1359, 1380, 1475 and the kernel CTArgs.
+
+### 11.6 CompressedTensor TP8 sharding path
+- **Infra added**: `CompressedTensor` uniform bfp4_b for each of gate/
+  up/down (256 CTs per proj); `Shard2dMeshMapper(dims=(0,1))` + the
+  TP8 torch layout from `moe_routed_expert_tp8_torch_for_cache`.
+- **Per-device DRAM meta + fmt tables**: via
+  `create_dram_expert_tensors_multi_device` in
+  `micro_ops/matmul_expert/op.py:617`. Returns per-device
+  `(in1_backing, meta_tensors, fmt_tensors, meta_l1_addr, fmt_l1_addr,
+  per_core_values, num_in1_buffers)`. `in1_backing` is a REPLICATED L1
+  tensor used as the CB backing for triple-buffered DRAM streaming,
+  **not** a weight tensor.
+- **cb_fmt**: sized `fmt_per_expert_bytes`, triple-buffered slots
+  push/pop per expert on the streamer core.
+- **Pipeline semaphore**: `cores_per_bank=1` (one streamer per bank
+  for MoE) is the degenerate self-signal case — sem still compile-
+  time-referenced but inactive.
