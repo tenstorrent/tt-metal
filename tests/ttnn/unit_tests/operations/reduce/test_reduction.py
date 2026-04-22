@@ -816,6 +816,7 @@ def run_reduce_sum_h(device, batch_size, h, w, dim):
     ],
 )
 def test_run_reduce_sum_h_after_max_pool(device, input_shape, kernel_size):
+    torch.manual_seed(0)
     run_maxpool(device, input_shape, kernel_size, kernel_size, (0, 0), (1, 1))
     run_reduce_sum_h(device, 1, 32, 32, -2)
 
@@ -841,6 +842,7 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy)
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
     Note: We do not enforce the same exception type or message.
     """
+    torch.manual_seed(0)
     if op not in ("std", "var") and use_legacy:
         pytest.skip("use_legacy only applies to std and var")
 
