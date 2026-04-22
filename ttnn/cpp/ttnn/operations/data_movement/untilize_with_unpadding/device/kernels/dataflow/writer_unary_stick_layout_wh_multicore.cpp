@@ -30,7 +30,7 @@ void kernel_main() {
         uint32_t l1_read_addr = get_write_ptr(cb_id_out0);
 
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
-            uint64_t dst_noc_addr = get_noc_addr(size_2d + k, s);
+            uint64_t dst_noc_addr = s.get_noc_addr(size_2d + k);
             uint32_t total_size = start_column_id + width_size;
             uint32_t write_size = width_size;
 

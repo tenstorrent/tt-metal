@@ -26,7 +26,7 @@ void kernel_main() {
     for (uint32_t iter = i_stick; iter < num_sticks_per_core; ++iter) {
         cb_out0.wait_front(1);
         uint32_t l1_read_addr = cb_out0.get_read_ptr();
-        uint64_t dst_noc_addr = get_noc_addr(iter, s0);
+        uint64_t dst_noc_addr = s0.get_noc_addr(iter);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
         noc_async_write_barrier();
         cb_out0.pop_front(1);
