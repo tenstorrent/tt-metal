@@ -58,7 +58,12 @@ struct MoeGather {
     // Sender args (BRISC): [dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_addr,
     //                       src_cb, src_num_pages, sender_grid_start_x, sender_grid_start_y,
     //                       sender_grid_end_x, sender_grid_end_y, row_major, receiver_data_addr,
-    //                       sender_idx]
+    //                       sender_idx, num_experts, src_page_size, expert_dst_stride]
+    // Multi-expert gather (expert-major layout): when num_experts > 1, BRISC loops over experts writing
+    //   data_size_bytes from src_addr + e*src_page_size to dst[e*expert_dst_stride + core*data_size].
+    //   Result: CB17 layout = [core0_exp0, core1_exp0, ..., coreN_exp0, core0_exp1, ...] (expert-major).
+    //   This keeps each expert's K tiles contiguous, matching the matmul's sequential K-tile read.
+    // When num_experts == 1, behaves identically to the original single-write gather.
     struct SenderArgs {
         uint32_t dest_noc_x;
         uint32_t dest_noc_y;
@@ -72,7 +77,10 @@ struct MoeGather {
         uint32_t sender_grid_end_y;
         uint32_t row_major;
         uint32_t receiver_data_addr;
-        uint32_t sender_idx;  // Per-core sender index (only used if UsePerCoreSenderIdx=true)
+        uint32_t sender_idx;         // Per-core sender index (UsePerCoreSenderIdx=true)
+        uint32_t num_experts;        // Number of expert writes per core (1 = single write)
+        uint32_t src_page_size;      // Source CB page size in bytes (stride between experts in src)
+        uint32_t expert_dst_stride;  // Destination stride between experts in bytes
     };
 
     // Compute args (TRISC) - not used for gather (dataflow only)
@@ -115,18 +123,26 @@ struct MoeGather {
                         args.sender_grid_end_x,
                         args.sender_grid_end_y);
                 }
-                uint32_t offset = core_index * args.data_size_bytes;
-
                 const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0);
-                uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + offset);
                 uint64_t dst_semaphore_noc_addr = dst_noc_coord | (uint64_t)args.receiver_semaphore_addr;
 
-                // Wait for source CB data to be ready
+                // Wait for source CB data to be ready (all experts' pages)
                 cb_wait_front(args.src_cb, args.src_num_pages);
 
-                // Get source address from CB
                 uint32_t input_data_addr = get_read_ptr(args.src_cb);
-                noc_async_write_one_packet<true, true>(input_data_addr, dst_data_noc_addr, args.data_size_bytes);
+                // Expert-major layout: core c's tiles interleaved per-expert.
+                // For core c, expert e: dst[e*expert_dst_stride + c*data_size_bytes].
+                // For num_experts==1: dst_off = 0 + core_index*data_size (unchanged).
+                uint32_t base_dst_offset = core_index * args.data_size_bytes;
+
+                // Loop over experts: write each expert's tile at its expert-major position.
+                for (uint32_t e = 0; e < args.num_experts; e++) {
+                    uint32_t src_off = e * args.src_page_size;
+                    uint32_t dst_off = e * args.expert_dst_stride + base_dst_offset;
+                    uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_off);
+                    noc_async_write_one_packet<true, true>(
+                        input_data_addr + src_off, dst_data_noc_addr, args.data_size_bytes);
+                }
                 // BH does not support posted atomics due to a bug
                 noc_semaphore_inc(dst_semaphore_noc_addr, 1);
 
