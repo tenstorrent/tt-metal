@@ -4,6 +4,7 @@
 
 #pragma once
 
+// ndivnic: PR gate LLK path probe (common)
 #include <array>
 #include <cstdint>
 
