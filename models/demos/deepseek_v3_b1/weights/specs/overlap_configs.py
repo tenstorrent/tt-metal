@@ -251,7 +251,7 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
     * **ffn_norm** — BFP16, (1, 7168), on core (12, 9).
     """
 
-    transform_version: int = 2  # bump when shuffle/preprocess logic in this class changes
+    transform_version: int = 3  # bump when shuffle/preprocess logic in this class changes
 
     o_proj: OverlappedTensorSpec = field(
         default_factory=lambda: OverlappedTensorSpec(

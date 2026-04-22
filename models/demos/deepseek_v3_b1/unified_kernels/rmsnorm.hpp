@@ -24,7 +24,6 @@
 #include "api/compute/experimental/pack_block.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/add_rsqrt.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/rmsnorm.h"
-#include "api/debug/dprint_pages.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -116,12 +115,6 @@ struct RMSNorm {
                 } else {
                     cb_wait_front(CTArgs::gamma_cb, CTArgs::num_tiles);
                 }
-                UNPACK(({
-                    for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                        DPRINT << "rmsnorm gamma cb=" << (uint)CTArgs::gamma_cb << " tile=" << i << ENDL();
-                        tt::compute::common::print_full_tile(CTArgs::gamma_cb, i);
-                    }
-                }));
             }
 
             compute_rmsnorm(args);
