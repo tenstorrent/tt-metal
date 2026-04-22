@@ -17,6 +17,14 @@ namespace ckernel {
 
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
+    // Drain any pending coprocessor instructions before reconfiguring the packer.
+    // Without this, a stale REG2FLOP left in the coprocessor queue by a prior
+    // operation (e.g. tilize) can be processed by the tensix_sync() inside
+    // llk_pack_dest_init *after* we have already written the correct pack config,
+    // overwriting it with the stale value.  Flushing here ensures stale entries
+    // complete before our correct config writes arrive.
+    tensix_sync();
+
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
@@ -26,6 +34,12 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init<false>(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+    // Verify that the packer is correctly configured after init (catches regressions where
+    // a stale coprocessor instruction would overwrite our pack config).
+    PACK((LLK_ASSERT(
+        ckernel::packer::are_packers_configured_correctly(
+            pack_src_format[get_output_id(ocb)], pack_dst_format[get_output_id(ocb)]),
+        "Pack config mismatch after init_sfpu: stale coprocessor REG2FLOP overwrote configuration")));
 
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
