@@ -4,11 +4,29 @@
 
 """Training loop and batch preparation for pipeline parallel transformer models."""
 
+import os
+import pickle
+
 import numpy as np
 import ttnn
 import ttml
 from ttml.common.data import get_batch, build_causal_mask
 from ttml.common.utils import PerformanceMeter, no_grad
+
+
+def save_checkpoint(model, step: int, checkpoint_dir: str, rank: int) -> None:
+    """Save a per-rank checkpoint as a pkl file for offline HF export.
+
+    Files are named step_{step}_rank_{rank}.pkl and can be merged by
+    tools/weight-utils/tt_to_hf_export.py.
+    """
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    path = os.path.join(checkpoint_dir, f"step_{step}_rank_{rank}.pkl")
+    state = {}
+    for name, param in model.parameters().items():
+        state[name] = param.to_numpy(ttnn.DataType.FLOAT32)
+    with open(path, "wb") as f:
+        pickle.dump({"step": step, "rank": rank, "model_state": state}, f)
 
 
 def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False):
@@ -163,5 +181,9 @@ def train(
             print(
                 f"Step {step}/{cfg.steps}: Loss = {accum_loss:.4f}, Samples/s = {samples_per_second:.2f}, Tokens/s = {tokens_per_second:.2f}"
             )
+
+        # Save per-rank checkpoint for offline HF export
+        if cfg.save_every and step % cfg.save_every == 0:
+            save_checkpoint(model, step, cfg.checkpoint_dir, rank)
 
     return train_losses, val_losses

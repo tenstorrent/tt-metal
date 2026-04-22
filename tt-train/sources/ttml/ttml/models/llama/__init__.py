@@ -186,6 +186,7 @@ from _ttml.models.llama import (
 )
 
 from .safetensors_loader import load_from_safetensors
+from .hf_exporter import save_to_hf_format
 
 __all__ = [
     # C++ bindings
@@ -197,4 +198,5 @@ __all__ = [
     "LlamaConfig",
     "LlamaRopeScalingConfig",
     "load_from_safetensors",
+    "save_to_hf_format",
 ]
