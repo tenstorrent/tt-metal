@@ -120,9 +120,37 @@ Pick the **primary** category. Multiple may apply — pick the one whose structu
 | **WRONG_INIT_UNINIT_SYMMETRY** | First run passes, later runs regress; or adjacent tests in the matrix fail after this kernel ran | § Solution Approach §6d — init changed hardware state without a mirrored uninit, or the uninit "restores" something init never touched |
 | **SFPI_LEAK** | The generated kernel contains `sfpi::vFloat`, `v_if`, `lut2`, `sFloat16b`, or similar Blackhole-only constructs — the tester saw compile errors or wrong results driven by those | Translate every remaining SFPI construct via the table in `llk-analyzer.md` §6. Quasar has no SFPI DSL; the analysis must encode the target-intrinsic form explicitly |
 | **MISSING_INSTRUCTION_ON_TARGET** | The kernel uses an instruction the target assembler rejected (or simulated to a NOP); `assembly.yaml` has no matching entry | Drop that instruction. Redesign the semantic step — sometimes this is an algorithm change (Taylor instead of LUT, integer emulation, etc.) |
+| **HARNESS_INCOMPATIBILITY** | Every variant times out or returns all-zeros with near-identical signatures; the tester's sibling smoke passes; the test source calls foreign-arch `_llk_*` / sync / `wait_*` symbols or reaches them via a `*_compat*` shim; at least one of the tester's attempts completed the pipeline on a variant that uses the "suspected" code path | The kernel plan was probably fine — the test source was written against a sibling architecture and never converted. The refined analysis must direct the tester to author a target-native test source (§1A.4) before any further kernel edits. Do NOT rewrite §6b pseudocode under this category |
 | **UNDIAGNOSABLE** | The 10 attempts have no coherent pattern — different signatures, different categories, no structural thread | Escalate. Do not refine on noise |
 
 If you cannot confidently pick ONE primary category after reading the logs twice, treat it as `UNDIAGNOSABLE` and escalate.
+
+### Positive-evidence requirement (MANDATORY for every category)
+
+Classification is not a label you pick by elimination. Before settling on a category, you must hold in hand **at least one of** the following as positive evidence for it:
+
+- An authoritative source (ISA page, `assembly.yaml`, datasheet) that directly confirms the category's mechanism — e.g. for `MISSING_INSTRUCTION_ON_TARGET`, zero grep hits on the instruction in `assembly.yaml`.
+- A minimal reproducer or isolation: a sibling kernel, a reduced variant, or an ad-hoc test that exhibits the same failure via the same mechanism and CANNOT be explained by any other category.
+- A sibling target kernel whose inline comments or analysis notes explicitly document the constraint you're about to encode.
+- (For `HARNESS_INCOMPATIBILITY` specifically) a concrete list of foreign-arch symbols the test source calls and a grep proving the target has no native definition.
+
+If your Step 4 cross-check **contradicts** the category you picked — e.g. you picked `WRONG_INSTRUCTION_MAPPING` and then your own ISA read confirms the instruction and mode are valid on the target — the category is rejected. Go back to Step 3 and pick a different one. *Do not* rationalize with "emulator appears to not implement it correctly", "appears to have non-deterministic behavior", or "spec is right but silicon differs" unless you have a bug-tracker link or a human-confirmed errata citation. Those phrasings are the diagnostic equivalent of a shrug; they encode guesses as conclusions and poison v${N+1}.
+
+### No absolute bans
+
+The refined analysis **must not** issue categorical prohibitions on target instructions, modes, or features unless the authoritative source you cited in Step 4 explicitly marks them unsupported. Phrasings like:
+
+- "X is BANNED on target"
+- "never use X"
+- "X causes a permanent pipeline stall — confirmed"
+
+are not allowed when the evidence is only "the tester tried X and saw a timeout". The *same* timeout could be caused by harness, sync, or environment — especially if you didn't rule those out. Prefer evidence-proportional phrasings:
+
+- "Prefer Y over X when the surrounding sequence allows it — rationale: {mechanism cited from ISA page}."
+- "X requires {specific surrounding context} to work on target — see sibling kernel {path}."
+- "If X is used, add {mitigation}. If the failure persists after the mitigation, re-evaluate the harness before concluding X is at fault."
+
+A hard ban committed to the analysis propagates into every future writer run — cheap to insert, expensive to retract. Writers treat bans as axioms; testers inherit the axiom and stop questioning it. The Refinement History that future iterations read should never inherit a claim that is stronger than its evidence.
 
 ---
 
@@ -140,6 +168,7 @@ Before rewriting anything, verify your hypothesis against the source of truth fo
 - **WRONG_FORMAT_APPLICABILITY** — re-read `tests/python_tests/helpers/format_config.py` (`QUASAR_DATA_FORMAT_ENUM_VALUES`, invalid-combo rules) and match against the tester's per-format results.
 - **WRONG_REGISTER_ALLOCATION** — read two sibling target kernels and compare their LREG usage. If your target allocation aliases under a 2-cycle hazard, that's the bug.
 - **WRONG_INIT_UNINIT_SYMMETRY** — read an analogous target kernel's init/uninit pair. Tabulate every hardware side-effect init produces and confirm uninit undoes each one (or that the side-effect survives by design — document either way).
+- **HARNESS_INCOMPATIBILITY** — open the test source the tester used; for every `_llk_*` / `_*_hw_configure_` / `_*_dvalid_*` / `wait_*` symbol it calls, run `Grep: pattern="^(inline |template|void )?.*\\b{symbol}\\b", path="tt_llk_{target_arch}/llk_lib"`. Any symbol with zero native-target hits is a foreign dependency. Also grep for `*_compat*` includes in the test source and for newly-created empty-bodied stubs added alongside the failed kernel. If the list of foreign dependencies is non-empty, the category is confirmed and the fix is in the test source, not the kernel.
 
 **Rule: every rewritten section in Step 6 must cite the source you consulted in this step** (file path + lines, Confluence page ID + section, or `assembly.yaml` entry). No rewrites on vibes.
 
@@ -195,6 +224,7 @@ Edit `codegen/artifacts/{op}_analysis.md` using `Edit` (or `Write` if the rewrit
   - `WRONG_INIT_UNINIT_SYMMETRY` → § Solution Approach §6d AND the affected §6b
   - `SFPI_LEAK` → § Solution Approach §6b end-to-end (every remaining SFPI construct replaced with its target-intrinsic equivalent)
   - `MISSING_INSTRUCTION_ON_TARGET` → § Available Instructions (drop), § Semantic → Instruction Mapping (redesign), § Solution Approach §6b (new pseudocode)
+  - `HARNESS_INCOMPATIBILITY` → § Target Pattern Survey §2b (replace the cited test source with a target-native one, or document that a native one must be authored by the tester §1A.4); add a § Risks entry pinning the harness gap so the next writer does not shim again. Do NOT rewrite §6b pseudocode under this category — the kernel plan likely held
 - **Cite sources.** Every rewritten line must be anchored: `{path}:{line}`, Confluence page ID + section, or `assembly.yaml` entry.
 - **Add a "Refinement History" section at the very top of the analysis**, above Problem Statement:
 

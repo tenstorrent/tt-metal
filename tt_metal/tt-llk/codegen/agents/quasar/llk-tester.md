@@ -418,6 +418,37 @@ The pattern usually points straight at the root cause and saves a whole iteratio
 
 Classify the failure. The classification drives the fix — do not start editing before you know the category.
 
+### 3.0 — Pre-classification invariants (run before EVERY diagnose step)
+
+Two checks that precede any categorization. Either one firing redirects the whole attempt.
+
+#### 3.0.a — Contradiction check (the fix log as evidence)
+
+Before forming ANY new hypothesis, re-read the fix log for this kernel. If a prior attempt in this run **passed** (or made it further through the pipeline than later attempts) while executing the code path you are about to indict, your hypothesis is disproven — not weakened, disproven. A run that completed through instruction X cannot be evidence that instruction X hangs.
+
+When a prior-attempt pass contradicts a new hypothesis:
+
+1. Stop drafting that hypothesis.
+2. Enumerate the differences between the passing attempt and the failing ones (format, `dest_acc`, tile count, variant id, previous test in the session, warmup state). Those differences — not the shared instruction — are your actual suspect list.
+3. Write this inversion into the fix log explicitly: "Attempt N passed on {variant} using {code path}; hypothesis 'X hangs' is rejected; new suspects: {list}."
+
+Never rationalize a contradicting pass as "simulator non-determinism", "first-run artifact", or "warmup race" without a mechanistic explanation that is itself testable. Simulator non-determinism is a last-resort hypothesis, not a first-pass escape hatch.
+
+#### 3.0.b — Uniform-failure triage (ALL variants fail the same way)
+
+Symptom: every variant in the sampled matrix fails, same category, same wall-time-bounded signature (e.g. every variant hits the pytest timeout at the same wall clock; every variant returns all-zero data). This pattern is **less likely** to be a bug in the kernel's arithmetic and **more likely** to be a harness, sync, or environment issue — because kernel arithmetic bugs usually land on a subset of formats or values, not uniformly.
+
+Before proposing any fix that edits `tt_llk_{target_arch}/`:
+
+1. Run R1 from § 3.3 (sibling smoke). If the sibling also times out / all-zeros, classify as `ENV_ERROR` and stop — your kernel is not the problem.
+2. If the sibling passes, turn to the harness. Open the test source and walk every `_llk_*` / sync / dvalid / `wait_*` call. For each, confirm the symbol is defined natively in `tt_llk_{target_arch}/llk_lib/`.
+   - Any symbol that resolves to a header whose name contains `_compat` or that is a newly-added empty/no-op body is a harness-incompatibility smoke signal; classify the failure as a harness problem, not a kernel problem.
+   - Any symbol defined for a sibling arch only (header gated by a different `ARCH_*`) and reached on the target via a shim is likewise a harness problem.
+3. Only after the harness is verified target-native do you move on to kernel-code hypotheses.
+
+If the harness check reveals foreign symbols or compat shims, the fix is NOT to change the kernel — it is to request/author a target-native test source (§ 1A.4) and re-run. Record `HARNESS_INCOMPATIBILITY` in the fix log and in your report, so the refiner (if invoked) can classify accordingly.
+
+
 | Category | Symptom | Most common root causes |
 |---|---|---|
 | **COMPILE_ERROR** | Compile producer step failed; stderr contains `error:` lines | Wrong template/runtime param; wrong include; wrong function signature; `TTI_` macro fed a non-constexpr operand |
@@ -425,6 +456,7 @@ Classify the failure. The classification drives the fix — do not start editing
 | **DATA_MISMATCH** | `AssertionError: PCC` or elementwise mismatch; golden vs actual differ | Wrong LREG usage; programmable constant not loaded; off-by-one in face loop; wrong approximation mode; input value out of safe range |
 | **ASSERTION** | Python assertion in the test harness (not in the golden compare) | Parameter-constraint violation, format combo the kernel does not actually support |
 | **ENV_ERROR** | Simulator fails to start, `flock` timeout, port in use | Infrastructure issue — not a kernel bug. Report to orchestrator |
+| **HARNESS_INCOMPATIBILITY** | Uniform timeout or all-zeros across every variant; sibling smoke passes in the same environment; the test source calls `_llk_*` / sync / `wait_*` symbols not native to the target or reaches them via a `*_compat*` shim | The test source was written against a sibling architecture and was never converted to target-native APIs. Fix is to author/request a target-native test source (§1A.4). Do NOT patch the kernel under this category |
 
 Keep the first meaningful line of the failure (compiler stderr line, pytest PCC line, simulator error) — you will need it for the fix log and for reporting `STUCK`.
 
@@ -564,6 +596,8 @@ Whatever the outcome, the kernel path and test paths must be stated literally so
 11. **Scale `--maxfail` to matrix size (see 2.1); never use `-x`.** `-x` stops after one failure, leaving you blind to whether the bug is uniform or variant-specific. `--maxfail=N` preserves the pattern signal while capping wasted simulator time on large matrices. Drop `--maxfail` on the verification attempt.
 12. **`--timeout=600` on the simulator consumer, not `--timeout=300`.** Simulator warmup after a prior run can exceed 300s; 600s eliminates the spurious-`TIMEOUT` failure mode without slowing healthy runs (pytest's timeout is a ceiling, not a floor). See 2.3.
 13. **Use `{WORKTREE_DIR}/...` absolute paths, not `../tests/...`.** The agent may be invoked from any CWD; absolute paths remove the hidden assumption that CWD is `codegen/`.
+14. **Contradiction check before every hypothesis (§3.0.a).** If a prior attempt passed while executing the code path you're about to indict, the hypothesis is disproven — not weakened. Re-read the fix log before drafting; don't explain contradictions away as "simulator non-determinism" without a testable mechanism. Uniform signatures across every variant rarely come from kernel arithmetic; they usually come from harness, sync, or environment.
+15. **Harness-first on uniform failures (§3.0.b).** When every variant fails identically, run the sibling smoke, then audit every `_llk_*` / `wait_*` / dvalid call in the test source for target-native definitions before touching the kernel. Any `*_compat*` shim or foreign-arch symbol reached via a stub is a HARNESS_INCOMPATIBILITY, not a kernel bug.
 
 ---
 
@@ -625,11 +659,12 @@ it matters for the dashboard. On STUCK, all 10 blocks MUST be present.
 
 ```
 ### Attempt {N}
-- Category: {COMPILE_ERROR | TIMEOUT | DATA_MISMATCH | ASSERTION | ENV_ERROR | PASS}
+- Category: {COMPILE_ERROR | TIMEOUT | DATA_MISMATCH | ASSERTION | ENV_ERROR | HARNESS_INCOMPATIBILITY | PASS}
 - Signature: {first meaningful line of the failure — or "all {N} variants passed"}
 - Hypothesis: {root cause if failure; N/A if PASS}
+- Contradiction check: {"none — no prior attempt exercised this code path", OR "attempt M passed on {variant} via {path} — rejected hypothesis X and re-suspected Y", OR "N/A — attempt 1"}
 - Source checked: {file / Confluence page / assembly.yaml section}
-- Fix applied: {file:line + what changed}  (or "N/A — PASS")
+- Fix applied: {file:line + what changed}  (or "N/A — PASS" / "N/A — HARNESS_INCOMPATIBILITY, deferred to tester §1A.4")
 - Expected outcome: {what the fix should change in the next run}  (or "N/A")
 - Observed outcome: {what actually happened on the next run}
 ```

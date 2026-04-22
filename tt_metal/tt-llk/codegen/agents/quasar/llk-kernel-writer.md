@@ -80,6 +80,49 @@ This produces a file with the correct:
 
 Do NOT hand-write includes or the namespace preamble — the template is the source of truth for boilerplate.
 
+### Step 2b: Scope & Harness Discipline (MANDATORY — read before compiling)
+
+**Before you scaffold or run any compile, vet the test source the analysis cites and fix your scope boundary.** A surprising amount of time has been lost historically to writers that made a foreign-arch test harness *compile* on the target by bolting on no-op shims — the compile then passes, the tester spends its full 10-attempt budget on runtime timeouts, and the refiner mis-classifies the failure as an ISA bug. Avoid this entirely.
+
+#### 2b.1 — Harness-fitness check
+
+Open the test source the analysis named. Walk its `LLK_TRISC_UNPACK` / `LLK_TRISC_MATH` / `LLK_TRISC_PACK` sections and answer ONE question per call site:
+
+> Is every `_llk_*` / `_*_hw_configure_` / `_*_dvalid_*` / `wait_*` symbol it calls **already defined for the target** in `tt_llk_{target_arch}/llk_lib/` with a matching signature?
+
+If the answer is "no" for ANY call site — the test source was written for a sibling architecture and drives that arch's sync model, not the target's. **It is NOT a valid harness for this kernel on this target.** Stop and report it as a harness gap in your output:
+
+```
+HARNESS_GAP
+  Test source: {path}
+  Foreign symbols encountered: {list}
+  Recommended: request a target-native test source from the tester/analyzer;
+               do NOT proceed by shimming.
+```
+
+Do not proceed to Step 3. The tester agent has a native-test-writing path (`new-kernel` flow, Step 1A.4) and will own creating the harness.
+
+#### 2b.2 — Scope boundary (non-negotiable)
+
+The writer touches:
+
+- The kernel file itself (`tt_llk_{target_arch}/common/inc/{family}/ckernel_*_{op}.h` or equivalent for math/pack/unpack).
+- Its direct LLK wrapper if the wrapper for this op family doesn't yet exist (`tt_llk_{target_arch}/llk_lib/llk_*.h`). New wrappers must use target-native sync primitives — they are not allowed to delegate to `#ifdef ARCH_*` branches for sibling architectures.
+- The single enum line in `tt_llk_{target_arch}/llk_lib/llk_defs.h` that registers the kernel's `SfpuType::{Op}` / equivalent.
+- The single `#include` line in the kernel-family dispatch header (e.g. `tt_llk_{target_arch}/common/inc/ckernel_sfpu.h`).
+
+The writer **never** touches — under any circumstance, to make a foreign-arch test harness compile — the following files. If you believe any of them must change, that is evidence you are on the wrong path; stop and report `HARNESS_GAP`:
+
+| Forbidden change | Why |
+|---|---|
+| Any file in `tt_metal/hw/inc/` (shared platform headers, `tensix_types.h`, etc.) | These are cross-arch contracts; a kernel cannot require one to change. |
+| `tt_llk_{target_arch}/common/inc/ckernel_debug.h` going from non-existent to "empty stub" | If the test source requires it and the target doesn't have it, the test source is foreign. |
+| Any newly-created `*_bh_compat*.h`, `*_wh_compat*.h`, or more generally `*_*_compat*.h` files | Shimming sibling-arch APIs as no-ops produces tests that compile but do not execute — the single worst failure signal this pipeline has historically generated. |
+| Any existing `llk_*.h` file growing a **no-op body** or a stub function signature solely to satisfy a foreign test source | Same reason. A real implementation is fine; an empty body that just lets the compiler pass is a lie. |
+| `codegen/scripts/compiler.py` or any other file under `codegen/scripts/` | The writer is a consumer of the toolchain, not its maintainer. Infrastructure bugs go to the human. |
+
+**Acid test before Step 3**: run `git diff --stat` (read-only) against HEAD. If the diff touches anything outside the five allowed surfaces above, revert that file and re-evaluate. A correct new kernel is usually ≤3 files modified.
+
 ### Step 3: Compile-Check the Scaffold (MANDATORY)
 
 Before filling in any function body, confirm the scaffold compiles against the real test harness. This catches include / namespace / path / signature errors immediately, when the blame is unambiguous.
@@ -172,6 +215,16 @@ Scaffold compiled: PASSED | FAILED
 Final compiled: FAILED
 Error summary: [brief description]
 Ready for: llk-debugger agent
+```
+
+On `HARNESS_GAP` (Step 2b.1 tripped — do NOT proceed to Step 3 in this state):
+```
+HARNESS_GAP
+Test source examined: {path}
+Foreign symbols encountered: {list of _llk_* / sync primitives not defined for target}
+Kernel file: NOT YET GENERATED
+Ready for: tester agent (new-kernel path) to author a target-native test source,
+           or refiner if the analyzer steered us at the wrong source.
 ```
 
 **Note**: This agent only handles code generation and compile-checking. Do NOT iterate on errors yourself — if Step 3 or Step 5 fails, report and let `llk-debugger` handle it.
