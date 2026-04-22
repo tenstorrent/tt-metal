@@ -186,59 +186,32 @@ def test_wan_decoder_ones_input(
     """
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
-    from ....models.vae import vae_wan2_1 as _vae_mod
-
     # single_block has no meaning for the standalone path (conv3d is dispatched
     # stand-alone, the W-halo is already materialized before the conv runs).
     if single_block and not use_fused:
         pytest.skip("single_block only affects use_fused=True; skipping redundant standalone run")
 
-    # --- Monkey-patch to force use_fused in every layer constructor.
-    # When single_block=True we rely on the model source values (only conv_in is fused),
-    # so skip the monkey-patch to avoid overriding them.
-    orig_causal_init = _vae_mod.WanCausalConv3d.__init__
-    orig_conv2d_init = _vae_mod.WanConv2d.__init__
-    patched = False
+    logger.info(f"WanDecoder use_fused={use_fused} for every halo-needing conv; timeconv stays standalone")
 
-    if not single_block:
-
-        def _patched_causal_init(self, *args, **kwargs):
-            kwargs["use_fused"] = use_fused
-            orig_causal_init(self, *args, **kwargs)
-
-        def _patched_conv2d_init(self, *args, **kwargs):
-            kwargs["use_fused"] = use_fused
-            orig_conv2d_init(self, *args, **kwargs)
-
-        _vae_mod.WanCausalConv3d.__init__ = _patched_causal_init
-        _vae_mod.WanConv2d.__init__ = _patched_conv2d_init
-        patched = True
-        logger.info(f"monkey-patch active -> forcing use_fused={use_fused} for all WanCausalConv3d/WanConv2d")
-
-    try:
-        _run_decoder_ones(
-            mesh_device=mesh_device,
-            B=B,
-            C=C,
-            T=T,
-            H=H,
-            W=W,
-            target_height=target_height,
-            target_width=target_width,
-            t_chunk_size=t_chunk_size,
-            cached=cached,
-            vae_call_chunk=vae_call_chunk,
-            h_axis=h_axis,
-            w_axis=w_axis,
-            num_links=num_links,
-            use_fused=use_fused,
-            single_block=single_block,
-            TorchAutoencoderKLWan=TorchAutoencoderKLWan,
-        )
-    finally:
-        if patched:
-            _vae_mod.WanCausalConv3d.__init__ = orig_causal_init
-            _vae_mod.WanConv2d.__init__ = orig_conv2d_init
+    _run_decoder_ones(
+        mesh_device=mesh_device,
+        B=B,
+        C=C,
+        T=T,
+        H=H,
+        W=W,
+        target_height=target_height,
+        target_width=target_width,
+        t_chunk_size=t_chunk_size,
+        cached=cached,
+        vae_call_chunk=vae_call_chunk,
+        h_axis=h_axis,
+        w_axis=w_axis,
+        num_links=num_links,
+        use_fused=use_fused,
+        single_block=single_block,
+        TorchAutoencoderKLWan=TorchAutoencoderKLWan,
+    )
 
 
 def _override_mid_block_full_cin(decoder) -> None:
@@ -357,6 +330,7 @@ def _run_decoder_ones(
         target_width=target_width,
         t_chunk_size=t_chunk_size,
         cached=cached,
+        use_fused=use_fused,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 

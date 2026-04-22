@@ -1223,6 +1223,7 @@ class WanDecoder3d(Module):
         target_width: int = 0,
         t_chunk_size: int | None = None,
         cached: bool = False,
+        use_fused: bool = True,
     ) -> None:
         super().__init__()
 
@@ -1266,7 +1267,7 @@ class WanDecoder3d(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             conv_dims=lat_dims,
-            use_fused=True,  # DIAG: only this layer is fused
+            use_fused=use_fused,
         )
 
         # middle blocks
@@ -1279,7 +1280,7 @@ class WanDecoder3d(Module):
             dtype=dtype,
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
             conv_dims=lat_dims,
-            use_fused=True,  # DIAG: testing mid_block (only mid_block fused)
+            use_fused=use_fused,
         )
 
         # upsample blocks
@@ -1317,7 +1318,7 @@ class WanDecoder3d(Module):
                 res_dims=ConvDims(T_res, stage_h, stage_w),
                 tconv_dims=ConvDims(T_tconv, stage_h, stage_w),
                 spatial_dims=ConvDims(T_spatial, next_h, next_w),
-                use_fused=False,  # DIAG: disabled
+                use_fused=use_fused,
             )
             self.up_blocks.append(up_block)
 
@@ -1342,7 +1343,7 @@ class WanDecoder3d(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             conv_dims=ConvDims(stage_t[-1].T_res, full_h, full_w),
-            use_fused=False,  # DIAG: disabled
+            use_fused=use_fused,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -1459,6 +1460,7 @@ class WanDecoder(Module):
         target_width: int = 0,
         t_chunk_size: int | None = None,
         cached: bool = False,
+        use_fused: bool = True,
     ) -> None:
         super().__init__()
 
@@ -1499,6 +1501,7 @@ class WanDecoder(Module):
             target_width=target_width,
             t_chunk_size=t_chunk_size,
             cached=cached,
+            use_fused=use_fused,
         )
 
         self.cached_conv_count = count_convs(self.decoder)
