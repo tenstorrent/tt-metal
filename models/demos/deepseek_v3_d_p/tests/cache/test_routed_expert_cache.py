@@ -16,6 +16,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     extract_mesh_config,
     get_ep_mesh_composer,
     get_ep_mesh_mapper,
+    get_gate_outputs,
+    initialize_test_inputs,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
@@ -79,18 +81,20 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
             }
         )
 
-    # Create input with proper sharding (follows PCC test pattern)
+    # Create input with proper sharding (follows PCC test pattern).
+    # Flat 4D layout: (num_dispatch_groups, dispatch_group_size,
+    # experts_per_chip * max_dispatched_tokens_per_expert, emb_dim) — each chip's experts
+    # are concatenated along the token dim, matching the real dispatch kernel layout.
     dispatched_buffer_torch = torch.randn(
         num_dispatch_groups,
         dispatch_group_size,
-        experts_per_chip,
-        max_dispatched_tokens_per_expert,
+        experts_per_chip * max_dispatched_tokens_per_expert,
         emb_dim,
         dtype=torch.float32,
     )
 
-    # Shard across devices and reshape to per-device shape
-    per_device_shape = (experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
+    # Shard across devices and reshape per-device to 2D (what extract/insert require).
+    per_device_shape = (experts_per_chip * max_dispatched_tokens_per_expert, emb_dim)
     mesh_mapper = get_ep_mesh_mapper(mesh_device)
     dispatched_buffer_tt = ttnn.from_torch(
         dispatched_buffer_torch,
@@ -102,8 +106,9 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     dispatched_buffer_tt = ttnn.reshape(dispatched_buffer_tt, per_device_shape)
 
     # Build (group, chip, local_expert) -> global expert id table, sharded across
-    # the EP mesh so each device holds (1, 1, experts_per_chip). Shared across all
-    # TtRoutedExpert instances built below.
+    # the EP mesh so each device holds (1, 1, experts_per_chip). Then squeeze to a
+    # 1D (experts_per_chip,) vector (required by extract/insert validators). Shared
+    # across all TtRoutedExpert instances built below.
     global_expert_idx_tt = ttnn.from_torch(
         ExpertMapping.create_global_expert_idx_table(
             experts_per_chip=experts_per_chip,
@@ -115,14 +120,46 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         device=mesh_device,
         dtype=ttnn.uint32,
     )
+    global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+    global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+
+    # Build synthetic token counts / region offsets from random routing indices.
+    # For a cache test we only need all three expert instances to see the same
+    # counts/offsets — the specific values don't matter for the PCC comparison.
+    _, _, routing_indices = initialize_test_inputs(
+        dispatch_group_size=dispatch_group_size,
+        seq_len_per_chip=seq_len_per_chip,
+        emb_dim=emb_dim,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        num_dispatch_groups=num_dispatch_groups,
+        skip_x_initialization=True,
+    )
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
+        num_routed_experts=num_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+    )
+    _, expert_token_counts_torch, expert_region_offsets_torch, _ = get_gate_outputs(
+        routing_indices,
+        dispatch_group_size,
+        num_routed_experts,
+        experts_per_chip,
+        seq_len_per_chip,
+        num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
+    )
+    expert_token_counts_tt = TtRoutedExpert.shard_expert_token_counts(mesh_device, expert_token_counts_torch)
+    expert_region_offsets_tt = TtRoutedExpert.shard_expert_token_counts(mesh_device, expert_region_offsets_torch)
 
     # Helper to convert output back to torch (follows PCC test pattern)
     mesh_composer = get_ep_mesh_composer(mesh_device)
 
     def to_torch_expert(tt_tensor):
         """Convert expert output back to torch with proper mesh composer."""
-        # Output shape per device: (experts_per_chip, max_tokens, emb_dim)
-        # Unsqueeze to 5D and compose
+        # Output shape per device: (experts_per_chip * max_tokens, emb_dim) — 2D.
+        # Unsqueeze to 4D and compose back across the EP mesh.
         tt_expanded = ttnn.unsqueeze(ttnn.unsqueeze(tt_tensor, dim=0), dim=0)
         return ttnn.to_torch(tt_expanded, mesh_composer=mesh_composer)
 
@@ -145,7 +182,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         weights_dtype=weights_dtype,
         weight_cache_path=None,
     )
-    output1_tt = expert_from_weights(dispatched_buffer_tt)
+    output1_tt = expert_from_weights(dispatched_buffer_tt, expert_token_counts_tt, expert_region_offsets_tt)
     output1 = to_torch_expert(output1_tt)
 
     # === Path 2: Cold Cache ===
@@ -186,7 +223,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         cache_name_prefix="routed_expert",
     )
     profiler.end("cold_load")
-    output2_tt = expert_cold(dispatched_buffer_tt)
+    output2_tt = expert_cold(dispatched_buffer_tt, expert_token_counts_tt, expert_region_offsets_tt)
     output2 = to_torch_expert(output2_tt)
 
     # === Path 3: Warm Cache ===
@@ -204,7 +241,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         cache_name_prefix="routed_expert",
     )
     profiler.end("warm_load")
-    output3_tt = expert_warm(dispatched_buffer_tt)
+    output3_tt = expert_warm(dispatched_buffer_tt, expert_token_counts_tt, expert_region_offsets_tt)
     output3 = to_torch_expert(output3_tt)
 
     # === Validation ===
