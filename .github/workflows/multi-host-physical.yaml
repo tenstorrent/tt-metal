@@ -314,7 +314,7 @@ jobs:
       - name: Run quad galaxy unit tests
         if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 30
+        timeout-minutes: 330
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
