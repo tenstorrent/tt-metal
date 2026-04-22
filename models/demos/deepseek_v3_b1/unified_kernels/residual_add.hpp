@@ -69,10 +69,10 @@ struct ResidualAdd {
             cb_wait_front(args.in1_cb, args.total_in1_tiles);
 
             if constexpr (SkipAdd) {
-                // Pass-through: copy in0 to out, discard in1.
-                // Original pre-pack_block_contiguous implementation (commit 848c9441c67).
+                // Pass-through: copy in0 to out, discard in1
                 reconfig_data_format<false, true>(args.in0_cb, args.in0_cb);
                 pack_reconfig_data_format<true>(args.out_cb);
+                pack_block_contiguous_init(args.out_cb);
                 copy_tile_to_dst_init_short(args.in0_cb);
                 cb_reserve_back(args.out_cb, out_w);
                 tile_regs_acquire();
@@ -81,9 +81,7 @@ struct ResidualAdd {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t j = 0; j < out_w; j++) {
-                    pack_tile(j, args.out_cb, j);
-                }
+                pack_block_contiguous(0, args.out_cb, out_w);
                 tile_regs_release();
             } else {
                 // Normal: matmul_out + shard(residual)

@@ -871,8 +871,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_cb_fmt"),
                 get_named_compile_time_arg_val("down_proj_accum_experts"),
                 get_named_compile_time_arg_val("down_proj_fuse_silu"),
-                get_named_compile_time_arg_val("down_proj_index_offset"),
-                0>;  // in0_core_offset: all DRAM worker cores share the same expert-major CB17
+                get_named_compile_time_arg_val("down_proj_index_offset")>;
 
             // Eltwise Add (compute)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ComputeCTArgs<

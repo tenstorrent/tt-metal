@@ -23,8 +23,6 @@ import math
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from loguru import logger
-
 import ttnn
 from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     CircularBufferIdManager,
@@ -535,12 +533,6 @@ class MoeRoutedExpertOp:
         ), f"per_device_tiles_w ({ct0._per_device_tiles_w}) must divide num_banks*cores_per_bank ({num_banks * cores_per_dram_bank})"
         assert Kt % num_subblocks_k == 0, f"Kt ({Kt}) must be divisible by num_subblocks_k ({num_subblocks_k})"
         subblock_k = Kt // num_subblocks_k
-        logger.info(
-            f"  setup_matmul_expert_dram: per_device_shape={ct0._per_device_shape}, "
-            f"Kt={Kt}, per_core_n={per_core_n}, subblock_k={subblock_k}, "
-            f"num_subblocks_k={num_subblocks_k}, num_total_experts={num_total_experts}, "
-            f"num_banks={num_banks}, cores_per_dram_bank={cores_per_dram_bank}"
-        )
 
         is_dram_flags = [1] * num_total_experts
 
@@ -669,10 +661,8 @@ class MoeRoutedExpertOp:
         Set up parameters and CB descriptors for element-wise multiply with CB aliasing and scalar multiply.
         When tensors are None, their CB descriptors are deferred to the overlap function.
         """
-        M = 1
-        tile_width = 32
-        total_elements = M * per_core_n * tile_width
-        mul_num_tiles = math.ceil(total_elements / 256)
+        # EltwiseMul operates on 1x32 tiles (M=1 row, N=per_core_n tiles of width 32).
+        mul_num_tiles = per_core_n
 
         TILE_16x16 = ttnn.Tile((16, 16))
         tile_16x16_size = TILE_16x16.get_tile_size(ttnn.bfloat16)
@@ -1379,18 +1369,6 @@ class MoeRoutedExpertOp:
                 num_subblocks_k=8,
                 num_active_experts=8,
             )
-            # Sanity check: gate_proj and up_proj must use DIFFERENT DRAM buffers.
-            first_coord = next(iter(gate_proj_params["meta_l1_addr_per_device"]))
-            gp_meta_sample = gate_proj_params["meta_l1_addr_per_device"][first_coord][0][1]
-            up_meta_sample = up_proj_params["meta_l1_addr_per_device"][first_coord][0][1]
-            gp_bank0_addr = gate_proj_params["per_core_values_per_device"][first_coord]["bank_id"][0]
-            up_bank0_addr = up_proj_params["per_core_values_per_device"][first_coord]["bank_id"][0]
-            logger.info(
-                f"GATE vs UP buffers: gp_fmt={hex(gate_proj_params['fmt_dram_addr'])}, "
-                f"up_fmt={hex(up_proj_params['fmt_dram_addr'])}, "
-                f"gp_meta_l1={hex(gp_meta_sample)}, up_meta_l1={hex(up_meta_sample)}, "
-                f"gp_bank0={gp_bank0_addr}, up_bank0={up_bank0_addr}"
-            )
         else:
             up_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
                 device=device,
@@ -1424,8 +1402,10 @@ class MoeRoutedExpertOp:
         down_proj_gather_dst_num_pages = (
             gate_proj_params["per_core_n"] * num_gate_proj_cores * down_proj_gather_num_experts
         )
-        down_proj_gather_src_page_size = 64
-        down_proj_gather_expert_dst_stride = num_gate_proj_cores * 64
+        # Per-expert src chunk = per_core_n tiles × 64 B/tile (contiguous in sender CB).
+        # Per-expert dst block = every sender's chunk concatenated on the receiver.
+        down_proj_gather_src_page_size = down_proj_gather_data_size_bytes
+        down_proj_gather_expert_dst_stride = num_gate_proj_cores * down_proj_gather_data_size_bytes
         down_proj_gather_params = MoeOp.setup_gather(
             device=device,
             receiver_core=sender_core,
@@ -2806,16 +2786,6 @@ class MoeSharedExpertOp:
         a_cores_list, b_cores_list = SharedExpertOp.build_ab_grids()
         assert len(a_cores_list) == num_compute_cores
         assert len(b_cores_list) == num_compute_cores
-        # DEBUG: show overlap between DRAM gate_proj cores and shared compute cores
-        _dram_cores_list = get_pinned_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
-        _dram_set = set((c.x, c.y) for c in _dram_cores_list)
-        _a_set = set((c.x, c.y) for c in a_cores_list)
-        _b_set = set((c.x, c.y) for c in b_cores_list)
-        logger.info(
-            f"DEBUG_SHARED_OVERLAP: dram_cores={sorted(_dram_set)} "
-            f"dram_in_A={sorted(_dram_set & _a_set)} "
-            f"dram_in_B={sorted(_dram_set & _b_set)}"
-        )
         assert set((c.x, c.y) for c in a_cores_list) == set(
             (c.x, c.y) for c in ttnn.corerange_to_cores(a_compute_grid)
         ), "Gate cores from OverlappedTensor don't match build_ab_grids()"
@@ -3976,10 +3946,13 @@ class MoeOp:
             kv_offset += cb20_total_size
 
             # CB 21: scalar working buffer (1x32 tile to match mul in0/in1; only [0,0] used via SCALAR bcast)
+            # Sized for all topk scalars (8) so the Mul can wait for all experts' scalars upfront
+            # and do one flattened tile_regs cycle.
             TILE_1x32 = ttnn.Tile((1, 32))
             tile_1x32_size = TILE_1x32.get_tile_size(ttnn.bfloat16)
             tile_1x32_desc = ttnn.TileDescriptor(TILE_1x32)
-            scalar_total_size = tile_1x32_size  # 64 B (single 1x32 tile)
+            scalar_num_pages = 8  # = mul_num_experts when routing is on
+            scalar_total_size = scalar_num_pages * tile_1x32_size
             cb21_desc = ttnn.cb_descriptor_from_sharded_tensor(
                 routed_ctx.mul_cb_scalar,
                 kv_buf,
@@ -4023,10 +3996,6 @@ class MoeOp:
         shared_in1_size = max(cb9_total_size, cb18_total_size)
 
         cb9_offset = kv_offset
-        logger.info(
-            f"  CB9/18 overlay: kv_offset={kv_offset}, cb9_total={cb9_total_size}, "
-            f"cb18_total={cb18_total_size}, shared={shared_in1_size}"
-        )
 
         # Build CB 9 descriptor from SDPA buffer with weights format
         cb9_desc = ttnn.cb_descriptor_from_sharded_tensor(
@@ -4082,7 +4051,6 @@ class MoeOp:
         # ── Shared Expert CBs → sdpa_kv_cache_buffer (continued) ──
 
         # CB 29: shared_gu_out (total_size=64, page_size=64, tile=1x32, bfloat16)
-        logger.info(f"DEBUG_CB29_OFFSET: kv_offset={kv_offset} (shared_gu_out_cb)")
         cb29_cb_id = shared_ctx.gu_out_cb
         cb29_total_size = 64
         cb29_desc = ttnn.cb_descriptor_from_sharded_tensor(

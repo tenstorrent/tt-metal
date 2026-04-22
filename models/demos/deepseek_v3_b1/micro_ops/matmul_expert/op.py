@@ -89,10 +89,6 @@ def upload_per_core_uint32_tensor(device, all_cores, per_core_data, entries_per_
     raw_size = entries_per_core * 4
     dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
     aligned_size = _align(max(raw_size, dram_alignment), dram_alignment)
-    logger.info(
-        f"    upload_per_core_uint32_tensor: entries_per_core={entries_per_core}, "
-        f"raw_size={raw_size}, aligned_size={aligned_size}, num_cores={len(all_cores)}"
-    )
     tensors = {}
     for core_idx, core in enumerate(all_cores):
         data_np = np.array(per_core_data[core_idx], dtype=np.uint32).view(np.uint8)
@@ -629,7 +625,6 @@ def create_dram_expert_tensors_multi_device(
     is_dram_flags: list,
     num_in1_buffers: int = 3,
     allocate_in1_backing: bool = True,
-    primary_cores_list=None,
 ) -> dict:
     """Create per-device tensors for ExpertKernel.mesh_op.
 
@@ -640,11 +635,6 @@ def create_dram_expert_tensors_multi_device(
     allocated (caller provides their own — e.g. the fused MoE kernel overlays
     cb_in1 on the SDPA KV buffer). The returned tuple has ``in1_backing=None``.
 
-    primary_cores_list: if provided, use this list of DRAM-bank-to-worker-core
-    coordinates (one per bank). If None, use mesh_device.get_optimal_dram_bank_to_logical_worker_assignment.
-    Caller must pass the same list that its compute kernels use to derive bank_id,
-    otherwise the DRAM shard index won't match the bank_id the kernel reads from.
-
     Returns:
         {MeshCoordinate: (in1_backing, meta_tensors, fmt_tensors,
                           meta_l1_addr, fmt_l1_addr, per_core_values, num_in1_buffers)}
@@ -654,9 +644,7 @@ def create_dram_expert_tensors_multi_device(
     logger.info(
         f"create_dram_expert_tensors_multi_device: {num_devices} devices, {num_total_experts} total experts, {len(cts)} DRAM CTs"
     )
-    if primary_cores_list is None:
-        primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
-    logger.info(f"  primary_cores_list (bank order): {[(c.x, c.y) for c in primary_cores_list]}")
+    primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     compute_cores_list = []
     for primary_core in primary_cores_list:
         for offset in range(cores_per_dram_bank):

@@ -243,7 +243,6 @@ def create_routed_expert_tensors(
     state_dict,
     is_moe=True,
     layer_idx=None,
-    tp8_routed=False,
     compressed_tp8=False,
     num_routed_experts=256,
 ):
@@ -395,7 +394,6 @@ def create_routed_expert_tensors(
             is_moe=True,
             num_routed_experts=num_experts,
             move_to_device=True,
-            tp8_routed=tp8_routed,
             compressed_tp8=compressed_tp8,
         )
         gate_proj_expert_tensors = routed_weights.routed_gate_proj
@@ -944,7 +942,6 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         state_dict=state_dict,
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
-        tp8_routed=True,
         compressed_tp8=True,
         num_routed_experts=num_routed_experts,
     )
@@ -1118,280 +1115,6 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         f"Rigged gate experts mismatch: expected={expected_top8_sorted.tolist()}, " f"got={tt_top8_sorted.tolist()}"
     )
 
-    # Show gate_proj_worker_cores ordering so we know which core_idx → NoC coord
-    try:
-        _gpwc = submesh.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
-        logger.info(f"gate_proj_worker_cores order: {[(c.x, c.y) for c in _gpwc]}")
-    except Exception as _ex:
-        logger.info(f"could not get gate_proj_worker_cores: {_ex}")
-
-    # ── Per-core gate/up golden dump (matches MoeOp.golden bf16 handling) ──
-    # Replicates exactly what each gate_proj core should compute:
-    #   x      = input.to(bf16).reshape(1, -1)           # [1, K]
-    #   norm_x = (x * rsqrt(var(x) + eps)) * gamma       # bf16 throughout
-    #   for each active expert e (top-8, in HW kernel iteration order):
-    #     gate_tile_core = SiLU(norm_x @ W_gate[e][:, cols(d,c)])  # bf16 @ bf16
-    #     up_tile_core   =        norm_x @ W_up  [e][:, cols(d,c)]
-    # where cols(d,c) = [d*256 + c*32, d*256 + (c+1)*32] (TP8 slice per core).
-    import torch.nn.functional as _F
-
-    _hw_expert_order = device_gate_indices[0].flatten()[:8].to(torch.int64).tolist()
-    logger.info(f"HW expert order (device 0): {_hw_expert_order}")
-    _x = r.torch_input.to(torch.bfloat16).reshape(1, -1)
-    _var = _x.pow(2).mean(-1, keepdim=True)
-    _gamma = r.torch_rmsnorm_gamma.to(torch.bfloat16).reshape(1, -1)
-    _norm_x = (_x * torch.rsqrt(_var + 1e-6)) * _gamma  # bf16
-    logger.info(
-        "GOLDEN_NORM_X first32: "
-        + ",".join(f"{(_norm_x[0, i].view(torch.int16).item() & 0xFFFF):04x}" for i in range(32))
-    )
-    _N_per_device = RoutedExpert.GATE_PROJ_N // num_devices  # 256
-    _cols_per_core = _N_per_device // r.num_gate_proj_cores  # 32
-
-    def _bf16_hex(v):
-        t = torch.tensor(v, dtype=torch.bfloat16)
-        return f"{t.view(torch.int16).item() & 0xFFFF:04x}"
-
-    for _d in range(num_devices):
-        for _c in range(r.num_gate_proj_cores):
-            _n0 = _d * _N_per_device + _c * _cols_per_core
-            _n1 = _n0 + _cols_per_core
-            for _ei, _e in enumerate(_hw_expert_order):
-                _gw = r.expert_weights_dict[_e].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N).to(torch.bfloat16)
-                _uw = r.up_proj_weights_dict[_e].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N).to(torch.bfloat16)
-                _gout = _F.silu(_norm_x @ _gw[:, _n0:_n1])  # bf16 [1, 32]
-                _uout = _norm_x @ _uw[:, _n0:_n1]
-                g0 = _gout[0, 0].float().item()
-                g4 = _gout[0, 4].float().item()
-                u0 = _uout[0, 0].float().item()
-                u4 = _uout[0, 4].float().item()
-                logger.info(
-                    f"GOLDEN d={_d} c={_c} ei={_ei} e={_e} "
-                    f"gate[c0]={g0:+.4f}({_bf16_hex(g0)}) gate[c4]={g4:+.4f}({_bf16_hex(g4)}) "
-                    f"up[c0]={u0:+.4f}({_bf16_hex(u0)}) up[c4]={u4:+.4f}({_bf16_hex(u4)})"
-                )
-                # Full 32-col hex dump for EVERY (d, c, ei) so a DPRINT-based
-                # in-kernel check can compare per-tile HW output against golden.
-                _gouts = _gout[0].float().tolist()
-                _uouts = _uout[0].float().tolist()
-                _gh = ",".join(_bf16_hex(v) for v in _gouts)
-                _uh = ",".join(_bf16_hex(v) for v in _uouts)
-                logger.info(f"GOLDEN_FULL_GP d={_d} c={_c} ei={_ei} e={_e}: {_gh}")
-                logger.info(f"GOLDEN_FULL_UP d={_d} c={_c} ei={_ei} e={_e}: {_uh}")
-
-    # ── Per-core down_proj golden: device 1 core (0,0) bank_id=1 tile 0 ──
-    # MUL values verified correct vs DPIN in Step 1. Now check DP output of the
-    # matmul_expert accum kernel matches the per-device down_proj math.
-    # Down_proj math (routed only, bf16):
-    #   per_d_hidden[e] = silu(norm_x @ W_gate_d1[e]) * (norm_x @ W_up_d1[e]) * scale[e]
-    #   per_d_down[e]   = per_d_hidden[e] @ W_down_d1[e]   # [1, 7168]
-    #   routed_sum_d1   = sum_e per_d_down[e]              # [1, 7168]
-    # Core (0,0) on device 1 has bank_id=1 (pinned DRAM assignment), per_core_N=896.
-    # Tile 0 = cols [1*896 : 1*896+32) = [896, 928).
-    _dbg_d = 1
-    _dbg_bank = 1  # core (0,0) → DPRINT core
-    _dbg_per_core_n = r.per_core_down_proj_N  # 896
-    _dbg_n0 = _dbg_bank * _dbg_per_core_n
-    _dbg_n1 = _dbg_n0 + 32  # tile 0 = 32 cols
-    # Per-expert scales (gate_topk_scores element; same for all devices since gate is replicated).
-    _dbg_x = r.torch_input.to(torch.bfloat16).reshape(1, -1)
-    _dbg_var = _dbg_x.pow(2).mean(-1, keepdim=True)
-    _dbg_norm_x = (_dbg_x * torch.rsqrt(_dbg_var + 1e-6)) * r.torch_rmsnorm_gamma.to(torch.bfloat16).reshape(1, -1)
-    # Recompute topk scales (matches MoeOp.golden math).
-    _dbg_logits = _dbg_norm_x @ r.torch_gate_mm_weights.to(torch.bfloat16)
-    _dbg_scores = torch.sigmoid(_dbg_logits).reshape(1, -1)
-    _dbg_bias_flat = r.torch_bias.reshape(1, -1).to(_dbg_scores.dtype)
-    _n_routed = _dbg_scores.shape[-1]
-    _n_groups = int(r.torch_bias.shape[-2])
-    _exp_per_group = _n_routed // _n_groups
-    _for_choice = _dbg_scores + _dbg_bias_flat
-    _grouped = _for_choice.reshape(1, _n_groups, _exp_per_group)
-    _gsummed = min(2, _exp_per_group)
-    _gscores = torch.topk(_grouped, k=_gsummed, dim=-1, sorted=True)[0].sum(dim=-1)
-    _gk = min(4, _n_groups)
-    _gidx = torch.topk(_gscores, k=_gk, dim=-1, sorted=True)[1]
-    _gmask = torch.zeros_like(_gscores)
-    _gmask.scatter_(1, _gidx, 1)
-    _scmask = _gmask.unsqueeze(-1).expand(1, _n_groups, _exp_per_group).reshape(1, _n_routed)
-    _masked = _for_choice.masked_fill(~_scmask.bool(), float("-inf"))
-    _sel_k = min(8, _n_routed)
-    _topk_idx = torch.topk(_masked, k=_sel_k, dim=-1, sorted=True)[1]
-    _topk_w = _dbg_scores.gather(1, _topk_idx)
-    if _sel_k > 1:
-        _topk_w = _topk_w / (_topk_w.sum(dim=-1, keepdim=True) + r.gate_eps)
-    _topk_w = _topk_w * r.gate_scaling_factor
-    _dbg_expert_ids = [int(i) for i in _topk_idx[0].tolist()]
-    _dbg_scales = [_topk_w[0, i].to(torch.bfloat16) for i in range(len(_dbg_expert_ids))]
-    logger.info(f"DBG golden expert_ids={_dbg_expert_ids} scales={[float(s) for s in _dbg_scales]}")
-    # Device 1 TP8 slices.
-    _d1_gate_start = _dbg_d * 256
-    _d1_gate_end = _d1_gate_start + 256
-    _dbg_dp_tile0 = torch.zeros(32, dtype=torch.float32)
-    # Iterate in HW order so per-expert DPEI output can be compared.
-    _dbg_hw_order = device_gate_indices[0].flatten()[:8].to(torch.int64).tolist()
-    _dbg_id_to_sc = {int(i): s for i, s in zip(_dbg_expert_ids, _dbg_scales)}
-
-    # Full 32-col hex dump of MUL golden per (d, c, ei) so a DPRINT-based
-    # in-kernel check can compare per-tile HW Mul output against golden.
-    # MUL = silu(norm_x @ W_gate[e][:, cols]) * (norm_x @ W_up[e][:, cols]) * scale[e]
-    for _d in range(num_devices):
-        for _c in range(r.num_gate_proj_cores):
-            _n0 = _d * _N_per_device + _c * _cols_per_core
-            _n1 = _n0 + _cols_per_core
-            for _ei, _e in enumerate(_hw_expert_order):
-                _gw = r.expert_weights_dict[_e].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N).to(torch.bfloat16)
-                _uw = r.up_proj_weights_dict[_e].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N).to(torch.bfloat16)
-                _gout = _F.silu(_norm_x @ _gw[:, _n0:_n1])  # bf16 [1, 32]
-                _uout = _norm_x @ _uw[:, _n0:_n1]
-                _sc = _dbg_id_to_sc.get(int(_e), torch.tensor(0.0, dtype=torch.bfloat16))
-                _mout = (_gout.to(torch.bfloat16) * _uout.to(torch.bfloat16)).to(torch.bfloat16) * _sc
-                _mouts = _mout[0].to(torch.bfloat16).float().tolist()
-                _mh = ",".join(_bf16_hex(v) for v in _mouts)
-                logger.info(f"GOLDEN_FULL_MUL d={_d} c={_c} ei={_ei} e={_e}: {_mh}")
-
-    # Full 32-col hex dump of DP golden per (d, c) tile 0 (cols [c*per_core_N, c*per_core_N+32)).
-    # DP[d, c, tile0] = sum_e MUL[d, e] @ W_down[e][d*256:(d+1)*256, c*per_core_N:c*per_core_N+32]
-    # where MUL[d, e] is the gathered [1, 256] MUL output for device d expert e.
-    _per_core_N = r.per_core_down_proj_N  # 896
-    for _d in range(num_devices):
-        # Per-device MUL[d, e] = [1, 256] over 8 experts
-        _mul_d = []  # list of [1, 256] tensors per expert (HW order)
-        _ks = _d * _N_per_device  # d * 256
-        _ke = _ks + _N_per_device
-        for _e in _hw_expert_order:
-            _gw_e = r.expert_weights_dict[_e].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N).to(torch.bfloat16)
-            _uw_e = r.up_proj_weights_dict[_e].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N).to(torch.bfloat16)
-            _gout_e = _F.silu(_norm_x @ _gw_e[:, _ks:_ke])  # [1, 256]
-            _uout_e = _norm_x @ _uw_e[:, _ks:_ke]
-            _sc_e = _dbg_id_to_sc.get(int(_e), torch.tensor(0.0, dtype=torch.bfloat16))
-            _mul_d.append((_gout_e.to(torch.bfloat16) * _uout_e.to(torch.bfloat16)).to(torch.bfloat16) * _sc_e)
-        _num_dp_tiles_per_core = _per_core_N // 32  # 896/32 = 28
-        for _c in range(r.num_gate_proj_cores):
-            _dp_core_n0 = _c * _per_core_N
-            for _t in range(_num_dp_tiles_per_core):
-                _dp_n0 = _dp_core_n0 + _t * 32
-                _dp_n1 = _dp_n0 + 32
-                _dp_tile = torch.zeros(32, dtype=torch.float32)
-                for _ei, _e in enumerate(_hw_expert_order):
-                    _dw_e = (
-                        r.down_proj_weights_dict[_e]
-                        .reshape(RoutedExpert.GATE_PROJ_N, RoutedExpert.K)
-                        .to(torch.bfloat16)
-                    )
-                    _dw_d_slice = _dw_e[_ks:_ke, _dp_n0:_dp_n1]  # [256, 32]
-                    _dp_e = (_mul_d[_ei] @ _dw_d_slice).to(torch.bfloat16)  # [1, 32]
-                    _dp_tile += _dp_e[0].float()
-                _dp_tile_bf16 = _dp_tile.to(torch.bfloat16).float().tolist()
-                _dh = ",".join(_bf16_hex(v) for v in _dp_tile_bf16)
-                logger.info(f"GOLDEN_FULL_DP d={_d} c={_c} t={_t}: {_dh}")
-
-    # Try a bfp4 round-trip for expert 1 (the first one we print) to see if precision
-    # alone explains the sign flip. Also compute per-TP-slice contributions to check if
-    # HW is reading the wrong K-rows.
-    _e_first = int(_dbg_hw_order[0])
-    _sc_first = _dbg_id_to_sc[_e_first]
-    _gw_first = r.expert_weights_dict[_e_first].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N).to(torch.bfloat16)
-    _uw_first = r.up_proj_weights_dict[_e_first].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N).to(torch.bfloat16)
-    _dw_first = r.down_proj_weights_dict[_e_first].reshape(RoutedExpert.GATE_PROJ_N, RoutedExpert.K).to(torch.bfloat16)
-    # For each candidate TP slice (tp_idx 0..7), print what expert 1's contribution would be.
-    for _tp in range(8):
-        _ks = _tp * 256
-        _ke = _ks + 256
-        _gw_t = _gw_first[:, _ks:_ke]
-        _uw_t = _uw_first[:, _ks:_ke]
-        _dw_t = _dw_first[_ks:_ke, _dbg_n0:_dbg_n1]
-        _g_t = torch.nn.functional.silu(_dbg_norm_x @ _gw_t)
-        _u_t = _dbg_norm_x @ _uw_t
-        _m_t = _g_t * _u_t * _sc_first
-        _c_t = (_m_t @ _dw_t).to(torch.bfloat16)
-        _h4 = ",".join(f"{_c_t.reshape(-1)[k].view(torch.int16).item() & 0xFFFF:04x}" for k in range(4))
-        logger.info(f"GOLDEN_TPSCAN e={_e_first} tp={_tp} t0={_h4}")
-    # Try a bfp4 round-trip for the down weight slice used by device 1.
-    try:
-        import ttnn as _ttnn_dbg
-
-        _dw_slice = _dw_first[_d1_gate_start:_d1_gate_end, :].contiguous()  # [256, 7168]
-        _dw_rt = _ttnn_dbg.to_torch(
-            _ttnn_dbg.from_torch(_dw_slice, dtype=_ttnn_dbg.bfloat4_b, layout=_ttnn_dbg.TILE_LAYOUT)
-        ).to(torch.bfloat16)
-        _dw_rt_d = _dw_rt[:, _dbg_n0:_dbg_n1]
-        _gw_d_f = _gw_first[:, _d1_gate_start:_d1_gate_end]
-        _uw_d_f = _uw_first[:, _d1_gate_start:_d1_gate_end]
-        _g_rt = torch.nn.functional.silu(_dbg_norm_x @ _gw_d_f)
-        _u_rt = _dbg_norm_x @ _uw_d_f
-        _m_rt = _g_rt * _u_rt * _sc_first
-        _c_rt = (_m_rt @ _dw_rt_d).to(torch.bfloat16)
-        _rh4 = ",".join(f"{_c_rt.reshape(-1)[k].view(torch.int16).item() & 0xFFFF:04x}" for k in range(4))
-        logger.info(f"GOLDEN_BFP4RT e={_e_first} t0={_rh4}")
-        # Expected weight tile 0 for device 1 core (0,0): row 0, col 0 of bank 1 after
-        # shuffle_dram_tiles. Source tile = _dw_d1[0:32, 896:928] bf16.
-        # Dump first 8 bf16 values of row 0 (what bank-1 tile 0 starts with).
-        _wt0 = _dw_slice[0:32, _dbg_n0:_dbg_n1]  # [32, 32]
-        _wt0_bf16 = _wt0.to(torch.bfloat16)
-        _wt0_rt = _dw_rt[0:32, _dbg_n0:_dbg_n1].to(torch.bfloat16)
-        _wrow0 = ",".join(f"{_wt0_bf16[0, k].view(torch.int16).item() & 0xFFFF:04x}" for k in range(8))
-        _wrow0_rt = ",".join(f"{_wt0_rt[0, k].view(torch.int16).item() & 0xFFFF:04x}" for k in range(8))
-        logger.info(f"GOLDEN_WTILE0 e={_e_first} row0_bf16={_wrow0}")
-        logger.info(f"GOLDEN_WTILE0 e={_e_first} row0_rt_bf16={_wrow0_rt}")
-    except Exception as _ex:
-        logger.info(f"GOLDEN_BFP4RT skipped: {_ex}")
-
-    for _i, _e in enumerate(_dbg_hw_order):
-        _sc = _dbg_id_to_sc[int(_e)]
-        _gw = r.expert_weights_dict[_e].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N).to(torch.bfloat16)
-        _uw = r.up_proj_weights_dict[_e].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N).to(torch.bfloat16)
-        _dw = r.down_proj_weights_dict[_e].reshape(RoutedExpert.GATE_PROJ_N, RoutedExpert.K).to(torch.bfloat16)
-        _gw_d = _gw[:, _d1_gate_start:_d1_gate_end]  # [K, 256]
-        _uw_d = _uw[:, _d1_gate_start:_d1_gate_end]  # [K, 256]
-        _dw_d = _dw[_d1_gate_start:_d1_gate_end, _dbg_n0:_dbg_n1]  # [256, 32]
-        # Round-trip gate/up/down through bfp4_b so the golden matches the HW quantization.
-        try:
-            import ttnn as _ttnn_q
-
-            _gw_d_bfp4 = _ttnn_q.to_torch(
-                _ttnn_q.from_torch(_gw_d.contiguous(), dtype=_ttnn_q.bfloat4_b, layout=_ttnn_q.TILE_LAYOUT)
-            ).to(torch.bfloat16)
-            _uw_d_bfp4 = _ttnn_q.to_torch(
-                _ttnn_q.from_torch(_uw_d.contiguous(), dtype=_ttnn_q.bfloat4_b, layout=_ttnn_q.TILE_LAYOUT)
-            ).to(torch.bfloat16)
-            _dw_d_bfp4 = _ttnn_q.to_torch(
-                _ttnn_q.from_torch(_dw_d.contiguous(), dtype=_ttnn_q.bfloat4_b, layout=_ttnn_q.TILE_LAYOUT)
-            ).to(torch.bfloat16)
-        except Exception:
-            _gw_d_bfp4 = _gw_d
-            _uw_d_bfp4 = _uw_d
-            _dw_d_bfp4 = _dw_d
-        _g_out = torch.nn.functional.silu(_dbg_norm_x @ _gw_d_bfp4)  # [1, 256] bf16
-        _u_out = _dbg_norm_x @ _uw_d_bfp4
-        _mul_out = _g_out * _u_out * _sc  # [1, 256] bf16
-        # GOLDEN_MUL: first 2 vals of mul output for this expert on device 1.
-        # Sender core 0 (from gate_proj_worker_cores[0]) produces cols [0, 32),
-        # so DPIN e=i c=0 v[0],v[1] should match _mul_out[0, 0:2] for expert e.
-        _mul_h2 = ",".join(f"{_mul_out[0, k].view(torch.int16).item() & 0xFFFF:04x}" for k in range(2))
-        logger.info(f"GOLDEN_MUL i={_i} e={_e} c0_v0_v1={_mul_h2}")
-        # Dump all 8 K-tiles of mul_out (cols 0..255) for comparison with DPIN pages c=0..7.
-        for _c in range(8):
-            _mul_kc = ",".join(f"{_mul_out[0, _c*32 + k].view(torch.int16).item() & 0xFFFF:04x}" for k in range(32))
-            logger.info(f"GOLDEN_MULK{_c} i={_i} e={_e} cols[{_c*32}:{(_c+1)*32})={_mul_kc}")
-        # Also dump silu(gate) and up outputs for the same K-tile 0 (cols 0..31), so we can
-        # see whether gate_proj (with silu) or up_proj is the source of divergence.
-        _gk0 = ",".join(f"{_g_out[0, k].view(torch.int16).item() & 0xFFFF:04x}" for k in range(32))
-        logger.info(f"GOLDEN_GPK0 i={_i} e={_e} cols[0:32)={_gk0}")
-        _uk0 = ",".join(f"{_u_out[0, k].view(torch.int16).item() & 0xFFFF:04x}" for k in range(32))
-        logger.info(f"GOLDEN_UPK0 i={_i} e={_e} cols[0:32)={_uk0}")
-        _dp_contrib = (_mul_out @ _dw_d_bfp4).to(torch.float32)  # [1, 32]
-        # Per-expert (non-cumulative) contribution — matches HW DPEI i=X with L1_ACC off.
-        _ct_bf16 = _dp_contrib.to(torch.bfloat16).reshape(-1)
-        _ct4 = ",".join(f"{_ct_bf16[k].view(torch.int16).item() & 0xFFFF:04x}" for k in range(4))
-        logger.info(f"GOLDEN_DPEXP i={_i} e={_e} alone_t0={_ct4}")
-        _dbg_dp_tile0 = _dbg_dp_tile0 + _dp_contrib.reshape(-1)
-        _acc_bf16 = _dbg_dp_tile0.to(torch.bfloat16)
-        _first4 = ",".join(f"{_acc_bf16[k].view(torch.int16).item() & 0xFFFF:04x}" for k in range(4))
-        logger.info(f"GOLDEN_DPEI i={_i} e={_e} t0={_first4}")
-    _dbg_tile_bf16 = _dbg_dp_tile0.to(torch.bfloat16)
-    _hx = ",".join(f"{_dbg_tile_bf16[i].view(torch.int16).item() & 0xFFFF:04x}" for i in range(32))
-    logger.info(f"GOLDEN_DP d={_dbg_d} bank={_dbg_bank} tile0 cols[{_dbg_n0}:{_dbg_n1}): {_hx}")
-
     # Per-device golden: each device runs TP8-shared + TP8-routed experts and the
     # reduce output is the sum across the 4x2 mesh. Residual only on ROOT1.
     # Mirrors test_mlp_with_reduce:1542-1573 but for the routed-MoE case.
@@ -1432,150 +1155,32 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         )
         expected_per_device.append(device_expected)
 
-    # Dump golden per-device eltwise_add-equivalent (routed_K + shared_K + residual_if_root)
-    # at tile 0 of each core (positions c*896 + 0..31). Matches HW AD t=0 DPRINT.
-    _per_core_N_ad = r.per_core_down_proj_N  # 896
-    for _d in range(num_devices):
-        _flat_d = expected_per_device[_d].float().flatten()
-        for _c in range(r.num_gate_proj_cores):
-            _start = _c * _per_core_N_ad
-            _tile0 = _flat_d[_start : _start + 32].to(torch.bfloat16).float().tolist()
-            _hx = ",".join(
-                f"{torch.tensor(v, dtype=torch.bfloat16).view(torch.int16).item() & 0xFFFF:04x}" for v in _tile0
-            )
-            logger.info(f"GOLDEN_FULL_AD d={_d} c={_c} t=0: {_hx}")
-
     expected_reduce_output = sum(expected_per_device)
 
-    # Also dump expected reduce per-core tile 0 (c*896 + 0..31) to compare with sum_d HW_AD.
-    _flat_red = expected_reduce_output.float().flatten()
-    for _c in range(r.num_gate_proj_cores):
-        _start = _c * _per_core_N_ad
-        _tile0 = _flat_red[_start : _start + 32].to(torch.bfloat16).float().tolist()
-        _hx = ",".join(f"{torch.tensor(v, dtype=torch.bfloat16).view(torch.int16).item() & 0xFFFF:04x}" for v in _tile0)
-        logger.info(f"GOLDEN_REDUCE c={_c} t=0: {_hx}")
-
-    # NOTE: In the reduce-fused path r.final_output_tensor is None (add output
-    # streams through CB 24 into reduce with no backing tensor). Per-device
-    # K-partial must be extracted from intermediate_tensors or via a separate
-    # non-reduce run instead.
-
-    # Get actual reduce output from ROOT1 device
+    # Get actual reduce output from ROOT1 device and extract valid portion (remove per-core padding).
     reduce_output_torch = ttnn.to_torch(
         ttnn_result_reduce,
         mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
     )
-
-    reduce_output_root = reduce_output_torch[root_device_idx]
-
-    # Extract valid portion (remove per-core padding)
     reduce_output_valid = extract_routed_expert_output(
-        reduce_output_root.unsqueeze(0),
+        reduce_output_torch[root_device_idx].unsqueeze(0),
         r.num_gate_proj_cores,
         r.final_output_width_per_core,
         r.per_core_down_proj_N,
     )
 
-    # Per-device debug: compare each device's raw output with its golden
-    per_device_hw = [reduce_output_torch[d].unsqueeze(0) for d in range(num_devices)]
-    per_device_hw_valid = [
-        extract_routed_expert_output(h, r.num_gate_proj_cores, r.final_output_width_per_core, r.per_core_down_proj_N)
-        for h in per_device_hw
-    ]
-    for d in range(num_devices):
-        gv = expected_per_device[d].flatten().float()
-        hv = per_device_hw_valid[d].flatten().float()
-        _, pcc_d = comp_pcc(gv, hv, 0.0)
-        logger.info(
-            f"Device {d}: golden sum={gv.sum().item():.3f} mean={gv.mean().item():.3f} "
-            f"hw sum={hv.sum().item():.3f} mean={hv.mean().item():.3f} PCC={pcc_d}"
-        )
+    _exp_flat = expected_reduce_output.float().flatten()
+    _hw_flat = reduce_output_valid.float().flatten()
+    _diff = _hw_flat - _exp_flat
+    _rel = _diff.abs() / (_exp_flat.abs() + 1e-9)
     logger.info(
-        f"Reduce: expected sum={expected_reduce_output.sum().item():.3f} "
-        f"mean={expected_reduce_output.mean().item():.3f} "
-        f"hw sum={reduce_output_valid.sum().item():.3f} mean={reduce_output_valid.mean().item():.3f}"
+        f"ELEMENTWISE: mean_diff={_diff.mean().item():.4f} "
+        f"mean_abs_diff={_diff.abs().mean().item():.4f} "
+        f"max_abs_diff={_diff.abs().max().item():.4f} (atol) "
+        f"rtol_p50={_rel.quantile(0.5).item():.4f} rtol_p95={_rel.quantile(0.95).item():.4f}"
     )
 
-    # Dump HW reduce output per-core tile 0 for sanity check against sum_d HW_AD[d,c,t=0].
-    _flat_hw_red = reduce_output_valid.float().flatten()
-    for _c in range(r.num_gate_proj_cores):
-        _start = _c * _per_core_N_ad
-        _tile0 = _flat_hw_red[_start : _start + 32].to(torch.bfloat16).float().tolist()
-        _hx = ",".join(f"{torch.tensor(v, dtype=torch.bfloat16).view(torch.int16).item() & 0xFFFF:04x}" for v in _tile0)
-        logger.info(f"HW_REDUCE c={_c} t=0: {_hx}")
-
-    # Extra debug: separate shared/routed/residual contributions in golden, and
-    # try comparing HW - residual against golden MoE-only
-    residual_sum = r.torch_input.float().sum().item()
-    moe_only_golden = expected_reduce_output - r.torch_input.float()
-    logger.info(
-        f"residual sum={residual_sum:.3f} | moe_only golden sum={moe_only_golden.sum().item():.3f} | "
-        f"hw - residual = {(reduce_output_valid.float() - r.torch_input.float()).sum().item():.3f}"
-    )
-    # Also try: is HW = golden + 7*residual (residual added on all 8 devices, not just root)?
-    hypothesis_all_residual = expected_reduce_output + 7 * r.torch_input.float()
-    _, pcc_hyp_all = comp_pcc(hypothesis_all_residual.flatten(), reduce_output_valid.flatten(), 0.0)
-    logger.info(
-        f"Hypothesis 'residual added on all 8': expected sum={hypothesis_all_residual.sum().item():.3f} PCC={pcc_hyp_all}"
-    )
-    # Also try: is HW = 8 * full_moe + residual (old replicated behavior)?
-    hypothesis_replicated = 8 * moe_only_golden + r.torch_input.float()
-    _, pcc_hyp_repl = comp_pcc(hypothesis_replicated.flatten(), reduce_output_valid.flatten(), 0.0)
-    logger.info(
-        f"Hypothesis 'replicated (8x moe + residual)': expected sum={hypothesis_replicated.sum().item():.3f} PCC={pcc_hyp_repl}"
-    )
-    # Decompose golden into shared vs routed (full weights, no residual)
-    _x_dbg = r.torch_input.to(torch.bfloat16).reshape(1, -1)
-    _var_dbg = _x_dbg.pow(2).mean(-1, keepdim=True)
-    _normed_dbg = _x_dbg * torch.rsqrt(_var_dbg + 1e-6) * r.torch_rmsnorm_gamma.to(torch.bfloat16).reshape(1, -1)
-    _sh_gate = s.torch_gate_weights.to(torch.bfloat16)
-    _sh_up = s.torch_up_weights.to(torch.bfloat16)
-    _sh_down = s.torch_down_weights.to(torch.bfloat16)
-    _shared_hidden = torch.nn.functional.silu(_normed_dbg @ _sh_gate) * (_normed_dbg @ _sh_up)
-    _shared_out = (_shared_hidden @ _sh_down).float()
-    logger.info(f"golden shared-only (full weights, no residual) sum={_shared_out.sum().item():.3f}")
-    # Routed-only = moe_only_golden - shared-only
-    _routed_only = moe_only_golden.reshape(1, -1) - _shared_out
-    logger.info(f"golden routed-only (full, no residual) sum={_routed_only.sum().item():.3f}")
-    # Hypothesis: HW = shared + k*routed + residual. Solve for k.
-    _hw_moe = reduce_output_valid.float().reshape(1, -1) - r.torch_input.float().reshape(1, -1)
-    _hw_routed = _hw_moe - _shared_out
-    _k_est = _hw_routed.sum().item() / (_routed_only.sum().item() + 1e-9)
-    logger.info(f"hw_routed sum={_hw_routed.sum().item():.3f}  estimated routed-scale k={_k_est:.4f}")
-    # Hypothesis: HW = shared + 1*routed + residual (scaling_factor=1 instead of 2.5)
-    hyp_no_scaling = _shared_out + (_routed_only / 2.5) + r.torch_input.float().reshape(1, -1)
-    _, pcc_hyp_no_sf = comp_pcc(hyp_no_scaling.flatten(), reduce_output_valid.flatten(), 0.0)
-    logger.info(
-        f"Hypothesis 'scaling_factor=1 (routed*=1/2.5)': expected sum={hyp_no_scaling.sum().item():.3f} PCC={pcc_hyp_no_sf}"
-    )
-    # Joint fit: HW = a*shared + b*routed + residual (Gram matrix least-squares over all elements)
-    _sv = _shared_out.reshape(-1).float()
-    _rv = _routed_only.reshape(-1).float()
-    _y = _hw_moe.reshape(-1).float()
-    _G = torch.tensor([[(_sv * _sv).sum(), (_sv * _rv).sum()], [(_sv * _rv).sum(), (_rv * _rv).sum()]])
-    _b = torch.tensor([(_sv * _y).sum(), (_rv * _y).sum()])
-    _ab = torch.linalg.solve(_G, _b)
-    _a_fit, _b_fit = _ab[0].item(), _ab[1].item()
-    _hyp_ab = _a_fit * _shared_out + _b_fit * _routed_only + r.torch_input.float().reshape(1, -1)
-    _, _pcc_ab = comp_pcc(_hyp_ab.flatten(), reduce_output_valid.flatten(), 0.0)
-    logger.info(
-        f"JOINT_FIT a*shared + b*routed + residual: a={_a_fit:.4f} b={_b_fit:.4f} "
-        f"sum={_hyp_ab.sum().item():.3f} PCC={_pcc_ab}"
-    )
-    # Sanity: sum(expected_per_device) decomposition
-    _exp_sum = expected_reduce_output.float()
-    logger.info(
-        f"SANITY expected_reduce (sum of per-device) sum={_exp_sum.sum().item():.3f} "
-        f"hw_reduce sum={reduce_output_valid.sum().item():.3f} "
-        f"ratio={reduce_output_valid.sum().item() / (_exp_sum.sum().item() + 1e-9):.4f}"
-    )
-    # Sanity: if kernel replicated (each device does full MoE instead of 1/8), sum = 8*full_shared + 8*full_routed + residual
-    _hyp_replicated_full = 8 * _shared_out + 8 * _routed_only + r.torch_input.float().reshape(1, -1)
-    _, _pcc_rep = comp_pcc(_hyp_replicated_full.flatten(), reduce_output_valid.flatten(), 0.0)
-    logger.info(f"SANITY replicated (8x both): sum={_hyp_replicated_full.sum().item():.3f} PCC={_pcc_rep}")
-
-    # Verify reduce output
-    passing, pcc_output = comp_pcc(expected_reduce_output.flatten(), reduce_output_valid.flatten(), 0.97)
+    passing, pcc_output = comp_pcc(_exp_flat, _hw_flat, 0.97)
     logger.info(f"Reduce output PCC: {pcc_output}")
 
     # --- Reference model comparison ---
@@ -1702,7 +1307,6 @@ def test_moe_fused_no_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_
         state_dict=state_dict,
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
-        tp8_routed=True,
         compressed_tp8=True,
         num_routed_experts=num_routed_experts,
     )

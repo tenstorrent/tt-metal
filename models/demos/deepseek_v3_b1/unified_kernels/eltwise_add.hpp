@@ -158,9 +158,6 @@ struct EltwiseAdd {
             tile_regs_release();
             cb_push_back(CTArgs::cb_out, num_tiles);
 
-            // AD DPRINT disabled — causes hang even with minimal 4 values.
-            // Use Python-side tensor capture for per-device K-partial debugging.
-
             // Restore cb_in1 read pointer (tensor-backed CB, no pop needed)
             UNPACK(({ unified_kernels::update_local_cb_rd_ptr(CTArgs::cb_in1, cb_in1_base_rd_ptr); }));
 

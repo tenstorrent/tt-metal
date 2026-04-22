@@ -459,50 +459,6 @@ def _moe_routed_expert_tensor_target(name: str, K: int, N: int, device) -> Tenso
     )
 
 
-def _moe_routed_expert_tp8_tensor_target(name: str, K: int, N: int, shard_dim: int, device) -> TensorTarget:
-    """TensorTarget for one TP8-sharded MoE routed expert projection (DRAM WIDTH_SHARDED, bfloat4_b).
-
-    ``shard_dim=1``: column-parallel gate/up — N is split across ``mesh_rows*mesh_cols`` devices.
-    ``shard_dim=0``: row-parallel down — K is split across ``mesh_rows*mesh_cols`` devices.
-    """
-    tile_w = 32
-    num_banks = device.dram_grid_size().x
-    _, moe_tp = _tp_factors(device)
-    if moe_tp == 1:
-        # Single-device falls back to replicated path.
-        return _moe_routed_expert_tensor_target(name, K, N, device)
-    if shard_dim == 1:
-        K_per_device = K
-        per_device_N = N // moe_tp
-        N_padded_per_device = ((per_device_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
-    elif shard_dim == 0:
-        K_per_device = K // moe_tp
-        per_device_N = N
-        N_padded_per_device = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
-    else:
-        raise ValueError(f"shard_dim must be 0 or 1, got {shard_dim}")
-    per_core_N = N_padded_per_device // num_banks
-    dram_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
-            )
-        }
-    )
-    shard_spec = ttnn.ShardSpec(dram_grid, [K_per_device, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
-    return TensorTarget(
-        name=name,
-        dtype=ttnn.bfloat4_b,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=mem_config,
-        tile_shape=(32, 32),
-        mesh_mapper_config=Shard2dMeshMapper(dims=(0, 1)),
-        transform_version=1,
-    )
-
-
 def _dense_routed_stacked_tensor_target(name: str, K: int, N: int, device) -> TensorTarget:
     """TensorTarget for dense MLP routed projection (all experts stacked on mesh)."""
     tile_w = 32
@@ -1359,7 +1315,6 @@ def prepare_routed_expert_weights(
     bspm_dir: Path | None = None,
     bspm_variant: str = "B",
     bspm_budget: float = 3.5,
-    tp8_routed: bool = False,
     compressed_tp8: bool = False,
 ) -> DenseRoutedExpertWeights | MoERoutedExpertWeights:
     """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts).
@@ -1421,41 +1376,18 @@ def prepare_routed_expert_weights(
             )
 
         # --- Uniform bfloat4_b path (TensorCache-backed) ---
-        if tp8_routed:
-            tgt_gate = _moe_routed_expert_tp8_tensor_target(
-                "routed_gate_proj_tp8", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, shard_dim=1, device=device
-            )
-            tgt_up = _moe_routed_expert_tp8_tensor_target(
-                "routed_up_proj_tp8", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, shard_dim=1, device=device
-            )
-            tgt_down = _moe_routed_expert_tp8_tensor_target(
-                "routed_down_proj_tp8", _ROUTED_DOWN_K, _ROUTED_DOWN_N, shard_dim=0, device=device
-            )
+        tgt_gate = _moe_routed_expert_tensor_target("routed_gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
+        tgt_up = _moe_routed_expert_tensor_target("routed_up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
+        tgt_down = _moe_routed_expert_tensor_target("routed_down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, device)
 
-            def _preprocess_gate(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
-                return moe_routed_expert_tp8_torch_for_cache(t[k].T.contiguous(), num_banks, mesh_shape, shard_dim=1)
+        def _preprocess_gate(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
+            return moe_routed_expert_torch_for_cache(t[k].T.contiguous(), num_banks)
 
-            def _preprocess_up(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
-                return moe_routed_expert_tp8_torch_for_cache(t[k].T.contiguous(), num_banks, mesh_shape, shard_dim=1)
+        def _preprocess_up(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
+            return moe_routed_expert_torch_for_cache(t[k].T.contiguous(), num_banks)
 
-            def _preprocess_down(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
-                return moe_routed_expert_tp8_torch_for_cache(t[k].T.contiguous(), num_banks, mesh_shape, shard_dim=0)
-
-        else:
-            tgt_gate = _moe_routed_expert_tensor_target(
-                "routed_gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device
-            )
-            tgt_up = _moe_routed_expert_tensor_target("routed_up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
-            tgt_down = _moe_routed_expert_tensor_target("routed_down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, device)
-
-            def _preprocess_gate(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
-                return moe_routed_expert_torch_for_cache(t[k].T.contiguous(), num_banks)
-
-            def _preprocess_up(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
-                return moe_routed_expert_torch_for_cache(t[k].T.contiguous(), num_banks)
-
-            def _preprocess_down(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
-                return moe_routed_expert_torch_for_cache(t[k].T.contiguous(), num_banks)
+        def _preprocess_down(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
+            return moe_routed_expert_torch_for_cache(t[k].T.contiguous(), num_banks)
 
         routed_gate_proj: list[ttnn.Tensor] = []
         routed_up_proj: list[ttnn.Tensor] = []
@@ -1469,9 +1401,7 @@ def prepare_routed_expert_weights(
             gw = cache_config.cache.get_or_create(
                 fp_g,
                 device,
-                preprocess=lambda t, _gk=gk: {
-                    "routed_gate_proj" if not tp8_routed else "routed_gate_proj_tp8": _preprocess_gate(t, _gk)
-                },
+                preprocess=lambda t, _gk=gk: {"routed_gate_proj": _preprocess_gate(t, _gk)},
                 raw_tensors=lambda _gk=gk: {_gk: state_dict[_gk]},
             )
             if not isinstance(gw, ttnn.Tensor):
@@ -1486,9 +1416,7 @@ def prepare_routed_expert_weights(
             uw = cache_config.cache.get_or_create(
                 fp_u,
                 device,
-                preprocess=lambda t, _uk=uk: {
-                    "routed_up_proj" if not tp8_routed else "routed_up_proj_tp8": _preprocess_up(t, _uk)
-                },
+                preprocess=lambda t, _uk=uk: {"routed_up_proj": _preprocess_up(t, _uk)},
                 raw_tensors=lambda _uk=uk: {_uk: state_dict[_uk]},
             )
             if not isinstance(uw, ttnn.Tensor):
@@ -1503,9 +1431,7 @@ def prepare_routed_expert_weights(
             dw = cache_config.cache.get_or_create(
                 fp_d,
                 device,
-                preprocess=lambda t, _dk=dk: {
-                    "routed_down_proj" if not tp8_routed else "routed_down_proj_tp8": _preprocess_down(t, _dk)
-                },
+                preprocess=lambda t, _dk=dk: {"routed_down_proj": _preprocess_down(t, _dk)},
                 raw_tensors=lambda _dk=dk: {_dk: state_dict[_dk]},
             )
             if not isinstance(dw, ttnn.Tensor):
