@@ -240,7 +240,7 @@ void jit_build_genfiles_triscs_src(
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
     const fs::path out_dir = fs::path(env.get_out_kernel_root_path()) / settings.get_full_kernel_name();
-    
+
     write_kernel_bindings_generated_header(out_dir, settings);
     write_kernel_args_generated_header(out_dir, settings);
 
