@@ -121,7 +121,12 @@ class BgeM3Model(LightweightModule):
     ) -> ttnn.Tensor | None:
         """
         Normalize mask to additive [B, 1, 1, S] with {0.0, -100000.0}.
-        Return None when there are no masked positions.
+
+        Always returns an additive mask tensor (an all-zeros additive mask is a no-op for
+        SDPA). The previous "no-op early return" used a device->host sync (``.item()``)
+        which both stalls the pipeline and breaks ``ttnn.begin_trace_capture`` because it
+        records control flow based on tensor data. Removing it keeps the forward pass
+        trace-safe with no numerical change.
         """
         self._require_rank2(input_ids, "input_ids")
         seq_len = input_ids.shape[1]
@@ -130,8 +135,6 @@ class BgeM3Model(LightweightModule):
 
         if attention_mask is None:
             pad_mask = ttnn.eq(input_ids, self.pad_token_id)
-            if not self._has_any_masked_positions(pad_mask):
-                return None
         else:
             rank = len(attention_mask.shape)
             if rank == 2:
@@ -173,11 +176,6 @@ class BgeM3Model(LightweightModule):
             self._ADDITIVE_MASKED_VALUE,
             self._ADDITIVE_UNMASKED_VALUE,
         )
-
-    @staticmethod
-    def _has_any_masked_positions(mask: ttnn.Tensor) -> bool:
-        mask_int = ttnn.typecast(mask, dtype=ttnn.uint32)
-        return int(ttnn.sum(mask_int).item()) > 0
 
     def forward(
         self,
