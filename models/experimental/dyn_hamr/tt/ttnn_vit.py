@@ -58,6 +58,44 @@ def _patch_embed_weight(conv: torch.nn.Conv2d) -> torch.Tensor:
     return w.contiguous()
 
 
+# --- head-dim padding (80 → 96) so SDPA / FlashAttention is usable ---------- #
+HEAD_DIM_RAW = 80     # HaMeR ViT-H native head dim
+HEAD_DIM_PAD = 96     # next multiple of TILE_WIDTH=32 — required by SDPA
+
+
+def _pad_qkv_weight(qkv_w_t: torch.Tensor, num_heads: int) -> torch.Tensor:
+    """Pad fused QKV weight so each head has ``HEAD_DIM_PAD`` cols.
+
+    Input layout: ``(in_dim, 3*h*d_raw)``.
+    Output layout: ``(in_dim, 3*h*d_pad)`` with the new cols set to zero so
+    they contribute nothing to attention.
+    """
+    in_dim = qkv_w_t.shape[0]
+    w = qkv_w_t.view(in_dim, 3, num_heads, HEAD_DIM_RAW)
+    pad = torch.zeros(in_dim, 3, num_heads, HEAD_DIM_PAD - HEAD_DIM_RAW, dtype=w.dtype)
+    return torch.cat([w, pad], dim=-1).reshape(in_dim, 3 * num_heads * HEAD_DIM_PAD).contiguous()
+
+
+def _pad_qkv_bias(qkv_b: torch.Tensor, num_heads: int) -> torch.Tensor:
+    b = qkv_b.view(3, num_heads, HEAD_DIM_RAW)
+    pad = torch.zeros(3, num_heads, HEAD_DIM_PAD - HEAD_DIM_RAW, dtype=b.dtype)
+    return torch.cat([b, pad], dim=-1).reshape(3 * num_heads * HEAD_DIM_PAD).contiguous()
+
+
+def _pad_proj_weight(proj_w_t: torch.Tensor, num_heads: int) -> torch.Tensor:
+    """Pad attention output-projection weight rows so the merged padded heads
+    feed straight into ``proj`` without an explicit slice — the new rows are
+    zero, so they don't contribute to the dot product.
+
+    Input layout: ``(h*d_raw, out_dim)``.
+    Output layout: ``(h*d_pad, out_dim)``.
+    """
+    out_dim = proj_w_t.shape[1]
+    w = proj_w_t.view(num_heads, HEAD_DIM_RAW, out_dim)
+    pad = torch.zeros(num_heads, HEAD_DIM_PAD - HEAD_DIM_RAW, out_dim, dtype=w.dtype)
+    return torch.cat([w, pad], dim=1).reshape(num_heads * HEAD_DIM_PAD, out_dim).contiguous()
+
+
 def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
     """Map the torch reference ``Hamer`` module's state into tt-nn parameters.
 
@@ -81,13 +119,17 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
         },
         "blocks": [],
     }
+    num_heads = backbone.blocks[0].attn.num_heads
     for blk in backbone.blocks:
+        qkv_w_padded = _pad_qkv_weight(blk.attn.qkv.weight.t(), num_heads)
+        qkv_b_padded = _pad_qkv_bias(blk.attn.qkv.bias, num_heads)
+        proj_w_padded = _pad_proj_weight(blk.attn.proj.weight.t(), num_heads)
         params["blocks"].append({
             "norm1": {"weight": _t(blk.norm1.weight, device), "bias": _t(blk.norm1.bias, device)},
             "attn": {
-                "qkv_w": _t(blk.attn.qkv.weight.t(), device),
-                "qkv_b": _t(blk.attn.qkv.bias, device),
-                "proj_w": _t(blk.attn.proj.weight.t(), device),
+                "qkv_w": _t(qkv_w_padded, device),
+                "qkv_b": _t(qkv_b_padded, device),
+                "proj_w": _t(proj_w_padded, device),
                 "proj_b": _t(blk.attn.proj.bias, device),
             },
             "norm2": {"weight": _t(blk.norm2.weight, device), "bias": _t(blk.norm2.bias, device)},
@@ -119,45 +161,43 @@ def patch_embed(pixel_values, params: Dict[str, Any], pad: int = 4, patch: int =
     return x
 
 
-def _split_qkv(qkv, num_heads: int, head_dim: int):
-    """Split fused (B, N, 3·h·d) into ((B, h, N, d), (B, h, d, N), (B, h, N, d)).
+def _split_qkv_sdpa(qkv, num_heads: int):
+    """Split padded (B, N, 3·h·HEAD_DIM_PAD) → triple of (B, h, N, HEAD_DIM_PAD).
 
-    Avoids ``ttnn.transformer.split_query_key_value_and_split_heads`` because
-    that helper asserts head_dim is a multiple of TILE_WIDTH (32), which
-    HaMeR's 80-d heads are not.  Manual reshape+permute lets the tile-padded
-    matmul handle the misaligned head dim transparently.
+    Layout consumed by ``ttnn.transformer.scaled_dot_product_attention``.
     """
     B, N, _ = qkv.shape
-    qkv = ttnn.reshape(qkv, (B, N, 3, num_heads, head_dim))
-    qkv = ttnn.permute(qkv, (2, 0, 3, 1, 4))  # (3, B, h, N, d)
-    q = qkv[0]
-    k = qkv[1]
-    v = qkv[2]
-    k = ttnn.permute(k, (0, 1, 3, 2))  # (B, h, d, N) for q @ k
-    return q, k, v
+    qkv = ttnn.reshape(qkv, (B, N, 3, num_heads, HEAD_DIM_PAD))
+    qkv = ttnn.permute(qkv, (2, 0, 3, 1, 4))  # (3, B, h, N, d_pad)
+    return qkv[0], qkv[1], qkv[2]
 
 
-def _merge_heads(ctx, num_heads: int, head_dim: int):
+def _merge_heads(ctx, num_heads: int):
     B = ctx.shape[0]
     N = ctx.shape[2]
-    out = ttnn.permute(ctx, (0, 2, 1, 3))  # (B, N, h, d)
-    return ttnn.reshape(out, (B, N, num_heads * head_dim))
+    out = ttnn.permute(ctx, (0, 2, 1, 3))  # (B, N, h, d_pad)
+    return ttnn.reshape(out, (B, N, num_heads * HEAD_DIM_PAD))
 
 
 def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
-    """One ViT-H transformer block (pre-norm, fused qkv, MLP with GELU)."""
-    # --- self-attention ---
+    """One ViT-H transformer block (pre-norm, fused qkv, FlashAttention-2, MLP).
+
+    Attention runs through ``ttnn.transformer.scaled_dot_product_attention``
+    on tile-aligned heads (``HEAD_DIM_PAD = 96``).  Padded cols are zeroed in
+    the upload-time weight transform so the math is exact.  ``head_dim`` arg
+    kept in the signature for backward compatibility but is unused.
+    """
+    del head_dim  # padded head dim handled internally
+    # --- self-attention via FlashAttention-2 ---
     h = ttnn.layer_norm(hidden, weight=block_params["norm1"]["weight"], bias=block_params["norm1"]["bias"])
     qkv = h @ block_params["attn"]["qkv_w"]
     qkv = qkv + block_params["attn"]["qkv_b"]
 
-    q, k, v = _split_qkv(qkv, num_heads, head_dim)
-    scale = head_dim ** -0.5
-    attn = q @ k
-    attn = attn * scale
-    attn = ttnn.softmax(attn, dim=-1)
-    ctx = attn @ v
-    ctx = _merge_heads(ctx, num_heads, head_dim)
+    q, k, v = _split_qkv_sdpa(qkv, num_heads)
+    ctx = ttnn.transformer.scaled_dot_product_attention(
+        q, k, v, is_causal=False, scale=HEAD_DIM_RAW ** -0.5,
+    )
+    ctx = _merge_heads(ctx, num_heads)
 
     attn_out = ctx @ block_params["attn"]["proj_w"]
     attn_out = attn_out + block_params["attn"]["proj_b"]
