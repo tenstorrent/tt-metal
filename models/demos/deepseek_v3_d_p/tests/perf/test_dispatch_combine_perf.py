@@ -54,6 +54,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 
 WARMUP_ITERS = 2
 MEASURE_ITERS = 5
@@ -252,6 +253,7 @@ def _make_params(mesh_shape, fabric_config, payload_size, num_links, topology, r
         {
             "fabric_config": fabric_config,
             "fabric_router_config": create_fabric_router_config(max_payload_size=payload_size),
+            "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
         },
         num_links,
         topology,

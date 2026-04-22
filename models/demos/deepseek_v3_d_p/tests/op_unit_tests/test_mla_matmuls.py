@@ -12,6 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 
 PCC_REQUIRED = 0.99
 
@@ -191,6 +192,7 @@ SEQ_LEN_25K = 6400
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
         }
     ],
     indirect=True,
