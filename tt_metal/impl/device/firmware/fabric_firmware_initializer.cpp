@@ -81,6 +81,19 @@ bool is_known_edm_status(uint32_t status) {
 
 }  // namespace
 
+// Thread-local compile seam — default-constructed (empty std::function) in all threads.
+// Only set by tests via set_compile_fn_for_testing() before MeshDevice::create().
+thread_local FabricFirmwareInitializer::CompileFabricFn
+    FabricFirmwareInitializer::s_compile_fn_for_testing_;
+
+void FabricFirmwareInitializer::set_compile_fn_for_testing(CompileFabricFn fn) {
+    s_compile_fn_for_testing_ = std::move(fn);
+}
+
+void FabricFirmwareInitializer::clear_compile_fn_for_testing() {
+    s_compile_fn_for_testing_ = {};
+}
+
 FabricFirmwareInitializer::FabricFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor, tt::tt_fabric::ControlPlane& control_plane) :
     FirmwareInitializer(std::move(descriptor)), control_plane_(control_plane) {}
@@ -983,11 +996,26 @@ std::pair<std::unordered_set<uint32_t>, bool> FabricFirmwareInitializer::termina
 }
 
 void FabricFirmwareInitializer::compile_and_configure_fabric() {
+    // Snapshot the compile seam once at function entry.  In production (no test override),
+    // s_compile_fn_for_testing_ is an empty std::function and we fall back to
+    // dev->compile_fabric().  In test code, set_compile_fn_for_testing() installs a stub
+    // that can throw, return false, or add delays to exercise the join-before-rethrow path.
+    //
+    // Snapshotting here (rather than re-reading s_compile_fn_for_testing_ inside each lambda)
+    // is important for two reasons:
+    //   1. Thread-safety: the test thread may clear the seam via clear_compile_fn_for_testing()
+    //      while async tasks are in flight; lambdas hold a captured copy and are unaffected.
+    //   2. Correctness: all tasks for this init round use the same compile function,
+    //      even if the test seam is changed by another test on the same thread afterward.
+    const CompileFabricFn compile_fn = s_compile_fn_for_testing_
+        ? s_compile_fn_for_testing_
+        : CompileFabricFn([](Device* d) { return d->compile_fabric(); });
+
     std::vector<std::shared_future<Device*>> events;
     events.reserve(devices_.size());
     for (auto* dev : devices_) {
-        events.emplace_back(detail::async([dev]() {
-            if (dev->compile_fabric()) {
+        events.emplace_back(detail::async([dev, compile_fn]() {
+            if (compile_fn(dev)) {
                 return dev;
             }
             // Compile failure mostly comes from Nebula (TG)

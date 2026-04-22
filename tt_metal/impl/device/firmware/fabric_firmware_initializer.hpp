@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <mutex>
 #include <set>
 #include <unordered_set>
@@ -39,6 +40,28 @@ public:
     // DeviceManager uses this to skip dispatch kernel initialization for unreachable devices —
     // dispatch writes to non-MMIO devices go through the same dead ETH relay and hang.
     const std::unordered_set<ChipId>& get_dead_relay_devices() const { return dead_relay_devices_; }
+
+    // ---------------------------------------------------------------------------
+    // Test seam: compile-factory injection for Scenario Y
+    //
+    // When set (non-null), compile_and_configure_fabric() calls this function
+    // instead of dev->compile_fabric() for every device in the async compile loop.
+    // The function may return false (compile not performed), return true (success),
+    // or throw std::exception (compile failure — join-before-rethrow path).
+    //
+    // Thread-local so parallel test workers on different threads don't interfere.
+    // Set before MeshDevice::create(), cleared immediately after via clear_compile_fn_for_testing().
+    //
+    // PRODUCTION CODE: s_compile_fn_for_testing_ is default-constructed (empty std::function)
+    // on every thread.  The branch in compile_and_configure_fabric() is a single bool check
+    // on an inline-initialized thread_local — zero overhead in non-test builds.
+    // ---------------------------------------------------------------------------
+    using CompileFabricFn = std::function<bool(Device*)>;
+
+    // Set/clear the per-thread compile seam.  NOT thread-safe with concurrent callers
+    // on the same thread (tests call this single-threaded before MeshDevice::create()).
+    static void set_compile_fn_for_testing(CompileFabricFn fn);
+    static void clear_compile_fn_for_testing();
 
 private:
     // Compile fabric on all devices, parallelized via async.
@@ -95,6 +118,10 @@ private:
     // Key: (device_id, eth_chan_id).
     mutable std::mutex force_reset_channels_mutex_;
     std::set<std::pair<ChipId, uint32_t>> force_reset_channels_;
+
+    // Thread-local compile seam (see set_compile_fn_for_testing / clear_compile_fn_for_testing).
+    // Default-constructed (empty std::function) — not set in production builds.
+    static thread_local CompileFabricFn s_compile_fn_for_testing_;
 };
 
 }  // namespace tt::tt_metal

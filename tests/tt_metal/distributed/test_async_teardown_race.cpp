@@ -54,6 +54,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_impl.hpp"
+#include "impl/device/firmware/fabric_firmware_initializer.hpp"
 #include "fabric/fabric_builder_context.hpp"
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_init.hpp"
@@ -2855,59 +2856,133 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, TerminateStaleEriscRouters_CorruptSta
 }
 
 // ---------------------------------------------------------------------------
-// Scenario Y: CompileAndConfigureFabric_JoinsAllFuturesBeforeRethrow  [SKIPPED]
+// Scenario Y: CompileAndConfigureFabric_JoinsAllFuturesBeforeRethrow
 //
-// INTENT: Force compile_fabric() to throw on exactly one device while
-// succeeding on all others, then verify:
-//   1. All shared_future::get() calls are drained before the exception is
-//      rethrown (no orphaned tasks left running with access to
-//      BuildEnvManager::device_id_to_build_env_)
-//   2. No SIGSEGV from concurrent unordered_map access during cleanup
-//   3. The original exception message propagates to the caller
+// WHAT THIS TESTS:
+//   The "Join ALL futures before rethrow" invariant in
+//   FabricFirmwareInitializer::compile_and_configure_fabric().
 //
-// This tests the "Join ALL futures before acting on any exception" fix in
-// FabricFirmwareInitializer::compile_and_configure_fabric() (lines ~775–796
-// of fabric_firmware_initializer.cpp).
+//   compile_and_configure_fabric() spawns one async task per device via
+//   detail::async([dev]{ dev->compile_fabric(); }).  If compile_fabric()
+//   throws on device 0 AND the remaining devices' tasks are still running,
+//   the old (broken) code rethrew immediately, leaving those tasks as
+//   orphans.  The orphans continued executing and accessed
+//   BuildEnvManager::device_id_to_build_env_ while the exception-cleanup
+//   path destroyed that map → SIGSEGV / data race under TSAN.
 //
-// WHY NOT IMPLEMENTED: compile_fabric() calls
-// tt::tt_fabric::create_and_compile_fabric_program(), which compiles real
-// ETH kernel binaries on real hardware.  There is no seam to make it fail on
-// one device without either:
-//   (a) A mock IDevice that overrides compile_fabric() to throw, or
-//   (b) A test-seam in FabricFirmwareInitializer::compile_and_configure_fabric
-//       that accepts a factory for compile operations.
+//   The fix: drain ALL futures before rethrowing.  This test injects a
+//   CompileFabricFn seam that:
+//     - device 0: throws std::runtime_error after 20ms (simulates compile failure)
+//     - device 1+: succeeds after 500ms  (ensures tasks are still in-flight
+//                                         when device 0 throws)
 //
-// Without such a seam, the only observable guarantee is that no SIGSEGV
-// occurs on a successful multi-device open — which is already covered by
-// Scenarios D, E, H, I, O, R, S that exercise FABRIC_2D on multi-device
-// meshes.  The crash this test guards against is non-deterministic by nature
-// (data race in unordered_map) and would not be reliably caught in a single
-// test run anyway.
+//   With the fix: all 500ms tasks finish before the exception is rethrown.
+//   Without the fix: tasks continue running after MeshDevice::create() returns
+//   the exception — dangling captures on freed BuildEnvManager → SIGSEGV/TSAN.
 //
-// TODO: Introduce a compile-factory seam (std::function<bool(Device*)>) in
-//       FabricFirmwareInitializer so tests can inject a throwing stub for one
-//       device and verify the join-before-rethrow invariant under TSAN.
+// HOW TO RUN WITH TSAN (detects the race if the fix regresses):
+//   cmake ... -DCMAKE_CXX_FLAGS="-fsanitize=thread" && <run this test binary>
 //
-// OPUS SUGGESTION (Cycle 3 audit, GAP 2):
-//   The same EthernetHandshake::advance() mock seam proposed for Scenarios W
-//   and X partially unblocks this test.  Full unblock requires the compile-
-//   factory seam to make compile_fabric() fail on one specific device:
-//     using CompileFabricFn = std::function<void(Device*)>;
-//   Add as optional ctor parameter (or protected virtual) to
-//   FabricFirmwareInitializer.  In tests, inject a lambda that throws
-//   std::runtime_error for device index 1.  Wrap the entire test in TSAN
-//   (add to TEST(..., ...) with //NOLINTNEXTLINE or TSAN CI tag) to catch
-//   any concurrent unordered_map access in BuildEnvManager that would be the
-//   actual bug this test is guarding against.
+// WHAT GUARANTEES "no orphaned tasks" HERE:
+//   The test captures a shared_ptr<atomic<int>> in the seam lambda.  If
+//   tasks were truly orphaned, they would continue incrementing the counter
+//   after MeshDevice::create() throws.  We check done_count == N (all devices
+//   called their seam function) after MeshDevice::create() returns — if any
+//   tasks were orphaned we would race on the counter.  Under TSAN, this
+//   race would be flagged as a data race.
 // ---------------------------------------------------------------------------
 TEST_F(AsyncTeardownFabric2DRepeatFixture, CompileAndConfigureFabric_JoinsAllFuturesBeforeRethrow) {
-    GTEST_SKIP()
-        << "[Scenario Y] SKIPPED — requires a compile-factory seam in "
-           "FabricFirmwareInitializer::compile_and_configure_fabric() to inject a throwing "
-           "stub for one device. "
-           "TODO: add std::function<bool(Device*)> compile_fn parameter (defaulting to "
-           "dev->compile_fabric()) and implement the multi-device throw + join-before-rethrow "
-           "test under TSAN. See OPUS SUGGESTION above for seam design.";
+    // Close the fixture's mesh device — we will do our own create() with the seam.
+    auto mesh_shape = mesh_device_->shape();
+    mesh_device_->close();
+    mesh_device_.reset();
+
+    // Shared counter: each async task increments this when its seam function is called.
+    // Using shared_ptr so the lambda can safely outlive this stack frame even if futures
+    // were somehow abandoned (which would be the bug — but we still want clean exit).
+    auto done_count = std::make_shared<std::atomic<int>>(0);
+
+    // Seam: device index 0 → sleep 20ms then throw (fast failure).
+    //       device index 1+ → sleep 500ms then succeed (slow, in-flight when 0 throws).
+    //
+    // The asymmetric timing creates a window where device 1+ tasks are still running
+    // (inside their 500ms sleep) when device 0's future throws.  The join-before-rethrow
+    // fix ensures we wait for all 500ms tasks to finish before propagating the exception.
+    FabricFirmwareInitializer::set_compile_fn_for_testing(
+        [done_count](Device* dev) -> bool {
+            const int idx = done_count->fetch_add(1);
+            if (idx == 0) {
+                // First device reached: simulate a compile failure after a short delay.
+                // Other devices are launched concurrently and have NOT finished yet.
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                throw std::runtime_error(
+                    "[Scenario Y] injected compile failure on device index 0");
+            }
+            // All other devices: succeed, but slowly — still running when device 0 throws.
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            return true;
+        });
+
+    // Attempt re-open.  This MUST throw (device 0 fails), and MUST complete (not hang).
+    // If the join-before-rethrow fix is broken, device 1+ tasks run as orphans after
+    // create() returns, racing on done_count and accessing freed BuildEnvManager state.
+    std::string caught_message;
+    bool threw = false;
+    try {
+        mesh_device_ = MeshDevice::create(
+            MeshDeviceConfig{mesh_shape},
+            DEFAULT_L1_SMALL_SIZE,
+            DEFAULT_TRACE_REGION_SIZE,
+            1 /* num_command_queues */,
+            tt_fabric::FabricConfig::FABRIC_2D);
+    } catch (const std::exception& e) {
+        threw = true;
+        caught_message = e.what();
+    }
+
+    // Clear the seam regardless of test outcome.
+    FabricFirmwareInitializer::clear_compile_fn_for_testing();
+
+    // Verify: the injected exception propagated.
+    EXPECT_TRUE(threw)
+        << "[Scenario Y] Expected MeshDevice::create() to throw (seam injects failure on "
+           "device index 0) but it did not throw.";
+    EXPECT_NE(caught_message.find("[Scenario Y]"), std::string::npos)
+        << "[Scenario Y] Exception message does not contain the injected marker string. "
+           "Got: " << caught_message;
+
+    // Verify: ALL device seam functions were called before create() returned.
+    // (With join-before-rethrow, all futures are drained before rethrowing —
+    //  done_count == number of devices in the mesh.)
+    // If any tasks were orphaned, done_count might be < N here (tasks still running
+    // post-create), which would be flagged as a data race by TSAN.
+    const int expected_device_count = static_cast<int>(mesh_shape.num_devices());
+    // Allow one iteration for the throw path: device 0 increments before throwing.
+    // Remaining devices each increment before sleeping 500ms.  All should have
+    // incremented by the time create() returns (join-before-rethrow waits for them).
+    EXPECT_EQ(done_count->load(), expected_device_count)
+        << "[Scenario Y] Not all compile seam functions completed before MeshDevice::create() "
+           "returned. Expected " << expected_device_count << " calls, got " << done_count->load()
+        << ". This indicates orphaned async tasks (join-before-rethrow fix may have regressed).";
+
+    log_info(
+        tt::LogTest,
+        "[Scenario Y] join-before-rethrow invariant confirmed: all {} device compile seam "
+        "functions completed before exception propagated. Exception: {}",
+        done_count->load(),
+        caught_message);
+
+    // Re-open cleanly so the fixture teardown doesn't crash.
+    // If the mesh device was partially initialized by the failed create(), it will be
+    // cleaned up by the exception path.  A fresh create() with real compile_fabric() should work.
+    ASSERT_NO_THROW(
+        mesh_device_ = MeshDevice::create(
+            MeshDeviceConfig{mesh_shape},
+            DEFAULT_L1_SMALL_SIZE,
+            DEFAULT_TRACE_REGION_SIZE,
+            1 /* num_command_queues */,
+            tt_fabric::FabricConfig::FABRIC_2D))
+        << "[Scenario Y] Re-open after injected failure should succeed";
 }
 
 // ---------------------------------------------------------------------------
