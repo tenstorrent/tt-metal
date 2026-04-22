@@ -316,6 +316,19 @@
   team: models
   model-name: wan2.2-t2v-a14b
 
+- name: Wan2.2-T2V-A14B BH LoudBox VAE W-seam diagnostic (C_in_block single vs multi)
+  cmd: >-
+    HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI
+    TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+    pytest models/tt_dit/tests/models/wan2_2/test_decoder_ones_input.py
+    -k "2x4_h0_w1 and fused" -x -s -v --timeout=900
+  skus:
+    bh_loudbox:
+      timeout: 60
+  owner_id: U06BXU8RWQ2 # Kevin Mi
+  team: models
+  model-name: wan2.2-t2v-a14b
+
 - name: stable_diffusion_xl demos
   cmd: >-
     pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&

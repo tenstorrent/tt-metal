@@ -24,9 +24,13 @@ Initially suspected the W-writer writes with stride `H_dev` while the conv3d rea
 
 Enabling `use_fused` for all WanConv2d/WanCausalConv3d did NOT eliminate the vertical lines. The seam is introduced by the fused `neighbor_pad_conv3d` path itself, not by the standalone path.
 
-### Hypothesis 3: Synchronization race — UNLIKELY BUT NOT FULLY RULED OUT
+### Hypothesis 3: Synchronization race — PARTIALLY RULED OUT (see details)
 
-The progress semaphore flow appears correct. Not the primary cause.
+**`w_neighbor_semaphore` race — DISPROVED (Session 2):**
+`ttnn.create_global_semaphore` allocates a *distinct L1 copy* per core in the `CoreRangeSet`. Each W writer addresses the *specific neighbor core's* L1 copy via NOC atomic increment (not a broadcast). Therefore on a middle 2x4 device that receives from both left and right W neighbors, each W reader waits on *its own per-core L1 copy* — only ever incremented by its single designated sender. No shared semaphore interference between W-left and W-right directions.
+
+**`input_progress_sem_addr` (conv3d reader gate) — CORRECT:**
+W readers increment all conv3d reader core semaphores once per dispatch. With `num_w_fabric_cores = 2` on a middle device, each conv3d reader waits for count=2 (both W readers done). Fabric in-order delivery guarantees DRAM data is valid before the matching semaphore increment arrives. Race is NOT possible.
 
 ### Hypothesis 4: Non-conv operations — DISPROVED
 
@@ -36,7 +40,7 @@ Non-conv operations do not cause the seam. The all-ones latent decoder test with
 
 Initially suspected that multi-W-block processing (W_out_block < W_dev) caused the seam via incorrect halo page addressing at block boundaries. But `conv_in` (C_in=32, W_out_block varies) does NOT show seams even with its production multi-W-block config. The seam is not caused by W_out_block splitting.
 
-### Hypothesis 6: C_in_block < C_in (channel block parallelism) — ACTIVE HYPOTHESIS
+### Hypothesis 6: C_in_block < C_in (channel block parallelism) — ACTIVE HYPOTHESIS (REFINED)
 
 **Key finding:** The seam appears ONLY in layers where `C_in_block < C_in` (multiple channel blocks processed by different cores):
 
@@ -49,10 +53,13 @@ Initially suspected that multi-W-block processing (W_out_block < W_dev) caused t
 **Layer isolation tests (all-ones latent, 2x4 480p 81f):**
 - `conv_in` only fused → clean (no seam in any blocking config)
 - `conv_in` + `mid_block` fused → seam appears
-- `conv_in` fused + `up_blocks[0]` fused → seam appears
+- `conv_in` fused + `up_blocks[0]` fused (mid disabled) → seam appears
 - `conv_in` multi-block by itself → still clean (re-confirmed)
 
 The common factor in failing layers: 384-channel residual blocks with `C_in_block=96` (4-way C_in split).
+
+**BUT: 2x2 mesh passes even with C_in_block < C_in (Session 2)**
+`mid_res_2x2_Wdev26_ones` test: C_in=384, C_in_block=96, W_dev=26 (matching 2x4's geometry) → PASSES on 2x2. This means the bug is **NOT** just `C_in_block < C_in` in isolation — it requires the 2x4 mesh topology (3 W boundaries, middle devices with 2 active W fabric neighbors).
 
 ### Hypothesis 6 — deep audit of halo addressing for C_in_block < C_in
 
@@ -75,23 +82,36 @@ Performed full source audit of the halo read/write paths. For `pw=1` (padding_w=
 - `batch_idx` and `t_global` are consistent across all C_in blocks
 - `h_halo_outer_dim_size` matches `T_dev` on both sides
 - Ping-pong buffer caching gives each dispatch a distinct halo buffer
+- DRAM allocation via `ttnn.from_torch` with `DRAM_MEMORY_CONFIG` produces identical buffer physical addresses across devices, so fabric writes land correctly
 
-**What this means:** The addressing at the DRAM level appears correct. The bug is likely in:
-1. **L1 accumulation/reduction** — when multiple cores produce partial sums for different C_in blocks, the reduction to a single output may have an error at W-boundary output positions
-2. **Synchronization between C_in block cores** — cores processing different C_in blocks for the same output position may have a race
-3. **Weight loading / index offset** — the weight tile index for W-boundary halo input positions may be computed differently when C_in is split
+### Hypothesis 7: 2x4 topology-specific issue — CURRENT BEST GUESS
 
-## Next Test: Override C_in_block = 384 (full C_in, no split)
+The bug manifests **only on 2x4 mesh, not on 2x2**, even with identical C_in_block < C_in configuration and matching W_dev geometry. Middle W devices (devices 1 and 2 on a 2x4) have two active W fabric neighbors — one left and one right. All synchronization analysis proves correct in isolation. The undiscovered bug likely lies in:
 
-**Status: PREPARED, NOT YET RUN** (devices need reset, `tt-smi -r` requires `--no_reinit` flag on this machine)
+1. **How `input_progress_signal_count` is set on middle devices:** `num_w_fabric_cores` should be 2 for middle devices, meaning conv3d readers wait for 2 progress signals. Need to verify this is actually set to 2 in the factory for middle devices on a real 2x4 mesh.
+2. **W-reader `outer_dim_size` vs actual sender count:** The W reader waits for `w_neighbor_sem_addr >= outer_dim_size`. If `outer_dim_size` is set inconsistently (e.g., `B*T*h_total` from one direction but the semaphore counts `B*T*h_total` from the other), the W reader might signal conv3d readers before the second direction's data arrives.
+3. **Partial sum reduction with halo from two sources simultaneously:** On 2x2, each device has at most 1 active W neighbor. On 2x4, middle devices have 2. This additional W halo exchange may expose a partial-sum ordering issue in `compute.cpp` that only surfaces with both left and right halos active.
 
-Code is in place: `_override_mid_block_full_cin()` in `test_decoder_ones_input.py` sets `C_in_block=384` for mid_block resnets while keeping spatial blocking at production values (T=1, H=32, W=4).
+## Next Test: Run on real 2x4 LoudBox via CI
 
-Test also now has automatic PCC/max-error comparison against the standalone reference (`wan_decoder_ones_480p_81f_standalone.pt`).
+**Status: DISPATCHED** (see dispatch command below)
 
-**If seam disappears with C_in_block=384:** Bug is confirmed in C_in parallelism (L1 partial-sum reduction or synchronization). Next step: audit the compute kernel's partial sum accumulation and the writer's output assembly.
+Two critical experiments:
+1. `multi_block and fused and 2x4_h0_w1` — confirm seam still present (baseline)
+2. `single_block and fused and 2x4_h0_w1` — C_in_block=384 override; if seam disappears, C_in parallelism is confirmed
 
-**If seam persists with C_in_block=384:** Bug is NOT in C_in splitting. Would need to investigate the conv3d compute kernel itself for W-boundary halo data processing errors.
+Test in `test_decoder_ones_input.py`:
+- `single_block=True` → calls `_override_mid_block_full_cin()` which sets `C_in_block=384` for all mid_block resnet convolutions
+- Compares output `.pt` against standalone reference; logs PCC + max_err + per-column seam jumps
+
+**If seam disappears with single_block:** Bug confirmed in C_in parallelism. Investigate:
+- How partial sums from different C_in block cores are combined on middle 2x4 devices
+- Whether `fp32_dest_acc_en` + `use_fp32_partials` behave differently with 2 active W halo sources
+- Specifically: weight-tile index offset for halo input positions when C_in is split
+
+**If seam persists with single_block:** Bug is NOT in C_in splitting. Investigate:
+- `conv3d` compute kernel behavior at W-boundary halo positions regardless of C_in splitting
+- Whether `num_w_fabric_cores` is correctly set to 2 for middle 2x4 devices
 
 ## Operational Notes
 
@@ -117,10 +137,28 @@ docker exec 834fa6b844f2 bash -c 'cd /localdev/kevinmi/tt-metal && source python
 docker exec CONTAINER bash -c 'for d in 0 1 2 3 4 5 6 7; do tt-smi -r $d --no_reinit; done'
 ```
 
+### bh-lb-09 topology limitation (cannot reproduce 2x4 locally)
+
+`bh-lb-09` has 8 P150b devices but physical ETH links only support a 2x2 mesh. Attempting to open a 2x4 mesh fails:
+```
+ERROR: TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology.
+```
+Both `SystemMeshDescriptor` and manual `TT_MESH_GRAPH_DESC_PATH` confirm this. **Local reproduction of the 2x4-specific bug is impossible on bh-lb-09.**
+
+### 2x2 mesh test results (bh-lb-09)
+
+All tests pass on 2x2, including:
+- `mid_res_2x2_480p_ones` (C_in=384, C_in_block=96) → PASS
+- `mid_res_2x2_Wdev26_ones` (C_in=384, C_in_block=96, W_dev=26 matching 2x4 geometry) → PASS
+- `test_fused_ones_input_seam` standalone vs fused → max_diff=0 (no seam on 2x2)
+
+This confirms the bug is specific to the 2x4 topology, not C_in_block < C_in in isolation.
+
 ### Test file locations
 - `models/tt_dit/tests/models/wan2_2/test_decoder_ones_input.py` — full decoder all-ones test
 - `models/tt_dit/models/vae/vae_wan2_1.py` — model definition, `use_fused` toggles per layer
-- Reference: `wan_decoder_ones_480p_81f_standalone.pt` — standalone (no-seam) decoder output
+- `models/tt_dit/tests/models/wan2_2/test_neighbor_pad_conv3d_fused.py` — unit test for fused op
+- Reference: `wan_decoder_ones_480p_81f_standalone_multiblk.pt` — standalone (no-seam) decoder output
 
 ### Current `use_fused` configuration in `vae_wan2_1.py`
 - `conv_in`: `use_fused=True`
@@ -136,18 +174,25 @@ docker exec CONTAINER bash -c 'for d in 0 1 2 3 4 5 6 7; do tt-smi -r $d --no_re
 | Enabled fused for WanConv2d | Tested, didn't fix the seam — standalone path is also fine | Keep standalone NP for WanConv2d |
 | Isolated layers one-by-one | Found C_in_block < C_in is the differentiating factor | Testing all layers at once (no isolation) |
 | conv_in clean in both blocking configs | Confirmed no W_out_block-related bug | Blaming W_out_block splitting |
+| w_neighbor_semaphore analysis | GlobalSemaphore creates per-core L1 copies; NOC writes to specific core; no sharing bug | Blaming semaphore shared-state race |
+| 2x2 test confirms bug is 2x4-specific | mid_res_2x2_Wdev26_ones with C_in_block=96 passes → not a C_in_block-only bug | Continuing to blame C_in_block alone |
+| Cannot test 2x4 on bh-lb-09 | ETH link topology prevents 2x4 mesh formation | Spending more time on bh-lb-09 |
 
 ## Surprises & Discoveries
 - `conv_in` (C_in=32, C_in_block=32) never shows seam regardless of spatial blocking config
-- `mid_block` and `up_blocks[0]` (C_in=384, C_in_block=96) always show seam
-- The DRAM-level halo addressing (page ID + byte offset) is mathematically correct for pw=1 — the bug is likely in the L1-side processing (accumulation, reduction, or synchronization)
+- `mid_block` and `up_blocks[0]` (C_in=384, C_in_block=96) always show seam on 2x4
+- The DRAM-level halo addressing (page ID + byte offset) is mathematically correct for pw=1
 - `tt-smi -r` on Blackhole LoudBox hangs without `--no_reinit`; need to reset devices individually
 - Building tt-metal requires the Docker container (host has cmake 3.22, needs 3.24+; host lacks `mold` linker)
+- `ttnn.create_global_semaphore` creates a **per-core** L1 semaphore copy (not a single shared cell), so different W directions on a middle device have independent, non-interfering semaphores
+- bh-lb-09 cannot form a 2x4 mesh despite having 8 P150b devices (ETH link topology mismatch)
+- `mid_res_2x2_Wdev26_ones` (C_in_block < C_in, W_dev=26 matching 2x4) passes cleanly on 2x2 → bug requires at least 3 W boundaries (middle devices)
+- The test comment "only conv_in fused" in `test_decoder_ones_input.py` is stale; actual model source has `conv_in=True` **AND** `mid_block=True`
 
 ## Open Questions
-- [ ] Does overriding `C_in_block=384` (no channel split) on mid_block eliminate the seam? (test prepared, not yet run)
-- [ ] If C_in splitting is confirmed as the cause, is the bug in the compute kernel's partial sum accumulation, or in how the reader dispatches halo data to different C_in cores?
-- [ ] Is there a `c_in_block` synchronization barrier before the output reduction that might be missing?
+- [ ] Does `single_block and fused` on a real 2x4 LoudBox (C_in_block=384 override) show a seam? (dispatched to CI)
+- [ ] Is `num_w_fabric_cores` correctly set to 2 for middle devices on a real 2x4 mesh?
+- [ ] Why does the bug only appear with 3 W boundaries (2x4) and not 1 W boundary (2x2)?
 
 ## State
 - [x] Disproved H1: W-writer/reader addressing mismatch
@@ -156,10 +201,16 @@ docker exec CONTAINER bash -c 'for d in 0 1 2 3 4 5 6 7; do tt-smi -r $d --no_re
 - [x] Disproved H5: W_out_block splitting
 - [x] Layer isolation: conv_in clean, mid_block + up_blocks[0] show seam
 - [x] Deep audit of halo addressing: correct for pw=1
+- [x] Deep audit of w_neighbor_semaphore: per-core L1 copies, no shared-state race
+- [x] Deep audit of input_progress_semaphore: correct for single W neighbor (2x2)
+- [x] Deep audit of C_in reduction in compute.cpp: FP32 accumulation is correct
 - [x] Added automatic PCC/max-error comparison to test
 - [x] Built tt-metal inside container (cmake 4.3.1)
-- [ ] Run C_in_block=384 override test (devices need reset first)
-- [ ] Based on result, either audit L1 accumulation or investigate compute kernel
+- [x] 2x2 tests pass (including mid_res_2x2_Wdev26_ones with C_in_block=96)
+- [x] bh-lb-09 topology confirmed as 2x2-only; cannot reproduce 2x4 locally
+- [x] Added diagnostic CI test entry to `blackhole_demo_tests.yaml` for LoudBox
+- [ ] CI results: does C_in_block=384 override eliminate seam on 2x4? (PENDING)
+- [ ] Based on CI result: audit L1 accumulation on middle 2x4 devices OR audit conv3d halo handling
 
 ## Key Measurements
 
@@ -172,19 +223,26 @@ docker exec CONTAINER bash -c 'for d in 0 1 2 3 4 5 6 7; do tt-smi -r $d --no_re
 | conv_in fused + up_blocks[0] fused (mid disabled) | **Seam visible** |
 | All standalone (no fused) | Clean — no seam |
 
+### 2x2 mesh results (bh-lb-09, no seam possible)
+| Configuration | Result |
+|---------------|--------|
+| mid_res_2x2_480p_ones (C_in=384, C_in_block=96) | PASS (max_diff=0) |
+| mid_res_2x2_Wdev26_ones (C_in=384, C_in_block=96, W_dev=26) | PASS (max_diff=0) |
+| test_fused_ones_input_seam all shapes | PASS (max_diff=0) |
+
 ### Reproduction commands
 ```bash
-# Inside container on bh-37:
+# Inside container on LoudBox (2x4 mesh):
 cd /localdev/kevinmi/tt-metal
 source python_env/bin/activate
 export PYTHONPATH=$(pwd)
 export TT_DIT_CACHE_DIR=/localdev/kevinmi/.cache
 
-# Multi-block fused (shows seam with mid_block enabled):
+# Multi-block fused on 2x4 (shows seam):
 pytest models/tt_dit/tests/models/wan2_2/test_decoder_ones_input.py \
-    -k "multi_block and fused" -x -s
+    -k "2x4_h0_w1 and multi_block and fused" -x -s
 
-# C_in_block=384 override (pending test):
+# C_in_block=384 override on 2x4 (key diagnostic test):
 pytest models/tt_dit/tests/models/wan2_2/test_decoder_ones_input.py \
-    -k "single_block and fused" -x -s
+    -k "2x4_h0_w1 and single_block and fused" -x -s
 ```
