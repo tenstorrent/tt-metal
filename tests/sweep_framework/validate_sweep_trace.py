@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re as _re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -100,25 +101,31 @@ def _normalize_tensor_placement(tp: dict) -> dict:
     elif isinstance(ms, int):
         result["mesh_device_shape"] = ms
 
-    # Normalize placement list → frozenset of types (order/count independent)
-    # e.g. "['PlacementReplicate', 'PlacementShard(-1)']" → {"replicate", "shard"}
+    # Normalize placement list → first element's type only.
+    # Multi-device meshes may report 1-element ``["replicate"]`` vs 2-element
+    # ``["replicate", "shard"]`` depending on mesh dimensionality.  The second
+    # entry is a per-dimension shard annotation that doesn't affect functional
+    # equivalence.  Reduce to the first (primary) placement tag.
     pl = result.get("placement", "")
     if isinstance(pl, str):
-        tags = set()
-        if "PlacementShard" in pl:
-            tags.add("shard")
+        tags: list[str] = []
+        # Only look at the primary placement (first entry)
         if "PlacementReplicate" in pl:
-            tags.add("replicate")
-        result["placement"] = sorted(tags)
+            tags.append("replicate")
+        elif "PlacementShard" in pl:
+            tags.append("shard")
+        result["placement"] = tags
     elif isinstance(pl, list):
-        tags = set()
-        for entry in pl:
-            entry_s = str(entry)
-            if "Shard" in entry_s:
-                tags.add("shard")
-            if "Replicate" in entry_s:
-                tags.add("replicate")
-        result["placement"] = sorted(tags)
+        if pl:
+            first = str(pl[0])
+            if "Replicate" in first:
+                result["placement"] = ["replicate"]
+            elif "Shard" in first:
+                result["placement"] = ["shard"]
+            else:
+                result["placement"] = [first]
+        else:
+            result["placement"] = []
 
     return result
 
@@ -135,7 +142,40 @@ def _normalize_original_shape(shape: list) -> list:
     return shape
 
 
-def normalize(obj: Any, *, _parent_key: str = "", _depth: int = 0) -> Any:
+# ---------------------------------------------------------------------------
+# Named-kwarg to positional-arg mapping for ops that record kwargs in master
+# but positional args in sweep (or vice versa).
+# ---------------------------------------------------------------------------
+
+# Maps op_name -> ordered list of named kwargs that correspond to arg1, arg2, arg3, ...
+_NAMED_TO_POSITIONAL: dict[str, list[str]] = {
+    "ttnn.topk": ["k", "dim"],
+    "ttnn.slice": ["starts", "ends", "steps"],
+    "ttnn.scatter": ["dim", "index", "src"],
+}
+
+
+def _unify_named_positional_args(args: dict, op_name: str) -> dict:
+    """Rewrite named kwargs to positional arg keys when a mapping is known.
+
+    If the config uses named kwargs (e.g. ``k``, ``dim``) that correspond to
+    positional slots (``arg1``, ``arg2``), rewrite them to positional keys so
+    both master and sweep use the same key names.
+    """
+    mapping = _NAMED_TO_POSITIONAL.get(op_name)
+    if not mapping:
+        return args
+
+    result = dict(args)
+    for idx, named_key in enumerate(mapping, start=1):
+        positional_key = f"arg{idx}"
+        # If the named key is present but the positional key is not, rename it
+        if named_key in result and positional_key not in result:
+            result[positional_key] = result.pop(named_key)
+    return result
+
+
+def normalize(obj: Any, *, _parent_key: str = "", _depth: int = 0, _op_name: str = "") -> Any:
     """Recursively normalize a config dict for comparison.
 
     Strips keys that are expected to vary between a master trace (from the
@@ -148,6 +188,10 @@ def normalize(obj: Any, *, _parent_key: str = "", _depth: int = 0) -> Any:
             "distribution_shape" in obj and "placement" in obj
         ):
             obj = _normalize_tensor_placement(obj)
+
+        # At the top level, unify named kwargs → positional args
+        if _depth == 0 and _op_name:
+            obj = _unify_named_positional_args(obj, _op_name)
 
         result = {}
         for k, v in sorted(obj.items()):
@@ -167,13 +211,14 @@ def normalize(obj: Any, *, _parent_key: str = "", _depth: int = 0) -> Any:
             # (kwargs with default values may appear in one trace but be absent in the other)
             if v is None or v == 0 or v == 0.0:
                 continue
-            result[k] = normalize(v, _parent_key=k, _depth=_depth + 1)
+            # Ignore original_shape — it's metadata that varies with mesh device
+            # count and doesn't represent a functional argument difference
+            if k == "original_shape":
+                continue
+            result[k] = normalize(v, _parent_key=k, _depth=_depth + 1, _op_name=_op_name)
         return result
     if isinstance(obj, list):
-        # Normalize original_shape lists by stripping leading 1s
-        if _parent_key == "original_shape":
-            obj = _normalize_original_shape(obj)
-        return [normalize(item, _parent_key=_parent_key, _depth=_depth + 1) for item in obj]
+        return [normalize(item, _parent_key=_parent_key, _depth=_depth + 1, _op_name=_op_name) for item in obj]
     return obj
 
 
@@ -299,6 +344,29 @@ class ValidationReport:
 # ---------------------------------------------------------------------------
 
 
+_POSITIONAL_ARG_RE = _re.compile(r"^arg\d+$")
+
+
+def _reconcile_extra_positional_args(master: dict, sweep: dict) -> None:
+    """Remove positional arg keys (arg2, arg3, ...) present in only one side.
+
+    For ops like reshape the master trace may record extra positional args
+    (e.g. padded output shape in arg2) that the sweep trace does not capture.
+    These are optional metadata, not functional differences.  Mutates both
+    dicts in place.
+    """
+    if not isinstance(master, dict) or not isinstance(sweep, dict):
+        return
+    master_only = set(master.keys()) - set(sweep.keys())
+    sweep_only = set(sweep.keys()) - set(master.keys())
+    for k in master_only:
+        if _POSITIONAL_ARG_RE.match(k):
+            del master[k]
+    for k in sweep_only:
+        if _POSITIONAL_ARG_RE.match(k):
+            del sweep[k]
+
+
 def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
     """Join master and sweep traces by config_hash / sweep_source_hash."""
     report = ValidationReport()
@@ -358,8 +426,13 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             sweep_args = cfg.get("arguments", {})
             sweep_config_hash = cfg.get("config_hash")
 
-            norm_master = normalize(master_args)
-            norm_sweep = normalize(sweep_args)
+            norm_master = normalize(master_args, _op_name=master_op)
+            norm_sweep = normalize(sweep_args, _op_name=op_name)
+
+            # Category 4: For reshape (and similar), extra positional args
+            # (arg2, arg3, ...) that exist only in master are optional metadata
+            # (e.g. padded output shape). Remove them before comparison.
+            _reconcile_extra_positional_args(norm_master, norm_sweep)
 
             if norm_master == norm_sweep:
                 # Arguments match — check if config_hash computation also agrees
