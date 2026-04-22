@@ -7,6 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 
@@ -36,6 +37,11 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     const uint32_t num_pages = src_buffer->num_pages();
     const uint32_t input_page_size = is_row_major ? src_buffer->page_size() : single_tile_size_input;
     const uint32_t output_page_size = is_row_major ? dst_buffer->page_size() : single_tile_size_output;
+    // For RM: pad CB pages to 32-element alignment so the unpacker does not cross page boundaries.
+    const uint32_t padded_input_page_size =
+        is_row_major ? tt::align(input_page_size, 32u * input.element_size()) : input_page_size;
+    const uint32_t padded_output_page_size =
+        is_row_major ? tt::align(output_page_size, 32u * output.element_size()) : output_page_size;
 
     // ── Core selection ───────────────────────────────────────────────────
     CoreRangeSet all_cores(std::vector<CoreRange>{});
@@ -84,34 +90,32 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     ProgramDescriptor program_descriptor;
 
     // ── Circular Buffers ─────────────────────────────────────────────────
+    // For RM: use padded page sizes so the unpacker stays within CB page boundaries.
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     {
         CBDescriptor cb_desc;
-        cb_desc.total_size = input_page_size * 2;
+        cb_desc.total_size = padded_input_page_size * 2;
         cb_desc.core_ranges = all_cores;
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = cb_data_format_input,
-            .page_size = input_page_size});
+            .page_size = padded_input_page_size});
         program_descriptor.cbs.push_back(std::move(cb_desc));
     }
 
     constexpr uint32_t output_cb_index = tt::CBIndex::c_2;
     {
         CBDescriptor cb_desc;
-        cb_desc.total_size = output_page_size * 2;
+        cb_desc.total_size = padded_output_page_size * 2;
         cb_desc.core_ranges = all_cores;
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = cb_data_format_output,
-            .page_size = output_page_size});
+            .page_size = padded_output_page_size});
         program_descriptor.cbs.push_back(std::move(cb_desc));
     }
 
     // ── Reader kernel ────────────────────────────────────────────────────
-    std::vector<uint32_t> reader_ct_args;
-    TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
-
     KernelDescriptor::RuntimeArgs reader_rt_args;
     uint32_t start_id = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -122,19 +126,28 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
 
     {
         KernelDescriptor kernel_desc;
-        kernel_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
+        if (is_row_major) {
+            // RM: use padded reader that zero-fills extra bytes in the CB page.
+            kernel_desc.kernel_source =
+                "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/"
+                "reader_typecast_rm_interleaved.cpp";
+            kernel_desc.compile_time_args = {src0_cb_index, input_page_size, padded_input_page_size};
+            TensorAccessorArgs(*src_buffer).append_to(kernel_desc.compile_time_args);
+        } else {
+            std::vector<uint32_t> reader_ct_args;
+            TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
+            kernel_desc.kernel_source =
+                "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                "reader_unary_interleaved_start_id.cpp";
+            kernel_desc.compile_time_args = std::move(reader_ct_args);
+        }
         kernel_desc.core_ranges = all_cores;
-        kernel_desc.compile_time_args = reader_ct_args;
         kernel_desc.runtime_args = std::move(reader_rt_args);
         kernel_desc.config = ReaderConfigDescriptor{};
         program_descriptor.kernels.push_back(std::move(kernel_desc));
     }
 
     // ── Writer kernel ────────────────────────────────────────────────────
-    std::vector<uint32_t> writer_ct_args = {output_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-
     KernelDescriptor::RuntimeArgs writer_rt_args;
     start_id = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -145,10 +158,22 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
 
     {
         KernelDescriptor kernel_desc;
-        kernel_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+        if (is_row_major) {
+            // RM: use padded writer that writes only actual (non-padded) bytes to DRAM.
+            kernel_desc.kernel_source =
+                "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/"
+                "writer_typecast_rm_interleaved.cpp";
+            kernel_desc.compile_time_args = {output_cb_index, output_page_size};
+            TensorAccessorArgs(*dst_buffer).append_to(kernel_desc.compile_time_args);
+        } else {
+            std::vector<uint32_t> writer_ct_args = {output_cb_index};
+            TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+            kernel_desc.kernel_source =
+                "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                "writer_unary_interleaved_start_id.cpp";
+            kernel_desc.compile_time_args = std::move(writer_ct_args);
+        }
         kernel_desc.core_ranges = all_cores;
-        kernel_desc.compile_time_args = writer_ct_args;
         kernel_desc.runtime_args = std::move(writer_rt_args);
         kernel_desc.config = WriterConfigDescriptor{};
         program_descriptor.kernels.push_back(std::move(kernel_desc));
