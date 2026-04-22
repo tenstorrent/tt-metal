@@ -33,13 +33,17 @@ private:
     std::shared_ptr<ttml::modules::ModuleBase> fc;
 
 public:
-    explicit DistributedTransformer(const TransformerConfig& config);
+    // `gather_output_at_lm_head` controls whether the column-parallel LM head all-gathers
+    // its output to produce fully-replicated [B,1,S,V] logits.
+    explicit DistributedTransformer(const TransformerConfig& config, bool gather_output_at_lm_head = true);
     virtual ~DistributedTransformer() = default;
     ttml::autograd::TensorPtr operator()(
         const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) override;
 };
 
-[[nodiscard]] std::shared_ptr<DistributedTransformer> create(const TransformerConfig& config);
-[[nodiscard]] std::shared_ptr<DistributedTransformer> create(const YAML::Node& config);
+[[nodiscard]] std::shared_ptr<DistributedTransformer> create(
+    const TransformerConfig& config, bool gather_output_at_lm_head = true);
+[[nodiscard]] std::shared_ptr<DistributedTransformer> create(
+    const YAML::Node& config, bool gather_output_at_lm_head = true);
 
 }  // namespace ttml::models::distributed::gpt2
