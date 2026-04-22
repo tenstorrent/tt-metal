@@ -68,28 +68,64 @@ def print_kernels_operations(name_prefix="", is_ttnn=False):
     print(f"{'='*80}")
 
     if is_ttnn:
+        # ttnn_ops = [
+        #     "ttnn.transpose",
+        #     "ttnn.typecast",
+        #     "ttnn.reshape",
+        #     "ttnn.multiply",
+        #     "ttnn.cumsum",
+        #     "ttnn.exp",
+        #     "ttnn.subtract",
+        #     "ttnn.matmul",
+        #     "ttnn.neg",
+        #     "ttnn.add",
+        #     "ttnn.slice",
+        #     "ttnn.to_layout",
+        #     "ttnn.sum",
+        #     "ttnn.zeros",
+        #     "ttnn.concat",
+        #     "ttnn.from_torch",
+        #     "ttnn.to_torch",
+        #     "l2_norm_ttnn (custom)",
+        #     "_create_eye_matrix_ttnn (custom)",
+        #     "_create_tril_ones_ttnn (custom)",
+        #     "_create_strict_lower_tril_ttnn (custom)",
+        # ]
+
         ttnn_ops = [
+            # Layout / IO
             "ttnn.transpose",
             "ttnn.typecast",
             "ttnn.reshape",
-            "ttnn.multiply",
-            "ttnn.cumsum",
-            "ttnn.exp",
-            "ttnn.subtract",
-            "ttnn.matmul",
-            "ttnn.neg",
-            "ttnn.add",
-            "ttnn.slice",
             "ttnn.to_layout",
-            "ttnn.sum",
-            "ttnn.zeros",
+            "ttnn.slice",
             "ttnn.concat",
-            "ttnn.from_torch",
-            "ttnn.to_torch",
+            "ttnn.zeros",
+            "ttnn.ones",  # added: used inside mask helpers
+            # Elementwise
+            "ttnn.multiply",
+            "ttnn.add",
+            "ttnn.subtract",
+            "ttnn.neg",
+            "ttnn.exp",
+            "ttnn.rsqrt",  # added: used inside l2_norm_ttnn
+            # Reductions
+            "ttnn.sum",
+            "ttnn.cumsum",
+            # Matmul
+            "ttnn.matmul",
+            # Mask builders (eager)
+            "ttnn.triu",  # added: inside mask helpers
+            "ttnn.tril",  # added: inside mask helpers
+            # Custom wrappers
             "l2_norm_ttnn (custom)",
             "_create_eye_matrix_ttnn (custom)",
             "_create_tril_ones_ttnn (custom)",
             "_create_strict_lower_tril_ttnn (custom)",
+            # NOTE: ttnn.from_torch / ttnn.to_torch removed -- not used in
+            # fused_chunked_delta_rule_ttnn or recurrent_gated_delta_rule_ttnn.
+            # Re-add them only if the list should cover the full model
+            # (ttnn_gated_deltanet.py does use them for weight loading).
         ]
 
         print(f"\n📋 TTNN Operations ({len(ttnn_ops)} total):")
@@ -106,39 +142,66 @@ def print_kernels_operations(name_prefix="", is_ttnn=False):
 
     else:
         # Torch operations used in chunk_gated_delta_rule
+        # torch_ops = [
+        #     "torch.transpose",
+        #     "torch.contiguous",
+        #     "torch.to(torch.float32)",
+        #     "torch.nn.functional.pad",
+        #     "torch.reshape / tensor.reshape",
+        #     "torch.mul / *",
+        #     "torch.cumsum",
+        #     "torch.exp",
+        #     "torch.unsqueeze",
+        #     "torch.sub / -",
+        #     "torch.triu",
+        #     "torch.tril",
+        #     "torch.eye",
+        #     "torch.masked_fill",
+        #     "torch.matmul / @",
+        #     "torch.zeros / torch.zeros_like",
+        #     "torch.clone",
+        #     "l2_norm (custom)",
+        # ]
+
         torch_ops = [
             "torch.transpose",
             "torch.contiguous",
             "torch.to(torch.float32)",
             "torch.nn.functional.pad",
             "torch.reshape / tensor.reshape",
-            "torch.mul / *",
+            "torch.mul ",
+            "torch.add ",
+            "torch.sub ",
+            "torch.neg",
+            "torch.sum",
             "torch.cumsum",
             "torch.exp",
+            "torch.rsqrt",
             "torch.unsqueeze",
-            "torch.sub / -",
             "torch.triu",
             "torch.tril",
             "torch.eye",
+            "torch.ones",
             "torch.masked_fill",
-            "torch.matmul / @",
-            "torch.zeros / torch.zeros_like",
+            "torch.matmul",
+            "torch.einsum",
+            "torch.zeros",
             "torch.clone",
-            "l2_norm (custom)",
         ]
 
+        # List key PyTorch operations relevant to chunked gated delta rule, in direct correspondence with TTNN ops.
         print(f"\n📋 PyTorch Operations ({len(torch_ops)} total):")
         for i, op in enumerate(torch_ops, 1):
             print(f"  {i:2d}. {op}")
 
-        print(f"\n🔧 Key Operations:")
-        print(f"  • Data Movement: transpose, contiguous, reshape, pad")
-        print(f"  • Element-wise: mul, exp, sub, add")
-        print(f"  • Reduction: cumsum")
-        print(f"  • Linear Algebra: matmul (@ operator)")
-        print(f"  • Masking: triu, tril, masked_fill")
-        print(f"  • Matrix Creation: eye, zeros, zeros_like")
-        print(f"  • Custom Helpers: l2_norm")
+        # Provide mapping/summary of operation categories based on actual model and TTNN kernel usage.
+        print(f"\n🔧 Key Operations (based on TTNN implementation):")
+        print(f"  • Data Movement: transpose, contiguous (to_layout), reshape, pad (concat with zeros)")
+        print(f"  • Element-wise: mul (multiply), exp, sub (subtract), add, neg, rsqrt")
+        print(f"  • Reduction: cumsum, sum")
+        print(f"  • Linear Algebra: matmul (@ operator), einsum")
+        print(f"  • Masking/Matrix ops: triu, tril, masked_fill, eye, ones, zeros")
+        print(f"  • Custom Helpers: l2_norm (see l2_norm_ttnn), custom tril/triu/eye generators")
 
     print(f"{'='*80}\n")
 
