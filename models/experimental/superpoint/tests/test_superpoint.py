@@ -25,6 +25,7 @@ from loguru import logger
 from models.experimental.superpoint.reference.superpoint_reference import (
     load_reference_model,
     get_dummy_input,
+    get_natural_input,
 )
 from models.experimental.superpoint.tt.superpoint_ttnn import (
     TtSuperPoint,
@@ -49,6 +50,37 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((a @ b).item() / denom)
 
 
+def _topk_keypoints(score_map: torch.Tensor, k: int) -> torch.Tensor:
+    """Return the (y, x) coordinates of the k highest-scoring pixels."""
+    flat = score_map.flatten()
+    k_eff = min(k, flat.numel())
+    _, idx = torch.topk(flat, k_eff)
+    h = score_map.shape[-2]
+    w = score_map.shape[-1]
+    return torch.stack([idx // w, idx % w], dim=1)
+
+
+def _keypoint_set_metrics(tt_scores: torch.Tensor, ref_scores: torch.Tensor, k: int = 500, tol: int = 2):
+    """Compare top-K keypoints with a pixel tolerance.
+
+    tt_scores, ref_scores: (H, W) post-NMS dense score maps.
+    tol: match if tt keypoint is within ``tol`` pixels of a reference keypoint.
+    Returns (recall, precision, f1).
+    """
+    tt_kp = _topk_keypoints(tt_scores, k)
+    ref_kp = _topk_keypoints(ref_scores, k)
+    if tt_kp.numel() == 0 or ref_kp.numel() == 0:
+        return 0.0, 0.0, 0.0
+    # For each ref keypoint, is there any tt keypoint within tol pixels?
+    d = torch.cdist(ref_kp.float(), tt_kp.float(), p=torch.inf)
+    ref_matched = (d.min(dim=1).values <= tol).float().mean().item()
+    tt_matched = (d.min(dim=0).values <= tol).float().mean().item()
+    recall = ref_matched
+    precision = tt_matched
+    f1 = 2 * recall * precision / max(recall + precision, 1e-9)
+    return recall, precision, f1
+
+
 def _device_to_host_post(tt_model, s, d_norm, b, h, w):
     enc_h, enc_w = h // 8, w // 8
     scores_nhwc = ttnn.to_torch(s).reshape(b, enc_h, enc_w, KEYPOINT_DIM)
@@ -60,6 +92,7 @@ def _device_to_host_post(tt_model, s, d_norm, b, h, w):
 
 
 @pytest.mark.parametrize("height,width", [(480, 640)])
+@pytest.mark.parametrize("input_kind", ["random", "natural"])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -71,11 +104,14 @@ def _device_to_host_post(tt_model, s, d_norm, b, h, w):
     ],
     indirect=True,
 )
-def test_superpoint_benchmark(device, height, width):
+def test_superpoint_benchmark(device, height, width, input_kind):
     torch.manual_seed(0)
 
     torch_model = load_reference_model()
-    pixel_values = get_dummy_input(batch_size=1, height=height, width=width)
+    if input_kind == "natural":
+        pixel_values = get_natural_input(batch_size=1, height=height, width=width)
+    else:
+        pixel_values = get_dummy_input(batch_size=1, height=height, width=width)
 
     with torch.no_grad():
         _ = torch_model(pixel_values=pixel_values)  # keep weights loaded on CPU
@@ -154,10 +190,21 @@ def test_superpoint_benchmark(device, height, width):
     desc_pcc = _pcc(tt_desc_nchw, ref_desc_full)
     accuracy = min(score_pcc, desc_pcc) * 100.0
 
+    # Keypoint-set overlap after NMS — the real downstream metric for
+    # SuperPoint consumers (matching, SLAM, etc.).
+    tt_scores_nms = tt_model._simple_nms(tt_scores_pre_nms, tt_model.nms_radius)[0]
+    with torch.no_grad():
+        ref_scores_nms = tt_model._simple_nms(ref_score_pre, tt_model.nms_radius)[0]
+    recall_500, precision_500, f1_500 = _keypoint_set_metrics(tt_scores_nms, ref_scores_nms, k=500, tol=2)
+
+    print(f"input_kind={input_kind}")
     print(f"inference_speed={fps:.4f} fps")
     print(f"accuracy={accuracy:.4f}")
     print(f"score_pcc={score_pcc:.6f}")
     print(f"descriptor_pcc={desc_pcc:.6f}")
+    print(f"keypoint_recall@500_tol2={recall_500:.4f}")
+    print(f"keypoint_precision@500_tol2={precision_500:.4f}")
+    print(f"keypoint_f1@500_tol2={f1_500:.4f}")
     print(f"peak_dram={0}")
 
     assert torch.isfinite(tt_scores_pre_nms).all()
