@@ -339,6 +339,19 @@ PERF_COUNTER_CSV_HEADERS = [
     "Data Hazard Stall Rate Median (%)",
     "Data Hazard Stall Rate Max (%)",
     "Data Hazard Stall Rate Avg (%)",
+    # TDMA_UNPACK: Fidelity metrics
+    "Fidelity Stall Rate Min (%)",
+    "Fidelity Stall Rate Median (%)",
+    "Fidelity Stall Rate Max (%)",
+    "Fidelity Stall Rate Avg (%)",
+    "HiFi Fraction Min (%)",
+    "HiFi Fraction Median (%)",
+    "HiFi Fraction Max (%)",
+    "HiFi Fraction Avg (%)",
+    "Avg HF Cycles Per Instrn Min",
+    "Avg HF Cycles Per Instrn Median",
+    "Avg HF Cycles Per Instrn Max",
+    "Avg HF Cycles Per Instrn Avg",
     # L1 Bank 0: utilization metrics
     "L1 Unpacker Port Util Min (%)",
     "L1 Unpacker Port Util Median (%)",
@@ -400,6 +413,14 @@ PERF_COUNTER_CSV_HEADERS = [
     "SrcA Write Port Blocked Rate Median (%)",
     "SrcA Write Port Blocked Rate Max (%)",
     "SrcA Write Port Blocked Rate Avg (%)",
+    "SrcA Write Overwrite Blocked Rate Min (%)",
+    "SrcA Write Overwrite Blocked Rate Median (%)",
+    "SrcA Write Overwrite Blocked Rate Max (%)",
+    "SrcA Write Overwrite Blocked Rate Avg (%)",
+    "SrcB Write Overwrite Blocked Rate Min (%)",
+    "SrcB Write Overwrite Blocked Rate Median (%)",
+    "SrcB Write Overwrite Blocked Rate Max (%)",
+    "SrcB Write Overwrite Blocked Rate Avg (%)",
     "Dest Read Backpressure Min (%)",
     "Dest Read Backpressure Median (%)",
     "Dest Read Backpressure Max (%)",
@@ -702,6 +723,9 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "Semaphore Full Wait T2",
         # TDMA_UNPACK
         "Data Hazard Stall Rate",
+        # TDMA_UNPACK fidelity
+        "Fidelity Stall Rate",
+        "HiFi Fraction",
         # L1 Bank 0
         "L1 Unpacker Port Util",
         "L1 TDMA Bundle Util",
@@ -721,6 +745,8 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "L1 Packer Port Backpressure",
         # Math pipeline stall breakdown
         "SrcA Write Port Blocked Rate",
+        "SrcA Write Overwrite Blocked Rate",
+        "SrcB Write Overwrite Blocked Rate",
         "Dest Read Backpressure",
         "Math Dest Write Port Stall Rate",
         "Math Scoreboard Stall Rate",
@@ -767,6 +793,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "T0 Instrn Issue Rate",
         "T1 Instrn Issue Rate",
         "T2 Instrn Issue Rate",
+        "Avg HF Cycles Per Instrn",
     ]
 
     # For each base metric, display a table with Min/Median/Max/Avg rows
@@ -933,17 +960,11 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     fpu_ref_cnt = get_counter_ref_cnt("FPU_COUNTER")
     math_counter = get_counter_series("MATH_COUNTER")
     math_ref_cnt = get_counter_ref_cnt("MATH_COUNTER")
-    # Prefer the _ACTUAL series; fall back to _THREAD0 + _THREAD1 if absent.
+    # For "write efficiency" metrics, use the port-OK counter for both sides so
+    # the numbers compare apples to apples. (SRCA_WRITE_ACTUAL and
+    # SRCB_WRITE_NOT_BLOCKED_PORT both measure "write not blocked by port".)
     srca_write = get_counter_series("SRCA_WRITE_ACTUAL")
-    if srca_write is None and has_counter("SRCA_WRITE_THREAD0"):
-        srca_t0 = get_counter_series("SRCA_WRITE_THREAD0")
-        srca_t1 = get_counter_series("SRCA_WRITE_THREAD1") if has_counter("SRCA_WRITE_THREAD1") else 0
-        srca_write = srca_t0.fillna(0) + (srca_t1 if isinstance(srca_t1, int) else srca_t1.fillna(0))
-    srcb_write = get_counter_series("SRCB_WRITE_ACTUAL")
-    if srcb_write is None and has_counter("SRCB_WRITE_THREAD0"):
-        srcb_t0 = get_counter_series("SRCB_WRITE_THREAD0")
-        srcb_t1 = get_counter_series("SRCB_WRITE_THREAD1") if has_counter("SRCB_WRITE_THREAD1") else 0
-        srcb_write = srcb_t0.fillna(0) + (srcb_t1 if isinstance(srcb_t1, int) else srcb_t1.fillna(0))
+    srcb_write = get_counter_series("SRCB_WRITE_NOT_BLOCKED_PORT")
     unpack0_busy = get_counter_series("UNPACK0_BUSY_THREAD0")
     unpack1_busy = get_counter_series("UNPACK1_BUSY_THREAD0")
     srca_write_avail = get_counter_series("SRCA_WRITE_AVAILABLE")
@@ -982,10 +1003,10 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     unpack0_eff = (srca_write / unpack0_busy * 100).replace([float("inf"), -float("inf")], nan)
     unpack1_eff = (srcb_write / unpack1_busy * 100).replace([float("inf"), -float("inf")], nan)
 
-    # Packer Efficiency: On WH, PACKER_DEST_READ_AVAILABLE / PACKER_BUSY.
-    # On BH, PACKER_BUSY is always 0 (packer completes within gated clock window).
-    # Fallback: DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE measures what fraction
-    # of dest read requests were granted (req/grant pair for BH's single packer engine).
+    # Packer Efficiency: PACKER_DEST_READ_AVAILABLE / PACKER_BUSY = fraction of
+    # packer-busy cycles where a dest read was requested. Falls back to
+    # DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE (dest read grant rate)
+    # for ops where the packer wasn't used (PACKER_BUSY == 0).
     if packer_busy is not None and packer_busy.sum() > 0:
         pack_eff = (packer_dest_read / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
     elif has_counter("DEST_READ_GRANTED_0"):
@@ -994,15 +1015,17 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     else:
         pack_eff = pd.Series(dtype=float)
 
-    # Math Pipeline Utilization: MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE.
-    # On BH, MATH_INSTRN_STARTED is empirically dead — metric will be empty.
+    # Math Pipeline Utilization: fraction of math-available cycles that actually
+    # issued an instruction (rden fired).
     if math_instrn_started is not None and math_instrn_started.sum() > 0:
         math_pipe_util = (math_instrn_started / math_instrn_available * 100).replace([float("inf"), -float("inf")], nan)
     else:
         math_pipe_util = pd.Series(dtype=float)
 
-    # Math-to-Pack Handoff Efficiency: On BH, PACKER_BUSY is always 0.
-    # Fall back to AVAILABLE_MATH / ref_cnt (% of time math not stalled by scoreboard).
+    # Math-to-Pack Handoff Ratio: AVAILABLE_MATH / PACKER_BUSY. Values > 100%
+    # mean math can keep up with packer (math-bound workload); < 100% means
+    # packer is waiting for math. Falls back to AVAILABLE_MATH / ref_cnt when
+    # packer wasn't used (PACKER_BUSY == 0) — then reports raw math availability.
     if packer_busy is not None and packer_busy.sum() > 0:
         math_pack_eff = (available_math / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
     elif available_math is not None:
@@ -1081,6 +1104,28 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             "DATA_HAZARD_STALLS_MOVD2A", "MATH_INSTRN_AVAILABLE"
         )
 
+    # === Fidelity metrics ===
+    # Fidelity Stall Rate: fraction of math-valid cycles spent in a fidelity phase.
+    if has_counter("MATH_FIDELITY_STALL") and has_counter("MATH_INSTRN_AVAILABLE"):
+        per_op_stats["Fidelity Stall Rate"] = compute_ratio_metric(
+            "MATH_FIDELITY_STALL", "MATH_INSTRN_AVAILABLE"
+        )
+    # HiFi Fraction: fraction of issued math instructions that used HiFi (2+ HF cycles).
+    if (
+        has_counter("MATH_INSTRN_HF_1_CYCLE")
+        and has_counter("MATH_INSTRN_HF_2_CYCLE")
+        and has_counter("MATH_INSTRN_HF_4_CYCLE")
+    ):
+        hf1 = get_counter_series("MATH_INSTRN_HF_1_CYCLE").fillna(0)
+        hf2 = get_counter_series("MATH_INSTRN_HF_2_CYCLE").fillna(0)
+        hf4 = get_counter_series("MATH_INSTRN_HF_4_CYCLE").fillna(0)
+        total = hf1 + hf2 + hf4
+        hifi_fraction = ((hf2 + hf4) / total * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["HiFi Fraction"] = _group_to_stat_dict(hifi_fraction)
+        # Avg HF cycles per issued math instruction (1 for LoFi, 2 for HiFi2, 4 for HiFi4).
+        avg_hf = ((hf1 + 2 * hf2 + 4 * hf4) / total).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["Avg HF Cycles Per Instrn"] = _group_to_stat_dict(avg_hf)
+
     # === L1 Bank 0 ===
     if has_counter("L1_0_UNPACKER_0"):
         per_op_stats["L1 Unpacker Port Util"] = compute_util_metric("L1_0_UNPACKER_0")
@@ -1120,12 +1165,22 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         )
 
     # === Grant counter derived metrics ===
-    # SrcA write port blocked rate
+    # SrcA/SrcB write blocked rates — two blocking modes per side.
+    # PORT blocking = DMA write port unavailable. OVR blocking = srcA/B not yet
+    # consumed by math, can't be overwritten. The *_WRITE_ACTUAL counters measure
+    # "port-OK" for srcA (sel 262) but "overwrite-OK" for srcB (sel 259).
+    if has_counter("SRCA_WRITE_AVAILABLE") and has_counter("SRCA_WRITE_ACTUAL"):
+        per_op_stats["SrcA Write Port Blocked Rate"] = compute_complement_metric(
+            "SRCA_WRITE_ACTUAL", "SRCA_WRITE_AVAILABLE"
+        )
     if has_counter("SRCA_WRITE_AVAILABLE") and has_counter("SRCA_WRITE_NOT_BLOCKED_OVR"):
-        avail = get_counter_series("SRCA_WRITE_AVAILABLE")
-        unblocked = get_counter_series("SRCA_WRITE_NOT_BLOCKED_OVR")
-        ratio = ((avail - unblocked) / avail * 100).replace([float("inf"), -float("inf")], nan)
-        per_op_stats["SrcA Write Port Blocked Rate"] = _group_to_stat_dict(ratio)
+        per_op_stats["SrcA Write Overwrite Blocked Rate"] = compute_complement_metric(
+            "SRCA_WRITE_NOT_BLOCKED_OVR", "SRCA_WRITE_AVAILABLE"
+        )
+    if has_counter("SRCB_WRITE_AVAILABLE") and has_counter("SRCB_WRITE_ACTUAL"):
+        per_op_stats["SrcB Write Overwrite Blocked Rate"] = compute_complement_metric(
+            "SRCB_WRITE_ACTUAL", "SRCB_WRITE_AVAILABLE"
+        )
 
     # Dest read backpressure: DEST_READ_GRANTED_0 is the matched grant for
     # PACKER_DEST_READ_AVAILABLE (req[0]/grant[0] pair, live on WH and BH).
@@ -1227,15 +1282,21 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     if has_counter("PACK_INSTRN_AVAILABLE_2"):
         per_op_stats["PACK Instrn Avail Rate T2"] = compute_util_metric("PACK_INSTRN_AVAILABLE_2")
 
-    # === Write port blocking ===
+    # === Write port blocking / write success efficiency ===
     if has_counter("SRCB_WRITE_AVAILABLE") and has_counter("SRCB_WRITE_NOT_BLOCKED_PORT"):
         per_op_stats["SrcB Write Port Blocked Rate"] = compute_complement_metric(
             "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_AVAILABLE"
         )
+    # SrcA/B Write Actual Efficiency: fraction of attempted writes not blocked
+    # by port unavailability. Uses the "port-OK" counter for both sides.
     if has_counter("SRCA_WRITE_ACTUAL") and has_counter("SRCA_WRITE_AVAILABLE"):
-        per_op_stats["SrcA Write Actual Efficiency"] = compute_ratio_metric("SRCA_WRITE_ACTUAL", "SRCA_WRITE_AVAILABLE")
-    if has_counter("SRCB_WRITE_ACTUAL") and has_counter("SRCB_WRITE_AVAILABLE"):
-        per_op_stats["SrcB Write Actual Efficiency"] = compute_ratio_metric("SRCB_WRITE_ACTUAL", "SRCB_WRITE_AVAILABLE")
+        per_op_stats["SrcA Write Actual Efficiency"] = compute_ratio_metric(
+            "SRCA_WRITE_ACTUAL", "SRCA_WRITE_AVAILABLE"
+        )
+    if has_counter("SRCB_WRITE_NOT_BLOCKED_PORT") and has_counter("SRCB_WRITE_AVAILABLE"):
+        per_op_stats["SrcB Write Actual Efficiency"] = compute_ratio_metric(
+            "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_AVAILABLE"
+        )
 
     # === Packer engine granularity ===
     if has_counter("PACKER_BUSY_0"):
@@ -1587,6 +1648,31 @@ def compute_device_only_metrics(
 
     eff_pivot["Data Hazard Stall Rate"] = eff_pivot.apply(_d2a_stall_rate, axis=1)
 
+    # Fidelity metrics
+    def _fidelity_stall_rate(x):
+        stall = x.get("value_MATH_FIDELITY_STALL", 0)
+        valid = x.get("value_MATH_INSTRN_AVAILABLE", 0)
+        return (stall / valid * 100) if valid > 0 else nan
+
+    eff_pivot["Fidelity Stall Rate"] = eff_pivot.apply(_fidelity_stall_rate, axis=1)
+
+    def _hifi_fraction(x):
+        h1 = x.get("value_MATH_INSTRN_HF_1_CYCLE", 0)
+        h2 = x.get("value_MATH_INSTRN_HF_2_CYCLE", 0)
+        h4 = x.get("value_MATH_INSTRN_HF_4_CYCLE", 0)
+        total = h1 + h2 + h4
+        return ((h2 + h4) / total * 100) if total > 0 else nan
+
+    def _avg_hf_cycles(x):
+        h1 = x.get("value_MATH_INSTRN_HF_1_CYCLE", 0)
+        h2 = x.get("value_MATH_INSTRN_HF_2_CYCLE", 0)
+        h4 = x.get("value_MATH_INSTRN_HF_4_CYCLE", 0)
+        total = h1 + h2 + h4
+        return ((h1 + 2 * h2 + 4 * h4) / total) if total > 0 else nan
+
+    eff_pivot["HiFi Fraction"] = eff_pivot.apply(_hifi_fraction, axis=1)
+    eff_pivot["Avg HF Cycles Per Instrn"] = eff_pivot.apply(_avg_hf_cycles, axis=1)
+
     # L1 Bank 0 metrics
     eff_pivot["L1 Unpacker Port Util"] = eff_pivot.apply(
         lambda x: safe_div(x.get("value_L1_0_UNPACKER_0", 0), x.get("ref_cnt_L1_0_UNPACKER_0", 0)),
@@ -1772,21 +1858,33 @@ def compute_device_only_metrics(
         axis=1,
     )
 
-    # Write port blocking
+    # Write port blocking (PORT = DMA write port unavailable).
+    # SRCA_WRITE_ACTUAL and SRCB_WRITE_NOT_BLOCKED_PORT are the "port-OK" counters.
     eff_pivot["SrcA Write Port Blocked Rate"] = eff_pivot.apply(
-        safe_complement("value_SRCA_WRITE_NOT_BLOCKED_OVR", "value_SRCA_WRITE_AVAILABLE"),
+        safe_complement("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"),
         axis=1,
     )
     eff_pivot["SrcB Write Port Blocked Rate"] = eff_pivot.apply(
         safe_complement("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_AVAILABLE"),
         axis=1,
     )
+    # Overwrite blocking (srcA/B not yet consumed; can't overwrite).
+    # SRCA_WRITE_NOT_BLOCKED_OVR and SRCB_WRITE_ACTUAL are the "overwrite-OK" counters.
+    eff_pivot["SrcA Write Overwrite Blocked Rate"] = eff_pivot.apply(
+        safe_complement("value_SRCA_WRITE_NOT_BLOCKED_OVR", "value_SRCA_WRITE_AVAILABLE"),
+        axis=1,
+    )
+    eff_pivot["SrcB Write Overwrite Blocked Rate"] = eff_pivot.apply(
+        safe_complement("value_SRCB_WRITE_ACTUAL", "value_SRCB_WRITE_AVAILABLE"),
+        axis=1,
+    )
+    # Write Actual Efficiency = port-OK success rate (consistent across sides).
     eff_pivot["SrcA Write Actual Efficiency"] = eff_pivot.apply(
         safe_ratio("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"),
         axis=1,
     )
     eff_pivot["SrcB Write Actual Efficiency"] = eff_pivot.apply(
-        safe_ratio("value_SRCB_WRITE_ACTUAL", "value_SRCB_WRITE_AVAILABLE"),
+        safe_ratio("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_AVAILABLE"),
         axis=1,
     )
 
@@ -2073,6 +2171,8 @@ def compute_device_only_metrics(
         "Semaphore Full Wait T1",
         "Semaphore Full Wait T2",
         "Data Hazard Stall Rate",
+        "Fidelity Stall Rate",
+        "HiFi Fraction",
         "L1 Unpacker Port Util",
         "L1 TDMA Bundle Util",
         "NOC Ring 0 Outgoing Util",
@@ -2087,6 +2187,8 @@ def compute_device_only_metrics(
         "L1 Unpacker Backpressure",
         "L1 Packer Port Backpressure",
         "SrcA Write Port Blocked Rate",
+        "SrcA Write Overwrite Blocked Rate",
+        "SrcB Write Overwrite Blocked Rate",
         "Dest Read Backpressure",
         "Math Dest Write Port Stall Rate",
         "Math Scoreboard Stall Rate",
@@ -2129,6 +2231,7 @@ def compute_device_only_metrics(
         "T0 Instrn Issue Rate",
         "T1 Instrn Issue Rate",
         "T2 Instrn Issue Rate",
+        "Avg HF Cycles Per Instrn",
     ]
 
     agg_metrics: Dict[str, Dict] = {}

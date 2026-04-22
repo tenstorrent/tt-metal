@@ -829,18 +829,31 @@ def _enrich_ops_from_device_logs(
                 # Math pipeline stall breakdown
                 assign_metric("Math Src Data Ready Rate", per_op_stats.get("Math Src Data Ready Rate", {}))
                 assign_metric("SrcA Write Port Blocked Rate", per_op_stats.get("SrcA Write Port Blocked Rate", {}))
+                assign_metric(
+                    "SrcA Write Overwrite Blocked Rate",
+                    per_op_stats.get("SrcA Write Overwrite Blocked Rate", {}),
+                )
+                assign_metric(
+                    "SrcB Write Overwrite Blocked Rate",
+                    per_op_stats.get("SrcB Write Overwrite Blocked Rate", {}),
+                )
                 assign_metric("Dest Read Backpressure", per_op_stats.get("Dest Read Backpressure", {}))
                 assign_metric(
                     "Math Dest Write Port Stall Rate", per_op_stats.get("Math Dest Write Port Stall Rate", {})
                 )
                 assign_metric("Math Scoreboard Stall Rate", per_op_stats.get("Math Scoreboard Stall Rate", {}))
 
-                # Instruction issue rates
+                # Fidelity metrics
+                assign_metric("Fidelity Stall Rate", per_op_stats.get("Fidelity Stall Rate", {}))
+                assign_metric("HiFi Fraction", per_op_stats.get("HiFi Fraction", {}))
                 assign_metric(
-                    "Unpack Instrn Issue Rate T0", per_op_stats.get("Unpack Instrn Issue Rate T0", {}), suffix=""
+                    "Avg HF Cycles Per Instrn", per_op_stats.get("Avg HF Cycles Per Instrn", {}), suffix=""
                 )
-                assign_metric("Math Instrn Issue Rate T1", per_op_stats.get("Math Instrn Issue Rate T1", {}), suffix="")
-                assign_metric("Pack Instrn Issue Rate T2", per_op_stats.get("Pack Instrn Issue Rate T2", {}), suffix="")
+
+                # Instruction issue rates
+                assign_metric("T0 Instrn Issue Rate", per_op_stats.get("T0 Instrn Issue Rate", {}), suffix="")
+                assign_metric("T1 Instrn Issue Rate", per_op_stats.get("T1 Instrn Issue Rate", {}), suffix="")
+                assign_metric("T2 Instrn Issue Rate", per_op_stats.get("T2 Instrn Issue Rate", {}), suffix="")
 
                 # Per-type instruction issue efficiency
                 assign_metric("CFG Instrn Avail Rate T0", per_op_stats.get("CFG Instrn Avail Rate T0", {}))
@@ -1121,8 +1134,12 @@ def get_device_data_generate_report(
 
                     # Write all metrics to CSV row systematically
                     for base_name, m in metrics.items():
-                        is_ipc = "IPC" in base_name or "Issue Rate" in base_name
-                        suffix = "" if is_ipc else " (%)"
+                        is_raw = (
+                            "IPC" in base_name
+                            or "Issue Rate" in base_name
+                            or base_name == "Avg HF Cycles Per Instrn"
+                        )
+                        suffix = "" if is_raw else " (%)"
                         # Special handling for SFPU/FPU/MATH "Avg on full grid" legacy names
                         if base_name == "SFPU Util":
                             rowDict["Avg SFPU util on full grid (%)"] = m["avg"].get(lookup_key, nan)

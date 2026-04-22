@@ -329,7 +329,7 @@ Semaphore Full Wait TN = WAITING_FOR_NONFULL_SEM_N / ref_cnt * 100
 
 **13. Data Hazard Stall Rate**
 
-Cycles stalled by destination-to-source data hazards (MOVD2A/MOVD2B operations).
+Fraction of math-valid cycles stalled by destination-to-source data hazards (MOVD2A/MOVD2B operations).
 
 | | |
 |---|---|
@@ -337,11 +337,14 @@ Cycles stalled by destination-to-source data hazards (MOVD2A/MOVD2B operations).
 | **Counter group** | UNPACK |
 
 ```
-Data Hazard Stall Rate = DATA_HAZARD_STALLS_MOVD2A / ref_cnt * 100
+Data Hazard Stall Rate = (MATH_INSTRN_AVAILABLE - DATA_HAZARD_STALLS_MOVD2A)
+                         / MATH_INSTRN_AVAILABLE * 100
 ```
 
-- **High value (>20%)**: Significant dest-to-src data movement stalls. Expected for matmul (29%).
-- **Low value (~0%)**: No data hazard stalls. Expected for simple eltwise ops.
+The RTL counter `DATA_HAZARD_STALLS_MOVD2A` is `math_instrn_valid & ~dest2src_post_stall` — cycles math was available AND *not* D2A-stalled. Subtracting from MATH_INSTRN_AVAILABLE gives the actual stall count.
+
+- **High value (>20%)**: Significant dest-to-src data movement stalls. Expected for concat (22% max).
+- **Low value (~0%)**: No data hazard stalls. Expected for matmul and simple eltwise ops.
 
 **Use case:** Identifies operations with heavy dest-to-src register movement overhead.
 
@@ -1006,6 +1009,96 @@ FPU Execution Efficiency = FPU_COUNTER / FPU_INSTRN_AVAILABLE_1 * 100
 **Not available on Blackhole**: `FPU_INSTRN_AVAILABLE_1` reads 0 on BH.
 
 **Use case:** Distinguishes compute-bound (high efficiency) from memory-bound (low efficiency) workloads.
+
+---
+
+**44. SrcA/SrcB Write Overwrite Blocked Rate**
+
+Fraction of srcA/srcB DMA write attempts blocked by overwrite protection (previous data not yet consumed by math).
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | UNPACK |
+
+```
+SrcA Write Overwrite Blocked = (SRCA_WRITE_AVAILABLE - SRCA_WRITE_NOT_BLOCKED_OVR) /
+                               SRCA_WRITE_AVAILABLE * 100
+SrcB Write Overwrite Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE_ACTUAL) /
+                               SRCB_WRITE_AVAILABLE * 100
+```
+
+Paired with `SrcA/SrcB Write Port Blocked Rate` to separate the two stall modes:
+- **Port blocking**: DMA write port unavailable (mux contention)
+- **Overwrite blocking**: previous srcA/B value not yet consumed by math; can't overwrite
+
+- **High value (>30%)**: Math is slow to consume; unpacker frequently waits. Typical for SFPU-heavy ops (silu shows 91% on srcA).
+- **Low value (~0%)**: No register pressure.
+
+**Use case:** Distinguishes source register overwrite stalls (math-consumer bottleneck) from port stalls (DMA arbitration).
+
+---
+
+**45. Fidelity Stall Rate**
+
+Fraction of math-valid cycles stalled in a fidelity phase (multi-HF-cycle math instruction).
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | UNPACK |
+
+```
+Fidelity Stall Rate = MATH_FIDELITY_STALL / MATH_INSTRN_AVAILABLE * 100
+```
+
+- **0%**: LoFi math only (all instructions complete in 1 HF cycle).
+- **>0%**: HiFi math instructions are active. Each HiFi2 takes 2 cycles, HiFi4 takes 4 cycles.
+
+**Use case:** Detects whether a workload uses HiFi math; non-zero values indicate multi-cycle math instructions contributing to total execution time.
+
+---
+
+**46. HiFi Fraction**
+
+Fraction of issued math instructions that took more than 1 HF cycle (HiFi2 or HiFi4).
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | UNPACK |
+
+```
+HiFi Fraction = (MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) /
+                (MATH_INSTRN_HF_1_CYCLE + MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) * 100
+```
+
+- **0%**: Pure LoFi.
+- **100%**: Pure HiFi.
+
+**Use case:** Quick check of fidelity mix in a workload.
+
+---
+
+**47. Avg HF Cycles Per Instrn**
+
+Weighted average of HF cycles per issued math instruction (1 for LoFi, 2 for HiFi2, 4 for HiFi4).
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | UNPACK |
+
+```
+Avg HF Cycles = (HF_1 + 2*HF_2 + 4*HF_4) / (HF_1 + HF_2 + HF_4)
+```
+
+- **1.0**: All LoFi.
+- **2.0**: All HiFi2.
+- **4.0**: All HiFi4.
+- Between: Mixed workload.
+
+**Use case:** Single-number summary of fidelity impact on math execution.
 
 ---
 
