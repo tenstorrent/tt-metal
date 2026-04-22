@@ -1,13 +1,13 @@
 operands:
   - name: "input_A"
-    dims: [256, 256]
+    dims: [64, 64]
     format: "Float16_b"
   - name: "input_B"
-    dims: [256, 256]
+    dims: [64, 64]
     format: "Float16_b"
     const_value: 1.0
   - name: "reduced_output"
-    dims: [256, 256]
+    dims: [64, 64]
     format: "Float16_b"
 
 operations:
