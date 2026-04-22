@@ -48,6 +48,7 @@ ROPE_OPS = frozenset(
         "RotaryEmbeddingDeviceOperation",
         "RotaryEmbeddingLlamaDeviceOperation",
         "RotaryEmbeddingLlamaFusedQKDeviceOperation",
+        "RotaryEmbeddingHfDeviceOperation",
     }
 )
 
