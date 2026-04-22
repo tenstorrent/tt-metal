@@ -5,7 +5,7 @@
 
 <h1>
 
-[Hardware](https://tenstorrent.com/hardware/blackhole) | [Install](./INSTALLING.md) |  [Discord](https://discord.gg/tvhGzHQwaj) | [Join Us](https://boards.greenhouse.io/tenstorrent/jobs/4155609007) | [Bounty $](https://github.com/tenstorrent/tt-metal/issues?q=is%3Aissue%20state%3Aopen%20label%3Abounty)
+[Hardware](https://tenstorrent.com/hardware/blackhole) | [Install](./INSTALLING.md) | [Docs](https://docs.tenstorrent.com/tt-metal/latest/ttnn/index.html) | [Discord](https://discord.gg/tvhGzHQwaj) | [Join Us](https://boards.greenhouse.io/tenstorrent/jobs/4155609007) | [Bounty $](https://github.com/tenstorrent/tt-metal/issues?q=is%3Aissue%20state%3Aopen%20label%3Abounty)
 
 </h1>
 
@@ -20,6 +20,43 @@
 </h3>
 
 </div>
+
+## Overview
+
+This repository contains two complementary frameworks for developing and running AI workloads on [Tenstorrent](https://tenstorrent.com) hardware:
+
+- **[TT-NN](#tt-nn)** — A high-level Python & C++ neural network operator library with PyTorch-like ergonomics, optimized for Tenstorrent hardware. Use TT-NN to run and optimize models.
+- **[TT-Metalium](#tt-metalium)** — A low-level programming model for writing custom kernels that run directly on Tenstorrent's Tensix cores. Use TT-Metalium for maximum hardware control and performance tuning.
+
+Both frameworks support Tenstorrent's [Wormhole](https://tenstorrent.com/hardware/wormhole) and [Blackhole](https://tenstorrent.com/hardware/blackhole) architectures, with scale-out support for multi-chip and multi-host configurations.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Quick Start](#quick-start)
+- [Featured Models](#featured-models)
+- [Model Updates](#model-updates)
+- [TT-NN Tech Reports](#tt-nn-tech-reports)
+- [Benchmarks](#benchmarks)
+- [TT-Metalium](#getting-started)
+- [TT-Metalium Tech Reports](#tt-metalium-tech-reports)
+- [TT-Metalium Programming Examples](#tt-metalium-programming-examples)
+- [Tools and Instruments](#tools-and-instruments)
+- [Related Tenstorrent Projects](#related-tenstorrent-projects)
+- [Latest Releases](#latest-releases)
+- [License](#license)
+
+## Quick Start
+
+1. **Check hardware requirements** — Supported cards: n150, n300, QuietBox, Galaxy (Wormhole); p150, p300 (Blackhole).
+2. **Install** — Follow the [installation guide](./INSTALLING.md).
+3. **Run a model demo** — Browse [Model Demos](./models/demos/) to find a pre-optimized model.
+4. **Write a kernel** — Start with the [Hello World Compute Kernel](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/hello_world_compute_kernel/hello_world_compute.md) for TT-Metalium.
+5. **Get help** — Join the [Discord community](https://discord.gg/tvhGzHQwaj) or browse the [Developer Hub](https://tenstorrent.com/developers).
+
+---
+
+## TT-NN
 
 ## Featured Models
 
@@ -77,6 +114,8 @@ For information on initial model procedures, please see [Model Bring-Up and Test
 
 ## TT-NN Tech Reports
 
+> These reports cover optimizations and architectures relevant to using TT-NN for model development.
+
 - [Advanced Performance Optimizations for Models](./tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) (updated March 4th, 2025)
 - [ViT Implementation in TT-NN on GS](./tech_reports/ViT-TTNN/vit.md)  (updated Sept 22nd, 2024)
 - [LLMs Bring up in TT-NN](./tech_reports/LLMs/llms.md)  (updated Oct 29th, 2024)
@@ -101,9 +140,11 @@ For information on initial model procedures, please see [Model Bring-Up and Test
 </h3>
 </div>
 
-## Getting started
+## TT-Metalium
 
-Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
+## Getting Started
+
+Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html) or explore the [Programming Guide](./METALIUM_GUIDE.md) for an in-depth walkthrough.
 
 ## TT-Metalium Tech Reports
 
