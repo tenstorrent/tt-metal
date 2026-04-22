@@ -39,6 +39,32 @@ feature that does or does not fit the helper API.
 
 ---
 
+### `ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama.cpp`
+- **Commit**: `61fe380f934`
+- **Stages migrated**: Stage 4 (final add) only
+- **Helper features used**: `add` NONE bcast, `WaitUpfrontPopAtEnd` × 2, `BinaryOutputPolicy::Bulk`
+- **Blocker for stages 2/3**: `mul_tiles(…, j + sin_cos_row_cnt * Wt, …)` in RELOAD_IMPL=0 mode
+  — B-tile index advances by `Wt` per seq_tile iteration. No helper policy supports
+  runtime-varying absolute B-tile offsets.
+- **Tests**: 13 prefill passed (head_dim 64/128/96/256, n_heads variants)
+
+### `ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama_sharded.cpp`
+- **Commit**: `64dac8f3798`
+- **Stages migrated**: Stages 2-4 (sin_interim, cos_interim, final add)
+- **Helper features used**: `mul` ROW bcast `WaitUpfrontPopAtEnd/NoWaitNoPop/Bulk` × 2,
+  `add` NONE bcast `WaitUpfrontPopAtEnd` × 2 `Bulk`. sin/cos CBs pre-waited globally
+  and reused across all `ht` iterations (`NoWaitNoPop`).
+- **Tests**: 18 decode tests passed (head_dim 64/128/96/256, batch 1/15/32, with program cache)
+
+### `ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/compute/rotary_embedding_llama_sharded.cpp`
+- **Commit**: `443b5e61d40`
+- **Stages migrated**: Stages 2-4 (sin_interim, cos_interim, final add)
+- **Helper features used**: same as regular sharded above; sin/cos CBs provided by reader
+  (NoWaitNoPop), runtime `in_cb`/`out_cb` from q/k selection — helpers take `uint32_t` OK
+- **Tests**: 16 decode tests passed (head_dim 128/64/256, batch 1/8/16/32, with program cache)
+
+---
+
 ## NOT-MIGRATED
 
 ### `ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/layernorm_post_allgather.cpp`
@@ -80,14 +106,16 @@ feature that does or does not fit the helper API.
 - **Blockers**:
   1. **ROPE fusion** — matmul + rotation ops interleaved with the binary
      sequence. Helpers are eltwise-only; `matmul_tiles` is out of scope.
-  2. **In-place CB writes** — `mul_tiles(intermediate_cb, rope_cos_cb, i, idx, i)`
-     followed by `cb_pop_front(intermediate_cb, block_size); cb_reserve_back(intermediate_cb, block_size)`
-     during the same DEST window. `binary_op` doesn't support "pop the input,
-     then reserve the same CB as output" in one call.
-  3. **Variable B-tile index** — `mul_tiles(intermediate_cb, rope_cos_cb, i, rope_cos_tile_in_head, i)`
+  2. **In-place CB writes with capacity=1** — the rsqrt stage (stage 2) reads
+     `reduce_result_cb`, then pops it BEFORE reserving the same CB as output.
+     `reduce_result_cb_num_tiles = 1` in the program factory. The helper's
+     reserve-before-pop order would deadlock on a capacity-1 CB.
+  3. **In-place CB writes (ROPE)** — `mul_tiles(intermediate_cb, rope_cos_cb, i, idx, i)`
+     followed by `cb_pop_front(intermediate_cb, block_size); cb_reserve_back(intermediate_cb, block_size)`.
+  4. **Variable B-tile index** — `mul_tiles(intermediate_cb, rope_cos_cb, i, rope_cos_tile_in_head, i)`
      where `rope_cos_tile_in_head` is a runtime-varying index that resets
      per head.
-  4. **Weight fusion cumulative wait** — `cb_wait_front(weight_cb, col_tile + block_size)`
+  5. **Weight fusion cumulative wait** — `cb_wait_front(weight_cb, col_tile + block_size)`
      same cumulative-wait pattern as rmsnorm_pre_allgather.
 
 ### `ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/rmsnorm_pre_allgather.cpp`
@@ -122,18 +150,12 @@ share this pattern.)
   the producer-consumer contract. Scope would bleed beyond just the
   compute kernel.
 
-### `ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama.cpp`
-(Representative of **Batch C** rotary embedding family — 4 similar files.)
+### `ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/compute/rotary_embedding_llama_sharded_row_major.cpp`
 - **Blockers**:
-  1. **Matmul** — `matmul_tiles(in_cb, trans_mat_cb, j, in1_index, j)` is out
-     of scope for binary_op helpers (FPU binary only).
-  2. **Variable B-tile offset** — `mul_tiles(rotated_in_interm_cb, sin_cb, j, j + (sin_cos_row_cnt * Wt), j)`
-     reads tile `j + sin_cos_row_cnt*Wt` from cb_sin; sin_cos_row_cnt is
-     a runtime counter that resets per head_num. Helper's binary_op B
-     side always uses tile index 0 (streaming) or wt_base+wt (COL/ROW
-     bcast with upfront waits) — not an arbitrary runtime offset.
-  3. Only the final `add_tiles(cos_interm_cb, sin_interm_cb, j, j, j)` is
-     cleanly migratable; partial migration isn't worth it.
+  1. Processes only 1 tile per loop iteration but does `cb_push_back(out_cb, Wt)`,
+     `cb_pop_front(sin_interm_cb, Wt)`. The "wait Wt, process 1, pop Wt" pattern
+     (Wt=1 in practice) doesn't map cleanly to any helper shape + policy combo.
+  2. Low value: Wt=1 is likely the only real config, making this kernel trivial.
 
 ### `ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax.cpp`
 - **Blockers**:
