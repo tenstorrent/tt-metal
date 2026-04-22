@@ -313,6 +313,19 @@ void MetalEnvImpl::teardown_fabric_config() {
             if (builder_context.get_num_fabric_initialized_routers(chip_id) == 0) {
                 continue;
             }
+            // FIX J: When topology auto-discovery degrades (e.g. 2x4->2x2 due to dead relay paths),
+            // some physical chips are excluded from the fabric cluster.  Calling
+            // get_fabric_node_id_from_physical_chip_id() for an excluded chip triggers TT_FATAL.
+            // Guard with is_physical_chip_in_fabric_cluster() and skip non-cluster chips here.
+            // See: https://github.com/tenstorrent/tt-metal/issues/42429
+            if (!control_plane.is_physical_chip_in_fabric_cluster(chip_id)) {
+                log_warning(
+                    tt::LogMetal,
+                    "[teardown_fabric_config] Chip {} not in fabric cluster (topology may have degraded), skipping "
+                    "TERMINATED wait.",
+                    chip_id);
+                continue;
+            }
             // Wait for ALL active ETH router channels (not just the master) to write TERMINATED.
             // The master ETH router propagates the termination signal to subordinate channels via
             // asynchronous NOC writes (notify_subordinate_routers()), so subordinate channels may
