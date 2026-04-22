@@ -324,7 +324,7 @@ def main():
     # ── Data mapper ────────────────────────────────────────────────────────────
     mapper = None
     if use_ddp:
-        mapper = ttml.current_mesh().axis_mapper("dp", tdim=0)
+        mapper = ttml.mesh().axis_mapper("dp", tdim=0)
 
     # ── Data chunks ─────────────────────────────────────────────────────────
     n_chunks = (len(train_ids) - 1) // seq_len
@@ -363,7 +363,7 @@ def main():
         logits = model(tt_x, None)
         loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
 
-        if use_ddp or use_tp:
+        if use_ddp:
             loss_val = float(get_loss_over_devices(loss))
         else:
             loss_val = float(loss.get_value().item())
@@ -379,8 +379,7 @@ def main():
         autograd_ctx.reset_graph()
 
         if use_ddp:
-            dp_axis = ttml.current_mesh().axis_pos("dp")
-            ttml.core.distributed.synchronize_gradients(model.parameters(), [dp_axis])
+            ttml.sync_gradients(model.parameters())
 
         optimizer.step()
         step_ms = (time.perf_counter() - t0) * 1000

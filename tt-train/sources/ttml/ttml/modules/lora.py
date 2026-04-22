@@ -133,7 +133,7 @@ class LoraColumnParallelLinear(AbstractModuleBase):
             self.bias.tensor.set_requires_grad(config.is_bias_trainable)
 
         self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank))
-        lora_B_mapper = ttml.current_mesh().axis_mapper(self.axis_name, tdim=2)
+        lora_B_mapper = ttml.mesh().axis_mapper(self.axis_name, tdim=2)
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features, mapper=lora_B_mapper))
 
     def forward(self, x):
@@ -186,7 +186,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
         if self.bias is not None:
             self.bias.tensor.set_requires_grad(config.is_bias_trainable)
 
-        lora_A_mapper = ttml.current_mesh().axis_mapper(self.axis_name, tdim=3)
+        lora_A_mapper = ttml.mesh().axis_mapper(self.axis_name, tdim=3)
         self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank, mapper=lora_A_mapper))
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features))
 
