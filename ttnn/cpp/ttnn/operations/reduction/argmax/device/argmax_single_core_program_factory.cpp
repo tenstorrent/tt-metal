@@ -160,11 +160,18 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(ctime_args);
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(ctime_args);
 
-    // Kernel
-    std::string kernel_path =
-        input.layout() == Layout::ROW_MAJOR
-            ? "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp"
-            : "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp";
+    // Kernel: TILE on H (rank-2) uses a height-reduction reader; on W, the existing width pass.
+    std::string kernel_path;
+    if (input.layout() == Layout::ROW_MAJOR) {
+        kernel_path = "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp";
+    } else {
+        const int32_t rank_i = static_cast<int32_t>(input.logical_shape().size());
+        const int32_t nd = dim.has_value() ? (dim.value() < 0 ? dim.value() + rank_i : dim.value()) : -1;
+        const bool dim_is_h = dim.has_value() && rank_i >= 2 && nd == rank_i - 2;
+        kernel_path = dim_is_h
+                          ? "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout_h.cpp"
+                          : "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp";
+    }
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kernel_path;

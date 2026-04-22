@@ -131,14 +131,24 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     if (args.dim.has_value()) {
         const uint32_t input_rank = input_tensor_a.logical_shape().rank();
         const uint32_t normalized_dim = args.dim.value() < 0 ? args.dim.value() + input_rank : args.dim.value();
-
-        // TODO: Add support for normalized_dim = 0, 1, 2
-        TT_FATAL(
-            normalized_dim == (input_rank - 1),
-            "Only argmax on last dim is supported! Got dim={} (normalized={}), expected {}",
-            args.dim.value(),
-            normalized_dim,
-            input_rank - 1);
+        if (input_layout == Layout::TILE) {
+            // Last dim: W, second-to-last: H.
+            const bool w_dim = (normalized_dim == input_rank - 1);
+            const bool h_dim = (input_rank >= 2 && normalized_dim == input_rank - 2);
+            TT_FATAL(
+                w_dim or h_dim,
+                "TILE: argmax dim must be H (rank-2) or W (last). Got dim={} (normalized={}) for rank {}.",
+                args.dim.value(),
+                normalized_dim,
+                input_rank);
+        } else {
+            TT_FATAL(
+                normalized_dim == (input_rank - 1),
+                "ROW_MAJOR: only argmax on the last dim is supported. Got dim={} (normalized={}), expected {}",
+                args.dim.value(),
+                normalized_dim,
+                input_rank - 1);
+        }
     } else {
         TT_FATAL(input_layout != Layout::TILE, "For inputs with TILE layout, dim parameter must be specified!");
     }
