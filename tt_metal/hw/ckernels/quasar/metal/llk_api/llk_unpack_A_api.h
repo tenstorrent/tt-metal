@@ -50,10 +50,15 @@ inline void llk_unpack_A_init(
     static_assert(acc_to_dest == false, "acc_to_dest is not yet supported on Quasar");
     static_assert(BType == BroadcastType::NONE, "Only BroadcastType::NONE is supported on Quasar right now");
 
-    // Once runtime asserts are added, add asserts for unsupported features above and for valid transpose_of_faces and within_face_16x16_transpose values
+    // TODO (tt-metal #42916): Once runtime asserts are added, add asserts for unsupported features above and for valid
+    // transpose_of_faces and within_face_16x16_transpose values
 
     // For Quasar, the unp_sel field is ignored if binary_reuse_dest != EltwiseBinaryReuseDestType::NONE
-    _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false /* TRANSPOSE_EN */, false /* IS_32b_DEST_EN */, binary_reuse_dest>(operand_id);
+    _llk_unpack_unary_operand_init_<
+        p_unpacr::UNP_A,
+        false /* TRANSPOSE_EN */,
+        false /* IS_32b_DEST_EN */,
+        binary_reuse_dest>(operand_id);
 }
 
 /**

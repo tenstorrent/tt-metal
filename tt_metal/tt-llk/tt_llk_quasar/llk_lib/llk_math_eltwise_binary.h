@@ -75,9 +75,7 @@ inline void _llk_math_eltwise_binary_mop_config_(const ckernel::TensorShape& ten
     constexpr bool high_fidelity = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
     // For reuse_dest + Elwmul we need dest accumulation (dest = old_dest + srcA*srcB) ; LoFi alone sets EN_DST_ACC=0.
-    const std::uint32_t EN_DST_ACC =
-        acc_to_dest ? 1u
-                    : (high_fidelity ? 1u : 0u);
+    const std::uint32_t EN_DST_ACC = acc_to_dest ? 1u : (high_fidelity ? 1u : 0u);
 
     constexpr std::uint8_t addrmod_fid    = high_fidelity ? ADDR_MOD_2 : ADDR_MOD_0;
     const std::uint32_t eltwise_binary_op = eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, p_elwise::SRCB_NO_BCAST, addrmod_fid>(EN_DST_ACC);
@@ -270,7 +268,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t tile_idx, const ckerne
             eltwise_binary_reuse_dest_as_src<reuse_dest>();
             if constexpr (ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL)
             {
-                // ELWMUL always accumulates. Clear dest face-by-face when reusing dest as srcA/B
+                // ELWMUL needs HiFi (therefore dest_acc). Clear dest face-by-face when reusing dest as srcA/B
                 TT_ZEROACC(p_zeroacc::CLR_16, clear_in_fp32_mode, 0, ADDR_MOD_3, tile_start + face_num);
             }
             ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
