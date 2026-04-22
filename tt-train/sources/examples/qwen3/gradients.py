@@ -46,7 +46,6 @@ from utils.tensor_utils import (
     create_input_tensor_from_torch as create_input_tensor,
     create_input_tensor_dp,
 )
-from utils.sharded_loss import sharded_cross_entropy_loss
 from utils.memory import MemoryUsageTracker, finalize_memory
 from utils.param_utils import (
     repermute_proj_rows,
@@ -384,8 +383,15 @@ def run_backward_comparison(
 
     if sharded_loss:
         print(f"  [Backward] using distributed cross-entropy " f"(tp_size={tp_size}, dp_size={dp_size})")
-        ttml_loss = sharded_cross_entropy_loss(
-            logits, target_np, vocab_padded, tp_size, tp_axis=shard_dim, dp_size=dp_size
+        if dp_size > 1:
+            target_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, 0)
+        else:
+            target_mapper = None
+        target_tensor = ttml.autograd.Tensor.from_numpy(
+            target_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, target_mapper
+        )
+        ttml_loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+            logits, target_tensor, cluster_axis=shard_dim
         )
     elif dp_size > 1:
         dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, 0)
