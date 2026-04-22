@@ -272,15 +272,11 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32
 }
 
 ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
-#ifdef ARCH_BLACKHOLE
-    // BH fast-tilize only uses SrcA — do not touch SrcB so matmul weights stay configured.
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(icb, icb)));
-    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(icb, icb)));
-#else
-    // WH fast-tilize uses both SrcA and SrcB.
+    // Reconfig both SrcA and SrcB to match WH: some activation-reuse call sites
+    // leave SrcB in a prior matmul-weights config that's incompatible with the
+    // fast-tilize path, producing garbage output.
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(icb, icb)));
-    MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
-#endif
+    MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(icb, icb)));
 
     fast_tilize_init(icb, full_dim, ocb);
 }
