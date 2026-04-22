@@ -4,6 +4,8 @@
 
 #include "post_combine_reduce_program_factory.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -59,28 +61,23 @@ CreatedProgram create_at(
     TT_FATAL(
         emb_dim_tiles <= 8, "Embedding dimension tiles {} must fit in 8 DST registers for batching", emb_dim_tiles);
 
-    constexpr uint32_t REQUIRED_TOKENS_PER_CORE = 32;
+    constexpr uint32_t TOKENS_PER_CHUNK = 32;
     TT_FATAL(
-        num_tokens % REQUIRED_TOKENS_PER_CORE == 0,
+        num_tokens % TOKENS_PER_CHUNK == 0,
         "Number of tokens {} must be divisible by {} for hardware tilization",
         num_tokens,
-        REQUIRED_TOKENS_PER_CORE);
+        TOKENS_PER_CHUNK);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-    uint32_t num_cores_needed = num_tokens / REQUIRED_TOKENS_PER_CORE;
-    TT_FATAL(
-        num_cores_needed <= num_cores_total,
-        "Need {} cores ({} tokens / {} tokens per core) but only {} cores available",
-        num_cores_needed,
-        num_tokens,
-        REQUIRED_TOKENS_PER_CORE,
-        num_cores_total);
-
-    uint32_t num_cores = num_cores_needed;
+    const uint32_t total_chunks = num_tokens / TOKENS_PER_CHUNK;
+    TT_FATAL(total_chunks > 0, "post_combine_reduce: num_tokens must be > 0, got {}", num_tokens);
+    const uint32_t num_cores = std::min(total_chunks, num_cores_total);
+    const uint32_t base_chunks_per_core = total_chunks / num_cores;
+    const uint32_t extra_chunks = total_chunks % num_cores;
 
     constexpr bool row_major = true;
 
@@ -120,11 +117,12 @@ CreatedProgram create_at(
             .set_page_size(tt::CBIndex::c_2, dispatch_table_aligned_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_dispatch_table_config);
 
-    // c_3: Indices scratch — loaded once by writer, read by compute.
-    // Each core handles TOKENS_PER_CORE tokens, each with num_experts index entries.
+    // c_3: Indices scratch — sized for a single chunk. Writer reloads it at the
+    // start of each chunk; compute pops it at the end, so the same CB slot is
+    // reused across all chunks regardless of how many chunks a core processes.
     uint32_t indices_page_size = get_page_size(indices);
     uint32_t indices_aligned_page_size = get_aligned_page_size(indices);
-    uint32_t indices_pages_per_core = REQUIRED_TOKENS_PER_CORE;  // one page per token
+    uint32_t indices_pages_per_core = TOKENS_PER_CHUNK;
     uint32_t indices_cb_size = indices_pages_per_core * indices_aligned_page_size;
     tt::tt_metal::CircularBufferConfig cb_indices_config =
         tt::tt_metal::CircularBufferConfig(indices_cb_size, {{tt::CBIndex::c_3, indices_cb_data_format}})
@@ -132,14 +130,13 @@ CreatedProgram create_at(
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_indices_config);
 
     // c_16: Output
-    uint32_t output_cb_size = REQUIRED_TOKENS_PER_CORE * emb_dim_tiles * tile_size;
+    uint32_t output_cb_size = TOKENS_PER_CHUNK * emb_dim_tiles * tile_size;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(output_cb_size, {{tt::CBIndex::c_16, output_cb_data_format}})
             .set_page_size(tt::CBIndex::c_16, tile_size);
     auto cb_output_handle = tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_output_config);
 
-    // c_17: Row-major scratch for tilize
-    uint32_t rowmajor_cb_size = 32 * emb_dim_tiles * tile_size;
+    uint32_t rowmajor_cb_size = TOKENS_PER_CHUNK * emb_dim_tiles * tile_size;
     tt::tt_metal::CircularBufferConfig cb_rowmajor_config =
         tt::tt_metal::CircularBufferConfig(rowmajor_cb_size, {{tt::CBIndex::c_17, output_cb_data_format}})
             .set_page_size(tt::CBIndex::c_17, tile_size);
@@ -211,18 +208,22 @@ CreatedProgram create_at(
         core_range_set,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    // Each core processes exactly 32 tokens (validated above)
+    // Distribute chunks of 32 tokens across cores. The first `extra_chunks` cores
+    // get (base_chunks_per_core + 1) chunks; the remaining cores get base_chunks_per_core.
     uint32_t token_start = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores[i];
+        const uint32_t chunks_this_core = base_chunks_per_core + (i < extra_chunks ? 1 : 0);
 
         std::vector<uint32_t> reader_runtime_args = {
             combine_buffer->address(),
             token_start,
+            chunks_this_core,
         };
 
         std::vector<uint32_t> compute_runtime_args = {
             token_start,
+            chunks_this_core,
         };
 
         std::vector<uint32_t> writer_runtime_args = {
@@ -231,13 +232,14 @@ CreatedProgram create_at(
             dispatch_table_buffer->address(),
             indices_buffer->address(),
             token_start,
+            chunks_this_core,
         };
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
-        token_start += REQUIRED_TOKENS_PER_CORE;
+        token_start += chunks_this_core * TOKENS_PER_CHUNK;
     }
 
     return CreatedProgram{
