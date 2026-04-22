@@ -15,6 +15,7 @@
 #include "impl/dispatch/dispatch_mem_map.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "device/device_impl.hpp"
+#include "device/device_manager.hpp"
 
 #include "dispatch/topology.hpp"
 
