@@ -363,6 +363,19 @@ int main(int argc, char **argv) {
         ->default_val(safetensors_path);
     bool track_memory = false;
     app.add_flag("--track_memory", track_memory, "Enable memory usage tracking during first iteration");
+
+    // Override the loss implementation selection.  `auto` (default) preserves the built-in
+    // rule (`vocab_parallel` iff enable_tp).  Intended for A/B testing the two implementations
+    // and expected to be removed once we settle on a single default.
+    std::string loss_impl = "auto";
+    app.add_option(
+           "--loss-impl",
+           loss_impl,
+           "Loss implementation: 'auto' (vocab_parallel iff enable_tp), 'cross_entropy' "
+           "(full-vocab, requires gathered logits), or 'vocab_parallel' (vocab-sharded, requires TP).")
+        ->check(CLI::IsMember({std::string("auto"), std::string("cross_entropy"), std::string("vocab_parallel")}))
+        ->default_val(loss_impl);
+
     CLI11_PARSE(app, argc, argv);
 
     auto yaml_config = YAML::LoadFile(training_config_name);
@@ -638,10 +651,27 @@ int main(int argc, char **argv) {
         },
         model_config.transformer_config);
 
-    // When TP is enabled we always use vocab_parallel_cross_entropy_loss, which expects
-    // vocab-sharded logits ([B,1,S,V/tp_size] per device).
-    const bool use_vocab_parallel_loss = device_config.enable_tp;
+    // Default: vocab_parallel_cross_entropy_loss iff TP is enabled (it expects vocab-sharded
+    // logits, [B,1,S,V/tp_size] per device).  --loss-impl overrides this for A/B testing.
+    bool use_vocab_parallel_loss = false;
+    if (loss_impl == "auto") {
+        use_vocab_parallel_loss = device_config.enable_tp;
+    } else if (loss_impl == "vocab_parallel") {
+        if (!device_config.enable_tp) {
+            throw std::runtime_error(
+                "--loss-impl=vocab_parallel requires enable_tp=true (the op expects "
+                "vocab-sharded logits across the TP cluster axis).");
+        }
+        use_vocab_parallel_loss = true;
+    } else {
+        // cross_entropy
+        use_vocab_parallel_loss = false;
+    }
     const bool gather_output_at_lm_head = !use_vocab_parallel_loss;
+    fmt::println(
+        "Loss implementation: {} (--loss-impl={})",
+        use_vocab_parallel_loss ? "vocab_parallel_cross_entropy_loss" : "cross_entropy_loss",
+        loss_impl);
 
     Model model = std::visit(
         [&device_config, &multihost_config, gather_output_at_lm_head](auto &&arg) -> Model {
