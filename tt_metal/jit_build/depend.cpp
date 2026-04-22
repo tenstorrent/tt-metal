@@ -188,13 +188,10 @@ void write_dependency_hashes(
         // Need to handle two cases:
         // 1. file is an absolute path
         // 2. file is a path relative to out_dir
-        std::filesystem::path dep_path(dep);
-        if (dep_path.is_relative()) {
-            dep_path = out_dir / dep_path;
-        }
+        std::filesystem::path dep_path = dep.is_relative() ? out_dir / dep : dep;
         auto [hash, valid] = FileHashCache::instance().get_or_compute(dep_path);
         if (!valid) {
-            log_warning(tt::LogBuildKernels, "Cannot cache JIT build because {} cannot be read.", dep);
+            log_warning(tt::LogBuildKernels, "Cannot cache JIT build because {} cannot be read.", dep.string());
             hash_file.setstate(std::ios::badbit);
             return;
         }
