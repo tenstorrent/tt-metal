@@ -81,7 +81,7 @@ def apply_l1_accumulation(
     Simulate L1 accumulation by summing partial results.
 
     With L1 acc enabled, the packer accumulates into the same output tile
-    slots across multiple passes.  For integer formats the hardware
+    slots across multiple passes. For integer formats the hardware
     saturates at every step instead of wrapping, so the golden must
     clamp the running sum to the output range after each addition.
 
