@@ -1064,7 +1064,7 @@ __attribute__((noinline)) void is_unpacker_A_configured_correctly(
     const std::uint32_t actual_unpA_src_format   = masked_data_format(td_word0);
     if (expected_unpA_src_format != actual_unpA_src_format)
     {
-        DEVICE_PRINT("unp_A_src_format mismatch. expected: {}, actual: {}\n", expected_unpA_src_format, actual_unpA_src_format);
+        // DEVICE_PRINT("unp_A_src_format mismatch. expected: {}, actual: {}\n", expected_unpA_src_format, actual_unpA_src_format);
         LLK_ASSERT(
             (expected_unpA_src_format == actual_unpA_src_format),
             "unp_A_src_format mismatch. Please uncomment the DEVICE_PRINT above and enable it to inspect the actual register value.");
@@ -1074,7 +1074,7 @@ __attribute__((noinline)) void is_unpacker_A_configured_correctly(
     const std::uint32_t actual_unpA_dst_format   = masked_data_format(cfg_word0);
     if (expected_unpA_dst_format != actual_unpA_dst_format)
     {
-        DEVICE_PRINT("unp_A_dst_format mismatch. expected: {}, actual: {}\n", expected_unpA_dst_format, actual_unpA_dst_format);
+        // DEVICE_PRINT("unp_A_dst_format mismatch. expected: {}, actual: {}\n", expected_unpA_dst_format, actual_unpA_dst_format);
         LLK_ASSERT(
             expected_unpA_dst_format == actual_unpA_dst_format,
             "unp_A_dst_format mismatch. Please uncomment the DEVICE_PRINT above and enable it to inspect the actual register value.");
@@ -1086,7 +1086,7 @@ __attribute__((noinline)) void is_unpacker_A_configured_correctly(
         const std::uint32_t tile_x_dim_cntx0_value = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
         if (tile_x_dim_cntx0_value != (face_dim | (face_dim << 16)))
         {
-            DEVICE_PRINT("unp_A_face_r_dim mismatch. expected: {}, actual: {}\n", face_dim, tile_x_dim_cntx0_value);
+            // DEVICE_PRINT("unp_A_face_r_dim mismatch. expected: {}, actual: {}\n", face_dim, tile_x_dim_cntx0_value);
             LLK_ASSERT(
                 (tile_x_dim_cntx0_value == (face_dim | (face_dim << 16))),
                 "unp_A_face_r_dim mismatch. Please uncomment the DEVICE_PRINT above and enable it to inspect the actual register value.");
@@ -1098,7 +1098,7 @@ __attribute__((noinline)) void is_unpacker_A_configured_correctly(
         const std::uint32_t td_word1 = (cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1]) >> 16;
         if (td_word1 != unpA_num_faces)
         {
-            DEVICE_PRINT("unp_A_num_faces mismatch. expected: {}, actual: {}\n", unpA_num_faces, td_word1);
+            // DEVICE_PRINT("unp_A_num_faces mismatch. expected: {}, actual: {}\n", unpA_num_faces, td_word1);
             LLK_ASSERT(
                 (td_word1 == unpA_num_faces),
                 "unp_A_num_faces mismatch. Please uncomment the DEVICE_PRINT above and enable it to inspect the actual register value.");
@@ -1153,7 +1153,7 @@ __attribute__((noinline)) void are_unpackers_AB_configured_correctly(
     const std::uint32_t actual_unpA_src_format   = masked_data_format(td0_word0);
     if (expected_unpA_src_format != actual_unpA_src_format)
     {
-        DEVICE_PRINT("unp_A_src_format mismatch. expected: {}, actual: {}\n", expected_unpA_src_format, actual_unpA_src_format);
+        // DEVICE_PRINT("unp_A_src_format mismatch. expected: {}, actual: {}\n", expected_unpA_src_format, actual_unpA_src_format);
         LLK_ASSERT(
             (expected_unpA_src_format == actual_unpA_src_format),
             "unp_A_src_format mismatch. Please uncomment the DEVICE_PRINT above and enable it to inspect the actual register value.");
@@ -1163,7 +1163,7 @@ __attribute__((noinline)) void are_unpackers_AB_configured_correctly(
     const std::uint32_t actual_unpA_dst_format   = masked_data_format(cfg0_word0);
     if (expected_unpA_dst_format != actual_unpA_dst_format)
     {
-        DEVICE_PRINT("unp_A_dst_format mismatch. expected: {}, actual: {}\n", expected_unpA_dst_format, actual_unpA_dst_format);
+        // DEVICE_PRINT("unp_A_dst_format mismatch. expected: {}, actual: {}\n", expected_unpA_dst_format, actual_unpA_dst_format);
         LLK_ASSERT(
             expected_unpA_dst_format == actual_unpA_dst_format,
             "unp_A_dst_format mismatch. Please uncomment the DEVICE_PRINT above and enable it to inspect the actual register value.");
@@ -1173,7 +1173,7 @@ __attribute__((noinline)) void are_unpackers_AB_configured_correctly(
     const std::uint32_t actual_unpB_src_format   = masked_data_format(td1_word0);
     if (expected_unpB_src_format != actual_unpB_src_format)
     {
-        DEVICE_PRINT("unp_B_src_format mismatch. expected: {}, actual: {}\n", expected_unpB_src_format, actual_unpB_src_format);
+        // DEVICE_PRINT("unp_B_src_format mismatch. expected: {}, actual: {}\n", expected_unpB_src_format, actual_unpB_src_format);
         LLK_ASSERT(
             expected_unpB_src_format == actual_unpB_src_format,
             "unp_B_src_format mismatch. Please uncomment the DEVICE_PRINT above and enable it to inspect the actual register value.");
@@ -1183,7 +1183,7 @@ __attribute__((noinline)) void are_unpackers_AB_configured_correctly(
     const std::uint32_t actual_unpB_dst_format   = masked_data_format(cfg1_word0);
     if (expected_unpB_dst_format != actual_unpB_dst_format)
     {
-        DEVICE_PRINT("unp_B_dst_format mismatch. expected: {}, actual: {}\n", expected_unpB_dst_format, actual_unpB_dst_format);
+        // DEVICE_PRINT("unp_B_dst_format mismatch. expected: {}, actual: {}\n", expected_unpB_dst_format, actual_unpB_dst_format);
         LLK_ASSERT(
             expected_unpB_dst_format == actual_unpB_dst_format,
             "unp_B_dst_format mismatch. Please uncomment the DEVICE_PRINT above and enable it to inspect the actual register value.");
@@ -1195,14 +1195,14 @@ __attribute__((noinline)) void are_unpackers_AB_configured_correctly(
         const std::uint32_t tile_x_dim_cntx0_value = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
         if (tile_x_dim_cntx0_value != (face_dim_a | (face_dim_a << 16)))
         {
-            DEVICE_PRINT("unp_A_face_r_dim mismatch. expected: {}, actual: {}\n", face_dim_a, tile_x_dim_cntx0_value);
+            // DEVICE_PRINT("unp_A_face_r_dim mismatch. expected: {}, actual: {}\n", face_dim_a, tile_x_dim_cntx0_value);
             LLK_ASSERT(
                 (tile_x_dim_cntx0_value == (face_dim_a | (face_dim_a << 16))),
                 "unp_A_face_r_dim mismatch. Please uncomment the DEVICE_PRINT above and enable it to inspect the actual register value.");
         }
         if ((td1_word0 >> 16) != unpB_face_r_dim * FACE_C_DIM)
         {
-            DEVICE_PRINT("unp_B_face_r_dim mismatch. expected: {}, actual: {}\n", unpB_face_r_dim * FACE_C_DIM, (td1_word0 >> 16));
+            // DEVICE_PRINT("unp_B_face_r_dim mismatch. expected: {}, actual: {}\n", unpB_face_r_dim * FACE_C_DIM, (td1_word0 >> 16));
             LLK_ASSERT(
                 (td1_word0 >> 16) == (unpB_face_r_dim * FACE_C_DIM),
                 "unp_B_face_r_dim mismatch. Please uncomment the DEVICE_PRINT above and enable it to inspect the actual register value.");
@@ -1215,14 +1215,14 @@ __attribute__((noinline)) void are_unpackers_AB_configured_correctly(
         const std::uint32_t td1_word1 = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1];
         if ((td0_word1 >> 16) != unpA_num_faces)
         {
-            DEVICE_PRINT("unp_A_num_faces mismatch. expected: {}, actual: {}\n", unpA_num_faces, (td0_word1 >> 16));
+            // DEVICE_PRINT("unp_A_num_faces mismatch. expected: {}, actual: {}\n", unpA_num_faces, (td0_word1 >> 16));
             LLK_ASSERT(
                 (td0_word1 >> 16) == unpA_num_faces,
                 "unp_A_num_faces mismatch. Please uncomment the DEVICE_PRINT above and enable it to inspect the actual register value.");
         }
         if ((td1_word1 >> 16) != unpB_num_faces)
         {
-            DEVICE_PRINT("unp_B_num_faces mismatch. expected: {}, actual: {}\n", unpB_num_faces, (td1_word1 >> 16));
+            // DEVICE_PRINT("unp_B_num_faces mismatch. expected: {}, actual: {}\n", unpB_num_faces, (td1_word1 >> 16));
             LLK_ASSERT(
                 (td1_word1 >> 16) == unpB_num_faces,
                 "unp_B_num_faces mismatch. Please uncomment the DEVICE_PRINT above and enable it to inspect the actual register value.");

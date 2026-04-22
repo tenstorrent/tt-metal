@@ -109,10 +109,8 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
-#ifdef ENABLE_LLK_ASSERT
     LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
-#endif
 
 #ifdef ARCH_BLACKHOLE
     // For pack with tilize enabled, check if the original input format is 8-bit.
@@ -168,10 +166,8 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-#ifdef ENABLE_LLK_ASSERT
     LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
         pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output)));
-#endif
 
     LLK_ASSERT(
         (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
@@ -194,10 +190,8 @@ inline void llk_pack_untilize_init(
     static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
 
-#ifdef ENABLE_LLK_ASSERT
     LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
-#endif
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
@@ -232,10 +226,8 @@ inline void llk_pack_untilize(
             (block_c_index * ((num_faces > 2) ? num_faces / 2 : num_faces) * block_ct_dim * FACE_C_DIM)) /
             16;
 
-#ifdef ENABLE_LLK_ASSERT
     LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
-#endif
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(
@@ -287,10 +279,8 @@ inline void llk_pack_rows(
 
     // Pack rows uses pack_reads_per_xy_plane=1 (set in _llk_pack_rows_init_) for row packing,
     // which differs from standard tile face_r_dim. Use ProgramByTile to skip face_r_dim check.
-#ifdef ENABLE_LLK_ASSERT
     LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByTile>(
         pack_src_format[output_id], pack_dst_format[output_id]));
-#endif
 
     _llk_pack_rows_(dst_index, pack_addr);
 }
@@ -309,10 +299,8 @@ inline void llk_matmul_pack(
     std::uint8_t output_id = get_output_id(output);
 
     static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
-#ifdef ENABLE_LLK_ASSERT
     LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
         pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output)));
-#endif
     LLK_ASSERT(
         ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");

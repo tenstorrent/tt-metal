@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <type_traits> // For std::void_t and std::declval
 
 #ifdef ENABLE_LLK_ASSERT
 

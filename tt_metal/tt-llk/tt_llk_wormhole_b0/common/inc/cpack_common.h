@@ -1043,8 +1043,8 @@ __attribute__((noinline)) void are_packers_configured_correctly(
 
         if (config.f.in_data_format != expected_src)
         {
-            DEVICE_PRINT(
-                "are_packers_configured_correctly: packer {} pack_src_format mismatch. expected: {}, actual: {}\n", i, expected_src, config.f.in_data_format);
+            // DEVICE_PRINT(
+            // "are_packers_configured_correctly: packer {} pack_src_format mismatch. expected: {}, actual: {}\n", i, expected_src, config.f.in_data_format);
             LLK_ASSERT(
                 (config.f.in_data_format == expected_src),
                 "are_packers_configured_correctly: pack_src_format mismatch. Enable TT_METAL_DEVICE_PRINT and dprint "
@@ -1052,8 +1052,8 @@ __attribute__((noinline)) void are_packers_configured_correctly(
         }
         if (config.f.out_data_format != expected_dst)
         {
-            DEVICE_PRINT(
-                "are_packers_configured_correctly: packer {} pack_dst_format mismatch. expected: {}, actual: {}\n", i, expected_dst, config.f.out_data_format);
+            // DEVICE_PRINT(
+            // "are_packers_configured_correctly: packer {} pack_dst_format mismatch. expected: {}, actual: {}\n", i, expected_dst, config.f.out_data_format);
             LLK_ASSERT(
                 (config.f.out_data_format == expected_dst),
                 "are_packers_configured_correctly: pack_dst_format mismatch. Enable TT_METAL_DEVICE_PRINT and dprint "
@@ -1066,11 +1066,11 @@ __attribute__((noinline)) void are_packers_configured_correctly(
             counters.val             = cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i];
             if (counters.f.pack_reads_per_xy_plane != face_r_dim)
             {
-                DEVICE_PRINT(
-                    "are_packers_configured_correctly: packer {} pack_reads_per_xy_plane mismatch. expected: {}, actual: {}\n",
-                    i,
-                    face_r_dim,
-                    counters.f.pack_reads_per_xy_plane);
+                // DEVICE_PRINT(
+                // "are_packers_configured_correctly: packer {} pack_reads_per_xy_plane mismatch. expected: {}, actual: {}\n",
+                // i,
+                // face_r_dim,
+                // counters.f.pack_reads_per_xy_plane);
                 LLK_ASSERT(
                     (counters.f.pack_reads_per_xy_plane == face_r_dim),
                     "are_packers_configured_correctly: pack_reads_per_xy_plane / face_r_dim mismatch. Enable "
