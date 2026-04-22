@@ -348,6 +348,31 @@ jobs:
           EXTRA_ARGS: ${{ matrix.extra_args }}
           LFC_AVAILABLE: ${{ steps.lfc-probe.outputs.lfc_available || 'true' }}
         run: |
+          # On CIv1 (bare-metal), HF_HUB_OFFLINE=1 is set at container level,
+          # so from_pretrained() only searches the local cache.  If HF_MODEL is
+          # a Hub ID (e.g. "openai/gpt-oss-120b") instead of a local path, the
+          # look-up fails because the model isn't in HF_HOME cache format.
+          # Rewrite the Hub ID to the corresponding MLPerf local directory so
+          # from_pretrained() loads directly from disk.
+          if [[ "${HF_HUB_OFFLINE:-0}" == "1" && -n "$HF_MODEL" && "$HF_MODEL" != /* ]]; then
+            ORIGINAL_HF_MODEL="$HF_MODEL"
+            LOCAL_MODEL_PATH="/mnt/MLPerf/tt_dnn-models/${HF_MODEL}"
+            if [[ -d "$LOCAL_MODEL_PATH" ]]; then
+              echo "::notice::CIv1 offline mode: rewriting HF_MODEL from '$HF_MODEL' to local path '$LOCAL_MODEL_PATH'"
+              export HF_MODEL="$LOCAL_MODEL_PATH"
+            else
+              echo "::warning::CIv1 offline mode: local path '$LOCAL_MODEL_PATH' does not exist. from_pretrained() may fail."
+            fi
+            # Set TT_CACHE_PATH for pre-computed tensor caches (same convention
+            # as models-e2e CI).  Hub ID "org/model" → "org--model" under tt_cache.
+            HF_CACHE_SLUG="${ORIGINAL_HF_MODEL//\//--}"
+            TT_CACHE_CANDIDATE="/mnt/MLPerf/huggingface/tt_cache/${HF_CACHE_SLUG}/"
+            if [[ -d "$TT_CACHE_CANDIDATE" ]]; then
+              export TT_CACHE_PATH="$TT_CACHE_CANDIDATE"
+              echo "::notice::CIv1: set TT_CACHE_PATH=$TT_CACHE_PATH"
+            fi
+          fi
+
           # When model is not in LFC, we need HuggingFace access.
           # CIv2 runners route all traffic through a restricted proxy that
           # blocks huggingface.co.  Strategy:
