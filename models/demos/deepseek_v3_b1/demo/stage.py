@@ -20,7 +20,12 @@ import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock, StageMetadata
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import (
+    HostIoPlacement,
+    LoopbackConfig,
+    PipelineBlock,
+    StageMetadata,
+)
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_broadcast_test_inputs
 from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
@@ -49,6 +54,7 @@ def activation_fifo_size_bytes(page_size_bytes: int, fifo_pages: int = DEFAULT_A
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
 ACTIVATION_FIFO_SIZE = activation_fifo_size_bytes(ACTIVATION_PAGE_SIZE_BYTES)
 PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 8)
+SECOND_PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 7)
 
 # Embedding core coords for the combined SpecLMHead+Embedding stage (column 12, outside mcast grid)
 EMBEDDING_H2D_CORE_COORD = ttnn.CoreCoord(12, 0)
@@ -127,9 +133,11 @@ class EmbeddingStage(StageKind):
         loopback_payload: PassthroughPayload = PassthroughPayload.TOKEN,
         d2h_page_size: int | None = None,
         forward_metadata: bool = False,
+        host_loopback: bool = False,
     ) -> None:
         self._weights = weights
         self._loopback_payload = loopback_payload
+        self._host_loopback = host_loopback
         self._d2h_page_size = d2h_page_size
         self._forward_metadata = forward_metadata
 
@@ -151,6 +159,7 @@ class EmbeddingStage(StageKind):
             ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES if self._forward_metadata else ACTIVATION_PAGE_SIZE_BYTES
         )
 
+        pipeline_config = ctx.pipeline_config
         if self._d2h_page_size is not None:
             size_to_payload = {
                 TOKEN_PAGE_SIZE_BYTES: PassthroughPayload.TOKEN,
@@ -167,6 +176,13 @@ class EmbeddingStage(StageKind):
         up_fifo, up_page = self._payload_sizes(loopback_payload)
         d2h_fifo, d2h_page = up_fifo, up_page
 
+        num_procs = len(pipeline_config) - 1
+        host_io_placement = self._create_host_io_placement(pipeline_config, num_procs)
+        if self._host_loopback:
+            loopback = LoopbackConfig.host_loopback(host_io_placement=host_io_placement)
+        else:
+            loopback = LoopbackConfig.fabric_loopback(host_io_placement=host_io_placement)
+
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -179,9 +195,39 @@ class EmbeddingStage(StageKind):
             d2h_socket_page_size=d2h_page,
             embedding_tensor=self._weights.embedding,
             forward_metadata=self._forward_metadata,
+            loopback=loopback,
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
-            pipeline_config=ctx.pipeline_config,
+            pipeline_config=pipeline_config,
+        )
+
+    @staticmethod
+    def _create_host_io_placement(pipeline_config, num_procs) -> HostIoPlacement:
+        """Resolve per-socket core coords for the four stage-0 kernels.
+
+        When the H2D chip and the forward D2D chip are the same device, two
+        persistent BRISC kernels would land on the same Tensix core.  We move
+        H2D (not D2D) to the alt core so the D2D send core stays at
+        PIPELINE_CORE_COORD — other stages build their entry socket configs
+        using pipeline_core_coord and must see the same sender core.  The same
+        logic applies to D2H vs. the loopback D2D entry.
+        """
+        h2d_chip = pipeline_config[0].entry_node_coord
+        fwd_d2d_chip = pipeline_config[0].exit_node_coord
+        lb_d2d_chip = pipeline_config[num_procs].entry_node_coord
+        d2h_chip = pipeline_config[num_procs].exit_node_coord
+
+        def _same(a, b):
+            return a[0] == b[0] and a[1] == b[1]
+
+        h2d_core = SECOND_PIPELINE_CORE_COORD if _same(h2d_chip, fwd_d2d_chip) else PIPELINE_CORE_COORD
+        d2h_core = SECOND_PIPELINE_CORE_COORD if _same(d2h_chip, lb_d2d_chip) else PIPELINE_CORE_COORD
+
+        return HostIoPlacement(
+            h2d_core=h2d_core,
+            d2h_core=d2h_core,
+            fwd_d2d_core=PIPELINE_CORE_COORD,
+            lb_d2d_core=PIPELINE_CORE_COORD,
         )
 
 
@@ -192,12 +238,14 @@ class PassthroughStage(StageKind):
         self,
         payload: PassthroughPayload,
         *,
+        host_loopback: bool = False,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         self._payload = payload
         self._upstream_fifo_pages = upstream_fifo_pages
         self._downstream_fifo_pages = downstream_fifo_pages
+        self._host_loopback = host_loopback
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
@@ -216,6 +264,20 @@ class PassthroughStage(StageKind):
         else:
             up_fifo = down_fifo = TOKEN_FIFO_SIZE
             up_page = down_page = TOKEN_PAGE_SIZE_BYTES
+        if self._host_loopback:
+            # d2h_core must differ from PIPELINE_CORE_COORD: both land on the same chip
+            # (no_loopback sets exit_node_coord = entry_node_coord), so using the same
+            # core would dispatch two persistent kernels to the same Tensix.
+            loopback = LoopbackConfig.host_loopback(
+                HostIoPlacement(
+                    h2d_core=PIPELINE_CORE_COORD,
+                    d2h_core=SECOND_PIPELINE_CORE_COORD,
+                    fwd_d2d_core=PIPELINE_CORE_COORD,
+                    lb_d2d_core=PIPELINE_CORE_COORD,
+                )
+            )
+        else:
+            loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -223,6 +285,9 @@ class PassthroughStage(StageKind):
             downstream_d2d_socket_fifo_size=down_fifo,
             upstream_d2d_socket_page_size=up_page,
             downstream_d2d_socket_page_size=down_page,
+            d2h_socket_fifo_size=up_fifo if self._host_loopback else None,
+            d2h_socket_page_size=up_page if self._host_loopback else None,
+            loopback=loopback,
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=ctx.pipeline_config,
@@ -534,10 +599,15 @@ class BaseLMHeadStage(StageKind):
         lmhead_exit_core = ttnn.MeshCoreCoord(
             pipeline_config[my_stage_idx].exit_node_coord, BaseLMHeadStage.ARGMAX_FINAL_CORE
         )
-        down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         up_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         up_fifo = activation_fifo_size_bytes(up_page, self._upstream_fifo_pages)
-        down_fifo = activation_fifo_size_bytes(down_page, self._downstream_fifo_pages)
+        # MTP: forward activation+metadata downstream; non-MTP: only the token result goes downstream.
+        if self._send_mtp_output_downstream:
+            down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+            down_fifo = activation_fifo_size_bytes(down_page, self._downstream_fifo_pages)
+        else:
+            down_page = TOKEN_META_PAGE_SIZE_BYTES
+            down_fifo = TOKEN_META_FIFO_SIZE
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -797,7 +867,7 @@ class BaseLMHeadStage(StageKind):
                 mesh_mapper=mesh_mapper,
             )
 
-        lmhead_input_socket = pipeline_block.get_downstream_socket()
+        lmhead_input_socket = pipeline_block.get_downstream_socket() if pipeline_block.has_exit else None
         lmhead_output_socket = pipeline_block.get_upstream_socket()
 
         device_grid_size = mesh_device.compute_with_storage_grid_size()

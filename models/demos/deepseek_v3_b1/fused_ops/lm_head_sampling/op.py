@@ -1188,7 +1188,10 @@ class LMHeadSampling:
                     ("embedding_size_bytes", embedding_dim * 2 if enable_mtp_on_device else 0),
                     # Sender core NOC for L1-to-L1 copy (embedding region in mcast_eh_src_cb -> embedding_cb)
                     ("reduce_gate_semaphore_id", reduce_gate_semaphore_id if enable_mtp_on_device else 0),
-                    ("argmax_defer_socket_output", 1 if enable_socket_output else 0),
+                    (
+                        "argmax_defer_socket_output",
+                        1 if (enable_socket_output and (persistent_mode or is_mtp_verify_stage)) else 0,
+                    ),
                     ("argmax_core_noc_x", argmax_core_noc_x if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("argmax_core_noc_y", argmax_core_noc_y if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("has_bypass_socket_output", 0),
@@ -1290,7 +1293,10 @@ class LMHeadSampling:
                     ("mcast_eh_src_num_pages", rms_num_tiles if enable_mtp_on_device else 0),
                     ("reduce_gate_semaphore_id", reduce_gate_semaphore_id if enable_mtp_on_device else 0),
                     ("reduce_gate_num_targets", reduce_num_fabric_and_worker_cores),
-                    ("argmax_defer_socket_output", 1 if enable_socket_output else 0),
+                    (
+                        "argmax_defer_socket_output",
+                        1 if (enable_socket_output and (persistent_mode or is_mtp_verify_stage)) else 0,
+                    ),
                     ("argmax_core_noc_x", argmax_core_noc_x if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("argmax_core_noc_y", argmax_core_noc_y if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("eh_matmul_num_cores", eh_matmul_num_cores if enable_mtp_on_device else 0),
