@@ -180,6 +180,25 @@ def test_superpoint_benchmark(device, height, width, input_kind):
                     _ = tt_model._sample_descriptors(kp[None], desc_host[i : i + 1], scale=8)
         elapsed_e2e = time.perf_counter() - t0
         fps_e2e = n_iter / elapsed_e2e
+
+        # Paper-matching slice: forward + D2H + descriptor sampling only (no NMS).
+        # Matches the paper's "13 ms" figure (11.15 ms forward + 1.5 ms descriptor).
+        t0 = time.perf_counter()
+        for _ in range(n_iter):
+            tt_model.load_input(tt_in, pixel_values)
+            ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+            scores_host, desc_host = _device_to_host_post(tt_model, s, d_norm, b, height, width)
+            scores_pre = tt_model._decode_keypoints(scores_host, apply_nms=False)
+            # Paper doesn't run NMS in the timed path — use a cheap proxy of
+            # thresholding pre-NMS scores to get ~1000 keypoints, then sample.
+            for i in range(b):
+                flat = scores_pre[i].flatten()
+                _, idx = torch.topk(flat, 1000)
+                w_ = scores_pre.shape[-1]
+                kp = torch.stack([idx // w_, idx % w_], dim=1).flip(1).to(torch.float32)
+                _ = tt_model._sample_descriptors(kp[None], desc_host[i : i + 1], scale=8)
+        elapsed_match = time.perf_counter() - t0
+        fps_match_paper = n_iter / elapsed_match
     else:
         # Fallback for profilers: no trace, so per-op markers are visible.
         tt_model.load_input(tt_in, pixel_values)
@@ -201,6 +220,7 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         elapsed = time.perf_counter() - t0
         fps = n_iter / elapsed
         fps_e2e = fps  # no-trace path doesn't separately time e2e
+        fps_match_paper = fps
 
     # Build full SuperPoint output structure for accuracy comparison.
     tt_scores_pre_nms = tt_model._decode_keypoints(tt_scores_nchw, apply_nms=False)
@@ -236,6 +256,7 @@ def test_superpoint_benchmark(device, height, width, input_kind):
     print(f"input_kind={input_kind}")
     print(f"inference_speed={fps:.4f} fps")
     print(f"inference_speed_e2e={fps_e2e:.4f} fps")
+    print(f"inference_speed_match_paper={fps_match_paper:.4f} fps")
     print(f"accuracy={accuracy:.4f}")
     print(f"score_pcc={score_pcc:.6f}")
     print(f"descriptor_pcc={desc_pcc:.6f}")
