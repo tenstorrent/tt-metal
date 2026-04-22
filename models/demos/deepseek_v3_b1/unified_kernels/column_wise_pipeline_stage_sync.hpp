@@ -42,7 +42,7 @@ struct ColumnWisePipelineStageSync {
         static constexpr uint32_t entry_device_core_noc_y_addr = entryDeviceCoreNocYAddr;
         static constexpr uint32_t r1_semaphore_l1_addr = r1SemaphoreL1Addr;
         static constexpr uint32_t r2_semaphore_l1_addr = r2SemaphoreL1Addr;
-        static constexpr uint32_t r3_semaphore_l1_addr = r2SemaphoreL1Addr;
+        static constexpr uint32_t r3_semaphore_l1_addr = r3SemaphoreL1Addr;
         static constexpr uint32_t fabric_arg_base = fabricArgBase;
     };
 
@@ -66,7 +66,7 @@ struct ColumnWisePipelineStageSync {
         static constexpr uint32_t entry_device_core_noc_y_addr = entryDeviceCoreNocYAddr;
         static constexpr uint32_t r1_semaphore_l1_addr = r1SemaphoreL1Addr;
         static constexpr uint32_t r2_semaphore_l1_addr = r2SemaphoreL1Addr;
-        static constexpr uint32_t r3_semaphore_l1_addr = r2SemaphoreL1Addr;
+        static constexpr uint32_t r3_semaphore_l1_addr = r3SemaphoreL1Addr;
         static constexpr uint32_t fabric_arg_base = fabricArgBase;
     };
 
@@ -149,7 +149,7 @@ struct ColumnWisePipelineStageSync {
                 (uint32_t)packet_header_b_ptr, sizeof(PACKET_HEADER_TYPE));
 
             // == Round 2
-            noc_semaphore_wait_min(r2_semaphore_l1_ptr, 1);
+            noc_semaphore_wait_min(r2_semaphore_l1_ptr, 2);
             unified_kernels::semaphore_dec(r2_semaphore_l1_ptr);
 
             // propagate to just left neighbour
