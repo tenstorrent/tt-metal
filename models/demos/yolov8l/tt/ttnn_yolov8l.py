@@ -704,7 +704,6 @@ class TtDetectionModel:
             "model.1",
             input_params=conv_config["input_params"][1],
             act_block_h=False,
-            block_shard=True,
         )
         self.c2f_2 = TtC2f(
             device,
@@ -734,7 +733,6 @@ class TtDetectionModel:
             parameters,
             "model.5",
             input_params=[3, 2, 1, 512, 256],
-            block_shard=True,
             bfloat8=True,
             packer_l1_acc=True,
         )
@@ -744,8 +742,6 @@ class TtDetectionModel:
             "model.6",
             n=6,
             shortcut=True,
-            block_shard=True,
-            change_shard=True,
             input_params=c2f_configs["model.6"]["input_params"],
         )
         self.conv_7 = TtConv(
@@ -753,7 +749,6 @@ class TtDetectionModel:
             parameters,
             "model.7",
             input_params=conv_config["input_params"][3],
-            block_shard=True,
             reshard_if_not_optimal=False,
             bfloat8=True,
             packer_l1_acc=True,
@@ -764,8 +759,6 @@ class TtDetectionModel:
             "model.8",
             n=3,
             shortcut=True,
-            change_shard=True,
-            block_shard=True,
             input_params=c2f_configs["model.8"]["input_params"],
         )
         self.sppf_9 = TtSppf(
@@ -778,7 +771,6 @@ class TtDetectionModel:
             n=3,
             shortcut=False,
             bfloat8=True,
-            block_shard=True,
             input_params=c2f_configs["model.12"]["input_params"],
         )
         self.c2f_15 = TtC2f(
@@ -794,7 +786,6 @@ class TtDetectionModel:
             parameters,
             "model.16",
             input_params=conv_config["input_params"][4],
-            block_shard=True,
             bfloat8=True,
             packer_l1_acc=True,
         )
@@ -811,7 +802,6 @@ class TtDetectionModel:
             parameters,
             "model.19",
             input_params=conv_config["input_params"][5],
-            block_shard=True,
             bfloat8=True,
             packer_l1_acc=True,
         )
@@ -822,7 +812,6 @@ class TtDetectionModel:
             n=3,
             shortcut=False,
             input_params=c2f_configs["model.21"]["input_params"],
-            block_shard=True,
             change_shard=False,
         )
         self.detect_22 = TtDetect(device, parameters, "model.22", detect_config)
@@ -923,7 +912,7 @@ class TtDetectionModel:
         ttnn.deallocate(x)
 
         c2f_15 = ttnn.sharded_to_interleaved(c2f_15, ttnn.L1_MEMORY_CONFIG)
-        fifteen = ttnn.clone(c2f_15, memory_config=ttnn.L1_MEMORY_CONFIG)
+        fifteen = ttnn.clone(c2f_15, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         c2f_15 = ttnn.to_memory_config(c2f_15, ttnn.DRAM_MEMORY_CONFIG)
         conv_16, out_h, out_w = self.conv_16(c2f_15)
         ttnn.deallocate(c2f_15)
@@ -938,7 +927,7 @@ class TtDetectionModel:
         ttnn.deallocate(x)
 
         c2f_18 = ttnn.sharded_to_interleaved(c2f_18, ttnn.L1_MEMORY_CONFIG)
-        eighteen = ttnn.clone(c2f_18, memory_config=ttnn.L1_MEMORY_CONFIG)
+        eighteen = ttnn.clone(c2f_18, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         conv_19, out_h, out_w = self.conv_19(c2f_18)
         ttnn.deallocate(c2f_18)
         conv_19 = ttnn.sharded_to_interleaved(conv_19, ttnn.L1_MEMORY_CONFIG)
@@ -950,15 +939,10 @@ class TtDetectionModel:
         ttnn.deallocate(conv_19)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         c2f_21, out_h, out_w = self.c2f_21(x, reshard_bottleneck_input=True)
-        c2f_21 = ttnn.sharded_to_interleaved(c2f_21, ttnn.L1_MEMORY_CONFIG)
+        c2f_21 = ttnn.sharded_to_interleaved(c2f_21, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x)
         x = [fifteen, eighteen, c2f_21]
-        x = [
-            ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
-            if tensor.memory_config().buffer_type != ttnn.BufferType.DRAM
-            else tensor
-            for tensor in x
-        ]
+
         x = self.detect_22(x, nc=80, ch=(320, 640, 640), reg_max=self.reg_max)
         return x
 
