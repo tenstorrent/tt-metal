@@ -39,7 +39,7 @@ class ColumnWisePipelineStageSync:
         num_iterations: int = 1,
     ) -> None:
         """
-        Execute PipelineStageSync using generic_op.
+        Execute ColumnWisePipelineStageSync using generic_op.
 
         Returns:
             None
