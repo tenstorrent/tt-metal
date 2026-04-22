@@ -58,7 +58,7 @@ class RMSNorm(LightweightModule):
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -144,7 +144,7 @@ class QKNorm(LightweightModule):
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
     def forward(self, q: ttnn.Tensor, k: ttnn.Tensor) -> tuple:

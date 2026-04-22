@@ -344,7 +344,7 @@ class Attention(LightweightModule):
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
         # HiFi3 + fp32 accumulation for float32 attention matmuls (Wormhole: HiFi4 + fp32 acc has a
@@ -354,7 +354,7 @@ class Attention(LightweightModule):
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
         # Pre-compute HEIGHT_SHARDED memory config for paged_update_cache input.
@@ -450,7 +450,7 @@ class Attention(LightweightModule):
         """
         batch_size = x.shape[0]
         is_decode = mode == "decode"
-        _d = ttnn.DRAM_MEMORY_CONFIG
+        _d = ttnn.L1_MEMORY_CONFIG
 
         xqkv = ttnn.linear(x, self.wqkv, compute_kernel_config=self.compute_kernel_config, memory_config=_d)
 
