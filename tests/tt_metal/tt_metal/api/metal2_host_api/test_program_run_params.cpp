@@ -99,8 +99,8 @@ inline ProgramRunParams::KernelRunParams MakeKernelRunParams(
     const std::vector<uint32_t>& common_args) {
     return ProgramRunParams::KernelRunParams{
         .kernel_spec_name = kernel_name,
-        .runtime_args = {{node, per_node_args}},
-        .common_runtime_args = common_args,
+        .runtime_varargs = {{node, per_node_args}},
+        .common_runtime_varargs = common_args,
     };
 }
 
@@ -130,8 +130,8 @@ TEST_F(ProgramRunParamsTestQuasar, UnknownKernelNameFails) {
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "nonexistent_kernel",
-        .runtime_args = {},
-        .common_runtime_args = {},
+        .runtime_varargs = {},
+        .common_runtime_varargs = {},
     });
 
     EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
@@ -146,8 +146,8 @@ TEST_F(ProgramRunParamsTestQuasar, InvalidNodeForKernelFails) {
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
-        .runtime_args = {{wrong_node, {1, 2}}},  // Wrong node!
-        .common_runtime_args = {},
+        .runtime_varargs = {{wrong_node, {1, 2}}},  // Wrong node!
+        .common_runtime_varargs = {},
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
@@ -214,8 +214,8 @@ TEST_F(ProgramRunParamsTestQuasar, MissingNodeRTAsFails) {
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
-        .runtime_args = {},  // Missing node RTAs!
-        .common_runtime_args = {},
+        .runtime_varargs = {},  // Missing node RTAs!
+        .common_runtime_varargs = {},
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
@@ -279,8 +279,8 @@ TEST_F(ProgramRunParamsTestQuasar, DuplicateNodeCoordInRuntimeArgsFails) {
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
-        .runtime_args = {{node, {1, 2}}, {node, {3, 4}}},  // Duplicate node!
-        .common_runtime_args = {},
+        .runtime_varargs = {{node, {1, 2}}, {node, {3, 4}}},  // Duplicate node!
+        .common_runtime_varargs = {},
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
@@ -470,13 +470,13 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "producer",
-        .runtime_args = {{node0, {10, 20}}, {node1, {30, 40}}},
-        .common_runtime_args = {100},
+        .runtime_varargs = {{node0, {10, 20}}, {node1, {30, 40}}},
+        .common_runtime_varargs = {100},
     });
     params.kernel_run_params.push_back({
         .kernel_spec_name = "consumer",
-        .runtime_args = {{node0, {}}, {node1, {}}},
-        .common_runtime_args = {},
+        .runtime_varargs = {{node0, {}}, {node1, {}}},
+        .common_runtime_varargs = {},
     });
 
     EXPECT_NO_THROW(SetProgramRunParameters(program, params));
@@ -517,13 +517,13 @@ TEST_F(ProgramRunParamsTestQuasar, MultiNode_MissingOneNodeFails) {
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "producer",
-        .runtime_args = {{node0, {10, 20}}},  // Missing node1!
-        .common_runtime_args = {},
+        .runtime_varargs = {{node0, {10, 20}}},  // Missing node1!
+        .common_runtime_varargs = {},
     });
     params.kernel_run_params.push_back({
         .kernel_spec_name = "consumer",
-        .runtime_args = {{node0, {}}, {node1, {}}},
-        .common_runtime_args = {},
+        .runtime_varargs = {{node0, {}}, {node1, {}}},
+        .common_runtime_varargs = {},
     });
 
     EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
@@ -668,7 +668,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
-        .runtime_args = {{node_a, {10, 20}}, {node_b, {100, 200, 300, 400, 500}}},
+        .runtime_varargs = {{node_a, {10, 20}}, {node_b, {100, 200, 300, 400, 500}}},
     });
     EXPECT_NO_THROW(SetProgramRunParameters(program, params));
 }
@@ -706,7 +706,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyRTAsMissingNodeCoverageFails) {
 
     ProgramRunParams params;
     params.kernel_run_params.push_back({
-        .kernel_spec_name = "dm_kernel", .runtime_args = {{node_a, {10, 20}}},  // node_b missing!
+        .kernel_spec_name = "dm_kernel", .runtime_varargs = {{node_a, {10, 20}}},  // node_b missing!
     });
     EXPECT_THAT(
         [&] { SetProgramRunParameters(program, params); },
@@ -725,7 +725,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyUnknownNodeFails) {
     ProgramRunParams params;
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
-        .runtime_args = {{wrong_node, {42}}},
+        .runtime_varargs = {{wrong_node, {42}}},
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
     EXPECT_THAT(
@@ -765,7 +765,7 @@ TEST_F(ProgramRunParamsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
         .named_runtime_args = {{.node = node, .args = {{"input_ptr", 0x1000}}}},
-        .runtime_args = {{node, {7, 8, 9}}},
+        .runtime_varargs = {{node, {7, 8, 9}}},
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
