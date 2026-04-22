@@ -158,7 +158,7 @@ The MCP server is pre-configured in `.mcp.json`.
 
 | Agent | Playbook | Purpose | Inputs | Outputs |
 |-------|----------|---------|--------|---------|
-| **Arch Lookup** | `llk-arch-lookup.md` | Fetch architecture docs from Confluence + DeepWiki | Kernel name, type | `artifacts/{op}_arch_research.md` |
+| **Arch Lookup** | `skills/llk-arch-lookup/SKILL.md` (skill) | Fetch architecture docs from Confluence + DeepWiki | Kernel name, type | `artifacts/{op}_arch_research.md` |
 | **Analyzer** | `llk-analyzer.md` | Analyze reference implementation, identify sub-kernel phases | Reference kernel, arch research | `artifacts/{op}_analysis.md` |
 | **Planner** | `llk-planner.md` | Design implementation spec with instruction mappings | Analysis, arch research | `artifacts/{op}_phase{N}_spec.md` |
 | **Writer** | `llk-kernel-writer.md` | Generate kernel code from spec, run compile check | Phase spec | `tt_llk_{arch}/.../ckernel_sfpu_{op}.h` |

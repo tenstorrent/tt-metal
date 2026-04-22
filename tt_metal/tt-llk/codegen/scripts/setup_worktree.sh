@@ -72,9 +72,13 @@ setup_worktree() {
   # ── Create worktree ──
   WORKTREE_DIR="/tmp/codegen_worktree_${task_id}"
 
-  if [[ -d "$WORKTREE_DIR" ]]; then
+  # Remove stale worktree: covers both (a) directory exists and (b) directory is
+  # missing but still registered in git ("missing but already registered" error).
+  if [[ -d "$WORKTREE_DIR" ]] || git -C "$REPO_ROOT" worktree list 2>/dev/null | grep -q "$WORKTREE_DIR"; then
     echo "[worktree] Cleaning up stale worktree at $WORKTREE_DIR"
-    git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
+    git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+    git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
+    rm -rf "$WORKTREE_DIR" 2>/dev/null || true
   fi
 
   echo "[worktree] Creating worktree at $WORKTREE_DIR"
@@ -101,6 +105,12 @@ setup_worktree() {
 
   # Writable: artifacts dir is per-worktree (no cross-contamination)
   mkdir -p "${wt_llk}/codegen/artifacts"
+
+  # Gitignored test artifacts: symlink venv + SFPI compiler from the source
+  # branch so settings.validate() passes without running setup scripts again.
+  # These are not tracked in git so the worktree checkout leaves them absent.
+  [[ -d "${LLK_ROOT}/tests/.venv" ]] && ln -snf "${LLK_ROOT}/tests/.venv" "${wt_llk}/tests/.venv"
+  [[ -d "${LLK_ROOT}/tests/sfpi"  ]] && ln -snf "${LLK_ROOT}/tests/sfpi"  "${wt_llk}/tests/sfpi"
 
   # Top-level config files (use -sf to overwrite any that exist on main)
   ln -sf "${LLK_ROOT}/CLAUDE.md"    "${wt_llk}/CLAUDE.md"

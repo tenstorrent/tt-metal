@@ -11,6 +11,18 @@ This document catalogs error patterns observed during kernel development. It is 
    - **Existing code**: `grep -r "{symbol}" tt_llk_{target_arch}/ --include="*.h" | head -20`
    - **assembly.yaml** (cross-check): `grep -A 20 "^{INSTRUCTION}:" tt_llk_{target_arch}/instructions/assembly.yaml`
 
+## Symptoms that look like kernel bugs but usually aren't
+
+These patterns have historically cost multi-hour debug sessions because they *look* like ISA / instruction / mode bugs but are actually harness or sync problems. If your symptom matches, jump straight to the cited playbook section before touching the kernel.
+
+| Symptom | Real category |
+|---|---|
+| Every variant hits the pytest timeout at the same wall clock; only one or a handful of variants ever completes, and the complete ones exercise the same code path as the hangs | Likely `HARNESS_INCOMPATIBILITY` — see tester §3.0.b and the refiner classification table. Audit `_llk_*` / `wait_*` / dvalid calls in the test source for target-native definitions and `*_compat*` shims **before** indicting the kernel. |
+| All variants return all-zero data but the kernel compiles cleanly | Data never reaches Dest: unpack-side no-op, dvalid handshake deadlock, or harness incompatibility. Same playbook as above — harness/sync first, kernel second. |
+| Writer produced a diff that touches files outside `tt_llk_{arch}/common/inc/` and `tt_llk_{arch}/llk_lib/` (shared platform headers, `compiler.py`, newly-created `*_compat*` files, empty-bodied stubs added to existing `llk_*.h`) | Scope escape. See writer §2b.2 — these changes are forbidden when their only purpose is to make a foreign-arch test source compile on the target. Revert and return `HARNESS_GAP` instead. |
+| A prior tester attempt passed on variant A while attempt B fails with a "the instruction hangs" hypothesis | Contradiction — the instruction cannot both hang and pass. See tester §3.0.a. Enumerate what differs between the passing and failing attempts; that diff is your real suspect list. Never encode "simulator non-determinism" as a conclusion without a testable mechanism. |
+| Refiner wants to write "X is BANNED on target" but the ISA / `assembly.yaml` says X is supported | Rejected category — see refiner "No absolute bans". Evidence must be proportional to the ban; "tester saw a timeout with X in the loop" is not evidence that X is the cause. |
+
 ---
 
 ## compiler.py Parameter Errors

@@ -189,23 +189,12 @@ table in `codegen/agents/quasar/llk-kernel-writer.md` Step 4 for the full mappin
 fields only. If the C++ test uses a symbol as a template argument or compile-time constant,
 it **must** be `-t`.
 
-2. **Run functional tests** — two-step compile-then-run flow:
+2. **Run functional tests** — use `run_llk_tests.sh run` (compile + simulate, flock-serialised).
+   Invoke via the Bash tool with `timeout: 1800000`; never `run_in_background: true`.
 ```bash
-# Compile producer (parallel, no simulator, no flock)
-source ../tests/.venv/bin/activate
-cd ../tests/python_tests/quasar
-CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{op}_quasar.py
-
-# Simulator consumer (flock-wrapped, no -n)
-flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
-  STALE=$(lsof -ti :5556 2>/dev/null || true)
-  [ -n "$STALE" ] && echo "Killing stale port 5556 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
-  pkill -9 -f "tt-exalens.*--port=5556" 2>/dev/null || true
-  sleep 1
-  source ../tests/.venv/bin/activate
-  cd ../tests/python_tests/quasar
-  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_{op}_quasar.py
-'
+bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh run \
+    --worktree {WORKTREE_DIR} --arch quasar --test test_{op}_quasar.py
+echo "RUN_EXIT=$?"
 ```
 
 ### Step 9: Handle Failures
@@ -235,16 +224,71 @@ A correct unoptimized kernel is always better than a broken optimized one.
 
 ---
 
-## Self-Logging (CRITICAL — DO NOT SKIP)
+## Self-Logging (MANDATORY — STRUCTURED TEMPLATE)
 
-**You MUST write `{LOG_DIR}/agent_optimizer.md` before returning your final response.**
-
-Write your reasoning log to `{LOG_DIR}/agent_optimizer.md` using the Write tool. Include:
-- Which ITERATIONS loops were found
-- Instruction count for each loop
-- Which loops were optimized (and which were skipped, with reason)
-- Compilation result (pass/fail)
-- Test result (pass/fail, any regressions)
-- If reverted: why the optimization failed
+**Before returning, write `{LOG_DIR}/agent_optimizer.md` using the `Write` tool.**
+The file MUST contain the sections below in order. The orchestrator's Step 5f
+concatenates the structured sections from every agent log into the final run
+report; missing sections break the report. Raw chronology (assistant text +
+tool calls + trimmed results) is captured separately by
+`codegen/scripts/extract_run_transcripts.py` at Step 5e.1 — this log is for the
+**curated narrative**, not a full transcript.
 
 If no `LOG_DIR` was provided, skip logging.
+
+### Required sections (omit nothing — write "none" if a section genuinely has no content)
+
+```markdown
+# Agent: llk-optimizer — {kernel} ({target_arch})
+
+## Inputs received
+- Kernel / kernel_type / target arch / kernel path / reference path
+- Analysis path
+- Pre-optimization kernel snapshot (`$LOG_DIR/pre_opt_*.h`)
+
+## Applicability check
+- Did the reference use replay buffers? (grep count for `replay|load_replay_buf`)
+- Which ITERATIONS loops in the target kernel are candidates?
+- Instruction count per candidate loop.
+- Which candidates were optimized vs. skipped (and why).
+
+## Assumptions made
+One bullet per assumption not derivable from the analysis / existing code.
+Shape: `- [Claim] — [Why I believed it] — [How/when it could be wrong]`.
+
+Typical optimizer assumptions: replay-buffer size limits, whether a 2-cycle
+instruction counts as 1 or 2 slots, whether a preceding NOP stays when hoisted
+out of the replayed body.
+
+**If you made no non-trivial assumptions, write "none" — but do not skip the section.**
+
+## Reasoning summary (4–6 sentences)
+What you optimized, what you skipped, whether the post-optimization re-test
+surfaced any regression, and whether you reverted. If every candidate was
+skipped, say so — a clean "not applicable" run is valid.
+
+## Decisions & trade-offs
+Per decision: **Choice** / **Alternatives** / **Why**.
+
+Typical optimizer decisions: which candidate loops to replay vs. leave as-is;
+whether to extend the replay body across multiple helper calls; revert vs.
+partial-apply when a subset of tests regresses.
+
+## Commands run (summary)
+Curated. Full transcript in `{LOG_DIR}/transcripts/NN_{slug}_commands.md`.
+Include each compile and each re-test.
+
+## Artifacts read / written
+- **Read**: reference kernel, analysis, pre-opt snapshot.
+- **Written**: the optimized kernel in place (or reverted from the snapshot),
+  self-log.
+
+## Verification
+- Compile result: PASS | FAIL
+- Test result: PASS ({N}/{N}) | FAIL ({failures}) | SKIPPED
+- If reverted: the revert command run and the reason.
+
+## Open questions / handoffs
+If the optimization surfaced a hardware-doc question or a replay-buffer limit
+the analysis didn't cite, record it so the next run can use it.
+```
