@@ -460,7 +460,7 @@ class OperationSchema(BaseModel):
             or self.block_size[1] > output.dimensions[1]
         ):
             raise ValueError(
-                f"Block size {self.block_size} exceeds output dimensions {self.output_dims}"
+                f"Block size {self.block_size} exceeds output dimensions {output.dimensions}"
             )
 
         kwargs = {}

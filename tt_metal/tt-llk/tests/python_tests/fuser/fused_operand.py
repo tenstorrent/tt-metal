@@ -58,9 +58,9 @@ class Operand:
             DataFormat.Float32: 256,
         }
 
-        self.tile_size = TILE_SIZES.get(self.data_format, 128) * (
-            self.tile_shape.total_num_faces() / 4
-        )
+        self.tile_size = (
+            TILE_SIZES.get(self.data_format, 128) * self.tile_shape.total_num_faces()
+        ) // 4
 
     def is_input(self) -> bool:
         return not self.is_output
@@ -221,8 +221,12 @@ class OperandRegistry:
             if (dimensions is not None and dimensions != operand.dimensions) or (
                 data_format is not None and data_format != operand.data_format
             ):
-                print(dimensions, data_format)
-                raise ValueError(f"Operand '{name}' exists with different parameters")
+                raise ValueError(
+                    f"Operand '{name}' exists with different parameters: "
+                    f"requested dimensions={dimensions}, data_format={data_format}; "
+                    f"existing dimensions={operand.dimensions}, data_format={operand.data_format}"
+                )
+
             return operand
 
         operand = Operand(
