@@ -18,6 +18,7 @@ from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
+from models.tt_transformers.tt.sakthi_debug_trace import sakthi_debug_log_once
 
 
 class Transformer(LightweightModule):
@@ -35,6 +36,7 @@ class Transformer(LightweightModule):
         prefetcher=None,
     ):
         super().__init__()
+        sakthi_debug_log_once("Transformer.__init__")
         self.args = args
         self.vocab_size = args.vocab_size
         assert self.vocab_size > 0
@@ -152,6 +154,7 @@ class Transformer(LightweightModule):
             self.sampling = None
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
+        sakthi_debug_log_once("Transformer.process_logits_after_prefill_trace")
         get_last_token = (last_token_idx // 32) * 32
         logits = ttnn.slice(
             logits,
@@ -181,6 +184,7 @@ class Transformer(LightweightModule):
             user_tokens: [1, 1, target_batch or padded_batch, dim_per_device] per device,
             column-sharded, TILE_LAYOUT
         """
+        sakthi_debug_log_once("Transformer.extract_last_tokens_batched_prefill")
         active_indices = [lt for lt in last_token_idx_list if lt > 0]
         all_same = len(set(active_indices)) <= 1
 
@@ -234,6 +238,7 @@ class Transformer(LightweightModule):
 
     def process_logits_after_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
         """Extract last tokens and run norm + lm_head once for all users."""
+        sakthi_debug_log_once("Transformer.process_logits_after_batched_prefill")
         user_tokens = self.extract_last_tokens_batched_prefill(
             hidden_states, last_token_idx_list, padded_batch, prefill_seq_len
         )
@@ -241,6 +246,7 @@ class Transformer(LightweightModule):
 
     def _apply_norm_and_lm_head(self, x):
         """Shared norm + lm_head for prefill logit processing. Input: [1, 1, 32, hidden_dim]."""
+        sakthi_debug_log_once("Transformer._apply_norm_and_lm_head")
         x = self.norm(
             x, mode=Mode.PREFILL, norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, self.prefetcher)
         )
@@ -257,6 +263,7 @@ class Transformer(LightweightModule):
         Returns hidden states (after norm) instead of logits.
         Used for embedding models that need hidden states rather than logits.
         """
+        sakthi_debug_log_once("Transformer.process_hidden_states_after_prefill_trace")
         get_last_token = (last_token_idx // 32) * 32
         hidden_states = ttnn.slice(
             hidden_states,
@@ -278,6 +285,7 @@ class Transformer(LightweightModule):
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host.
         """
+        sakthi_debug_log_once("Transformer.prepare_prefill_inputs_trace")
         host_inputs = self.prepare_inputs_prefill(
             tokens,
             page_table=page_table,
@@ -289,6 +297,7 @@ class Transformer(LightweightModule):
         return host_inputs
 
     def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+        sakthi_debug_log_once("Transformer.transform_and_embed_prefill_inputs_device")
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, tt_page_table, tt_chunk_page_table
@@ -311,6 +320,7 @@ class Transformer(LightweightModule):
         tensors on device if trace is disabled or on host if trace is enabled.
         TODO: Debate whether this function is responsible for padding
         """
+        sakthi_debug_log_once("Transformer.prepare_inputs_prefill")
 
         # We set the device to None if trace is enabled so we keep the tensors on host instead of sending it to the device (None - keeps on host, device - sends to specified device)
         # We will send them to device later (copy_host_to_device)
@@ -424,6 +434,7 @@ class Transformer(LightweightModule):
         Its implementation can take advantage of a few other functions which the
         model must implement.
         """
+        sakthi_debug_log_once("Transformer.prepare_inputs_decode")
         host_inputs = self.prepare_decode_inputs_host(*inputs)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
         return device_inputs
@@ -433,6 +444,7 @@ class Transformer(LightweightModule):
         Inputs are torch tensors or python types. Outputs are ttnn tensors on host.
         NOTE: Tokens and current_pos are padded to batch
         """
+        sakthi_debug_log_once("Transformer.prepare_decode_inputs_host")
         B = tokens.shape[0]
         assert current_pos.shape[0] == B, "Batch size mismatch"
         assert (
@@ -485,11 +497,12 @@ class Transformer(LightweightModule):
         """
         Inputs are ttnn tensors on device. This function applies any on-device
         transformations which should happen before forward decode.
-        For example: tilize, reshape, shard.
+        For example:         tilize, reshape, shard.
         Return transformed device tensors
 
         Embed tokens
         """
+        sakthi_debug_log_once("Transformer._transform_decode_inputs_device")
         decode_residual_mem_cfg = self.args.get_residual_mem_config(Mode.DECODE, self.prefetcher)
         tt_tokens = self.embd(
             tokens,
@@ -503,6 +516,7 @@ class Transformer(LightweightModule):
         """
         Concatenate the output of the devices into a single host tensor.
         """
+        sakthi_debug_log_once("Transformer.concat_host_output")
         torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out)]
         if self.args.is_galaxy:
             row_dim, col_dim = (3, 1)
@@ -526,6 +540,7 @@ class Transformer(LightweightModule):
         Input is ttnn host tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
+        sakthi_debug_log_once("Transformer.process_output_prefill")
         assert tt_out.storage_type() == ttnn.StorageType.HOST, "Expected host tensor"
         return self.concat_host_output(tt_out)[0, 0, last_token_idx, : self.vocab_size]
 
@@ -535,6 +550,7 @@ class Transformer(LightweightModule):
         Output is torch hidden states tensor of shape [hidden_size].
         Used for embedding models.
         """
+        sakthi_debug_log_once("Transformer.process_output_prefill_hidden_states")
         assert tt_out.storage_type() == ttnn.StorageType.HOST, "Expected host tensor"
         # Extract the last token's hidden state
         # Shape: [batch=1, head=1, seq, hidden_dim] -> [hidden_dim]
@@ -555,6 +571,7 @@ class Transformer(LightweightModule):
         """
         Input is ttnn host tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
+        sakthi_debug_log_once("Transformer.process_output_decode")
         if is_tokens or is_log_probs:
             # Pad to 32 to match the expected batch size for decode operations (tiles are 32x32)
             padded_batch_size = 32
@@ -585,6 +602,7 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        sakthi_debug_log_once("Transformer.ttnn_prefill_forward")
         return self.forward(
             x,
             current_pos=None,
@@ -601,6 +619,7 @@ class Transformer(LightweightModule):
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
+        sakthi_debug_log_once("Transformer._increment_decode_positions_device")
         ttnn.plus_one(current_pos, skip_negative_entries=True)
         ttnn.plus_one(rot_mat_idxs)
 
@@ -618,6 +637,7 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        sakthi_debug_log_once("Transformer.ttnn_decode_forward")
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
         rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
 
@@ -675,6 +695,7 @@ class Transformer(LightweightModule):
         return tt_logits, None
 
     def switch_mode(self, mode: Mode):
+        sakthi_debug_log_once("Transformer.switch_mode")
         if self.prefetcher is not None:
             self.prefetcher.init(mode)
             self.prefetcher.prefetch()
@@ -694,6 +715,7 @@ class Transformer(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ):
+        sakthi_debug_log_once("Transformer.forward")
         if mode == Mode.DECODE:
             # Run prefetcher if it is enabled
             if self.prefetcher is not None:

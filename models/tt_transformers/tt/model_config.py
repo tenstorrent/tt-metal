@@ -43,6 +43,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     standardize_hf_keys_multimodal,
 )
 from models.tt_transformers.tt.prefetcher import Prefetcher
+from models.tt_transformers.tt.sakthi_debug_trace import sakthi_debug_log_once
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -1084,6 +1085,7 @@ class ModelArgs:
         return getattr(self, "_use_fused_all_gather_matmul", False)
 
     def get_warmup_prefill_supported_seq_lens(self):
+        sakthi_debug_log_once("ModelArgs.get_warmup_prefill_supported_seq_lens")
         assert (
             self.capped_warmup_seq_len > 0 and (self.capped_warmup_seq_len & (self.capped_warmup_seq_len - 1)) == 0
         ), f"capped_warmup_seq_len must be a power of 2, but got {self.capped_warmup_seq_len}"
@@ -1109,6 +1111,7 @@ class ModelArgs:
         return to_warmup_seq_lens
 
     def filter_warmup_seq_lens(self, to_warmup_seq_lens):
+        sakthi_debug_log_once("ModelArgs.filter_warmup_seq_lens")
         # TODO: Add more model-specific filtering here
         # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
 
@@ -2881,6 +2884,7 @@ class ModelArgs:
         # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
         # TODO: Support prefix caching with tracing
         """
+        sakthi_debug_log_once("ModelArgs.can_enable_trace")
 
         allowed_seq_lens = self.trace_prefill_supported_seq_lens
 
@@ -2965,6 +2969,7 @@ class ModelArgs:
 
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
+        sakthi_debug_log_once("ModelArgs.load_state_dict")
         # by default, the model is not a mixture-of-expert. This will be set to True if we find any `.experts.` in the keys
         if self.dummy_weights:
             from transformers import AutoConfig
@@ -3529,6 +3534,7 @@ class ModelArgs:
         return processor
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
+        sakthi_debug_log_once("ModelArgs.encode_prompt")
         if instruct:
             try:
                 return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
@@ -4444,6 +4450,7 @@ def determine_device_name(mesh_device):
     Raises:
         ValueError: If architecture or device count is unsupported
     """
+    sakthi_debug_log_once("model_config.determine_device_name")
     num_devices = mesh_device.get_num_devices() if mesh_device else 0
     arch_name = ttnn.get_arch_name()
     dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)

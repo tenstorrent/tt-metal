@@ -20,10 +20,17 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
+from models.tt_transformers.tt.sakthi_debug_trace import (
+    sakthi_debug_is_enabled,
+    sakthi_debug_log_once,
+    sakthi_debug_reset,
+    sakthi_debug_summary,
+)
 
 
 def get_accuracy_thresholds(model_args, optimizations):
     """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
+    sakthi_debug_log_once("text_demo.get_accuracy_thresholds")
     # Read PERF.md
     perf_file = Path(__file__).parent.parent / "PERF.md"
     with open(perf_file, "r") as f:
@@ -81,6 +88,7 @@ def create_tt_model(
     from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
     from models.tt_transformers.tt.model import Transformer
 
+    sakthi_debug_log_once("text_demo.create_tt_model")
     tt_model_args = ModelArgs(
         mesh_device,
         instruct=instruct,
@@ -111,6 +119,7 @@ def create_tt_model(
 
 class TokenAccuracy:
     def __init__(self, model_name):
+        sakthi_debug_log_once("text_demo.TokenAccuracy.__init__")
         self.gt_pos = -1
         self.store_predicted_tokens = []
         reference_data_file = os.path.join("models/tt_transformers/tests/reference_outputs/", model_name) + ".refpt"
@@ -125,15 +134,18 @@ class TokenAccuracy:
         self.maxindex = len(self.gt_tokens) - 1
 
     def prepare_ref_tokens(self, tokenizer):
+        sakthi_debug_log_once("text_demo.TokenAccuracy.prepare_ref_tokens")
         text_data = tokenizer.decode(self.input_prompt.tolist())
         return text_data
 
     def collect_predicted_tokens(self, tokens):
+        sakthi_debug_log_once("text_demo.TokenAccuracy.collect_predicted_tokens")
         self.store_predicted_tokens.append(tokens)
         self.gt_pos += 1
         return self.gt_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
 
     def compute_accuracy(self):
+        sakthi_debug_log_once("text_demo.TokenAccuracy.compute_accuracy")
         count = 0
         count_t5 = 0
         matching_sz = min(len(self.gt_tokens), len(self.store_predicted_tokens))
@@ -149,6 +161,7 @@ class TokenAccuracy:
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
+    sakthi_debug_log_once("text_demo.load_and_cache_context")
     cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
 
     if cache_file.exists():
@@ -180,6 +193,7 @@ def load_and_cache_context(context_url, cache_dir, max_length=None):
 
 # load input prompts from json, return as a list
 def load_inputs(user_input, batch, instruct):
+    sakthi_debug_log_once("text_demo.load_inputs")
     if isinstance(user_input, str):
         with open(user_input, "r") as f:
             user_input = json.load(f)
@@ -216,6 +230,7 @@ def load_inputs(user_input, batch, instruct):
 
 
 def create_tt_page_table(global_batch_size, data_parallel, paged_attention_config: PagedAttentionConfig):
+    sakthi_debug_log_once("text_demo.create_tt_page_table")
     page_table = None
 
     if paged_attention_config:
@@ -240,6 +255,7 @@ def prepare_generator_args(
     page_params,
     paged_attention,
 ):
+    sakthi_debug_log_once("text_demo.prepare_generator_args")
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
 
@@ -723,6 +739,9 @@ def test_demo_text(
     Simple demo with limited dependence on reference code.
     """
     test_id = request.node.callspec.id
+    if sakthi_debug_is_enabled():
+        sakthi_debug_reset()
+    sakthi_debug_log_once("text_demo.test_demo_text")
     if is_ci_env and (("accuracy" in test_id) or not ci_only):
         pytest.skip("CI only runs the CI-only tests")
 
@@ -1325,3 +1344,6 @@ def test_demo_text(
                 logger.warning(
                     f"No CI performance targets found for {model_device_key}. Skipping performance verification."
                 )
+
+    if sakthi_debug_is_enabled():
+        sakthi_debug_summary(f"text_demo.test_demo_text test_id={test_id}")

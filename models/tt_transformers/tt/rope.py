@@ -14,6 +14,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat
 from models.tt_transformers.tt.prefetcher import Prefetcher
+from models.tt_transformers.tt.sakthi_debug_trace import sakthi_debug_log_once
 from ttnn import replicate_tensor_to_mesh_mapper
 
 
@@ -449,6 +450,7 @@ class RotarySetup(LightweightModule):
         prefetcher: Optional[Prefetcher] = None,
     ) -> None:
         super().__init__()
+        sakthi_debug_log_once("RotarySetup.__init__")
 
         self.use_qk_fused = use_qk_fused
         self.original_batch_size = batch_size
@@ -571,6 +573,7 @@ class RotarySetup(LightweightModule):
         return {"decode": self.transformation_mat, "prefill": self.transformation_mat_prefill}
 
     def get_rot_idxs(self, position_idxs: torch.Tensor, on_host: bool = False) -> ttnn.Tensor:
+        sakthi_debug_log_once("RotarySetup.get_rot_idxs")
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
 
@@ -636,6 +639,7 @@ class RotarySetup(LightweightModule):
             List of [cos, sin] tensors sliced and sharded for the given positions.
             If return_rot_idxs=True, returns ([cos, sin], rot_idxs).
         """
+        sakthi_debug_log_once("RotarySetup.get_rot_mats")
         device = self.device
 
         # If position_idxs is a torch tensor, get the TTNN version of it
@@ -730,6 +734,7 @@ class HfRotarySetup(LightweightModule):
         prefetcher: Optional[Prefetcher] = None,
     ) -> None:
         super().__init__()
+        sakthi_debug_log_once("HfRotarySetup.__init__")
         if use_qk_fused:
             raise NotImplementedError("use_qk_fused")
         self.batch_size = batch_size
@@ -766,6 +771,7 @@ class HfRotarySetup(LightweightModule):
         self.transformation_mat_prefill = None
 
     def get_rot_idxs(self, position_idxs: torch.Tensor, on_host: bool = False) -> ttnn.Tensor:
+        sakthi_debug_log_once("HfRotarySetup.get_rot_idxs")
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
 
@@ -817,6 +823,7 @@ class HfRotarySetup(LightweightModule):
         Returns:
             ``[cos, sin]`` with shape ``[1, 1, batch_padded, head_dim]``.
         """
+        sakthi_debug_log_once("HfRotarySetup.get_rot_mats")
         if isinstance(position_idxs, ttnn.Tensor):
             rot_idx = position_idxs
             if len(rot_idx.shape) == 1:

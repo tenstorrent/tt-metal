@@ -12,6 +12,7 @@ from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
+from models.tt_transformers.tt.sakthi_debug_trace import sakthi_debug_log_once
 
 
 class TransformerBlock(LightweightModule):
@@ -31,6 +32,7 @@ class TransformerBlock(LightweightModule):
         prefetcher=None,
     ):
         super().__init__()
+        print("[debug-sakthi] __init__")
 
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
@@ -214,6 +216,7 @@ class TransformerBlock(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ) -> ttnn.Tensor:
+        sakthi_debug_log_once("TransformerBlock.forward")
         TG = self.args.is_galaxy
         residual = x
 

@@ -13,6 +13,7 @@ from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, 
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
 from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
+from models.tt_transformers.tt.sakthi_debug_trace import sakthi_debug_log_once
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -57,6 +58,7 @@ class ModelArgs(TTModelArgs):
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
     ):
+        sakthi_debug_log_once("gemma3.ModelArgs.__init__")
         super().__init__(
             mesh_device,
             instruct=instruct,
@@ -72,6 +74,7 @@ class ModelArgs(TTModelArgs):
         self.padded_vocab_size = 262400
 
     def get_warmup_prefill_supported_seq_lens(self):
+        sakthi_debug_log_once("gemma3.ModelArgs.get_warmup_prefill_supported_seq_lens")
         DEFAULT_VALUE = self.capped_warmup_seq_len
 
         # This dictionary is used to override the default ceil warmup prefill value
@@ -94,11 +97,13 @@ class ModelArgs(TTModelArgs):
         return to_warmup_seq_lens
 
     def filter_warmup_seq_lens(self, to_warmup_seq_lens):
+        sakthi_debug_log_once("gemma3.ModelArgs.filter_warmup_seq_lens")
         # TODO: Add more model-specific filtering here
         # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
         return to_warmup_seq_lens
 
     def get_trace_prefill_supported_seq_lens(self):
+        sakthi_debug_log_once("gemma3.ModelArgs.get_trace_prefill_supported_seq_lens")
         default_supported_seq_lens = {
             # for gemma we have different default supported seq lens than in tt_transformers
             # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed

@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 from models.common.sampling.sampling_params import SamplingParams
+from models.tt_transformers.tt.sakthi_debug_trace import sakthi_debug_log_once
 
 
 class WarmupForwardMixin:
@@ -28,6 +29,7 @@ class WarmupForwardMixin:
         top_k, top_p, presence/frequency/repetition penalties, log_probs); warmup then includes
         those configs. When False, only greedy decoding is warmed up (temperature=0.0, top_k=1, top_p=1.0).
         """
+        sakthi_debug_log_once("WarmupForwardMixin._create_sampling_params")
         if not can_sample_on_device:
             return [None]
 
@@ -91,6 +93,11 @@ class WarmupForwardMixin:
         """
         This function is called by vLLM
         """
+        sakthi_debug_log_once("WarmupForwardMixin.warmup_model_decode")
+        logger.info(
+            f"WarmupForwardMixin.warmup_model_decode: max_batch_size={max_batch_size} num_blocks={num_blocks} "
+            f"enable_trace={enable_trace} can_sample_on_device={can_sample_on_device}"
+        )
         sampling_params = self._create_sampling_params(
             can_sample_on_device, non_greedy_decoding_on_device, max_batch_size
         )

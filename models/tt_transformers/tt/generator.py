@@ -34,6 +34,7 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
+from models.tt_transformers.tt.sakthi_debug_trace import sakthi_debug_log_once
 
 # Maximum total tokens (batch_size * seq_len) allowed for a batched prefill pass.
 # Exceeding this triggers a fallback to sequential per-user prefill.
@@ -63,6 +64,7 @@ class Generator(WarmupForwardMixin):
         For bringup, make this class general to any backend implementation, as long as it takes torch tensors and returns torch tensors.
 
         """
+        sakthi_debug_log_once("Generator.__init__")
         self.model = model
         self.model_args = model_args
         self.mesh_device = mesh_device
@@ -104,6 +106,7 @@ class Generator(WarmupForwardMixin):
         return sampling_module, sampling_dp, group_batch, total_sampling_batch
 
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
+        sakthi_debug_log_once("Generator._mock_tokens")
         ret = dict()
         ret["tokens"] = torch.zeros(batch_size, seq_len, dtype=torch.long)
         ret["prompt_lens"] = torch.tensor([seq_len] * batch_size, dtype=torch.long)
@@ -121,6 +124,7 @@ class Generator(WarmupForwardMixin):
         return ret
 
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
+        sakthi_debug_log_once("Generator.warmup_model_prefill")
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
@@ -433,6 +437,7 @@ class Generator(WarmupForwardMixin):
         warmup_prefill=True,
         **kwargs,
     ):
+        sakthi_debug_log_once("Generator.prefill_forward_text")
         self.mode = Mode.PREFILL
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
@@ -860,6 +865,7 @@ class Generator(WarmupForwardMixin):
         batch_size=1,
         **kwargs,
     ):
+        sakthi_debug_log_once("Generator.prefill_forward_single_user_text")
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         use_prefix_caching = num_cached_tokens > 0
@@ -996,6 +1002,7 @@ class Generator(WarmupForwardMixin):
         slot_remap=None,
         **kwargs,
     ):
+        sakthi_debug_log_once("Generator.decode_forward")
         mode_switched = False
         if self.mode != Mode.DECODE:
             self.mode = Mode.DECODE
@@ -1102,6 +1109,7 @@ class Generator(WarmupForwardMixin):
         Performs text decode step.
         Returns tt_logits on device
         """
+        sakthi_debug_log_once("Generator._decode_forward_no_trace_text")
         tt_output = []
         tt_tokens = []
         tt_current_pos = []
@@ -1575,6 +1583,7 @@ class Generator(WarmupForwardMixin):
         Input tt_out is list of tuples of (tt_out_tok, tt_log_probs)
         tt_log_probs can be: ttnn.Tensor (old path), LogProbsResult (new path), or None.
         """
+        sakthi_debug_log_once("Generator.read_decode_output")
 
         def _read_logprobs(lp, blocking: bool = True):
             if lp is None:
@@ -1620,6 +1629,7 @@ class Generator(WarmupForwardMixin):
              logits, topk_lp, and topk_idx are torch tensors concatenated across
              data-parallel ranks.
         """
+        sakthi_debug_log_once("Generator.process_decode_output_host")
         from models.common.sampling.tt_log_probs import LogProbsResult
 
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -2336,6 +2346,7 @@ class Generator(WarmupForwardMixin):
         user_id=None,
         padded_batch_size=None,
     ):
+        sakthi_debug_log_once("Generator._get_prefill_user_page_table")
         block_size = get_block_size(kv_cache)
 
         if use_batched_prefill:
@@ -2428,6 +2439,7 @@ class Generator(WarmupForwardMixin):
 
 
 def create_submeshes(mesh_device, data_parallel):
+    sakthi_debug_log_once("generator.create_submeshes")
     if not isinstance(mesh_device, ttnn.MeshDevice) or data_parallel == 1:
         return [mesh_device]
 

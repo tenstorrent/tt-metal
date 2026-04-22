@@ -16,6 +16,7 @@ from pydantic import AliasChoices, BaseModel, Field
 
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat as get_rot_transformation_mat_v2
+from models.tt_transformers.tt.sakthi_debug_trace import sakthi_debug_log_once
 
 
 class URL(BaseModel):
@@ -204,6 +205,7 @@ def preprocess_inputs_prefill(
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
+    sakthi_debug_log_once("common.preprocess_inputs_prefill")
     # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
 
     for m_args in model_args:
@@ -624,6 +626,7 @@ def sample_top_p(probs: torch.Tensor, p: float):
 
 
 def sample_host(tt_input, temperature=0.6, top_p=0.08, on_host=True):
+    sakthi_debug_log_once("common.sample_host")
     vocab_size = tt_input.shape[-1]
     pt_input = tt_input[..., :vocab_size]
 
