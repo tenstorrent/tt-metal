@@ -184,6 +184,25 @@ def _merge_heads(ctx, num_heads: int):
     return ttnn.reshape(out, (B, N, num_heads * HEAD_DIM_PAD))
 
 
+_MLP_GRID = None  # populated lazily once we have a device handle
+
+
+def _mlp_grid(device):
+    """Return the largest ``ttnn.CoreGrid`` available on ``device``.
+
+    Blackhole p150 reports a 13×10 compute grid (some cores harvested).
+    The default matmul scheduler picks a conservative subset for small
+    tensors; pinning the grid explicitly lets the 1280→5120 / 5120→1280
+    MLP matmuls span every available tensix.
+    """
+    global _MLP_GRID
+    if _MLP_GRID is not None:
+        return _MLP_GRID
+    g = device.compute_with_storage_grid_size()
+    _MLP_GRID = ttnn.CoreGrid(x=g.x, y=g.y)
+    return _MLP_GRID
+
+
 def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
     """One ViT-H transformer block (pre-norm, fused qkv, FlashAttention-2, MLP).
 
@@ -191,9 +210,18 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
     on tile-aligned heads (``HEAD_DIM_PAD = 96``).  Padded cols are zeroed in
     the upload-time weight transform so the math is exact.  ``head_dim`` arg
     kept in the signature for backward compatibility but is unused.
+
+    The MLP matmuls explicitly request the full Blackhole grid via
+    ``core_grid`` so the 1280→5120 → 5120→1280 pair (largest matmuls in the
+    block) saturate compute instead of running on the default conservative
+    subset.
     """
     del head_dim  # padded head dim handled internally
+    grid = _mlp_grid(hidden.device())
+
     # --- self-attention via FlashAttention-2 ---
+    # QKV/proj kept on the default grid: explicit full-grid here costs PCC
+    # without buying speed (presumably different reduction order).
     h = ttnn.layer_norm(hidden, weight=block_params["norm1"]["weight"], bias=block_params["norm1"]["bias"])
     qkv = h @ block_params["attn"]["qkv_w"]
     qkv = qkv + block_params["attn"]["qkv_b"]
@@ -208,12 +236,12 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
     attn_out = attn_out + block_params["attn"]["proj_b"]
     hidden = hidden + attn_out
 
-    # --- MLP ---
+    # --- MLP (full-grid) ---
     h = ttnn.layer_norm(hidden, weight=block_params["norm2"]["weight"], bias=block_params["norm2"]["bias"])
-    h = h @ block_params["mlp"]["fc1_w"]
+    h = ttnn.matmul(h, block_params["mlp"]["fc1_w"], core_grid=grid)
     h = h + block_params["mlp"]["fc1_b"]
     h = ttnn.gelu(h)
-    h = h @ block_params["mlp"]["fc2_w"]
+    h = ttnn.matmul(h, block_params["mlp"]["fc2_w"], core_grid=grid)
     h = h + block_params["mlp"]["fc2_b"]
     hidden = hidden + h
     return hidden
