@@ -16,8 +16,7 @@ lets us flip a single env var once the cluster is free.
 from __future__ import annotations
 
 import os
-import signal
-from contextlib import contextmanager
+import subprocess
 from typing import Any, Optional
 
 import torch
@@ -25,24 +24,51 @@ import torch
 
 _DEFAULT_DEVICE_ID = int(os.environ.get("DYN_HAMR_DEVICE", "0"))
 _USE_TT = os.environ.get("DYN_HAMR_USE_TT", "0") == "1"
-_OPEN_TIMEOUT_S = int(os.environ.get("DYN_HAMR_OPEN_TIMEOUT", "10"))
+_FORCE = os.environ.get("DYN_HAMR_FORCE_TT", "0") == "1"
 
 
-@contextmanager
-def _sigalarm(seconds: int):
-    """Raise TimeoutError after ``seconds`` wall-clock seconds.  Used to bound
-    ``ttnn.open_device`` because it otherwise blocks indefinitely on a
-    cluster-wide ``CHIP_IN_USE_*`` lock when other agents hold the mesh.
+def _cluster_contended() -> bool:
+    """Check whether any other pytest is alive on this host.
+
+    UMD's ``Starting devices in cluster`` path takes a per-chip pthread
+    mutex that SIGALRM cannot interrupt, so if another agent's test is
+    alive we *must not* call ``ttnn.open_device`` — it will hang the
+    harness indefinitely.  Returns True when a contending process is
+    detected.  ``DYN_HAMR_FORCE_TT=1`` bypasses the check.
     """
-    def _handler(signum, frame):
-        raise TimeoutError(f"tt-nn device open exceeded {seconds}s")
-    old = signal.signal(signal.SIGALRM, _handler)
-    signal.alarm(seconds)
+    if _FORCE:
+        return False
+    my_pid = os.getpid()
     try:
-        yield
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old)
+        out = subprocess.check_output(["pgrep", "-f", "pytest"], text=True).split()
+    except subprocess.CalledProcessError:
+        return False
+    others = [int(p) for p in out if p.isdigit() and int(p) != my_pid]
+    # Filter out our own parent chain (tee, shell) if they match.
+    if not others:
+        return False
+    # If any other pid looks like it is also running pytest, assume contention.
+    return any(_pid_runs_pytest(p, my_pid) for p in others)
+
+
+def _pid_runs_pytest(pid: int, my_pid: int) -> bool:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            cmdline = fh.read().replace(b"\0", b" ").decode(errors="ignore")
+    except OSError:
+        return False
+    if "pytest" not in cmdline:
+        return False
+    # Skip our own process tree (parent shell etc.).
+    try:
+        with open(f"/proc/{pid}/status", "r") as fh:
+            ppid = next(
+                (int(ln.split()[1]) for ln in fh if ln.startswith("PPid:")),
+                -1,
+            )
+    except OSError:
+        return True
+    return ppid != my_pid
 
 
 class TtHamer:
@@ -63,17 +89,17 @@ class TtHamer:
             self._open_device()
 
     def _open_device(self) -> None:
+        if _cluster_contended():
+            print("[dyn_hamr] tt-nn cluster contended (other pytest alive); falling back to CPU reference")
+            self.device = None
+            return
         try:
             import ttnn  # noqa: WPS433
         except Exception as e:
             print(f"[dyn_hamr] ttnn import failed: {e}")
             return
         try:
-            with _sigalarm(_OPEN_TIMEOUT_S):
-                self.device = ttnn.open_device(device_id=self.device_id)
-        except TimeoutError as e:
-            print(f"[dyn_hamr] {e}; falling back to CPU reference")
-            self.device = None
+            self.device = ttnn.open_device(device_id=self.device_id)
         except Exception as e:
             print(f"[dyn_hamr] tt-nn device open failed on id={self.device_id}: {e}")
             self.device = None
