@@ -10,15 +10,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-# - name: Galaxy Llama3 integration tests
-#   cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model llama3
-#   model: llama3
-#   skus:
-#    wh_galaxy:
-#      timeout: 70
-#   owner_id: U053W15B6JF # Djordje Ivanovic
-#   team: ttnn
-
 - name: Galaxy resnet50 integration tests
   cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model resnet50
   model: resnet50
