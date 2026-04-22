@@ -10,6 +10,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 
 namespace ttnn::operations::matmul::utilities {
 
@@ -180,6 +181,16 @@ inline ttnn::Shape get_matmul_tensor_logical_shape(const Tensor& input_tensor, b
         std::swap(shape[-2], shape[-1]);
     }
     return shape;
+}
+
+inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType opType) {
+    using ttnn::operations::unary::UnaryOpType;
+    switch (opType) {
+        case UnaryOpType::GELU: return KernelActivation::GELU;
+        case UnaryOpType::TANH: return KernelActivation::TANH;
+        case UnaryOpType::SILU: return KernelActivation::SILU;
+        default: TT_THROW("Unsupported UnaryOpType for fused activation: {}", opType);
+    };
 }
 
 }  // namespace ttnn::operations::matmul::utilities
