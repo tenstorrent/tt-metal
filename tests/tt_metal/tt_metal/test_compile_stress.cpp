@@ -10,7 +10,10 @@
 // the JIT thread pool / remote compile server stays fully saturated.
 //
 // Configuration (env vars):
-//   TT_METAL_COMPILE_STRESS_NUM_KERNELS  total unique kernels  (default 1000)
+//   TT_METAL_COMPILE_STRESS_NUM_KERNELS  total unique kernels        (default 1000)
+//   TT_METAL_COMPILE_STRESS_ARCH         mock arch: wormhole_b0 |
+//                                          blackhole | quasar        (default wormhole_b0)
+//   TT_METAL_COMPILE_STRESS_NUM_CHIPS    mock num_chips              (default 1)
 //
 // Example:
 //   TT_METAL_COMPILE_STRESS_NUM_KERNELS=40000 \
@@ -27,8 +30,10 @@
 #include <vector>
 
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/experimental/mock_device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -41,6 +46,16 @@ uint32_t get_env_uint32(const char* name, uint32_t default_value) {
         return static_cast<uint32_t>(std::stoul(env));
     }
     return default_value;
+}
+
+tt::ARCH get_mock_arch_from_env() {
+    const char* env = std::getenv("TT_METAL_COMPILE_STRESS_ARCH");
+    if (!env) {
+        return tt::ARCH::WORMHOLE_B0;
+    }
+    tt::ARCH arch = tt::get_arch_from_string(env);
+    TT_FATAL(arch != tt::ARCH::Invalid, "Invalid TT_METAL_COMPILE_STRESS_ARCH value: '{}'", env);
+    return arch;
 }
 
 Program create_compute_program(
@@ -77,7 +92,24 @@ Program create_compute_program(
 
 }  // namespace
 
-TEST_F(MeshDispatchFixture, NIGHTLY_TensixCompileStress) {
+// Mock-device-backed fixture: this test stresses the compiler / remote JIT server only
+// and never enqueues work, so it doesn't need real hardware. Running on a mock device
+// lets the test run in any environment (CI, dev boxes without TT cards, etc.) and makes
+// behaviour reproducible regardless of the host machine's cluster.
+class CompileStressFixture : public MeshDispatchFixture {
+protected:
+    void SetUp() override {
+        experimental::configure_mock_mode(
+            get_mock_arch_from_env(), get_env_uint32("TT_METAL_COMPILE_STRESS_NUM_CHIPS", 1));
+        MeshDispatchFixture::SetUp();
+    }
+    void TearDown() override {
+        MeshDispatchFixture::TearDown();
+        experimental::disable_mock_mode();
+    }
+};
+
+TEST_F(CompileStressFixture, NIGHTLY_TensixCompileStress) {
     IDevice* dev = devices_[0]->get_devices()[0];
 
     const uint32_t target_num_kernels = get_env_uint32("TT_METAL_COMPILE_STRESS_NUM_KERNELS", 1000);
