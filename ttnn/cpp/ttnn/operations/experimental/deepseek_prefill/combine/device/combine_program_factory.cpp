@@ -300,6 +300,9 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     {
         auto counter_shape = expert_token_counts.tensor_spec().logical_shape();
         uint32_t num_routed_experts = counter_shape[-1];
+        TT_FATAL(operation_attributes.experts_per_chip > 0, "experts_per_chip must be > 0");
+        TT_FATAL(operation_attributes.dispatch_group_size > 0, "dispatch_group_size must be > 0");
+        TT_FATAL(num_routed_experts > 0, "num_routed_experts must be > 0");
         uint32_t computed_ndg =
             num_routed_experts / (operation_attributes.experts_per_chip * operation_attributes.dispatch_group_size);
         TT_FATAL(
