@@ -360,7 +360,7 @@ class Attention(LightweightModule):
             memory_config=get_wo_memory_config(),
             mesh_mapper=get_wo_mesh_mapper(),
             cache_file_name=(
-                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo_dim2_sharded")
+                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
         if not use_paged_kv_cache:
