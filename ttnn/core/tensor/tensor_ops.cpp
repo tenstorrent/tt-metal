@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include <cstdint>
+#include <numeric>
 #include <ranges>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -22,6 +23,23 @@
 #include "ttnn/graph/graph_serialization.hpp"
 
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt_stl/small_vector.hpp>
+
+namespace {
+// Matches ttnn::operations::data_movement::squeeze_shape_to_ND (leading dims folded into [0]).
+// Used to keep ND shard_shape rank in sync with logical shape when a view only reduces rank via that fold.
+tt::tt_metal::Shape squeeze_shape_to_nd_for_view(const tt::tt_metal::Shape& shape, const uint32_t n) {
+    if (shape.rank() <= n) {
+        return shape;
+    }
+    ttsl::SmallVector<uint32_t> shape_nd(n);
+    std::copy(shape.view().rbegin(), shape.view().rbegin() + n, shape_nd.rbegin());
+    const auto rank_diff_end = shape.rank() - n + 1;
+    shape_nd[0] = std::accumulate(shape.cbegin(), shape.cbegin() + rank_diff_end, 1, std::multiplies<uint32_t>());
+
+    return tt::tt_metal::Shape(std::move(shape_nd));
+}
+}  // namespace
 
 namespace tt::tt_metal {
 
@@ -278,6 +296,21 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         input_memory_config.shard_spec()->shape[1]);
 
     auto output_memory_config = input_memory_config;
+    if (input_memory_config.created_with_nd_shard_spec() && input_memory_config.nd_shard_spec().has_value()) {
+        const auto& nd_spec = *input_memory_config.nd_shard_spec();
+        const size_t old_log_rank = input_tensor.logical_shape().rank();
+        const size_t new_log_rank = new_logical_shape.rank();
+        if (nd_spec.shard_shape.rank() == old_log_rank && new_log_rank < old_log_rank) {
+            const auto expected_logical =
+                ::squeeze_shape_to_nd_for_view(input_tensor.logical_shape(), static_cast<uint32_t>(new_log_rank));
+            if (expected_logical == new_logical_shape) {
+                auto new_nd = nd_spec;
+                new_nd.shard_shape =
+                    ::squeeze_shape_to_nd_for_view(nd_spec.shard_shape, static_cast<uint32_t>(new_log_rank));
+                output_memory_config = MemoryConfig{input_memory_config.buffer_type(), std::move(new_nd)};
+            }
+        }
+    }
     if (is_row_major && input_memory_config.is_sharded() && changing_last_dim) {
         auto shard_spec = input_memory_config.shard_spec().value();
         auto shard_volume = shard_spec.numel();

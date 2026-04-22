@@ -4,6 +4,7 @@
 
 #include "gather.hpp"
 #include <cstdint>
+#include <optional>
 
 #include "device/gather_device_operation.hpp"
 
@@ -11,6 +12,7 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
@@ -39,8 +41,8 @@ namespace CMAKE_UNIQUE_NAMESPACE {
  * @note For scalar tensors (logical shape {1}), the function returns the input tensor unchanged
  * @note Index tensors are padded with zeros, while input tensors are padded with minimum float values
  * @note Input tensors are sliced to match the index tensor dimensions for proper cell mapping
- * @note Interleaved, legacy-sharded, and ND-sharded layouts are preserved: transpose/slice/fill use the tensor's
- *       memory_config (see perform_transpose and slice call sites below).
+ * @note Interleaved, legacy-sharded, and ND-sharded layouts are preserved: transpose/fill use the tensor's
+ *       memory_config. After rank reduction, slice uses the transformed tensor's memory_config (see slice call).
  */
 Tensor pre_gather_transform_tensor(
     const Tensor& input_tensor,
@@ -76,8 +78,9 @@ Tensor pre_gather_transform_tensor(
         index_tensor_padded_shape[2],
         transformed_tensor.logical_shape()[-1]};
 
-    const Tensor sliced_tensor =
-        ttnn::slice(transformed_tensor, start_index, end_index, step, input_tensor.memory_config());
+    // Use the transformed tensor's memory config (rank matches after transpose + to-4D). The original
+    // input's ND shard spec is still 5D+ and will break to_memory_config inside slice if passed here.
+    const Tensor sliced_tensor = ttnn::slice(transformed_tensor, start_index, end_index, step, std::nullopt);
 
     return ttnn::fill_implicit_tile_padding(sliced_tensor, std::numeric_limits<float>::min());
 }
@@ -146,6 +149,40 @@ Tensor post_gather_transform_tensor(
     return output_tensor;
 }
 
+// prim::Gather runs on preprocessed (typically 4D) index tensors, but the caller may still pass the original
+// high-rank NdShardSpec. TensorSpec::populate_legacy_shard_spec_from_nd() requires matching ranks; fold the
+// leading dimensions the same way as transform_to_4d_tensor.
+tt::tt_metal::MemoryConfig fold_nd_output_memory_config_for_device_op(
+    const tt::tt_metal::MemoryConfig& requested,
+    const ttnn::Shape& pre_transform_index_shape,
+    const Tensor& transformed_index_tensor) {
+    if (!requested.created_with_nd_shard_spec() || !requested.nd_shard_spec().has_value()) {
+        return requested;
+    }
+    const auto& nd = *requested.nd_shard_spec();
+    const auto out_rank = transformed_index_tensor.logical_shape().rank();
+    if (nd.shard_shape.rank() == out_rank) {
+        return requested;
+    }
+    if (nd.shard_shape.rank() < out_rank) {
+        return requested;
+    }
+    const uint32_t out_rank_u = static_cast<uint32_t>(out_rank);
+    const auto squeezed_index =
+        ttnn::operations::data_movement::squeeze_shape_to_ND(pre_transform_index_shape, out_rank_u);
+    if (squeezed_index == transformed_index_tensor.logical_shape()) {
+        auto new_nd = nd;
+        new_nd.shard_shape = ttnn::operations::data_movement::squeeze_shape_to_ND(nd.shard_shape, out_rank_u);
+        return tt::tt_metal::MemoryConfig{requested.buffer_type(), std::make_optional(std::move(new_nd))};
+    }
+    if (transformed_index_tensor.memory_config().created_with_nd_shard_spec() &&
+        transformed_index_tensor.memory_config().nd_shard_spec().has_value()) {
+        auto aligned_nd = *transformed_index_tensor.memory_config().nd_shard_spec();
+        return tt::tt_metal::MemoryConfig{requested.buffer_type(), std::make_optional(std::move(aligned_nd))};
+    }
+    return requested;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -203,6 +240,10 @@ Tensor gather(
         false,
         padded_index_tensor.padded_shape());
 
+    const tt::tt_metal::MemoryConfig memory_config_for_device_op =
+        operations::data_movement::CMAKE_UNIQUE_NAMESPACE::fold_nd_output_memory_config_for_device_op(
+            memory_config_value, original_index_tensor_lshape, padded_index_tensor);
+
     std::optional<Tensor> optional_output_tensor_value = std::nullopt;
     if (optional_output_tensor.has_value()) {
         auto& output_tensor = optional_output_tensor.value();
@@ -216,7 +257,7 @@ Tensor gather(
         normalized_dim,
         padded_index_tensor,
         sparse_grad,
-        memory_config_value,
+        memory_config_for_device_op,
         optional_output_tensor_value,
         sub_core_grids);
 
