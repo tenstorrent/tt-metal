@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -62,20 +63,22 @@ namespace compute_kernel_lib {
 // =============================================================================
 
 /**
- * @brief Reconfiguration mode for data format setup before reduce operations
+ * @brief Reconfiguration mode for data format unpacker and packer setup
  *
- * Controls whether unpacker (input) and/or packer (output) are reconfigured:
- * - NONE: Skip all reconfiguration (reduce is first op or formats match)
- * - INPUT: Reconfigure unpacker only (input format changed)
- * - OUTPUT: Reconfigure packer only (output format changed)
- * - INPUT_AND_OUTPUT: Reconfigure both unpacker and packer (default, safest option)
+ * If the data format for input (unpacker) or output (packer) differs from what the
+ * previous op configured, unpacker and/or packer must be reconfigured.
+ *
+ * Perf note: unnecessary reconfigurations cost cycles. If the caller tracks data-format
+ * usage across consecutive ops it can pick a narrower mode. When that is impractical,
+ * INPUT_AND_OUTPUT is the safe default (biggest perf hit, but always correct).
+ *
+ * - NONE: Skip all reconfiguration (reduce is first op, or input and output formats
+ *         both match the previous op).
+ * - INPUT: Reconfigure unpacker only (input CB format differs from previous op).
+ * - OUTPUT: Reconfigure packer only (output CB format differs from previous op).
+ * - INPUT_AND_OUTPUT: Reconfigure both (default, safest, largest perf impact).
  */
-enum class ReduceDataFormatReconfigMode {
-    NONE,             // Skip all data format reconfiguration
-    INPUT,            // Reconfigure unpacker only (calls reconfig_data_format)
-    OUTPUT,           // Reconfigure packer only (calls pack_reconfig_data_format)
-    INPUT_AND_OUTPUT  // Reconfigure both unpacker and packer (default)
-};
+enum class ReduceDataFormatReconfigMode { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT };
 
 // =============================================================================
 // Input Policy - control how input tiles are synchronized and consumed
@@ -86,7 +89,7 @@ enum class ReduceDataFormatReconfigMode {
  *
  * Controls when to wait for input tiles and whether to pop them after processing:
  *
- * - WaitAndPopPerTile: Wait/process/pop one tile at a time (streaming, safe for any CB size)
+ * - WaitAndPopPerTile: Wait/process/pop one tile at a time (streaming, safe for any CB size).
  *
  * - BulkWaitBulkPop: Wait for bulk, process all with indexed access, pop bulk.
  *   Bulk size depends on reduce dimension:
@@ -94,16 +97,13 @@ enum class ReduceDataFormatReconfigMode {
  *     REDUCE_ROW:    Bulk = Wt tiles    → 1 output per row
  *     REDUCE_COL:    Bulk = Ht×chunk    → chunk outputs (chunk = DEST_AUTO_LIMIT)
  *
- * - WaitUpfrontNoPop: Wait for all tiles upfront, don't pop (persistent, for tile reuse)
+ * - WaitUpfrontNoPop: Wait for all tiles upfront, don't pop (persistent, for tile reuse).
+ *   For REDUCE_COL tiles are indexed in standard row-major order (batch_offset + Ht*stride + Wt).
  *
- * - NoWaitNoPop: Caller manages wait/pop externally (preloaded, tiles already in CB)
+ * - NoWaitNoPop: Caller manages wait/pop externally (preloaded, tiles already in CB).
+ *   For REDUCE_COL tiles are accessed in row-major order, same as WaitUpfrontNoPop.
  */
-enum class ReduceInputPolicy {
-    WaitAndPopPerTile,  // Wait/process/pop one tile at a time (streaming)
-    BulkWaitBulkPop,    // Wait for bulk, process all, pop bulk (see above for bulk sizes)
-    WaitUpfrontNoPop,   // Wait for all tiles upfront, don't pop (persistent)
-    NoWaitNoPop         // Caller manages wait/pop (preloaded)
-};
+enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNoPop, NoWaitNoPop };
 
 // =============================================================================
 // Configuration Types
@@ -152,8 +152,9 @@ struct ReduceInputBlockShape {
  * Does not hold iteration state - that's provided via Accumulate wrapper.
  */
 struct AccumulationConfig {
-    uint32_t cb_accumulator = 0;  // CB for accumulator
-    uint32_t dst_index = 0;       // DST register for accumulation (default: 0)
+    // CB holding the running accumulator tile across reduce() iterations; see Accumulate below.
+    uint32_t cb_accumulator = 0;
+    uint32_t dst_index = 0;  // DST register for accumulation (default: 0)
 
     static constexpr AccumulationConfig with_cb(uint32_t cb, uint32_t dst = 0) { return {cb, dst}; }
 };
@@ -271,12 +272,6 @@ struct NoOp {
  * IMPORTANT - SCALER CB REQUIREMENT:
  * The scaler CB (scaler_cb) must contain the scaling factor tile BEFORE calling
  * this function. The function will wait for it automatically.
- *
- * IMPORTANT - REDUCE_COL DATA LAYOUT:
- * - WaitAndPopPerTile policy: Tiles processed one-at-a-time in column-major chunks due to DEST limits.
- * - BulkWaitBulkPop policy: Tiles batched per chunk (Ht*chunk_size tiles), indexed access.
- * - NoWaitNoPop/WaitUpfrontNoPop policy: Tiles in standard row-major order (batch_offset + ht*stride + wt).
- * - Chunk size is auto-detected from DEST register capacity (DEST_AUTO_LIMIT).
  *
  * INPUT POLICIES: See ReduceInputPolicy enum for detailed mode descriptions.
  * - Use BulkWaitBulkPop for optimal performance when wait/pop are symmetric with ReduceInputBlockShape.

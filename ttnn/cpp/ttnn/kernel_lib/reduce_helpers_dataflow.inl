@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
 // SPDX-License-Identifier: Apache-2.0
 
 // Implementation file for reduce_helpers_dataflow.hpp
@@ -250,6 +251,10 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     // Matmul-based reduce uses col-0 fill; reduce LLK uses row-0 fill
     constexpr bool use_matmul = !compute_uses_reduce_tile && reduce_uses_matmul<pool_type, reduce_dim>();
 
+    // Full element count along the reduce axis: cols for REDUCE_ROW, rows for REDUCE_COL.
+    // Unused for REDUCE_SCALAR (which always fills the full tile).
+    constexpr uint32_t full_dim = (reduce_dim == ReduceDim::REDUCE_COL) ? tile_r_dim : tile_c_dim;
+
     ::experimental::CircularBuffer cb(cb_id);
 
     cb.reserve_back(1);
@@ -260,7 +265,7 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     if constexpr (use_matmul) {
         uint32_t scaler = float_to_col0_scaler_bits<data_format>(scaler_f);
         if (scaler != 0) {
-            if (valid_reduce_dim_elements_in_tile == tile_r_dim) {
+            if (valid_reduce_dim_elements_in_tile == full_dim) {
                 fill_tile_col0<data_format, face_rows, faces_per_row>(addr_to_l1_ptr(write_addr), scaler);
             } else {
                 fill_tile_col0_partial<data_format, face_rows, faces_per_row>(
@@ -273,8 +278,6 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
             if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
                 fill_each_face_row0<data_format, num_faces>(addr_to_l1_ptr(write_addr), scaler);
             } else {
-                constexpr uint32_t full_dim =
-                    (reduce_dim == ReduceDim::REDUCE_COL) ? tile_r_dim : tile_c_dim;
                 if (valid_reduce_dim_elements_in_tile == full_dim) {
                     fill_each_face_row0<data_format, num_faces>(addr_to_l1_ptr(write_addr), scaler);
                 } else {

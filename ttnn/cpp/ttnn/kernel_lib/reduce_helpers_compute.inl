@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
 // SPDX-License-Identifier: Apache-2.0
 
 // Implementation file for reduce_helpers_compute.hpp
@@ -21,16 +22,16 @@ namespace compute_kernel_lib {
 constexpr ckernel::MathFidelity REDUCE_MATMUL_FIDELITY = ckernel::MathFidelity::HiFi4;
 
 // Matmul wrappers that use REDUCE_MATMUL_FIDELITY instead of MATH_FIDELITY
-ALWI void reduce_mm_init_short(uint32_t in0_cb_id, uint32_t in1_cb_id) {
+ALWI void reduce_with_matmul_init(uint32_t in0_cb_id, uint32_t in1_cb_id) {
     state_configure(in1_cb_id, in0_cb_id);
     MATH((llk_math_matmul_init<REDUCE_MATMUL_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, 0)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, 0)));
 }
 
-ALWI void reduce_mm_init_short_with_dt(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca) {
+ALWI void reduce_with_matmul_init_with_dt(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca) {
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
-    reduce_mm_init_short(in0_cb_id, in1_cb_id);
+    reduce_with_matmul_init(in0_cb_id, in1_cb_id);
 }
 
 ALWI void reduce_matmul_tiles(
@@ -114,7 +115,7 @@ ALWI void reload_accumulator_if_needed(
             // Use short version since packer config is still valid from initial init
             // Pass accumulator CB as old_cb_id to reconfigure data format from accumulator to input CB
             if constexpr (use_matmul) {
-                reduce_mm_init_short_with_dt(input_cb_id, scaler_cb_id, accumulate.config.cb_accumulator);
+                reduce_with_matmul_init_with_dt(input_cb_id, scaler_cb_id, accumulate.config.cb_accumulator);
             } else {
                 reduce_init_short_with_dt<reduce_type, reduce_dim>(
                     accumulate.config.cb_accumulator, input_cb_id, scaler_cb_id);
@@ -227,7 +228,7 @@ ALWI void reduce(
     }
     // Initialization
     if constexpr (use_matmul) {
-        reduce_mm_init_short(input_cb_id, scaler_cb_id);
+        reduce_with_matmul_init(input_cb_id, scaler_cb_id);
     } else {
         reduce_init<reduce_type, reduce_dim>(input_cb_id, scaler_cb_id, output_cb_id);
     }
