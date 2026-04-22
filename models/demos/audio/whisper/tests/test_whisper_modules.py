@@ -5,7 +5,10 @@
 import pytest
 import torch
 import transformers
-from datasets import load_dataset
+import glob
+import os
+
+from datasets import load_dataset, load_from_disk
 from loguru import logger
 from transformers import AutoFeatureExtractor, EncoderDecoderCache, WhisperConfig, WhisperModel
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -566,7 +569,13 @@ def test_ttnn_whisper(
     input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     config = whisper_config_for_tests(model_name)
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
-    ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    # Prefer load_from_disk when HF_DATASETS_CACHE is set: it reads Arrow files
+    # directly without writing lock files, which avoids EROFS on read-only mounts.
+    _cache = os.environ.get("HF_DATASETS_CACHE")
+    _cached_dirs = glob.glob(os.path.join(_cache, "hf-internal-testing___parquet", "clean-*")) if _cache else []
+    ds = load_from_disk(sorted(_cached_dirs)[-1]) if _cached_dirs else load_dataset(
+        "hf-internal-testing/librispeech_asr_dummy", "clean", split="validation"
+    )
     inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features
     input_features = input_features.repeat(batch_size, 1, 1)
