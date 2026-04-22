@@ -268,6 +268,84 @@ INSTANTIATE_TEST_SUITE_P(
             .padded_shape = Shape{5, 4, 3, 16, 16},
         }));
 
+// Regression tests for `legacyShapeToAlignment` on TILE-layout tensors that
+// take the "INTERLEAVED with (deprecated) non-height/width padding" branch
+// (i.e. logical and padded shapes differ on outer dimensions).
+//
+// Before the fix in tensor_layout.cpp, the outer-dimension alignment cascade
+// was seeded with the substituted tile dimensions for TILE layout, causing
+// `compute_physical_shape` to return a size smaller than the legacy padded
+// volume whenever `padded[-2] > tile_height`. That smaller size was used to
+// allocate device buffers, while host-side buffers were still packed for the
+// original legacy padded volume, leading to a buffer overflow during
+// `enqueue_write_tensor` (TT_FATAL in buffer.cpp: region.offset + region.size
+// <= size()).
+//
+// These cases pick parameters where `alignment_can_be_2D == false` and
+// `padded[-2]` exceeds the 32x32 tile dims, so the buggy cascade yields a
+// strictly smaller physical shape than the fixed cascade.
+struct TilePaddedAlignmentTestParams {
+    Shape shape;
+    Shape padded_shape;
+    DataType dtype;
+    tt::tt_metal::Shape2D expected_physical_shape;
+};
+
+class TensorLayoutTilePaddedAlignmentTests : public ::testing::TestWithParam<TilePaddedAlignmentTestParams> {};
+
+TEST_P(TensorLayoutTilePaddedAlignmentTests, Tensor_TilePaddedAlignmentRegression) {
+    const auto& params = GetParam();
+    TensorLayout layout = TensorLayout::fromPaddedShape(
+        params.dtype, Layout::TILE, DefaultMemoryConfig, params.shape, params.padded_shape);
+
+    // The physical shape must match the expected value: it reflects the outer
+    // dimension cumulative alignment correctly carrying the original padded
+    // dims, not the substituted tile dims. A too-small physical shape is the
+    // direct signature of the bug.
+    EXPECT_EQ(layout.compute_physical_shape(params.shape), params.expected_physical_shape);
+
+    // The physical volume must cover the legacy padded volume,
+    // otherwise a host buffer packed for the legacy padded shape would not
+    // fit into the device allocation.
+    const size_t physical_volume =
+        static_cast<size_t>(params.expected_physical_shape.height()) * params.expected_physical_shape.width();
+    EXPECT_EQ(physical_volume, params.padded_shape.volume());
+
+    // Roundtrip: compute_padded_shape on the logical shape must recover the
+    // originally supplied legacy padded shape.
+    EXPECT_EQ(layout.compute_padded_shape(params.shape), params.padded_shape);
+
+    // End-to-end: allocating a device tensor with this spec and writing a
+    // host buffer of `compute_packed_buffer_size_bytes` into it must succeed.
+    // (With the buggy alignment the device allocation would be smaller than
+    // the host buffer, triggering the buffer.cpp TT_FATAL.)
+    test_utils::test_tensor_on_device(params.shape, layout);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorLayoutTests,
+    TensorLayoutTilePaddedAlignmentTests,
+    ::testing::Values(
+        // Minimal reproducer: outer dim N padded from 1 -> 2, padded[-2]=64 > tile_h=32.
+        TilePaddedAlignmentTestParams{
+            .shape = Shape{1, 2, 64, 32},
+            .padded_shape = Shape{2, 2, 64, 32},
+            .dtype = DataType::BFLOAT16,
+            .expected_physical_shape = tt::tt_metal::Shape2D{256, 32}},
+        // Padding on C (dim -3) while N stays equal; padded[-2]=64 > 32.
+        TilePaddedAlignmentTestParams{
+            .shape = Shape{3, 1, 64, 32},
+            .padded_shape = Shape{3, 2, 64, 32},
+            .dtype = DataType::BFLOAT16,
+            .expected_physical_shape = tt::tt_metal::Shape2D{384, 32}},
+
+        // padded[-2]=96 > 32 and outer-dim padding on N.
+        TilePaddedAlignmentTestParams{
+            .shape = Shape{1, 3, 96, 32},
+            .padded_shape = Shape{2, 3, 96, 32},
+            .dtype = DataType::BFLOAT16,
+            .expected_physical_shape = tt::tt_metal::Shape2D{576, 32}}));
+
 struct ConsumedMemoryBytesPerBankTestParams {
     Shape shape;
     TensorLayout tensor_layout;

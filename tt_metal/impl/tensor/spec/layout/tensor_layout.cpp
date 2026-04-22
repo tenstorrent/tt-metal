@@ -70,7 +70,15 @@ Alignment legacyShapeToAlignment(
     // INTERLEAVED with (deprecated) non-height/width padding
     // NOTE: Rank > 2 is guaranteed in this case
     ttsl::SmallVector<uint32_t> values(padded_rank);
+
     if (page_config.get_layout() == Layout::TILE) {
+        // For TILE layout we use tile dims as the innermost alignment values instead of the
+        // legacy padded shape dims, because padded[-2]/padded[-1] can exceed the tile size and
+        // should not be treated as alignment requirements for TILE tensors.
+        // However, the cumulative alignment for outer dims must still be computed from the
+        // original padded shape dims (not from the substituted tile dims), otherwise outer
+        // alignment values would be smaller than the actual padded volume and
+        // compute_physical_shape() would return a size smaller than the buffer holds.
         values[padded_rank - 1] = page_config.get_tile().get_width();
         values[padded_rank - 2] = page_config.get_tile().get_height();
     } else {
@@ -78,8 +86,10 @@ Alignment legacyShapeToAlignment(
         values[padded_rank - 2] = legacy_padded_shape[-2];
     }
 
+    uint32_t cumulative_padded = legacy_padded_shape[-2];
     for (int i = padded_rank - 3; i >= 0; i--) {
-        values[i] = legacy_padded_shape[i] * values[i + 1];
+        values[i] = legacy_padded_shape[i] * cumulative_padded;
+        cumulative_padded *= legacy_padded_shape[i];
     }
 
     for (auto& value : values) {
