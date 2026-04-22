@@ -105,9 +105,12 @@ void kernel_main() {
             }
 
             if (!is_last_chip) {
+                // Inter-device W exchange: always ship real boundary data regardless of
+                // is_padding_zeros. is_padding_zeros only gates the tensor-global edge pad
+                // (is_first_chip branch above), never inter-device boundaries.
                 for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
                     cb_reserve_back(cb_output_id, 1);
-                    if (is_t_front || is_padding_zeros) {
+                    if (is_t_front) {
                         zeroPad<stick_size>(cb_output_id);
                         noc_async_read_barrier();
                     } else {
@@ -161,9 +164,10 @@ void kernel_main() {
             }
 
             if (!is_last_chip) {
+                // Inter-device W exchange: ship real boundary data regardless of is_padding_zeros.
                 for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
                     cb_reserve_back(cb_output_id, 1);
-                    if (is_t_front || is_padding_zeros) {
+                    if (is_t_front) {
                         zeroPad<stick_size>(cb_output_id);
                         noc_async_read_barrier();
                     } else {
@@ -198,9 +202,10 @@ void kernel_main() {
             }
 
             if (!is_last_chip) {
+                // Inter-device W exchange: ship real boundary data regardless of is_padding_zeros.
                 for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
                     cb_reserve_back(cb_output_id, 1);
-                    if (is_t_front || is_padding_zeros) {
+                    if (is_t_front) {
                         zeroPad<stick_size>(cb_output_id);
                         noc_async_read_barrier();
                     } else {

@@ -398,12 +398,11 @@ def run_neighbor_pad_2d_t_front_pad_impl(
             device_idx = row * mesh_shape[1] + col
             dev_tensor = ttnn.to_torch(device_tensors[device_idx])
             golden = goldens[(row, col)]
-            assert dev_tensor.shape == golden.shape, (
-                f"Device ({row},{col}): shape mismatch: got {dev_tensor.shape}, expected {golden.shape}"
-            )
+            assert (
+                dev_tensor.shape == golden.shape
+            ), f"Device ({row},{col}): shape mismatch: got {dev_tensor.shape}, expected {golden.shape}"
             eq, msg = comp_equal(dev_tensor, golden)
-            logger.info(f"Device ({row},{col}): {msg}")
-            # assert eq, f"Device ({row},{col}): {msg}"
+            assert eq, f"Device ({row},{col}): {msg}"
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
@@ -507,9 +506,7 @@ def run_neighbor_pad_t_front_pad_impl(
         w_chunks = list(torch.chunk(h_chunks[h_idx], w_factor, dim=other_shard_dim))
         for w_idx in range(w_factor):
             # H halo for this (h_idx, w_idx): need neighbor H data from same W column
-            col_h_chunks = [
-                torch.chunk(h_chunks[hi], w_factor, dim=other_shard_dim)[w_idx] for hi in range(h_factor)
-            ]
+            col_h_chunks = [torch.chunk(h_chunks[hi], w_factor, dim=other_shard_dim)[w_idx] for hi in range(h_factor)]
             padded_col = pad_chunks_along_dim(col_h_chunks, h_dim, padding_h, padding_h, "zeros")
             padded_hw = padded_col[h_idx]
             # Prepend T-front zero frames
@@ -573,9 +570,9 @@ def run_neighbor_pad_t_front_pad_impl(
             device_idx = row * mesh_shape[1] + col
             dev_tensor = ttnn.to_torch(device_tensors[device_idx])
             golden = goldens[(row, col)]
-            assert dev_tensor.shape == golden.shape, (
-                f"Device ({row},{col}): shape mismatch: got {dev_tensor.shape}, expected {golden.shape}"
-            )
+            assert (
+                dev_tensor.shape == golden.shape
+            ), f"Device ({row},{col}): shape mismatch: got {dev_tensor.shape}, expected {golden.shape}"
             eq, msg = comp_equal(dev_tensor, golden)
             assert eq, f"Device ({row},{col}): {msg}"
 
@@ -661,12 +658,12 @@ def run_neighbor_pad_logical_h_impl(
     mesh_shape = tuple(mesh_device.shape)
     h_factor = mesh_shape[cluster_axis]
 
-    assert input_shape[halo_dim] % h_factor == 0, (
-        f"input_shape[{halo_dim}]={input_shape[halo_dim]} must be divisible by h_factor={h_factor}"
-    )
-    assert 0 < logical_h <= input_shape[halo_dim], (
-        f"logical_h={logical_h} must be in (0, input_shape[{halo_dim}]={input_shape[halo_dim]}]"
-    )
+    assert (
+        input_shape[halo_dim] % h_factor == 0
+    ), f"input_shape[{halo_dim}]={input_shape[halo_dim]} must be divisible by h_factor={h_factor}"
+    assert (
+        0 < logical_h <= input_shape[halo_dim]
+    ), f"logical_h={logical_h} must be in (0, input_shape[{halo_dim}]={input_shape[halo_dim]}]"
 
     input_tensor = torch.rand(input_shape).bfloat16()
 
