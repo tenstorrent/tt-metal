@@ -291,19 +291,40 @@ class TtSuperPoint:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def prepare_host_input(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
+        """Host-side preprocess: extract first channel, NHWC-flatten, convert to
+        bf16, and build a host ttnn tensor once. Reuse the return value across
+        iterations — then ``load_input_prepared`` is pure H2D DMA (~0.1 ms).
+
+        Without this, ``ttnn.from_torch(fp32 -> bf16)`` inside the hot loop
+        costs ~10 ms/iter (dominant at trace speeds of ~3 ms forward).
+        """
+        nhwc = self._preprocess_host(pixel_values)
+        # Pre-cast to bf16 on the CPU side — the expensive part.
+        nhwc_bf16 = nhwc.to(torch.bfloat16).contiguous()
+        return ttnn.from_torch(nhwc_bf16, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    def load_input_prepared(
+        self,
+        tt_in: ttnn.Tensor,
+        host_tensor: ttnn.Tensor,
+        cq_id: int = 0,
+    ) -> None:
+        """Issue the H2D copy of a pre-built host tensor into the device slot."""
+        ttnn.copy_host_to_device_tensor(host_tensor, tt_in, cq_id=cq_id)
+
     def load_input(
         self,
         tt_in: ttnn.Tensor,
         pixel_values: torch.Tensor,
         cq_id: int = 0,
     ) -> None:
-        """Copy host pixel data into a preallocated device input tensor.
+        """One-shot convenience: preprocess + build host tensor + H2D.
 
-        Pass ``cq_id=1`` to issue the H2D on the data-movement queue so it can
-        overlap with a compute trace running on queue 0.
+        Use ``prepare_host_input`` + ``load_input_prepared`` in hot loops —
+        that split moves the fp32→bf16 cast out of the per-iteration cost.
         """
-        nhwc = self._preprocess_host(pixel_values)
-        host = ttnn.from_torch(nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        host = self.prepare_host_input(pixel_values)
         ttnn.copy_host_to_device_tensor(host, tt_in, cq_id=cq_id)
 
     def run_device_compute(self, tt_in: ttnn.Tensor, b: int = 1):
