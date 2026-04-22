@@ -242,6 +242,9 @@ class DummyGoldenGenerator:
     def transpose_within_faces_multi_tile(*args, **kwargs):
         return torch.zeros(1024, dtype=torch.bfloat16)
 
+    def accumulate_l1(*args, **kwargs):
+        return torch.zeros(1024, dtype=torch.bfloat16)
+
 
 def dummy_golden_generator(cls):
     return DummyGoldenGenerator()
@@ -1547,6 +1550,13 @@ class PackGolden:
                 )
                 # Clamp between 0 and threshold
                 return torch.clamp(result, min=0.0, max=threshold)
+
+    @staticmethod
+    def accumulate_l1(
+        partials: list[torch.Tensor],
+        data_format: DataFormat,
+    ) -> torch.Tensor:
+        return apply_l1_accumulation(partials, data_format)
 
 
 @register_golden
