@@ -767,8 +767,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         sampling_logits = logits
         if logits.shape[2] != sampling_batch_size:
             if enable_trace:
-                raise ValueError(
-                    f"Device sampling trace requires logits batch {sampling_batch_size}, got {logits.shape[2]}"
+                enable_trace = False
+                logger.warning(
+                    f"Sampling tracing is disabled: Device sampling trace requires logits batch {sampling_batch_size}, got {logits.shape[2]}."
                 )
             if logits.shape[2] <= 0 or logits.shape[2] > sampling_batch_size:
                 raise ValueError(
@@ -1860,7 +1861,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                             prompt_len=prompt_len,
                         )
                         assert prefill_logits is not None
-                        logger.info("prefill_logits shape: {prefill_logits.shape}")
                         if self.sample_on_device:
                             # prefill_logits is already sliced to [1,1,1,vocab] (single-ring)
                             # or [1,1,batch,vocab] (multi-ring via _slice_last_token_logits),
@@ -2238,10 +2238,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         tokens = tokens.view(1, 1, -1)
         seq_len = tokens.shape[-1]
 
-        from models.demos.deepseek_v3.utils.debug_utils import _print_memory_stats
-
-        _print_memory_stats(self.mesh_device, "before tokens to device")
-
         # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
         tt_tokens = ttnn.from_torch(
             tokens,
@@ -2276,7 +2272,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                 return_hidden=True,
             )
         else:
-            _print_memory_stats(self.mesh_device, "RowBatchedModel.forward_prefill")
             # Pass prompt_len so only the logit at prompt_len-1 is computed,
             # skipping LMHead for every other transformer chunk.
             # _forward_prefill now handles multi-row meshes via a post-LMHead
@@ -2292,7 +2287,6 @@ class DeepseekGenerator(WarmupForwardMixin):
             )
             hidden_tt = None
 
-        logger.info(f"RowBatchedModel.forward_prefill finished. Logits shape: {logits_tt.shape}")
         if sample_on_device and return_last_hidden:
             raise ValueError("sample_on_device=True and return_last_hidden=True is not supported.")
 

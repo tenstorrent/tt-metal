@@ -22,7 +22,7 @@ from models.demos.deepseek_v3.tt.mtp import MTP2D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig, ReshardConfig
-from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config, get_prefill_chunk_sizes, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -111,7 +111,9 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         """Create the model configuration for prefill mode."""
+        model_chunk = get_prefill_chunk_sizes(hf_config.max_seq_len, mesh_device.shape[0]).model_chunk
         model_cfg = {
+            "model_chunk": model_chunk,
             "embedding": Embedding2D.prefill_model_config(hf_config, mesh_device),
             "mlp_decoder_block": [
                 DecoderBlock2D.prefill_model_config(
@@ -377,27 +379,24 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         ``_forward_prefill`` performs a post-LMHead row all-gather so every device
         converges on the target token's logits.
         """
-        CHUNK_SIZE = 1024
-        # CHUNK_SIZE = 2048
-        # CHUNK_SIZE = 4096
-        # CHUNK_SIZE = 8192
-        # CHUNK_SIZE = 16384
-        # CHUNK_SIZE = 32768
-        # CHUNK_SIZE = 65536
+        CHUNK_SIZE = cfg["model_chunk"]
         cos_dim = rope_tensors["cos_matrix"].shape[3]
         sin_dim = rope_tensors["sin_matrix"].shape[3]
+        _decoder_cfgs = cfg["mlp_decoder_block"] or cfg["moe_decoder_block"]
+        block_size = int(_decoder_cfgs[0]["mla"]["mla1d"]["kvpe_cache"].shape[2])
         logits = []
         hidden_for_mtp = []
-        for i in range(0, x.shape[2], CHUNK_SIZE):
-            start = i
-            end = min(i + CHUNK_SIZE, x.shape[2])
-            logger.info(f"start-end: {start} - {end}")
+        for start in range(0, x.shape[2], CHUNK_SIZE):
+            end = min(start + CHUNK_SIZE, x.shape[2])
             x_chunk = ttnn.slice(x, [0, 0, start], [1, 1, end])
             rope_chunk = {
                 "cos_matrix": ttnn.slice(rope_tensors["cos_matrix"], [0, 0, start, 0], [1, 1, end, cos_dim]),
                 "sin_matrix": ttnn.slice(rope_tensors["sin_matrix"], [0, 0, start, 0], [1, 1, end, sin_dim]),
                 "trans_matrix": rope_tensors["trans_matrix"],
             }
+            start_block = start // block_size
+            end_block = (end + block_size - 1) // block_size
+            page_tables_chunk = [ttnn.slice(pt, [0, start_block], [pt.shape[0], end_block]) for pt in page_tables]
 
             # When prompt_len is set, only compute LMHead for the chunk that
             # contains the target token; skip it (but still run decoder blocks
@@ -418,7 +417,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 user_id,
                 cfg,
                 rope_chunk,
-                page_tables,
+                page_tables_chunk,
                 return_hidden,
                 lm_head_local_idx=lm_head_local_idx,
                 skip_lm_head=skip_lm_head,
@@ -426,6 +425,8 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             ttnn.deallocate(x_chunk)
             ttnn.deallocate(rope_chunk["cos_matrix"])
             ttnn.deallocate(rope_chunk["sin_matrix"])
+            # for pt_chunk in page_tables_chunk:
+            #     ttnn.deallocate(pt_chunk)
             if logits_chunk is not None:
                 logits.append(logits_chunk)
             if len(hidden_for_mtp_chunk) > 0:
@@ -452,7 +453,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         lm_head_local_idx: int | None = None,
         skip_lm_head: bool = False,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Forward pass for prefill mode.
+        """Forward pass for one prefill chunk.
 
         Args:
             lm_head_local_idx: When set, only the logit for this single
@@ -466,11 +467,12 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 entirely (decoder blocks still run for KV-cache population).
                 Returns ``(None,)`` / ``(None, hidden)`` so the caller can use
                 the same ``logits_chunk, *hidden = ...`` unpacking pattern.
+            page_tables: Per-layer page tables pre-sliced to exactly the blocks
+                needed for this chunk.
         """
 
         x = Embedding2D.forward_prefill(x, cfg["embedding"])
 
-        i = 0
         for (block_cfg, BlockClass), page_table in zip(
             itertools.chain(
                 zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
@@ -479,16 +481,12 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             page_tables,
             strict=True,
         ):
-            logger.info(f"{BlockClass} ({i}) started")
             x = BlockClass.forward_prefill(x, user_id, block_cfg, rope_tensors, page_table)
-            logger.info(f"{BlockClass} ({i}) finished")
-            i += 1
 
         # Capture pre-norm hidden states for MTP; MTP applies its own hnorm.
         hidden_for_mtp = x if return_hidden else None
 
         x = DistributedRMSNorm.forward_prefill(x, cfg["norm"])  # no resharding needed for prefill
-        logger.debug(f"DistributedRMSNorm finished")
 
         ccl = cfg["lm_head"]["ccl"]
 
@@ -512,17 +510,13 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             x = x_sliced
 
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
-        logger.debug(f"all_gather_async finished")
         if return_hidden:
             lm_head_in = ttnn.clone(x)
             ttnn.deallocate(x)
             logits = LMHead1D.forward_prefill(lm_head_in, cfg["lm_head"])
             return logits, hidden_for_mtp
 
-        logger.debug(f"LMHead1D.forward_prefill x: {x.shape}")
         logits = LMHead1D.forward_prefill(x, cfg["lm_head"])
-        logger.debug(f"LMHead1D.forward_prefill logits: {logits.shape}")
-        logger.debug(f"LMHead1D finished")
 
         # In a multi-row mesh every row computed logits for its own local token
         # (at row_local_idx within its 64-token slice).  All-gather across rows

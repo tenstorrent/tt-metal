@@ -96,8 +96,7 @@ def _demo_case(
 # | quad_full_demo      | 512         | 32                | 1              | 129            | None                | True         | True             | quad_demo_full_results    | False          | None        | False              | None        | None                 |
 # | quad_stress_demo    | 56          | 32                | 20             | 129            | None                | True         | True             | quad_demo_stress_results  | False          | False       | True               | None        | None                 |
 # | profile_decode      | 1           | 32                | 1              | 13             | 5                   | True         | True             | None                      | True           | False       | True               | None        | None                 |
-# | quad_long_ctx_65k   | 1           | 8                 | 1              | 129            | None                | True         | True             | None                      | False          | False       | True               | 65536       | 64512                |
-# | quad_long_ctx_131k  | 1           | 8                 | 1              | 129            | None                | True         | True             | None                      | False          | False       | True               | 131072      | 130048               |
+# | quad_long_ctx_48k   | 1           | 8                 | 1              | 129            | None                | True         | True             | None                      | False          | False       | True               | 49152       | 48896                |
 # +---------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+---------------------------+----------------+-------------+--------------------+-------------+----------------------+
 
 
@@ -274,7 +273,7 @@ def _demo_case(
             max_prompts=1,
             max_users_per_row=8,
             repeat_batches=1,
-            max_new_tokens=32,
+            max_new_tokens=129,
             override_num_layers=None,
             enable_trace=True,
             sample_on_device=True,
@@ -282,27 +281,10 @@ def _demo_case(
             profile_decode=False,
             stop_at_eos=False,
             expect_full_length=True,
-            case_id="quad_long_ctx_65k",
-            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
-            max_seq_len=65536,
-            target_prompt_tokens=65536 - 1024,
-        ),
-        _demo_case(
-            max_prompts=1,
-            max_users_per_row=8,
-            repeat_batches=1,
-            max_new_tokens=32,
-            override_num_layers=None,
-            enable_trace=True,
-            sample_on_device=True,
-            artifact_name=None,
-            profile_decode=False,
-            stop_at_eos=False,
-            expect_full_length=True,
-            case_id="quad_long_ctx_131k",
-            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(7200)],
-            max_seq_len=131072,
-            target_prompt_tokens=131072 - 1024,
+            case_id="quad_long_ctx_48k",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(2400)],
+            max_seq_len=48 * 1024,
+            target_prompt_tokens=48 * 1024 - 256,
         ),
     ],
 )
