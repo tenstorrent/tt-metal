@@ -16,13 +16,22 @@ import os
 import socket as _socket
 import threading
 import time
+from collections import deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 
 _jpeg_lock = threading.Lock()
-_jpeg_data = b""
+_jpeg_data = b""  # last-sent JPEG (fallback if FIFO is empty)
+_jpeg_seq = 0
+# Small FIFO of unique frames waiting to be sent.  Absorbs producer jitter
+# so a 20-30 ms pause on the prep side doesn't translate into a held display
+# frame.  Each display tick pops one; if the FIFO is empty we re-send the
+# last frame.  Bounded so we don't drift arbitrarily far behind live.
+_jpeg_fifo: deque = deque()
+_fifo_max = 2  # ~33 ms added latency at 60 Hz; absorbs most producer pauses
 
 _mode_file: str | None = None
+_send_hz: float = 60.0  # MJPEG send pacing clock (default 60 Hz to match displays)
 
 
 # ---------------------------------------------------------------------------
@@ -31,21 +40,27 @@ _mode_file: str | None = None
 
 
 def _single_reader(path: str):
-    global _jpeg_data
+    global _jpeg_seq
     last_mtime = 0.0
+    last_size = 0
     while True:
         try:
             st = os.stat(path)
-            if st.st_mtime != last_mtime:
+            if st.st_mtime != last_mtime or st.st_size != last_size:
                 with open(path, "rb") as f:
                     data = f.read()
                 if data:
                     with _jpeg_lock:
-                        _jpeg_data = data
+                        _jpeg_fifo.append(data)
+                        # Drop oldest if over capacity (keep freshest N).
+                        while len(_jpeg_fifo) > _fifo_max:
+                            _jpeg_fifo.popleft()
+                        _jpeg_seq += 1
                     last_mtime = st.st_mtime
+                    last_size = st.st_size
         except (FileNotFoundError, OSError):
             pass
-        time.sleep(0.02)
+        time.sleep(0.0005)  # 0.5 ms poll — catch writes even if bursty
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +69,7 @@ def _single_reader(path: str):
 
 
 def _dual_reader(left_path: str, right_path: str):
-    global _jpeg_data
+    global _jpeg_data, _jpeg_seq
     import cv2
 
     left_mtime = right_mtime = 0.0
@@ -94,8 +109,9 @@ def _dual_reader(left_path: str, right_path: str):
             if ok:
                 with _jpeg_lock:
                     _jpeg_data = buf.tobytes()
+                    _jpeg_seq += 1
 
-        time.sleep(0.02)
+        time.sleep(0.003)
 
 
 # ---------------------------------------------------------------------------
@@ -253,21 +269,38 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(html.encode())
 
     def _serve_mjpeg(self):
+        global _jpeg_data
         self.send_response(200)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
+        # Strict send clock + small FIFO.  Each tick pops the oldest queued
+        # unique frame (absorbs producer bursts and pauses); on empty, re-send
+        # the last frame.  Together this gives a smooth, jitter-free stream
+        # even when the prep pipeline has 20-30 ms variance.
+        PACE = 1.0 / _send_hz
+        next_send = time.perf_counter()
         try:
             while True:
+                now = time.perf_counter()
+                delay = next_send - now
+                if delay > 0:
+                    time.sleep(delay)
+                elif delay < -2 * PACE:
+                    next_send = now
                 with _jpeg_lock:
-                    jpeg = _jpeg_data
+                    if _jpeg_fifo:
+                        jpeg = _jpeg_fifo.popleft()
+                        _jpeg_data = jpeg
+                    else:
+                        jpeg = _jpeg_data
                 if jpeg:
                     self.wfile.write(b"--frame\r\n")
                     self.wfile.write(b"Content-Type: image/jpeg\r\n\r\n")
                     self.wfile.write(jpeg)
                     self.wfile.write(b"\r\n")
                     self.wfile.flush()
-                time.sleep(0.03)
+                next_send += PACE
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -311,7 +344,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global _mode_file
+    global _mode_file, _send_hz
     import argparse
 
     p = argparse.ArgumentParser(description="Standalone MJPEG HTTP server.")
@@ -321,9 +354,11 @@ def main():
     p.add_argument("--left-file", default=None, help="Left-pane JPEG (dual mode).")
     p.add_argument("--right-file", default=None, help="Right-pane JPEG (dual mode).")
     p.add_argument("--mode-file", default=None, help="Shared file for mode switching (enables toggle UI).")
+    p.add_argument("--send-hz", type=float, default=60.0, help="Strict send clock in Hz (match display refresh).")
     args = p.parse_args()
 
     _mode_file = args.mode_file
+    _send_hz = args.send_hz
 
     dual = args.left_file and args.right_file
     if not dual and not args.frame_file:

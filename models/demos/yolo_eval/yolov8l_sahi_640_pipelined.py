@@ -26,6 +26,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -276,6 +277,7 @@ def _prep_process_worker(
     frame_h: int,
     frame_w: int,
     display_width: int,
+    pace: bool = False,
 ):
     """Separate process: read, fused slice+preprocess, scale frame to ring buffer.
 
@@ -301,6 +303,16 @@ def _prep_process_worker(
     src = FrameSource(video_path)
     ring_idx = 0
     prep_frame_idx = 0  # for double-buffer alternation
+
+    # Frame pacing: when enabled, cap delivery to source video FPS.
+    _pace_interval = 0.0
+    if pace:
+        _cap = cv2.VideoCapture(video_path)
+        _src_fps = _cap.get(cv2.CAP_PROP_FPS)
+        _cap.release()
+        if _src_fps > 0:
+            _pace_interval = 1.0 / _src_fps
+    _pace_t0 = 0.0
 
     # C++ fused per-range kernel: 8 Python threads, each processes 3 tiles
     # with a single C++ call (avoids 24x pybind11 overhead).
@@ -381,6 +393,15 @@ def _prep_process_worker(
             # host_prep + h2d (not the bandwidth-sensitive d2h window).
             slot = ring_idx % ring_size
             ring_idx += 1
+
+            if _pace_interval > 0:
+                if _pace_t0 == 0.0:
+                    _pace_t0 = time.perf_counter()
+                else:
+                    target_t = _pace_t0 + prep_frame_idx * _pace_interval
+                    now = time.perf_counter()
+                    if target_t > now:
+                        time.sleep(target_t - now)
 
             shm_timings[0] = 1.0
             shm_timings[1] = t_read
@@ -605,28 +626,38 @@ def _postprocess_worker_shm(
     fc = 0
     t_post_sum = t_nms_sum = t_merge_sum = t_draw_sum = t_encode_sum = 0.0
     t_wall_start = 0.0
-    LOG_INTERVAL = 10
+    LOG_INTERVAL = 300
     nms_pool = ThreadPoolExecutor(max_workers=4)
     # 3 encode workers: each cv2.imencode takes ~28ms, NMS+merge+draw takes ~13ms.
     # With 3 workers, encode(N) completes before we need its slot (3*13=39 > 28ms),
     # so the encode wait drops to ~0ms.
     encode_pool = ThreadPoolExecutor(max_workers=3)
     encode_futures: list = []
+    # Monotonic sequence guard: 3 encode workers finish out-of-order, so frame
+    # N+1 can land before frame N.  Without this, the older frame overwrites the
+    # newer one → backward jumps → visible jerkiness in the MJPEG stream.
+    _write_lock = threading.Lock()
+    _write_seq = [0]
 
-    def _write_frame_ts(path: str, img: np.ndarray, quality: int):
-        """Thread-safe write_frame: unique tmp name per thread."""
-        import threading
-
+    def _write_frame_ts(path: str, img: np.ndarray, quality: int, seq: int):
         ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if not ok:
             return
+        if seq < _write_seq[0]:
+            return
+        data = buf.tobytes()
         tmp = path + f".tmp.{threading.get_ident()}"
-        try:
-            with open(tmp, "wb") as f:
-                f.write(buf.tobytes())
-            os.replace(tmp, path)
-        except OSError:
-            pass
+        with open(tmp, "wb") as f:
+            f.write(data)
+        with _write_lock:
+            if seq >= _write_seq[0]:
+                _write_seq[0] = seq
+                os.replace(tmp, path)
+            else:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
 
     while True:
         try:
@@ -678,20 +709,20 @@ def _postprocess_worker_shm(
             t_nms = time.perf_counter() - t0
             t_merge = 0.0  # merged into nms
 
-            # Debug: log detection stats every 5 frames
             n_dets = len(boxes_np)
-            if fc % 5 == 0 and n_dets > 0:
-                widths = boxes_np[:, 2] - boxes_np[:, 0]
-                heights = boxes_np[:, 3] - boxes_np[:, 1]
-                print(
-                    f"{TAG} frame {fc}: {n_dets} dets, "
-                    f"scores=[{scores_np.min():.2f},{scores_np.max():.2f}], "
-                    f"widths=[{widths.min():.0f},{widths.max():.0f}], "
-                    f"heights=[{heights.min():.0f},{heights.max():.0f}]",
-                    flush=True,
-                )
-            elif fc % 5 == 0:
-                print(f"{TAG} frame {fc}: 0 detections", flush=True)
+            if fc == 0:
+                if n_dets > 0:
+                    widths = boxes_np[:, 2] - boxes_np[:, 0]
+                    heights = boxes_np[:, 3] - boxes_np[:, 1]
+                    print(
+                        f"{TAG} frame {fc}: {n_dets} dets, "
+                        f"scores=[{scores_np.min():.2f},{scores_np.max():.2f}], "
+                        f"widths=[{widths.min():.0f},{widths.max():.0f}], "
+                        f"heights=[{heights.min():.0f},{heights.max():.0f}]",
+                        flush=True,
+                    )
+                else:
+                    print(f"{TAG} frame {fc}: 0 detections", flush=True)
 
             t0 = time.perf_counter()
             _draw_boxes_np(canvas, boxes_np, scores_np, cls_np, names_dict)
@@ -713,7 +744,7 @@ def _postprocess_worker_shm(
             # latency, the prep process overwrites this slot ~27ms after BG reads
             # it — while the 28ms JPEG encode is still reading.  The race causes
             # half-old/half-new frames → "boxes appear and disappear" glitch.
-            encode_futures.append(encode_pool.submit(_write_frame_ts, frame_file, canvas.copy(), jpeg_quality))
+            encode_futures.append(encode_pool.submit(_write_frame_ts, frame_file, canvas.copy(), jpeg_quality, fc))
             t_encode = time.perf_counter() - t0
 
             dt_post = time.perf_counter() - t_post_start
@@ -901,18 +932,18 @@ def run_sahi_640_pipelined(args):
 
     # --- Shared memory: prediction ring (avoids pickling 67 MB per frame) --
     PRED_RING = 2
-    # Physical shape: tile-aligned padding of [84, 8400] → [96, 8416].
-    # batch_to_torch(physical=True) copies full physical buffers contiguously
-    # (24 large memcpy calls vs 2016 strided = 4.4ms vs 7.8ms).
-    # BG process slices to [:, :84, :8400] for logical data (free view).
-    _phys_pred_h = ((84 + 31) // 32) * 32  # 96
-    _phys_pred_w = ((8400 + 31) // 32) * 32  # 8416
+    # Query the runner's actual physical/logical shard shape — with
+    # untilize_with_unpadding the on-device output is already unpadded
+    # ([84, 8400]) so physical == logical.  With plain untilize, the
+    # physical shape includes tile padding ([96, 8416]).
+    _phys_pred_h, _phys_pred_w = runner._phys_per_shard
+    _log_pred_h, _log_pred_w = runner._log_per_shard
     shm_preds = torch.zeros(
         PRED_RING, tiles_per_frame, _phys_pred_h, _phys_pred_w, dtype=torch.bfloat16
     ).share_memory_()
     print(
         f"{TAG} shm_preds: [{PRED_RING}, {tiles_per_frame}, {_phys_pred_h}, {_phys_pred_w}] "
-        f"logical=[:, :, :84, :8400] "
+        f"logical=[:, :, :{_log_pred_h}, :{_log_pred_w}] "
         f"({shm_preds.nelement() * 2 / 1e6:.1f} MB)",
         flush=True,
     )
@@ -988,6 +1019,7 @@ def run_sahi_640_pipelined(args):
             frame_h,
             frame_w,
             display_width,
+            getattr(args, "pace", False),
         ),
         daemon=True,
         name="sahi640-prep",
@@ -1269,7 +1301,9 @@ def run_sahi_640_pipelined(args):
                 if last_preds is not None and prev_meta is not None:
                     r_shifts, r_ring_slot = prev_meta
                     pred_slot = pred_write_idx % PRED_RING
-                    shm_preds[pred_slot, :tiles_per_frame, :84, :8400].copy_(last_preds[:tiles_per_frame])
+                    shm_preds[pred_slot, :tiles_per_frame, :_log_pred_h, :_log_pred_w].copy_(
+                        last_preds[:tiles_per_frame]
+                    )
                     pred_write_idx += 1
                     q_post.put(
                         (pred_slot, r_ring_slot, r_shifts, tiles_per_frame, scale_x, scale_y),
@@ -1370,6 +1404,11 @@ def parse_args() -> argparse.Namespace:
         help="Merge across classes.",
     )
     p.add_argument("--output", type=str, default=None, help="Save result (image mode).")
+    p.add_argument(
+        "--pace",
+        action="store_true",
+        help="Pace output to source video FPS for smooth playback.",
+    )
     return p.parse_args()
 
 

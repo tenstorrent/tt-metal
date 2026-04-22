@@ -96,42 +96,25 @@ def sharded_concat(input_tensors, num_cores=64, dim=3, skip_s2i=False):
         return output
 
     # Original sharded logic for smaller tensors
-    input_sharded_memory_configs = []
-
+    target_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    sharded_inputs = []
     for i in range(len(input_tensors)):
-        if input_tensors[i].is_sharded():
-            input_sharded_memory_configs.append(input_tensors[i].memory_config())
-        else:
-            input_sharded_memory_config = ttnn.create_sharded_memory_config(
-                (shard_height, input_tensors[i].shape[-1]),
-                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                use_height_and_width_as_shard_shape=True,
-            )
-            input_sharded_memory_configs.append(input_sharded_memory_config)
-
-    sharded_inputs = [
-        ttnn.to_memory_config(tensor, config) if not tensor.is_sharded() else tensor
-        for tensor, config in zip(input_tensors, input_sharded_memory_configs)
-    ]
+        cfg = ttnn.create_sharded_memory_config(
+            (shard_height, input_tensors[i].shape[-1]),
+            core_grid=target_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        sharded_inputs.append(ttnn.to_memory_config(input_tensors[i], cfg))
 
     out_sharded_memory_config = ttnn.create_sharded_memory_config(
         (shard_height, total_width),
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        core_grid=target_grid,
         strategy=ttnn.ShardStrategy.HEIGHT,
         use_height_and_width_as_shard_shape=True,
     )
 
-    try:
-        output = ttnn.concat(sharded_inputs, dim, memory_config=out_sharded_memory_config)
-    except RuntimeError as e:
-        # 640-path can produce incompatible shard grids at concat boundaries; fall back to safe DRAM concat.
-        if "same grid" not in str(e):
-            raise
-        output = concat_via_dram_interleaved()
-        if not skip_s2i:
-            output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
-        return output
+    output = ttnn.concat(sharded_inputs, dim, memory_config=out_sharded_memory_config)
 
     if not skip_s2i:
         output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -262,7 +245,9 @@ class TtConv:
             return_weights_and_bias=True,
             return_output_dim=True,
             dtype=self.output_dtype,
-            slice_config=self.slice_config if self.slice_config is not None else ttnn.Conv2dL1FullSliceConfig,
+            slice_config=self.slice_config
+            if self.slice_config is not None
+            else (ttnn.Conv2dL1FullSliceConfig if _DETECT_MEM_CONFIG == ttnn.L1_MEMORY_CONFIG else None),
         )
 
         if self.is_detect_cv2:
@@ -466,11 +451,11 @@ class TtC2f:
         total_width = sum(tensor.shape[-1] for tensor in y)
 
         if not reshard_bottleneck_input:
-            # Check if tensors are sharded before accessing shard_spec
             if y[0].is_sharded():
                 input_sharded_memory_config = y[0].memory_config()
                 input_sharded_spec = input_sharded_memory_config.shard_spec
                 shard_height = input_sharded_spec.shape[0]
+                ref_grid = input_sharded_spec.grid
                 input_sharded_memory_layout = str(input_sharded_memory_config.memory_layout)
                 if "HEIGHT" in input_sharded_memory_layout:
                     out_sharded_memory_config_strategy = ttnn.ShardStrategy.HEIGHT
@@ -479,9 +464,19 @@ class TtC2f:
                 elif "WIDTH" in input_sharded_memory_layout:
                     out_sharded_memory_config_strategy = ttnn.ShardStrategy.WIDTH
 
+                for idx in range(1, len(y)):
+                    if y[idx].is_sharded() and y[idx].memory_config().shard_spec.grid != ref_grid:
+                        reshard_cfg = ttnn.create_sharded_memory_config(
+                            (shard_height, y[idx].shape[-1]),
+                            core_grid=ref_grid,
+                            strategy=out_sharded_memory_config_strategy,
+                            use_height_and_width_as_shard_shape=True,
+                        )
+                        y[idx] = ttnn.to_memory_config(y[idx], reshard_cfg)
+
                 out_sharded_memory_config = ttnn.create_sharded_memory_config(
                     (shard_height, total_width),
-                    core_grid=input_sharded_spec.grid,
+                    core_grid=ref_grid,
                     strategy=out_sharded_memory_config_strategy,
                     use_height_and_width_as_shard_shape=True,
                 )
@@ -494,8 +489,6 @@ class TtC2f:
 
         for i in range(len(y)):
             ttnn.deallocate(y[i])
-        if _DETECT_MEM_CONFIG == ttnn.DRAM_MEMORY_CONFIG:
-            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x, out_h, out_w = self.cv2(x)
         return x, out_h, out_w
 
@@ -976,15 +969,11 @@ class TtDetectionModel:
         conv_0, out_h, out_w = self.conv_0(x)
         conv_1, out_h, out_w = self.conv_1(conv_0)
         ttnn.deallocate(conv_0)
-        if not self._use_l1:
-            conv_1 = ttnn.to_memory_config(conv_1, ttnn.DRAM_MEMORY_CONFIG)
         c2f_2, out_h, out_w = self.c2f_2(conv_1)
         ttnn.deallocate(conv_1)
         conv_3, out_h, out_w = self.conv_3(c2f_2)
         ttnn.deallocate(c2f_2)
 
-        if not self._use_l1:
-            conv_3 = ttnn.to_memory_config(conv_3, ttnn.DRAM_MEMORY_CONFIG)
         c2f_4, out_h, out_w = self.c2f_4(conv_3)
         ttnn.deallocate(conv_3)
 
@@ -1072,8 +1061,6 @@ class TtDetectionModel:
 
         c2f_15 = ttnn.sharded_to_interleaved(c2f_15, ttnn.L1_MEMORY_CONFIG)
         fifteen = ttnn.clone(c2f_15, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-        if not self._use_l1:
-            c2f_15 = ttnn.to_memory_config(c2f_15, ttnn.DRAM_MEMORY_CONFIG)
         conv_16, out_h, out_w = self.conv_16(c2f_15)
         ttnn.deallocate(c2f_15)
         conv_16 = ttnn.sharded_to_interleaved(conv_16, ttnn.L1_MEMORY_CONFIG)
@@ -1097,8 +1084,6 @@ class TtDetectionModel:
 
         ttnn.deallocate(nine)
         ttnn.deallocate(conv_19)
-        if not self._use_l1:
-            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         c2f_21, out_h, out_w = self.c2f_21(x, reshard_bottleneck_input=True)
         c2f_21 = ttnn.sharded_to_interleaved(c2f_21, ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(x)

@@ -82,11 +82,28 @@ class YOLOv8lPerformantRunner:
         self.runner_infra.run()
         self.runner_infra.validate()
 
-        # Untilize detection output on-device (TILE → ROW_MAJOR).
-        # This eliminates the expensive CPU-side untiling in to_torch,
-        # cutting compose from ~18ms to ~10ms.
+        # Untilize detection output on-device (TILE → ROW_MAJOR) and strip
+        # tile-alignment padding in one fused op.  untilize_with_unpadding
+        # produces a truly unpadded buffer (e.g. [1,84,33600] instead of
+        # [1,96,33600]), reducing D2H volume by ~12.5%.
         tile_output = self.runner_infra.output_tensor[0]
-        rm_output = ttnn.untilize(tile_output, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        _logical = list(tile_output.shape)
+        _padded = list(tile_output.padded_shape)
+        self._needs_unpad = _padded != _logical
+        if self._needs_unpad:
+            self._output_end = tuple(s - 1 for s in _logical)  # inclusive end
+            rm_output = ttnn.untilize_with_unpadding(
+                tile_output,
+                output_tensor_end=self._output_end,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            print(
+                f"[runner] untilize_with_unpadding: {_padded} → {_logical} "
+                f"(saves {(_padded[-2]-_logical[-2])*_padded[-1]*2/1024:.0f} KB/shard)",
+                flush=True,
+            )
+        else:
+            rm_output = ttnn.untilize(tile_output, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tile_output)
         self.runner_infra.output_tensor[0] = rm_output
 
@@ -144,9 +161,16 @@ class YOLOv8lPerformantRunner:
         self.runner_infra.run()
         # On-device output processing inside trace — replayed every frame
         tile_output_traced = self.runner_infra.output_tensor[0]
-        self.runner_infra.output_tensor[0] = ttnn.untilize(
-            tile_output_traced, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        if self._needs_unpad:
+            self.runner_infra.output_tensor[0] = ttnn.untilize_with_unpadding(
+                tile_output_traced,
+                output_tensor_end=self._output_end,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            self.runner_infra.output_tensor[0] = ttnn.untilize(
+                tile_output_traced, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
         ttnn.deallocate(tile_output_traced)
         self.input_tensor = ttnn.allocate_tensor_on_device(dram_spec, self.device)
         ttnn.end_trace_capture(self.device, self.tid, cq_id=0)
@@ -320,7 +344,7 @@ class YOLOv8lPerformantRunner:
 
         Must be called after ``pcie_d2h()``.
 
-        Uses ``batch_to_torch`` — a single C++ call that memcpy's all 24
+        Uses ``batch_to_torch`` — a single C++ call that memcpy's all 32
         shard buffers contiguously into a pre-allocated torch tensor.
         Eliminates per-shard Python to_torch calls, per-shard allocations,
         and torch.cat entirely.
