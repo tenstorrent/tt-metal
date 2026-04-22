@@ -5,14 +5,16 @@
 //
 // High-power matmul workload for sustained power draw measurement.
 //
-// Runs a large HiFi4 matrix multiplication across all available cores for many
-// iterations, producing near-maximum compute utilization and power consumption.
+// Runs a large HiFi4 matrix multiplication across a configurable number of
+// cores for many iterations, producing near-maximum compute utilization.
+// Sweep num_cores to produce a cores-vs-execution-time curve.
 //
 // Usage:
-//   ./metal_example_high_power_matmul [M] [N] [K] [iterations]
+//   ./metal_example_high_power_matmul [M] [N] [K] [iterations] [num_cores]
 //
-// Defaults: M=4096 N=4096 K=2048 iterations=500
+// Defaults: M=4096 N=4096 K=4096 iterations=500 num_cores=all
 // All dimensions must be multiples of 32 (tile size).
+// num_cores is snapped down to whole rows of the compute grid.
 //
 
 #include <chrono>
@@ -41,6 +43,7 @@ int main(int argc, char* argv[]) {
     uint32_t N = 4096;
     uint32_t K = 4096;
     uint32_t num_iterations = 500;
+    uint32_t requested_cores = 0;  // 0 = use all available
 
     if (argc >= 2) {
         M = std::stoul(argv[1]);
@@ -53,6 +56,9 @@ int main(int argc, char* argv[]) {
     }
     if (argc >= 5) {
         num_iterations = std::stoul(argv[4]);
+    }
+    if (argc >= 6) {
+        requested_cores = std::stoul(argv[5]);
     }
 
     TT_FATAL(M % TILE_HEIGHT == 0, "M ({}) must be divisible by TILE_HEIGHT ({})", M, TILE_HEIGHT);
@@ -79,10 +85,27 @@ int main(int argc, char* argv[]) {
         auto& cq = mesh_device->mesh_command_queue();
 
         auto core_grid = mesh_device->compute_with_storage_grid_size();
-        fmt::print("Compute grid: {}x{} ({} cores)\n", core_grid.x, core_grid.y, core_grid.x * core_grid.y);
+        uint32_t total_available_cores = core_grid.x * core_grid.y;
+        fmt::print("Compute grid: {}x{} ({} cores)\n", core_grid.x, core_grid.y, total_available_cores);
+
+        // Build effective grid from requested_cores, snapping down to whole rows.
+        CoreCoord effective_grid = core_grid;
+        if (requested_cores > 0 && requested_cores < total_available_cores) {
+            if (requested_cores <= core_grid.x) {
+                effective_grid = {requested_cores, 1};
+            } else {
+                effective_grid = {core_grid.x, requested_cores / core_grid.x};
+            }
+            fmt::print(
+                "Requested cores: {}  →  using {}x{} = {} cores\n",
+                requested_cores,
+                effective_grid.x,
+                effective_grid.y,
+                effective_grid.x * effective_grid.y);
+        }
 
         auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core1, work_per_core2] =
-            split_work_to_cores(core_grid, total_output_tiles);
+            split_work_to_cores(effective_grid, total_output_tiles);
 
         fmt::print("Active cores: {}  |  Tiles/core: {}", num_cores, work_per_core1);
         if (work_per_core2 > 0) {

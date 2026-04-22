@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/debug/dprint.h"
 
 using std::uint32_t;
 
@@ -22,8 +23,7 @@ void kernel_main() {
 
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
         if (iter % 10 == 0) {
-            // Only print from TRISC0, otherwise we'll get three identical prints
-            UNPACK((DPRINT << "Iteration " << iter << " of " << num_iterations << ENDL()));
+            DPRINT_UNPACK(DPRINT << "Iteration " << iter << " of " << num_iterations << ENDL());
         }
         for (uint32_t i = 0; i < num_output_tiles; i++) {
             // TRISC1 Acquires the tile registers
