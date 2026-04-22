@@ -173,11 +173,12 @@ def begin_graph_capture(run_mode=None):
     ``end_graph_capture_to_file`` can embed operation arguments,
     tensor IDs, and stack traces in the JSON report.
 
-    For the outermost capture session, Python stack traces are enabled so that
-    offline ``graph_report`` imports can fill ``tensor_lifetime`` source file/line
+    For the outermost capture session, Python stack traces are enabled **only when**
+    ``ttnn.CONFIG.enable_detailed_tensor_report`` is ``True`` (set via
+    ``TTNN_CONFIG_OVERRIDES={"enable_detailed_tensor_report": true}``).  When enabled,
+    offline ``graph_report`` imports fill the ``tensor_lifetime`` source file/line
     columns (see :mod:`ttnn.graph_report`). The previous stack-trace setting is
-    restored when capture ends. Extra overhead applies; use :func:`full_graph_capture`
-    only when you need buffer tracing / slow dispatch as well.
+    restored when capture ends.
 
     When graph capture is started from C++ (e.g. ``MemoryUsageTracker``),
     this wrapper is bypassed and Python I/O recording stays disabled,
@@ -189,8 +190,13 @@ def begin_graph_capture(run_mode=None):
         _python_io_data = []
         _python_io_recording_enabled = True
         _saved_python_stack_traces_before_outer_capture = _python_stack_traces_enabled
-        _python_stack_traces_enabled = True
         import ttnn
+
+        # Only pay the stack-trace overhead when detailed tensor reporting is requested
+        # (TTNN_CONFIG_OVERRIDES={"enable_detailed_tensor_report": true}).
+        # Stack traces are required for tensor_lifetime source file/line columns in the report.
+        if ttnn.CONFIG.enable_detailed_tensor_report:
+            _python_stack_traces_enabled = True
 
         if ttnn.CONFIG.enable_fast_runtime_mode:
             logger.warning(

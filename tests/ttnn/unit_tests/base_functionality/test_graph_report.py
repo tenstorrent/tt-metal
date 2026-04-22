@@ -70,6 +70,24 @@ def _import_to_db(report_dict, tmp_path):
 
 
 @pytest.fixture
+def single_relu_python_io():
+    """python_io sidecar for single_relu_mock_graph with a minimal stack trace.
+
+    The stack trace makes import_report treat this as a detailed-tensor-report capture,
+    so the tensor_lifetime table is populated (gated on has_stack_traces in import_report).
+    """
+    return [
+        {
+            "name": "ttnn::relu",
+            "arguments": {},
+            "input_tensor_ids": [42],
+            "output_tensor_ids": [101],
+            "python_stack_trace": ['  File "model.py", line 10, in forward\n    out = ttnn.relu(x)\n'],
+        }
+    ]
+
+
+@pytest.fixture
 def single_relu_mock_graph():
     """Minimal graph: one ttnn::relu consuming tensor 42 and producing tensor 101.
 
@@ -242,8 +260,10 @@ class TestTensorLifetime:
         # The op should appear as last_use_operation_id since it consumed the tensor as input
         assert recs[0]["last_use_operation_id"] == 10
 
-    def test_tensor_lifetime_table_populated_on_import(self, tmp_path, single_relu_mock_graph):
-        report = _make_report(single_relu_mock_graph)
+    def test_tensor_lifetime_table_populated_on_import(self, tmp_path, single_relu_mock_graph, single_relu_python_io):
+        # python_io with stack traces signals enable_detailed_tensor_report=True to import_report,
+        # which is required for the tensor_lifetime table to be populated.
+        report = _make_report(single_relu_mock_graph, python_io=single_relu_python_io)
         conn, cursor = _import_to_db(report, tmp_path)
         cursor.execute(
             "SELECT tensor_id, producer_operation_id, last_use_operation_id, deallocate_operation_id "
@@ -254,6 +274,19 @@ class TestTensorLifetime:
         assert rows[42][2] == 1  # tensor 42 is consumed by op 1 (ttnn::relu)
         assert rows[101][1] == 1  # tensor 101 is produced by op 1
         assert rows[101][2] is None  # tensor 101 is never consumed — orphan candidate
+        conn.close()
+
+    def test_tensor_lifetime_table_empty_without_stack_traces(self, tmp_path, single_relu_mock_graph):
+        """tensor_lifetime must NOT be populated when no stack traces are present.
+
+        enable_detailed_tensor_report=False (the default) means begin_graph_capture does
+        not record stack traces. import_report detects this via has_stack_traces=False and
+        skips record_tensor_lifetime, leaving the table empty.
+        """
+        report = _make_report(single_relu_mock_graph)  # no python_io → no stack traces
+        conn, cursor = _import_to_db(report, tmp_path)
+        cursor.execute("SELECT COUNT(*) FROM tensor_lifetime")
+        assert cursor.fetchone()[0] == 0
         conn.close()
 
     def test_tensor_consumers_mirror_input_tensors(self, tmp_path, single_relu_mock_graph):

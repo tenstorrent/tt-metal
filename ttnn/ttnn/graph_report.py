@@ -584,6 +584,7 @@ def import_graph(
     devices: list = None,
     python_io: list = None,
     per_operation_buffers: dict = None,
+    record_tensor_lifetime: bool = False,
 ) -> dict:
     """
     Import graph trace into database using batch inserts for performance.
@@ -604,6 +605,11 @@ def import_graph(
         python_io: Optional list of Python-level I/O records from the decorator.
             Each record has ``name``, ``input_tensor_ids``, and ``output_tensor_ids``.
             When available, these override the heuristic I/O lifting.
+        record_tensor_lifetime: When True, compute and insert tensor lifetime metadata
+            (producer / last-use / deallocate op IDs and source file/line) into the
+            ``tensor_lifetime`` table.  Should be set to True only when the capture was
+            made with ``enable_detailed_tensor_report=True`` (i.e. stack traces are
+            present).  ``import_report`` derives this automatically from the python_io data.
 
     Returns dict with stats about what was imported.
     """
@@ -1281,31 +1287,33 @@ def import_graph(
     if tensors_batch:
         cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
 
-    tensor_lifetime_records = compute_tensor_lifetime_records(
-        operations_batch,
-        input_tensors_batch,
-        output_tensors_batch,
-        stack_traces_batch,
-        kept_tensor_ids,
-    )
-    if tensor_lifetime_records:
-        tl_rows = [
-            (
-                r["tensor_id"],
-                r["producer_operation_id"],
-                r["last_use_operation_id"],
-                r["deallocate_operation_id"],
-                r["producer_source_file"],
-                r["producer_source_line"],
-                r["last_use_source_file"],
-                r["last_use_source_line"],
-            )
-            for r in tensor_lifetime_records
-        ]
-        cursor.executemany(
-            """INSERT OR REPLACE INTO tensor_lifetime VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            tl_rows,
+    tensor_lifetime_records = []
+    if record_tensor_lifetime:
+        tensor_lifetime_records = compute_tensor_lifetime_records(
+            operations_batch,
+            input_tensors_batch,
+            output_tensors_batch,
+            stack_traces_batch,
+            kept_tensor_ids,
         )
+        if tensor_lifetime_records:
+            tl_rows = [
+                (
+                    r["tensor_id"],
+                    r["producer_operation_id"],
+                    r["last_use_operation_id"],
+                    r["deallocate_operation_id"],
+                    r["producer_source_file"],
+                    r["producer_source_line"],
+                    r["last_use_source_file"],
+                    r["last_use_source_line"],
+                )
+                for r in tensor_lifetime_records
+            ]
+            cursor.executemany(
+                """INSERT OR REPLACE INTO tensor_lifetime VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                tl_rows,
+            )
 
     if device_tensors_batch:
         cursor.executemany("""INSERT INTO device_tensors VALUES (?, ?, ?)""", device_tensors_batch)
@@ -1508,6 +1516,14 @@ def import_report(
                         with open(sidecar_path, "r") as pio:
                             python_io = json.load(pio)
 
+                # Derive whether tensor lifetime tracking was requested at capture time.
+                # When enable_detailed_tensor_report=True, begin_graph_capture records
+                # Python stack traces; their presence in python_io is the reliable offline
+                # signal that the detailed report was requested.
+                has_stack_traces = python_io is not None and any(
+                    record.get("python_stack_trace") for record in python_io
+                )
+
                 stats = import_graph(
                     cursor,
                     report["graph"],
@@ -1515,6 +1531,7 @@ def import_report(
                     devices=devices_data,
                     python_io=python_io,
                     per_operation_buffers=report.get("per_operation_buffers"),
+                    record_tensor_lifetime=has_stack_traces,
                 )
                 total_stats["operations"] += stats["operations"]
                 total_stats["tensors"] += stats["tensors"]
