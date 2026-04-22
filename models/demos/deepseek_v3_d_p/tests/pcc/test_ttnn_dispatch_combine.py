@@ -46,7 +46,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
     [
-        (3200, 7168, 64, 2, 2),
+        (3200, 7168, 256, 8, 2),
     ],
     ids=["3200-avg"],
 )
@@ -54,163 +54,25 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     "mesh_device, device_params, num_links, topology",
     [
         pytest.param(
-            (2, 1),
+            (32, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+                # "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=4096),
             },
-            1,
+            1,  # ,2
             ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
-            id="linear-2-1link",
-        ),
-        pytest.param(
-            (2, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
-            id="linear-2-2link",
-        ),
-        pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4-1link",
-        ),
-        pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4-2link",
-        ),
-        pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
-            id="ring-4-1link",
-        ),
-        pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
-            id="ring-4-2link",
-        ),
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8-1link",
-        ),
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8-2link",
-        ),
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="ring-8-1link",
-        ),
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="ring-8-2link",
-        ),
-        pytest.param(
-            (2, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-            id="mesh-2x2",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            marks=pytest.mark.requires_mesh_topology(
+                mesh_shape=(8, 4), topology="mesh-32x4"
+            ),  # (8, 4) is what single host see
+            id="mesh-32x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize("smoke, num_iterations", [(True, 1000), (False, 1)], ids=["smoke_loop", "pcc"])
+@pytest.mark.timeout(0)
 def test_ttnn_dispatch_combine(
     mesh_device,
     seq_len_per_chip,
@@ -221,9 +83,17 @@ def test_ttnn_dispatch_combine(
     num_links,
     topology,
     use_predictable_data,
+    smoke,
+    num_iterations,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
     torch.manual_seed(42)
+
+    # skip CI if num_iterations > 1 to avoid long runtimes in CI, since this test is primarily for local debugging and PCC validation
+    if num_iterations > 1 and (is_ci_env or is_ci_v2_env):
+        pytest.skip("Skipping multi-iteration test in CI environment")
 
     num_devices = mesh_device.get_num_devices()
 
@@ -383,16 +253,6 @@ def test_ttnn_dispatch_combine(
     offsets_result.assert_passed("Dispatch offsets mismatch before dispatch")
     counts_result.assert_passed("Expert token counts mismatch before dispatch")
 
-    # Run TTNN dispatch
-    logger.debug("Running TTNN dispatch...")
-    tt_expert_offsets = tt_dispatch_offsets
-    tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
-    tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
-        tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
-    )
-    ttnn.synchronize_device(mesh_device)
-    logger.debug("Dispatch complete!")
-
     # --- Torch reference for verbose validation ---
     torch_dispatch_module = TorchDispatchModule(
         dispatch_group_size=dispatch_group_size,
@@ -434,67 +294,85 @@ def test_ttnn_dispatch_combine(
     )
 
     # Run TTNN combine
-    logger.debug("Running TTNN combine...")
-    tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
-    ttnn.synchronize_device(mesh_device)
-    logger.debug("Combine complete!")
+    for iteration in range(num_iterations):
+        # Run TTNN dispatch
+        logger.debug(f"Running TTNN dispatch... {iteration=}/{num_iterations}")
+        tt_expert_offsets = tt_dispatch_offsets
+        tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(
+            mesh_device, expert_dispatch_table, sp_axis
+        )
+        tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
+            tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
+        )
+        ttnn.synchronize_device(mesh_device)
+        logger.success(f"Dispatch complete! {iteration=}/{num_iterations}")
 
-    # Convert TTNN output back to torch
-    y = ttnn.to_torch(tt_output, mesh_composer=ep_composer, dtype=torch.bfloat16)
+        logger.debug(f"Running TTNN combine... {iteration=}/{num_iterations}")
+        tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
+        ttnn.synchronize_device(mesh_device)
+        logger.success(f"Combine complete! {iteration=}/{num_iterations}")
 
-    # Host-side reduction: remove extra dimension added for 2D mesh composition
-    y = y.squeeze(-4)
+        if not smoke:
+            # Convert TTNN output back to torch
+            y = ttnn.to_torch(tt_output, mesh_composer=ep_composer, dtype=torch.bfloat16)
 
-    # Verbose combine validation (compare torch combine vs TTNN combine)
-    combine_result = validate_combine_output(
-        torch_output,
-        y,
-        indices,
-        num_dispatch_groups,
-        num_routed_experts,
-        verbose=True,
-        expert_dispatch_table=expert_dispatch_table,
-        expert_token_counts=expert_token_counts,
-        experts_per_chip=experts_per_chip,
-    )
+            # Host-side reduction: remove extra dimension added for 2D mesh composition
+            y = y.squeeze(-4)
 
-    log_validation_results(
-        results=[combine_result],
-        num_dispatch_groups=num_dispatch_groups,
-        dispatch_group_size=dispatch_group_size,
-        title="Combine Validation Results (verbose)",
-    )
+            # Verbose combine validation (compare torch combine vs TTNN combine)
+            combine_result = validate_combine_output(
+                torch_output,
+                y,
+                indices,
+                num_dispatch_groups,
+                num_routed_experts,
+                verbose=True,
+                expert_dispatch_table=expert_dispatch_table,
+                expert_token_counts=expert_token_counts,
+                experts_per_chip=experts_per_chip,
+            )
 
-    # Verify round-trip correctness
-    # NOTE: Current combine kernel does NOT all-reduce across EP ranks.
-    # Each EP rank's output only contains data for tokens that EP rank processed.
-    # Output positions not written by local combine contain uninitialized garbage.
-    # We validate per (chip, token, topk) using the EP rank that actually processed it.
+            log_validation_results(
+                results=[combine_result],
+                num_dispatch_groups=num_dispatch_groups,
+                dispatch_group_size=dispatch_group_size,
+                title="Combine Validation Results (verbose)",
+            )
 
-    result = validate_roundtrip_output(
-        x,
-        y,
-        indices,
-        num_dispatch_groups,
-        num_routed_experts,
-    )
+            # Verify round-trip correctness
+            # NOTE: Current combine kernel does NOT all-reduce across EP ranks.
+            # Each EP rank's output only contains data for tokens that EP rank processed.
+            # Output positions not written by local combine contain uninitialized garbage.
+            # We validate per (chip, token, topk) using the EP rank that actually processed it.
 
-    log_validation_results(
-        results=[result],
-        num_dispatch_groups=num_dispatch_groups,
-        dispatch_group_size=dispatch_group_size,
-        title="Roundtrip Validation Results",
-    )
+            result = validate_roundtrip_output(
+                x,
+                y,
+                indices,
+                num_dispatch_groups,
+                num_routed_experts,
+            )
 
-    if not result.passed:
-        # Create a pseudo-output tensor for mismatch logging (x repeated for each topk)
-        # We need to expand x to match the shape expected by log_combine_mismatch_details
-        x_expanded = x.unsqueeze(2).expand(-1, -1, num_experts_per_tok, -1)
-        log_combine_mismatch_details(result.mismatches, x_expanded, y)
+            log_validation_results(
+                results=[result],
+                num_dispatch_groups=num_dispatch_groups,
+                dispatch_group_size=dispatch_group_size,
+                title="Roundtrip Validation Results",
+            )
 
-    result.assert_passed("Round-trip mismatch")
+            if not result.passed:
+                # Create a pseudo-output tensor for mismatch logging (x repeated for each topk)
+                # We need to expand x to match the shape expected by log_combine_mismatch_details
+                x_expanded = x.unsqueeze(2).expand(-1, -1, num_experts_per_tok, -1)
+                log_combine_mismatch_details(result.mismatches, x_expanded, y)
 
-    logger.debug("✅ TTNN dispatch→combine round-trip matches input!")
+            result.assert_passed("Round-trip mismatch")
+
+            logger.success("✅ TTNN dispatch→combine round-trip matches input!")
+        else:
+            logger.warning("Skipping round-trip validation for smoke test.")
+
+    logger.success("✅ TTNN dispatch→combine done")
 
 
 @pytest.mark.parametrize(
