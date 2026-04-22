@@ -656,7 +656,7 @@ int main(int argc, char **argv) {
                 }
             } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
                 if (device_config.enable_tp) {
-                    return ttml::models::distributed::gpt2::create(arg);
+                    return ttml::models::distributed::gpt2::create(arg, gather_output_at_lm_head);
                 } else {
                     return ttml::models::gpt2::create(arg);
                 }
