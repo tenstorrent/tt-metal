@@ -415,7 +415,6 @@ class TtLlamaAttention_optimized:
             xs,
             self.qkv,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_qkv else None,
             dtype=ttnn.bfloat16,
             program_config=pc_qkv,
         )
@@ -500,7 +499,7 @@ class TtLlamaAttention_optimized:
         k_chunk_size = 512 if seq_len % 512 == 0 else 128 if seq_len % 128 == 0 else 32
 
         pc_sdpa = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=[8, 7],
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
@@ -576,7 +575,6 @@ class TtLlamaAttention_optimized:
             attn_output,
             self.wo,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_dense_out else None,
             dtype=ttnn.bfloat16,
             program_config=pc_dense_out,
         )

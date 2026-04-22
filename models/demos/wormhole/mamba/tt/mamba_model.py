@@ -159,7 +159,6 @@ class MambaTT(torch.nn.Module):
                 x,
                 self.lm_head_weights,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                core_grid=x.device().core_grid,
                 compute_kernel_config=self.compute_kernel_config,
                 dtype=self.configs["dtype"]["activations"],
             )

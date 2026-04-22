@@ -60,7 +60,6 @@ ttnn::Tensor routed_expert_ffn_bh(
     auto gate_up_grid = CoreRangeSet({CoreRange({0, 0}, {GRID_X - 1, gate_up_grid_y - 1})});
 
     auto gate_up_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {GRID_X, gate_up_grid_y},
         .in0_block_w = gate_up_in0_bw,
         .out_subblock_h = 1,
         .out_subblock_w = gate_up_sub_w,
@@ -70,6 +69,7 @@ ttnn::Tensor routed_expert_ffn_bh(
         .per_core_N = gate_up_per_core_N,
         .transpose_mcast = false,
         .fuse_batch = false,
+        .allowed_worker_cores = gate_up_grid,
     };
 
     auto gate_up_shard = tt::tt_metal::ShardSpec(
@@ -134,8 +134,8 @@ ttnn::Tensor routed_expert_ffn_bh(
     // Cap subblock to fit dest register (h*w <= 8)
     const uint32_t down_sub_w = largest_divisor(down_per_core_N, 8);
 
+    auto down_grid = CoreRangeSet({CoreRange({0, 0}, {GRID_X - 1, down_grid_y - 1})});
     auto down_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {GRID_X, down_grid_y},
         .in0_block_w = down_in0_bw,
         .out_subblock_h = 1,
         .out_subblock_w = down_sub_w,
@@ -145,6 +145,7 @@ ttnn::Tensor routed_expert_ffn_bh(
         .per_core_N = down_per_core_N,
         .transpose_mcast = false,
         .fuse_batch = false,
+        .allowed_worker_cores = down_grid,
     };
 
     return ttnn::matmul(
@@ -157,7 +158,6 @@ ttnn::Tensor routed_expert_ffn_bh(
         /*program_config=*/down_config,
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config,
-        /*core_grid=*/std::nullopt,
         /*output_tile=*/std::nullopt,
         /*optional_output_tensor=*/std::move(output));
 }

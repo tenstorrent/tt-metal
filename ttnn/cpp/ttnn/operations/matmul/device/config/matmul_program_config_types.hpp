@@ -12,17 +12,22 @@ namespace ttnn::operations::matmul {
 // TODO: Uplift this to support fused activation and bias
 // TODO: Uplift this to support bcast batch for in1; currently, only allows B=1
 // for in1 iff B=1 for in0 (ie. single core)
+// Note on allowed_worker_cores: when input A is sharded, the factories derive
+// the compute core layout from this field's bounding box. It must therefore
+// match the input's shard grid — using a different set of cores will produce
+// incorrect results. Auto-selected configs always set this from the shard spec.
+// For unsharded inputs, nullopt uses the full device compute grid.
+
 struct MatmulMultiCoreReuseProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w{};
     std::size_t out_subblock_h{};
     std::size_t out_subblock_w{};
     std::size_t per_core_M{};
     std::size_t per_core_N{};
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCastProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w{};
     std::size_t out_subblock_h{};
     std::size_t out_subblock_w{};
@@ -33,10 +38,10 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool transpose_mcast{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool fuse_batch = true;
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w{};
     std::size_t out_subblock_h{};
     std::size_t out_subblock_w{};
@@ -51,6 +56,7 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     CoreRangeSet hop_cores;
     std::size_t num_global_cb_receivers{};
     bool untilize_out{};
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
@@ -67,7 +73,9 @@ struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
 };
 
-struct MatmulMultiCoreProgramConfig {};
+struct MatmulMultiCoreProgramConfig {
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+};
 
 using MatmulProgramConfig = std::variant<
     MatmulMultiCoreProgramConfig,

@@ -161,7 +161,9 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
             break
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+        ),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -491,7 +493,9 @@ class MLA1D(AbstractModule):
         k_chunk_size = K_CHUNK_SIZE
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
@@ -965,7 +969,9 @@ class MLA1D(AbstractModule):
         k_chunk_size = K_CHUNK_SIZE
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,

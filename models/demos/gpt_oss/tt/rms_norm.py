@@ -39,7 +39,16 @@ class RMSNorm(nn.Module):
             activation_grid_bounding_box_size = x.memory_config().shard_spec.grid.bounding_box().grid_size()
             shard_height, shard_width = x.memory_config().shard_spec.shape
             program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=activation_grid_bounding_box_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(
+                                activation_grid_bounding_box_size.x - 1, activation_grid_bounding_box_size.y - 1
+                            ),
+                        )
+                    }
+                ),
                 subblock_w=1,
                 block_h=ttnn.core.divup(shard_height, ttnn.TILE_SIZE),
                 block_w=ttnn.core.divup(shard_width, ttnn.TILE_SIZE),

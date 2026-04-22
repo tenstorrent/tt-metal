@@ -307,6 +307,8 @@ MatmulMultiCoreReuseProgramFactory::cached_program_t MatmulMultiCoreReuseProgram
     // This should allocate a DRAM buffer on the device
     tt_metal::IDevice* device = a.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    // Note: This factory is for the non-optimized MatmulMultiCoreReuseProgramConfig path
+    // which doesn't use allowed_worker_cores (config auto-generation always uses device grid)
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 

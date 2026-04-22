@@ -67,7 +67,6 @@ ttnn::Tensor routed_expert_ffn_wh(
     auto gate_up_grid = CoreRangeSet({CoreRange({0, 0}, {GRID_X - 1, gate_up_grid_y - 1})});
 
     auto gate_up_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {GRID_X, gate_up_grid_y},
         .in0_block_w = gate_up_in0_bw,
         .out_subblock_h = 1,
         .out_subblock_w = gate_up_sub_w,
@@ -77,6 +76,7 @@ ttnn::Tensor routed_expert_ffn_wh(
         .per_core_N = gate_up_per_core_N,
         .transpose_mcast = false,
         .fuse_batch = false,
+        .allowed_worker_cores = gate_up_grid,
     };
 
     auto gate_up_shard = tt::tt_metal::ShardSpec(
@@ -136,8 +136,8 @@ ttnn::Tensor routed_expert_ffn_wh(
     const uint32_t down_sub_w = largest_divisor(down_per_core_N, GRID_X);
     const uint32_t down_sub_h = 1;
 
+    auto down_grid = CoreRangeSet({CoreRange({0, 0}, {GRID_X - 1, down_grid_y - 1})});
     auto down_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {GRID_X, down_grid_y},
         .in0_block_w = down_in0_bw,
         .out_subblock_h = down_sub_h,
         .out_subblock_w = down_sub_w,
@@ -146,9 +146,9 @@ ttnn::Tensor routed_expert_ffn_wh(
         .per_core_M = down_per_core_M,
         .per_core_N = down_per_core_N,
         .transpose_mcast = false,
-        .fuse_batch = true};
-
-    auto down_grid = CoreRangeSet({CoreRange({0, 0}, {GRID_X - 1, down_grid_y - 1})});
+        .fuse_batch = true,
+        .allowed_worker_cores = down_grid,
+    };
     auto down_shard =
         tt::tt_metal::ShardSpec(down_grid, {down_per_core_M * ttnn::TILE_SIZE, down_per_core_N * ttnn::TILE_SIZE});
     auto down_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, down_shard};
@@ -166,7 +166,6 @@ ttnn::Tensor routed_expert_ffn_wh(
         /*program_config=*/down_config,
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config,
-        /*core_grid=*/std::nullopt,
         /*output_tile=*/std::nullopt,
         /*optional_output_tensor=*/std::nullopt);
     gate_result.deallocate(/*force=*/true);

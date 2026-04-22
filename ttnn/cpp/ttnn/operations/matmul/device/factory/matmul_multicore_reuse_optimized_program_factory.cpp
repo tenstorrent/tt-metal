@@ -30,7 +30,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
-    // create_descriptor falls back to program_config.compute_with_storage_grid_size when
+    // create_descriptor falls back to allowed_worker_cores (or full device grid) when
     // core_range_set is not provided, so no need to pass one explicitly here.
     ProgramDescriptor descriptor = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
 
@@ -59,10 +59,15 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
     // override_runtime_arguments for program cache reuse.
     const auto& program_config =
         std::get<operations::matmul::MatmulMultiCoreReuseProgramConfig>(operation_attributes.program_config.value());
-    CoreCoord compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
-
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
+    CoreRangeSet resolved_grid;
+    if (program_config.allowed_worker_cores.has_value()) {
+        resolved_grid = program_config.allowed_worker_cores.value();
+    } else {
+        auto gs = a.device()->compute_with_storage_grid_size();
+        resolved_grid = CoreRangeSet({CoreRange({0, 0}, {gs.x - 1, gs.y - 1})});
+    }
     auto& output = tensor_return_value.at(0);
 
     bool in0_is_sharded = a.is_sharded();
@@ -107,16 +112,14 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
             core_group_1,
             core_group_2,
             num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total);
+            num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(resolved_grid, num_output_blocks_total);
     }
 
     bool row_major = false;
     if (shard_spec.has_value()) {
         row_major = shard_spec.value().orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
     }
-    const auto cores =
-        grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, row_major);
+    const auto cores = corerange_to_cores(all_cores, num_cores, row_major);
 
     return {std::move(program), {reader_id, writer_id, cb_src0, cb_src1, cb_output, num_cores, cores}};
 }
@@ -346,7 +349,14 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     } else {
-        CoreCoord grid = program_config.compute_with_storage_grid_size;
+        auto device = a.device();
+        CoreRangeSet grid;
+        if (program_config.allowed_worker_cores.has_value()) {
+            grid = program_config.allowed_worker_cores.value();
+        } else {
+            auto gs = device->compute_with_storage_grid_size();
+            grid = CoreRangeSet({CoreRange({0, 0}, {gs.x - 1, gs.y - 1})});
+        }
         std::tie(
             num_cores,
             all_cores,

@@ -193,7 +193,9 @@ def get_model_config(batch, device_grid_size, model_config_str):
         grid_size = ttnn.CoreCoord(12, batch)
         new_config_values = {
             "OP3_PRE_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=2,
                 out_subblock_h=1,
                 out_subblock_w=6,
@@ -201,7 +203,9 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 per_core_N=12,
             ),
             "OP5_POST_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=12,
                 out_subblock_h=4,
                 out_subblock_w=2,
@@ -209,7 +213,9 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 per_core_N=2,
             ),
             "OP7_SELFOUT_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=4,
                 out_subblock_h=2,
                 out_subblock_w=4,
@@ -219,7 +225,9 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 fused_activation=None,
             ),
             "OP9_FF1_MM_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=4,
                 out_subblock_h=1,
                 out_subblock_w=8,
@@ -229,7 +237,9 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 fused_activation=(ttnn.UnaryOpType.GELU, True),
             ),
             "OP10_FF2_MM_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=16,
                 out_subblock_h=2,
                 out_subblock_w=4,
@@ -320,7 +330,9 @@ def get_model_config(batch, device_grid_size, model_config_str):
             "OP11_LAYERNORM_BETA_MEMCFG": DRAM_MEMCFG,
             "RESERVE_SPLIT_HEADS_SHAPE": [1, 1, 1, 153 * 1024 // 2],
             "OP1_FUSED_QKV_MM_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=4,
                 out_subblock_h=1,
                 out_subblock_w=6,
@@ -330,7 +342,9 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 fused_activation=None,
             ),
             "OP3_PRE_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=2,
                 out_subblock_h=1,
                 out_subblock_w=6,
@@ -338,7 +352,9 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 per_core_N=12,
             ),
             "OP5_POST_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=12,
                 out_subblock_h=4,
                 out_subblock_w=2,
@@ -346,7 +362,9 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 per_core_N=2,
             ),
             "OP7_SELFOUT_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=4,
                 out_subblock_h=2,
                 out_subblock_w=4,
@@ -356,7 +374,9 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 fused_activation=None,
             ),
             "OP9_FF1_MM_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=4,
                 out_subblock_h=1,
                 out_subblock_w=8,
@@ -366,7 +386,9 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 fused_activation=(ttnn.UnaryOpType.GELU, True),
             ),
             "OP10_FF2_MM_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=16,
                 out_subblock_h=2,
                 out_subblock_w=4,
@@ -376,21 +398,27 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 fused_activation=None,
             ),
             "OP8_LAYERNORM_CONFIG": ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 subblock_w=4,
                 block_h=12,
                 block_w=4,
                 inplace=True,
             ),
             "OP11_LAYERNORM_CONFIG": ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 subblock_w=4,
                 block_h=12,
                 block_w=4,
                 inplace=True,
             ),
             "OP4_SOFTMAX_CONFIG": ttnn.SoftmaxShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 subblock_w=6,
                 block_h=24,
                 block_w=12,

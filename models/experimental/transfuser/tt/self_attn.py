@@ -39,7 +39,6 @@ class TTSelfAttention(LightweightModule):
                 bias=self.parameters["query_key_value"]["bias"],
                 memory_config=self.memory_config,
                 dtype=self.dtype,
-                core_grid=ttnn.CoreGrid(y=B, x=8),
             )
 
             # Split QKV and split heads
@@ -87,7 +86,6 @@ class TTSelfAttention(LightweightModule):
                 self.parameters["query"]["weight"],
                 bias=self.parameters["query"]["bias"],
                 memory_config=self.memory_config,
-                core_grid=ttnn.CoreGrid(x=8, y=8),
                 dtype=self.dtype,
             )
             key = ttnn.linear(
@@ -96,7 +94,6 @@ class TTSelfAttention(LightweightModule):
                 bias=self.parameters["key"]["bias"],
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=self.memory_config,
-                core_grid=ttnn.CoreGrid(x=8, y=8),
                 dtype=self.dtype,
             )
             value = ttnn.linear(
@@ -104,7 +101,6 @@ class TTSelfAttention(LightweightModule):
                 self.parameters["value"]["weight"],
                 bias=self.parameters["value"]["bias"],
                 memory_config=self.memory_config,
-                core_grid=ttnn.CoreGrid(x=8, y=8),
                 dtype=self.dtype,
             )
             head_dim = C // self.n_head
@@ -120,7 +116,6 @@ class TTSelfAttention(LightweightModule):
                 key,
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=self.memory_config,
-                core_grid=ttnn.CoreGrid(y=8, x=8),
                 dtype=self.dtype,
             )
             value = ttnn.reshape(value, (B, T, self.n_head, head_dim))
@@ -135,7 +130,6 @@ class TTSelfAttention(LightweightModule):
                 value,
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=self.memory_config,
-                core_grid=ttnn.CoreGrid(y=8, x=8),
                 dtype=self.dtype,
             )
 
@@ -152,7 +146,6 @@ class TTSelfAttention(LightweightModule):
             bias=self.parameters["proj"]["bias"],
             compute_kernel_config=self.compute_kernel_config,
             memory_config=self.memory_config,
-            core_grid=ttnn.CoreGrid(y=B, x=8) if self.use_optimized else ttnn.CoreGrid(y=8, x=8),
             dtype=self.dtype,
         )
 

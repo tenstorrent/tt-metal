@@ -122,7 +122,9 @@ def create_vision_encoder_sharded_config(device: ttnn.Device):
     # QKV projection: [1, 608, 768] @ [768, 2304] -> output [1, 608, 2304]
     # Height tiles: 19, Width tiles: 72
     qkv_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(7, 3),  # 21 cores
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 2))}
+        ),  # 21 cores
         in0_block_w=2,  # 2 tiles of K dimension per block
         out_subblock_h=1,
         out_subblock_w=4,  # 4 output width tiles per subblock
@@ -135,7 +137,9 @@ def create_vision_encoder_sharded_config(device: ttnn.Device):
 
     # Output projection: [1, 608, 768] @ [768, 768] -> output [1, 608, 768]
     out_proj_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(7, 3),  # 21 cores
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 2))}
+        ),  # 21 cores
         in0_block_w=2,
         out_subblock_h=1,
         out_subblock_w=4,
@@ -149,7 +153,9 @@ def create_vision_encoder_sharded_config(device: ttnn.Device):
     # MLP fc1: [1, 608, 768] @ [768, 3072] -> output [1, 608, 3072]
     # Height tiles: 19, Width tiles: 96
     mlp_fc1_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(7, 8),  # 56 cores
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))}
+        ),  # 56 cores
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=2,
@@ -162,7 +168,9 @@ def create_vision_encoder_sharded_config(device: ttnn.Device):
 
     # MLP fc2: [1, 608, 3072] @ [3072, 768] -> output [1, 608, 768]
     mlp_fc2_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(7, 8),  # 56 cores
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))}
+        ),  # 56 cores
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=4,
@@ -350,7 +358,6 @@ def run_vision_encoder_layer_sharded(
         memory_config=l1_config,
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
-        core_grid=full_grid,
     )
     ttnn.deallocate(hidden_states)
 
@@ -366,7 +373,9 @@ def run_vision_encoder_layer_sharded(
     # This fuses QK^T, scale, softmax, and AV into a single optimized kernel
     compute_grid = device.compute_with_storage_grid_size()
     sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+        ),
         q_chunk_size=128,
         k_chunk_size=128,
         exp_approx_mode=True,
@@ -408,7 +417,6 @@ def run_vision_encoder_layer_sharded(
         memory_config=l1_config,
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
-        core_grid=full_grid,
     )
     ttnn.deallocate(context)
 
@@ -435,7 +443,6 @@ def run_vision_encoder_layer_sharded(
         memory_config=l1_config,
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
-        core_grid=full_grid,
     )
     ttnn.deallocate(hidden_states)
     mlp_hidden = ttnn.gelu(mlp_hidden)
@@ -448,7 +455,6 @@ def run_vision_encoder_layer_sharded(
         memory_config=l1_config,
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
-        core_grid=full_grid,
     )
     ttnn.deallocate(mlp_hidden)
 
@@ -617,7 +623,6 @@ def run_text_encoder_layer_sharded(
         memory_config=l1_config,
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
-        core_grid=full_grid,
     )
     ttnn.deallocate(hidden_states)
 
@@ -632,7 +637,9 @@ def run_text_encoder_layer_sharded(
     # Use SDPA with is_causal=True
     compute_grid = device.compute_with_storage_grid_size()
     sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+        ),
         q_chunk_size=128,
         k_chunk_size=128,
         exp_approx_mode=True,
@@ -675,7 +682,6 @@ def run_text_encoder_layer_sharded(
         memory_config=l1_config,
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
-        core_grid=full_grid,
     )
     ttnn.deallocate(context)
 
@@ -702,7 +708,6 @@ def run_text_encoder_layer_sharded(
         memory_config=l1_config,
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
-        core_grid=full_grid,
     )
     ttnn.deallocate(hidden_states)
     mlp_hidden = ttnn.gelu(mlp_hidden)
@@ -715,7 +720,6 @@ def run_text_encoder_layer_sharded(
         memory_config=l1_config,
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
-        core_grid=full_grid,
     )
     ttnn.deallocate(mlp_hidden)
 

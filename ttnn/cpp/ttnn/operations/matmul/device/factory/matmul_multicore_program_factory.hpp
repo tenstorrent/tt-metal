@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
@@ -14,7 +16,7 @@ struct MatmulMultiCoreProgramFactory {
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
         uint32_t num_cores{};
-        uint32_t num_cores_y{};
+        std::vector<CoreCoord> cores;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

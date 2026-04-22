@@ -48,7 +48,9 @@ def matmul_config(
         in0_block_w = find_largest_divisor(k // (tile_size * grid_size[1]))
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+        ),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -96,7 +98,7 @@ class AttentionConfig(BaseModel):
     )
     sdpa_cfg: ttnn.SDPAProgramConfig = Field(
         default_factory=lambda: ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             q_chunk_size=256,
             k_chunk_size=256,
             exp_approx_mode=False,

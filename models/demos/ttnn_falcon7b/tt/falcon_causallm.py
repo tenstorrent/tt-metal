@@ -64,7 +64,6 @@ class TtFalconCausalLM(TtFalconModelShared):
             self.lm_head_weights,
             memory_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
-            core_grid=self.core_grid,
         )
 
         return lm_logits, presents

@@ -1007,7 +1007,6 @@ matmul_multi_core_reuse_dram_sharded_optimized_(
     const auto& per_core_M = program_config.per_core_M;
     const auto& per_core_N = program_config.per_core_N;
     const auto& fused_activation = program_config.fused_activation;
-
     const auto& untilize_out = operation_attributes.untilize_out;
     const bool skip_compute = false;
     const bool skip_in0_mcast = false;

@@ -665,7 +665,7 @@ def test_galaxy_rotary_matmul(batch, seq_len, head_dim, n_local_heads, n_local_k
     )
 
     ROT_MAT_MM_PROGCFG = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=[8, 4],
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         in0_block_w=4,
         out_subblock_h=1,
         out_subblock_w=4,

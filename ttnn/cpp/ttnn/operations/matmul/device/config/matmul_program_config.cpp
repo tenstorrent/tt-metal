@@ -279,7 +279,6 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     uint32_t out_subblock_h = std::get<0>(matmul_params);
     uint32_t out_subblock_w = std::get<1>(matmul_params);
     return MatmulMultiCoreReuseMultiCast1DProgramConfig{
-        .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
         .in0_block_w = k_tiles_per_core,
         .out_subblock_h = out_subblock_h,
         .out_subblock_w = out_subblock_w,
@@ -387,7 +386,6 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     auto out_subblock_w = std::get<1>(subblock_hw);
 
     return MatmulMultiCoreReuseMultiCast1DProgramConfig{
-        .compute_with_storage_grid_size = grid_size,
         .in0_block_w = in0_block_w,
         .out_subblock_h = out_subblock_h,
         .out_subblock_w = out_subblock_w,
@@ -406,7 +404,6 @@ MatmulProgramConfig create_matmul_program_config(
     const bool transpose_a,
     const bool transpose_b,
     const uint32_t bias_single_tile_size,
-    const std::optional<const CoreCoord> user_core_coord,
     const std::optional<unary::UnaryWithParam>& fused_activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const MemoryConfig& mem_config,
@@ -438,14 +435,6 @@ MatmulProgramConfig create_matmul_program_config(
         "of the second tensor must be a multiple of "
         "tile size");
     auto core_coord = input_tensor_a.device()->compute_with_storage_grid_size();
-    bool has_user_core_coord = user_core_coord.has_value();
-    if (has_user_core_coord) {
-        auto x = user_core_coord.value().x;
-        auto y = user_core_coord.value().y;
-        if (x <= core_coord.x && y <= core_coord.y) {
-            core_coord = user_core_coord.value();
-        }
-    }
 
     uint32_t m_tiles_per_core;
     uint32_t n_tiles_per_core;
@@ -505,7 +494,6 @@ MatmulProgramConfig create_matmul_program_config(
         uint32_t out_subblock_w = std::get<1>(matmul_params);
 
         return MatmulMultiCoreReuseProgramConfig{
-            .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
             .in0_block_w = k_tiles_per_core,
             .out_subblock_h = out_subblock_h,
             .out_subblock_w = out_subblock_w,
@@ -589,7 +577,6 @@ MatmulProgramConfig create_matmul_program_config(
     }
 
     return MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
         .in0_block_w = k_tiles_per_core,
         .out_subblock_h = out_subblock_h,
         .out_subblock_w = out_subblock_w,
@@ -613,15 +600,11 @@ MatmulProgramConfig get_matmul_program_config(
     const MemoryConfig& output_mem_config,
     const std::optional<unary::UnaryWithParam>& fused_activation,
     const bool matmul,
-    const std::optional<const CoreCoord> user_core_coord,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype) {
     using namespace tt;
     TT_FATAL(input_tensor_a.is_sharded(), "Input tensor A must be sharded");
     bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
-    // TODO: allow overwriting of grid size by user_core_coord after allowing
-    // support of arbitrary compute grid and more generic sharded output tensor
-    // creation
     auto grid_size = input_tensor_a.shard_spec().value().grid.bounding_box().grid_size();
 
     const auto& a_shape_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
@@ -704,7 +687,6 @@ MatmulProgramConfig get_matmul_program_config(
             auto out_subblock_w = std::get<1>(subblock_hw);
 
             return MatmulMultiCoreReuseMultiCast1DProgramConfig{
-                .compute_with_storage_grid_size = grid_size,
                 .in0_block_w = in0_block_w,
                 .out_subblock_h = out_subblock_h,
                 .out_subblock_w = out_subblock_w,
@@ -715,6 +697,7 @@ MatmulProgramConfig get_matmul_program_config(
                 .fuse_batch = true,
                 .fused_activation = fused_activation,
                 .mcast_in0 = mcast_in0,
+                .allowed_worker_cores = input_tensor_a.shard_spec().value().grid,
             };
         }
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
@@ -783,7 +766,6 @@ MatmulProgramConfig get_matmul_program_config(
             auto out_subblock_w = std::get<1>(subblock_hw);
 
             return MatmulMultiCoreReuseMultiCastProgramConfig{
-                .compute_with_storage_grid_size = grid_size,
                 .in0_block_w = in0_block_w,
                 .out_subblock_h = out_subblock_h,
                 .out_subblock_w = out_subblock_w,
@@ -860,7 +842,6 @@ MatmulProgramConfig get_matmul_program_config(
         }
 
         return MatmulMultiCoreReuseProgramConfig{
-            .compute_with_storage_grid_size = grid_size,
             .in0_block_w = in0_block_w,
             .out_subblock_h = out_subblock_h,
             .out_subblock_w = out_subblock_w,
@@ -874,7 +855,6 @@ MatmulProgramConfig get_matmul_program_config(
         transpose_a,
         transpose_b,
         bias_single_tile_size,
-        user_core_coord,
         fused_activation,
         compute_kernel_config,
         output_mem_config,
@@ -889,29 +869,19 @@ inline MatmulProgramConfig generate_matmul_program_config(
     const uint32_t bias_single_tile_size,
     const MemoryConfig& mem_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const CoreCoord> user_core_coord,
     const std::optional<unary::UnaryWithParam>& user_fused_activation,
     const bool user_run_batched,
-    const tt::tt_metal::DataType output_dtype) {
-    const bool has_user_grid = user_core_coord.has_value();
-    if (has_user_grid || !input_tensor_a.is_sharded()) {
-        CoreCoord core_coord;
-        if (has_user_grid) {
-            core_coord = user_core_coord.value();
-            return create_matmul_program_config(
-                input_tensor_a,
-                input_tensor_b,
-                transpose_a,
-                transpose_b,
-                bias_single_tile_size,
-                user_core_coord,
-                user_fused_activation,
-                compute_kernel_config,
-                mem_config,
-                output_dtype);
-        }
+    const tt::tt_metal::DataType output_dtype,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) {
+    if (!input_tensor_a.is_sharded()) {
         tt::tt_metal::IDevice* device = input_tensor_a.device();
-        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        CoreCoord compute_with_storage_grid_size;
+        if (sub_device_id.has_value()) {
+            auto sub_grid = device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+            compute_with_storage_grid_size = sub_grid.bounding_box().grid_size();
+        } else {
+            compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        }
         return create_simple_matmul_program_config(
             input_tensor_a,
             input_tensor_b,
@@ -931,9 +901,8 @@ inline MatmulProgramConfig generate_matmul_program_config(
         transpose_b,
         bias_single_tile_size,
         mem_config,
-        std::nullopt,
+        user_fused_activation,
         !bmm,
-        user_core_coord,
         compute_kernel_config,
         output_dtype);
 }
@@ -1000,37 +969,30 @@ MatmulProgramConfig get_program_config(
         bias_single_tile_size,
         attributes.output_mem_config,
         attributes.compute_kernel_config,
-        attributes.user_core_coord,
         attributes.user_fused_activation,
         attributes.user_run_batched,
-        attributes.output_dtype.value_or(input_tensor_a.dtype()));
+        attributes.output_dtype.value_or(input_tensor_a.dtype()),
+        attributes.sub_device_id);
     log_debug(tt::LogOp, "Auto generated program config: {}", config);
 
     // Sanity checks for matmul program configs
     std::visit(
         [input_tensor_a](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            // Validate allowed_worker_cores for configs that support it
+            if constexpr (requires { program_config.allowed_worker_cores; }) {
+                if (program_config.allowed_worker_cores.has_value()) {
+                    auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+                    CoreRangeSet device_cores({CoreRange({0, 0}, {device_grid.x - 1, device_grid.y - 1})});
+                    TT_FATAL(
+                        device_cores.contains(program_config.allowed_worker_cores.value()),
+                        "allowed_worker_cores must be a subset of the device compute grid!");
+                }
+            }
             if constexpr (
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig> and
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig> and
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
-                TT_FATAL(
-                    program_config.compute_with_storage_grid_size.x <=
-                        input_tensor_a.device()->compute_with_storage_grid_size().x,
-                    "Number of columns in matmul compute grid exceeds maximum device "
-                    "compute grid size!");
-                TT_FATAL(
-                    program_config.compute_with_storage_grid_size.y <=
-                        input_tensor_a.device()->compute_with_storage_grid_size().y,
-                    "Number of rows in matmul compute grid exceeds maximum device "
-                    "compute grid size!");
-                TT_FATAL(
-                    program_config.compute_with_storage_grid_size.x > 0,
-                    "Number of columns in matmul compute grid must be greater "
-                    "than 0!");
-                TT_FATAL(
-                    program_config.compute_with_storage_grid_size.y > 0,
-                    "Number of rows in matmul compute grid must be greater than 0!");
                 TT_FATAL(program_config.in0_block_w > 0, "in0_block_w must be greater than 0!");
                 TT_FATAL(program_config.out_subblock_h > 0, "out_subblock_h must be greater than 0!");
                 TT_FATAL(program_config.out_subblock_w > 0, "out_subblock_w must be greater than 0!");
@@ -1268,7 +1230,6 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 out_subblock_w = std::get<1>(subblock_hw);
             }
             return MatmulMultiCoreReuseMultiCastProgramConfig{
-                .compute_with_storage_grid_size = {num_cores_x, num_cores_y},
                 .in0_block_w = in0_block_w,
                 .out_subblock_h = out_subblock_h,
                 .out_subblock_w = out_subblock_w,

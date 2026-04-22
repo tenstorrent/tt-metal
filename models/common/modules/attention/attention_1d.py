@@ -1559,7 +1559,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
 
     if config.decode_sdpa_prg_config is None:
         to_set["decode_sdpa_prg_config"] = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             exp_approx_mode=False,
             q_chunk_size=0,
             k_chunk_size=0,
@@ -1621,7 +1621,9 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
         @lru_cache
         def xqkv_prefill_prg_config(seq_len: int):
             return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 9))})
+                if is_blackhole()
+                else ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -1646,7 +1648,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
                 k_chunk = min(k_chunk, chunk_start_idx & -chunk_start_idx)
 
             return ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
                 exp_approx_mode=False,
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
@@ -1721,7 +1723,9 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
         do_per_core_N = dim // num_devices // tile_size // (do_core_grid_size[0] * do_core_grid_size[1])
 
         to_set["decode_all_gather_matmul_prg_config"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=do_core_grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(do_core_grid_size.x - 1, do_core_grid_size.y - 1))}
+            ),
             in0_block_w=dim // tile_size // (do_core_grid_size[0] * do_core_grid_size[1]),
             out_subblock_h=1,
             out_subblock_w=_get_out_subblock_w(do_per_core_N, out_subblock_h=1),
@@ -2087,7 +2091,9 @@ def _matmul_config(
         in0_block_w = _find_largest_divisor(k // (tile_size * grid_size[1]))
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+        ),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,

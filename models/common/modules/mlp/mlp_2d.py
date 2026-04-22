@@ -307,7 +307,6 @@ class MLP2D(LightweightModule):
             x,
             self.w1,
             dtype=ttnn.bfloat8_b,
-            core_grid=None,
             compute_kernel_config=cfg.ff1_3_compute_kernel_cfg,
             program_config=cfg.decode_w1_w3_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -316,7 +315,6 @@ class MLP2D(LightweightModule):
             x,
             self.w3,
             dtype=ttnn.bfloat8_b,
-            core_grid=None,
             compute_kernel_config=cfg.ff1_3_compute_kernel_cfg,
             program_config=cfg.decode_w1_w3_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -353,7 +351,6 @@ class MLP2D(LightweightModule):
             dtype=cfg.ccl_dtype,
             program_config=cfg.decode_w2_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            core_grid=None,
         )
         ttnn.deallocate(w2_in)
 
@@ -405,7 +402,6 @@ class MLP2D(LightweightModule):
             x,
             self.w1,
             dtype=ttnn.bfloat8_b,
-            core_grid=None,
             compute_kernel_config=cfg.ff1_3_compute_kernel_cfg,
             program_config=pc_w1_w3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -414,7 +410,6 @@ class MLP2D(LightweightModule):
             x,
             self.w3,
             dtype=ttnn.bfloat8_b,
-            core_grid=None,
             compute_kernel_config=cfg.ff1_3_compute_kernel_cfg,
             program_config=pc_w1_w3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -451,7 +446,6 @@ class MLP2D(LightweightModule):
             dtype=cfg.ccl_dtype,
             program_config=pc_w2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=None,
         )
         ttnn.deallocate(w2_in)
 

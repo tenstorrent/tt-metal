@@ -13,20 +13,6 @@ namespace ttnn::prim {
 
 namespace {
 
-void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
-    // Validate tensor is within grid if sharded and not in DRAM
-    if (tensor.memory_config().is_sharded() && tensor.memory_config().buffer_type() != BufferType::DRAM) {
-        const auto& shard_spec = tensor.memory_config().shard_spec().value();
-        const auto& shard_grid = shard_spec.grid;
-        CoreRange range(CoreCoord(0, 0), grid_size);
-        TT_FATAL(
-            range.contains(shard_grid),
-            "Tensor shard spec grid must be within config grid! Shard grid: {}, Config grid: {}",
-            shard_grid,
-            range);
-    }
-}
-
 bool get_broadcast_batch(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -483,10 +469,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     }
 
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
-                } else {
-                    // Checks specific to non-gather configs
-                    check_tensor_in_grid(input_tensor_a, program_config.compute_with_storage_grid_size);
-                    check_tensor_in_grid(input_tensor_b, program_config.compute_with_storage_grid_size);
                 }
                 if (program_config.mcast_in0 || program_config.gather_in0) {
                     if (input_tensor_a.is_sharded()) {
@@ -649,6 +631,11 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
+                TT_FATAL(
+                    !attributes.sub_device_id.has_value(),
+                    "sub_device_id is not supported for DRAM-sharded matmul. "
+                    "DRAM-sharded matmul selects worker cores based on DRAM bank adjacency and cannot be constrained "
+                    "to a sub-device.");
                 TT_FATAL(input_tensor_a.is_sharded(), "Input tensor A must be sharded for DRAM sharded program config");
                 TT_FATAL(
                     attributes.output_mem_config.is_sharded(),
@@ -710,6 +697,11 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 // Input A: HEIGHT_SHARDED in L1 (batch-sharded, each core has B/12 complete [M, N] matrices)
                 // Input B: HEIGHT_SHARDED in DRAM (batch-sharded, each bank has B/12 complete [N, K] matrices)
                 // Output: HEIGHT_SHARDED in L1 (batch-sharded, each core outputs B/12 complete [M, K] matrices)
+                TT_FATAL(
+                    !attributes.sub_device_id.has_value(),
+                    "sub_device_id is not supported for batched DRAM-sharded matmul. "
+                    "DRAM-sharded matmul selects worker cores based on DRAM bank adjacency and cannot be constrained "
+                    "to a sub-device.");
                 TT_FATAL(input_tensor_a.is_sharded(), "Input tensor A must be sharded for batch-sharded DRAM matmul");
                 TT_FATAL(
                     attributes.output_mem_config.is_sharded(),
@@ -750,8 +742,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                check_tensor_in_grid(input_tensor_a, program_config.compute_with_storage_grid_size);
-                check_tensor_in_grid(input_tensor_b, program_config.compute_with_storage_grid_size);
                 TT_FATAL(
                     program_config.per_core_M % program_config.out_block_h == 0,
                     "Error: incompatible values {} and {}",
@@ -1214,8 +1204,12 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                             uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                             uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                             uint32_t num_cores = num_blocks_x * num_blocks_y;
-                            CoreRangeSet all_cores = num_cores_to_corerangeset(
-                                num_cores, program_config.compute_with_storage_grid_size, true);
+                            auto grid_size_for_cores =
+                                program_config.allowed_worker_cores.has_value()
+                                    ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
+                                    : input_tensor_a.device()->compute_with_storage_grid_size();
+                            CoreRangeSet all_cores =
+                                num_cores_to_corerangeset(num_cores, grid_size_for_cores, true);
                             tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                                 all_cores,
                                 {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
@@ -1348,10 +1342,12 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         shard_orientation = input_tensor_b.shard_spec().value().orientation;
                     }
 
+                    auto grid_size_for_reuse =
+                        program_config.allowed_worker_cores.has_value()
+                            ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
+                            : input_tensor_a.device()->compute_with_storage_grid_size();
                     CoreRangeSet all_cores = num_cores_to_corerangeset(
-                        num_cores,
-                        program_config.compute_with_storage_grid_size,
-                        shard_orientation == ShardOrientation::ROW_MAJOR);
+                        num_cores, grid_size_for_reuse, shard_orientation == ShardOrientation::ROW_MAJOR);
                     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
@@ -1491,12 +1487,11 @@ MatmulParams create_matmul_attributes(
     tt::tt_metal::IDevice* device = input_tensor_a.device();
     TT_FATAL(device != nullptr, "Operand to matmul must be on device");
     auto arch = device->arch();
-    const bool has_user_grid = parameters.user_core_coord.has_value();
     const bool has_program_config = parameters.program_config.has_value();
     bool are_inputs_low_precision_df =
         ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
          (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B));
-    const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
+    const auto increase_fidelity = !has_program_config && !are_inputs_low_precision_df;
     auto math_fidelity = increase_fidelity ? tt::tt_metal::MathFidelity::HiFi2 : tt::tt_metal::MathFidelity::LoFi;
     bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
@@ -1506,7 +1501,6 @@ MatmulParams create_matmul_attributes(
 
     bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(
         input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b, parameters.program_config));
-    TT_FATAL(!(has_user_grid && has_program_config), "Cannot use both user core grid/coordinates and a program config");
 
     const bool is_optional_output_tensor =
         !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
@@ -1566,7 +1560,6 @@ MatmulParams create_matmul_attributes(
         output_dtype,
         kernel_config_val,
         parameters.untilize_out,
-        parameters.user_core_coord,
         parameters.user_fused_activation,
         parameters.user_run_batched,
         parameters.transpose_a,

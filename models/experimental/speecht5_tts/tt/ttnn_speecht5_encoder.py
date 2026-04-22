@@ -297,7 +297,6 @@ class TTNNSpeechT5Attention:
             self.parameters["qkv_proj"]["weight"],
             bias=self.parameters["qkv_proj"]["bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=self.core_grid,
             compute_kernel_config=self.linear_compute_config,
         )
 
@@ -345,7 +344,6 @@ class TTNNSpeechT5Attention:
             query_states,
             key_states_t,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=self.core_grid,
             compute_kernel_config=self.attn_compute_config,
         )
 
@@ -366,7 +364,6 @@ class TTNNSpeechT5Attention:
                 reshape_q,
                 position_bias_t,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                core_grid=self.core_grid,
                 compute_kernel_config=self.attn_compute_config,
             )
 
@@ -392,7 +389,6 @@ class TTNNSpeechT5Attention:
             attn_weights,
             value_states,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=self.core_grid,
             compute_kernel_config=self.attn_compute_config,
         )
 
@@ -415,7 +411,6 @@ class TTNNSpeechT5Attention:
             self.parameters["out_proj"]["weight"],
             bias=self.parameters["out_proj"]["bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=self.core_grid,
             compute_kernel_config=self.linear_compute_config,
         )
 
@@ -480,7 +475,9 @@ class TTNNSpeechT5EncoderBlock:
         block_w = K_tiles // total_cores
 
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             subblock_w=1,
             block_h=per_core_M,
             block_w=block_w,
@@ -627,7 +624,9 @@ class TTNNSpeechT5Encoder:
         block_w = K_tiles // total_cores
 
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             subblock_w=1,
             block_h=per_core_M,
             block_w=block_w,
@@ -924,7 +923,9 @@ def get_encoder_ffn_program_config(device, seq_len, in_dim, out_dim):
         per_core_M = (seq_len + 31) // 32
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(compute_grid.x, 1),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, 0))}
+            ),
             in0_block_w=in0_block_w,  # K dimension in tiles, limited for L1
             out_subblock_h=1,
             out_subblock_w=min(4, per_core_N),  # Limit subblock width
@@ -940,7 +941,9 @@ def get_encoder_ffn_program_config(device, seq_len, in_dim, out_dim):
         per_core_N = (out_dim + compute_grid.x * 32 - 1) // (compute_grid.x * 32)
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(compute_grid.x, grid_y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, grid_y - 1))}
+            ),
             in0_block_w=in0_block_w,  # K dimension in tiles, limited for L1
             out_subblock_h=1,
             out_subblock_w=min(4, per_core_N),

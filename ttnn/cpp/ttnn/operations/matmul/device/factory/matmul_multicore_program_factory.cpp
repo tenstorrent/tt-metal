@@ -59,8 +59,20 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
 
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    CoreRangeSet resolved_grid;
+    if (operation_attributes.program_config.has_value()) {
+        const auto& pc =
+            std::get<operations::matmul::MatmulMultiCoreProgramConfig>(operation_attributes.program_config.value());
+        if (pc.allowed_worker_cores.has_value()) {
+            resolved_grid = pc.allowed_worker_cores.value();
+        } else {
+            auto gs = device->compute_with_storage_grid_size();
+            resolved_grid = CoreRangeSet({CoreRange({0, 0}, {gs.x - 1, gs.y - 1})});
+        }
+    } else {
+        auto gs = device->compute_with_storage_grid_size();
+        resolved_grid = CoreRangeSet({CoreRange({0, 0}, {gs.x - 1, gs.y - 1})});
+    }
     uint32_t c_batch_size = get_batch_size(cshape);
     auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
     auto
@@ -69,8 +81,8 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
          core_group_1,
          core_group_2,
          num_output_tiles_per_core_group_1,
-         num_output_tiles_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
+         num_output_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(resolved_grid, num_output_tiles_total);
+    const auto cores = tt::tt_metal::corerange_to_cores(all_cores, num_cores, /*row_wise=*/false);
 
     tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -188,7 +200,7 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     }
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        const CoreCoord& core = cores[i];
 
         uint32_t num_output_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
@@ -218,7 +230,7 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
         num_tiles_written += num_output_tiles_per_core;
     }
 
-    return {std::move(program), {reader_id, writer_id, num_cores, num_cores_y}};
+    return {std::move(program), {reader_id, writer_id, num_cores, cores}};
 }
 
 void MatmulMultiCoreProgramFactory::override_runtime_arguments(
@@ -230,15 +242,13 @@ void MatmulMultiCoreProgramFactory::override_runtime_arguments(
     auto& shared_variables = cached_program.shared_variables;
     auto reader_kernel_id = shared_variables.reader_kernel_id;
     auto writer_kernel_id = shared_variables.writer_kernel_id;
-    auto num_cores = shared_variables.num_cores;
-    auto num_cores_y = shared_variables.num_cores_y;
+    const auto& cores = shared_variables.cores;
 
     auto* src_dram_buffer_a = tensor_args.input_tensors.at(0).buffer();
     auto* src_dram_buffer_b = tensor_args.input_tensors.at(1).buffer();
     auto* dst_dram_buffer = tensor_return_value.at(0).buffer();
 
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (const auto& core : cores) {
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer_a->address();

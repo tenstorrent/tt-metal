@@ -2669,14 +2669,11 @@ def run_matmul(device, params, core_grid, dtype, test_bias):
         op_output_tensor = ttnn.linear(
             input_tensor0,
             input_tensor1,
-            core_grid=grid,
             compute_kernel_config=compute_kernel_config,
             bias=input_tensor2,
         )
     else:
-        op_output_tensor = ttnn.matmul(
-            input_tensor0, input_tensor1, core_grid=grid, compute_kernel_config=compute_kernel_config
-        )
+        op_output_tensor = ttnn.matmul(input_tensor0, input_tensor1, compute_kernel_config=compute_kernel_config)
     output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.99

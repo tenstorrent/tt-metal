@@ -15,7 +15,9 @@ def bert_large_fused_qkv_matmul(
     assert input_tensor_b.padded_shape == [1, 1, 1024, 3072], "Unsupported input shape"
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(12, batch_size),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, batch_size - 1))}
+        ),
         in0_block_w=4,
         out_subblock_h=4,
         out_subblock_w=2,
@@ -60,7 +62,9 @@ def bert_large_ff1_matmul(
     assert input_tensor_b.padded_shape == [1, 1, 1024, 4096], "Unsupported input shape"
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(12, batch_size),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, batch_size - 1))}
+        ),
         in0_block_w=4,
         out_subblock_h=6,
         out_subblock_w=1,
@@ -88,7 +92,9 @@ def bert_large_ff2_matmul(
     assert input_tensor_b.padded_shape == [1, 1, 4096, 1024], "Unsupported input shape"
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(12, batch_size),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, batch_size - 1))}
+        ),
         in0_block_w=4,
         out_subblock_h=6,
         out_subblock_w=1,
@@ -116,7 +122,9 @@ def bert_large_selfout_matmul(
     assert input_tensor_b.padded_shape == [1, 1, 1024, 1024], "Unsupported input shape"
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(12, batch_size),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, batch_size - 1))}
+        ),
         in0_block_w=4,
         out_subblock_h=6,
         out_subblock_w=1,
@@ -144,7 +152,9 @@ def bert_large_pre_softmax_bmm(
     assert input_tensor_b.padded_shape == [batch_size, 16, 64, 384], "Unsupported input shape"
 
     program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=(12, batch_size),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, batch_size - 1))}
+        ),
         in0_block_w=1,
         out_subblock_h=4,
         out_subblock_w=2,
@@ -169,7 +179,9 @@ def bert_large_post_softmax_bmm(
     assert input_tensor_b.padded_shape == [batch_size, 16, 384, 64], "Unsupported input shape"
 
     program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=(12, batch_size),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, batch_size - 1))}
+        ),
         in0_block_w=2,
         out_subblock_h=4,
         out_subblock_w=2,

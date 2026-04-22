@@ -503,7 +503,9 @@ class Linear:
     def _create_program_config(self):
         if self.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
             return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.core_grid.x - 1, self.core_grid.y - 1))}
+                ),
                 in0_block_w=self.in0_block_w,
                 out_subblock_h=self.out_subblock[0],
                 out_subblock_w=self.out_subblock[1],
@@ -517,7 +519,9 @@ class Linear:
             )
         elif self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
             return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.core_grid.x - 1, self.core_grid.y - 1))}
+                ),
                 in0_block_w=self.in0_block_w,
                 out_subblock_h=self.out_subblock[0],
                 out_subblock_w=self.out_subblock[1],
