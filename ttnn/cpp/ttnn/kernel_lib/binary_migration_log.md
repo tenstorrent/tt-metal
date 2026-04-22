@@ -63,6 +63,41 @@ feature that does or does not fit the helper API.
   (NoWaitNoPop), runtime `in_cb`/`out_cb` from q/k selection — helpers take `uint32_t` OK
 - **Tests**: 16 decode tests passed (head_dim 128/64/256, batch 1/8/16/32, with program cache)
 
+### `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/hardswish_kernel.cpp`
+- **Commit**: `d02a44f0c89`
+- **Pattern**: `sfpu_chain(Load<WaitNoPop>, SfpuOp, DestReuseOp<WaitAndPop>)` — single CB
+  read twice (once for SFPU, once via FPU dest-reuse to preserve BFloat16 precision path)
+- **Helper features used**: `sfpu_chain` with `Load<cb_input, D0, WaitNoPop>`,
+  `Hardsigmoid<D0>`, `DestReuseOp<cb_input, ELWMUL, DEST_TO_SRCA, D0, WaitAndPop>`.
+  `sfpu_pipeline` handles CB lifecycle + output packing.
+- **Required helper fix**: `sfpu_pipeline` called `copy_tile_to_dst_init_short` once before
+  the loop; `DestReuseOp::exec()` runs `binary_dest_reuse_tiles_init` which clobbers that
+  state for subsequent tiles. Added `chain_has_non_load_fpu_clash_v` trait to `sfpu_chain.hpp`
+  and updated `sfpu_chain.inl` to re-call `copy_tile_to_dst_init_short` per tile when the
+  trait is true. Zero behavior change for SFPU-only chains.
+- **Discovered by**: fresh investigation outside the original plan — plan only looked at
+  binary_op_helpers (two-CB streaming); these kernels are unary but use a terminal FPU
+  dest-reuse step after SFPU ops, a different helper axis never explored in the plan.
+- **Tests**: 14 hardswish tests passed (bf16, bfloat8_b, fp32, shapes)
+
+### `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/tanhshrink_kernel.cpp`
+- **Commit**: `d02a44f0c89`
+- **Pattern**: same sfpu_chain + DestReuseOp pattern as hardswish
+- **Helper features used**: `Load<WaitNoPop>`, `Tanh<Approx::Exact, D0>`,
+  `DestReuseOp<cb_input, ELWSUB, DEST_TO_SRCB, D0, WaitAndPop>`.
+  `DEST_TO_SRCB`: loads x into SRCB, computes SRCA(tanh(x)) - SRCB(x) → x - tanh(x).
+- **Tests**: 7 tanhshrink tests passed (bf16, bfloat8_b, fp32)
+
+### `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/mish_kernel.cpp` (INP_FLOAT path)
+- **Commit**: `d02a44f0c89`
+- **Pattern**: same sfpu_chain + DestReuseOp, longer SFPU chain (exp+log1p+tanh)
+- **Helper features used**: `Load<WaitNoPop>`, `Exp<Fast|Exact>`, `Log1p<Fast|Exact>`,
+  `Tanh<Exact>`, `DestReuseOp<cb_input, ELWMUL, DEST_TO_SRCA, D0, WaitAndPop>`.
+  `use_approx` runtime flag dispatches to two statically-typed chains.
+  INP_FLOAT32 path was already migrated separately (uses `SfpuMul` instead of DestReuseOp
+  to preserve FP32-specific precision semantics).
+- **Tests**: 25 mish tests passed (bf16+fp32, approx=True/False, multiple shapes)
+
 ### `ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/compute/layernorm_post_allgather_welford.cpp`
 - **Commit**: `3b46be49921`
 - **Stages migrated**: Stage 2 (x_minus_mean: sub COL bcast) only
