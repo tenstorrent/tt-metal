@@ -9,9 +9,9 @@
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
 
 class KSplitGramMatmulTest : public ::testing::Test {
 protected:
@@ -32,16 +32,8 @@ constexpr float kAtol = 15.0f;
 
 ttnn::Tensor make_random_tensor(uint32_t M, uint32_t N, uint32_t seed = 42) {
     auto* device = &ttml::autograd::ctx().get_device();
-    std::vector<float> data(M * N);
-    ttml::core::parallel_generate(
-        std::span{data.data(), data.size()}, []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); }, seed);
-    auto shape = ttnn::Shape({1, 1, M, N});
-    return ttnn::Tensor::from_vector(
-        data,
-        ttnn::TensorSpec(
-            shape,
-            tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
-        device);
+    auto data = ttml::test_utils::make_uniform_vector<float>(M * N, -1.0f, 1.0f, seed);
+    return ttml::core::from_vector(data, ttnn::Shape({1, 1, M, N}), device);
 }
 
 // Compute reference gram matmul tile G[m_tile, n_tile] on CPU
