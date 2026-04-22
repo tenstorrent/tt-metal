@@ -663,6 +663,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
     auto kernel = MakeMinimalDMKernel("dm_kernel", nodes);
     kernel.runtime_arguments_schema.num_runtime_args_per_node = {{node_a, 2}, {node_b, 5}};
     spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", nodes, {"dm_kernel"})};
     Program program = MakeProgramFromSpec(spec);
 
     ProgramRunParams params;
@@ -702,6 +703,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyRTAsMissingNodeCoverageFails) {
     auto kernel = MakeMinimalDMKernel("dm_kernel", nodes);
     kernel.runtime_arguments_schema.num_runtime_args_per_node = {{node_a, 2}, {node_b, 2}};
     spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", nodes, {"dm_kernel"})};
     Program program = MakeProgramFromSpec(spec);
 
     ProgramRunParams params;
