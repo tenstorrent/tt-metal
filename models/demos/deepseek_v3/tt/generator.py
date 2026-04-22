@@ -372,9 +372,10 @@ class DeepseekGenerator(WarmupForwardMixin):
             return self._prefill_warmup_prompt_lens
         prompt_lens_set: set[int] = set()
         prompt_len = ttnn.TILE_SIZE
-        upper_bound = max_prompt_len if max_prompt_len > 0 else self.hf_config.max_seq_len
+        hf_max_seq_len = (self.hf_config.max_seq_len // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        max_prompt_len = ((max_prompt_len + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        upper_bound = min(max_prompt_len if max_prompt_len > 0 else hf_max_seq_len, hf_max_seq_len)
         # upper_bound set to next multiple of 32
-        upper_bound = (upper_bound // ttnn.TILE_SIZE + 1) * ttnn.TILE_SIZE
         while prompt_len <= upper_bound:
             prompt_lens_set.add(prompt_len)
             prompt_len *= 2
