@@ -39,6 +39,8 @@ uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
     return logical_volume / hidden_size;
 }
 
+const CoreRangeSet max_combine_core_range_set = CoreRangeSet(CoreRange({5, 0}, {6, 7}));
+
 std::tuple<
     std::vector<CoreCoord>,  // T cores
     std::vector<CoreCoord>,  // MM cores
@@ -60,7 +62,8 @@ get_cores(
      */
 
     // Cores
-    const std::vector<CoreCoord> tilize_cores = {CoreCoord(6, 9), CoreCoord(6, 8), CoreCoord(5, 9), CoreCoord(5, 8)};
+    const std::vector<CoreCoord> tilize_cores = {
+        CoreCoord(6, 9), CoreCoord(6, 8)};  //, CoreCoord(5, 9), CoreCoord(5, 8)};
     const std::vector<CoreCoord> matmul_cores =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
 
@@ -76,12 +79,9 @@ get_cores(
     // Verify none of the bounding boxes overlap
     TT_FATAL(!tilize_bounding_box.intersects(matmul_bounding_box), "tilize and matmul bounding boxes cannot overlap");
 
-    // Combine cores (16 total), that don't overlap with any of the tilize or matmul bounding boxes
-    const CoreRange combine_core_range({5, 0}, {6, 7});
-    const CoreRangeSet init_combine_core_range_set = CoreRangeSet(combine_core_range);
-
+    // Combine cores (16 max), that don't overlap with any of the tilize or matmul bounding boxes
     const auto combine_core_range_set = select_from_corerangeset(
-        init_combine_core_range_set,
+        max_combine_core_range_set,
         /*start_index=*/0,
         (combine_token_parallel_cores * combine_data_parallel_cores) - 1);
 
@@ -398,8 +398,9 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Tilize drain-sync core signals combine sync core (which then multicasts to the rest)
     // that metadata is ready and task splitting can proceed.
+    // Allocate on full rectangle of usable cores so we can multicast without clobbering.
     const auto tilize_combine_sync_semaphore_id =
-        tt::tt_metal::CreateSemaphore(program, combine_core_range_set, INVALID);
+        tt::tt_metal::CreateSemaphore(program, max_combine_core_range_set, INVALID);
 
     // Matmul dm1 signals combine cores when data is written; combine writer waits on this semaphore.
     // For double buffering, combine cores will also use this semaphore to signal matmul when buffer segments are free
@@ -707,8 +708,8 @@ MoEComputeMeshWorkloadFactory::create_at(
     uint32_t tile_width_bytes = TILE_WIDTH * tilize_input_tensor.element_size();
     uint32_t max_tiles_per_local_chunk = max_tilize_subtoken_size / tile_width_bytes;
 
-    const uint32_t primary_mcast_gather_group_num_cores = (tilize_num_cores + 1) / 2;
-    const uint32_t secondary_mcast_gather_group_num_cores = tilize_num_cores / 2;
+    const uint32_t primary_mcast_gather_group_num_cores = tilize_num_cores / 2;
+    const uint32_t secondary_mcast_gather_group_num_cores = tilize_num_cores - primary_mcast_gather_group_num_cores;
 
     // Drain core is always the first tilize core (index 0)
     CoreCoord tilize_drain_core_physical = tilize_cores_physical.at(0);
