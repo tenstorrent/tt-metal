@@ -56,7 +56,7 @@ void kernel_main() {
                         uint32_t input_tile_sub_row_to_read =
                             output_stick_id % num_sticks_per_input_tile_row / input_Wt;
 
-                        uint64_t banked_addr = get_noc_addr(input_tile_to_read, s0);
+                        uint64_t banked_addr = s0.get_noc_addr(input_tile_to_read);
                         banked_addr +=
                             (((input_tile_sub_row_to_read >> 4) << 1)
                              << 9);  // if intra-tile source h is > 16, add 2*512 to subtile offset

@@ -16,6 +16,7 @@ with :class:`~weights.cache.CacheConfig` and the ``prepare_*`` functions
 
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
 from models.demos.deepseek_v3_b1.weights.cache import (
+    BspmVariant,
     CacheConfig,
     CompressedTensorBuildInputs,
     CompressedTensorTarget,
@@ -37,6 +39,7 @@ from models.demos.deepseek_v3_b1.weights.cache import (
     SourceTensorSelection,
     TensorTarget,
 )
+from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import get_or_create_bspm_expert
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     DOWN_PROJ_SINGLE_DEVICE_SPEC,
@@ -1118,7 +1121,7 @@ def prepare_moe_routed_experts_bspm(
     *,
     move_to_device: bool,
     cache_config: "CacheConfig",
-    bspm_variant: str = "B",
+    bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
 ) -> MoERoutedExpertWeights:
     """Upload MoE routed experts as BSPM-encoded CompressedTensor objects.
@@ -1152,35 +1155,34 @@ def prepare_moe_routed_experts_bspm(
             for e in range(num_routed_experts)
         ]
 
-        tgt = CompressedTensorTarget(
-            name=proj_name,
-            K=K,
-            N_padded=N_padded,
-            num_banks=num_banks,
-            bspm_variant=bspm_variant,
-            bspm_budget=bspm_budget,
-        )
-
         for e, key in enumerate(keys):
             assignment_logical = all_assignments[e]
+            assignment_hash = hashlib.sha256(assignment_logical.tobytes()).hexdigest()[:16]
+            tgt = CompressedTensorTarget(
+                name=proj_name,
+                K=K,
+                N_padded=N_padded,
+                num_banks=num_banks,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
+                assignment_hash=assignment_hash,
+            )
             fp = cache_config.context.fingerprint(
                 source=SourceTensorSelection(names=(key,)),
                 target=tgt,
             )
-            ct = cache_config.cache.get_or_create(
+            ct = get_or_create_bspm_expert(
+                cache_config.cache,
                 fp,
                 device,
-                preprocess=lambda tensors, _k=key, _a=assignment_logical, _N=N, _N_padded=N_padded: {
-                    proj_name: CompressedTensorBuildInputs(
-                        w_logical=torch.nn.functional.pad(
-                            tensors[_k].T.contiguous().float(), (0, _N_padded - _N)
-                        ).numpy()
-                        if _N_padded != _N
-                        else tensors[_k].T.contiguous().float().numpy(),
-                        assignment_logical=_a,
-                    )
-                },
                 raw_tensors=lambda _k=key: {_k: state_dict[_k]},
+                preprocess=lambda tensors, _k=key, _a=assignment_logical, _N=N, _N_padded=N_padded: CompressedTensorBuildInputs(
+                    w=torch.nn.functional.pad(tensors[_k].T.contiguous().float(), (0, _N_padded - _N)).numpy()
+                    if _N_padded != _N
+                    else tensors[_k].T.contiguous().float().numpy(),
+                    assignment=_a,
+                ),
+                move_to_device=move_to_device,
             )
             results[proj_idx].append(ct)
 
@@ -1207,7 +1209,7 @@ def prepare_routed_expert_weights(
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
     bspm_dir: Path | None = None,
-    bspm_variant: str = "B",
+    bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
 ) -> DenseRoutedExpertWeights | MoERoutedExpertWeights:
     """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts).
@@ -1451,7 +1453,7 @@ def prepare_moe_layer_weights(
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
     bspm_dir: Path | None = None,
-    bspm_variant: str = "B",
+    bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer.

@@ -390,6 +390,80 @@ def _add_global_weights(state: dict[str, torch.Tensor], seed: int = 42) -> None:
     )
 
 
+def test_compressed_tensor_target_transform_version_invalidates_cache():
+    """Bumping transform_version on CompressedTensorTarget produces a distinct artifact ID."""
+    from models.demos.deepseek_v3_b1.weights.cache import (
+        BspmVariant,
+        CacheContext,
+        CompressedTensorTarget,
+        SourceTensorSelection,
+    )
+    from models.demos.deepseek_v3_b1.weights.cache.fingerprint import compute_artifact_id
+
+    ctx = CacheContext(schema_version=1, hf_model_id="test", hf_revision="r0", mesh_shape=(1, 1))
+    source = SourceTensorSelection(names=("layer.weight",))
+
+    tgt_v3 = CompressedTensorTarget(
+        name="gate_proj",
+        K=64,
+        N_padded=64,
+        num_banks=8,
+        bspm_variant=BspmVariant.B,
+        bspm_budget=3.5,
+        transform_version=3,
+    )
+    tgt_v4 = CompressedTensorTarget(
+        name="gate_proj",
+        K=64,
+        N_padded=64,
+        num_banks=8,
+        bspm_variant=BspmVariant.B,
+        bspm_budget=3.5,
+        transform_version=4,
+    )
+
+    id_v3 = compute_artifact_id(ctx.fingerprint(source=source, target=tgt_v3))
+    id_v4 = compute_artifact_id(ctx.fingerprint(source=source, target=tgt_v4))
+    assert id_v3 != id_v4, "Bumping transform_version must produce a different artifact ID"
+
+
+def test_compressed_tensor_target_assignment_hash_invalidates_cache():
+    """Different assignment_hash values in CompressedTensorTarget produce distinct artifact IDs."""
+    from models.demos.deepseek_v3_b1.weights.cache import (
+        BspmVariant,
+        CacheContext,
+        CompressedTensorTarget,
+        SourceTensorSelection,
+    )
+    from models.demos.deepseek_v3_b1.weights.cache.fingerprint import compute_artifact_id
+
+    ctx = CacheContext(schema_version=1, hf_model_id="test", hf_revision="r0", mesh_shape=(1, 1))
+    source = SourceTensorSelection(names=("layer.weight",))
+
+    tgt_a = CompressedTensorTarget(
+        name="gate_proj",
+        K=64,
+        N_padded=64,
+        num_banks=8,
+        bspm_variant=BspmVariant.B,
+        bspm_budget=3.5,
+        assignment_hash="aabbccdd00001111",
+    )
+    tgt_b = CompressedTensorTarget(
+        name="gate_proj",
+        K=64,
+        N_padded=64,
+        num_banks=8,
+        bspm_variant=BspmVariant.B,
+        bspm_budget=3.5,
+        assignment_hash="ffffffffffffffff",
+    )
+
+    id_a = compute_artifact_id(ctx.fingerprint(source=source, target=tgt_a))
+    id_b = compute_artifact_id(ctx.fingerprint(source=source, target=tgt_b))
+    assert id_a != id_b, "Different assignment_hash values must produce distinct artifact IDs"
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
