@@ -174,8 +174,8 @@ class MoE(AbstractModuleBase):
                 [b, 1, s, self.n_limited_groups], ttnn.DataType.BFLOAT16, ttnn.Layout.ROW_MAJOR, biased.device()
             )
             group_mask = ttnn.scatter(group_mask, -1, top_group_indices_u32, group_src)
-            group_mask = ttnn.to_layout(group_mask, ttnn.TILE_LAYOUT)
             group_mask = ttnn.repeat_interleave(group_mask, experts_per_group, dim=-1)
+            group_mask = ttnn.to_layout(group_mask, ttnn.TILE_LAYOUT)
             neg_inf = ttnn.multiply(ttnn.subtract(group_mask, 1.0), 1e9)
             biased_masked = ttnn.add(biased, neg_inf)
 
