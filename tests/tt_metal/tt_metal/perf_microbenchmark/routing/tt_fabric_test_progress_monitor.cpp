@@ -403,8 +403,8 @@ void TestProgressMonitor::check_for_hung_endpoints() {
             continue;
         }
 
-        // Skip completed endpoints
-        if (eps.packets_expected > 0 && eps.packets_processed >= eps.packets_expected) {
+        // Skip completed endpoints (including zero-expected configs, which are trivially complete)
+        if (eps.packets_processed >= eps.packets_expected) {
             continue;
         }
 
@@ -489,7 +489,7 @@ void TestProgressMonitor::display_granular_progress(std::chrono::duration<double
     for (const auto& [eid, eps] : endpoint_states_) {
         total_current += eps.packets_processed;
         total_target += eps.packets_expected;
-        if (eps.packets_expected > 0 && eps.packets_processed >= eps.packets_expected) {
+        if (eps.packets_processed >= eps.packets_expected) {
             completed_endpoints_++;
         }
     }
@@ -529,7 +529,7 @@ bool TestProgressMonitor::all_endpoints_resolved() const {
         if (eps.hung.confirmed_hung) {
             continue;
         }
-        if (eps.packets_expected > 0 && eps.packets_processed >= eps.packets_expected) {
+        if (eps.packets_processed >= eps.packets_expected) {
             continue;
         }
         return false;

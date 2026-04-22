@@ -145,12 +145,19 @@ void kernel_main() {
     // Terminate muxes and wait for completion
     mux_termination_manager.terminate_muxes();
 
-    // Final per-config flush so per-config data matches aggregate completion
-    auto* per_config_results = get_per_config_results(sender_config->get_result_buffer_address());
+    // Aggregate the per-config send counts for the final test_packets write.
+    // The per-config flush itself is skipped in BENCHMARK_MODE to avoid extra
+    // L1 writes on the exit path (per-config progress monitoring is disabled
+    // in benchmark mode anyway).
     for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-        uint64_t config_packets = sender_config->traffic_config_ptrs[i]->num_packets_processed;
-        total_packets_sent += config_packets;
-        write_per_config_result(&per_config_results[i], config_packets);
+        total_packets_sent += sender_config->traffic_config_ptrs[i]->num_packets_processed;
+    }
+    if constexpr (!BENCHMARK_MODE) {
+        auto* per_config_results = get_per_config_results(sender_config->get_result_buffer_address());
+        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+            uint64_t config_packets = sender_config->traffic_config_ptrs[i]->num_packets_processed;
+            write_per_config_result(&per_config_results[i], config_packets);
+        }
     }
 
     // Write test results

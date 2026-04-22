@@ -113,10 +113,11 @@ void kernel_main() {
     mux_termination_manager.terminate_muxes();
 
     // Final per-config flush — write per-config counters for progress monitoring.
-    // Do NOT overwrite total_packets_received: in the skip-validation path,
-    // num_packets_processed is never advanced, so summing it would zero out
-    // the correct aggregate that was already computed in the main loop.
-    {
+    // Skipped in BENCHMARK_MODE: num_packets_processed is never advanced in the
+    // skip-validation path so the values would be zero (causing host-side
+    // granular monitoring to falsely report stalls), and we want to keep the
+    // exit path free of extra L1 writes for accurate perf measurement.
+    if constexpr (!BENCHMARK_MODE) {
         auto* per_config_results = get_per_config_results(receiver_config->get_result_buffer_address());
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             uint64_t config_packets = receiver_config->traffic_configs()[i]->num_packets_processed;
