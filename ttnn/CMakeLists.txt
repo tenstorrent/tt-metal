@@ -297,12 +297,15 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/experimental_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/generic/patchable_generic_op_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/paged_cache/paged_cache_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/plusone/plusone_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
@@ -644,15 +647,17 @@ target_sources(
         cpp/ttnn/operations/generic/generic_op.cpp
         cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
         cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
-        cpp/ttnn/operations/experimental/generic/device/patchable_generic_op_device_operation.cpp
-        cpp/ttnn/operations/experimental/generic/device/patchable_generic_op_program_factory.cpp
+        cpp/ttnn/operations/experimental/fusion/device/fusion_dispatch_op_device_operation.cpp
+        cpp/ttnn/operations/experimental/fusion/device/fusion_dispatch_op_program_factory.cpp
         cpp/ttnn/operations/data_movement/reshape_view/reshape_common.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
         cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.cpp
         cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine.cpp
-        cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn.cpp
+        cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_common.cpp
+        cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_wh.cpp
+        cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_bh.cpp
         cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
@@ -721,6 +726,9 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::Combine
         TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
         TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
+        TTNN::Ops::Experimental::DeepSeekPrefill::Extract
+        TTNN::Ops::Experimental::DeepSeekPrefill::Insert
+        TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reduction
@@ -973,6 +981,9 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/dispatch)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/combine)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/extract)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/insert)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk)
 add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
