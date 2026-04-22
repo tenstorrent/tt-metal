@@ -228,6 +228,11 @@ class Generator(WarmupForwardMixin):
         batch_size=1,
         user_id=0,
     ):
+        logger.info(
+            "Prefill trace capture starting (batch_size=%s): compile pass then trace record — "
+            "large models may show no logs for several minutes until 'Done Compiling Model'.",
+            batch_size,
+        )
         if batch_size > 1:
             prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": user_id}
             if global_user_id is not None:
@@ -254,6 +259,7 @@ class Generator(WarmupForwardMixin):
             logger.info("Done Compiling Model")
 
             device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+            logger.info("Prefill trace capture: recording trace (begin_trace_capture → end_trace_capture)...")
             trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
             transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
             tt_out_trace = self.model[model_id].ttnn_prefill_forward(
@@ -293,6 +299,7 @@ class Generator(WarmupForwardMixin):
             logger.info("Done Compiling Model")
 
             device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+            logger.info("Prefill trace capture: recording trace (begin_trace_capture → end_trace_capture)...")
             trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
             transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
             tt_out_trace = self.model[model_id].ttnn_prefill_forward(
