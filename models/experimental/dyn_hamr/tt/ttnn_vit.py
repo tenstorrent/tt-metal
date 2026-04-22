@@ -111,8 +111,13 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
     """
     assert ttnn is not None, "ttnn runtime not available"
     backbone = ref.backbone
+    # HaMeR's `forward_features` adds `pos_embed[:, 1:]` (per-token positional)
+    # and `pos_embed[:, :1]` (cls-slot, broadcast to every token).  Pre-fuse
+    # them into a single (N, C) tensor so the per-call add is one ttnn op.
+    pos = backbone.pos_embed.squeeze(0)  # (N+1, C)
+    pos_combined = pos[1:] + pos[:1]
     params: Dict[str, Any] = {
-        "pos_embed": _t(backbone.pos_embed.squeeze(0), device),  # (N+1, C)
+        "pos_embed": _t(pos_combined, device),  # (N, C), pre-fused
         "last_norm": {
             "weight": _t(backbone.last_norm.weight, device),
             "bias": _t(backbone.last_norm.bias, device),
@@ -230,13 +235,9 @@ def forward(
     ``(B, 192, 1280)`` token-major.
     """
     x = patch_tokens
-    pos = params["pos_embed"]
-    # HaMeR adds pos_embed[:, 1:] + pos_embed[:, :1] to every token; we
-    # collapsed pos_embed to (193, C) at upload, so reuse the same split.
-    pos_patches = pos[1:]
-    pos_cls = pos[:1]
-    x = x + pos_patches
-    x = x + pos_cls
+    # ``pos_embed`` is the pre-fused ``pos[1:] + pos[:1]`` from upload time —
+    # one broadcast add instead of two on every forward.
+    x = x + params["pos_embed"]
 
     for i in range(depth):
         x = block(x, params["blocks"][i], num_heads=num_heads, head_dim=head_dim)
