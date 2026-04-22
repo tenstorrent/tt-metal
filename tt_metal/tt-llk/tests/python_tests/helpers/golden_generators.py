@@ -72,6 +72,39 @@ def saturate_integer(result: torch.Tensor, data_format, torch_format) -> torch.T
     return result.to(torch_format)
 
 
+def apply_l1_accumulation(
+    partials: list[torch.Tensor],
+    data_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Simulate L1 accumulation by summing partial results.
+
+    With L1 acc enabled, the packer accumulates into the same output tile
+    slots across multiple passes.  For integer formats the hardware
+    saturates at every step instead of wrapping, so the golden must
+    clamp the running sum to the output range after each addition.
+
+    Args:
+        partials: List of tensors, one per accumulation pass, all of the
+                  same shape. Each tensor represents the contribution
+                  packed into the output tiles during that pass.
+        data_format: DataFormat of the pack output.  When the format is integer,
+               each accumulation step is saturated to the format's representable range.
+    Returns:
+        Element-wise sum of all partials (saturated per-step for integers).
+    """
+    needs_saturation = data_format.is_integer()
+
+    accumulated = partials[0].clone()
+    for partial in partials[1:]:
+        if needs_saturation:
+            wide = accumulated.to(torch.int64) + partial.to(torch.int64)
+            accumulated = saturate_integer(wide, data_format, format_dict[data_format])
+        else:
+            accumulated += partial
+    return accumulated
+
+
 def check_bfp8_b(operand: list) -> list:
     """Check if datum is BFP8_B there is a +/- inf then zero out entire row of 16 elements because they inherit the same exponent and therefore get zeroed out in tensix."""
     # tensor_bytes = pack_bfp8_b(torch.tensor(operand, dtype=torch.bfloat16))
@@ -1513,40 +1546,6 @@ class PackGolden:
                 )
                 # Clamp between 0 and threshold
                 return torch.clamp(result, min=0.0, max=threshold)
-
-    @staticmethod
-    def apply_l1_accumulation(
-        partials: list[torch.Tensor],
-        data_format: DataFormat,
-    ) -> torch.Tensor:
-        """
-        Simulate L1 accumulation by summing partial results.
-
-        With L1 acc enabled, the packer accumulates into the same output tile
-        slots across multiple passes.  For integer formats the hardware
-        saturates at every step instead of wrapping, so the golden must
-        clamp the running sum to the output range after each addition.
-
-        Args:
-            partials: List of tensors, one per accumulation pass, all of the
-                      same shape. Each tensor represents the contribution
-                      packed into the output tiles during that pass.
-            data_format: DataFormat of the pack output.  When the format is integer,
-                   each accumulation step is saturated to the format's representable range.
-        Returns:
-            Element-wise sum of all partials (saturated per-step for integers).
-        """
-        needs_saturation = data_format.is_integer()
-        torch_format = format_dict[data_format] if needs_saturation else None
-
-        accumulated = partials[0].clone()
-        for partial in partials[1:]:
-            if needs_saturation:
-                wide = accumulated.to(torch.int64) + partial.to(torch.int64)
-                accumulated = saturate_integer(wide, data_format, torch_format)
-            else:
-                accumulated += partial
-        return accumulated
 
 
 @register_golden
