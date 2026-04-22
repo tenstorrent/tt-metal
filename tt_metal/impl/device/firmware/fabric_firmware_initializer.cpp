@@ -31,12 +31,7 @@ namespace {
 
 using tt::tt_fabric::chan_id_t;
 using tt::tt_fabric::EDMStatus;
-using tt::umd::CoreCoord;
 
-// Sanity-check the precondition that a freshly-cleared edm_status_address
-// (sentinel value 0 written by get_fabric_router_addresses_to_clear()) is
-// distinct from every EDMStatus value the kernel will ever write, so
-// NotStarted can be distinguished from every real stage.
 static_assert(static_cast<uint32_t>(EDMStatus::STARTED) != 0);
 static_assert(static_cast<uint32_t>(EDMStatus::REMOTE_HANDSHAKE_COMPLETE) != 0);
 static_assert(static_cast<uint32_t>(EDMStatus::LOCAL_HANDSHAKE_COMPLETE) != 0);
