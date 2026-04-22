@@ -226,9 +226,9 @@ void link_one(
     append_tokenized(args, gpp);
     args.push_back("-" + target.linker_opt_level);
 
-    std::vector<std::string> link_deps = {target.linker_script};
+    std::vector<fs::path> link_deps = {fs::path(target.linker_script)};
     if (!target.weakened_firmware_name.empty()) {
-        link_deps.push_back(target.weakened_firmware_name);
+        link_deps.push_back(fs::path(target.weakened_firmware_name));
         if (!target.firmware_is_kernel_object) {
             args.push_back("-Wl,--just-symbols=" + target.weakened_firmware_name);
         } else {
