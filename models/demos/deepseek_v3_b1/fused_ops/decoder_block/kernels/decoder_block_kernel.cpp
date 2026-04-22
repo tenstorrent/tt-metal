@@ -1071,14 +1071,16 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
         get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("rmsnorm_output_cb")>;
+        get_named_compile_time_arg_val("rmsnorm_output_cb"),
+        false>;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm2_num_tiles"),
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("rmsnorm2_input_cb"),
         get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),
-        get_named_compile_time_arg_val("rmsnorm2_output_cb")>;
+        get_named_compile_time_arg_val("rmsnorm2_output_cb"),
+        false>;
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
 
     // RMSNorm compute runtime args
@@ -1206,7 +1208,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
         get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("kv_rmsnorm_output_cb")>;
+        get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
+        false>;
 
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs kv_rmsnorm_args{
@@ -2051,7 +2054,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("moe_rmsnorm_rsqrt_fast_approx") == 1,
                 get_named_compile_time_arg_val("moe_rmsnorm_input_cb"),  // residual_mcast_src_cb
                 get_named_compile_time_arg_val("moe_rmsnorm_gamma_cb"),
-                get_named_compile_time_arg_val("moe_rmsnorm_output_cb")>;  // rmsnorm_output_cb
+                get_named_compile_time_arg_val("moe_rmsnorm_output_cb"),  // rmsnorm_output_cb
+                false>;
             deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
                 get_common_arg_val<uint32_t>(
                     get_named_compile_time_arg_val("moe_rmsnorm_trisc_common_rt_arg_base") + 0),
