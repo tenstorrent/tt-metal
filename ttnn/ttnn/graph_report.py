@@ -1520,12 +1520,8 @@ def import_report(
                 total_stats["stack_traces"] += stats.get("stack_traces", 0)
                 tl = stats.get("tensor_lifetime") or []
                 total_stats["tensor_lifetime_records"] += len(tl)
-                total_stats["tensor_consumer_rows"] = total_stats.get("tensor_consumer_rows", 0) + stats.get(
-                    "tensor_consumers", 0
-                )
-                total_stats["tensor_producer_rows"] = total_stats.get("tensor_producer_rows", 0) + stats.get(
-                    "tensor_producers", 0
-                )
+                total_stats["tensor_consumer_rows"] += stats.get("tensor_consumers", 0)
+                total_stats["tensor_producer_rows"] += stats.get("tensor_producers", 0)
                 if tl:
                     tl_path = output_dir / (rpath.stem + ".tensor_lifetime.json")
                     with open(tl_path, "w") as f:
