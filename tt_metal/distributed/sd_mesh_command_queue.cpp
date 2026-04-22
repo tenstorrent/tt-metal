@@ -140,6 +140,8 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
     if (!logical_cores_for_previous_workload_.empty()) {
+        // In emulated mode this map is always empty (LaunchProgram is synchronous),
+        // so this block is effectively a no-op for emulated devices.
         for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
             tt::llrt::internal_::wait_for_idle(device_id, logical_cores);
         }

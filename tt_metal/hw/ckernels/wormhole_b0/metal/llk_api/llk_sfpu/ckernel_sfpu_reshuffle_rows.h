@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_sfpu_reshuffle_rows.h"
+#include "sfpu/ckernel_sfpu_reshuffle_rows.h"
 
 namespace ckernel {
 namespace sfpu {

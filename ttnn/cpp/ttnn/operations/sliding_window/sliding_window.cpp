@@ -890,10 +890,10 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
 }
 
 void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config) {
-    log_info(tt::LogOp, "========================================");
-    log_info(tt::LogOp, "  Sliding Window Op Config Visualization");
-    log_info(tt::LogOp, "========================================");
-    log_info(tt::LogOp, "Total Cores: {}", config.size());
+    log_debug(tt::LogOp, "========================================");
+    log_debug(tt::LogOp, "  Sliding Window Op Config Visualization");
+    log_debug(tt::LogOp, "========================================");
+    log_debug(tt::LogOp, "Total Cores: {}", config.size());
 
     // Calculate statistics
     uint32_t total_elements = 0;
@@ -906,19 +906,19 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
         min_config_size = std::min(min_config_size, static_cast<uint32_t>(core_config.size()));
     }
 
-    log_info(tt::LogOp, "Total Elements: {}", total_elements);
-    log_info(tt::LogOp, "Max Config Size per Core: {}", max_config_size);
-    log_info(tt::LogOp, "Min Config Size per Core: {}", min_config_size);
-    log_info(tt::LogOp, "========================================");
+    log_debug(tt::LogOp, "Total Elements: {}", total_elements);
+    log_debug(tt::LogOp, "Max Config Size per Core: {}", max_config_size);
+    log_debug(tt::LogOp, "Min Config Size per Core: {}", min_config_size);
+    log_debug(tt::LogOp, "========================================");
 
     // Visualize each core's configuration
     for (uint32_t core_id = 0; core_id < config.size(); ++core_id) {
         const auto& core_config = config[core_id];
-        log_info(tt::LogOp, "");
-        log_info(tt::LogOp, "Core #{} (size: {} elements)", core_id, core_config.size());
+        log_trace(tt::LogOp, "");
+        log_trace(tt::LogOp, "Core #{} (size: {} elements)", core_id, core_config.size());
 
         if (core_config.empty()) {
-            log_info(tt::LogOp, "  [EMPTY]");
+            log_trace(tt::LogOp, "  [EMPTY]");
             continue;
         }
 
@@ -940,7 +940,7 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
                 break;
             }
 
-            log_info(tt::LogOp, "  Block {}: {} segments", block_num, num_segments);
+            log_trace(tt::LogOp, "  Block {}: {} segments", block_num, num_segments);
             idx += 2;  // Skip num_segments and alignment
 
             // Display segments (pairs of start-end indices)
@@ -950,7 +950,7 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
                 uint16_t end_idx = core_config[idx + 1];
                 uint16_t range_size = (end_idx >= start_idx) ? (end_idx - start_idx + 1) : 0;
 
-                log_info(
+                log_trace(
                     tt::LogOp,
                     "    Segment {}: [{:5d} -> {:5d}] (len: {})",
                     segment_count,
@@ -964,7 +964,7 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
 
             // If we didn't find all segments, something might be wrong
             if (segment_count < num_segments) {
-                log_info(
+                log_trace(
                     tt::LogOp, "    WARNING: Expected {} segments but only parsed {}", num_segments, segment_count);
                 break;
             }
@@ -975,11 +975,11 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
         // Show remaining padding if any
         if (idx < core_config.size()) {
             uint32_t padding_count = core_config.size() - idx;
-            log_info(tt::LogOp, "  [Padding: {} elements]", padding_count);
+            log_trace(tt::LogOp, "  [Padding: {} elements]", padding_count);
         }
     }
 
-    log_info(tt::LogOp, "========================================");
+    log_debug(tt::LogOp, "========================================");
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(

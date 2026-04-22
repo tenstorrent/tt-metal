@@ -114,6 +114,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather2_row_major"),
                 get_named_compile_time_arg_val("gather2_receiver_data_addr"),
                 get_named_compile_time_arg_val("gather2_sender_idx"),
+                noc_index,
             },
         .receiver = {},
     };
@@ -152,6 +153,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather3_row_major"),
                 get_named_compile_time_arg_val("gather3_receiver_data_addr"),
                 get_named_compile_time_arg_val("gather3_sender_idx"),
+                noc_index,
             },
         .receiver = {},
     };
@@ -595,6 +597,15 @@ void kernel_main() {
         args.sender_noc_y = get_common_arg_val<uint32_t>(3);
         args.sender_local_data_l1_addr = get_common_arg_val<uint32_t>(4);
         args.local_ready_sem_bank_addr = get_common_arg_val<uint32_t>(5);
+
+        // Residual CB is tensor-backed (data already in L1); signal TRISC so
+        // Compute's cb_wait_front(cb_residual) unblocks. Reader no longer does
+        // this — responsibility moved to the caller.
+        if constexpr (AllReduceReaderCTArgs::has_residual) {
+            cb_reserve_back(AllReduceReaderCTArgs::residual_cb_id, AllReduceReaderCTArgs::total_num_tiles);
+            cb_push_back(AllReduceReaderCTArgs::residual_cb_id, AllReduceReaderCTArgs::total_num_tiles);
+        }
+
         deepseek_b1_ops::AllReduce::Reader<AllReduceReaderCTArgs> reader;
         reader(args);
     }
