@@ -10,8 +10,8 @@ namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn {
 ttnn::Tensor routed_matmul(
     const ttnn::Tensor& a,
     const ttnn::Tensor& b,
-    const ttnn::Tensor& max_iter,
-    uint32_t expert_iter,
+    const ttnn::Tensor& max_expert_iter,
+    uint32_t curr_expert_iter,
     const ttnn::operations::matmul::MatmulProgramConfig& program_config,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const tt::tt_metal::MemoryConfig& output_memory_config,
@@ -20,8 +20,8 @@ ttnn::Tensor routed_matmul(
     return ttnn::prim::routed_matmul(
         a,
         b,
-        max_iter,
-        expert_iter,
+        max_expert_iter,
+        curr_expert_iter,
         program_config,
         compute_kernel_config,
         output_memory_config,

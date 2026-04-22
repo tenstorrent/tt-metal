@@ -14,15 +14,15 @@
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
 
 ttnn::Tensor routed_expert_ffn_bh(
-    uint32_t expert_iter,
+    uint32_t curr_expert_iter,
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output,
-    const std::optional<ttnn::Tensor>& max_iter) {
-    const bool use_routed = max_iter.has_value();
+    const std::optional<ttnn::Tensor>& max_expert_iter) {
+    const bool use_routed = max_expert_iter.has_value();
     // Blackhole compute grid is fixed at 11x8 = 88 cores. All configs below
     // are tuned for this grid; bail loudly if the device can't supply it.
     // gate/up is output-sharded with per_core_N = div_up(N_gate, GRID_X),
@@ -90,8 +90,8 @@ ttnn::Tensor routed_expert_ffn_bh(
         gate_result = routed_matmul(
             /*a=*/x,
             /*b=*/gate_proj,
-            /*max_iter=*/max_iter.value(),
-            /*expert_iter=*/expert_iter,
+            /*max_expert_iter=*/max_expert_iter.value(),
+            /*curr_expert_iter=*/curr_expert_iter,
             /*program_config=*/gate_up_config,
             /*compute_kernel_config=*/compute_kernel_config.value(),
             /*output_memory_config=*/gate_up_mem);
@@ -99,8 +99,8 @@ ttnn::Tensor routed_expert_ffn_bh(
         up_result = routed_matmul(
             /*a=*/x,
             /*b=*/up_proj,
-            /*max_iter=*/max_iter.value(),
-            /*expert_iter=*/expert_iter,
+            /*max_expert_iter=*/max_expert_iter.value(),
+            /*curr_expert_iter=*/curr_expert_iter,
             /*program_config=*/gate_up_config,
             /*compute_kernel_config=*/compute_kernel_config.value(),
             /*output_memory_config=*/gate_up_mem);
@@ -185,8 +185,8 @@ ttnn::Tensor routed_expert_ffn_bh(
         return routed_matmul(
             /*a=*/activated,
             /*b=*/down_proj,
-            /*max_iter=*/max_iter.value(),
-            /*expert_iter=*/expert_iter,
+            /*max_expert_iter=*/max_expert_iter.value(),
+            /*curr_expert_iter=*/curr_expert_iter,
             /*program_config=*/down_config,
             /*compute_kernel_config=*/compute_kernel_config.value(),
             /*output_memory_config=*/down_out_mem_cfg,

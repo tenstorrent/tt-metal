@@ -25,7 +25,7 @@ void bind_routed_expert_ffn(nb::module_& mod) {
             output   = activated @ down_proj
 
         Args:
-            expert_iter (int): Index of the current expert iteration. Used only on
+            curr_expert_iter (int): Index of the current expert iteration. Used only on
                 Blackhole; pass 0 on Wormhole.
             x (ttnn.Tensor): Input tensor.
             gate_proj (ttnn.Tensor): Gate projection weight (emb_dim, hidden_dim).
@@ -35,18 +35,18 @@ void bind_routed_expert_ffn(nb::module_& mod) {
         Keyword Args:
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration. Defaults to None.
             output (ttnn.Tensor, optional): Pre-allocated output tensor for in-place write of the final matmul result. Defaults to None.
-            max_iter (ttnn.Tensor, optional): DRAM uint32 tile-layout scalar tensor. When provided, the three Blackhole matmuls dispatch via the forked routed_matmul device op (reader/compute guard). When None, falls back to ttnn::matmul.
+            max_expert_iter (ttnn.Tensor, optional): DRAM uint32 tile-layout scalar tensor. When provided, the three Blackhole matmuls dispatch via the forked routed_matmul device op (reader/compute guard). When None, falls back to ttnn::matmul.
 
         Returns:
             ttnn.Tensor: Output tensor with the same shape as ``x``.
 
         Example:
             >>> output = ttnn.experimental.deepseek_prefill.routed_expert_ffn(
-                    expert_iter, x, gate_proj, up_proj, down_proj,
+                    curr_expert_iter, x, gate_proj, up_proj, down_proj,
                     compute_kernel_config=compute_kernel_config)
         )doc",
         &routed_expert_ffn,
-        nb::arg("expert_iter"),
+        nb::arg("curr_expert_iter"),
         nb::arg("x").noconvert(),
         nb::arg("gate_proj").noconvert(),
         nb::arg("up_proj").noconvert(),
@@ -54,7 +54,7 @@ void bind_routed_expert_ffn(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output") = nb::none(),
-        nb::arg("max_iter") = nb::none());
+        nb::arg("max_expert_iter") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail

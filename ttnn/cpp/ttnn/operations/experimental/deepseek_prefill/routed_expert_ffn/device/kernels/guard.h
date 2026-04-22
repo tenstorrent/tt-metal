@@ -4,101 +4,76 @@
 
 // Shared guard helpers for routed_matmul kernels.
 //
-// Contract:
-//   - BRISC (in0 reader) calls guard_check_brisc() at kernel entry.
-//     It reads the max_iter scalar from DRAM into cb_guard[0..3], writes the
-//     guard_token from its runtime args to cb_guard[32..35], and returns whether
-//     this core should skip (expert_iter > max_iter).
-//   - NCRISC (in1 reader/writer) and TRISC (compute) call guard_check_wait().
-//     They spin until cb_guard[32..35] == their own guard_token runtime arg,
-//     then read cb_guard[0..3] and compare against expert_iter.
+// Each dataflow kernel (BRISC / NCRISC) independently reads max_expert_iter directly
+// from DRAM into a small L1 scratch region (cb_guard), then compares against
+// curr_expert_iter.  Because max_expert_iter is a read-only scalar that never changes during
+// the FFN pass, no token-based synchronization between BRISC and NCRISC is
+// needed — both simply read the same immutable value and reach the same
+// skip/execute decision independently.
 //
-// Token scheme avoids the semaphore-reset-on-program-cache-hit problem: each
-// host-side dispatch passes a unique guard_token (monotonic counter), so stale
-// L1 from the previous dispatch can never coincidentally satisfy the wait.
+// TRISC (compute) cannot issue NOC reads, so its guard always returns false
+// (never skip).  This is safe for the common case where max_expert_iter >= all
+// curr_expert_iter values; production skip support for TRISC is a future TODO.
 //
-// cb_guard layout (64 bytes, one page):
-//   [0..3]   max_iter scalar (uint32)   — BRISC writes via DRAM read
-//   [32..35] guard_token (uint32)       — BRISC writes after DRAM barrier
+// Named compile-time args set by the program factory (via named_compile_args):
+//   GUARD_CB_ID     - CB index for cb_guard (scratch for the DRAM read)
+//   GUARD_ARG_BASE  - starting runtime arg index for the 2 guard args
 //
-// Compile-time defines (set by the program factory, per-kernel):
-//   GUARD_CB_ID     - CB index for cb_guard
-//   GUARD_ARG_BASE  - starting runtime arg index for the 3 guard args
+// Runtime args at positions GUARD_ARG_BASE+{0,1}:
+//   [0] max_expert_iter DRAM buffer address (uint32)
+//   [1] curr_expert_iter scalar           (uint32)
 //
-// Runtime args at positions GUARD_ARG_BASE+{0,1,2}:
-//   [0] max_iter DRAM buffer address
-//   [1] expert_iter scalar
-//   [2] guard_token
-//
-// If ROUTED_GUARD_ENABLED is not defined, the helpers compile to no-ops that
-// always return false (never skip). Lets the factory bring routed_matmul up
-// without the guard wiring first, then enable it by defining the flag.
+// If ROUTED_GUARD_ENABLED is not defined, the helpers compile to no-ops.
 
 #pragma once
 
 #include <cstdint>
 
 namespace routed_guard_detail {
-
-constexpr uint32_t kScalarOffset = 0;
-constexpr uint32_t kTokenOffset = 32;
-
+constexpr uint32_t kScalarOffset = 0;  // byte offset of scalar within cb_guard
 }  // namespace routed_guard_detail
 
 #ifdef ROUTED_GUARD_ENABLED
 
 #ifdef GUARD_COMPUTE_KERNEL
 
-// TRISC-side: wait for BRISC token, then compare.
-FORCE_INLINE bool guard_check_wait() {
-    const uint32_t expert_iter = get_arg_val<uint32_t>(GUARD_ARG_BASE + 1);
-    const uint32_t guard_token = get_arg_val<uint32_t>(GUARD_ARG_BASE + 2);
+// TRISC cannot issue NOC reads — always proceed (no skip).
+// TODO: implement proper TRISC guard when DRAM-read support is available.
+FORCE_INLINE bool guard_check_wait() { return false; }
 
-    const uint32_t base_addr = get_read_ptr(GUARD_CB_ID);
-    volatile tt_l1_ptr uint32_t* token_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_addr + routed_guard_detail::kTokenOffset);
-    while (*token_ptr != guard_token) {
-    }
-    volatile tt_l1_ptr uint32_t* scalar_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_addr + routed_guard_detail::kScalarOffset);
-    return expert_iter > *scalar_ptr;
-}
+#else  // dataflow side (BRISC and NCRISC)
 
-#else  // dataflow side
-
+// BRISC: read max_expert_iter from DRAM into L1 scratch, compare with curr_expert_iter.
 FORCE_INLINE bool guard_check_brisc() {
-    const uint32_t max_iter_addr = get_arg_val<uint32_t>(GUARD_ARG_BASE);
-    const uint32_t expert_iter = get_arg_val<uint32_t>(GUARD_ARG_BASE + 1);
-    const uint32_t guard_token = get_arg_val<uint32_t>(GUARD_ARG_BASE + 2);
+    constexpr uint32_t kArgBase = get_named_compile_time_arg_val("GUARD_ARG_BASE");
+    constexpr uint32_t kCbId = get_named_compile_time_arg_val("GUARD_CB_ID");
 
-    const uint32_t base_addr = get_write_ptr(GUARD_CB_ID);
-    const uint32_t scratch_addr = base_addr + routed_guard_detail::kScalarOffset;
+    const uint32_t max_iter_addr = get_arg_val<uint32_t>(kArgBase);
+    const uint32_t curr_expert_iter = get_arg_val<uint32_t>(kArgBase + 1);
+
+    const uint32_t scratch = get_write_ptr(kCbId) + routed_guard_detail::kScalarOffset;
     uint64_t dram_src = get_noc_addr_from_bank_id<true>(0, max_iter_addr);
     // 32-byte DRAM transaction; the uint32 scalar occupies the first 4 bytes.
-    noc_async_read(dram_src, scratch_addr, 32);
+    noc_async_read(dram_src, scratch, 32);
     noc_async_read_barrier();
 
-    volatile tt_l1_ptr uint32_t* token_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_addr + routed_guard_detail::kTokenOffset);
-    *token_ptr = guard_token;
-
-    volatile tt_l1_ptr uint32_t* scalar_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_addr);
-    return expert_iter > *scalar_ptr;
+    return curr_expert_iter > *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
 }
 
-// NCRISC: same wait-and-compare as TRISC. BRISC on the same core owns the DRAM read.
+// NCRISC: same direct DRAM read — no token wait needed, max_expert_iter is immutable.
 FORCE_INLINE bool guard_check_wait() {
-    const uint32_t expert_iter = get_arg_val<uint32_t>(GUARD_ARG_BASE + 1);
-    const uint32_t guard_token = get_arg_val<uint32_t>(GUARD_ARG_BASE + 2);
+    constexpr uint32_t kArgBase = get_named_compile_time_arg_val("GUARD_ARG_BASE");
+    constexpr uint32_t kCbId = get_named_compile_time_arg_val("GUARD_CB_ID");
 
-    const uint32_t base_addr = get_read_ptr(GUARD_CB_ID);
-    volatile tt_l1_ptr uint32_t* token_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_addr + routed_guard_detail::kTokenOffset);
-    while (*token_ptr != guard_token) {
-    }
-    volatile tt_l1_ptr uint32_t* scalar_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_addr + routed_guard_detail::kScalarOffset);
-    return expert_iter > *scalar_ptr;
+    const uint32_t max_iter_addr = get_arg_val<uint32_t>(kArgBase);
+    const uint32_t curr_expert_iter = get_arg_val<uint32_t>(kArgBase + 1);
+
+    const uint32_t scratch = get_read_ptr(kCbId) + routed_guard_detail::kScalarOffset;
+    uint64_t dram_src = get_noc_addr_from_bank_id<true>(0, max_iter_addr);
+    noc_async_read(dram_src, scratch, 32);
+    noc_async_read_barrier();
+
+    return curr_expert_iter > *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
 }
 
 #endif  // GUARD_COMPUTE_KERNEL

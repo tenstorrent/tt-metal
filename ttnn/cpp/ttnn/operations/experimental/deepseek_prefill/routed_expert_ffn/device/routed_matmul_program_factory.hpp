@@ -13,14 +13,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::d
 
 // Forked 2D-mcast matmul program factory. Same layout/config as matmul's 2D mcast
 // factory; the reader and compute kernels are replaced with forked variants that
-// read a scalar from the max_iter tensor and early-return when
-// expert_iter > max_iter. expert_iter is passed as a per-kernel runtime arg so the
+// read a scalar from the max_expert_iter tensor and early-return when
+// curr_expert_iter > max_expert_iter. curr_expert_iter is passed as a per-kernel runtime arg so the
 // program can be cached across iterations.
 struct RoutedMatmulMcast2DProgramFactory {
-    // Mirrors matmul's 2D-mcast shared_variables_t exactly. Phase 3 scope keeps
-    // guard.h as a no-op (ROUTED_GUARD_ENABLED not defined), so we don't need the
-    // guard CB / semaphore / extra kernel handles yet. A follow-up turn can add
-    // them here alongside the factory wiring.
     struct shared_variables_t {
         tt::tt_metal::KernelHandle mm_kernel_in0_sender_id{};
         std::vector<tt::tt_metal::CoreCoord> in0_sender_interleaved_cores;
@@ -38,6 +34,14 @@ struct RoutedMatmulMcast2DProgramFactory {
         uint32_t start_core_y{};
         bool transpose_mcast{};
         std::vector<tt::tt_metal::CoreCoord> cores;
+        // Guard mechanism
+        tt::tt_metal::CBHandle cb_guard{};
+        bool output_is_sharded{false};
+        tt::tt_metal::KernelHandle mm_compute_kernel_id{};
+        tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id{};
+        tt::tt_metal::KernelHandle mm_kernel_in0_receiver_other_noc_setup_id{};
+        std::vector<tt::tt_metal::CoreCoord> in0_receiver_interleaved_cores;
+        std::vector<tt::tt_metal::CoreCoord> in0_receiver_other_cores;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

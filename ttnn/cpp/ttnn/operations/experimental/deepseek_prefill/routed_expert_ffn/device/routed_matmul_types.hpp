@@ -15,9 +15,9 @@
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::device {
 
 // Attributes that affect the compiled program (part of the program cache key).
-// expert_iter lives here so the framework's tensor-visitor on tensor_args_t isn't
+// curr_expert_iter lives here so the framework's tensor-visitor on tensor_args_t isn't
 // asked to walk a scalar — but the custom compute_program_hash on
-// RoutedMatmulDeviceOperation deliberately excludes expert_iter from the hash, so
+// RoutedMatmulDeviceOperation deliberately excludes curr_expert_iter from the hash, so
 // the same program is reused across iterations (only runtime args change).
 // fused_activation lives inside program_config (on the matmul variant structs).
 struct RoutedMatmulParams {
@@ -25,15 +25,15 @@ struct RoutedMatmulParams {
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     tt::tt_metal::MemoryConfig output_memory_config;
     tt::tt_metal::DataType output_dtype;
-    uint32_t expert_iter;
+    uint32_t curr_expert_iter;
 };
 
-// Tensor inputs. max_iter is a small DRAM tile-layout tensor whose [0,0] scalar
-// each kernel reads to decide skip-vs-execute against the runtime expert_iter.
+// Tensor inputs. max_expert_iter is a small DRAM tile-layout tensor whose [0,0] scalar
+// each kernel reads to decide skip-vs-execute against the runtime curr_expert_iter.
 struct RoutedMatmulInputs {
     ttnn::Tensor a;
     ttnn::Tensor b;
-    ttnn::Tensor max_iter;
+    ttnn::Tensor max_expert_iter;
     std::optional<ttnn::Tensor> optional_output_tensor;
 };
 

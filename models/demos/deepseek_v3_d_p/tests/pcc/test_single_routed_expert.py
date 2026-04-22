@@ -100,19 +100,14 @@ def test_single_routed_expert(
     )
     logger.debug(f"TTNN input shape: {tt_input.shape}")
 
-    # Optional: build a "fake" max_iter tensor to exercise the routed_matmul path.
-    # max_iter=1000 is far larger than any expert_iter we generate
-    # (expert_iters = ceil(tokens/MAX_EXPERT_LENGTH), small single digits here), so
-    # the guard — when enabled in the kernels — would always allow execution. With
-    # the guard currently inert this just switches dispatch to the routed_matmul
-    # device op and should match stock ttnn::matmul perf / PCC.
-    max_iter_tt = None
+    # Optional: build a fake max_expert_iter_container tensor to exercise the guard path.
+    # Value 2 allows chunk iterations 0..2; iteration 3 would be skipped.
+    max_expert_iter_container = None
     if use_routed_matmul:
-        FAKE_MAX_ITER = 1000
+        FAKE_MAX_EXPERT_ITER = 1000
         # DRAM uint32 tile-layout scalar. Only [0,0] is read by the kernel.
-        max_iter_torch = torch.full((1, 32, 32), FAKE_MAX_ITER, dtype=torch.int32)
-        max_iter_tt = ttnn.from_torch(
-            max_iter_torch,
+        max_expert_iter_container = ttnn.from_torch(
+            torch.full((1, 32, 32), FAKE_MAX_EXPERT_ITER, dtype=torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -120,7 +115,7 @@ def test_single_routed_expert(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         ttnn.synchronize_device(mesh_device)
-        logger.debug(f"Fake max_iter={FAKE_MAX_ITER} tensor created, shape={max_iter_tt.shape}")
+        logger.debug(f"Fake max_expert_iter={FAKE_MAX_EXPERT_ITER} tensor created")
 
     # Create TtRoutedExpert
     logger.debug("Creating TtRoutedExpert...")
@@ -133,12 +128,11 @@ def test_single_routed_expert(
         torch_weights=[weights],  # List with single expert weights
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
-        max_iter=max_iter_tt,
     )
 
     # Run TTNN forward
     logger.debug("Running TTNN forward...")
-    tt_output = tt_expert(tt_input)
+    tt_output = tt_expert(tt_input, max_expert_iter_container=max_expert_iter_container)
     logger.debug(f"TTNN output shape: {tt_output.shape}")
 
     # Convert back to torch for comparison

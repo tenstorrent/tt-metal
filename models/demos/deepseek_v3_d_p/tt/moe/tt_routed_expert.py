@@ -204,7 +204,6 @@ class TtRoutedExpert(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
-        max_iter: Optional[ttnn.Tensor] = None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -236,12 +235,6 @@ class TtRoutedExpert(LightweightModule):
         self.compute_kernel_config = compute_kernel_config
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
-        # Optional DRAM uint32 tile-layout scalar tensor. When set, the BH path
-        # dispatches via the forked routed_matmul device op (guard scaffolding in
-        # place; currently inert). None -> stock ttnn.matmul, preserving prior
-        # behavior.
-        self.max_iter = max_iter
-
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
         logger.debug(f"emb_dim={emb_dim}, hidden_dim={hidden_dim}")
@@ -337,19 +330,20 @@ class TtRoutedExpert(LightweightModule):
 
     def _expert_ffn(
         self,
-        expert_iter: int,
+        curr_expert_iter: int,
         x: ttnn.Tensor,
         gate_proj: ttnn.Tensor,
         up_proj: ttnn.Tensor,
         down_proj: ttnn.Tensor,
         out: Optional[ttnn.Tensor] = None,
+        max_expert_iter_container: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Single expert FFN computation.
 
         Args:
-            expert_iter: Index of the current expert iteration. Used only on the
-                Blackhole path; pass 0 on Wormhole.
+            curr_expert_iter: Index of the current chunk iteration within the expert loop.
+                Used only on the Blackhole path; pass 0 on Wormhole.
             x: Input tensor. Shape is (1, tokens, emb_dim) for the Blackhole path
                 (after ttnn.narrow) or (tokens, emb_dim) for the Wormhole path
                 (after tensor indexing).
@@ -365,20 +359,21 @@ class TtRoutedExpert(LightweightModule):
         """
 
         return ttnn.experimental.deepseek_prefill.routed_expert_ffn(
-            expert_iter,
+            curr_expert_iter,
             x,
             gate_proj,
             up_proj,
             down_proj,
             compute_kernel_config=self.compute_kernel_config,
             output=out,
-            max_iter=self.max_iter,
+            max_expert_iter=max_expert_iter_container,
         )
 
     def _bh_forward_impl(
         self,
         dispatched_buffer: ttnn.Tensor,
         expert_token_counts: ttnn.Tensor = None,  # Unused for now, can reduce compute
+        max_expert_iter_container: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Blackhole forward implementation using narrow and in-place writes.
@@ -398,6 +393,15 @@ class TtRoutedExpert(LightweightModule):
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
         """
         logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
+        # Read max_expert_iter from the container tensor if provided.
+        max_expert_iter = None
+        if max_expert_iter_container is not None:
+            t = (
+                ttnn.to_torch(max_expert_iter_container, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+                if self.num_devices > 1
+                else ttnn.to_torch(max_expert_iter_container)
+            )
+            max_expert_iter = int(t.flatten()[0])
 
         # Convert input to activations dtype if needed
         if dispatched_buffer.dtype != self.activations_dtype:
@@ -422,22 +426,32 @@ class TtRoutedExpert(LightweightModule):
             expert_lengths = [self.MAX_EXPERT_LENGTH] * expert_iters
             expert_lengths[-1] = tokens.shape[1] - self.MAX_EXPERT_LENGTH * (expert_iters - 1)  # Handle any remainder
             start = 0
-            for expert_iter in range(expert_iters):
-                signpost(f"FFN iteration {expert_iter+1}/{expert_iters} for Expert {local_expert+1}")
-                expert_tokens = ttnn.narrow(tokens, dim=1, start=start, length=expert_lengths[expert_iter])
-                expert_out = ttnn.narrow(out, dim=1, start=start, length=expert_lengths[expert_iter])
-                start += expert_lengths[expert_iter]
+            for curr_expert_iter in range(expert_iters):
+                if max_expert_iter is not None and curr_expert_iter >= max_expert_iter:
+                    signpost(
+                        f"FFN iterations {curr_expert_iter+1}..{expert_iters}/{expert_iters} for Expert {local_expert+1} skipped"
+                    )
+                    break
 
-                # Run FFN
+                signpost(f"FFN iteration {curr_expert_iter+1}/{expert_iters} for Expert {local_expert+1}")
+                expert_tokens = ttnn.narrow(tokens, dim=1, start=start, length=expert_lengths[curr_expert_iter])
+                expert_out = ttnn.narrow(out, dim=1, start=start, length=expert_lengths[curr_expert_iter])
+                start += expert_lengths[curr_expert_iter]
+
+                # Run FFN — pass curr_expert_iter so the on-device guard compares the
+                # chunk iteration index against the max_expert_iter tensor.
                 output = self._expert_ffn(
-                    expert_iter,
+                    curr_expert_iter,
                     expert_tokens,
                     self.gate_projs[local_expert],
                     self.up_projs[local_expert],
                     self.down_projs[local_expert],
                     out=expert_out,
+                    max_expert_iter_container=max_expert_iter_container,
                 )
-                logger.debug(f"Expert {local_expert}: FFN iteration {expert_iter+1} output shape {expert_out.shape}")
+                logger.debug(
+                    f"Expert {local_expert}: FFN iteration {curr_expert_iter+1} output shape {expert_out.shape}"
+                )
 
             logger.debug(f"Expert {local_expert}: output shape {output.shape}")
 
@@ -489,7 +503,7 @@ class TtRoutedExpert(LightweightModule):
             logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
             # Run FFN
-            # expert_iter is unused on the Wormhole path; pass 0.
+            # curr_expert_iter is unused on the Wormhole path; pass 0.
             output = self._expert_ffn(
                 0,
                 tokens,
@@ -516,6 +530,7 @@ class TtRoutedExpert(LightweightModule):
         self,
         dispatched_buffer: ttnn.Tensor,
         expert_token_counts: ttnn.Tensor = None,  # Unused for now, can reduce compute
+        max_expert_iter_container: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Process dispatched tokens through local experts.
@@ -536,6 +551,6 @@ class TtRoutedExpert(LightweightModule):
         if is_wormhole_b0():
             return self._wh_forward_impl(dispatched_buffer, expert_token_counts)
         elif is_blackhole():
-            return self._bh_forward_impl(dispatched_buffer, expert_token_counts)
+            return self._bh_forward_impl(dispatched_buffer, expert_token_counts, max_expert_iter_container)
         else:
             raise ValueError("Unsupported device architecture")

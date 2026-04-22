@@ -21,6 +21,8 @@
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
+// Guard: mark this as the compute (TRISC) path so guard.h compiles the no-op variant.
+// NOT added to mm_kernel_defines to avoid redefinition in defines_generated.h.
 #define GUARD_COMPUTE_KERNEL
 #include "../guard.h"
 

@@ -30,7 +30,7 @@ struct RoutedMatmulDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // Exclude expert_iter from the hash: it varies per call but doesn't change
+    // Exclude curr_expert_iter from the hash: it varies per call but doesn't change
     // the program, so we want every iteration to hit the same cached program.
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
@@ -42,8 +42,8 @@ namespace ttnn::prim {
 ttnn::Tensor routed_matmul(
     const ttnn::Tensor& a,
     const ttnn::Tensor& b,
-    const ttnn::Tensor& max_iter,
-    uint32_t expert_iter,
+    const ttnn::Tensor& max_expert_iter,
+    uint32_t curr_expert_iter,
     const ttnn::operations::matmul::MatmulProgramConfig& program_config,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const tt::tt_metal::MemoryConfig& output_memory_config,

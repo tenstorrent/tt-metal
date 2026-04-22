@@ -12,7 +12,7 @@
 //   * Program creates an extra semaphore (sem_guard) and CB (cb_guard) used by the
 //     per-kernel guard block. GUARD_CB_ID, GUARD_SEM_ID, GUARD_ARG_BASE are added
 //     to each kernel's compile-time defines; the two guard runtime args
-//     (max_iter_addr, expert_iter) are appended to every kernel's rt-args vector.
+//     (max_iter_addr, curr_expert_iter) are appended to every kernel's rt-args vector.
 //   * override_runtime_arguments updates the appended guard args on cache hits.
 //
 // The matmul body (core-grid layout, CB sizes, mcast topology, compute config) is
@@ -84,6 +84,8 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
     tt::DataFormat output_data_format,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    uint32_t max_iter_addr,
+    uint32_t curr_expert_iter,
     CoreCoord sub_device_start_core = {0, 0}) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
@@ -338,6 +340,17 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
     auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
+    // Guard CB — 64 bytes of L1 used as DRAM-read scratch by guard.h.
+    // Each kernel (BRISC/NCRISC) independently reads max_expert_iter from DRAM into
+    // this scratch region, then compares with curr_expert_iter.  No token needed.
+    // CBIndex::c_11 is not used by any other CB in this factory.
+    constexpr uint32_t guard_cb_index = tt::CBIndex::c_11;
+    auto cb_guard = tt_metal::CreateCircularBuffer(
+        program,
+        all_cores,
+        tt::tt_metal::CircularBufferConfig(64, {{guard_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(guard_cb_index, 64));
+
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
@@ -580,9 +593,23 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_sharded_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_interleaved_defines;
+    std::map<std::string, std::string> mm_kernel_in0_receiver_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_receiver_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_receiver_writer_other_noc_setup_defines;
+
+    // Enable on-device guard for all kernels.
+    // ROUTED_GUARD_ENABLED goes in defines (-D flag for dataflow; defines_generated.h for compute).
+    // GUARD_CB_ID and GUARD_ARG_BASE go in named_compile_args (accessible via
+    // get_named_compile_time_arg_val in guard.h). GUARD_COMPUTE_KERNEL is already
+    // #defined directly in bmm_routed.cpp — do not add it here to avoid redefinition.
+    mm_kernel_defines["ROUTED_GUARD_ENABLED"] = "1";
+    mm_kernel_in0_sender_interleaved_defines["ROUTED_GUARD_ENABLED"] = "1";
+    mm_kernel_in1_sender_writer_defines["ROUTED_GUARD_ENABLED"] = "1";
+    mm_kernel_in1_receiver_writer_defines["ROUTED_GUARD_ENABLED"] = "1";
+    mm_kernel_in1_receiver_writer_other_noc_setup_defines["ROUTED_GUARD_ENABLED"] = "1";
+    mm_kernel_in0_receiver_defines["ROUTED_GUARD_ENABLED"] = "1";
+
     if (bias_buffer != nullptr) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
@@ -750,6 +777,8 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                     {"cb_in0_sharded", tt::CBIndex::c_2},
                     {"cb_sparsity", tt::CBIndex::c_6},
                     {"cb_in0_intermediate", tt::CBIndex::c_8},
+                    {"GUARD_CB_ID", guard_cb_index},
+                    {"GUARD_ARG_BASE", 8u},
                 }});
     }
 
@@ -769,6 +798,9 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                 {"cb_out", tt::CBIndex::c_4},
                 {"cb_sparsity", tt::CBIndex::c_7},
                 {"cb_in1_intermediate", tt::CBIndex::c_9},
+                {"GUARD_CB_ID", guard_cb_index},
+                // When OUT_SHARDED, the kernel skips last_num_blocks_w_dim arg → 1 fewer base arg.
+                {"GUARD_ARG_BASE", output_is_sharded ? 20u : 21u},
             }});
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
@@ -788,6 +820,9 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                     {"cb_in1", tt::CBIndex::c_1},
                     {"cb_bias", tt::CBIndex::c_3},
                     {"cb_out", tt::CBIndex::c_4},
+                    {"GUARD_CB_ID", guard_cb_index},
+                    // When OUT_SHARDED, the kernel skips last_num_blocks_{h,w} (2 args) → 2 fewer.
+                    {"GUARD_ARG_BASE", output_is_sharded ? 13u : 15u},
                 }});
     }
 
@@ -803,8 +838,11 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
                 .compile_args = in0_receiver_compile_time_args,
+                .defines = mm_kernel_in0_receiver_defines,
                 .named_compile_args = {
                     {"cb_in0", tt::CBIndex::c_0},
+                    {"GUARD_CB_ID", guard_cb_index},
+                    {"GUARD_ARG_BASE", 2u},
                 }});
     }
 
@@ -826,6 +864,8 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                     {"cb_in1", tt::CBIndex::c_1},
                     {"cb_bias", tt::CBIndex::c_3},
                     {"cb_out", tt::CBIndex::c_4},
+                    {"GUARD_CB_ID", guard_cb_index},
+                    {"GUARD_ARG_BASE", output_is_sharded ? 13u : 15u},
                 }});
 
         mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateKernel(
@@ -837,8 +877,11 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_split_noc,
                 .compile_args = in0_receiver_compile_time_args,
+                .defines = mm_kernel_in0_receiver_defines,
                 .named_compile_args = {
                     {"cb_in0", tt::CBIndex::c_0},
+                    {"GUARD_CB_ID", guard_cb_index},
+                    {"GUARD_ARG_BASE", 2u},
                 }});
     }
 
@@ -881,7 +924,7 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
     // bool fp32_dest_acc_en = true;
     // Gelu currently has better accuracy when run in approx mode
     // bool math_approx_mode = false;
-    tt_metal::CreateKernel(
+    auto mm_compute_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/device/kernels/compute/"
         "bmm_routed.cpp",
@@ -902,6 +945,8 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                 {"cb_in1_intermediate", tt::CBIndex::c_9},
                 {"cb_in0_transposed", tt::CBIndex::c_10},
                 {"bias_ntiles", in1_per_core_w},
+                {"GUARD_CB_ID", guard_cb_index},
+                {"GUARD_ARG_BASE", 0u},
             }});
 
     // Create circular buffers
@@ -1208,6 +1253,10 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
 
+            // guard args [GUARD_ARG_BASE + 0..1]
+            mm_in0_sender_args.push_back(max_iter_addr);
+            mm_in0_sender_args.push_back(curr_expert_iter);
+
             tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_0_default
 
             // in0 receiver
@@ -1215,7 +1264,10 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
             std::vector<uint32_t> mm_in0_receiver_args = {
                 // in0 mcast args
                 (std::uint32_t)in0_mcast_sender.x,  // in0_mcast_sender_noc_x
-                (std::uint32_t)in0_mcast_sender.y   // in0_mcast_sender_noc_y
+                (std::uint32_t)in0_mcast_sender.y,  // in0_mcast_sender_noc_y
+                // guard args [GUARD_ARG_BASE + 0..1]
+                max_iter_addr,
+                curr_expert_iter,
             };
             // left half
             if (core.x <= half_core || (!transpose_mcast and core.y == start_core_y)) {
@@ -1366,6 +1418,9 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                         TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
                     }
                 }
+                // guard args [GUARD_ARG_BASE + 0..1]
+                mm_in1_sender_writer_args.push_back(max_iter_addr);
+                mm_in1_sender_writer_args.push_back(curr_expert_iter);
                 tt_metal::SetRuntimeArgs(
                     program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_1_default
 
@@ -1449,6 +1504,10 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                     fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_receiver_writer_args, in0_idx, in1_idx);
                 }
 
+                // guard args [GUARD_ARG_BASE + 0..1]
+                mm_in1_receiver_writer_args.push_back(max_iter_addr);
+                mm_in1_receiver_writer_args.push_back(curr_expert_iter);
+
                 // left half
                 if (core.x <= half_core || (transpose_mcast and core.y == start_core_y)) {
                     tt_metal::SetRuntimeArgs(
@@ -1460,6 +1519,24 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                         program, mm_kernel_in1_receiver_writer_other_noc_setup_id, core, mm_in1_receiver_writer_args);
                 }
             }
+        }
+    }
+
+    // Compute runtime args: 2 guard args (max_iter_addr, curr_expert_iter). TRISC always proceeds.
+    for (const auto& core : grid_to_cores(all_cores_with_work.start_coord, all_cores_with_work.end_coord, true)) {
+        tt_metal::SetRuntimeArgs(program, mm_compute_kernel_id, core, {max_iter_addr, curr_expert_iter});
+    }
+
+    // Collect in0_receiver core lists for override_runtime_arguments.
+    std::vector<CoreCoord> in0_receiver_interleaved_cores;
+    std::vector<CoreCoord> in0_receiver_other_cores;
+    if (!in0_block_sharded) {
+        in0_receiver_interleaved_cores = corerange_to_cores(in0_receiver_interleaved, std::nullopt, true);
+        if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
+            in0_receiver_other_cores = grid_to_cores(
+                in0_receiver_in1_receiver_interleaved_other_cores.value().start_coord,
+                in0_receiver_in1_receiver_interleaved_other_cores.value().end_coord,
+                true);
         }
     }
 
@@ -1480,12 +1557,20 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
          start_core_x,
          start_core_y,
          transpose_mcast,
-         cores}};
+         cores,
+         cb_guard,
+         output_is_sharded,
+         mm_compute_kernel_id,
+         mm_kernel_in0_receiver_id,
+         mm_kernel_in0_receiver_other_noc_setup_id,
+         std::move(in0_receiver_interleaved_cores),
+         std::move(in0_receiver_other_cores)}};
 }
 
 void override_runtime_arguments_impl(
-    const RoutedMatmulMcast2DProgramFactory::shared_variables_t& shared_variables,
+    RoutedMatmulMcast2DProgramFactory::shared_variables_t& shared_variables,
     tt::tt_metal::Program& program,
+    const RoutedMatmulParams& operation_attributes,
     const RoutedMatmulInputs& tensor_args,
     ttnn::Tensor& output_tensor) {
     auto mm_kernel_in0_sender_id = shared_variables.mm_kernel_in0_sender_id;
@@ -1507,42 +1592,90 @@ void override_runtime_arguments_impl(
     bool src0_sharded = tensor_args.a.memory_config().is_sharded();
     bool out_sharded = output_tensor.memory_config().is_sharded();
 
+    // Guard args — updated on every dispatch (cache hit).
+    const uint32_t max_iter_addr = tensor_args.max_expert_iter.buffer()->address();
+    const uint32_t guard_expert_iter = operation_attributes.curr_expert_iter;
+
     // in0 sender
     if (src0_sharded) {
         UpdateDynamicCircularBufferAddress(program, cb_src2, *src_buffer_a);
     } else {
         auto& reader_sender_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in0_sender_id);
         for (const auto& core : in0_sender_interleaved_cores) {
-            auto& reader_runtime_args = reader_sender_runtime_args_by_core[core.x][core.y];
-            reader_runtime_args[0] = src_buffer_a->address();
+            auto& args = reader_sender_runtime_args_by_core[core.x][core.y];
+            args[0] = src_buffer_a->address();
+            args[8] = max_iter_addr;
+            args[9] = guard_expert_iter;
         }
     }
 
-    // in1 sender
-    auto& sender_writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id);
-    for (const auto& core : in1_sender_cores) {
-        auto& writer_runtime_args = sender_writer_runtime_args_by_core[core.x][core.y];
-        writer_runtime_args[0] = src_buffer_b->address();
-        writer_runtime_args[7] = dst_buffer->address();
+    // in0 receiver left-half (GUARD_ARG_BASE = 2)
+    if (shared_variables.mm_kernel_in0_receiver_id != 0) {
+        auto& in0_recv_args = GetRuntimeArgs(program, shared_variables.mm_kernel_in0_receiver_id);
+        for (const auto& core : shared_variables.in0_receiver_interleaved_cores) {
+            auto& args = in0_recv_args[core.x][core.y];
+            args[2] = max_iter_addr;
+            args[3] = guard_expert_iter;
+        }
+    }
+    // in0 receiver right-half
+    if (shared_variables.mm_kernel_in0_receiver_other_noc_setup_id != 0 &&
+        shared_variables.mm_kernel_in0_receiver_other_noc_setup_id != shared_variables.mm_kernel_in0_receiver_id) {
+        auto& in0_recv_other_args = GetRuntimeArgs(program, shared_variables.mm_kernel_in0_receiver_other_noc_setup_id);
+        for (const auto& core : shared_variables.in0_receiver_other_cores) {
+            auto& args = in0_recv_other_args[core.x][core.y];
+            args[2] = max_iter_addr;
+            args[3] = guard_expert_iter;
+        }
     }
 
-    // in1 receiver
+    // in1 sender: guard base is 20 when out_sharded (22 total args), 21 when not (23 total).
+    auto& sender_writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id);
+    for (const auto& core : in1_sender_cores) {
+        auto& args = sender_writer_runtime_args_by_core[core.x][core.y];
+        args[0] = src_buffer_b->address();
+        args[7] = dst_buffer->address();
+        const uint32_t gb = (args.size() <= 22u) ? 20u : 21u;
+        args[gb] = max_iter_addr;
+        args[gb + 1] = guard_expert_iter;
+    }
+
+    // in1 receiver: guard base is 13 when out_sharded (15 total), 15 when not (17 total).
     auto& receiver_writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id);
     for (const auto& core : in1_receiver_cores) {
-        auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
-        writer_runtime_args[2] = dst_buffer->address();
+        auto& args = receiver_writer_runtime_args_by_core[core.x][core.y];
+        args[2] = dst_buffer->address();
+        const uint32_t gb = (args.size() <= 15u) ? 13u : 15u;
+        args[gb] = max_iter_addr;
+        args[gb + 1] = guard_expert_iter;
     }
+    // in1 receiver right-half
     if (mm_kernel_in1_receiver_writer_id != mm_kernel_in1_receiver_writer_other_noc_setup_id) {
         auto& receiver_writer_runtime_args_by_core_other =
             GetRuntimeArgs(program, mm_kernel_in1_receiver_writer_other_noc_setup_id);
         for (const auto& core : in1_receiver_other_cores) {
-            auto& writer_runtime_args = receiver_writer_runtime_args_by_core_other[core.x][core.y];
-            writer_runtime_args[2] = dst_buffer->address();
+            auto& args = receiver_writer_runtime_args_by_core_other[core.x][core.y];
+            args[2] = dst_buffer->address();
+            const uint32_t gb = (args.size() <= 15u) ? 13u : 15u;
+            args[gb] = max_iter_addr;
+            args[gb + 1] = guard_expert_iter;
         }
     }
 
     if (out_sharded) {
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+    }
+
+    // compute (GUARD_ARG_BASE = 0): 2 args — max_iter_addr and curr_expert_iter
+    auto& compute_args_map = GetRuntimeArgs(program, shared_variables.mm_compute_kernel_id);
+    CoreRange work_range(
+        {shared_variables.start_core_x, shared_variables.start_core_y},
+        {shared_variables.start_core_x + shared_variables.num_cores_with_work_c - 1,
+         shared_variables.start_core_y + shared_variables.num_cores_with_work_r - 1});
+    for (const auto& core : grid_to_cores(work_range.start_coord, work_range.end_coord, true)) {
+        auto& args = compute_args_map[core.x][core.y];
+        args[0] = max_iter_addr;
+        args[1] = guard_expert_iter;
     }
 }
 }  // namespace routed_mcast_optimized_helpers
@@ -1723,6 +1856,9 @@ static RoutedMatmulMcast2DProgramFactory::cached_program_t routed_matmul_build_p
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
+    const uint32_t max_iter_addr = tensor_args.max_expert_iter.buffer()->address();
+    const uint32_t guard_expert_iter = operation_attributes.curr_expert_iter;
+
     return routed_mcast_optimized_helpers::create_program_mcast_in0_in1(
         program,
         device,
@@ -1764,6 +1900,8 @@ static RoutedMatmulMcast2DProgramFactory::cached_program_t routed_matmul_build_p
         output_data_format,
         untilize_out,
         fused_op_signaler,
+        max_iter_addr,
+        guard_expert_iter,
         sub_device_start_core);
 }
 
@@ -1780,11 +1918,15 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t RoutedMatmulMcast2DProgramFa
 
 void RoutedMatmulMcast2DProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const RoutedMatmulParams& /*operation_attributes*/,
+    const RoutedMatmulParams& operation_attributes,
     const RoutedMatmulInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
     routed_mcast_optimized_helpers::override_runtime_arguments_impl(
-        cached_program.shared_variables, cached_program.program, tensor_args, tensor_return_value);
+        cached_program.shared_variables,
+        cached_program.program,
+        operation_attributes,
+        tensor_args,
+        tensor_return_value);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::device
