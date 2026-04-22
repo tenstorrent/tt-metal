@@ -2163,7 +2163,7 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                     const PerfCounter perf_counter(marker.data);
                     const uint32_t counter_type_raw = perf_counter.counter_type;
                     // counter_type is an 8-bit field; values outside PerfCounterType's
-                    // valid range (0..STALL_GRANT_SFPU_2) indicate garbage data (e.g. dropped
+                    // valid range (0..ANY_THREAD_STALL) indicate garbage data (e.g. dropped
                     // markers reinterpreting an adjacent region, or a DRAM-region write that
                     // went past the host-reported end). Skip enrichment rather than let a
                     // bogus enum propagate into downstream analysis.

@@ -26,9 +26,10 @@ constexpr size_t NUM_FPU_COUNTERS = 3;
 //   grant[4] (sel 260) = srcB not blocked by write port   (dma_srcb_wr_port_avail)
 //   grant[5] (sel 261) = srcA not blocked by overwrite    (srca_write_ready)
 //   grant[6] (sel 262) = srcA not blocked by write port   (dma_srca_wr_port_avail)
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
+     {PerfCounterType::MATH_FIDELITY_STALL, 2},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
      {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
      {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
@@ -37,6 +38,9 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters =
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
+     {PerfCounterType::MATH_INSTRN_HF_4_CYCLE, 256},
+     {PerfCounterType::MATH_INSTRN_HF_2_CYCLE, 257},
+     {PerfCounterType::MATH_INSTRN_HF_1_CYCLE, 258},
      {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
      {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
      {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},
@@ -45,12 +49,9 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters =
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
-constexpr size_t NUM_UNPACK_COUNTERS = 18;
+constexpr size_t NUM_UNPACK_COUNTERS = 22;
 
 // BH TDMA_PACK: PACK_COUNT=1, 2 req + 3 grant live.
-// Empirically-dead counters (RTL-live, filtered in Python):
-//   MATH_INSTRN_STARTED (o_math_instrnbuf_rden never fires on BH)
-//   WAITING_FOR_SFPU_IDLE_0/1/2 (empirically 0 across all workloads)
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_BUSY, 18},
@@ -168,10 +169,15 @@ constexpr size_t NUM_L1_4_COUNTERS = 16;
 // BH: 3-bit L1 mux at MUX_CTRL[6:4], values 0-4
 constexpr uint32_t L1_MUX_MASK = 0x7 << 4;
 
-// BH INSTRN_THREAD: 82 counters
-// Sel 27-30: shared stall conditions (1 slot each on BH)
-// Sel 31-57: per-thread stall reasons (9 types x 3 threads)
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 113> instrn_counters = {
+// BH INSTRN_THREAD
+// Sel 0-23:  per-thread instruction-type availability (gaps at 9-11 where the
+//            hardware ties the XSEARCH kick to 0)
+// Sel 24-26: per-thread total stall cycles
+// Sel 27-30: shared stall conditions (SRCA/SRCB CLEAR/VALID)
+// Sel 31-57: per-thread stall reasons (9 types x 3 threads, thread-major)
+// Sel 256, 264, 272: per-thread total instruction issue counts
+// Sel 283:   cycles any thread is stalled
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 59> instrn_counters = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_2, 2},
@@ -181,9 +187,6 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 113> instrn_counters 
      {PerfCounterType::THCON_INSTRN_AVAILABLE_0, 6},
      {PerfCounterType::THCON_INSTRN_AVAILABLE_1, 7},
      {PerfCounterType::THCON_INSTRN_AVAILABLE_2, 8},
-     {PerfCounterType::XSEARCH_INSTRN_AVAILABLE_0, 9},
-     {PerfCounterType::XSEARCH_INSTRN_AVAILABLE_1, 10},
-     {PerfCounterType::XSEARCH_INSTRN_AVAILABLE_2, 11},
      {PerfCounterType::MOVE_INSTRN_AVAILABLE_0, 12},
      {PerfCounterType::MOVE_INSTRN_AVAILABLE_1, 13},
      {PerfCounterType::MOVE_INSTRN_AVAILABLE_2, 14},
@@ -237,66 +240,10 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 113> instrn_counters 
      {PerfCounterType::WAITING_FOR_MOVE_IDLE_2, 55},
      {PerfCounterType::WAITING_FOR_MMIO_IDLE_2, 56},
      {PerfCounterType::WAITING_FOR_SFPU_IDLE_2, 57},
-     // Grant counters: actual instruction issue counts (counter_sel + 256)
-     {PerfCounterType::CFG_INSTRN_ISSUED_0, 256},
-     {PerfCounterType::CFG_INSTRN_ISSUED_1, 257},
-     {PerfCounterType::CFG_INSTRN_ISSUED_2, 258},
-     {PerfCounterType::SYNC_INSTRN_ISSUED_0, 259},
-     {PerfCounterType::SYNC_INSTRN_ISSUED_1, 260},
-     {PerfCounterType::SYNC_INSTRN_ISSUED_2, 261},
-     {PerfCounterType::THCON_INSTRN_ISSUED_0, 262},
-     {PerfCounterType::THCON_INSTRN_ISSUED_1, 263},
-     {PerfCounterType::THCON_INSTRN_ISSUED_2, 264},
-     {PerfCounterType::XSEARCH_INSTRN_ISSUED_0, 265},
-     {PerfCounterType::XSEARCH_INSTRN_ISSUED_1, 266},
-     {PerfCounterType::XSEARCH_INSTRN_ISSUED_2, 267},
-     {PerfCounterType::MOVE_INSTRN_ISSUED_0, 268},
-     {PerfCounterType::MOVE_INSTRN_ISSUED_1, 269},
-     {PerfCounterType::MOVE_INSTRN_ISSUED_2, 270},
-     {PerfCounterType::FPU_INSTRN_ISSUED_0, 271},
-     {PerfCounterType::FPU_INSTRN_ISSUED_1, 272},
-     {PerfCounterType::FPU_INSTRN_ISSUED_2, 273},
-     {PerfCounterType::UNPACK_INSTRN_ISSUED_0, 274},
-     {PerfCounterType::UNPACK_INSTRN_ISSUED_1, 275},
-     {PerfCounterType::UNPACK_INSTRN_ISSUED_2, 276},
-     {PerfCounterType::PACK_INSTRN_ISSUED_0, 277},
-     {PerfCounterType::PACK_INSTRN_ISSUED_1, 278},
-     {PerfCounterType::PACK_INSTRN_ISSUED_2, 279},
-     // Grant counters for shared stall conditions (grant = |inst_stall_thread)
-     // BH: sels 27-30 → grant sels 283-286
-     {PerfCounterType::STALL_GRANT_SRCA_CLEAR, 283},
-     {PerfCounterType::STALL_GRANT_SRCB_CLEAR, 284},
-     {PerfCounterType::STALL_GRANT_SRCA_VALID, 285},
-     {PerfCounterType::STALL_GRANT_SRCB_VALID, 286},
-     // Grant counters for per-thread stall reasons — THREAD-MAJOR
-     // Thread 0 grants (sels 287-295)
-     {PerfCounterType::STALL_GRANT_THCON_0, 287},
-     {PerfCounterType::STALL_GRANT_UNPACK_0, 288},
-     {PerfCounterType::STALL_GRANT_PACK_0, 289},
-     {PerfCounterType::STALL_GRANT_MATH_0, 290},
-     {PerfCounterType::STALL_GRANT_SEM_ZERO_0, 291},
-     {PerfCounterType::STALL_GRANT_SEM_MAX_0, 292},
-     {PerfCounterType::STALL_GRANT_MOVE_0, 293},
-     {PerfCounterType::STALL_GRANT_MMIO_0, 294},
-     {PerfCounterType::STALL_GRANT_SFPU_0, 295},
-     // Thread 1 grants (sels 296-304)
-     {PerfCounterType::STALL_GRANT_THCON_1, 296},
-     {PerfCounterType::STALL_GRANT_UNPACK_1, 297},
-     {PerfCounterType::STALL_GRANT_PACK_1, 298},
-     {PerfCounterType::STALL_GRANT_MATH_1, 299},
-     {PerfCounterType::STALL_GRANT_SEM_ZERO_1, 300},
-     {PerfCounterType::STALL_GRANT_SEM_MAX_1, 301},
-     {PerfCounterType::STALL_GRANT_MOVE_1, 302},
-     {PerfCounterType::STALL_GRANT_MMIO_1, 303},
-     {PerfCounterType::STALL_GRANT_SFPU_1, 304},
-     // Thread 2 grants (sels 305-313)
-     {PerfCounterType::STALL_GRANT_THCON_2, 305},
-     {PerfCounterType::STALL_GRANT_UNPACK_2, 306},
-     {PerfCounterType::STALL_GRANT_PACK_2, 307},
-     {PerfCounterType::STALL_GRANT_MATH_2, 308},
-     {PerfCounterType::STALL_GRANT_SEM_ZERO_2, 309},
-     {PerfCounterType::STALL_GRANT_SEM_MAX_2, 310},
-     {PerfCounterType::STALL_GRANT_MOVE_2, 311},
-     {PerfCounterType::STALL_GRANT_MMIO_2, 312},
-     {PerfCounterType::STALL_GRANT_SFPU_2, 313}}};
-constexpr size_t NUM_INSTRN_COUNTERS = 113;
+     // Per-thread total instruction issue counts.
+     {PerfCounterType::THREAD_INSTRUCTIONS_0, 256},
+     {PerfCounterType::THREAD_INSTRUCTIONS_1, 264},
+     {PerfCounterType::THREAD_INSTRUCTIONS_2, 272},
+     // Cycles any thread is stalled (OR across threads).
+     {PerfCounterType::ANY_THREAD_STALL, 283}}};
+constexpr size_t NUM_INSTRN_COUNTERS = 59;

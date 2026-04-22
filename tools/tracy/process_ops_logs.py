@@ -700,7 +700,7 @@ def _enrich_ops_from_device_logs(
         device_arch = device_data["deviceInfo"].get("arch", "")
         perf_counter_df = None
         if "events" in risc_data and "perf_counter_data" in risc_data["events"]:
-            perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"], arch=device_arch)
+            perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"])
 
             # Print statistics for captured counter data
             if perf_counter_df is not None and not perf_counter_df.empty:
@@ -1032,7 +1032,7 @@ def get_device_data_generate_report(
         for device in deviceData["devices"]:
             risc_data = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]
             if "events" in risc_data and "perf_counter_data" in risc_data["events"]:
-                perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"], arch=device_arch)
+                perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"])
 
                 if perf_counter_df is not None and not perf_counter_df.empty:
                     # Print statistics for captured counter data

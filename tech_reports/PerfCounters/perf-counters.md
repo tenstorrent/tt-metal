@@ -40,16 +40,14 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 
 | | Wormhole | Blackhole |
 |---|---|---|
-| Tensix raw counters | 181 (0 dead) | 220 (4 empirically-dead filtered) |
-| Derived metrics | 68+ | 68+ |
+| Tensix counters read | 135 | 154 |
+| Derived metrics | 60+ | 60+ |
 
 **Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
 
-**Blackhole** has fewer active TDMA counters due to `PACK_COUNT=1` (single packer engine) and `o_math_instrnbuf_rden` being inactive on silicon. All RTL-dead counters (14 PACK/UNPACK signals hardwired to `1'b0` or `2'b00`) have been removed from the BH `hw_counters.h` arrays entirely; only RTL-live signals are read from hardware. 4 remaining counters (`MATH_INSTRN_STARTED`, `WAITING_FOR_SFPU_IDLE_0/1/2`) are RTL-live but empirically dead across 8 diverse workloads, and are filtered in `perf_counter_analysis.py`. Three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas since their WH denominators (`PACKER_BUSY`, `MATH_INSTRN_STARTED`) are always 0 on BH. TDMA_UNPACK grant banks 4-6 (sels 260-262) have identical RTL wiring on WH and BH (verified: srcB port, srcA overwrite, srcA port). Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
+**Blackhole** has fewer active TDMA counters due to `PACK_COUNT=1` (single packer engine). Only RTL-live signals are read from hardware — any counter whose RTL signal is hardwired to a constant has been omitted from the `hw_counters.h` arrays, and any aliased grant counter is consolidated to one canonical entry. Three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas because their WH denominator (`PACKER_BUSY`) is always 0 on BH. TDMA_UNPACK grant banks 4-6 (sels 260-262) have identical RTL wiring on WH and BH (verified: srcB port, srcA overwrite, srcA port). Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
 
-**INSTRN_THREAD bank** — The `perf_cnt_instrn_thread` flat array (built from a Verilog generate array in `tt_instruction_thread.sv`) has architecture-specific counter_sel mappings for sel 27+. On WH, the shared stall conditions (srcA/B valid/cleared) are broadcast to 3 slots (sels 27-38), while on BH they occupy 1 slot each (sels 27-30). Per-thread stall reasons use **thread-major layout**: on WH sels 39-47 = all 9 stall types for thread 0, sels 48-56 = thread 1, sels 57-65 = thread 2 (order within each thread: thcon, unpack, pack, math, sem_zero, sem_max, move, mmio, sfpu). On BH the same layout starts at sel 31. Both req and grant counters for these stall reasons are now read (grant = `inst_stall_thread[th]` per-thread). The counter arrays are in arch-specific `hw_counters.h` files; `perf_counters.hpp` is arch-agnostic (WH defines empty L1_2/3/4 arrays).
-
-**Note**: Per-thread instruction issue/grant counters exist (e.g. `*_INSTRN_ISSUED_*`), but there is no dedicated counter for *total* instructions per thread. Sel 24-26 measures total stall cycles per thread (`THREAD_STALLS`), not instruction counts. The `Thread IPC` metric was removed for this reason.
+**INSTRN_THREAD bank** — `perf_cnt_instrn_thread` is built from a Verilog generate array in `tt_instruction_thread.sv` and has architecture-specific counter_sel mappings. Req-side: sels 0-23 are per-thread instruction-type availability (CFG/SYNC/THCON/MOVE/FPU/UNPACK/PACK, 3 threads each), sels 24-26 are per-thread total stall cycles, and sels 27+ are stall reasons. On WH the shared stall conditions (SRCA/B clear/valid) are replicated across 3 slots each (sels 27-38); on BH they occupy 1 slot each (sels 27-30). Per-thread stall reasons are thread-major: WH sels 39-65 (9 types × 3 threads), BH sels 31-57. Grant-side: the RTL wires grant as `{8{ibuffer_rden[th]}}` per instance and `{9{inst_stall_thread[th]}}` per per-thread stall-reason instance, so the 24 possible issue-count sels collapse to 3 distinct per-thread values and the per-thread stall-reason grants reproduce `THREAD_STALLS_{th}`. We expose only the distinct grants: `THREAD_INSTRUCTIONS_{0,1,2}` at sels 256/264/272 (one per instance) and `ANY_THREAD_STALL` at sel 283. The counter arrays are in arch-specific `hw_counters.h` files; `perf_counters.hpp` is arch-agnostic (WH defines empty L1_2/3/4 arrays).
 
 ---
 
@@ -215,9 +213,25 @@ Thread mapping: Thread 0 = unpack, Thread 1 = math, Thread 2 = pack.
 
 ---
 
-**8. Thread 0/1/2 IPC** *(Removed)*
+**8. T0/T1/T2 Instrn Issue Rate**
 
-No RTL counter exists for per-thread instruction counts. The INSTRN_THREAD flat array sel 24-26 measures total stall cycles (mapped to `THREAD_STALLS`), not instruction issue counts. The IPC metric has been removed.
+Average instructions issued per cycle, per thread.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | INSTRN |
+
+```
+TN Instrn Issue Rate = THREAD_INSTRUCTIONS_N / ref_cnt
+```
+
+Thread mapping: Thread 0 = unpack, Thread 1 = math, Thread 2 = pack.
+
+- **High value (close to 1.0)**: Thread issues an instruction almost every cycle.
+- **Low value (<0.1)**: Thread is stalled or idle most of the time.
+
+**Use case:** Lets you see where the pipeline is spending instruction-issue bandwidth. Combined with the stall-rate metric (#7) it distinguishes "thread issued lots of instructions" from "thread sat idle".
 
 ---
 
@@ -1004,29 +1018,8 @@ FPU Execution Efficiency = FPU_COUNTER / FPU_INSTRN_AVAILABLE_1 * 100
 | `stall_cnt` (bits [127:96]) | BH | `out_fmt` is 1-bit, no mode to route bits [127:96] | Software derives stall as `req - grant` |
 | DDR5 RISC L1 counters | BH | Counters instantiated but no debug register interface | None — requires RTL change |
 
-### Blackhole Counter Set
+### Counter Set
 
-Verified against the `blackhole_rtl` branch: only counters whose RTL signals are actually driven are read on BH. Any counter whose RTL signal is hardwired to `1'b0` or `2'b00` has been removed from the BH `hw_counters.h` arrays and is never read from hardware.
+Verified against the `wormhole_rtl` and `blackhole_rtl` branches. Every counter exposed via the `hw_counters.h` arrays is driven by a real RTL signal — signals that are hardwired to a constant, or whose grant/req line is an alias of another counter we already expose, are omitted from the arrays entirely. No post-hoc filtering is applied; every emitted counter is reported as-is.
 
-#### RTL-live but empirically dead — read but filtered
-
-A small number of counters are RTL-live (signal exists and could produce data) but never produce useful data across the 8 diverse workloads tested (matmul, eltwise binary, reduce sum, tilize, relu, sqrt, silu, concat). These are filtered in `perf_counter_analysis.py` via `BH_RTL_DEAD_COUNTERS`.
-
-| Signal | Counter_sel | RTL Wire | Why Empirically Dead |
-|--------|------------|----------|----------------------|
-| `MATH_INSTRN_STARTED` | 3 | `o_math_instrnbuf_rden` | Instruction-buffer read-enable never fires on BH |
-| `WAITING_FOR_SFPU_IDLE_0` | 39 | Per-thread SFPU stall | 0 across all workloads including SFPU-heavy |
-| `WAITING_FOR_SFPU_IDLE_1` | 48 | Same | Same |
-| `WAITING_FOR_SFPU_IDLE_2` | 57 | Same | Same |
-
-#### Empirically dead but not RTL-confirmed
-
-These counters have real hardware signals but were always 0 across all 8 test workloads. They may be active with different workloads (e.g. multi-thread operations, specific data patterns). Examples:
-
-- `PACKER_BUSY` (sel 18): RTL has `|tdma_pack_busy` but never fires empirically
-- `MATH_NOT_STALLED_DEST_WR_PORT` (sel 271): RTL has `math_valid & ~dest_wr_port_stall` but always 0
-- `UNPACK1_BUSY_THREAD1` (sel 10): Second unpacker on thread 1 unused in tested workloads
-- `THREAD_STALLS_1/2`: Math and pack threads don't stall in tested workloads
-- Various `INSTRN_AVAILABLE` counters for instructions that issue immediately
-
-These are kept in the counter set and reported normally — they may become active with different workloads.
+Some counters will still be 0 for a given workload — for example, `WAITING_FOR_SFPU_IDLE_{0,2}` never fires because only the math thread waits for SFPU, and `MATH_INSTRN_HF_2/4_CYCLE` fire only for HiFi math. These are workload-dependent zeros, not dead counters.

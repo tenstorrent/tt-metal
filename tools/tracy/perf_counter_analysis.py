@@ -14,22 +14,6 @@ from loguru import logger
 OpDict = Dict[str, Any]
 DeviceOpsDict = Dict[int, List[OpDict]]
 
-# BH empirically-dead counters: RTL-live signals that never produce useful data
-# on BH silicon (verified across 8 diverse workloads):
-# - MATH_INSTRN_STARTED: o_math_instrnbuf_rden never fires on BH silicon
-# - WAITING_FOR_SFPU_IDLE_0/1/2: 0 across all workloads including SFPU-heavy
-BH_RTL_DEAD_COUNTERS = frozenset(
-    {
-        "MATH_INSTRN_STARTED",
-        "WAITING_FOR_SFPU_IDLE_0",
-        "WAITING_FOR_SFPU_IDLE_1",
-        "WAITING_FOR_SFPU_IDLE_2",
-    }
-)
-
-# WH: every counter read from WH hardware produces live data; no filtering needed.
-WH_RTL_DEAD_COUNTERS = frozenset()
-
 # Counter type enum from perf_counters.hpp — auto-generated, must match C++ enum order
 COUNTER_TYPE_NAMES = {
     0: "UNDEF",
@@ -40,252 +24,198 @@ COUNTER_TYPE_NAMES = {
     # TDMA_UNPACK Group
     4: "MATH_SRC_DATA_READY",
     5: "DATA_HAZARD_STALLS_MOVD2A",
-    6: "MATH_INSTRN_STARTED",
-    7: "MATH_INSTRN_AVAILABLE",
-    8: "SRCB_WRITE_AVAILABLE",
-    9: "SRCA_WRITE_AVAILABLE",
-    10: "UNPACK0_BUSY_THREAD0",
-    11: "UNPACK1_BUSY_THREAD0",
-    12: "UNPACK0_BUSY_THREAD1",
-    13: "UNPACK1_BUSY_THREAD1",
-    14: "SRCB_WRITE",
-    15: "SRCA_WRITE",
+    6: "MATH_FIDELITY_STALL",
+    7: "MATH_INSTRN_STARTED",
+    8: "MATH_INSTRN_AVAILABLE",
+    9: "SRCB_WRITE_AVAILABLE",
+    10: "SRCA_WRITE_AVAILABLE",
+    11: "UNPACK0_BUSY_THREAD0",
+    12: "UNPACK1_BUSY_THREAD0",
+    13: "UNPACK0_BUSY_THREAD1",
+    14: "UNPACK1_BUSY_THREAD1",
+    # TDMA_UNPACK fidelity-cycle grant counters
+    15: "MATH_INSTRN_HF_1_CYCLE",
+    16: "MATH_INSTRN_HF_2_CYCLE",
+    17: "MATH_INSTRN_HF_4_CYCLE",
     # TDMA_PACK Group
-    16: "PACKER_DEST_READ_AVAILABLE",
-    17: "PACKER_BUSY",
-    18: "AVAILABLE_MATH",
+    18: "PACKER_DEST_READ_AVAILABLE",
+    19: "PACKER_BUSY",
+    20: "AVAILABLE_MATH",
     # INSTRN_THREAD Group (req)
-    19: "CFG_INSTRN_AVAILABLE_0",
-    20: "CFG_INSTRN_AVAILABLE_1",
-    21: "CFG_INSTRN_AVAILABLE_2",
-    22: "SYNC_INSTRN_AVAILABLE_0",
-    23: "SYNC_INSTRN_AVAILABLE_1",
-    24: "SYNC_INSTRN_AVAILABLE_2",
-    25: "THCON_INSTRN_AVAILABLE_0",
-    26: "THCON_INSTRN_AVAILABLE_1",
-    27: "THCON_INSTRN_AVAILABLE_2",
-    28: "XSEARCH_INSTRN_AVAILABLE_0",
-    29: "XSEARCH_INSTRN_AVAILABLE_1",
-    30: "XSEARCH_INSTRN_AVAILABLE_2",
-    31: "MOVE_INSTRN_AVAILABLE_0",
-    32: "MOVE_INSTRN_AVAILABLE_1",
-    33: "MOVE_INSTRN_AVAILABLE_2",
-    34: "FPU_INSTRN_AVAILABLE_0",
-    35: "FPU_INSTRN_AVAILABLE_1",
-    36: "FPU_INSTRN_AVAILABLE_2",
-    37: "UNPACK_INSTRN_AVAILABLE_0",
-    38: "UNPACK_INSTRN_AVAILABLE_1",
-    39: "UNPACK_INSTRN_AVAILABLE_2",
-    40: "PACK_INSTRN_AVAILABLE_0",
-    41: "PACK_INSTRN_AVAILABLE_1",
-    42: "PACK_INSTRN_AVAILABLE_2",
-    43: "THREAD_STALLS_0",
-    44: "THREAD_STALLS_1",
-    45: "THREAD_STALLS_2",
-    46: "WAITING_FOR_SRCA_CLEAR",
-    47: "WAITING_FOR_SRCB_CLEAR",
-    48: "WAITING_FOR_SRCA_VALID",
-    49: "WAITING_FOR_SRCB_VALID",
-    50: "WAITING_FOR_THCON_IDLE_0",
-    51: "WAITING_FOR_THCON_IDLE_1",
-    52: "WAITING_FOR_THCON_IDLE_2",
-    53: "WAITING_FOR_UNPACK_IDLE_0",
-    54: "WAITING_FOR_UNPACK_IDLE_1",
-    55: "WAITING_FOR_UNPACK_IDLE_2",
-    56: "WAITING_FOR_PACK_IDLE_0",
-    57: "WAITING_FOR_PACK_IDLE_1",
-    58: "WAITING_FOR_PACK_IDLE_2",
-    59: "WAITING_FOR_MATH_IDLE_0",
-    60: "WAITING_FOR_MATH_IDLE_1",
-    61: "WAITING_FOR_MATH_IDLE_2",
-    62: "WAITING_FOR_NONZERO_SEM_0",
-    63: "WAITING_FOR_NONZERO_SEM_1",
-    64: "WAITING_FOR_NONZERO_SEM_2",
-    65: "WAITING_FOR_NONFULL_SEM_0",
-    66: "WAITING_FOR_NONFULL_SEM_1",
-    67: "WAITING_FOR_NONFULL_SEM_2",
-    68: "WAITING_FOR_MOVE_IDLE_0",
-    69: "WAITING_FOR_MOVE_IDLE_1",
-    70: "WAITING_FOR_MOVE_IDLE_2",
-    71: "WAITING_FOR_MMIO_IDLE_0",
-    72: "WAITING_FOR_MMIO_IDLE_1",
-    73: "WAITING_FOR_MMIO_IDLE_2",
-    74: "WAITING_FOR_SFPU_IDLE_0",
-    75: "WAITING_FOR_SFPU_IDLE_1",
-    76: "WAITING_FOR_SFPU_IDLE_2",
-    77: "THREAD_INSTRUCTIONS_0",
-    78: "THREAD_INSTRUCTIONS_1",
-    79: "THREAD_INSTRUCTIONS_2",
+    21: "CFG_INSTRN_AVAILABLE_0",
+    22: "CFG_INSTRN_AVAILABLE_1",
+    23: "CFG_INSTRN_AVAILABLE_2",
+    24: "SYNC_INSTRN_AVAILABLE_0",
+    25: "SYNC_INSTRN_AVAILABLE_1",
+    26: "SYNC_INSTRN_AVAILABLE_2",
+    27: "THCON_INSTRN_AVAILABLE_0",
+    28: "THCON_INSTRN_AVAILABLE_1",
+    29: "THCON_INSTRN_AVAILABLE_2",
+    30: "MOVE_INSTRN_AVAILABLE_0",
+    31: "MOVE_INSTRN_AVAILABLE_1",
+    32: "MOVE_INSTRN_AVAILABLE_2",
+    33: "FPU_INSTRN_AVAILABLE_0",
+    34: "FPU_INSTRN_AVAILABLE_1",
+    35: "FPU_INSTRN_AVAILABLE_2",
+    36: "UNPACK_INSTRN_AVAILABLE_0",
+    37: "UNPACK_INSTRN_AVAILABLE_1",
+    38: "UNPACK_INSTRN_AVAILABLE_2",
+    39: "PACK_INSTRN_AVAILABLE_0",
+    40: "PACK_INSTRN_AVAILABLE_1",
+    41: "PACK_INSTRN_AVAILABLE_2",
+    42: "THREAD_STALLS_0",
+    43: "THREAD_STALLS_1",
+    44: "THREAD_STALLS_2",
+    45: "WAITING_FOR_SRCA_CLEAR",
+    46: "WAITING_FOR_SRCB_CLEAR",
+    47: "WAITING_FOR_SRCA_VALID",
+    48: "WAITING_FOR_SRCB_VALID",
+    49: "WAITING_FOR_THCON_IDLE_0",
+    50: "WAITING_FOR_THCON_IDLE_1",
+    51: "WAITING_FOR_THCON_IDLE_2",
+    52: "WAITING_FOR_UNPACK_IDLE_0",
+    53: "WAITING_FOR_UNPACK_IDLE_1",
+    54: "WAITING_FOR_UNPACK_IDLE_2",
+    55: "WAITING_FOR_PACK_IDLE_0",
+    56: "WAITING_FOR_PACK_IDLE_1",
+    57: "WAITING_FOR_PACK_IDLE_2",
+    58: "WAITING_FOR_MATH_IDLE_0",
+    59: "WAITING_FOR_MATH_IDLE_1",
+    60: "WAITING_FOR_MATH_IDLE_2",
+    61: "WAITING_FOR_NONZERO_SEM_0",
+    62: "WAITING_FOR_NONZERO_SEM_1",
+    63: "WAITING_FOR_NONZERO_SEM_2",
+    64: "WAITING_FOR_NONFULL_SEM_0",
+    65: "WAITING_FOR_NONFULL_SEM_1",
+    66: "WAITING_FOR_NONFULL_SEM_2",
+    67: "WAITING_FOR_MOVE_IDLE_0",
+    68: "WAITING_FOR_MOVE_IDLE_1",
+    69: "WAITING_FOR_MOVE_IDLE_2",
+    70: "WAITING_FOR_MMIO_IDLE_0",
+    71: "WAITING_FOR_MMIO_IDLE_1",
+    72: "WAITING_FOR_MMIO_IDLE_2",
+    73: "WAITING_FOR_SFPU_IDLE_0",
+    74: "WAITING_FOR_SFPU_IDLE_1",
+    75: "WAITING_FOR_SFPU_IDLE_2",
     # L1 Bank 0 req (ports 0-7)
-    80: "L1_0_UNPACKER_0",
-    81: "L1_0_UNPACKER_1_ECC_PACK1",
-    82: "L1_0_TDMA_BUNDLE_0_RISC",
-    83: "L1_0_TDMA_BUNDLE_1_TRISC",
-    84: "L1_0_NOC_RING0_OUTGOING_0",
-    85: "L1_0_NOC_RING0_OUTGOING_1",
-    86: "L1_0_NOC_RING0_INCOMING_0",
-    87: "L1_0_NOC_RING0_INCOMING_1",
+    76: "L1_0_UNPACKER_0",
+    77: "L1_0_UNPACKER_1_ECC_PACK1",
+    78: "L1_0_TDMA_BUNDLE_0_RISC",
+    79: "L1_0_TDMA_BUNDLE_1_TRISC",
+    80: "L1_0_NOC_RING0_OUTGOING_0",
+    81: "L1_0_NOC_RING0_OUTGOING_1",
+    82: "L1_0_NOC_RING0_INCOMING_0",
+    83: "L1_0_NOC_RING0_INCOMING_1",
     # L1 Bank 1 req (ports 8-15)
-    88: "L1_1_TDMA_PACKER_2",
-    89: "L1_1_EXT_UNPACKER_1",
-    90: "L1_1_EXT_UNPACKER_2",
-    91: "L1_1_EXT_UNPACKER_3",
-    92: "L1_1_NOC_RING1_OUTGOING_0",
-    93: "L1_1_NOC_RING1_OUTGOING_1",
-    94: "L1_1_NOC_RING1_INCOMING_0",
-    95: "L1_1_NOC_RING1_INCOMING_1",
+    84: "L1_1_TDMA_PACKER_2",
+    85: "L1_1_EXT_UNPACKER_1",
+    86: "L1_1_EXT_UNPACKER_2",
+    87: "L1_1_EXT_UNPACKER_3",
+    88: "L1_1_NOC_RING1_OUTGOING_0",
+    89: "L1_1_NOC_RING1_OUTGOING_1",
+    90: "L1_1_NOC_RING1_INCOMING_0",
+    91: "L1_1_NOC_RING1_INCOMING_1",
     # Blackhole-specific L1 ports
-    96: "L1_0_UNIFIED_PACKER",
-    97: "L1_1_RISC_CORE",
+    92: "L1_0_UNIFIED_PACKER",
+    93: "L1_1_RISC_CORE",
     # L1 Bank 0 grant counters
-    98: "L1_0_UNPACKER_0_GRANT",
-    99: "L1_0_PORT1_GRANT",
-    100: "L1_0_TDMA_BUNDLE_0_GRANT",
-    101: "L1_0_TDMA_BUNDLE_1_GRANT",
-    102: "L1_0_NOC_RING0_OUTGOING_0_GRANT",
-    103: "L1_0_NOC_RING0_OUTGOING_1_GRANT",
-    104: "L1_0_NOC_RING0_INCOMING_0_GRANT",
-    105: "L1_0_NOC_RING0_INCOMING_1_GRANT",
+    94: "L1_0_UNPACKER_0_GRANT",
+    95: "L1_0_PORT1_GRANT",
+    96: "L1_0_TDMA_BUNDLE_0_GRANT",
+    97: "L1_0_TDMA_BUNDLE_1_GRANT",
+    98: "L1_0_NOC_RING0_OUTGOING_0_GRANT",
+    99: "L1_0_NOC_RING0_OUTGOING_1_GRANT",
+    100: "L1_0_NOC_RING0_INCOMING_0_GRANT",
+    101: "L1_0_NOC_RING0_INCOMING_1_GRANT",
     # L1 Bank 1 grant counters
-    106: "L1_1_PORT8_GRANT",
-    107: "L1_1_EXT_UNPACKER_1_GRANT",
-    108: "L1_1_EXT_UNPACKER_2_GRANT",
-    109: "L1_1_EXT_UNPACKER_3_GRANT",
-    110: "L1_1_NOC_RING1_OUTGOING_0_GRANT",
-    111: "L1_1_NOC_RING1_OUTGOING_1_GRANT",
-    112: "L1_1_NOC_RING1_INCOMING_0_GRANT",
-    113: "L1_1_NOC_RING1_INCOMING_1_GRANT",
-    # INSTRN_THREAD grant counters (instruction issues)
-    114: "CFG_INSTRN_ISSUED_0",
-    115: "CFG_INSTRN_ISSUED_1",
-    116: "CFG_INSTRN_ISSUED_2",
-    117: "SYNC_INSTRN_ISSUED_0",
-    118: "SYNC_INSTRN_ISSUED_1",
-    119: "SYNC_INSTRN_ISSUED_2",
-    120: "THCON_INSTRN_ISSUED_0",
-    121: "THCON_INSTRN_ISSUED_1",
-    122: "THCON_INSTRN_ISSUED_2",
-    123: "XSEARCH_INSTRN_ISSUED_0",
-    124: "XSEARCH_INSTRN_ISSUED_1",
-    125: "XSEARCH_INSTRN_ISSUED_2",
-    126: "MOVE_INSTRN_ISSUED_0",
-    127: "MOVE_INSTRN_ISSUED_1",
-    128: "MOVE_INSTRN_ISSUED_2",
-    129: "FPU_INSTRN_ISSUED_0",
-    130: "FPU_INSTRN_ISSUED_1",
-    131: "FPU_INSTRN_ISSUED_2",
-    132: "UNPACK_INSTRN_ISSUED_0",
-    133: "UNPACK_INSTRN_ISSUED_1",
-    134: "UNPACK_INSTRN_ISSUED_2",
-    135: "PACK_INSTRN_ISSUED_0",
-    136: "PACK_INSTRN_ISSUED_1",
-    137: "PACK_INSTRN_ISSUED_2",
+    102: "L1_1_PORT8_GRANT",
+    103: "L1_1_EXT_UNPACKER_1_GRANT",
+    104: "L1_1_EXT_UNPACKER_2_GRANT",
+    105: "L1_1_EXT_UNPACKER_3_GRANT",
+    106: "L1_1_NOC_RING1_OUTGOING_0_GRANT",
+    107: "L1_1_NOC_RING1_OUTGOING_1_GRANT",
+    108: "L1_1_NOC_RING1_INCOMING_0_GRANT",
+    109: "L1_1_NOC_RING1_INCOMING_1_GRANT",
+    # INSTRN_THREAD per-thread total instruction issue counts.
+    110: "THREAD_INSTRUCTIONS_0",
+    111: "THREAD_INSTRUCTIONS_1",
+    112: "THREAD_INSTRUCTIONS_2",
     # TDMA_UNPACK grant counters (write/port info)
-    138: "SRCB_WRITE_ACTUAL",
-    139: "SRCA_WRITE_NOT_BLOCKED_OVR",
-    140: "SRCA_WRITE_ACTUAL",
-    141: "SRCB_WRITE_NOT_BLOCKED_PORT",
-    142: "SRCA_WRITE_THREAD0",
-    143: "SRCB_WRITE_THREAD0",
-    144: "SRCA_WRITE_THREAD1",
-    145: "SRCB_WRITE_THREAD1",
+    113: "SRCB_WRITE_ACTUAL",
+    114: "SRCA_WRITE_NOT_BLOCKED_OVR",
+    115: "SRCA_WRITE_ACTUAL",
+    116: "SRCB_WRITE_NOT_BLOCKED_PORT",
+    117: "SRCA_WRITE_THREAD0",
+    118: "SRCB_WRITE_THREAD0",
+    119: "SRCA_WRITE_THREAD1",
+    120: "SRCB_WRITE_THREAD1",
     # TDMA_PACK additional req counters (WH only, PACK_COUNT=4)
-    146: "PACKER_DEST_READ_1",
-    147: "PACKER_DEST_READ_2",
-    148: "PACKER_DEST_READ_3",
-    149: "PACKER_BUSY_0",
-    150: "PACKER_BUSY_1",
-    151: "PACKER_BUSY_2",
+    121: "PACKER_DEST_READ_1",
+    122: "PACKER_DEST_READ_2",
+    123: "PACKER_DEST_READ_3",
+    124: "PACKER_BUSY_0",
+    125: "PACKER_BUSY_1",
+    126: "PACKER_BUSY_2",
     # TDMA_PACK grant counters
-    152: "DEST_READ_GRANTED_0",
-    153: "DEST_READ_GRANTED_1",
-    154: "DEST_READ_GRANTED_2",
-    155: "DEST_READ_GRANTED_3",
-    156: "MATH_NOT_STALLED_DEST_WR_PORT",
+    127: "DEST_READ_GRANTED_0",
+    128: "DEST_READ_GRANTED_1",
+    129: "DEST_READ_GRANTED_2",
+    130: "DEST_READ_GRANTED_3",
+    131: "MATH_NOT_STALLED_DEST_WR_PORT",
     # L1 Bank 4 req (BH only, mux position 4, misc ports 32-39)
-    157: "L1_4_MISC_PORT_0",
-    158: "L1_4_MISC_PORT_1",
-    159: "L1_4_MISC_PORT_2",
-    160: "L1_4_MISC_PORT_3",
-    161: "L1_4_MISC_PORT_4",
-    162: "L1_4_MISC_PORT_5",
-    163: "L1_4_MISC_PORT_6",
-    164: "L1_4_MISC_PORT_7",
+    132: "L1_4_MISC_PORT_0",
+    133: "L1_4_MISC_PORT_1",
+    134: "L1_4_MISC_PORT_2",
+    135: "L1_4_MISC_PORT_3",
+    136: "L1_4_MISC_PORT_4",
+    137: "L1_4_MISC_PORT_5",
+    138: "L1_4_MISC_PORT_6",
+    139: "L1_4_MISC_PORT_7",
     # L1 Bank 4 grant counters
-    165: "L1_4_MISC_PORT_0_GRANT",
-    166: "L1_4_MISC_PORT_1_GRANT",
-    167: "L1_4_MISC_PORT_2_GRANT",
-    168: "L1_4_MISC_PORT_3_GRANT",
-    169: "L1_4_MISC_PORT_4_GRANT",
-    170: "L1_4_MISC_PORT_5_GRANT",
-    171: "L1_4_MISC_PORT_6_GRANT",
-    172: "L1_4_MISC_PORT_7_GRANT",
+    140: "L1_4_MISC_PORT_0_GRANT",
+    141: "L1_4_MISC_PORT_1_GRANT",
+    142: "L1_4_MISC_PORT_2_GRANT",
+    143: "L1_4_MISC_PORT_3_GRANT",
+    144: "L1_4_MISC_PORT_4_GRANT",
+    145: "L1_4_MISC_PORT_5_GRANT",
+    146: "L1_4_MISC_PORT_6_GRANT",
+    147: "L1_4_MISC_PORT_7_GRANT",
     # L1 Bank 2 (BH only, mux position 2, NOC Ring 2 ports 16-23)
-    173: "L1_2_NOC_RING2_PORT_0",
-    174: "L1_2_NOC_RING2_PORT_1",
-    175: "L1_2_NOC_RING2_PORT_2",
-    176: "L1_2_NOC_RING2_PORT_3",
-    177: "L1_2_NOC_RING2_PORT_4",
-    178: "L1_2_NOC_RING2_PORT_5",
-    179: "L1_2_NOC_RING2_PORT_6",
-    180: "L1_2_NOC_RING2_PORT_7",
-    181: "L1_2_NOC_RING2_PORT_0_GRANT",
-    182: "L1_2_NOC_RING2_PORT_1_GRANT",
-    183: "L1_2_NOC_RING2_PORT_2_GRANT",
-    184: "L1_2_NOC_RING2_PORT_3_GRANT",
-    185: "L1_2_NOC_RING2_PORT_4_GRANT",
-    186: "L1_2_NOC_RING2_PORT_5_GRANT",
-    187: "L1_2_NOC_RING2_PORT_6_GRANT",
-    188: "L1_2_NOC_RING2_PORT_7_GRANT",
+    148: "L1_2_NOC_RING2_PORT_0",
+    149: "L1_2_NOC_RING2_PORT_1",
+    150: "L1_2_NOC_RING2_PORT_2",
+    151: "L1_2_NOC_RING2_PORT_3",
+    152: "L1_2_NOC_RING2_PORT_4",
+    153: "L1_2_NOC_RING2_PORT_5",
+    154: "L1_2_NOC_RING2_PORT_6",
+    155: "L1_2_NOC_RING2_PORT_7",
+    156: "L1_2_NOC_RING2_PORT_0_GRANT",
+    157: "L1_2_NOC_RING2_PORT_1_GRANT",
+    158: "L1_2_NOC_RING2_PORT_2_GRANT",
+    159: "L1_2_NOC_RING2_PORT_3_GRANT",
+    160: "L1_2_NOC_RING2_PORT_4_GRANT",
+    161: "L1_2_NOC_RING2_PORT_5_GRANT",
+    162: "L1_2_NOC_RING2_PORT_6_GRANT",
+    163: "L1_2_NOC_RING2_PORT_7_GRANT",
     # L1 Bank 3 (BH only, mux position 3, NOC Ring 3 ports 24-31)
-    189: "L1_3_NOC_RING3_PORT_0",
-    190: "L1_3_NOC_RING3_PORT_1",
-    191: "L1_3_NOC_RING3_PORT_2",
-    192: "L1_3_NOC_RING3_PORT_3",
-    193: "L1_3_NOC_RING3_PORT_4",
-    194: "L1_3_NOC_RING3_PORT_5",
-    195: "L1_3_NOC_RING3_PORT_6",
-    196: "L1_3_NOC_RING3_PORT_7",
-    197: "L1_3_NOC_RING3_PORT_0_GRANT",
-    198: "L1_3_NOC_RING3_PORT_1_GRANT",
-    199: "L1_3_NOC_RING3_PORT_2_GRANT",
-    200: "L1_3_NOC_RING3_PORT_3_GRANT",
-    201: "L1_3_NOC_RING3_PORT_4_GRANT",
-    202: "L1_3_NOC_RING3_PORT_5_GRANT",
-    203: "L1_3_NOC_RING3_PORT_6_GRANT",
-    204: "L1_3_NOC_RING3_PORT_7_GRANT",
-    # INSTRN_THREAD stall condition grant counters
-    205: "STALL_GRANT_SRCA_CLEAR",
-    206: "STALL_GRANT_SRCB_CLEAR",
-    207: "STALL_GRANT_SRCA_VALID",
-    208: "STALL_GRANT_SRCB_VALID",
-    209: "STALL_GRANT_THCON_0",
-    210: "STALL_GRANT_THCON_1",
-    211: "STALL_GRANT_THCON_2",
-    212: "STALL_GRANT_UNPACK_0",
-    213: "STALL_GRANT_UNPACK_1",
-    214: "STALL_GRANT_UNPACK_2",
-    215: "STALL_GRANT_PACK_0",
-    216: "STALL_GRANT_PACK_1",
-    217: "STALL_GRANT_PACK_2",
-    218: "STALL_GRANT_MATH_0",
-    219: "STALL_GRANT_MATH_1",
-    220: "STALL_GRANT_MATH_2",
-    221: "STALL_GRANT_SEM_ZERO_0",
-    222: "STALL_GRANT_SEM_ZERO_1",
-    223: "STALL_GRANT_SEM_ZERO_2",
-    224: "STALL_GRANT_SEM_MAX_0",
-    225: "STALL_GRANT_SEM_MAX_1",
-    226: "STALL_GRANT_SEM_MAX_2",
-    227: "STALL_GRANT_MOVE_0",
-    228: "STALL_GRANT_MOVE_1",
-    229: "STALL_GRANT_MOVE_2",
-    230: "STALL_GRANT_MMIO_0",
-    231: "STALL_GRANT_MMIO_1",
-    232: "STALL_GRANT_MMIO_2",
-    233: "STALL_GRANT_SFPU_0",
-    234: "STALL_GRANT_SFPU_1",
-    235: "STALL_GRANT_SFPU_2",
+    164: "L1_3_NOC_RING3_PORT_0",
+    165: "L1_3_NOC_RING3_PORT_1",
+    166: "L1_3_NOC_RING3_PORT_2",
+    167: "L1_3_NOC_RING3_PORT_3",
+    168: "L1_3_NOC_RING3_PORT_4",
+    169: "L1_3_NOC_RING3_PORT_5",
+    170: "L1_3_NOC_RING3_PORT_6",
+    171: "L1_3_NOC_RING3_PORT_7",
+    172: "L1_3_NOC_RING3_PORT_0_GRANT",
+    173: "L1_3_NOC_RING3_PORT_1_GRANT",
+    174: "L1_3_NOC_RING3_PORT_2_GRANT",
+    175: "L1_3_NOC_RING3_PORT_3_GRANT",
+    176: "L1_3_NOC_RING3_PORT_4_GRANT",
+    177: "L1_3_NOC_RING3_PORT_5_GRANT",
+    178: "L1_3_NOC_RING3_PORT_6_GRANT",
+    179: "L1_3_NOC_RING3_PORT_7_GRANT",
+    # Cycles any thread is stalled (OR across threads).
+    180: "ANY_THREAD_STALL",
 }
 
 
@@ -483,18 +413,18 @@ PERF_COUNTER_CSV_HEADERS = [
     "Math Scoreboard Stall Rate Max (%)",
     "Math Scoreboard Stall Rate Avg (%)",
     # Instruction issue rates (per cycle, not %)
-    "Unpack Instrn Issue Rate T0 Min",
-    "Unpack Instrn Issue Rate T0 Median",
-    "Unpack Instrn Issue Rate T0 Max",
-    "Unpack Instrn Issue Rate T0 Avg",
-    "Math Instrn Issue Rate T1 Min",
-    "Math Instrn Issue Rate T1 Median",
-    "Math Instrn Issue Rate T1 Max",
-    "Math Instrn Issue Rate T1 Avg",
-    "Pack Instrn Issue Rate T2 Min",
-    "Pack Instrn Issue Rate T2 Median",
-    "Pack Instrn Issue Rate T2 Max",
-    "Pack Instrn Issue Rate T2 Avg",
+    "T0 Instrn Issue Rate Min",
+    "T0 Instrn Issue Rate Median",
+    "T0 Instrn Issue Rate Max",
+    "T0 Instrn Issue Rate Avg",
+    "T1 Instrn Issue Rate Min",
+    "T1 Instrn Issue Rate Median",
+    "T1 Instrn Issue Rate Max",
+    "T1 Instrn Issue Rate Avg",
+    "T2 Instrn Issue Rate Min",
+    "T2 Instrn Issue Rate Median",
+    "T2 Instrn Issue Rate Max",
+    "T2 Instrn Issue Rate Avg",
     # === NEW: Per-type instruction issue efficiency ===
     "CFG Instrn Avail Rate T0 Min (%)",
     "CFG Instrn Avail Rate T0 Median (%)",
@@ -632,20 +562,13 @@ PERF_COUNTER_CSV_HEADERS = [
 ]
 
 
-def extract_perf_counters(events: List[Any], arch: str = "") -> Optional[pd.DataFrame]:
+def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
     # If perf counter data exists, extract relevant columns and return as a dataframe
     EVENT_METADATA_IDX = 0
     EVENT_TIMESTAMP_IDX = 1
     EVENT_RISC_TYPE_IDX = 3
     EVENT_CORE_COORDS_IDX = 4
     PERF_COUNTER_ID = 9090
-
-    arch_lower = arch.lower() if arch else ""
-    dead_counters = frozenset()
-    if arch_lower == "blackhole":
-        dead_counters = BH_RTL_DEAD_COUNTERS
-    elif arch_lower in ("wormhole", "wormhole_b0"):
-        dead_counters = WH_RTL_DEAD_COUNTERS
 
     try:
         # Process events: extract metadata, add timestamp and coords
@@ -668,10 +591,6 @@ def extract_perf_counters(events: List[Any], arch: str = "") -> Optional[pd.Data
                     counter_type_name = counter_type_raw
                 else:
                     counter_type_name = COUNTER_TYPE_NAMES.get(counter_type_raw, f"UNKNOWN_{counter_type_raw}")
-
-                # Skip RTL-confirmed dead counters (signals tied to 0 in silicon)
-                if dead_counters and counter_type_name in dead_counters:
-                    continue
 
                 perf_counter_events.append(
                     {
@@ -845,10 +764,9 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
 
     # Non-percentage metrics (raw rates, not %)
     rate_metrics = [
-        # Thread IPC removed: no RTL counter for instruction counts
-        "Unpack Instrn Issue Rate T0",
-        "Math Instrn Issue Rate T1",
-        "Pack Instrn Issue Rate T2",
+        "T0 Instrn Issue Rate",
+        "T1 Instrn Issue Rate",
+        "T2 Instrn Issue Rate",
     ]
 
     # For each base metric, display a table with Min/Median/Max/Avg rows
@@ -1015,10 +933,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     fpu_ref_cnt = get_counter_ref_cnt("FPU_COUNTER")
     math_counter = get_counter_series("MATH_COUNTER")
     math_ref_cnt = get_counter_ref_cnt("MATH_COUNTER")
-    # SRCA_WRITE / SRCB_WRITE enum slots exist but are not collected by the hardware
-    # counter arrays (unpack_counters selects the _ACTUAL grant counters instead).
-    # Prefer the _ACTUAL series, and fall back to _THREAD0 + _THREAD1 if those are
-    # also absent.
+    # Prefer the _ACTUAL series; fall back to _THREAD0 + _THREAD1 if absent.
     srca_write = get_counter_series("SRCA_WRITE_ACTUAL")
     if srca_write is None and has_counter("SRCA_WRITE_THREAD0"):
         srca_t0 = get_counter_series("SRCA_WRITE_THREAD0")
@@ -1158,8 +1073,13 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             per_op_stats[f"Semaphore Full Wait T{t}"] = compute_util_metric(full_name)
 
     # === TDMA_UNPACK data hazard ===
-    if has_counter("DATA_HAZARD_STALLS_MOVD2A"):
-        per_op_stats["Data Hazard Stall Rate"] = compute_util_metric("DATA_HAZARD_STALLS_MOVD2A")
+    # DATA_HAZARD_STALLS_MOVD2A (sel 1 req) = math_instrn_valid & ~dest2src_post_stall
+    # = cycles math was valid AND NOT stalled by D2A. MATH_INSTRN_AVAILABLE = cycles
+    # math was valid. Actual D2A stall rate = (AVAILABLE - NOT_STALLED) / AVAILABLE.
+    if has_counter("DATA_HAZARD_STALLS_MOVD2A") and has_counter("MATH_INSTRN_AVAILABLE"):
+        per_op_stats["Data Hazard Stall Rate"] = compute_complement_metric(
+            "DATA_HAZARD_STALLS_MOVD2A", "MATH_INSTRN_AVAILABLE"
+        )
 
     # === L1 Bank 0 ===
     if has_counter("L1_0_UNPACKER_0"):
@@ -1231,13 +1151,13 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
         per_op_stats["Math Scoreboard Stall Rate"] = _group_to_stat_dict(ratio)
 
-    # Instruction issue rates per thread
-    if has_counter("UNPACK_INSTRN_ISSUED_0"):
-        per_op_stats["Unpack Instrn Issue Rate T0"] = compute_util_metric("UNPACK_INSTRN_ISSUED_0", scale=1)
-    if has_counter("FPU_INSTRN_ISSUED_1"):
-        per_op_stats["Math Instrn Issue Rate T1"] = compute_util_metric("FPU_INSTRN_ISSUED_1", scale=1)
-    if has_counter("PACK_INSTRN_ISSUED_2"):
-        per_op_stats["Pack Instrn Issue Rate T2"] = compute_util_metric("PACK_INSTRN_ISSUED_2", scale=1)
+    # Per-thread total instruction issue rates.
+    if has_counter("THREAD_INSTRUCTIONS_0"):
+        per_op_stats["T0 Instrn Issue Rate"] = compute_util_metric("THREAD_INSTRUCTIONS_0", scale=1)
+    if has_counter("THREAD_INSTRUCTIONS_1"):
+        per_op_stats["T1 Instrn Issue Rate"] = compute_util_metric("THREAD_INSTRUCTIONS_1", scale=1)
+    if has_counter("THREAD_INSTRUCTIONS_2"):
+        per_op_stats["T2 Instrn Issue Rate"] = compute_util_metric("THREAD_INSTRUCTIONS_2", scale=1)
 
     # === L1 Bank 1 ===
     if has_counter("L1_1_NOC_RING1_OUTGOING_0") and has_counter("L1_1_NOC_RING1_OUTGOING_1"):
@@ -1551,14 +1471,15 @@ def compute_device_only_metrics(
         ),
         axis=1,
     )
-    # Unpacker Write Efficiency — WH only (SRCA_WRITE/SRCB_WRITE counters not on BH)
-    if "value_SRCA_WRITE" in eff_pivot.columns:
+    # Unpacker Write Efficiency: actual srcA/srcB writes vs unpacker busy cycles.
+    if "value_SRCA_WRITE_ACTUAL" in eff_pivot.columns:
         eff_pivot["Unpacker0 Write Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_SRCA_WRITE", 0), x.get("value_UNPACK0_BUSY_THREAD0", 0)),
+            lambda x: safe_div(x.get("value_SRCA_WRITE_ACTUAL", 0), x.get("value_UNPACK0_BUSY_THREAD0", 0)),
             axis=1,
         )
+    if "value_SRCB_WRITE_ACTUAL" in eff_pivot.columns:
         eff_pivot["Unpacker1 Write Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_SRCB_WRITE", 0), x.get("value_UNPACK1_BUSY_THREAD0", 0)),
+            lambda x: safe_div(x.get("value_SRCB_WRITE_ACTUAL", 0), x.get("value_UNPACK1_BUSY_THREAD0", 0)),
             axis=1,
         )
     # Packer Efficiency: On WH, PACKER_DEST_READ_AVAILABLE / PACKER_BUSY.
@@ -1656,14 +1577,15 @@ def compute_device_only_metrics(
                 axis=1,
             )
 
-    # Data Hazard Stall Rate
-    eff_pivot["Data Hazard Stall Rate"] = eff_pivot.apply(
-        lambda x: safe_div(
-            x.get("value_DATA_HAZARD_STALLS_MOVD2A", 0),
-            x.get("ref_cnt_DATA_HAZARD_STALLS_MOVD2A", 0),
-        ),
-        axis=1,
-    )
+    # Data Hazard Stall Rate: fraction of math-valid cycles that were D2A-stalled.
+    # DATA_HAZARD_STALLS_MOVD2A counts cycles math was valid AND NOT stalled;
+    # subtracting from MATH_INSTRN_AVAILABLE gives the actual stall count.
+    def _d2a_stall_rate(x):
+        valid = x.get("value_MATH_INSTRN_AVAILABLE", 0)
+        not_stalled = x.get("value_DATA_HAZARD_STALLS_MOVD2A", 0)
+        return max(0.0, (valid - not_stalled) / valid * 100) if valid > 0 else nan
+
+    eff_pivot["Data Hazard Stall Rate"] = eff_pivot.apply(_d2a_stall_rate, axis=1)
 
     # L1 Bank 0 metrics
     eff_pivot["L1 Unpacker Port Util"] = eff_pivot.apply(
@@ -1896,27 +1818,27 @@ def compute_device_only_metrics(
         axis=1,
     )
 
-    # Instruction issue rates (per cycle, not %)
-    eff_pivot["Unpack Instrn Issue Rate T0"] = eff_pivot.apply(
+    # Per-thread total instruction issue rates (per cycle, not %)
+    eff_pivot["T0 Instrn Issue Rate"] = eff_pivot.apply(
         lambda x: (
-            x.get("value_UNPACK_INSTRN_ISSUED_0", 0) / x.get("ref_cnt_UNPACK_INSTRN_ISSUED_0", 1)
-            if x.get("ref_cnt_UNPACK_INSTRN_ISSUED_0", 0) > 0
+            x.get("value_THREAD_INSTRUCTIONS_0", 0) / x.get("ref_cnt_THREAD_INSTRUCTIONS_0", 1)
+            if x.get("ref_cnt_THREAD_INSTRUCTIONS_0", 0) > 0
             else nan
         ),
         axis=1,
     )
-    eff_pivot["Math Instrn Issue Rate T1"] = eff_pivot.apply(
+    eff_pivot["T1 Instrn Issue Rate"] = eff_pivot.apply(
         lambda x: (
-            x.get("value_FPU_INSTRN_ISSUED_1", 0) / x.get("ref_cnt_FPU_INSTRN_ISSUED_1", 1)
-            if x.get("ref_cnt_FPU_INSTRN_ISSUED_1", 0) > 0
+            x.get("value_THREAD_INSTRUCTIONS_1", 0) / x.get("ref_cnt_THREAD_INSTRUCTIONS_1", 1)
+            if x.get("ref_cnt_THREAD_INSTRUCTIONS_1", 0) > 0
             else nan
         ),
         axis=1,
     )
-    eff_pivot["Pack Instrn Issue Rate T2"] = eff_pivot.apply(
+    eff_pivot["T2 Instrn Issue Rate"] = eff_pivot.apply(
         lambda x: (
-            x.get("value_PACK_INSTRN_ISSUED_2", 0) / x.get("ref_cnt_PACK_INSTRN_ISSUED_2", 1)
-            if x.get("ref_cnt_PACK_INSTRN_ISSUED_2", 0) > 0
+            x.get("value_THREAD_INSTRUCTIONS_2", 0) / x.get("ref_cnt_THREAD_INSTRUCTIONS_2", 1)
+            if x.get("ref_cnt_THREAD_INSTRUCTIONS_2", 0) > 0
             else nan
         ),
         axis=1,
@@ -2204,9 +2126,9 @@ def compute_device_only_metrics(
     ]
     # Non-percentage metrics (raw rates)
     _ipc_metric_names = [
-        "Unpack Instrn Issue Rate T0",
-        "Math Instrn Issue Rate T1",
-        "Pack Instrn Issue Rate T2",
+        "T0 Instrn Issue Rate",
+        "T1 Instrn Issue Rate",
+        "T2 Instrn Issue Rate",
     ]
 
     agg_metrics: Dict[str, Dict] = {}

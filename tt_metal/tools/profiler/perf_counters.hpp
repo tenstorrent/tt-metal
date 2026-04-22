@@ -13,9 +13,10 @@ enum PerfCounterType : uint16_t {
     FPU_COUNTER,
     SFPU_COUNTER,
     MATH_COUNTER,
-    // TDMA_UNPACK Group (11 req + 11 grant = 22 counters)
+    // TDMA_UNPACK Group
     MATH_SRC_DATA_READY,        // Req 0: math instrn valid & src_data_ready
     DATA_HAZARD_STALLS_MOVD2A,  // Req 1: math instrn not stalled by D2A
+    MATH_FIDELITY_STALL,        // Req 2: math instrn valid & fidelity_phases_ongoing
     MATH_INSTRN_STARTED,
     MATH_INSTRN_AVAILABLE,
     SRCB_WRITE_AVAILABLE,
@@ -24,13 +25,15 @@ enum PerfCounterType : uint16_t {
     UNPACK1_BUSY_THREAD0,
     UNPACK0_BUSY_THREAD1,
     UNPACK1_BUSY_THREAD1,
-    SRCB_WRITE,
-    SRCA_WRITE,
+    // TDMA_UNPACK fidelity-phase instruction counts (grant side)
+    MATH_INSTRN_HF_1_CYCLE,  // grant 258: o_math_instrnbuf_rden & hf_cycles==0
+    MATH_INSTRN_HF_2_CYCLE,  // grant 257: o_math_instrnbuf_rden & hf_cycles==1
+    MATH_INSTRN_HF_4_CYCLE,  // grant 256: o_math_instrnbuf_rden & hf_cycles==3
     // TDMA_PACK Group (3 counters)
     PACKER_DEST_READ_AVAILABLE,
     PACKER_BUSY,
     AVAILABLE_MATH,
-    // INSTRN_THREAD Group (61 counters)
+    // INSTRN_THREAD Group
     CFG_INSTRN_AVAILABLE_0,
     CFG_INSTRN_AVAILABLE_1,
     CFG_INSTRN_AVAILABLE_2,
@@ -40,9 +43,6 @@ enum PerfCounterType : uint16_t {
     THCON_INSTRN_AVAILABLE_0,
     THCON_INSTRN_AVAILABLE_1,
     THCON_INSTRN_AVAILABLE_2,
-    XSEARCH_INSTRN_AVAILABLE_0,
-    XSEARCH_INSTRN_AVAILABLE_1,
-    XSEARCH_INSTRN_AVAILABLE_2,
     MOVE_INSTRN_AVAILABLE_0,
     MOVE_INSTRN_AVAILABLE_1,
     MOVE_INSTRN_AVAILABLE_2,
@@ -89,9 +89,6 @@ enum PerfCounterType : uint16_t {
     WAITING_FOR_SFPU_IDLE_0,
     WAITING_FOR_SFPU_IDLE_1,
     WAITING_FOR_SFPU_IDLE_2,
-    THREAD_INSTRUCTIONS_0,  // Deprecated: sel 24-26 are stall cycles, not instruction counts. Kept for enum compatibility.
-    THREAD_INSTRUCTIONS_1,  // Deprecated: see THREAD_STALLS_0/1/2 for the actual counters at these sels.
-    THREAD_INSTRUCTIONS_2,  // Deprecated: no RTL counter exists for per-thread total instruction counts.
     // L1 Bank 0 (MUX_CTRL bit 4 = 0, monitors L1 ports 0-7)
     L1_0_UNPACKER_0,            // Port 0: Unpacker #0
     L1_0_UNPACKER_1_ECC_PACK1,  // Port 1: Unpacker #1 / ECC / Packer #1
@@ -134,31 +131,10 @@ enum PerfCounterType : uint16_t {
     L1_1_NOC_RING1_INCOMING_0_GRANT,
     L1_1_NOC_RING1_INCOMING_1_GRANT,
     // === Grant counters (accessed via out_fmt bit 16 = 1) ===
-    // INSTRN_THREAD grant counters: actual instruction issue counts (8 types x 3 threads = 24)
-    CFG_INSTRN_ISSUED_0,
-    CFG_INSTRN_ISSUED_1,
-    CFG_INSTRN_ISSUED_2,
-    SYNC_INSTRN_ISSUED_0,
-    SYNC_INSTRN_ISSUED_1,
-    SYNC_INSTRN_ISSUED_2,
-    THCON_INSTRN_ISSUED_0,
-    THCON_INSTRN_ISSUED_1,
-    THCON_INSTRN_ISSUED_2,
-    XSEARCH_INSTRN_ISSUED_0,
-    XSEARCH_INSTRN_ISSUED_1,
-    XSEARCH_INSTRN_ISSUED_2,
-    MOVE_INSTRN_ISSUED_0,
-    MOVE_INSTRN_ISSUED_1,
-    MOVE_INSTRN_ISSUED_2,
-    FPU_INSTRN_ISSUED_0,
-    FPU_INSTRN_ISSUED_1,
-    FPU_INSTRN_ISSUED_2,
-    UNPACK_INSTRN_ISSUED_0,
-    UNPACK_INSTRN_ISSUED_1,
-    UNPACK_INSTRN_ISSUED_2,
-    PACK_INSTRN_ISSUED_0,
-    PACK_INSTRN_ISSUED_1,
-    PACK_INSTRN_ISSUED_2,
+    // INSTRN_THREAD per-thread total instruction issue counts.
+    THREAD_INSTRUCTIONS_0,
+    THREAD_INSTRUCTIONS_1,
+    THREAD_INSTRUCTIONS_2,
     // TDMA_UNPACK grant counters: write/port info
     SRCB_WRITE_ACTUAL,            // srcB writes not blocked by overwrite (grant 259)
     SRCA_WRITE_NOT_BLOCKED_OVR,   // srcA writes not blocked by overwrite (grant 260)
@@ -234,26 +210,12 @@ enum PerfCounterType : uint16_t {
     L1_3_NOC_RING3_PORT_5_GRANT,
     L1_3_NOC_RING3_PORT_6_GRANT,
     L1_3_NOC_RING3_PORT_7_GRANT,
-    // INSTRN_THREAD grant counters for stall conditions.
-    // Shared stall grants: cycles where condition active AND any thread stalled.
-    // Per-thread stall grants: cycles where stall reason active AND that thread stalled.
-    STALL_GRANT_SRCA_CLEAR,
-    STALL_GRANT_SRCB_CLEAR,
-    STALL_GRANT_SRCA_VALID,
-    STALL_GRANT_SRCB_VALID,
-    STALL_GRANT_THCON_0, STALL_GRANT_THCON_1, STALL_GRANT_THCON_2,
-    STALL_GRANT_UNPACK_0, STALL_GRANT_UNPACK_1, STALL_GRANT_UNPACK_2,
-    STALL_GRANT_PACK_0, STALL_GRANT_PACK_1, STALL_GRANT_PACK_2,
-    STALL_GRANT_MATH_0, STALL_GRANT_MATH_1, STALL_GRANT_MATH_2,
-    STALL_GRANT_SEM_ZERO_0, STALL_GRANT_SEM_ZERO_1, STALL_GRANT_SEM_ZERO_2,
-    STALL_GRANT_SEM_MAX_0, STALL_GRANT_SEM_MAX_1, STALL_GRANT_SEM_MAX_2,
-    STALL_GRANT_MOVE_0, STALL_GRANT_MOVE_1, STALL_GRANT_MOVE_2,
-    STALL_GRANT_MMIO_0, STALL_GRANT_MMIO_1, STALL_GRANT_MMIO_2,
-    STALL_GRANT_SFPU_0, STALL_GRANT_SFPU_1, STALL_GRANT_SFPU_2,
+    // Cycles any thread is stalled (OR across threads).
+    ANY_THREAD_STALL,
     // Max enum value must fit in 8 bits (PerfCounter.counter_type is uint32_t:8).
     // Do not add values beyond 255.
 };
-static_assert(STALL_GRANT_SFPU_2 <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
+static_assert(ANY_THREAD_STALL <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
 
 union PerfCounter {
     struct {
