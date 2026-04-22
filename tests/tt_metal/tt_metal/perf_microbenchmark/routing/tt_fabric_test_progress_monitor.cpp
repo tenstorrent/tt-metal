@@ -12,6 +12,7 @@
 #include <limits>
 #include <set>
 #include <sstream>
+#include <thread>
 
 #include "tt_fabric_test_constants.hpp"
 #include "tt_fabric_test_context.hpp"
@@ -133,11 +134,18 @@ private:
 static std::filesystem::path resolve_report_path(const std::string& filename) {
     std::filesystem::path root =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
-    std::filesystem::path dir = root / std::string(OUTPUT_DIR);
-    if (!std::filesystem::exists(dir)) {
-        std::filesystem::create_directories(dir);
+    std::filesystem::path path = root / std::string(OUTPUT_DIR) / filename;
+    // Cover both the default output dir and any extra subdirectories the user
+    // passed in via filename (e.g. "subdir/report.log").
+    const std::filesystem::path parent = path.parent_path();
+    if (!parent.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(parent, ec);
+        if (ec) {
+            log_warning(tt::LogTest, "Failed to create report directory '{}': {}", parent.string(), ec.message());
+        }
     }
-    return dir / filename;
+    return path;
 }
 
 TestProgressMonitor::TestProgressMonitor(::TestContext* ctx, const ProgressMonitorConfig& config) :
@@ -164,9 +172,9 @@ TestProgressMonitor::TestProgressMonitor(::TestContext* ctx, const ProgressMonit
         }
 
         for (const auto& [core, sender] : test_device.get_senders()) {
-            for (uint16_t ci = 0; ci < sender.configs_.size(); ci++) {
+            for (size_t ci = 0; ci < sender.configs_.size(); ci++) {
                 const auto& [cfg, conn_key] = sender.configs_[ci];
-                EndpointId eid{EndpointRole::Sender, node_id, core, ci};
+                EndpointId eid{EndpointRole::Sender, node_id, core, static_cast<uint16_t>(ci)};
                 EndpointProgressState eps{
                     .flow_uid = cfg.flow_uid, .endpoint_id = eid, .packets_expected = cfg.parameters.num_packets};
                 endpoint_states_.insert_or_assign(eid, eps);
@@ -175,9 +183,9 @@ TestProgressMonitor::TestProgressMonitor(::TestContext* ctx, const ProgressMonit
         }
 
         for (const auto& [core, receiver] : test_device.get_receivers()) {
-            for (uint16_t ci = 0; ci < receiver.configs_.size(); ci++) {
+            for (size_t ci = 0; ci < receiver.configs_.size(); ci++) {
                 const auto& [cfg, opt_key] = receiver.configs_[ci];
-                EndpointId eid{EndpointRole::Receiver, node_id, core, ci};
+                EndpointId eid{EndpointRole::Receiver, node_id, core, static_cast<uint16_t>(ci)};
                 EndpointProgressState eps{
                     .flow_uid = cfg.flow_uid, .endpoint_id = eid, .packets_expected = cfg.parameters.num_packets};
                 endpoint_states_.insert_or_assign(eid, eps);
@@ -870,18 +878,17 @@ std::vector<HungEndpointWireRecord> TestProgressMonitor::exchange_hung_records(
             all_records.insert(all_records.end(), remote.begin(), remote.end());
         }
         return all_records;
-    } else {
-        // Phase 2: send local records to rank 0 if non-empty
-        if (!local_wire.empty()) {
-            ctx->send(
-                ttsl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(local_wire.data()),
-                    local_wire.size() * sizeof(HungEndpointWireRecord)),
-                Rank{0},
-                Tag{kWireRecordTag});
-        }
-        return {};
     }
+
+    // Non-zero ranks: Phase 2 — send local records to rank 0 if non-empty.
+    if (!local_wire.empty()) {
+        ctx->send(
+            ttsl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(local_wire.data()), local_wire.size() * sizeof(HungEndpointWireRecord)),
+            Rank{0},
+            Tag{kWireRecordTag});
+    }
+    return {};
 }
 
 // =====================================================================

@@ -10,6 +10,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -145,17 +146,26 @@ HungEndpointWireRecord to_wire_record(
     const HungEndpointRecord& rec, uint32_t rank, const std::vector<FlowDescriptor>& flow_descriptors);
 HungEndpointRecord from_wire_record(const HungEndpointWireRecord& wire);
 
-// Parse per-config results from a result buffer readback
+// Parse per-config results from a result buffer readback.
+// Reads via word indexing rather than reinterpret_cast<PerConfigResult*> on a
+// uint32_t buffer to avoid strict-aliasing UB (the underlying vector elements
+// have type uint32_t, not PerConfigResult).
 inline std::vector<ParsedConfigProgress> parse_per_config_results(
     const std::vector<uint32_t>& result_data, uint8_t num_configs) {
     std::vector<ParsedConfigProgress> results(num_configs);
-    if (result_data.size() < PER_CONFIG_RESULT_BASE_WORD_INDEX + num_configs * 2) {
+    constexpr size_t kPerConfigResultWords = sizeof(PerConfigResult) / sizeof(uint32_t);
+    static_assert(kPerConfigResultWords == 2, "PerConfigResult layout changed; update parser");
+
+    const size_t needed_words =
+        PER_CONFIG_RESULT_BASE_WORD_INDEX + static_cast<size_t>(num_configs) * kPerConfigResultWords;
+    if (result_data.size() < needed_words) {
         return results;
     }
-    auto* per_config = reinterpret_cast<const PerConfigResult*>(result_data.data() + PER_CONFIG_RESULT_BASE_WORD_INDEX);
     for (uint8_t i = 0; i < num_configs; i++) {
-        results[i].packets_processed =
-            static_cast<uint64_t>(per_config[i].packets_high) << 32 | per_config[i].packets_low;
+        const size_t base = PER_CONFIG_RESULT_BASE_WORD_INDEX + static_cast<size_t>(i) * kPerConfigResultWords;
+        const uint32_t packets_low = result_data[base];
+        const uint32_t packets_high = result_data[base + 1];
+        results[i].packets_processed = (static_cast<uint64_t>(packets_high) << 32) | packets_low;
     }
     return results;
 }

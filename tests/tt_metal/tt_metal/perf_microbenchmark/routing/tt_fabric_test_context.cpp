@@ -6,6 +6,7 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_context.hpp"
 
 #include <filesystem>
+#include <thread>
 
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_constants.hpp"
