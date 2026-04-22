@@ -196,7 +196,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t block = 0; block < output_num_blocks; block++)
     {
         // First iteration should have L1 accumulation disabled, otherwise partials will be accumulated on top of the L1 data left by the previous test variant
-        _llk_pack_set_l1_acc_<p_pacr::PACK0>(block == 0 ? 0 : 1 /*l1_acc_en*/);
+        _llk_pack_set_l1_acc_<p_pacr::PACK0>(block == 0 ? false : true /*l1_acc_en*/);
         for (std::uint32_t tile = 0; tile < output_tiles_in_block; tile++)
         {
             // Accumulate each block on top of the previous one
@@ -204,6 +204,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
+    // Disable L1 accumulation so that it does not affect tests that could run after the l1_acc test
+    _llk_pack_set_l1_acc_<p_pacr::PACK0>(false /*l1_acc_en*/);
 }
 
 #endif
