@@ -48,6 +48,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(td_dest.buf_desc_id, td_dest.buf_desc);
     _llk_unpack_configure_unary_<p_unpacr::UNP_DEST>(td_dest);
 
+    // Set dest base for UNPACK thread (SEC0). Mimics bank switching: in a real
+    // scenario this would be called per tile-batch with _get_dest_buffer_base_()
+    // toggling between banks. Here all tiles fit in bank 0.
+    ckernel::unpack::_set_dst_write_addr_<ckernel::trisc::DstTileShape::Tile32x32>(0);
+
     // Program MOP and unpack all tiles of operand B to Dest
     _llk_unpack_unary_operand_init_<p_unpacr::UNP_DEST, false, is_fp32_dest_acc_en>(buf_desc_id_dest, num_tiles);
     _llk_unpack_unary_operand_<p_unpacr::UNP_DEST>(0);
@@ -162,46 +167,38 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_unary_sfpu_init_();
 
+    // SFPU add: operand A from SrcS slice 0, operand B from Dest, result to SrcS slice 2.
+    // Dest addressing is purely SW — no counter increments needed.
+    // D counter stays at 0 (set by _llk_math_eltwise_unary_sfpu_init_) and
+    // ADDR_MOD_7 has dest.incr=0, so the full offset is in dest_reg_addr.
+    // Tile positioning uses dest_section_base (via _set_dst_write_addr_),
+    // intra-tile slice offsets use SfpuDestSlice/SfpuSrcsSlice.
+    const SfpuSrcsSlice srcs {static_cast<int>(PARAM_SRCS_YDIM)};
+    const SfpuDestSlice dest {static_cast<int>(PARAM_SRCS_YDIM)};
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1; // SFP_ROWS == 2
     for (std::uint32_t i = 0; i < num_tiles; ++i)
     {
+        // Set dest_section_base for this tile (SEC3 for ISOLATE_SFPU).
+        // Matches the UNPACK thread's dest base so both agree on tile positioning.
+        _set_dst_write_addr_<trisc::DstTileShape::Tile32x32>(i);
+
         // Unpack operand A to SrcS (unary: single operand with dvalid)
         _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_srcs, i * PARAM_SRCS_SLICE_COUNT);
 
         _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
 
-        // Reset Dest read counter before walking through slices of this tile
-        _reset_counters_<p_setrwc::SET_D>();
-
         for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
         {
-            // SFPU add: operand A from SrcS (0x400), operand B from Dest (0x0),
-            // result to SrcS output slice (0x400 + 2*YDIM).
-            const int in_srcs = ckernel::math::SFPU_SRCS_BASE_ADDR;
-            const int in_dest = ckernel::math::SFPU_DEST_BASE_ADDR;
-            const int out     = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
-
 #pragma GCC unroll 8
             for (int d = 0; d < num_sfpu_iterations; d++)
             {
-                TT_SFPLOAD(p_sfpu::LREG0, sfpmem_mod, ADDR_MOD_7, 0, in_srcs + (d << 1));
-                TT_SFPLOAD(p_sfpu::LREG1, sfpmem_mod_dest, ADDR_MOD_7, 0, in_dest + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG0, sfpmem_mod, ADDR_MOD_7, 0, srcs[0] + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG1, sfpmem_mod_dest, ADDR_MOD_7, 0, dest[slice] + (d << 1));
                 // Add LREG0 (A from SrcS) + LREG1 (B from Dest), store result in LREG2
                 TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0);
                 TTI_NOP;
                 // Store result back to SrcS output slice
-                TT_SFPSTORE(p_sfpu::LREG2, sfpmem_mod, ADDR_MOD_7, 0, out + (d << 1));
-            }
-
-            // Advance Dest read counter by PARAM_SRCS_YDIM to align with next SrcS slice.
-            // _incr_counters_ requires compile-time template args, so branch on 32-bit mode.
-            if (PARAM_SRCS_32BIT_MODE)
-            {
-                _incr_counters_<0x0, 0x0, PARAM_SRCS_YDIM_BASE / 2, 0x0>();
-            }
-            else
-            {
-                _incr_counters_<0x0, 0x0, PARAM_SRCS_YDIM_BASE, 0x0>();
+                TT_SFPSTORE(p_sfpu::LREG2, sfpmem_mod, ADDR_MOD_7, 0, srcs[2] + (d << 1));
             }
 
             _llk_math_eltwise_unary_sfpu_srcs_clear_vlds_<0x1, 0x1>(); // Clears dvalid for SFPU read and write
