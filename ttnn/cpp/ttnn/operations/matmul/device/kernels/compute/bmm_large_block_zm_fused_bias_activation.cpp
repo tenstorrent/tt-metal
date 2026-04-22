@@ -335,8 +335,6 @@ void kernel_main() {
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
-
-                                // TODO: replace with SEM
                                 PACK(TTI_SEMWAIT(
                                     p_stall::STALL_TDMA | p_stall::STALL_CFG,
                                     semaphore::t6_sem(semaphore::MATH_PACK),
