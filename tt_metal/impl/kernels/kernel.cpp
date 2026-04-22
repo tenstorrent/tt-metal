@@ -301,9 +301,10 @@ bool Kernel::binaries_exist_on_disk(const IDevice* device) const {
             output_path = build_state.get_out_path();
         }
     }
-    // Note: this->get_full_kernel_name() already has a '/' at the end.
-    const std::string build_success_marker_path =
-        fmt::format("{}{}{}", output_path.value(), this->get_full_kernel_name(), SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
+    // Use path operator/ to join components safely (avoids missing separator when
+    // out_path_ no longer carries a trailing slash after the safe-filesystem migration).
+    const auto build_success_marker_path = std::filesystem::path(output_path.value()) / this->get_full_kernel_name() /
+                                           SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
     return std::filesystem::exists(build_success_marker_path);
 }
 
