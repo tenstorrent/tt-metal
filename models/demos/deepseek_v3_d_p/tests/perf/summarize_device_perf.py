@@ -27,6 +27,7 @@ Each CSV's `Model` column is expected to match:
 
 import argparse
 import math
+import os
 import re
 import sys
 from pathlib import Path
@@ -215,15 +216,13 @@ def main():
 
     # Contain user-supplied paths to the tt-metal workspace root. Prevents
     # accidental/malicious scans of unrelated filesystem locations.
-    allowed_root = DEFAULT_ROOT.resolve()
+    allowed_root = str(DEFAULT_ROOT.resolve())
     paths = []
-    for raw in args.paths or [allowed_root]:
-        resolved = Path(raw).resolve()
-        try:
-            resolved.relative_to(allowed_root)
-        except ValueError:
+    for raw in args.paths or ["."]:
+        resolved = os.path.abspath(os.path.join(allowed_root, str(raw)))
+        if not (resolved == allowed_root or resolved.startswith(allowed_root + os.sep)):
             ap.error(f"path {raw!r} is outside the allowed root {allowed_root}")
-        paths.append(resolved)
+        paths.append(Path(resolved))
 
     csvs = list(_iter_csv_paths(paths, args.date))
     if not csvs:
