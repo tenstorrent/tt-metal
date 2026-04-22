@@ -320,7 +320,12 @@ if(ENABLE_DISTRIBUTED)
     endif()
 endif()
 
-add_executable(tt-ethtool tt-ethtool/main.cpp)
+add_executable(
+    tt-ethtool
+    tt-ethtool/main.cpp
+    tt-ethtool/list.cpp
+    tt-ethtool/link.cpp
+)
 
 set_target_properties(
     tt-ethtool
@@ -328,6 +333,9 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${Metalium_BINARY_DIR}/tools/scaleout
 )
+
+# Sources use "tools/scaleout/tt-ethtool/..." style includes.
+target_include_directories(tt-ethtool PRIVATE ${CMAKE_SOURCE_DIR})
 
 target_compile_features(tt-ethtool PRIVATE cxx_std_20)
 
