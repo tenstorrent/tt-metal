@@ -270,6 +270,13 @@ _SHARD_GRID_2X1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.C
 _SHARD_GRID_2X2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
 
 
+import logging
+
+
+def _align_tile(value):
+    return (value + 31) // 32 * 32
+
+
 def _legacy_output_memory_config(tensor_shape, grid, memory_layout, orientation):
     num_dims = len(tensor_shape)
     tensor_height = 1
@@ -277,18 +284,32 @@ def _legacy_output_memory_config(tensor_shape, grid, memory_layout, orientation)
         tensor_height *= tensor_shape[i]
     tensor_width = tensor_shape[-1]
     num_cores = grid.num_cores()
-    height_shard_shape = (tensor_height // num_cores, tensor_width)
-    width_shard_shape = (tensor_height, tensor_width // num_cores)
+
+    height_shard_shape = (_align_tile(tensor_height // num_cores), tensor_width)
+    width_shard_shape = (tensor_height, _align_tile(tensor_width // num_cores))
     block_grid_size = grid.bounding_box().grid_size()
     if orientation == ttnn.ShardOrientation.ROW_MAJOR:
-        block_sharded_shard_shape = (tensor_height // block_grid_size.y, tensor_width // block_grid_size.x)
+        block_sharded_shard_shape = (
+            _align_tile(tensor_height // block_grid_size.y),
+            _align_tile(tensor_width // block_grid_size.x),
+        )
     else:
-        block_sharded_shard_shape = (tensor_height // block_grid_size.x, tensor_width // block_grid_size.y)
+        block_sharded_shard_shape = (
+            _align_tile(tensor_height // block_grid_size.x),
+            _align_tile(tensor_width // block_grid_size.y),
+        )
+
     layout_map = {
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED: {"shard_grid": grid, "shard_shape": height_shard_shape},
         ttnn.TensorMemoryLayout.WIDTH_SHARDED: {"shard_grid": grid, "shard_shape": width_shard_shape},
         ttnn.TensorMemoryLayout.BLOCK_SHARDED: {"shard_grid": grid, "shard_shape": block_sharded_shard_shape},
     }
+    logging.info(
+        f"height_shard_shape: {height_shard_shape}, width_shard_shape: {width_shard_shape}, block_sharded_shard_shape: {block_sharded_shard_shape}"
+    )
+    logging.info(
+        f"tensor_shape: {tensor_shape}, grid: {grid}, memory_layout: {memory_layout}, orientation: {orientation}"
+    )
     info = layout_map[memory_layout]
     shard_spec = ttnn.ShardSpec(info["shard_grid"], info["shard_shape"], orientation)
     return ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
@@ -509,7 +530,7 @@ def test_gather_legacy_sharded_to_nd_sharded(
         tensor_height *= tensor_shape[i]
     tensor_width = tensor_shape[-1]
     num_cores = shard_core_grid.num_cores()
-    legacy_shard_shape = (tensor_height // num_cores, tensor_width)
+    legacy_shard_shape = (_align_tile(tensor_height // num_cores), tensor_width)
     legacy_spec = ttnn.ShardSpec(shard_core_grid, legacy_shard_shape, input_orientation)
     input_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, legacy_spec)
     ttnn_input = ttnn.from_torch(
@@ -574,7 +595,7 @@ def test_gather_legacy_sharded_to_interleaved(device, dim):
     for i in range(num_dims - 1):
         tensor_height *= tensor_shape[i]
     tensor_width = tensor_shape[-1]
-    legacy_shard_shape = (tensor_height // _SHARD_GRID_2X1.num_cores(), tensor_width)
+    legacy_shard_shape = (_align_tile(tensor_height // _SHARD_GRID_2X1.num_cores()), tensor_width)
     legacy_spec = ttnn.ShardSpec(_SHARD_GRID_2X1, legacy_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     input_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, legacy_spec)
     ttnn_input = ttnn.from_torch(
