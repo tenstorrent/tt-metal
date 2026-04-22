@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-+"""
+"""
 host_mem_profiler.py — Host-side memory profiler for model tests
 ===============================================================
 
@@ -69,7 +69,7 @@ Usage examples
         --hf-model    meta-llama/Llama-3.1-8B-Instruct \\
         --test        models/tt_transformers/demo/simple_text_demo.py \\
         -k            performance-ci-token-mathcing
- """
+"""
 
 import argparse
 import importlib
