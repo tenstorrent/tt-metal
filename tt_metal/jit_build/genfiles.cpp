@@ -142,43 +142,44 @@ void write_kernel_args_generated_header(const string& out_dir, const JitBuildSet
                "//\n"
                "// SPDX-License-Identifier: Apache-2.0\n\n"
                "// AUTO-GENERATED — do not edit.\n\n"
-               "#pragma once\n\n";
+               "#pragma once\n\n"
+               "#include \"experimental/kernel_args.h\"\n\n";
 
-    const bool has_any = !rta_names.empty() || !crta_names.empty() || !cta_entries.empty();
-    if (!has_any) {
-        content << "// No named kernel args for this kernel.\n";
-        write_file(path, content.str());
-        return;
+    // Named args namespace: emit only when the kernel has at least one named arg or CTA.
+    // A kernel with only varargs (and no named anything) still needs the vararg helpers below,
+    // so we keep emitting those unconditionally.
+    const bool has_named_args = !rta_names.empty() || !crta_names.empty() || !cta_entries.empty();
+    if (has_named_args) {
+        content << "namespace " << ns << " {\n";
+
+        // Named RTAs
+        // Here, rta_offset tracks the byte_offset of the RTA in the dispatch buffer.
+        // (Only uint32_t arg types are currently supported, but we later want to extend this.)
+        uint32_t rta_offset = 0;
+        for (const auto& name : rta_names) {
+            content << "constexpr experimental::RtaArg<uint32_t> " << name << "{" << rta_offset << "};\n";
+            rta_offset += sizeof(uint32_t);
+        }
+        // Named CRTAs
+        uint32_t crta_offset = 0;
+        for (const auto& name : crta_names) {
+            content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
+            crta_offset += sizeof(uint32_t);
+        }
+        // Named CTAs
+        // No offsets to deal with here; CTA values are emitted directly into the generated header.
+        for (const auto& [name, value] : cta_entries) {
+            content << "constexpr experimental::CtaVal<uint32_t> " << name << "{" << value << "u};\n";
+        }
+
+        content << "}  // namespace " << ns << "\n\n";
     }
 
-    content << "#include \"experimental/kernel_args.h\"\n\n";
-    content << "namespace " << ns << " {\n";
-
-    // Named RTAs
-    // Here, rta_offset tracks the byte_offset of the RTA in the dispatch buffer.
-    // (Only uint32_t arg types are currently supported, but we later want to extend this.)
-    uint32_t rta_offset = 0;
-    for (const auto& name : rta_names) {
-        content << "constexpr experimental::RtaArg<uint32_t> " << name << "{" << rta_offset << "};\n";
-        rta_offset += sizeof(uint32_t);
-    }
-    // Named CRTAs
-    uint32_t crta_offset = 0;
-    for (const auto& name : crta_names) {
-        content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
-        crta_offset += sizeof(uint32_t);
-    }
-    // Named CTAs
-    // No offsets to deal with here; CTA values are emitted directly into the generated header.
-    for (const auto& [name, value] : cta_entries) {
-        content << "constexpr experimental::CtaVal<uint32_t> " << name << "{" << value << "u};\n";
-    }
-
-    content << "}  // namespace " << ns << "\n\n";
-
-    // Vararg helpers.
+    // Vararg helpers — always emitted.
     // The starting offset (named_arg_count) is baked in so kernel code uses 0-based
-    // indexing: get_vararg(0) is the first vararg, regardless of named-arg count.
+    // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
+    // there are no named args, the offset is zero and these helpers are just thin wrappers
+    // around get_arg_val / get_common_arg_val.
     const uint32_t named_rta_words = static_cast<uint32_t>(rta_names.size());
     const uint32_t named_crta_words = static_cast<uint32_t>(crta_names.size());
     content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>(" << named_rta_words
