@@ -138,8 +138,7 @@ struct PipelineStageSync {
             PacketHeaderPool::reset();
             auto* packet_header_ptr = PacketHeaderPool::allocate_header(1);
             fabric_set_unicast_route(fabric_connection, packet_header_ptr, slot);
-            packet_header_ptr->to_noc_unicast_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_semaphore_noc_addr, 1});
+            auto& sender = fabric_connection.get(slot).sender;
 
             // Wait for signal (if intermediate signaller)
             if (is_intermediate_signaller) {
@@ -150,7 +149,8 @@ struct PipelineStageSync {
             }
 
             // Send semaphore increment over fabric
-            auto& sender = fabric_connection.get(slot).sender;
+            packet_header_ptr->to_noc_unicast_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_semaphore_noc_addr, 1});
             sender.wait_for_empty_write_slot();
             sender.send_payload_flush_blocking_from_address((uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
             close_connections(fabric_connection);

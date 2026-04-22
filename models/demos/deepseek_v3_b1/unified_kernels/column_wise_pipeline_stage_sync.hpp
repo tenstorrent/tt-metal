@@ -19,33 +19,29 @@ using namespace tt::tt_fabric::linear::experimental;
 
 namespace deepseek_b1_ops {
 
-struct PipelineStageSync {
+struct ColumnWisePipelineStageSync {
     // ========================================================================
     // Compile-time args structs
     // ========================================================================
 
     // Reader CTArgs (NCRISC)
     template <
-        uint32_t runStallingLogicOnNCRISC,
-        uint32_t runSignallingLogicOnNCRISC,
-        uint32_t isIntermediateSignaller,
-        uint32_t isSignallingToIntermediateSignaller,
-        uint32_t signallingCoreNocXAddr,
-        uint32_t signallingCoreNocYAddr,
-        uint32_t stallingCoreNocXAddr,
-        uint32_t stallingCoreNocYAddr,
-        uint32_t semaphoreL1Addr,
+        uint32_t runEntryDeviceLogicOnNCRISC,
+        uint32_t runExitDeviceLogicOnNCRISC,
+        uint32_t entryDeviceCoreNocXAddr,
+        uint32_t entryDeviceCoreNocYAddr,
+        uint32_t r1SemaphoreL1Addr,
+        uint32_t r2SemaphoreL1Addr,
+        uint32_t r3SemaphoreL1Addr,
         uint32_t fabricArgBase>
     struct ReaderCTArgs {
-        static constexpr bool run_stalling_logic_on_ncrisc = runStallingLogicOnNCRISC == 1;
-        static constexpr bool run_signalling_logic_on_ncrisc = runSignallingLogicOnNCRISC == 1;
-        static constexpr bool is_intermediate_signaller = isIntermediateSignaller == 1;
-        static constexpr bool is_signalling_to_intermediate_signaller = isSignallingToIntermediateSignaller == 1;
-        static constexpr uint32_t signalling_core_noc_x_addr = signallingCoreNocXAddr;
-        static constexpr uint32_t signalling_core_noc_y_addr = signallingCoreNocYAddr;
-        static constexpr uint32_t stalling_core_noc_x_addr = stallingCoreNocXAddr;
-        static constexpr uint32_t stalling_core_noc_y_addr = stallingCoreNocYAddr;
-        static constexpr uint32_t semaphore_l1_addr = semaphoreL1Addr;
+        static constexpr bool run_entry_device_logic_on_ncrisc = runEntryDeviceLogicOnNCRISC == 1;
+        static constexpr bool run_exit_device_logic_on_ncrisc = runExitDeviceLogicOnNCRISC == 1;
+        static constexpr uint32_t entry_device_core_noc_x_addr = entryDeviceCoreNocXAddr;
+        static constexpr uint32_t entry_device_core_noc_y_addr = entryDeviceCoreNocYAddr;
+        static constexpr uint32_t r1_semaphore_l1_addr = r1SemaphoreL1Addr;
+        static constexpr uint32_t r2_semaphore_l1_addr = r2SemaphoreL1Addr;
+        static constexpr uint32_t r3_semaphore_l1_addr = r2SemaphoreL1Addr;
         static constexpr uint32_t fabric_arg_base = fabricArgBase;
     };
 
@@ -54,26 +50,22 @@ struct PipelineStageSync {
 
     // Writer CTArgs (BRISC)
     template <
-        uint32_t runStallingLogicOnBRISC,
-        uint32_t runSignallingLogicOnBRISC,
-        uint32_t isIntermediateSignaller,
-        uint32_t isSignallingToIntermediateSignaller,
-        uint32_t signallingCoreNocXAddr,
-        uint32_t signallingCoreNocYAddr,
-        uint32_t stallingCoreNocXAddr,
-        uint32_t stallingCoreNocYAddr,
-        uint32_t semaphoreL1Addr,
+        uint32_t runEntryDeviceLogicOnBRISC,
+        uint32_t runExitDeviceLogicOnBRISC,
+        uint32_t entryDeviceCoreNocXAddr,
+        uint32_t entryDeviceCoreNocYAddr,
+        uint32_t r1SemaphoreL1Addr,
+        uint32_t r2SemaphoreL1Addr,
+        uint32_t r3SemaphoreL1Addr,
         uint32_t fabricArgBase>
     struct WriterCTArgs {
-        static constexpr bool run_stalling_logic_on_brisc = runStallingLogicOnBRISC == 1;
-        static constexpr bool run_signalling_logic_on_brisc = runSignallingLogicOnBRISC == 1;
-        static constexpr bool is_intermediate_signaller = isIntermediateSignaller == 1;
-        static constexpr bool is_signalling_to_intermediate_signaller = isSignallingToIntermediateSignaller == 1;
-        static constexpr uint32_t signalling_core_noc_x_addr = signallingCoreNocXAddr;
-        static constexpr uint32_t signalling_core_noc_y_addr = signallingCoreNocYAddr;
-        static constexpr uint32_t stalling_core_noc_x_addr = stallingCoreNocXAddr;
-        static constexpr uint32_t stalling_core_noc_y_addr = stallingCoreNocYAddr;
-        static constexpr uint32_t semaphore_l1_addr = semaphoreL1Addr;
+        static constexpr bool run_entry_device_logic_on_brisc = runEntryDeviceLogicOnBRISC == 1;
+        static constexpr bool run_exit_device_logic_on_brisc = runExitDeviceLogicOnBRISC == 1;
+        static constexpr uint32_t entry_device_core_noc_x_addr = entryDeviceCoreNocXAddr;
+        static constexpr uint32_t entry_device_core_noc_y_addr = entryDeviceCoreNocYAddr;
+        static constexpr uint32_t r1_semaphore_l1_addr = r1SemaphoreL1Addr;
+        static constexpr uint32_t r2_semaphore_l1_addr = r2SemaphoreL1Addr;
+        static constexpr uint32_t r3_semaphore_l1_addr = r2SemaphoreL1Addr;
         static constexpr uint32_t fabric_arg_base = fabricArgBase;
     };
 
@@ -103,65 +95,108 @@ struct PipelineStageSync {
 
     private:
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
-        static FORCE_INLINE void stalling_impl(uint32_t semaphore_l1_addr) {
-            /*
-             * - Wait min as multiple signals may have been received before testing semaphore value
-             * - Decrement by one (instead of set to 0), so further signals aren't erased
-             * - Invalidate cache to ensure value is decremented before proceeding (to prevent wrap around reading same
-             * value)
-             */
-            auto semaphore_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_l1_addr);
-            noc_semaphore_wait_min(semaphore_l1_ptr, 1);
-            unified_kernels::semaphore_dec(semaphore_l1_ptr);
+        static FORCE_INLINE void entry_device_impl(
+            uint32_t entry_device_core_noc_x_addr,
+            uint32_t entry_device_core_noc_y_addr,
+            uint32_t r1_semaphore_l1_addr,
+            uint32_t r2_semaphore_l1_addr,
+            uint32_t r3_semaphore_l1_addr,
+            size_t fabric_arg_base) {
+            auto r1_semaphore_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r1_semaphore_l1_addr);
+            auto r2_semaphore_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_semaphore_l1_addr);
+            auto r3_semaphore_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r3_semaphore_l1_addr);
+
+            uint64_t r2_semaphore_noc_addr =
+                get_noc_addr(entry_device_core_noc_x_addr, entry_device_core_noc_y_addr, r2_semaphore_l1_addr);
+            uint64_t r3_semaphore_noc_addr =
+                get_noc_addr(entry_device_core_noc_x_addr, entry_device_core_noc_y_addr, r3_semaphore_l1_addr);
+
+            constexpr uint32_t slot_a = 0;
+            constexpr uint32_t slot_b = 1;
+            constexpr uint32_t num_connections = 2;
+            tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
+            open_connections(fabric_connection, num_connections, fabric_arg_base);
+
+            PacketHeaderPool::reset();
+            auto* packet_header_a_ptr = PacketHeaderPool::allocate_header(1);
+            auto* packet_header_b_ptr = PacketHeaderPool::allocate_header(1);
+
+            fabric_set_unicast_route(fabric_connection, packet_header_a_ptr, slot_a);
+            fabric_set_unicast_route(fabric_connection, packet_header_b_ptr, slot_b);
+
+            auto& sender_a = fabric_connection.get(slot_a).sender;
+            auto& sender_b = fabric_connection.get(slot_b).sender;
+
+            packet_header_a_ptr->to_noc_unicast_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{r2_semaphore_noc_addr, 1});
+            packet_header_b_ptr->to_noc_unicast_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{r2_semaphore_noc_addr, 1});
+
+            // TODO: (GR) change to single semaphore with bits
+
+            // == Round 1
+            noc_semaphore_wait_min(r1_semaphore_l1_ptr, 1);
+            unified_kernels::semaphore_dec(r1_semaphore_l1_ptr);
+
+            // propagate to both neighbours
+            sender_a.wait_for_empty_write_slot();
+            sender_a.send_payload_flush_blocking_from_address(
+                (uint32_t)packet_header_a_ptr, sizeof(PACKET_HEADER_TYPE));
+
+            sender_b.wait_for_empty_write_slot();
+            sender_b.send_payload_flush_blocking_from_address(
+                (uint32_t)packet_header_b_ptr, sizeof(PACKET_HEADER_TYPE));
+
+            // == Round 2
+            noc_semaphore_wait_min(r2_semaphore_l1_ptr, 1);
+            unified_kernels::semaphore_dec(r2_semaphore_l1_ptr);
+
+            // propagate to just left neighbour
+            packet_header_a_ptr->to_noc_unicast_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{r3_semaphore_noc_addr, 1});
+            sender_a.wait_for_empty_write_slot();
+            sender_a.send_payload_flush_blocking_from_address(
+                (uint32_t)packet_header_a_ptr, sizeof(PACKET_HEADER_TYPE));
+
+            // == Round 3
+            noc_semaphore_wait_min(r3_semaphore_l1_ptr, 1);
+            unified_kernels::semaphore_dec(r3_semaphore_l1_ptr);
+
+            // == Shutdown
+            close_connections(fabric_connection);
+            noc_async_write_barrier();
             invalidate_l1_cache();
+            // TODO: (GR)
+            // NOTE: don't need fabric barrier after on these devices, since executes on same core/risc as bcast
+
+            // TODO: (GR) confirm this
+            // NOTE: don't need a fabric barrier on the other devices either, since they have to be done
+            // in order for next stage to start
         }
 
-        static FORCE_INLINE void signalling_impl(
-            bool is_intermediate_signaller,
-            bool is_signalling_to_intermediate_signaller,
-            uint32_t signalling_core_noc_x_addr,
-            uint32_t signalling_core_noc_y_addr,
-            uint32_t stalling_core_noc_x_addr,
-            uint32_t stalling_core_noc_y_addr,
-            uint32_t semaphore_l1_addr,
+        static FORCE_INLINE void exit_device_impl(
+            uint32_t entry_device_core_noc_x_addr,
+            uint32_t entry_device_core_noc_y_addr,
+            uint32_t r1_semaphore_l1_addr,
             size_t fabric_arg_base) {
-            // Remote semaphore noc address
-            uint64_t remote_semaphore_noc_addr;
-            if (is_signalling_to_intermediate_signaller) {
-                remote_semaphore_noc_addr =
-                    get_noc_addr(signalling_core_noc_x_addr, signalling_core_noc_y_addr, semaphore_l1_addr);
-            } else {
-                remote_semaphore_noc_addr =
-                    get_noc_addr(stalling_core_noc_x_addr, stalling_core_noc_y_addr, semaphore_l1_addr);
-            }
+            uint64_t r1_semaphore_noc_addr =
+                get_noc_addr(entry_device_core_noc_x_addr, entry_device_core_noc_y_addr, r1_semaphore_l1_addr);
 
-            // Setup fabric while waiting for signal (speeds things up for intermediate signallers)
+            constexpr uint32_t slot = 0;
             constexpr uint32_t num_connections = 1;
             tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
             open_connections(fabric_connection, num_connections, fabric_arg_base);
 
             PacketHeaderPool::reset();
             auto* packet_header_ptr = PacketHeaderPool::allocate_header(1);
-            fabric_set_unicast_route(fabric_connection, packet_header_ptr, 0);
+            fabric_set_unicast_route(fabric_connection, packet_header_ptr, slot);
+            auto& sender = fabric_connection.get(slot).sender;
 
-            constexpr uint32_t num_hops = 1;
-            packet_header_ptr->to_chip_unicast(num_hops);
             packet_header_ptr->to_noc_unicast_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_semaphore_noc_addr, 1});
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{r1_semaphore_noc_addr, 1});
+            sender.wait_for_empty_write_slot();
+            sender.send_payload_flush_blocking_from_address((uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
 
-            // Wait for signal (if intermediate signaller)
-            if (is_intermediate_signaller) {
-                auto semaphore_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_l1_addr);
-                noc_semaphore_wait_min(semaphore_l1_ptr, 1);
-                unified_kernels::semaphore_dec(semaphore_l1_ptr);
-                invalidate_l1_cache();
-            }
-
-            // Send semaphore increment over fabric
-            auto& connection = fabric_connection.get(0).sender;
-            connection.wait_for_empty_write_slot();
-            connection.send_payload_flush_blocking_from_address(
-                (uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
             close_connections(fabric_connection);
             noc_async_write_barrier();
         }
@@ -172,17 +207,19 @@ struct PipelineStageSync {
             // ================================================================
             // NCRISC (Reader)
             // ================================================================
-            if constexpr (CTArgs::run_stalling_logic_on_ncrisc) {
-                stalling_impl(CTArgs::semaphore_l1_addr);
-            } else if constexpr (CTArgs::run_signalling_logic_on_ncrisc) {
-                signalling_impl(
-                    CTArgs::is_intermediate_signaller,
-                    CTArgs::is_signalling_to_intermediate_signaller,
-                    CTArgs::signalling_core_noc_x_addr,
-                    CTArgs::signalling_core_noc_y_addr,
-                    CTArgs::stalling_core_noc_x_addr,
-                    CTArgs::stalling_core_noc_y_addr,
-                    CTArgs::semaphore_l1_addr,
+            if constexpr (CTArgs::run_entry_device_logic_on_ncrisc) {
+                entry_device_impl(
+                    CTArgs::entry_device_core_noc_x_addr,
+                    CTArgs::entry_device_core_noc_y_addr,
+                    CTArgs::r1_semaphore_l1_addr,
+                    CTArgs::r2_semaphore_l1_addr,
+                    CTArgs::r3_semaphore_l1_addr,
+                    CTArgs::fabric_arg_base);
+            } else if constexpr (CTArgs::run_exit_device_logic_on_ncrisc) {
+                exit_device_impl(
+                    CTArgs::entry_device_core_noc_x_addr,
+                    CTArgs::entry_device_core_noc_y_addr,
+                    CTArgs::r1_semaphore_l1_addr,
                     CTArgs::fabric_arg_base);
             }
 
@@ -195,23 +232,25 @@ struct PipelineStageSync {
             // ================================================================
             // BRISC (Writer)
             // ================================================================
-            if constexpr (CTArgs::run_stalling_logic_on_brisc) {
-                stalling_impl(CTArgs::semaphore_l1_addr);
-            } else if constexpr (CTArgs::run_signalling_logic_on_brisc) {
-                signalling_impl(
-                    CTArgs::is_intermediate_signaller,
-                    CTArgs::is_signalling_to_intermediate_signaller,
-                    CTArgs::signalling_core_noc_x_addr,
-                    CTArgs::signalling_core_noc_y_addr,
-                    CTArgs::stalling_core_noc_x_addr,
-                    CTArgs::stalling_core_noc_y_addr,
-                    CTArgs::semaphore_l1_addr,
+            if constexpr (CTArgs::run_entry_device_logic_on_brisc) {
+                entry_device_impl(
+                    CTArgs::entry_device_core_noc_x_addr,
+                    CTArgs::entry_device_core_noc_y_addr,
+                    CTArgs::r1_semaphore_l1_addr,
+                    CTArgs::r2_semaphore_l1_addr,
+                    CTArgs::r3_semaphore_l1_addr,
+                    CTArgs::fabric_arg_base);
+            } else if constexpr (CTArgs::run_exit_device_logic_on_brisc) {
+                exit_device_impl(
+                    CTArgs::entry_device_core_noc_x_addr,
+                    CTArgs::entry_device_core_noc_y_addr,
+                    CTArgs::r1_semaphore_l1_addr,
                     CTArgs::fabric_arg_base);
             }
 #endif
         }
     };
 
-};  // struct PipelineStageSync
+};  // struct ColumnWisePipelineStageSync
 
 }  // namespace deepseek_b1_ops
