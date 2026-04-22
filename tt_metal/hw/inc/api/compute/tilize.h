@@ -298,7 +298,7 @@ ALWI void fast_tilize_block(
     // Each chunk: wait_for_dest + unpack + math + pack + section_done.
     {
         uint32_t tiles_done = 0;
-        uint32_t prev_chunk = (block <= 1) ? 1 : 4;  // matches init_udim from fast_tilize_init
+        uint32_t prev_chunk = 0;  // matches init_udim from fast_tilize_init
 
         while (tiles_done < block) {
             // BH fast-tilize MOP supports unit_dim 2, 3, 4 (not 1).
