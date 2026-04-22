@@ -367,13 +367,7 @@ HostTensor view(
     }
 
     auto new_spec = tt::tt_metal::TensorSpec(
-        new_logical_shape,
-        TensorLayout::fromPaddedShape(
-            tensor.dtype(),
-            tensor.tensor_spec().page_config(),
-            output_memory_config,
-            new_logical_shape,
-            new_padded_shape));
+        new_logical_shape, TensorLayout(tensor.dtype(), tensor.tensor_spec().page_config(), output_memory_config));
 
     // TODO (#25340): Review tensor topology logic for reshape
     const auto& buffer = tensor.buffer();
