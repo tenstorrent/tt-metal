@@ -24,6 +24,9 @@ using on-device token count accumulation.
 
 from __future__ import annotations
 
+import os
+
+import numpy as np
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, Buffer, ModuleList
@@ -35,6 +38,16 @@ from .autograd_ops import (
     autograd_softmax,
     moe_routing_normalize,
 )
+
+
+# Set ``MOE_DEBUG_EQ=1`` in the environment to compare two evaluations of
+# ``ttnn.eq(topk_indices, float(expert_idx))`` per expert per forward:
+# one read on the host (used to populate ``activated_experts``) versus the
+# downstream device chain that feeds ``_token_counts`` and ``mask_narrow``.
+# Any disagreement is printed on its own line and points at non-deterministic
+# / re-execution behaviour of ``ttnn.eq`` on UINT16 + non-zero float scalars
+# at the production tile shape.
+_MOE_DEBUG_EQ = os.environ.get("MOE_DEBUG_EQ", "0") == "1"
 
 
 class Expert(AbstractModuleBase):
@@ -168,7 +181,7 @@ class MoE(AbstractModuleBase):
             # Build group mask [B, 1, S, num_experts]
             group_mask_parts = []
             for g in range(self.n_groups):
-                match = ttnn.eq(top_group_indices_u32, float(g))
+                match = ttnn.eq(top_group_indices, float(g))
                 match_f = ttnn.typecast(match, ttnn.DataType.BFLOAT16)
                 match_any = ttnn.sum(match_f, dim=-1, keepdim=True)
                 group_selected = ttnn.gt(match_any, 0.0)
@@ -223,6 +236,7 @@ class MoE(AbstractModuleBase):
             routing_weights = None  # softmax path uses score_i directly below
 
         # Accumulate token counts on device (unchanged):
+
         # Stack all expert mask sums into [1, 1, 1, num_experts]
         expert_count_scalars = []
         for expert_idx in range(self.num_experts):
@@ -275,6 +289,25 @@ class MoE(AbstractModuleBase):
             output = ttml.ops.binary.add(output, self.shared_experts(x))
 
         return output
+
+    def read_activation_probabilities(self) -> np.ndarray:
+        """Non-destructive read of the current per-expert activation probabilities.
+
+        Returns the fraction of tokens for which each expert was selected,
+        accumulated across all forward passes since the last
+        ``update_expert_bias`` (which resets ``_token_counts``). Shape:
+        ``(num_experts,)``, dtype ``float32``, values in ``[0, 1]``.
+
+        Uses the self-normalising identity
+        ``sum(counts) == n_activated * total_tokens`` so no batch-size /
+        grad-accum bookkeeping is required at the call site.
+        """
+        counts = ttnn.to_torch(self._token_counts.tensor.get_value())
+        counts_np = counts.float().cpu().numpy().flatten()
+        total = float(counts_np.sum())
+        if total <= 0.0:
+            return np.zeros_like(counts_np, dtype=np.float32)
+        return (counts_np * float(self.n_activated) / total).astype(np.float32)
 
     def update_expert_bias(self, coeff: float = 0.001) -> None:
         """Auxiliary-loss-free load balancing (DeepSeek-V3 style).
