@@ -6,6 +6,7 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <iostream>
+#include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
@@ -45,21 +46,12 @@ ttnn::Tensor make_random_tensor(uint32_t M, uint32_t N, uint32_t seed = 42) {
 
 // Compute reference gram matmul tile G[m_tile, n_tile] on CPU
 std::vector<float> compute_gram_tile(const std::vector<float>& in_vec, uint32_t K, uint32_t m_tile, uint32_t n_tile) {
-    std::vector<float> result(32 * 32, 0.0f);
-    uint32_t K_tiles = K / 32;
-    for (uint32_t k_tile = 0; k_tile < K_tiles; k_tile++) {
-        for (uint32_t i = 0; i < 32; i++) {
-            for (uint32_t j = 0; j < 32; j++) {
-                float sum = 0.0f;
-                for (uint32_t k = 0; k < 32; k++) {
-                    sum += in_vec[(m_tile * 32 + i) * K + k_tile * 32 + k] *
-                           in_vec[(n_tile * 32 + j) * K + k_tile * 32 + k];
-                }
-                result[i * 32 + j] += sum;
-            }
-        }
-    }
-    return result;
+    size_t M = in_vec.size() / K;
+    xt::xarray<float> x = xt::adapt(in_vec, std::array<size_t, 2>{M, K});
+    auto a = xt::view(x, xt::range(m_tile * 32, m_tile * 32 + 32), xt::all());
+    auto b = xt::view(x, xt::range(n_tile * 32, n_tile * 32 + 32), xt::all());
+    xt::xarray<float> c = xt::linalg::dot(a, xt::transpose(b));
+    return std::vector<float>(c.begin(), c.end());
 }
 
 std::vector<float> extract_output_tile(
