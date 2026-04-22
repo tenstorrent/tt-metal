@@ -745,6 +745,37 @@ void ProgramImpl::finalize_single_dfb_config(
         "Both producer and consumer cannot be Tensix-only RISCs - at least one DM RISC is required to initialize tile "
         "counters");
 
+    // TRISC pack/unpack store ring extent in uint16_t L1-aligned units; host must reject oversized rings.
+    if (MetalContext::instance().hal().has_tile_counter_registers()) {
+        const bool tensix_on_dfb =
+            has_tensix_risc(config.producer_risc_mask) || has_tensix_risc(config.consumer_risc_mask);
+        if (tensix_on_dfb && dfb->capacity > 0) {
+            const uint64_t ring_bytes =
+                dfb->entry_size * (dfb->stride_in_entries * (dfb->capacity - 1U) + 1U);
+            const uint32_t l1_align = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+            TT_FATAL(
+                ring_bytes % l1_align == 0,
+                "DFB {}: ring size in bytes ({}) must be a multiple of L1 alignment ({})",
+                dfb->id,
+                ring_bytes,
+                l1_align);
+            const uint64_t ring_trisc_units = ring_bytes / l1_align;
+            TT_FATAL(
+                ring_trisc_units > 0U,
+                "DFB {}: TRISC ring extent is zero L1 units (ring_bytes={}, align={})",
+                dfb->id,
+                ring_bytes,
+                l1_align);
+            TT_FATAL(
+                ring_trisc_units < 65536U,
+                "DFB {}: TRISC ring extent ({} L1 units of {} bytes) exceeds uint16_t; reduce capacity, stride, or "
+                "entry_size",
+                dfb->id,
+                ring_trisc_units,
+                l1_align);
+        }
+    }
+
     dfb->risc_mask = config.producer_risc_mask | config.consumer_risc_mask;
 
     // DM-DM BLOCKED: producer broadcasts to N TCs (one per consumer) instead of using remapper.

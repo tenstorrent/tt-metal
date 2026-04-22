@@ -41,8 +41,9 @@ inline void llk_unpack_A_init(const std::uint32_t operand) {
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
     const std::uint32_t operand_id = get_operand_id(operand);
     // Number of tiles the read pointer has advanced from DFB base
+    const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     const std::uint32_t l1_tile_index =
-        g_dfb_interface[operand_id].tc_slots[g_dfb_interface[operand_id].tc_idx].rd_entry_idx + tile_index;
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx + tile_index;
 
     WAYPOINT("UPAW");
     _llk_unpack_unary_operand_<p_unpacr::UNP_A>(l1_tile_index);
@@ -63,7 +64,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 inline void llk_unpack_A_block(
     const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    const LocalDFBInterface& local_dfb_interface = g_dfb_interface[operand_id];
+    const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     std::uint32_t l1_tile_index =
         local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx + start_tile_index;
 
