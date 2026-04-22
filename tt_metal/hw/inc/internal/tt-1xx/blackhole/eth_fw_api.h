@@ -27,6 +27,7 @@
 #define ETH_RISC_NUM_INTERRUPT_VECS 5
 #define ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_LO_REG_ADDR 0xFFB98850
 #define ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_HI_REG_ADDR 0xFFB98854
+#define ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR 0xFFB9800C
 #define ETH_CLOCK_CYCLE_1MS 1000000
 #define ETH_UPDATE_LINK_STATUS_INTERVAL_MS 1000
 
@@ -67,16 +68,9 @@ struct chip_info_t {
     uint32_t board_id_lo;
     uint32_t mac_addr_org;
     uint32_t mac_addr_id;
-    uint32_t spare[2];
-    uint32_t ack;
-};
-
-struct serdes_rx_bist_results_t {
-    uint32_t bist_mode;
-    uint32_t test_time;  // Test time in cycles for bist mode 0 and ms for bist mode 1
-    uint32_t error_cnt_nt[NUM_SERDES_LANES];
-    uint32_t error_cnt_55t32_nt[NUM_SERDES_LANES];
-    uint32_t error_cnt_overflow_nt[NUM_SERDES_LANES];
+    uint32_t asic_id_hi;
+    uint32_t asic_id_lo;
+    uint32_t req_ack;
 };
 
 struct eth_status_t {
@@ -103,19 +97,27 @@ struct serdes_results_t {
 
     // Training retries
     uint32_t anlt_retry_cnt;
-    uint32_t spare[16 - 9];
+    uint32_t manual_eq_retry_cnt;
+
+    // LCPLL
+    uint32_t lcpll_lock_fail_cnt;
+    uint32_t spare[16 - 11];
 
     // BIST
     uint32_t bist_mode;
     uint32_t bist_test_time;  // Test time in cycles for bist mode 0 and ms for bist mode 1
-    uint32_t bist_err_cnt_nt[NUM_SERDES_LANES];
-    uint32_t bist_err_cnt_55t32_nt[NUM_SERDES_LANES];
+    uint32_t bist_err_cnt_lo[NUM_SERDES_LANES];
+    uint32_t bist_err_cnt_hi[NUM_SERDES_LANES];
     uint32_t bist_err_cnt_overflow_nt[NUM_SERDES_LANES];
 
     uint32_t cdr_unlocked_cnt;
     uint32_t cdr_unlock_transitions;
 
-    uint32_t spare2[48 - 44];
+    uint32_t initial_serdes_init;
+    uint32_t serdes_reset_status;
+    uint32_t serdes_lane_reset_status;
+
+    uint32_t host_msg;  // Communication field for host/firmware handshake
 
     // Training times
     uint32_t man_eq_cmn_pstate_time;
@@ -128,29 +130,37 @@ struct serdes_results_t {
     uint32_t anlt_retrain_time;
     uint32_t cdr_lock_time;
     uint32_t bist_lock_time;
+    uint32_t man_eq_sigdet_time;
+    uint32_t lcpll_check_time;
 
-    uint32_t spare_time[64 - 58];
+    uint32_t spare_time[62 - 60];
+    uint32_t serdes_reset_deassert_timestamp_hi;
+    uint32_t serdes_reset_deassert_timestamp_lo;
 };
 
 struct macpcs_results_t {
     uint32_t postcode;
 
     uint32_t macpcs_retry_cnt;
+    uint32_t eth_cntrl_int;
 
-    uint32_t spare[24 - 2];
+    uint32_t spare[24 - 3];
 
     // Training times
     uint32_t link_up_time;
     uint32_t chip_info_time;
 
-    uint32_t spare_time[32 - 26];
+    uint32_t spare_time[30 - 26];
+    uint32_t macpcs_reset_deassert_timestamp_hi;
+    uint32_t macpcs_reset_deassert_timestamp_lo;
 };
 
 struct eth_live_status_t {
     uint32_t retrain_count;
     uint32_t rx_link_up;  // MAC/PCS RX Link Up
-
-    uint32_t spare[8 - 2];
+    uint32_t link_flap_count;        // Link Flap Count
+    uint32_t link_poll_alive_count;  // Link Poll Alive Count
+    uint32_t spare[8 - 4];
 
     // Snapshot registers
     uint64_t frames_txd;          // Cumulative TX Packets Transmitted count
@@ -170,15 +180,25 @@ struct eth_live_status_t {
     uint64_t corr_cw;             // Cumulative Corrected Codeword count
     uint64_t uncorr_cw;           // Cumulative Uncorrected Codeword count
 
-    uint32_t spare2[64 - 40];
+    // TX/RX Queue registers
+    uint64_t txq0_resend_cnt;  // Cumulative Packet Reset count on TXQ0
+    uint64_t txq1_resend_cnt;  // Cumulative Packet Reset count on TXQ1
+    uint64_t txq2_resend_cnt;  // Cumulative Packet Reset count on TXQ2
+    uint64_t rxq0_pkt_drop;    // Cumulative Packet Drop count on RXQ0
+    uint64_t rxq1_pkt_drop;    // Cumulative Packet Drop count on RXQ1
+    uint64_t rxq2_pkt_drop;    // Cumulative Packet Drop count on RXQ2
+
+    uint32_t spare2[64 - 52];  // 52-63
 };
 
 struct eth_api_table_t {
     uint32_t* send_eth_msg_ptr;           // Pointer to the send eth msg function
     uint32_t* service_eth_msg_ptr;        // Pointer to the service eth msg function
     uint32_t* eth_link_status_check_ptr;  // Pointer to the eth link status check function
-    uint32_t* eth_dynamic_noc_init_ptr;   // Pointer to the dynamic noc init function
-    uint32_t spare[16 - 4];
+    uint32_t* eth_dynamic_noc_init_ptr;   // Pointer to the eth dynamic noc init function
+    uint32_t* eth_link_recovery_ptr;      // Pointer to the eth link recovery function
+
+    uint32_t spare[16 - 5];  // 5-15
 };
 
 enum eth_mailbox_e : uint32_t {
@@ -250,47 +270,16 @@ void disable_interrupts() {
 }
 
 FORCE_INLINE bool is_link_up() {
+    auto pcs_status_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR);
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
-    // Collect current link states
-    // TODO: Until erisc0 is enabled, use MAILBOX_RISC1 for link status check. When both riscs are enabled, assign one
-    // to use MAILBOX_OTHER Sending msgs to mailbox described in:
-    // https://tenstorrent.atlassian.net/wiki/spaces/syseng/pages/904626206/ETH+SW+APIs
-    constexpr uint32_t risc1_mailbox_addr = MEM_SYSENG_ETH_MAILBOX_ADDR + (MAILBOX_RISC1 * sizeof(eth_mailbox_t));
-
-    volatile tt_l1_ptr uint32_t* risc1_mailbox_msg_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(risc1_mailbox_addr + offsetof(eth_mailbox_t, msg));
-    volatile tt_l1_ptr uint32_t* risc1_mailbox_arg0_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(risc1_mailbox_addr + offsetof(eth_mailbox_t, arg[0]));
-    uint32_t risc1_mailbox_val = *risc1_mailbox_msg_ptr;
-    // Make sure mailbox is free to accept a new message
-    do {
-        invalidate_l1_cache();
-        risc1_mailbox_val = *risc1_mailbox_msg_ptr;
-    } while (((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) != MEM_SYSENG_ETH_MSG_DONE) &&
-             risc1_mailbox_val != 0);
-
-    // This tells link status check to avoid copying results into another location in L1
-    *risc1_mailbox_arg0_ptr = 0xFFFFFFFF;
-
-    // Send msg to get the link status
-    *risc1_mailbox_msg_ptr = MEM_SYSENG_ETH_MSG_CALL | MEM_SYSENG_ETH_MSG_LINK_STATUS_CHECK;
-
-    // Wait until the msg was serviced
-    do {
-        invalidate_l1_cache();
-        risc1_mailbox_val = *risc1_mailbox_msg_ptr;
-    } while ((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) == MEM_SYSENG_ETH_MSG_CALL);
-
-    auto link_status = (volatile eth_live_status_t*)(MEM_SYSENG_ETH_LIVE_STATUS);
-    return link_status->rx_link_up == 1;
+    return *pcs_status_ptr == 1;
 #else
-    auto link_status = (volatile eth_live_status_t*)(MEM_SYSENG_ETH_LIVE_STATUS);
-    if (link_status->rx_link_up != 1) {
-        // erisc0 checks link status and does retraining.  If erisc1 detects link down, wait a bit and check again
+    if (*pcs_status_ptr != 1) {
+        // erisc0 checks link status and does retraining. If link down is detected, wait a bit and check again
         eth_wait_cycles(3 << 30);
         eth_wait_cycles(2 << 30);
     }
-    return link_status->rx_link_up == 1;
+    return *pcs_status_ptr == 1;
 #endif
 }
 
@@ -349,6 +338,24 @@ static void update_boot_results_eth_link_status_check() {
 
         update_next_link_status_check_timestamp();
     }
+#endif
+}
+
+// Essentially a copy of what the base erisc main loop does
+FORCE_INLINE void aerisc_context_switch() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    volatile boot_results_t* const boot_results = (volatile boot_results_t*)(MEM_SYSENG_BOOT_RESULTS_BASE);
+
+    // Update heartbeat - base fw use 0xabcdxxxx, to help denote that SW has taken over the core,
+    // we will use 0xdcbaxxxx for the heartbeat value written by this function
+    volatile uint32_t heartbeat_val = (boot_results->eth_status.heartbeat[0] & 0xFFFF);
+    heartbeat_val++;
+    heartbeat_val &= 0xFFFF;
+    boot_results->eth_status.heartbeat[0] = 0xdcba0000 | heartbeat_val;
+
+    service_eth_msg();
+    update_boot_results_eth_link_status_check();
+
 #endif
 }
 
