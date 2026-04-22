@@ -203,10 +203,10 @@ void MeshBuffer::initialize_device_buffers() {
     // Only L1 buffers need mirroring — DRAM buffers use a separate address space.
     // Note: we check HYBRID via rtoptions rather than mesh_device->allocator_impl() because
     // allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
-    if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr &&
-                                                std::holds_alternative<OwnedBufferState>(state_) &&
-                                                device_local_config_.buffer_type == BufferType::L1 &&
-                                                MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+    if (auto mesh_device = mesh_device_.lock();
+        mesh_device != nullptr && std::holds_alternative<OwnedBufferState>(state_) &&
+        device_local_config_.buffer_type == BufferType::L1 &&
+        MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
         auto* backing = get_backing_buffer();
         auto alloc_size = backing->aligned_size_per_bank();
         for (const auto& [coord, device_buffer] : buffers_) {
@@ -267,7 +267,7 @@ void MeshBuffer::deallocate() {
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
         // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
         // 2. During teardown, device state may be partially destroyed, causing segfaults.
-        if (MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        if (MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
             // Unmirror lockstep L1 allocation from each device's lockstep allocator.
             if (std::holds_alternative<OwnedBufferState>(state_) &&
                 device_local_config_.buffer_type == BufferType::L1) {

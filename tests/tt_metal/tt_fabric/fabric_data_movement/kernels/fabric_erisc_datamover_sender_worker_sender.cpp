@@ -77,7 +77,7 @@ void kernel_main() {
     const uint32_t receiver_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr auto dst_args = TensorAccessorArgs<5>();
-    const auto dest_addr_gen = TensorAccessor(dst_args, dest_addr, page_size);
+    const auto dest_addr_gen = TensorAccessor(dst_args, dest_addr);
 
     sender.open<true>();
 

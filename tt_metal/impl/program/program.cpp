@@ -48,6 +48,10 @@
 #include "impl/context/context_types.hpp"
 #include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
+#include "impl/device/device_impl.hpp"
+#include "impl/memory_tracking/memory_stats_shm.hpp"
+#include "tt-metalium/mesh_device.hpp"
+#include <unistd.h>
 #include "jit_build/build.hpp"
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
@@ -72,6 +76,8 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
+#include "tt_metal/jit_build/jit_build_utils.hpp"
+#include "impl/jit_server/remote_compile_coordinator.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
@@ -157,9 +163,49 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     }
 }
 
-#ifdef GENERATE_HASH_LOG
-#include <fstream>
-#endif
+// Similar to Kernel::generate_binaries(), but does not run the compiler.  Used by remote compilation.
+void generate_kernel_source_files(
+    IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
+    const auto& env = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env;
+    jit_build_genfiles_descriptors(env, build_options);
+    if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+        jit_build_genfiles_triscs_src(env, *kernel, kernel->kernel_source());
+    } else {
+        jit_build_genfiles_kernel_include(env, *kernel, kernel->kernel_source());
+    }
+}
+
+// Build a KernelCompileDescriptor to be submitted to RemoteCompileCoordinator.
+KernelCompileDescriptor build_kernel_descriptor(
+    IDevice* device,
+    const std::shared_ptr<Kernel>& kernel,
+    const JitBuildOptions& build_options,
+    std::size_t kernel_hash) {
+    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+
+    uint32_t core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+    uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
+
+    KernelCompileDescriptor desc;
+    desc.kernel_hash = kernel_hash;
+    desc.request.build_key = build_env.build_key();
+    desc.request.kernel_name = kernel->name() + "/" + std::to_string(kernel_hash);
+    desc.request.gpp = build_env.build_env.get_gpp();
+    static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
+    desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
+    desc.output_dir = build_options.path;
+
+    int num_binaries = kernel->expected_num_binaries();
+    for (int i = 0; i < num_binaries; ++i) {
+        const JitBuildState& bs = BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
+        desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
+    }
+
+    return desc;
+}
 
 size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
@@ -218,7 +264,11 @@ detail::ProgramImpl::ProgramImpl() :
     Inspector::program_created(this);
 }
 
-detail::ProgramImpl::~ProgramImpl() noexcept { Inspector::program_destroyed(this); }
+detail::ProgramImpl::~ProgramImpl() noexcept {
+    // Deallocate circular buffers and unregister from devices
+    deallocate_circular_buffers();
+    Inspector::program_destroyed(this);
+}
 
 Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
@@ -1069,13 +1119,71 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
 
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     // ZoneScoped;
+
+    // If device is a MeshDevice, we need to track all its sub-devices
+    std::vector<const IDevice*> devices_to_track;
+    const tt::tt_metal::distributed::MeshDevice* mesh_device =
+        dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
+    if (mesh_device != nullptr) {
+        // Mesh device: track all sub-devices
+        for (IDevice* sub_device : mesh_device->get_devices()) {
+            devices_to_track.push_back(sub_device);
+        }
+    } else {
+        // Single device
+        devices_to_track.push_back(device);
+    }
+
+    // Track which devices are NEW (not already tracked)
+    std::vector<const IDevice*> new_devices;
+    for (const IDevice* dev : devices_to_track) {
+        auto [iter, inserted] = this->cb_devices_.insert(dev);
+        if (inserted) {
+            new_devices.push_back(dev);
+        }
+    }
+
+    // If CB layout already calculated, skip allocation but report for new devices
     if (not this->local_circular_buffer_allocation_needed_) {
+        // Report CB allocations for any NEW devices (using cached addresses)
+        if (!new_devices.empty() && !this->circular_buffers_.empty()) {
+            for (const IDevice* dev : new_devices) {
+                for (const auto& circular_buffer : this->circular_buffers_) {
+                    if (!circular_buffer->globally_allocated()) {
+                        tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                            circular_buffer->core_ranges(),
+                            circular_buffer->address(),
+                            circular_buffer->size(),
+                            circular_buffer->globally_allocated(),
+                            dev);
+                    }
+                }
+
+                // Also register program with the NEW device
+                auto* device_obj = dynamic_cast<Device*>(const_cast<IDevice*>(dev));
+                if (device_obj) {
+                    device_obj->register_program(this);
+                    if (device_obj->get_shm_stats_provider()) {
+                        device_obj->get_shm_stats_provider()->update_from_allocator(device_obj, getpid());
+                    }
+                }
+            }
+        }
         return;
     }
 
     uint64_t base_cb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
+            // Track globally allocated CBs too (they use L1 memory allocated via the allocator)
+            for (const IDevice* dev : devices_to_track) {
+                tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                    circular_buffer->core_ranges(),
+                    circular_buffer->address(),
+                    circular_buffer->size(),
+                    circular_buffer->globally_allocated(),
+                    dev);
+            }
             continue;
         }
 
@@ -1103,15 +1211,78 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
                 }
             }
         }
-        tt::tt_metal::GraphTracker::instance().track_allocate_cb(
-            circular_buffer->core_ranges(),
-            computed_addr,
-            circular_buffer->size(),
-            circular_buffer->globally_allocated(),
-            device);
+        // Report CB allocation for ALL devices being tracked
+        for (const IDevice* dev : devices_to_track) {
+            tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                circular_buffer->core_ranges(),
+                computed_addr,
+                circular_buffer->size(),
+                circular_buffer->globally_allocated(),
+                dev);
+        }
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
+
+    // Register program ONLY with NEW devices (prevents duplicate registration)
+    for (const IDevice* dev : new_devices) {
+        auto* device_obj = dynamic_cast<Device*>(const_cast<IDevice*>(dev));
+        if (device_obj) {
+            device_obj->register_program(this);
+            // Update locally-allocated CB stats via query (accurate even for cached programs)
+            if (device_obj->get_shm_stats_provider()) {
+                device_obj->get_shm_stats_provider()->update_from_allocator(device_obj, getpid());
+            }
+        }
+    }
     this->local_circular_buffer_allocation_needed_ = false;
+}
+
+std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> detail::ProgramImpl::get_cb_l1_regions_per_core(
+    int device_id, size_t num_devices) const {
+    (void)device_id;    // TODO: Use device_id once per-device or heterogeneous mesh CB layouts are supported
+    (void)num_devices;  // TODO: Use num_devices for multi-device filtering or layout partitioning when implemented
+
+    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_core;
+
+    // For each allocator, iterate through all cores in its CoreRange
+    for (const auto& cb_allocator : cb_allocators_) {
+        const auto& l1_regions = cb_allocator.l1_regions;
+
+        // Add these regions to every core in the CoreRange
+        for (uint32_t x = cb_allocator.core_range.start_coord.x; x <= cb_allocator.core_range.end_coord.x; x++) {
+            for (uint32_t y = cb_allocator.core_range.start_coord.y; y <= cb_allocator.core_range.end_coord.y; y++) {
+                CoreCoord core(x, y);
+                auto& core_regions = regions_per_core[core];
+                core_regions.insert(core_regions.end(), l1_regions.begin(), l1_regions.end());
+            }
+        }
+    }
+
+    return regions_per_core;
+}
+
+void detail::ProgramImpl::deallocate_circular_buffers() {
+    // Deallocate all circular buffers for this program on ALL devices
+    // This notifies the GraphTracker to report deallocations
+    if (!this->cb_devices_.empty() && !this->circular_buffers_.empty()) {
+        for (const IDevice* idevice : this->cb_devices_) {
+            tt::tt_metal::GraphTracker::instance().track_deallocate_cb(idevice);
+        }
+
+        // Unregister program from ALL devices (matches registration)
+        for (const IDevice* idevice : this->cb_devices_) {
+            auto* device = dynamic_cast<Device*>(const_cast<IDevice*>(idevice));
+            if (device) {
+                device->unregister_program(this);
+                // Update locally-allocated CB stats via query (accurate after deallocation)
+                if (device->get_shm_stats_provider()) {
+                    device->get_shm_stats_provider()->update_from_allocator(device, getpid());
+                }
+            }
+        }
+
+        this->cb_devices_.clear();  // Clear device set after deallocation
+    }
 }
 
 void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device) {
@@ -1314,9 +1485,8 @@ void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, Ji
 }
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
-    // Mock devices don't dispatch to hardware, skip dispatch data population
-    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
-        tt::TargetDevice::Mock) {
+    // Mock/emulated devices don't dispatch to hardware, skip dispatch data population
+    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().is_mock_or_emulated()) {
         return;
     }
 
@@ -1670,54 +1840,86 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         "dependent on information that is set during device initialization.",
         this->get_id());
 
+    bool is_mock = tt::tt_metal::MetalContext::instance(context_id).get_cluster().is_mock_or_emulated();
+    bool remote_enabled = jit_server::JitCompileRpcClient::enabled() && !is_mock;
     std::vector<std::shared_future<void>> events;
 
-    bool is_mock = tt::tt_metal::MetalContext::instance(context_id).get_cluster().get_target_device_type() ==
-                   tt::TargetDevice::Mock;
+    auto prep_kernel = [&](const std::shared_ptr<Kernel>& kernel) {
+        JitBuildOptions build_options(build_env.build_env);
+        kernel->set_build_options(build_options);
+        if (this->compiled_.empty()) {
+            this->set_remote_circular_buffer_init(kernel);
+        }
+        this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
+        this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
+        this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
+        this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
 
-    for (auto& kernels : kernels_) {
-        for (auto& [id, kernel] : kernels) {
-            validate_kernel_placement(force_slow_dispatch, kernel);
-            launch_build_step(
-                [kernel, device, this, &build_env, is_mock] {
-                    JitBuildOptions build_options(build_env.build_env);
-                    kernel->set_build_options(build_options);
-                    if (this->compiled_.empty()) {
-                        this->set_remote_circular_buffer_init(kernel);
-                    }
-                    this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
-                    this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
-                    this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
-                    this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
+        auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
 
-                    auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
+        const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
+        kernel->set_full_name(kernel_path_suffix);
+        build_options.set_name(kernel_path_suffix);
 
-                    const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
-                    kernel->set_full_name(kernel_path_suffix);
-                    build_options.set_name(kernel_path_suffix);
+        return std::pair{std::move(build_options), kernel_hash};
+    };
 
-                    if (!is_mock) {
-                        kernel->register_kernel_elf_paths_with_watcher(*device);
-                    }
+    if (remote_enabled) {
+        // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
+        // server.
+        auto endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
+        TT_FATAL(
+            !endpoints.empty(),
+            "TT_METAL_JIT_SERVER_ENABLE is set but no compile-server endpoints are configured. "
+            "Set TT_METAL_JIT_SERVER_ENDPOINTS or TT_METAL_JIT_SERVER_ENDPOINT.");
+        RemoteCompileCoordinator coordinator(std::move(endpoints), device->build_id(), build_env.build_key());
 
-                    jit_build_once(kernel_hash, [&] {
+        std::vector<std::pair<std::shared_ptr<Kernel>, JitBuildOptions>> submitted_kernels;
+
+        for (auto& kernels : kernels_) {
+            for (auto& [id, kernel] : kernels) {
+                validate_kernel_placement(force_slow_dispatch, kernel);
+                auto [build_options, kernel_hash] = prep_kernel(kernel);
+                kernel->register_kernel_elf_paths_with_watcher(*device);
+
+                generate_kernel_source_files(device, build_options, kernel);
+                auto desc = build_kernel_descriptor(device, kernel, build_options, kernel_hash);
+                coordinator.submit(std::move(desc));
+                submitted_kernels.emplace_back(kernel, std::move(build_options));
+            }
+        }
+
+        coordinator.finish();
+
+        for (const auto& [kernel, build_options] : submitted_kernels) {
+            Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+        }
+    } else {
+        // Local path: parallel build via thread pool.
+        for (auto& kernels : kernels_) {
+            for (auto& [id, kernel] : kernels) {
+                validate_kernel_placement(force_slow_dispatch, kernel);
+                launch_build_step(
+                    [&, kernel] {
+                        auto [build_options, kernel_hash] = prep_kernel(kernel);
+
                         if (!is_mock) {
-                            GenerateBinaries(device, build_options, kernel);
+                            kernel->register_kernel_elf_paths_with_watcher(*device);
+                            jit_build_once(kernel_hash, [&] { GenerateBinaries(device, build_options, kernel); });
                         } else {
                             // Create empty stub binaries for mock devices
                             std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
                             kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
                         }
-                    });
-
-                    Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
-                },
-                events);
+                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+                    },
+                    events);
+            }
         }
+        sync_build_steps(events);
     }
-    sync_build_steps(events);
 
-    // Mock devices don't have binaries to read
+    // Mock/emulated devices don't have binaries to read.
     if (!is_mock) {
         for (const auto& kernels : kernels_) {
             for (const auto& pair : kernels) {
@@ -1795,16 +1997,6 @@ bool detail::ProgramImpl::runs_on_noc_multicast_only_cores() {
         MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX) != -1 and
         not this->get_kernel_groups(
                     MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX))
-                .empty());
-}
-
-bool detail::ProgramImpl::kernel_binary_always_stored_in_ringbuffer() {
-    // Active ethernet cores use a fixed address for the kernel binary, because they don't have enough memory to have
-    // that big of a ringbuffer.
-    return !(
-        MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
-        not this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(
-                                        HalProgrammableCoreType::ACTIVE_ETH))
                 .empty());
 }
 
@@ -2022,8 +2214,8 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 
     // Determine the DRAM kernel binary size per program and the max across all programs.
     // populate_dispatch_data (called above via set_program_attrs_across_core_types) packs all
-    // kernel binaries from every core type into program_transfer_info.binary_data, so its size
-    // reflects the full unpadded binary payload the prefetcher must cache.
+    // kernel binaries from every core type into program_transfer_info.binary_data as a single,
+    // page-aligned payload, so its size reflects the full padded binary data the prefetcher must cache.
     uint32_t max_program_sizeB = 0;
     for (auto& program : programs) {
         uint32_t binary_sizeB =

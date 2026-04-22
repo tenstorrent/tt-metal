@@ -701,7 +701,6 @@ class TtTransformer(LightweightModule):
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         return_logits=False,
-        capture_sampling_trace=False,  # If true, return logits so sampling can be traced elsewhere
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -745,15 +744,7 @@ class TtTransformer(LightweightModule):
 
             tt_out_logits_saved.copy_(tt_out_logits)
 
-        if capture_sampling_trace:
-            return tt_logits
-
-        tt_toks, tt_log_probs = self.sampling.sample(
-            tt_logits[0],
-            tt_out_tok=x,
-            enable_trace=False,
-        )
-        return tt_toks, tt_log_probs
+        return tt_logits
 
     def switch_mode(self, mode):
         if mode == "decode":
