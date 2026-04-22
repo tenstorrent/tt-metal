@@ -5,7 +5,10 @@
 #include <tt_stl/fmt.hpp>
 #include "fabric_firmware_initializer.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <optional>
+#include <string_view>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -20,8 +23,206 @@
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_metal {
+
+namespace {
+
+using tt::tt_fabric::chan_id_t;
+using tt::tt_fabric::EDMStatus;
+using tt::umd::CoreCoord;
+
+// Sanity-check the precondition that a freshly-cleared edm_status_address
+// (sentinel value 0 written by get_fabric_router_addresses_to_clear()) is
+// distinct from every EDMStatus value the kernel will ever write, so
+// NotStarted can be distinguished from every real stage.
+static_assert(static_cast<uint32_t>(EDMStatus::STARTED) != 0);
+static_assert(static_cast<uint32_t>(EDMStatus::REMOTE_HANDSHAKE_COMPLETE) != 0);
+static_assert(static_cast<uint32_t>(EDMStatus::LOCAL_HANDSHAKE_COMPLETE) != 0);
+static_assert(static_cast<uint32_t>(EDMStatus::READY_FOR_TRAFFIC) != 0);
+static_assert(static_cast<uint32_t>(EDMStatus::TERMINATED) != 0);
+
+// Progress stages observable at a router's edm_status_address during init.
+// Ordering is significant: declaration order of the first five enumerators
+// reflects the kernel's *edm_status_ptr write sequence in
+// tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp, so
+// `a < b` means stage `a` is earlier in init than stage `b`.
+//
+// Sentinels that do not lie on the linear progress axis
+// (TerminatedIndeterminate, Unknown) must be declared AFTER all comparable
+// stages so has_comparable_progress() stays correct.
+enum class EdmInitProgress : uint8_t {
+    NotStarted,
+    Started,
+    RemoteHandshakeComplete,
+    LocalHandshakeComplete,
+    ReadyForTraffic,
+    TerminatedIndeterminate,
+    Unknown,
+};
+
+constexpr bool has_comparable_progress(EdmInitProgress p) { return p <= EdmInitProgress::ReadyForTraffic; }
+
+std::string_view progress_name(EdmInitProgress p) {
+    switch (p) {
+        case EdmInitProgress::NotStarted: return "NOT_STARTED";
+        case EdmInitProgress::Started: return "STARTED";
+        case EdmInitProgress::RemoteHandshakeComplete: return "REMOTE_HANDSHAKE_COMPLETE";
+        case EdmInitProgress::LocalHandshakeComplete: return "LOCAL_HANDSHAKE_COMPLETE";
+        case EdmInitProgress::ReadyForTraffic: return "READY_FOR_TRAFFIC";
+        case EdmInitProgress::TerminatedIndeterminate: return "TERMINATED";
+        case EdmInitProgress::Unknown: return "UNKNOWN";
+    }
+    return "UNKNOWN";
+}
+
+EdmInitProgress classify_edm_status(uint32_t raw_status) {
+    switch (raw_status) {
+        case 0: return EdmInitProgress::NotStarted;
+        case static_cast<uint32_t>(EDMStatus::STARTED): return EdmInitProgress::Started;
+        case static_cast<uint32_t>(EDMStatus::REMOTE_HANDSHAKE_COMPLETE):
+            return EdmInitProgress::RemoteHandshakeComplete;
+        case static_cast<uint32_t>(EDMStatus::LOCAL_HANDSHAKE_COMPLETE): return EdmInitProgress::LocalHandshakeComplete;
+        case static_cast<uint32_t>(EDMStatus::READY_FOR_TRAFFIC): return EdmInitProgress::ReadyForTraffic;
+        case static_cast<uint32_t>(EDMStatus::TERMINATED): return EdmInitProgress::TerminatedIndeterminate;
+        default: return EdmInitProgress::Unknown;
+    }
+}
+
+struct RouterStatusReport {
+    chan_id_t chan;
+    CoreCoord logical_core;
+    uint32_t raw_status;
+    EdmInitProgress stage;
+    bool is_master;
+};
+
+[[noreturn]] void report_router_sync_timeout_and_throw(
+    Device* dev,
+    chan_id_t master_chan,
+    const CoreCoord& master_core,
+    uint32_t master_raw_status,
+    uint32_t expected_status,
+    uint32_t router_sync_address,
+    uint32_t timeout_ms,
+    tt::tt_fabric::ControlPlane& control_plane,
+    Cluster& cluster) {
+    const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev->id());
+    const auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+    const auto& soc_desc = cluster.get_soc_desc(dev->id());
+
+    std::vector<RouterStatusReport> reports;
+    reports.reserve(active_channels.size());
+
+    // Master's status was already read by the caller; reuse it.
+    reports.push_back({
+        master_chan,
+        master_core,
+        master_raw_status,
+        classify_edm_status(master_raw_status),
+        /*is_master=*/true,
+    });
+
+    for (const auto& [chan, _direction] : active_channels) {
+        if (chan == master_chan) {
+            continue;
+        }
+        auto core = soc_desc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+        std::vector<uint32_t> status_buf{0};
+        detail::ReadFromDeviceL1(dev, core, router_sync_address, 4, status_buf, CoreType::ETH);
+        reports.push_back({chan, core, status_buf[0], classify_edm_status(status_buf[0]), /*is_master=*/false});
+    }
+
+    std::optional<EdmInitProgress> min_stage;
+    for (const auto& r : reports) {
+        if (has_comparable_progress(r.stage) && (!min_stage || r.stage < *min_stage)) {
+            min_stage = r.stage;
+        }
+    }
+    const RouterStatusReport* representative_laggard = nullptr;
+    size_t laggard_count = 0;
+    if (min_stage) {
+        for (const auto& r : reports) {
+            if (r.stage == *min_stage) {
+                ++laggard_count;
+                if (representative_laggard == nullptr) {
+                    representative_laggard = &r;
+                }
+            }
+        }
+    }
+
+    log_error(
+        tt::LogMetal,
+        "Fabric Router Sync: Timeout after {} ms on Device {}. Expected status 0x{:08x} ({}) at "
+        "edm_status_address=0x{:08x}. Per-router status:",
+        timeout_ms,
+        dev->id(),
+        expected_status,
+        progress_name(classify_edm_status(expected_status)),
+        router_sync_address);
+
+    for (const auto& r : reports) {
+        const bool is_laggard = min_stage && r.stage == *min_stage;
+        log_error(
+            tt::LogMetal,
+            "  {} chan={:2d} logical={} status=0x{:08x} ({}){}",
+            r.is_master ? "master" : "sub   ",
+            r.chan,
+            r.logical_core.str(),
+            r.raw_status,
+            progress_name(r.stage),
+            is_laggard ? "  <-- least progress" : "");
+    }
+
+    if (min_stage) {
+        log_error(
+            tt::LogMetal,
+            "Earliest init stage reached: {} ({} core(s) stuck at this stage).",
+            progress_name(*min_stage),
+            laggard_count);
+    }
+
+    const size_t terminated_count = std::count_if(reports.begin(), reports.end(), [](const auto& r) {
+        return r.stage == EdmInitProgress::TerminatedIndeterminate;
+    });
+    const size_t unknown_count = std::count_if(
+        reports.begin(), reports.end(), [](const auto& r) { return r.stage == EdmInitProgress::Unknown; });
+    if (terminated_count > 0) {
+        log_error(
+            tt::LogMetal,
+            "{} core(s) in TERMINATED state -- progress before termination is indeterminate.",
+            terminated_count);
+    }
+    if (unknown_count > 0) {
+        log_error(
+            tt::LogMetal,
+            "{} core(s) reported an unrecognized status value -- treated as UNKNOWN progress.",
+            unknown_count);
+    }
+
+    const std::string laggard_summary = representative_laggard != nullptr
+                                            ? fmt::format(
+                                                  "furthest-behind stage: {} ({} core(s), e.g. chan={} got 0x{:08x})",
+                                                  progress_name(*min_stage),
+                                                  laggard_count,
+                                                  representative_laggard->chan,
+                                                  representative_laggard->raw_status)
+                                            : std::string("no cores reached a comparable init stage");
+
+    TT_THROW(
+        "Fabric Router Sync: Timeout after {} ms on Device {}: expected status 0x{:08x}. "
+        "Master chan={} got 0x{:08x}. {}. See error log above for per-core status breakdown.",
+        timeout_ms,
+        dev->id(),
+        expected_status,
+        master_chan,
+        master_raw_status,
+        laggard_summary);
+}
+
+}  // namespace
 
 FabricFirmwareInitializer::FabricFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor, tt::tt_fabric::ControlPlane& control_plane) :
@@ -206,18 +407,16 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
             auto current_time = std::chrono::steady_clock::now();
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time).count();
             if (elapsed_ms > timeout_ms) {
-                log_info(
-                    tt::LogMetal,
-                    "Fabric Router Sync: master chan={}, logical core={}, sync address=0x{:08x}",
+                report_router_sync_timeout_and_throw(
+                    dev,
                     master_router_chan,
-                    master_router_logical_core.str(),
-                    router_sync_address);
-                TT_THROW(
-                    "Fabric Router Sync: Timeout after {} ms. Device {}: Expected status 0x{:08x}, got 0x{:08x}",
-                    timeout_ms,
-                    dev->id(),
+                    master_router_logical_core,
+                    master_router_status[0],
                     expected_status,
-                    master_router_status[0]);
+                    router_sync_address,
+                    timeout_ms,
+                    control_plane_,
+                    cluster_);
             }
         }
 
