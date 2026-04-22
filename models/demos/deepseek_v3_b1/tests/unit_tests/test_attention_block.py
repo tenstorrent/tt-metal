@@ -392,6 +392,15 @@ def test_attention_block(
     # KV Cache Branch RMSNorm gamma
     torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
 
+    # Folded weights for kernel: gamma pre-multiplied into projection weights (_folded_gamma pattern).
+    # Kernel uses folded weights + do_gamma=false in RMSNorm.
+    # Golden uses original weights + explicit gamma in RMSNorm (see AttentionBlock.golden).
+    torch_matmul_weights_folded = torch_matmul_weights * torch_gamma.reshape(-1, 1)
+    torch_dkv_matmul_weights_folded = torch_dkv_matmul_weights * torch_gamma.reshape(-1, 1)
+    torch_matmul2_weights_folded = torch_matmul2_weights_full_unshuffled * torch_rmsnorm2_gamma.reshape(-1, 1)
+    torch_matmul3_weights_folded = torch_matmul3_weights * torch_dkv_rmsnorm_gamma
+    torch_kv_b2_proj_weights_folded = torch_kv_b2_proj_weights * torch_dkv_rmsnorm_gamma.reshape(-1, 1)
+
     # Fused o_proj (TP4 shuffled), gate_mm, norms, and q_a/q_b/kv_a into one L1 buffer.
     fused = fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
         torch_o_proj_weights,
@@ -400,9 +409,9 @@ def test_attention_block(
         torch_rmsnorm2_gamma,
         torch_dkv_rmsnorm_gamma,
         torch_ffn_norm,
-        torch_matmul_weights,
-        torch_matmul2_weights_full_unshuffled,
-        torch_dkv_matmul_weights,
+        torch_matmul_weights_folded,
+        torch_matmul2_weights_folded,
+        torch_dkv_matmul_weights_folded,
         submesh,
     )
     o_proj_overlapped = fused["o_proj"]
@@ -413,11 +422,13 @@ def test_attention_block(
     matmul2_weights_overlapped = fused["q_b_proj"]
     dkv_matmul_weights_overlapped = fused["kv_a_proj"]
 
-    # Matmul3 / kv_b1_proj weights — fused with kv_b2_proj
-    torch_matmul3_weights_flat = torch_matmul3_weights.reshape(num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
+    # Matmul3 / kv_b1_proj weights — fused with kv_b2_proj (use folded versions: kv_norm pre-multiplied)
+    torch_matmul3_weights_folded_flat = torch_matmul3_weights_folded.reshape(
+        num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM
+    )
     kv_b12 = fuse_kv_b12(
-        torch_matmul3_weights_flat,
-        torch_kv_b2_proj_weights,
+        torch_matmul3_weights_folded_flat,
+        torch_kv_b2_proj_weights_folded,
         submesh,
     )
     matmul3_weights_overlapped = kv_b12["kv_b1_proj"]
@@ -932,7 +943,7 @@ def test_attention_block(
         torch_matmul_weights,
         torch_rmsnorm2_gamma,
         torch_matmul2_weights_full_unshuffled,
-        torch_matmul3_weights,
+        torch_matmul3_weights_folded,
         torch_sin,
         torch_cos,
         metadata,
@@ -940,7 +951,7 @@ def test_attention_block(
         torch_dkv_rmsnorm_gamma,
         torch_kv_cache,
         scale,
-        torch_kv_b2_proj_weights,
+        torch_kv_b2_proj_weights_folded,
         torch_o_proj_weights,
         epsilon=epsilon,
         num_qnope_heads=total_qnope_heads,
@@ -989,7 +1000,7 @@ def test_attention_block(
             matmul_weights_tensor=torch_matmul_weights,
             rmsnorm2_gamma_tensor=torch_rmsnorm2_gamma,
             matmul2_weights_tensor=torch_matmul2_weights_full_unshuffled,
-            matmul3_weights_tensor=torch_matmul3_weights,
+            matmul3_weights_tensor=torch_matmul3_weights_folded,
             sin_tensor=torch_sin,
             cos_tensor=torch_cos,
             dkv_matmul_weights_tensor=torch_dkv_matmul_weights,

@@ -124,7 +124,11 @@ class AttentionBlock:
         def rmsnorm(x, gamma):
             variance = x.pow(2).mean(-1, keepdim=True)
             normalized = x * torch.rsqrt(variance + epsilon)
-            return normalized
+            return normalized * gamma
+
+        def rmsnorm_no_gamma(x):
+            variance = x.pow(2).mean(-1, keepdim=True)
+            return x * torch.rsqrt(variance + epsilon)
 
         position_id = metadata.position_id
         slot_id = metadata.slot_id
@@ -164,7 +168,7 @@ class AttentionBlock:
         # KV Cache Branch
         dkv = input_layernorm @ dkv_matmul_weights_tensor
         kv, k_rope = torch.split(dkv, [nope_dim, rope_dim], dim=-1)
-        kv = rmsnorm(kv, dkv_rmsnorm_gamma_tensor)
+        kv = rmsnorm_no_gamma(kv)
         k_rope = RopeSingleCore.golden(k_rope, cos_tensor, sin_tensor, position_ids).squeeze(0)
 
         # from 0 to position id, the kv cache is valid
