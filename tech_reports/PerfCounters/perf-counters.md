@@ -45,7 +45,7 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 
 **Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
 
-**Blackhole** has fewer active TDMA counters due to `PACK_COUNT=1` (single packer engine). Only RTL-live signals are read from hardware — any counter whose RTL signal is hardwired to a constant has been omitted from the `hw_counters.h` arrays, and any aliased grant counter is consolidated to one canonical entry. Three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas because their WH denominator (`PACKER_BUSY`) is always 0 on BH. TDMA_UNPACK grant banks 4-6 (sels 260-262) have identical RTL wiring on WH and BH (verified: srcB port, srcA overwrite, srcA port). Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
+**Blackhole** has fewer raw TDMA counters because `PACK_COUNT=1` ties the per-engine busy and dest-read signals for engines 1-3 to constants. Only RTL-live signals are read from hardware — any counter whose RTL signal is hardwired to a constant has been omitted from the `hw_counters.h` arrays, and any aliased grant counter is consolidated to one canonical entry. `Packer Efficiency` and `Math-to-Pack Handoff Efficiency` fall back to alternative formulas when `PACKER_BUSY` is 0 for a given workload (e.g. pure-SFPU ops that don't drive the packer). TDMA_UNPACK grant banks 4-6 (sels 260-262) have identical RTL wiring on WH and BH (verified: srcB port, srcA overwrite, srcA port). Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
 
 **INSTRN_THREAD bank** — `perf_cnt_instrn_thread` is built from a Verilog generate array in `tt_instruction_thread.sv` and has architecture-specific counter_sel mappings. Req-side: sels 0-23 are per-thread instruction-type availability (CFG/SYNC/THCON/MOVE/FPU/UNPACK/PACK, 3 threads each), sels 24-26 are per-thread total stall cycles, and sels 27+ are stall reasons. On WH the shared stall conditions (SRCA/B clear/valid) are replicated across 3 slots each (sels 27-38); on BH they occupy 1 slot each (sels 27-30). Per-thread stall reasons are thread-major: WH sels 39-65 (9 types × 3 threads), BH sels 31-57. Grant-side: the RTL wires grant as `{8{ibuffer_rden[th]}}` per instance and `{9{inst_stall_thread[th]}}` per per-thread stall-reason instance, so the 24 possible issue-count sels collapse to 3 distinct per-thread values and the per-thread stall-reason grants reproduce `THREAD_STALLS_{th}`. We expose only the distinct grants: `THREAD_INSTRUCTIONS_{0,1,2}` at sels 256/264/272 (one per instance) and `ANY_THREAD_STALL` at sel 283. The counter arrays are in arch-specific `hw_counters.h` files; `perf_counters.hpp` is arch-agnostic (WH defines empty L1_2/3/4 arrays).
 
@@ -131,22 +131,22 @@ Measures how often the packer has valid destination data available when it's bus
 | **Counter group** | PACK |
 
 ```
-WH:  Packer Efficiency = PACKER_DEST_READ_AVAILABLE / PACKER_BUSY * 100
-BH:  Packer Efficiency = DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE * 100
+Primary:  Packer Efficiency = PACKER_DEST_READ_AVAILABLE / PACKER_BUSY * 100
+Fallback: Packer Efficiency = DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE * 100
 ```
 
-On Blackhole, `PACKER_BUSY` is always 0 empirically (the packer completes within its gated clock window and the OR of per-thread busy bits never stays high long enough for the ungated perf counter to sample). The BH fallback uses `DEST_READ_GRANTED_0` (counter_sel 267), the matched grant for `PACKER_DEST_READ_AVAILABLE` (counter_sel 11, req[0]). PACK_COUNT=1 on BH means grant[0] is the only live grant — grants 1-3 (sels 268-270) are RTL-tied to `1'b0` and not read. The ratio is the grant rate: 100% = every request granted, <100% = packer waited for dest data.
+The primary formula applies whenever `PACKER_BUSY > 0` (any op where the packer runs). For ops that never trigger the packer (e.g. pure SFPU ops like relu/sqrt), `PACKER_BUSY = 0` and the formula falls back to the dest-read grant rate — fraction of dest-read requests that were granted.
 
-- **High value (100%)**: Packer always has data when busy (no stalls). This is the normal case on BH.
-- **Low value (<80%)**: Packer is busy but waiting for destination register data from math stage.
+- **High value (100%)**: Packer always has data when busy (no stalls).
+- **Low value (<80%)**: Packer is busy but waiting for destination register data from the math stage.
 
 **Use case:** Detects destination register stalls indicating the math stage is not keeping up with the packer.
 
 ---
 
-**5. Math-to-Pack Handoff Efficiency**
+**5. Math-to-Pack Handoff Ratio**
 
-Measures pipeline balance between math output and packer consumption. Capped at 100%.
+Measures pipeline balance between math output and packer consumption.
 
 | | |
 |---|---|
@@ -154,15 +154,15 @@ Measures pipeline balance between math output and packer consumption. Capped at 
 | **Counter group** | PACK |
 
 ```
-WH:  Math-to-Pack Handoff = AVAILABLE_MATH / PACKER_BUSY * 100
-BH:  Math-to-Pack Handoff = AVAILABLE_MATH / ref_cnt * 100
+Primary:  Math-to-Pack Handoff = AVAILABLE_MATH / PACKER_BUSY * 100
+Fallback: Math-to-Pack Handoff = AVAILABLE_MATH / ref_cnt * 100
 ```
 
-On Blackhole, `PACKER_BUSY` is always 0. The BH fallback measures what fraction of cycles the math pipeline was not stalled by the scoreboard — a direct measure of math availability to the pack stage.
+`AVAILABLE_MATH` counts cycles where the math instruction was valid AND not scoreboard-stalled. Dividing by `PACKER_BUSY` gives a ratio that can exceed 100% when math produces output faster than the packer consumes it. When `PACKER_BUSY = 0` (packer not used) the formula falls back to math availability as a fraction of total cycles.
 
-- **WH high value (>100%)**: Math produces output faster than packer consumes.
-- **BH high value (>25%)**: Math unit is available (not scoreboard-stalled) for a significant fraction of cycles.
-- **Low value**: Math is frequently stalled, limiting pack throughput.
+- **>100%**: Math produces output faster than packer consumes (packer is the consumer bottleneck).
+- **~100%**: Math and packer balanced.
+- **<100%**: Math is frequently stalled, limiting pack throughput.
 
 **Use case:** Identifies whether math is keeping up with the packer. Low values indicate math is the bottleneck.
 
@@ -185,7 +185,7 @@ Unpacker-to-Math Data Flow = avg(SRCA_WRITE_AVAILABLE, SRCB_WRITE_AVAILABLE) /
 - **High value (>80%)**: Unpackers can write to source registers when busy. Good data flow.
 - **Low value (<30%)**: Unpackers are busy but source register buffers are full. Math is not consuming data fast enough.
 
-**Use case:** Detects math stage backpressure causing unpacker stalls. Compare with Unpacker Write Efficiency (WH only) to distinguish backpressure from other stall types.
+**Use case:** Detects math stage backpressure causing unpacker stalls. Compare with **Unpacker Write Efficiency** (#42) to distinguish backpressure from other stall types.
 
 ---
 
@@ -435,7 +435,7 @@ Math Dest Write Port Stall = (MATH_INSTRN_AVAILABLE - MATH_NOT_STALLED_DEST_WR_P
 - **High value (>10%)**: Math is stalled waiting for write port to destination register.
 - **Low value (~0%)**: No write port stalls.
 
-**Not available on Blackhole**: `MATH_NOT_STALLED_DEST_WR_PORT` is always 0 on BH (empirically verified), which would produce a bogus 100% stall rate. The metric is automatically hidden on BH. On WH, this counter is live and the metric works correctly.
+The metric is skipped when `MATH_NOT_STALLED_DEST_WR_PORT` reads 0 for an entire op (would otherwise report a misleading 100% stall rate). This happens on BH for workloads that don't exercise the write-port path heavily.
 
 **Use case:** Detects destination register write contention from the math side.
 
@@ -903,9 +903,7 @@ Compute-to-Unpack Ratio = MATH_COUNTER / (UNPACK0_BUSY + UNPACK1_BUSY) * 100
 
 ---
 
-### Architecture-Specific Metrics
-
-Some of these metrics use BH-specific fallback formulas. Others are truly Wormhole-only (marked below) because the required hardware signal is inactive on Blackhole.
+### Additional Pipeline Metrics
 
 **39. Math Pipeline Utilization**
 
@@ -913,23 +911,23 @@ Measures math instruction flow efficiency through the pipeline.
 
 | | |
 |---|---|
-| **Architectures** | Wormhole |
+| **Architectures** | Wormhole, Blackhole |
 | **Counter group** | UNPACK |
 
 ```
 Math Pipeline Utilization = MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE * 100
 ```
 
-On Blackhole, `MATH_INSTRN_STARTED` is empirically inactive (`o_math_instrnbuf_rden` never fires), so this metric is hidden from BH output.
-
-- **High value (>80%)**: Math pipeline efficiently moves instructions.
+- **High value (>80%)**: Math pipeline efficiently moves instructions. Expected for compute-bound ops like matmul (99.91%).
 - **Low value**: Math pipeline is mostly idle or stalled.
 
+**Use case:** Diagnoses whether math instructions are issuing at the rate the front-end can produce them.
 
+---
 
 **40. SrcB Write Actual Efficiency**
 
-Fraction of srcB write attempts that actually succeeded.
+Fraction of srcB write attempts that were not blocked by port contention.
 
 | | |
 |---|---|
@@ -937,16 +935,17 @@ Fraction of srcB write attempts that actually succeeded.
 | **Counter group** | UNPACK |
 
 ```
-SrcB Write Actual Efficiency = SRCB_WRITE_ACTUAL / SRCB_WRITE_AVAILABLE * 100
+SrcB Write Actual Efficiency = SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_AVAILABLE * 100
 ```
 
-- **High value (100%)**: Every srcB write attempt succeeds.
-- **Low value (<80%)**: Significant fraction of srcB writes are blocked.
+Mirrors **SrcA Write Actual Efficiency** (#20); both measure "fraction of writes not blocked by the DMA write port" for their respective source registers.
+
+- **100%**: Every srcB write attempt succeeds at the port.
+- **<100%**: Port contention occasionally blocks writes.
 
 **Use case:** Measures effective srcB write throughput.
 
 ---
-
 
 **41. Packer Engine 0/1/2 Util**
 
@@ -961,7 +960,7 @@ Per-engine packer utilization.
 Packer Engine N Util = PACKER_BUSY_N / ref_cnt * 100
 ```
 
-**Not available on Blackhole**: `PACK_COUNT=1`, per-engine busy signals tied to 0.
+**Not available on Blackhole**: `PACK_COUNT=1`, per-engine busy signals tied to 0 in RTL.
 
 **Use case:** Detects load imbalance across WH's 4 packer engines.
 
@@ -969,46 +968,42 @@ Packer Engine N Util = PACKER_BUSY_N / ref_cnt * 100
 
 **42. Unpacker0/1 Write Efficiency**
 
-Source register write throughput per unpacker.
+Source register write throughput per unpacker — fraction of unpacker-busy cycles where the write actually succeeded (port-OK).
 
 | | |
 |---|---|
-| **Architectures** | Wormhole only |
+| **Architectures** | Wormhole, Blackhole |
 | **Counter group** | UNPACK |
 
 ```
-Unpacker0 Efficiency = SRCA_WRITE / UNPACK0_BUSY_THREAD0 * 100
-Unpacker1 Efficiency = SRCB_WRITE / UNPACK1_BUSY_THREAD0 * 100
+Unpacker0 Write Efficiency = SRCA_WRITE_ACTUAL / UNPACK0_BUSY_THREAD0 * 100
+Unpacker1 Write Efficiency = SRCB_WRITE_NOT_BLOCKED_PORT / UNPACK1_BUSY_THREAD0 * 100
 ```
 
-- **High value (>80%)**: Unpacker spends most busy time writing data (efficient).
-- **Low value (<20%)**: Unpacker is busy but not writing (stalled/waiting).
+- **High value (>80%)**: Unpacker spends most busy time successfully writing data.
+- **Low value (<40%)**: Unpacker busy but writes are blocked (port contention or less data than busy cycles).
 
-**Not available on Blackhole**: Counter signals read 0 on BH.
-
-**Use case:** Identifies unpacker stalls due to L1 contention or data dependencies.
+**Use case:** Identifies unpacker bottlenecks — low efficiency combined with high Unpack Busy cycles suggests port contention or register overwrite stalls.
 
 ---
 
 **43. FPU Execution Efficiency**
 
-FPU active cycles as fraction of math instruction availability.
+FPU active cycles as fraction of math instruction availability on the math thread.
 
 | | |
 |---|---|
-| **Architectures** | Wormhole only |
+| **Architectures** | Wormhole, Blackhole |
 | **Counter group** | FPU + INSTRN |
 
 ```
 FPU Execution Efficiency = FPU_COUNTER / FPU_INSTRN_AVAILABLE_1 * 100
 ```
 
-- **High value (>80%)**: FPU executes whenever work is available (compute-efficient).
-- **Low value (<30%)**: FPU instructions available but not executing (pipeline stalls).
+- **High value (>80%)**: FPU executes whenever math work is available (compute-efficient).
+- **Low value (<30%)**: Math instructions pending but FPU not running (pipeline stalls).
 
-**Not available on Blackhole**: `FPU_INSTRN_AVAILABLE_1` reads 0 on BH.
-
-**Use case:** Distinguishes compute-bound (high efficiency) from memory-bound (low efficiency) workloads.
+**Use case:** Distinguishes compute-bound (high efficiency) from stall-bound (low efficiency) workloads on the math path.
 
 ---
 

@@ -278,8 +278,6 @@ PERF_COUNTER_CSV_HEADERS = [
     "Thread 2 Stall Rate Median (%)",
     "Thread 2 Stall Rate Max (%)",
     "Thread 2 Stall Rate Avg (%)",
-    # INSTRN_THREAD: Thread IPC (instructions per cycle, not %)
-    # Thread IPC removed: no RTL counter for instruction counts (sel 24-26 = total stalls)
     # INSTRN_THREAD: Pipeline wait metrics
     "SrcA Valid Wait Min (%)",
     "SrcA Valid Wait Median (%)",
@@ -1070,8 +1068,6 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         if has_counter(name):
             per_op_stats[f"Thread {t} Stall Rate"] = compute_util_metric(name)
 
-    # Thread IPC: no RTL counter for instruction counts. IPC metric removed.
-
     # Pipeline wait metrics
     pipeline_wait_counters = {
         "SrcA Valid Wait": "WAITING_FOR_SRCA_VALID",
@@ -1559,15 +1555,15 @@ def compute_device_only_metrics(
         )
 
     # Math Pipeline Utilization: MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE.
-    # On BH, MATH_INSTRN_STARTED is empirically dead — metric will be empty.
+    # Skipped for ops where no math is issued (STARTED == 0 across the whole run).
     if "value_MATH_INSTRN_STARTED" in eff_pivot.columns and eff_pivot["value_MATH_INSTRN_STARTED"].sum() > 0:
         eff_pivot["Math Pipeline Utilization"] = eff_pivot.apply(
             lambda x: safe_div(x.get("value_MATH_INSTRN_STARTED", 0), x.get("value_MATH_INSTRN_AVAILABLE", 0)),
             axis=1,
         )
 
-    # Math-to-Pack Handoff: On BH, PACKER_BUSY is always 0.
-    # Fall back to AVAILABLE_MATH / ref_cnt.
+    # Math-to-Pack Handoff: math availability vs packer busy.
+    # Falls back to AVAILABLE_MATH / ref_cnt when the packer isn't used.
     if has_packer_busy:
         eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
             lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("value_PACKER_BUSY", 0)),

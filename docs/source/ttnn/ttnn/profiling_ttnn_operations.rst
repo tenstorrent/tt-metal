@@ -171,9 +171,11 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 *Pipeline Efficiency*
 
-- **Packer Efficiency (%)**: On Wormhole: fraction of packer busy cycles where dest data was available (``PACKER_DEST_READ_AVAILABLE / PACKER_BUSY``). On Blackhole: fraction of dest read requests that were granted (``DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE``). 100% means the packer never waited for data.
-- **Math-to-Pack Handoff Efficiency (%)**: On Wormhole: how quickly math results reach the packer (``AVAILABLE_MATH / PACKER_BUSY``). On Blackhole: fraction of cycles the math pipeline was not stalled by the scoreboard (``AVAILABLE_MATH / ref_cnt``), since ``PACKER_BUSY`` is inactive.
+- **Packer Efficiency (%)**: Fraction of packer-busy cycles where dest data was available (``PACKER_DEST_READ_AVAILABLE / PACKER_BUSY``). For workloads that don't use the packer (``PACKER_BUSY = 0``), falls back to the dest-read grant rate (``DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE``). 100% means the packer never waited for data.
+- **Math-to-Pack Handoff Ratio (%)**: Ratio of math-availability cycles to packer-busy cycles (``AVAILABLE_MATH / PACKER_BUSY``). Values >100% mean math produces output faster than packer consumes it; <100% means packer is the consumer bottleneck. Falls back to ``AVAILABLE_MATH / ref_cnt`` when the packer isn't used.
 - **Unpacker-to-Math Data Flow (%)**: Ratio of source register write availability to unpacker busy time. Higher means data flows smoothly from unpack to math.
+- **Math Pipeline Utilization (%)**: Fraction of math-available cycles where the math instruction actually issued (``MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE``). 100% means every available math instruction issued immediately.
+- **FPU Execution Efficiency (%)**: FPU active cycles as fraction of math instruction availability on thread 1 (``FPU_COUNTER / FPU_INSTRN_AVAILABLE_1``). Distinguishes compute-bound (high) from stall-bound (low) workloads.
 
 *Thread Analysis*
 
@@ -194,10 +196,13 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 *TDMA Stall Metrics*
 
-- **Data Hazard Stall Rate (%)**: Cycles stalled by dest-to-src data hazards (MOVD2A/MOVD2B). High values in matmul are expected.
-- **SrcA Write Port Blocked Rate (%)**: Cycles where DMA to srcA was blocked by overwrite protection.
+- **Data Hazard Stall Rate (%)**: Fraction of math-valid cycles stalled by dest-to-src data hazards (MOVD2A/MOVD2B). Computed as ``(MATH_INSTRN_AVAILABLE - DATA_HAZARD_STALLS_MOVD2A) / MATH_INSTRN_AVAILABLE``.
+- **SrcA Write Port Blocked Rate (%)**: Fraction of srcA DMA write attempts blocked by port unavailability (DMA mux contention).
+- **SrcB Write Port Blocked Rate (%)**: Same for srcB.
+- **SrcA Write Overwrite Blocked Rate (%)**: Fraction of srcA write attempts blocked by overwrite protection — math hasn't consumed the previous value yet. High values indicate math-consumer bottleneck.
+- **SrcB Write Overwrite Blocked Rate (%)**: Same for srcB.
 - **Dest Read Backpressure (%)**: Cycles where destination register read was requested but not granted.
-- **Math Dest Write Port Stall Rate (%)**: Cycles where math was stalled by destination register write port contention. Wormhole only — on Blackhole, ``MATH_NOT_STALLED_DEST_WR_PORT`` is inactive and this metric is hidden.
+- **Math Dest Write Port Stall Rate (%)**: Fraction of math-valid cycles stalled by destination register write port contention. Skipped when the underlying counter is 0 for an entire op (workload-dependent).
 - **Math Scoreboard Stall Rate (%)**: Cycles where math was stalled by FPU data hazard scoreboard.
 
 *Instruction Availability*
@@ -208,8 +213,11 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 *Write Port Analysis*
 
-- **SrcB Write Port Blocked Rate (%)**: Cycles where srcB DMA write was blocked by write port unavailability.
-- **SrcA Write Actual Efficiency (%)**: Fraction of srcA write attempts that succeeded. 100% = no blocking.
+- **SrcA Write Actual Efficiency (%)**: Fraction of srcA write attempts not blocked by port contention (``SRCA_WRITE_ACTUAL / SRCA_WRITE_AVAILABLE``). 100% = no port blocking.
+- **SrcB Write Actual Efficiency (%)**: Same for srcB (``SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_AVAILABLE``).
+- **Unpacker0 Write Efficiency (%)**: Fraction of Unpacker 0 busy cycles where the srcA write succeeded (``SRCA_WRITE_ACTUAL / UNPACK0_BUSY_THREAD0``).
+- **Unpacker1 Write Efficiency (%)**: Same for Unpacker 1 using srcB.
+- **Unpacker Write Efficiency (%)**: Average of Unpacker0/1 Write Efficiency (per core, then aggregated).
 
 *L1 Memory Utilization*
 
@@ -234,16 +242,18 @@ The following metrics are automatically computed from raw counters. Each metric 
 - **NOC vs Compute Balance (%)**: NOC cycles as a fraction of NOC + FPU cycles. >50% = NOC-bound, <50% = compute-bound.
 - **TDMA vs NOC L1 Share (%)**: RISC/TDMA traffic as a fraction of all L1 traffic. Shows how much bandwidth goes to firmware vs NOC.
 
-*Additional Wormhole-Only Metrics*
+*Fidelity Metrics*
 
-These metrics depend on hardware signals inactive on Blackhole and are automatically hidden from BH output.
+- **Fidelity Stall Rate (%)**: Fraction of math-valid cycles spent in a fidelity phase (multi-HF-cycle math instruction). 0% = pure LoFi; >0% = HiFi math is active.
+- **HiFi Fraction (%)**: Fraction of issued math instructions that took more than 1 HF cycle (HiFi2 + HiFi4 over total).
+- **Avg HF Cycles Per Instrn** (raw number): Weighted average of HF cycles per issued math instruction. 1.0 = all LoFi, 2.0 = all HiFi2, 4.0 = all HiFi4.
 
-- **Math Pipeline Utilization (%)**: Math instruction flow efficiency (``MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE``). Hidden on Blackhole, where ``MATH_INSTRN_STARTED`` is empirically inactive.
-- **SrcB Write Actual Efficiency (%)**: Fraction of srcB write attempts that succeeded.
-- **Packer Engine 0/1/2/3 Util (%)**: Per-engine packer utilization (Wormhole has 4 packer engines).
+*Wormhole-Only Metrics*
+
+These metrics depend on per-pack-engine hardware signals that don't exist on Blackhole (``PACK_COUNT=1``).
+
+- **Packer Engine 0/1/2 Util (%)**: Per-engine packer utilization (WH has 4 packer engines; BH has 1 and uses the combined ``PACKER_BUSY``).
 - **Packer Load Imbalance (%)**: Spread between most and least utilized pack engines.
-- **Unpacker0/1 Write Efficiency (%)**: Source register write throughput per unpacker.
-- **FPU Execution Efficiency (%)**: FPU active cycles as fraction of math instruction availability.
 
 *Additional Idle Waits*
 
@@ -251,15 +261,19 @@ These metrics depend on hardware signals inactive on Blackhole and are automatic
 
 *Composite Metrics*
 
-- **Stall Cause Overlap T0/T1/T2 (x)**: Ratio of sum of stall reasons to total stalls per thread. >1.0 means multiple stall conditions overlap.
+- **Stall Overlap T0/T1/T2 (x)**: Ratio of sum of stall reasons to total stalls per thread. >1.0 means multiple stall conditions overlap.
 - **Compute-to-Unpack Ratio (%)**: MATH_COUNTER / unpack busy. >100% = compute-bound, <100% = memory-bound.
-- **Unpack/Math/Pack Instrn Issue Rate T0/T1/T2**: Instructions issued per cycle per thread.
+- **T0/T1/T2 Instrn Issue Rate** (raw number): Instructions issued per cycle per thread (``THREAD_INSTRUCTIONS_N / ref_cnt``).
 
 **Architecture Differences**
 
-Wormhole and Blackhole expose different sets of raw hardware signals, so the set of available computed metrics also differs by architecture. On Blackhole, some TDMA-related signals are inactive (``PACK_COUNT=1``, ``o_math_instrnbuf_rden`` tied off), so metrics that depend on those signals are hidden from BH output; three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas. Blackhole also has additional L1 mux positions (3 extra for Tensix) providing deeper memory visibility. For the authoritative current counts of raw counters and derived metrics for each architecture, see ``tech_reports/PerfCounters/perf-counters.md``.
+Wormhole and Blackhole expose different raw hardware signals:
 
-For detailed hardware counter documentation including register maps and signal definitions, see ``tech_reports/PerfCounters/perf-counters.md``.
+- ``PACK_COUNT=1`` on Blackhole ties the per-engine packer busy and dest-read signals for engines 1-3 to constants, so per-engine packer metrics (Packer Engine 0/1/2 Util, Packer Load Imbalance) are WH-only.
+- Blackhole has additional L1 mux positions (3 extra for Tensix) providing deeper memory visibility through ``l1_2``, ``l1_3``, ``l1_4`` counter groups.
+- ``Packer Efficiency`` and ``Math-to-Pack Handoff Ratio`` fall back to alternative formulas when ``PACKER_BUSY = 0`` on a given op (e.g. pure-SFPU ops that don't drive the packer).
+
+For the authoritative per-architecture metric list, raw counter set, register maps, and signal definitions, see ``tech_reports/PerfCounters/perf-counters.md``.
 
 
 profile_this description
