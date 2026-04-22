@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
@@ -48,24 +47,6 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def get_max_tokens_all_users(
-        cls,
-        model_name: str = "",
-        num_devices: int = 1,
-        tt_data_parallel: int = 1,
-        **kwargs,
-    ) -> int:
-        """Returns config-specific all-user KV-cache token capacity."""
-        if "DeepSeek-R1-0528" in model_name and is_wormhole_b0():
-            return 32_768
-        return super().get_max_tokens_all_users(
-            model_name=model_name,
-            num_devices=num_devices,
-            tt_data_parallel=tt_data_parallel,
-            **kwargs,
-        )
-
-    @classmethod
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations: str = None
     ):
@@ -76,13 +57,18 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 "DEEPSEEK_V3_HF_MODEL is not set. Set the environment variable or initialize via the demo "
                 "entrypoint with an explicit --model-path."
             )
+        if not cache_dir:
+            raise ValueError(
+                "DEEPSEEK_V3_CACHE is not set. Set the environment variable or initialize via the demo "
+                "entrypoint with an explicit --cache-dir."
+            )
         tokenizer = load_tokenizer(model_path)
 
         model = cls(
             hf_config=hf_config,
             mesh_device=mesh_device,
             model_path=Path(model_path),
-            cache_dir=Path(cache_dir) if cache_dir else None,
+            cache_dir=Path(cache_dir),
             tokenizer=tokenizer,
             max_seq_len=max_seq_len,
             vllm_context=True,
