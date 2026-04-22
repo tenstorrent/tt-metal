@@ -1113,7 +1113,6 @@ def _make_2d_mem_config(
 
 
 # Grids for 2D sharded configs (1 shard per core for HEIGHT/WIDTH/BLOCK).
-_GRID_9x1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8, 0))})
 _GRID_5x1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))})
 _GRID_3x5 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 4))})  # 15 cores
 
