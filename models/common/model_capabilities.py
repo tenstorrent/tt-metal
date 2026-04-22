@@ -9,6 +9,6 @@ class ModelCapabilitiesMixin:
     """Defines interface for hardware- or model-specific configurations."""
 
     @classmethod
-    def get_max_tokens_all_users(cls, *args, **kwargs) -> int:
+    def get_max_tokens_all_users(cls, **kwargs) -> int:
         """Returns the default total token budget across all users."""
         return MAX_TOKENS_ALL_USERS

@@ -43,6 +43,7 @@ MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 # Power-of-2 batch sizes supported by trace caching for batched prefill.
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 
+
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
 
@@ -52,7 +53,6 @@ def _deepseek_kvdbg_enabled() -> bool:
 
 
 class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
-
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.

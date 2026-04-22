@@ -250,7 +250,6 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         model_name: str = "",
         num_devices: int = 1,
         tt_data_parallel: int = 1,
-        *args,
         **kwargs,
     ) -> int:
         """Returns config-specific total token budget across all users."""
@@ -260,7 +259,12 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         # Llama90B on WH T3K
         if "3.2-90B" in model_name and devices_per_dp_cache == 8 and is_wormhole:
             return 65_536
-        return super().get_max_tokens_all_users(*args, **kwargs)
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -365,7 +369,6 @@ class LlamaForCausalLM(Generator):
         model_name: str = "",
         num_devices: int = 1,
         tt_data_parallel: int = 1,
-        *args,
         **kwargs,
     ) -> int:
         """Returns config-specific total token budget across all users."""
@@ -375,7 +378,12 @@ class LlamaForCausalLM(Generator):
         # Llama8B on N150
         if "3.1-8B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
             return 32_768
-        return super().get_max_tokens_all_users(*args, **kwargs)
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -445,7 +453,6 @@ class QwenForCausalLM(Generator):
         model_name: str = "",
         num_devices: int = 1,
         tt_data_parallel: int = 1,
-        *args,
         **kwargs,
     ) -> int:
         """Returns config-specific total token budget across all users."""
@@ -455,7 +462,12 @@ class QwenForCausalLM(Generator):
         # Qwen3-8B on N150 (same constraint as Llama8B-N150)
         if "3-8B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
             return 32_768
-        return super().get_max_tokens_all_users(*args, **kwargs)
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -512,7 +524,6 @@ class MistralForCausalLM(Generator):
         model_name: str = "",
         num_devices: int = 1,
         tt_data_parallel: int = 1,
-        *args,
         **kwargs,
     ) -> int:
         """Returns config-specific total token budget across all users."""
@@ -522,7 +533,12 @@ class MistralForCausalLM(Generator):
         # Mistral7B on N150
         if "7B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
             return 65_536
-        return super().get_max_tokens_all_users(*args, **kwargs)
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -584,7 +600,6 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         model_name: str = "",
         num_devices: int = 1,
         tt_data_parallel: int = 1,
-        *args,
         **kwargs,
     ) -> int:
         """Returns config-specific total token budget across all users."""
@@ -594,7 +609,12 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         # gemma3-4b on wormhole configurations with up to 2 devices per DP shard
         if "4b" in model_name.lower() and devices_per_dp_cache <= 2 and is_wormhole:
             return 65_536
-        return super().get_max_tokens_all_users(*args, **kwargs)
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

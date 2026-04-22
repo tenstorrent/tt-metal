@@ -130,7 +130,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         model_name: str = "",
         num_devices: int = 1,
         tt_data_parallel: int = 1,
-        *args,
         **kwargs,
     ) -> int:
         """Returns config-specific total token budget across all users."""
@@ -141,7 +140,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             model_name=model_name,
             num_devices=num_devices,
             tt_data_parallel=tt_data_parallel,
-            *args,
             **kwargs,
         )
 
