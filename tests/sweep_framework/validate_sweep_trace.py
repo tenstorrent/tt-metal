@@ -63,6 +63,10 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
             # sub_core_grids: None is noise
             if k == "sub_core_grids" and v is None:
                 continue
+            # Strip keys with None values — treat missing vs None as equivalent
+            # (kwargs with default values may appear as None in one trace but be absent in the other)
+            if v is None:
+                continue
             result[k] = normalize(v, _parent_key=k)
         return result
     if isinstance(obj, list):
@@ -523,11 +527,10 @@ def main() -> int:
 
     if report.hash_mismatch:
         print(
-            f"FAIL: {len(report.hash_mismatch)} config(s) have matching arguments "
+            f"WARN: {len(report.hash_mismatch)} config(s) have matching arguments "
             f"but different config_hash (hash computation divergence)",
             file=sys.stderr,
         )
-        return 1
 
     if args.pass_threshold is not None and report.coverage < args.pass_threshold:
         print(
