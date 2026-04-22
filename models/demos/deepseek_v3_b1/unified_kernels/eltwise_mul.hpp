@@ -144,14 +144,13 @@ struct EltwiseMul {
                 uint32_t cb_read_addr = get_read_ptr(CTArgs::cb_scalar_src);
                 volatile tt_l1_ptr uint16_t* src_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_read_addr);
 
+                // cb_scalar holds num_experts pages; get_write_ptr advances each push,
+                // so recompute the dst pointer per iteration.
                 for (uint32_t e = 0; e < CTArgs::num_experts; e++) {
-                    uint16_t scalar_val = src_ptr[CTArgs::scalar_index_offset + e];
-
                     cb_reserve_back(CTArgs::cb_scalar, 1);
-                    uint32_t cb_write_addr = get_write_ptr(CTArgs::cb_scalar);
                     volatile tt_l1_ptr uint16_t* dst_ptr =
-                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_write_addr);
-                    dst_ptr[0] = scalar_val;
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(CTArgs::cb_scalar));
+                    dst_ptr[0] = src_ptr[CTArgs::scalar_index_offset + e];
                     cb_push_back(CTArgs::cb_scalar, 1);
                 }
 
@@ -162,19 +161,32 @@ struct EltwiseMul {
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
-            // TRISC: Element-wise multiplication, looped over num_experts.
-            // enable_scalar=true:  per expert, in0 * scalar * in1  (3-way with expert scale)
-            // enable_scalar=false: per expert, in0 * in1            (simple binary multiply)
+            // TRISC: Element-wise multiplication across all num_experts in a single
+            // tile_regs cycle. Same shape as the original single-expert loop, just
+            // with total_tiles = num_tiles * num_experts held live in DST.
             //
-            // Each expert consumes num_tiles from cb_in0/cb_in1 (and 1 scalar), producing
-            // num_tiles on cb_out. One-time hardware/format init runs before the loop;
-            // the scalar-bcast init is re-issued each iteration because the per-expert
-            // binary_dest_reuse_tiles_init switches hw state.
+            // Layout: cb_in0 / cb_in1 / cb_out each hold total_tiles tiles produced
+            //   by the upstream matmuls. cb_scalar holds num_experts bf16 scalars
+            //   (one 1x32 tile per expert, only [0,0] used via SCALAR broadcast).
+            // Indexing: for expert e, tile i → dst slot e*num_tiles + i.
+            //
+            // Assumes total_tiles <= DST capacity (8 in fp32-accum, 16 in bf16).
             // ================================================================
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
+            constexpr uint32_t num_experts = CTArgs::num_experts;
+            constexpr uint32_t total_tiles = num_tiles * num_experts;
+            static_assert(total_tiles <= 8, "total_tiles must fit in DST (fp32-accum capacity = 8)");
 
-            // ---- One-time init (hw startup + format reconfig) ----
+            // Wait for all experts' inputs.
+            // cb_in0_wait/cb_in1_wait allow waiting on different CBs (for CB aliasing).
+            cb_wait_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles * num_experts);
+            cb_wait_front(CTArgs::cb_in1_wait, CTArgs::cb_in1_wait_tiles * num_experts);
+
+            // Reserve output space for all experts.
+            cb_reserve_back(CTArgs::cb_out, total_tiles);
+
             if constexpr (CTArgs::enable_scalar) {
+                // ---- 3-way multiply: in0 * scalar -> dest, then dest * in1 -> dest ----
                 if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
                     deepseek_compute_kernel_hw_startup<CTArgs::fp32_dest_acc_en>(
                         CTArgs::cb_in0, CTArgs::cb_scalar, CTArgs::cb_out);
@@ -182,64 +194,54 @@ struct EltwiseMul {
                     reconfig_data_format<false, true>(CTArgs::cb_in0, CTArgs::cb_scalar);
                     pack_reconfig_data_format<true>(CTArgs::cb_out);
                 }
+                deepseek_mul_tiles_bcast_scalar_init_short(CTArgs::cb_in0, CTArgs::cb_scalar);
+
+                tile_regs_acquire();
+
+                // Step 1: in0[idx] * scalar[e] -> dest[idx] (idx = e*num_tiles + i)
+                // Wait one scalar at a time so math can start as soon as BRISC
+                // pushes the e-th page (cb_wait_front is cumulative; no pop mid-loop).
+                for (uint32_t e = 0; e < num_experts; e++) {
+                    cb_wait_front(CTArgs::cb_scalar, e + 1);
+                    for (uint32_t i = 0; i < num_tiles; i++) {
+                        uint32_t idx = e * num_tiles + i;
+                        deepseek_mul_tiles_bcast_scalar<CTArgs::fp32_dest_acc_en>(
+                            CTArgs::cb_in0, CTArgs::cb_scalar, idx, e, idx);
+                    }
+                }
+                // Step 2: dest[idx] *= in1[idx] across all experts (init once, pre-loop)
+                deepseek_binary_dest_reuse_tiles_init(CTArgs::cb_in1);
+                for (uint32_t idx = 0; idx < total_tiles; idx++) {
+                    deepseek_binary_dest_reuse_tiles<CTArgs::fp32_dest_acc_en>(CTArgs::cb_in1, idx, idx);
+                }
             } else {
+                // ---- Simple binary multiply: in0 * in1 -> dest ----
                 reconfig_data_format<false, true>(CTArgs::cb_in0, CTArgs::cb_in1);
                 pack_reconfig_data_format<true>(CTArgs::cb_out);
                 mul_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1);
+
+                tile_regs_acquire();
+
+                for (uint32_t idx = 0; idx < total_tiles; idx++) {
+                    mul_tiles(CTArgs::cb_in0, CTArgs::cb_in1, idx, idx, idx);
+                }
             }
 
-            // ---- Per-expert loop ----
-            for (uint32_t e = 0; e < CTArgs::num_experts; e++) {
-                // Wait for this expert's inputs.
-                // cb_in0_wait/cb_in1_wait allow waiting on different CBs (for CB aliasing).
-                cb_wait_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);
-                cb_wait_front(CTArgs::cb_in1_wait, CTArgs::cb_in1_wait_tiles);
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t idx = 0; idx < total_tiles; idx++) {
+                pack_tile(idx, CTArgs::cb_out);
+            }
+            tile_regs_release();
+            cb_push_back(CTArgs::cb_out, total_tiles);
 
-                // Reserve this expert's output space.
-                cb_reserve_back(CTArgs::cb_out, num_tiles);
-
+            // Pop inputs if requested.
+            // Pop from cb_in0_wait (not cb_in0) since that's where tiles were pushed.
+            if constexpr (PopInputs) {
+                cb_pop_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles * num_experts);
+                cb_pop_front(CTArgs::cb_in1_wait, CTArgs::cb_in1_wait_tiles * num_experts);
                 if constexpr (CTArgs::enable_scalar) {
-                    // Re-issue scalar-bcast init every iteration: the inline
-                    // binary_dest_reuse_tiles_init below switches hw state.
-                    deepseek_mul_tiles_bcast_scalar_init_short(CTArgs::cb_in0, CTArgs::cb_scalar);
-
-                    tile_regs_acquire();
-
-                    // Step 1: cb_in0 * scalar -> dest (using scalar broadcast)
-                    cb_wait_front(CTArgs::cb_scalar, 1);
-                    for (uint32_t i = 0; i < num_tiles; i++) {
-                        deepseek_mul_tiles_bcast_scalar<CTArgs::fp32_dest_acc_en>(
-                            CTArgs::cb_in0, CTArgs::cb_scalar, i, 0, i);
-                    }
-                    // Step 2: dest * cb_in1 -> dest (using binary dest reuse)
-                    deepseek_binary_dest_reuse_tiles_init(CTArgs::cb_in1);
-                    for (uint32_t i = 0; i < num_tiles; i++) {
-                        deepseek_binary_dest_reuse_tiles<CTArgs::fp32_dest_acc_en>(CTArgs::cb_in1, i, i);
-                    }
-                } else {
-                    tile_regs_acquire();
-
-                    for (uint32_t i = 0; i < num_tiles; i++) {
-                        mul_tiles(CTArgs::cb_in0, CTArgs::cb_in1, i, i, i);
-                    }
-                }
-
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < num_tiles; i++) {
-                    pack_tile(i, CTArgs::cb_out);
-                }
-                tile_regs_release();
-                cb_push_back(CTArgs::cb_out, num_tiles);
-
-                // Pop this expert's inputs if requested.
-                // Pop from cb_in0_wait (not cb_in0) since that's where tiles were pushed.
-                if constexpr (PopInputs) {
-                    cb_pop_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);
-                    cb_pop_front(CTArgs::cb_in1_wait, CTArgs::cb_in1_wait_tiles);
-                    if constexpr (CTArgs::enable_scalar) {
-                        cb_pop_front(CTArgs::cb_scalar, 1);
-                    }
+                    cb_pop_front(CTArgs::cb_scalar, num_experts);
                 }
             }
 

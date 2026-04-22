@@ -901,11 +901,16 @@ def create_dram_expert_tensors_multi_device(
     num_in1_buffers: int = 3,
     subblock_n: int = 1,
     k_parallel_per_bank: int = 1,
+    allocate_in1_backing: bool = True,
 ) -> dict:
     """Create per-device tensors for ExpertKernel.mesh_op.
 
     Calls create_dram_expert_metadata once per device in the mesh.
     Assumes homogeneous DRAM bank topology across all devices.
+
+    When ``allocate_in1_backing=False`` the L1 backing tensor for cb_in1 is NOT
+    allocated (caller provides their own — e.g. the fused MoE kernel overlays
+    cb_in1 on the SDPA KV buffer). The returned tuple has ``in1_backing=None``.
 
     Returns:
         {MeshCoordinate: (in1_backing, meta_tensors, fmt_tensors,

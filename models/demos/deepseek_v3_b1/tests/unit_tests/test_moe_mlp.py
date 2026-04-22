@@ -243,7 +243,6 @@ def create_routed_expert_tensors(
     state_dict,
     is_moe=True,
     layer_idx=None,
-    tp8_routed=False,
     compressed_tp8=False,
     num_routed_experts=256,
 ):
@@ -395,7 +394,6 @@ def create_routed_expert_tensors(
             is_moe=True,
             num_routed_experts=num_experts,
             move_to_device=True,
-            tp8_routed=tp8_routed,
             compressed_tp8=compressed_tp8,
         )
         gate_proj_expert_tensors = routed_weights.routed_gate_proj
@@ -944,7 +942,6 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         state_dict=state_dict,
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
-        tp8_routed=True,
         compressed_tp8=True,
         num_routed_experts=num_routed_experts,
     )
@@ -1310,7 +1307,6 @@ def test_moe_fused_no_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_
         state_dict=state_dict,
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
-        tp8_routed=True,
         compressed_tp8=True,
         num_routed_experts=num_routed_experts,
     )

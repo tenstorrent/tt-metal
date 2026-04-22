@@ -1447,8 +1447,10 @@ class MoeRoutedExpertOp:
         down_proj_gather_dst_num_pages = (
             gate_proj_params["per_core_n"] * num_gate_proj_cores * down_proj_gather_num_experts
         )
-        down_proj_gather_src_page_size = 64
-        down_proj_gather_expert_dst_stride = num_gate_proj_cores * 64
+        # Per-expert src chunk = per_core_n tiles × 64 B/tile (contiguous in sender CB).
+        # Per-expert dst block = every sender's chunk concatenated on the receiver.
+        down_proj_gather_src_page_size = down_proj_gather_data_size_bytes
+        down_proj_gather_expert_dst_stride = num_gate_proj_cores * down_proj_gather_data_size_bytes
         down_proj_gather_params = MoeOp.setup_gather(
             device=device,
             receiver_core=sender_core,
@@ -4101,10 +4103,13 @@ class MoeOp:
             kv_offset += cb20_total_size
 
             # CB 21: scalar working buffer (1x32 tile to match mul in0/in1; only [0,0] used via SCALAR bcast)
+            # Sized for all topk scalars (8) so the Mul can wait for all experts' scalars upfront
+            # and do one flattened tile_regs cycle.
             TILE_1x32 = ttnn.Tile((1, 32))
             tile_1x32_size = TILE_1x32.get_tile_size(ttnn.bfloat16)
             tile_1x32_desc = ttnn.TileDescriptor(TILE_1x32)
-            scalar_total_size = tile_1x32_size  # 64 B (single 1x32 tile)
+            scalar_num_pages = 8  # = mul_num_experts when routing is on
+            scalar_total_size = scalar_num_pages * tile_1x32_size
             cb21_desc = ttnn.cb_descriptor_from_sharded_tensor(
                 routed_ctx.mul_cb_scalar,
                 kv_buf,

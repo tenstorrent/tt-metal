@@ -136,12 +136,14 @@ struct MoeGather {
                 uint32_t base_dst_offset = core_index * args.data_size_bytes;
 
                 // Loop over experts: write each expert's tile at its expert-major position.
+                uint32_t src_off = 0;
+                uint32_t dst_off = base_dst_offset;
                 for (uint32_t e = 0; e < args.num_experts; e++) {
-                    uint32_t src_off = e * args.src_page_size;
-                    uint32_t dst_off = e * args.expert_dst_stride + base_dst_offset;
                     uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_off);
                     noc_async_write_one_packet<true, true>(
                         input_data_addr + src_off, dst_data_noc_addr, args.data_size_bytes);
+                    src_off += args.src_page_size;
+                    dst_off += args.expert_dst_stride;
                 }
                 // BH does not support posted atomics due to a bug
                 noc_semaphore_inc(dst_semaphore_noc_addr, 1);
