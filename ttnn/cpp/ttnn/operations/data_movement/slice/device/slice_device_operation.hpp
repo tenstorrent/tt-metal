@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation_types.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_default.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_stride.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
@@ -34,7 +34,7 @@ struct SliceDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        SliceRmProgramFactory,
+        SliceRmDefaultProgramFactory,
         SliceRmShardedProgramFactory,
         SliceRmStrideProgramFactory,
         SliceTileProgramFactory,

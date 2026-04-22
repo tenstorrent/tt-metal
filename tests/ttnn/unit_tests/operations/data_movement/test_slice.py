@@ -1468,3 +1468,84 @@ def test_issue_38841_regression(device):
     tt_output_torch = ttnn.to_torch(tt_output)
 
     assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
+
+
+def test_slice_rm_nd_sharded_implicit_memory_config(device):
+    """ND-sharded RM input: slice without explicit output MemoryConfig; output NdShardSpec is resized."""
+    torch.manual_seed(42)
+    tensor_shape = [1, 2, 32, 32]
+    shard_shape = [1, 1, 16, 32]
+    torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
+
+    grid_size = device.compute_with_storage_grid_size()
+    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))
+    grid = ttnn.CoreRangeSet([core_range])
+    nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid)
+    mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+    )
+
+    begins = (0, 0, 0, 0)
+    ends = (1, 2, 24, 32)
+    tt_out = ttnn.slice(tt_input, begins, ends)
+    assert tt_out.memory_config().nd_shard_spec is not None
+    tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
+    tt_torch = ttnn.to_torch(tt_out)
+
+    torch_expected = torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]]
+    assert_with_pcc(torch_expected, tt_torch, 0.9999)
+
+
+def test_slice_rm_strided_height_sharded(device):
+    """Strided slice on height-sharded RM tensor (optimized sharded factory when output shard_spec is set)."""
+    torch.manual_seed(7)
+    n, c, h, w = 2, 4, 64, 32
+    torch_input = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    begins = (0, 0, 0, 0)
+    ends = (n, c, h, w)
+    steps = (1, 1, 2, 1)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    num_cores_x = 4
+    num_cores_y = 2
+    shard_h = (n * c * h + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
+    grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tt_input = ttnn.to_memory_config(tt_input, sharded_mem_config)
+
+    out_h = (h - begins[2] + steps[2] - 1) // steps[2]
+    out_shard_h = (n * c * out_h + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
+    out_shard_spec = ttnn.ShardSpec(shard_grid, (out_shard_h, w), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, out_shard_spec
+    )
+
+    tt_out = ttnn.slice(tt_input, starts=begins, ends=ends, steps=steps, memory_config=output_mem_config)
+    tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
+    tt_torch = ttnn.to_torch(tt_out)
+
+    torch_expected = torch_input[
+        begins[0] : ends[0] : steps[0],
+        begins[1] : ends[1] : steps[1],
+        begins[2] : ends[2] : steps[2],
+        begins[3] : ends[3] : steps[3],
+    ]
+    assert_with_pcc(torch_expected, tt_torch, 0.9999)

@@ -7,13 +7,14 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_default.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_stride.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;
 
@@ -90,6 +91,22 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
+namespace {
+
+bool can_use_sharded_optimized_factory(const SliceParams& args, const Tensor& input) {
+    if (!input.is_sharded()) {
+        return false;
+    }
+    if (!input.shard_spec().has_value()) {
+        return false;
+    }
+    if (!args.output_mem_config.shard_spec().has_value()) {
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
 
 void SliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -143,7 +160,6 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
     if (has_step) {  // if all ones modify before passing in to function
         TT_FATAL(
             tensor_args.input.layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
-        TT_FATAL(!tensor_args.input.is_sharded(), "Strided slice is not supported for sharded tensor");
         TT_FATAL(
             args.step.size() == args.slice_end.rank(),
             "Number of steps {} must match number of ends/starts {}",
@@ -162,11 +178,35 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             (output_tensor_shape[-1] % TILE_WIDTH == 0) && (args.slice_start[-1] % TILE_WIDTH == 0),
             "Can only slice tilized tensor with width begin index aligned to tiles");
+        if (tensor_args.input.memory_config().is_sharded()) {
+            const uint32_t page_size_bytes = tensor_args.input.buffer()->page_size();
+            TT_FATAL(
+                page_size_bytes == tensor_args.input.buffer()->aligned_page_size(),
+                "Tiled sharded slice requires tile page size {} bytes to equal aligned page size {} (L1 alignment {})",
+                page_size_bytes,
+                tensor_args.input.buffer()->aligned_page_size(),
+                hal::get_l1_alignment());
+        }
     } else if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         if (has_step) {
             for (uint32_t i = 0; i < tensor_args.input.padded_shape().rank(); i++) {
                 TT_FATAL(args.step[i] > 0, "Step({}) = {} should be positive", i, args.step[i]);
             }
+        }
+        if (tensor_args.input.memory_config().is_sharded()) {
+            const uint32_t shard_width = tensor_args.input.shard_spec().has_value()
+                                             ? tensor_args.input.shard_spec().value().shape[1]
+                                             : tensor_args.input.nd_shard_spec().value().shard_shape[-1];
+            const uint32_t page_size_bytes = tensor_args.input.buffer()->page_size();
+            TT_FATAL(
+                page_size_bytes == tensor_args.input.buffer()->aligned_page_size(),
+                "Input row-major shard width {} with data type {} gives page size {} bytes, which must equal aligned "
+                "page size {} (L1 alignment {})",
+                shard_width,
+                tensor_args.input.dtype(),
+                page_size_bytes,
+                tensor_args.input.buffer()->aligned_page_size(),
+                hal::get_l1_alignment());
         }
     }
 }
@@ -243,13 +283,16 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
 
     if (input.layout() == Layout::ROW_MAJOR) {
-        if (input.is_sharded()) {
-            return SliceRmShardedProgramFactory{};
-        }
         if (has_step) {
             return SliceRmStrideProgramFactory{};
         }
-        return SliceRmProgramFactory{};
+        if (input.is_sharded()) {
+            if (can_use_sharded_optimized_factory(args, input)) {
+                return SliceRmShardedProgramFactory{};
+            }
+            return SliceRmDefaultProgramFactory{};
+        }
+        return SliceRmDefaultProgramFactory{};
     }
     // Layout::TILE
     return SliceTileProgramFactory{};

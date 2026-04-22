@@ -16,11 +16,12 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
+    constexpr uint32_t num_pages_in_row = get_compile_time_arg_val(1);
+    constexpr uint32_t page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t size_of_valid_data_in_last_page_in_row = get_compile_time_arg_val(3);
+    constexpr auto dst_args = TensorAccessorArgs<4>();
 
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
-    const auto s0 = TensorAccessor(dst_args, dst_addr, stick_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     // Create experimental CircularBuffer for Device 2.0 API
     experimental::CircularBuffer cb_out0(cb_id_out0);
@@ -33,10 +34,26 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-            uint64_t dst_noc_addr = get_noc_addr(i_stick, s0);
-            noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
-            l1_read_addr += stick_size_offset;
-            i_stick += 1;
+            if (num_pages_in_row == 1) {
+                uint64_t dst_noc_addr = s0.get_noc_addr(i_stick);
+                noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+                l1_read_addr += stick_size_offset;
+                i_stick += 1;
+            } else {
+                uint32_t row_l1 = l1_read_addr;
+                for (uint32_t p = 0; p < num_pages_in_row - 1; p++) {
+                    uint64_t dst_noc_addr = s0.get_noc_addr(i_stick);
+                    noc_async_write(row_l1, dst_noc_addr, page_size);
+                    noc_async_write_barrier();
+                    row_l1 += page_size;
+                    i_stick += 1;
+                }
+                uint64_t dst_noc_addr = s0.get_noc_addr(i_stick);
+                noc_async_write(row_l1, dst_noc_addr, size_of_valid_data_in_last_page_in_row);
+                noc_async_write_barrier();
+                i_stick += 1;
+                l1_read_addr += stick_size_offset;
+            }
         }
         noc_async_write_barrier();
         cb_out0.pop_front(num_read_per_barrier);

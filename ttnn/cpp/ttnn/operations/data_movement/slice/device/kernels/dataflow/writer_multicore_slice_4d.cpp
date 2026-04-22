@@ -60,7 +60,10 @@ void kernel_main() {
     // Compile-time arguments
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr uint32_t num_pages_in_row = get_compile_time_arg_val(2);
+    constexpr uint32_t page_size = get_compile_time_arg_val(3);
+    constexpr uint32_t size_of_valid_data_in_last_page_in_row = get_compile_time_arg_val(4);
+    constexpr auto dst_args = TensorAccessorArgs<5>();
 
     // Calculate sizes - working with rows, not tiles
     uint32_t output_bytes_per_row = output_w * element_size;  // Dynamic element size
@@ -77,14 +80,23 @@ void kernel_main() {
         cb_in.wait_front(1);
         uint32_t l1_read_addr = cb_in.get_read_ptr();
 
-        // Calculate global output row index for this local row
         uint32_t global_output_row = start_row_for_this_core + local_row;
+        uint32_t base_page = global_output_row * num_pages_in_row;
 
-        // Calculate output address for this row
-        uint64_t output_row_noc_addr = get_noc_addr(global_output_row, s0);
-
-        // Write the complete row to output tensor
-        noc_async_write(l1_read_addr, output_row_noc_addr, output_bytes_per_row);
+        if (num_pages_in_row == 1) {
+            uint64_t output_row_noc_addr = s0.get_noc_addr(base_page);
+            noc_async_write(l1_read_addr, output_row_noc_addr, output_bytes_per_row);
+        } else {
+            uint32_t row_l1 = l1_read_addr;
+            for (uint32_t p = 0; p < num_pages_in_row - 1; p++) {
+                uint64_t output_row_noc_addr = s0.get_noc_addr(base_page + p);
+                noc_async_write(row_l1, output_row_noc_addr, page_size);
+                noc_async_write_barrier();
+                row_l1 += page_size;
+            }
+            uint64_t output_row_noc_addr = s0.get_noc_addr(base_page + num_pages_in_row - 1);
+            noc_async_write(row_l1, output_row_noc_addr, size_of_valid_data_in_last_page_in_row);
+        }
         noc_async_writes_flushed();
 
         cb_in.pop_front(1);

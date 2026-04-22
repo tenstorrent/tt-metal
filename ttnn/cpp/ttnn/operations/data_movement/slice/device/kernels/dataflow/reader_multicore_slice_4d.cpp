@@ -76,7 +76,10 @@ void kernel_main() {
     // Compile-time arguments
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
+    constexpr uint32_t num_pages_in_row = get_compile_time_arg_val(2);
+    constexpr uint32_t page_size = get_compile_time_arg_val(3);
+    constexpr uint32_t size_of_valid_data_in_last_page_in_row = get_compile_time_arg_val(4);
+    constexpr auto src_args = TensorAccessorArgs<5>();
 
     // Calculate sizes - working with rows, not tiles
     uint32_t input_bytes_per_row = input_w * element_size;  // Dynamic element size
@@ -148,10 +151,23 @@ void kernel_main() {
                 cb_out.reserve_back(1);
                 uint32_t l1_write_addr = cb_out.get_write_ptr();
 
-                // Read the full input row first
-                uint64_t input_row_noc_addr = get_noc_addr(input_row_idx, s0);
-                noc_async_read(input_row_noc_addr, l1_write_addr, input_bytes_per_row);
-                noc_async_read_barrier();
+                if (num_pages_in_row == 1) {
+                    uint64_t input_row_noc_addr = s0.get_noc_addr(input_row_idx);
+                    noc_async_read(input_row_noc_addr, l1_write_addr, input_bytes_per_row);
+                    noc_async_read_barrier();
+                } else {
+                    uint32_t row_l1 = l1_write_addr;
+                    uint32_t base_page = input_row_idx * num_pages_in_row;
+                    for (uint32_t p = 0; p < num_pages_in_row - 1; p++) {
+                        uint64_t input_row_noc_addr = s0.get_noc_addr(base_page + p);
+                        noc_async_read(input_row_noc_addr, row_l1, page_size);
+                        noc_async_read_barrier();
+                        row_l1 += page_size;
+                    }
+                    uint64_t input_row_noc_addr = s0.get_noc_addr(base_page + num_pages_in_row - 1);
+                    noc_async_read(input_row_noc_addr, row_l1, size_of_valid_data_in_last_page_in_row);
+                    noc_async_read_barrier();
+                }
 
                 // Now slice the row according to width slice parameters
                 // Copy sliced elements to the beginning of the buffer
