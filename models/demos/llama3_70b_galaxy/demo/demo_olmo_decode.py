@@ -535,6 +535,12 @@ def run_olmo_demo(
         num_compile_iters = 10
     elif layers == 5:
         num_compile_iters = 2
+    elif batch_size > 1 and padded_prefill_len > 128:
+        # Extra eager decode warmup for batch=32 at ISL > 128: the heavier prefill
+        # (32 × N CCL ops) can leave CCL ring-fabric state that deadlocks the decode
+        # trace at iteration 1.  Additional eager passes drain pending signals and
+        # stabilize the fabric before trace capture.
+        num_compile_iters = 3
     else:
         num_compile_iters = 1
     for i in range(num_compile_iters):

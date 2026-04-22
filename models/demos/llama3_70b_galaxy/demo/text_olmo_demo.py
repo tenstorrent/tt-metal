@@ -529,6 +529,20 @@ def run_olmo_demo(
             1,
             False,
         ),
+        (  # long-4k-b32: 4K context, 32 users
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k_b32.json",
+            True,
+            1,
+            128 * 1024,
+            32,
+            128,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"temperature": 0.0, "top_p": 0.08},  # argmax
+            False,
+            64,
+            True,  # is_cur_pos_sharded
+        ),
         (  # long-4k-b1: 4K context, 1 user
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",
             True,
@@ -634,6 +648,7 @@ def run_olmo_demo(
         "quick",
         "single",
         "single-batch1",
+        "long-4k-b32",
         "long-4k-b1",
         "long-8k-b1",
         "long-16k-b1",

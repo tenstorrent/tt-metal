@@ -669,23 +669,20 @@ class TtLlamaAttention(LightweightModule):
             self._capture_attn("k_pre_norm", k_heads_pre_rot_1BKD)
             self._capture_attn("v_heads", v_heads_1BKD)
 
-            # ---- K global norm: fused_rms_minimal over 8 row devices (1024 total elements) ----
-            # K from create_heads: [1, 1, batch_per_col, 128]. Reshape, pad logical height to 32,
-            # tilize, shard to OLMO_K_FUSED_NORM_MEMCFG → fused norm → slice back.
+            # ---- K global norm (fused): distributed rms_norm via fused_rms_minimal (cluster_axis=0) ----
+            # K exits create_heads as [1, q_batch, 1, head_dim] HEIGHT_SHARDED in L1.
+            # Reshape to [1, 1, q_batch, head_dim], pad to 32 rows (fused_rms_minimal requirement),
+            # tilize, move to fused-norm shard, apply fused norm, then undo padding/reshape.
             q_batch = q_heads_pre_rot_1BQD.shape[1]  # batch per col-device (e.g. 8 for 32-user run)
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(
                 k_heads_pre_rot_1BKD, self.model_config["OLMO_K_NORM_L1_MEMCFG"]
             )
             k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 1, q_batch, self.head_dim])
-            # Pad logical height to 32 (fused_rms_minimal requires logical_shape[2]==32)
-            _k_pad_rows = 32 - q_batch
-            if _k_pad_rows > 0:
+            if q_batch < 32:
                 k_heads_pre_rot_1BKD = ttnn.pad(
-                    k_heads_pre_rot_1BKD, [(0, 0), (0, 0), (0, _k_pad_rows), (0, 0)], value=0.0
+                    k_heads_pre_rot_1BKD, [(0, 0), (0, 0), (0, 32 - q_batch), (0, 0)], value=0.0
                 )
-            k_heads_pre_rot_1BKD = ttnn.to_layout(
-                k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT, memory_config=self.model_config["OLMO_K_NORM_L1_MEMCFG"]
-            )
+            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(
                 k_heads_pre_rot_1BKD, self.model_config["OLMO_K_FUSED_NORM_MEMCFG"]
             )
@@ -694,56 +691,57 @@ class TtLlamaAttention(LightweightModule):
                 self.model_config["OLMO_K_FUSED_NORM_PROGCFG"],
                 self.olmo_k_norm_weight,
                 self.tt_ccl,
-                self.model_config["OLMO_K_NORM_L1_MEMCFG"],
+                output_mem_config=self.model_config["OLMO_K_FUSED_NORM_MEMCFG"],
                 stats_key="LAYERNORM_QK_K_STATS",
-                epsilon=1e-6,
             )
             k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
-            # Slice and reshape back to original K shape [1, q_batch, 1, head_dim] = [1, 8, 1, 128]
-            if _k_pad_rows > 0:
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(
+                k_heads_pre_rot_1BKD, self.model_config["OLMO_K_NORM_L1_MEMCFG"]
+            )
+            if q_batch < 32:
                 k_heads_pre_rot_1BKD = ttnn.slice(k_heads_pre_rot_1BKD, [0, 0, 0, 0], [1, 1, q_batch, self.head_dim])
             k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, q_batch, 1, self.head_dim])
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, k_mem_cfg)
 
-            # ---- Q global norm: fused_rms_minimal over 8 row devices (5120 total elements) ----
-            # create_heads output: [1, batch(8), padded_heads(8), head_dim(128)]
-            # Slice 5 real Q heads, flatten to 640, pad rows to 32, shard to OLMO_Q_FUSED_NORM_MEMCFG.
+            # ---- Q global norm (fused): distributed rms_norm via fused_rms_minimal (cluster_axis=0) ----
+            # Q from create_heads: [1, q_batch, 8, 128] (padded heads). Move to L1 interleaved,
+            # slice 5 real heads, reshape to [1, 1, q_batch, 640], pad to 32 rows, apply fused norm.
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(
                 q_heads_pre_rot_1BQD, self.model_config["OLMO_Q_NORM_L1_MEMCFG"]
             )
 
-            # Slice 5 real Q heads in dim 2: [1, batch, 8, 128] → [1, batch, 5, 128]
+            # Slice 5 real Q heads in dim 2: [1, q_batch, 8, 128] → [1, q_batch, 5, 128]
             q_real = ttnn.slice(q_heads_pre_rot_1BQD, [0, 0, 0, 0], [1, q_batch, self.n_local_heads, self.head_dim])
             ttnn.deallocate(q_heads_pre_rot_1BQD)
 
-            # Reshape [1, batch, 5, 128] → [1, 1, batch, 640]: move batch to row dim for fused norm.
-            # Pad logical height to 32 (fused_rms_minimal requires logical_shape[2]==32).
+            # Reshape [1, q_batch, 5, 128] → [1, 1, q_batch, 640]
             q_flat = ttnn.reshape(q_real, [1, 1, q_batch, self.n_local_heads * self.head_dim])
             ttnn.deallocate(q_real)
-            _q_pad_rows = 32 - q_batch
-            if _q_pad_rows > 0:
-                q_flat = ttnn.pad(q_flat, [(0, 0), (0, 0), (0, _q_pad_rows), (0, 0)], value=0.0)
-            q_flat = ttnn.to_layout(q_flat, ttnn.TILE_LAYOUT, memory_config=self.model_config["OLMO_Q_NORM_L1_MEMCFG"])
+            if q_batch < 32:
+                q_flat = ttnn.pad(q_flat, [(0, 0), (0, 0), (0, 32 - q_batch), (0, 0)], value=0.0)
+            q_flat = ttnn.to_layout(q_flat, ttnn.TILE_LAYOUT)
             q_flat = ttnn.to_memory_config(q_flat, self.model_config["OLMO_Q_FUSED_NORM_MEMCFG"])
+
             q_flat = fused_olmo_qk_norm(
                 q_flat,
                 self.model_config["OLMO_Q_FUSED_NORM_PROGCFG"],
                 self.olmo_q_norm_weight_full_prefill,
                 self.tt_ccl,
-                self.model_config["OLMO_Q_NORM_L1_MEMCFG"],
+                output_mem_config=self.model_config["OLMO_Q_FUSED_NORM_MEMCFG"],
                 stats_key="LAYERNORM_QK_Q_STATS",
-                epsilon=1e-6,
             )
             q_flat = ttnn.to_layout(q_flat, ttnn.ROW_MAJOR_LAYOUT)
-            # Slice back to [1, 1, q_batch, 640] (remove padded rows)
-            if _q_pad_rows > 0:
+            q_flat = ttnn.to_memory_config(q_flat, self.model_config["OLMO_Q_NORM_L1_MEMCFG"])
+
+            # Slice back to q_batch rows: [1, 1, 32, 640] → [1, 1, q_batch, 640]
+            if q_batch < 32:
                 q_flat = ttnn.slice(q_flat, [0, 0, 0, 0], [1, 1, q_batch, self.n_local_heads * self.head_dim])
 
-            # Undo reshape [1, 1, batch, 640] → [1, batch, 5, 128]
+            # Reshape [1, 1, q_batch, 640] → [1, q_batch, 5, 128]
             q_real_normed = ttnn.reshape(q_flat, [1, q_batch, self.n_local_heads, self.head_dim])
             ttnn.deallocate(q_flat)
 
-            # Pad 3 zero heads in dim 2: [1, batch, 5, 128] → [1, batch, 8, 128]
+            # Pad 3 zero heads in dim 2: [1, q_batch, 5, 128] → [1, q_batch, 8, 128]
             n_pad = self.n_local_heads_padded - self.n_local_heads
             if n_pad > 0:
                 q_heads_pre_rot_1BQD = ttnn.pad(q_real_normed, [(0, 0), (0, 0), (0, n_pad), (0, 0)], value=0.0)
