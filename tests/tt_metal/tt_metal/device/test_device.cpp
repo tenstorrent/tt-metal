@@ -534,8 +534,6 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     uint32_t dst_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32);
     uint32_t pcie_xy_enc = noc_addr.value().pcie_xy_enc;
 
-    std::cout << "dst lo: " << dst_lo << " dst hi: " << dst_hi << " pcie xy enc: " << pcie_xy_enc << std::endl;
-
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b_wwrite.cpp",

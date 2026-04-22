@@ -645,8 +645,8 @@ def test_device_trace_run():
         statTypes=["kernel", "fw"],
         allowedRange=0,
         refCountDict={
-            "trace_fw_duration": [50],
-            "trace_kernel_duration": [50],
+            "trace_fw_duration": [5],
+            "trace_kernel_duration": [5],
         },
     )
     verify_stats(
@@ -658,8 +658,8 @@ def test_device_trace_run():
         statTypes=["kernel", "fw"],
         allowedRange=0,
         refCountDict={
-            "trace_fw_duration": [50],
-            "trace_kernel_duration": [50],
+            "trace_fw_duration": [5],
+            "trace_kernel_duration": [5],
         },
     )
 

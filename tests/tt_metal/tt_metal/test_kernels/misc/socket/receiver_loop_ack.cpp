@@ -43,7 +43,7 @@ void kernel_main() {
     noc_semaphore_set_multicast((uint32_t)worker_config_sem_ptr, worker_config_sem_mcast_noc_addr, num_worker_cores);
 
     constexpr uint32_t num_pages = data_size / page_size;
-    SocketReceiverInterface receiver_socket = create_receiver_socket_interface_2(socket_config_addr);
+    SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, page_size);
 
     uint32_t sending_credits_sem_addr = get_semaphore(credits0_sem_id);

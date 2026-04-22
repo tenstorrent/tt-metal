@@ -854,10 +854,9 @@ static void ReadDeviceProfilerResultsImpl(
     }
 
     TT_FATAL(
-        !MetalContext::instance(context_id).dprint_server(),
-        "Debug print server is running, cannot read device profiler data");
+        !MetalContext::instance().dprint_server(), "Debug print server is running, cannot read device profiler data");
 
-    if (tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_profiler_trace_only()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
     } else {

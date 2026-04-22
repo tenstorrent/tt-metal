@@ -61,9 +61,20 @@ class PCIeCoreWriter;
 class D2HSocket {
 public:
     /**
+     * @brief Constructs a D2HSocket for streaming data from a device core to host.
+     *
+     * Allocates pinned host memory for the data FIFO and bytes_sent signaling.
+     * Creates a configuration buffer on the device that the kernel uses to access
+     * socket metadata and downstream (host) buffer addresses.
+     *
+     * @param mesh_device The mesh device containing the sender core.
+     * @param sender_core The source core coordinate (device + core) that sends data.
+     * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
      * @param l1_data_buffer_size If non-zero, allocates an L1 staging buffer on the sender core
      *        and writes its address into the socket config so the device kernel can use it.
      *        The address is retrievable via get_l1_data_buffer_address(). Default: 0 (disabled).
+     *
+     * @throws TT_FATAL if pinned memory allocation fails or addresses are invalid.
      */
     D2HSocket(
         const std::shared_ptr<MeshDevice>& mesh_device,
@@ -71,27 +82,146 @@ public:
         uint32_t fifo_size,
         uint32_t l1_data_buffer_size = 0);
 
+    /**
+     * @brief Connects to an existing D2HSocket from another process.
+     *
+     * Waits for the flatbuffer descriptor exported by the owner, opens the named
+     * shared memory, and sets up PCIe write access to the device core via
+     * PCIeCoreWriter (bypasses MetalContext). The returned socket is fully
+     * functional for read() and barrier() operations.
+     *
+     * @param socket_id The identifier used when the owner called export_descriptor().
+     * @param timeout_ms Max time to wait for the descriptor file (default 10s).
+     * @return A connected D2HSocket ready for data transfer.
+     */
     static std::unique_ptr<D2HSocket> connect(
         const std::string& socket_id, std::optional<uint32_t> timeout_ms = std::nullopt);
 
+    /**
+     * @brief Exports a descriptor file for cross-process socket attachment.
+     *
+     * Writes a flatbuffer binary to /dev/shm/ containing all metadata needed for
+     * a remote process to connect: shared memory name, buffer layout, device
+     * addresses, pre-resolved core coordinates, and PCIe alignment.
+     *
+     * @param socket_id A user-provided identifier used in the descriptor filename.
+     * @return The full path to the written descriptor file.
+     */
     std::string export_descriptor(const std::string& socket_id);
+
+    /**
+     * @brief Destroys the D2HSocket.
+     *
+     * Releases pinned memory mappings before freeing the underlying host buffers.
+     * This ensures the DMA mappings are properly cleaned up to avoid "File exists"
+     * errors when re-pinning memory at the same virtual address.
+     * Owner: waits for device acknowledgement, unpins memory, unlinks shared memory,
+     * removes descriptor file.
+     * Connector: unmaps shared memory via NamedShm destructor.
+     */
     ~D2HSocket() noexcept;
 
+    /**
+     * @brief Returns the currently configured page size.
+     *
+     * @return The page size in bytes, or 0 if not yet set.
+     */
     uint32_t get_page_size() const { return page_size_; }
 
+    /**
+     * @brief Returns the L1 address of the socket configuration buffer on the device.
+     *
+     * This address should be passed to the device kernel (typically as a compile-time
+     * argument) so it can call `create_sender_socket_interface()` to access socket metadata.
+     *
+     * @return The L1 address of the configuration buffer.
+     */
     uint32_t get_config_buffer_address() const { return config_buffer_address_; }
 
+    /**
+     * @brief Returns the L1 address of the optional sender-side staging buffer.
+     *
+     * Non-zero only when the socket was constructed with a non-zero
+     * `l1_data_buffer_size`. Intended to be passed to the sender kernel as a
+     * compile-time argument so it can stage data in L1 before pushing into the
+     * socket FIFO.
+     *
+     * @return The L1 address of the staging buffer, or 0 if not allocated.
+     */
     uint32_t get_l1_data_buffer_address() const { return l1_data_buffer_address_; }
+
+    /**
+     * @brief Returns the size of the optional sender-side L1 staging buffer.
+     *
+     * @return The staging buffer size in bytes, or 0 if not allocated.
+     */
     uint32_t get_l1_data_buffer_size() const { return l1_data_buffer_size_; }
 
+    /**
+     * @brief Sets the page size for subsequent read operations.
+     *
+     * The page size determines the granularity of data transfers. Must be PCIe-aligned
+     * and less than or equal to the FIFO size. The read pointer is aligned to the new
+     * page size boundary.
+     *
+     * If alignment causes the read pointer to wrap, this function waits for the device
+     * to send enough data to cover the alignment adjustment before returning.
+     *
+     * @param page_size Page size in bytes. Must be PCIe-aligned.
+     *
+     * @throws TT_FATAL if page_size is not PCIe-aligned or exceeds FIFO size.
+     */
     void set_page_size(uint32_t page_size);
 
+    /**
+     * @brief Non-blocking check for available data.
+     *
+     * Returns true if at least one page of data is available in the FIFO
+     * without blocking. Useful for poll-based readers that need to check
+     * a shutdown flag between iterations.
+     *
+     * @return true if at least one page can be read immediately.
+     *
+     * @throws TT_FATAL if page_size has not been set.
+     */
     bool has_data();
 
+    /**
+     * @brief Reads data pages from the socket FIFO.
+     *
+     * Blocks until the requested number of pages are available in the FIFO.
+     * Copies data from the pinned host buffer to the provided destination buffer.
+     * Optionally notifies the device that buffer space has been freed.
+     *
+     * @param data Pointer to the destination buffer. Must have space for
+     *             `num_pages * page_size` bytes.
+     * @param num_pages Number of pages to read.
+     * @param notify_sender If true (default), updates `bytes_acked` on the device
+     *                      to signal that buffer space is available. Set to false
+     *                      if batching multiple reads before acknowledging.
+     *
+     * @throws TT_FATAL if page_size has not been set or num_pages exceeds FIFO capacity.
+     */
     void read(void* data, uint32_t num_pages, bool notify_sender = true);
 
+    /**
+     * @brief Blocks until all sent data has been acknowledged.
+     *
+     * Waits until `bytes_acked` equals `bytes_sent`, indicating the host has
+     * consumed all data sent by the device.
+     *
+     * @param timeout_ms Optional timeout in milliseconds. If specified, the function will throw an exception if the
+     * barrier is not met within the timeout.
+     */
     void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
 
+    /**
+     * @brief Non-blocking query for the number of pages currently available in the FIFO.
+     *
+     * @return The number of complete pages that can be read immediately.
+     *
+     * @throws TT_FATAL if page_size has not been set.
+     */
     uint32_t pages_available();
 
     std::vector<MeshCoreCoord> get_active_cores() const;
