@@ -75,6 +75,8 @@ void kernel_main() {
     //   +4: aligned_experts_tok_counter_page_size - aligned counter page size (L1 stride)
     //   +5: read_batch_size                       - number of rows per untilize batch
     //   +6: cb_metadata_batch_id                  - this idle core's c_9 CB (target of sender's metadata unicast)
+    //   +7: num_experts_per_tok                   - number of experts each token is routed to (for output_page_idx)
+    //   +8: aligned_dispatched_metadata_page_size - aligned metadata page size (stride in c_9)
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t cb_stop_signal_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t cb_experts_tok_counter_id =
@@ -85,6 +87,9 @@ void kernel_main() {
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 4);
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 5);
     constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 6);
+    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 7);
+    constexpr uint32_t aligned_dispatched_metadata_page_size =
+        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 8);
     constexpr uint32_t total_transfer_size = read_batch_size * aligned_output_page_size;
     constexpr uint32_t counter_data_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
 
@@ -136,7 +141,10 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
     // Process untilized batches until compute pushes ROUTE_INFO_SENTINEL onto cb_stop_signal_id.
-    // A non-sentinel value means "another batch is on cb_untilize_id, send it to the owning sender".
+    // A non-sentinel value means "another batch is on cb_untilize_id".
+    // After the sender signals start_sem, c_9[0] tells us which path to take:
+    //   ROUTE_INFO_SENTINEL → sender has non-local writes; send untilized data to sender
+    //   any other value     → batch_count; all writes are local; write directly to output DRAM
     while (true) {
         cb_wait_front(cb_stop_signal_id, 1);
         volatile tt_l1_ptr uint32_t* stop_signal_ptr =
@@ -150,22 +158,45 @@ void kernel_main() {
         // 3. Wait for compute to finish untilizing this batch
         cb_wait_front(cb_untilize_id, read_batch_size);
 
-        // 4. Wait for the sender's "send now" signal
+        // 4. Wait for the sender's "send now" signal.
+        //    By the time start_sem arrives, sender has already written metadata to c_9 and
+        //    set c_9[0] to ROUTE_INFO_SENTINEL (non-local) or batch_count (all-local).
         noc_semaphore_wait(start_sem_ptr, 1);
         noc_semaphore_set(start_sem_ptr, 0);
 
-        // 5. NOC-write untilized rows to the sender's receive buffer (chunked for NOC burst limit)
         uint32_t untilize_read_ptr = get_read_ptr(cb_untilize_id);
-        uint32_t off = 0;
-        while (off < total_transfer_size) {
-            uint32_t chunk = (total_transfer_size - off > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE
-                                                                                        : (total_transfer_size - off);
-            noc_async_write(untilize_read_ptr + off, sender_receive_buf_noc_addr + off, chunk);
-            off += chunk;
-        }
-        noc_async_write_barrier();
+        volatile tt_l1_ptr uint32_t* c9_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_c9_l1_offset);
 
-        // 6. Signal the sender that untilized data has landed
+        if (c9_ptr[0] == ROUTE_INFO_SENTINEL) {
+            // 5a. Non-local path: send untilized rows to the sender's receive buffer
+            uint32_t off = 0;
+            while (off < total_transfer_size) {
+                uint32_t chunk = (total_transfer_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
+                                     ? (uint32_t)NOC_MAX_BURST_SIZE
+                                     : (total_transfer_size - off);
+                noc_async_write(untilize_read_ptr + off, sender_receive_buf_noc_addr + off, chunk);
+                off += chunk;
+            }
+            noc_async_write_barrier();
+        } else {
+            // 5b. All-local path: c9[0] = batch_count, write each row directly to output DRAM.
+            //     Metadata layout in c_9: each entry is aligned_dispatched_metadata_page_size bytes,
+            //     with [0]=dst_chip (ignored, all local), [1]=dst_token_idx, [2]=dst_topk_indice.
+            uint32_t batch_count = c9_ptr[0];
+            for (uint32_t t = 0; t < batch_count; t++) {
+                const volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
+                    my_c9_l1_offset + t * aligned_dispatched_metadata_page_size);
+                uint32_t dst_token_idx = metadata[1];
+                uint32_t dst_topk_indice = metadata[2];
+                uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
+                noc_async_write_page(
+                    output_page_idx, output_addr_gen, untilize_read_ptr + t * aligned_output_page_size);
+                noc_async_writes_flushed();
+            }
+            noc_async_write_barrier();
+        }
+
+        // 6. Signal the sender that this batch is done (data sent OR local writes done)
         noc_semaphore_inc(sender_data_ready_noc_addr, 1);
         noc_async_atomic_barrier();
 

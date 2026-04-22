@@ -342,17 +342,17 @@ void kernel_main() {
                 }
             }
 
-            // Unicast the metadata batch to the current idle core's c_9 CB.
-            uint32_t metadata_unicast_bytes = batch_count * aligned_dispatched_metadata_page_size;
-            noc_async_write(metadata_base, idle_metadata_noc_addrs[current_idle_core], metadata_unicast_bytes);
-            noc_async_write_barrier();
-
-            // If any non-local writes exist, overwrite the first uint32 on idle's c_9 with the
-            // sentinel so the idle core knows to send its untilized data back to us.  Otherwise
-            // the first uint32 is the real dst_chip (== linearized_mesh_coord) and idle handles
-            // the entire batch locally.
             if (has_non_local) {
+                // Idle core only checks c_9[0] on the non-local path — skip the full metadata
+                // unicast and just write the sentinel directly.
                 noc_inline_dw_write(idle_metadata_noc_addrs[current_idle_core], ROUTE_INFO_SENTINEL);
+            } else {
+                // Unicast the full metadata batch to the idle core's c_9 so it can write each
+                // row directly to output DRAM, then set c_9[0] = batch_count as the signal.
+                uint32_t metadata_unicast_bytes = batch_count * aligned_dispatched_metadata_page_size;
+                noc_async_write(metadata_base, idle_metadata_noc_addrs[current_idle_core], metadata_unicast_bytes);
+                noc_async_write_barrier();
+                noc_inline_dw_write(idle_metadata_noc_addrs[current_idle_core], batch_count);
             }
 
             // Signal the idle core that the metadata batch is ready in its c_9.
@@ -368,9 +368,8 @@ void kernel_main() {
             noc_semaphore_set(data_ready_sem_ptr, 0);
 #endif
 
-            // In TILE_LAYOUT the sender only routes tokens when has_non_local is true (the idle
-            // core already did the writes for all-local batches). In ROW_MAJOR there's no idle
-            // offload, so we always route.
+            // In TILE_LAYOUT the sender only routes when has_non_local is true — idle already
+            // handled all-local batches directly. In ROW_MAJOR there is no idle offload.
 #if IS_TILE_LAYOUT
             if (has_non_local)
 #endif

@@ -731,6 +731,9 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         zi_compile_time_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // counter page size
         zi_compile_time_args.push_back(read_batch_size);
         zi_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));  // cb_metadata_batch_id
+        zi_compile_time_args.push_back(operation_attributes.num_experts_per_tok);  // num_experts_per_tok
+        zi_compile_time_args.push_back(
+            detail::get_aligned_page_size(dispatched_metadata));  // aligned_dispatched_metadata_page_size
 
         std::map<std::string, std::string> zi_defines;
         zi_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
