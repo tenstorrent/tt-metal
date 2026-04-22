@@ -113,7 +113,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
     for (auto refs : table_refs) {
         futures.emplace_back(detail::async([this, refs]() {
             tt::ChipId device_id = refs.device_id;
-            // Clear L1/DRAM if requested - skip for mock devices
+            // Clear L1/DRAM if requested - skip for mock devices (no memory), but do for emulated (memory-backed)
             if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
                 if (rtoptions_.get_clear_l1()) {
                     clear_l1_state(device_id);
@@ -133,12 +133,11 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             generate_worker_logical_to_virtual_map(
                 device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
 
-            // Skip firmware building for mock devices
-            if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
-                // Create build env for this device, and build FW if it's not built already.
+            // Skip build env registration and firmware building for mock/emulated devices
+            if (!cluster_.is_mock_or_emulated()) {
+                BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
                 // build_firmware ensures that the FW is built only once for a given build key
                 // (which captures the fw_compile_hash).
-                BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
                 BuildEnvManager::get_instance().build_firmware(device_id);
                 // Clear the entire launch message ring buffer on ethernet cores before application firmware is
                 // activated. This is required since ethernet cores context switch between application and routing
@@ -159,7 +158,7 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
     // Launch FW on each device sequentially, since a multithreaded launch leads to initialization hangs.
     // See https://github.com/tenstorrent/tt-metal/issues/35701
     ZoneScopedN("Resets and FW Launch");
-    if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
+    if (!cluster_.is_mock_or_emulated()) {
         terminate_active_ethernet_cores_on_all_chips();
 
         for (tt::ChipId device_id : device_ids) {
@@ -196,7 +195,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
 
     teardown_simulator_ethernet_cores();
 
-    if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
+    if (!cluster_.is_mock_or_emulated()) {
         for (tt::ChipId device_id : all_devices) {
             assert_cores(device_id);
             cluster_.l1_barrier(device_id);
@@ -490,8 +489,8 @@ void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(
 
     dram_bank_to_noc_xy.clear();
     dram_bank_to_noc_xy.reserve(hal_.get_num_nocs() * num_dram_banks);
-    bool noc_translation_enabled = cluster_.get_target_device_type() != tt::TargetDevice::Mock &&
-                                   cluster_.get_cluster_desc()->get_noc_translation_table_en().at(device_id);
+    bool noc_translation_enabled =
+        !cluster_.is_mock_or_emulated() && cluster_.get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
         noc_translation_enabled && (hal_.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
     for (unsigned int noc = 0; noc < hal_.get_num_nocs(); noc++) {

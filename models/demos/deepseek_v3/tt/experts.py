@@ -32,6 +32,7 @@ class Experts(AbstractModule):
     """Experts layer for Mixture-of-Experts (MoE) module."""
 
     WEIGHT_TORCH_DTYPE = torch.bfloat16
+    _warned_legacy_expert_checkpoint = False
 
     @classmethod
     def _get_num_experts_per_device(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> int:
@@ -53,7 +54,51 @@ class Experts(AbstractModule):
         (state_dict,) = state_dicts
         assert state_dict is not None
 
+        view_with_prefix = getattr(state_dict, "view_with_prefix", None)
+        stacked_state_dict = view_with_prefix("experts_stacked.") if callable(view_with_prefix) else state_dict
+        stacked_lookup_names = {f"{hf_name}.weight" for hf_name in ("gate_proj", "down_proj", "up_proj")}
+        if not callable(view_with_prefix):
+            stacked_lookup_names = {f"experts_stacked.{hf_name}" for hf_name in stacked_lookup_names}
+        present_stacked_lookup_names = {name for name in stacked_lookup_names if name in stacked_state_dict}
+
         def _load_expert_weight(hf_name: str) -> torch.Tensor:
+            stacked_weight_name = f"experts_stacked.{hf_name}.weight"
+            stacked_lookup_name = f"{hf_name}.weight" if callable(view_with_prefix) else stacked_weight_name
+
+            if stacked_lookup_name in stacked_state_dict:
+                stacked_weight = get_dequantized_tensor(
+                    stacked_state_dict, stacked_lookup_name, dtype=cls.WEIGHT_TORCH_DTYPE
+                )
+                if stacked_weight.ndim != 3:
+                    raise ValueError(
+                        f"Expected stacked expert weight '{stacked_weight_name}' to have rank 3, got {stacked_weight.ndim}"
+                    )
+                if stacked_weight.shape[0] != hf_config.n_routed_experts:
+                    raise ValueError(
+                        f"Expected stacked expert weight '{stacked_weight_name}' to contain "
+                        f"{hf_config.n_routed_experts} experts, got {stacked_weight.shape[0]}"
+                    )
+                return stacked_weight.contiguous()
+
+            if present_stacked_lookup_names:
+                raise ValueError(
+                    f"Checkpoint mixes stacked and legacy expert weights: missing '{stacked_weight_name}' while "
+                    "other stacked expert tensors are present. Regenerate the stacked checkpoint so all expert "
+                    "projections are exported together."
+                )
+
+            if not cls._warned_legacy_expert_checkpoint:
+                logger.warning(
+                    "Stacked expert tensors were not found in the DeepSeek checkpoint. "
+                    "Falling back to the slower legacy per-expert compatibility path. "
+                    "Generate a stacked checkpoint with "
+                    "`python models/demos/deepseek_v3/scripts/dequantize_hf_checkpoint.py "
+                    "<source-model-path> --stack-experts` "
+                    "and point `DEEPSEEK_V3_HF_MODEL` or `--model-path` at the resulting "
+                    "`*-dequantized-stacked` directory."
+                )
+                cls._warned_legacy_expert_checkpoint = True
+
             weight_name = f"{hf_name}.weight"
             expert_weights: list[torch.Tensor] = []
             for expert_id in range(hf_config.n_routed_experts):
@@ -62,13 +107,13 @@ class Experts(AbstractModule):
                     get_dequantized_tensor(state_dict, full_weight_name, dtype=cls.WEIGHT_TORCH_DTYPE)
                 )
 
-            return torch.stack(expert_weights)
+            return torch.stack(expert_weights).contiguous()
 
         return {
             ttnn_name: {
                 "input_tensor_b": shard_and_save(
                     output_path / f"{ttnn_name}.input_tensor_b",
-                    _load_expert_weight(hf_name).unsqueeze(0).transpose(-1, -2).contiguous(),
+                    _load_expert_weight(hf_name).unsqueeze(0).contiguous(),
                     shard_dims=(1, 1),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat8_b if hf_name == "down_proj" else ttnn.bfloat4_b,
@@ -119,16 +164,19 @@ class Experts(AbstractModule):
             "mesh_device": MeshDeviceStub(mesh_device.shape),
             "w1_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                transpose_b=True,
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "w2_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                transpose_b=True,
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "w3_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                transpose_b=True,
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),

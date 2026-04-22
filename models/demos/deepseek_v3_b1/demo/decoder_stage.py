@@ -339,7 +339,7 @@ def create_decoder_block_tensors(
     trans_mat_replicated = torch_trans_mat.repeat(1, 1, qrope_num_cores + kv_cache_branch_rope_crs.num_cores(), 1)
     ttnn_trans_mat = ttnn.from_torch(
         trans_mat_replicated,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=trans_mem,
@@ -731,6 +731,8 @@ class DecoderStage(StageKind):
         self._num_routed_experts = num_routed_experts
         self._use_hardcoded_expert_index = use_hardcoded_expert_index
         self._enable_routing = enable_routing
+        self._num_links_bcast = 1
+        self._num_links_allreduce = 2
         self._state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -838,8 +840,8 @@ class DecoderStage(StageKind):
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             reduce_cluster_axis=1,
             sdpa_cluster_axis=0,
-            num_links_bcast=1,
-            num_links_allreduce=1,
+            num_links_bcast=self._num_links_bcast,
+            num_links_allreduce=self._num_links_allreduce,
             skip_ccl=False,
             upstream_socket=self._state["recv_socket"],
             downstream_sockets=self._state["downstream_sockets"],
@@ -861,7 +863,9 @@ class DecoderStage(StageKind):
             num_cores, mesh_device.compute_with_storage_grid_size(), row_wise=True
         )
 
-        attn_semaphores = AttentionBlock.create_semaphores(mesh_device)
+        attn_semaphores = AttentionBlock.create_semaphores(
+            mesh_device, num_links_bcast=self._num_links_bcast, num_links_allreduce=self._num_links_allreduce
+        )
         moe_semaphores = MoeOp.create_semaphores(mesh_device)
         reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
         persistent_next_iter_semaphore = (
