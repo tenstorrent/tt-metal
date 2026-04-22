@@ -220,6 +220,10 @@ DataFormat get_single_pack_src_format(
         pack_src_format = DataFormat::Invalid;
     } else if (data_format == DataFormat::Fp8_e4m3) {
         pack_src_format = is_exp_b_format(unpack_conditional_dst_format) ? DataFormat::Float16_b : DataFormat::Float16;
+    } else if (data_format == DataFormat::MxFp4) {
+        pack_src_format = fp32_dest_acc_en
+            ? DataFormat::Float32
+            : (is_exp_b_format(unpack_conditional_dst_format) ? DataFormat::Float16_b : DataFormat::Float16);
     } else if (fp32_dest_acc_en) {
         if (arch == tt::ARCH::QUASAR && !tt::is_integer_format(data_format)) {
             pack_src_format = DataFormat::Float32;
