@@ -7,6 +7,8 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include "device_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
@@ -78,6 +80,9 @@ inline LLKDeviceEnvironment& acquire_environment() {
 
 inline bool detect_slow_dispatch() { return getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr; }
 
+// Host architecture from UMD (works before SetUp() fills arch_ on the fixture).
+inline tt::ARCH detect_arch() { return tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()); }
+
 inline void log_dispatch_mode(bool slow_dispatch) {
     if (slow_dispatch) {
         log_info(tt::LogTest, "Running test using Slow Dispatch");
@@ -86,10 +91,38 @@ inline void log_dispatch_mode(bool slow_dispatch) {
     }
 }
 
+inline void populate_shared_state(LLKSharedDevices& s, const std::vector<ChipId>& ids) {
+    s.arch = detect_arch();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    auto id_to_device = distributed::MeshDevice::create_unit_meshes(
+        ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
+    s.devices.clear();
+    s.devices.reserve(id_to_device.size());
+    for (auto& [_, device] : id_to_device) {
+        s.devices.push_back(std::move(device));
+    }
+    s.max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+    s.initialized = true;
+}
+
+template <class Fixture>
+void apply_shared_state(Fixture& f, const LLKSharedDevices& s) {
+    const bool slow_dispatch = detect_slow_dispatch();
+    log_dispatch_mode(slow_dispatch);
+    f.slow_dispatch_ = slow_dispatch;
+    f.arch_ = s.arch;
+    f.devices_ = s.devices;
+    f.max_cbs_ = s.max_cbs;
+    f.num_devices_ = s.devices.size();
+}
+
 }  // namespace detail
 
 class LLKMeshDeviceFixture : public MeshDeviceFixture {
 protected:
+    template <class F>
+    friend void detail::apply_shared_state(F&, const detail::LLKSharedDevices&);
+
     static detail::LLKSharedDevices& shared_state() {
         return detail::acquire_environment<LLKMeshDeviceFixture>().state;
     }
@@ -99,30 +132,19 @@ protected:
         if (s.initialized) {
             return;
         }
-        s.arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         // Limit to 2 chips for CI throughput; same rationale as MeshDeviceFixture.
+        // Use MMIO (host) chips only — same id source as the single-card LLK fixture.
         size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         if (num_devices > 2) {
             num_devices = 2;
         }
-        std::vector<ChipId> ids;
-        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
-            ids.push_back(id);
-            if (ids.size() >= num_devices) {
-                break;
-            }
+        const auto& mmio = tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids();
+        std::vector<ChipId> ids(mmio.begin(), mmio.end());
+        if (ids.size() > num_devices) {
+            ids.resize(num_devices);
         }
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        auto id_to_device = distributed::MeshDevice::create_unit_meshes(
-            ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
-        s.devices.clear();
-        for (const auto& [device_id, device] : id_to_device) {
-            s.devices.push_back(device);
-        }
-        s.max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-        s.initialized = true;
+        detail::populate_shared_state(s, ids);
     }
 
     // Per-suite cleanup: drop the device handles between suites so the next
@@ -139,13 +161,7 @@ protected:
             // Defensive — should never happen because SetUpTestSuite runs first.
             SetUpTestSuite();
         }
-        const bool slow_dispatch = detail::detect_slow_dispatch();
-        detail::log_dispatch_mode(slow_dispatch);
-        this->slow_dispatch_ = slow_dispatch;
-        this->arch_ = s.arch;
-        this->devices_ = s.devices;
-        this->max_cbs_ = s.max_cbs;
-        this->num_devices_ = s.devices.size();
+        detail::apply_shared_state(*this, s);
     }
 
     void TearDown() override {
@@ -162,18 +178,18 @@ protected:
 class LLKMeshDeviceFixtureSlowDispatchOnly : public LLKMeshDeviceFixture {
 protected:
     void SetUp() override {
-        LLKMeshDeviceFixture::SetUp();
-        if (::testing::Test::IsSkipped()) {
-            return;
-        }
         if (!this->IsSlowDispatch()) {
             GTEST_SKIP() << "Skipping: test requires slow dispatch (TT_METAL_SLOW_DISPATCH_MODE=1)";
         }
+        LLKMeshDeviceFixture::SetUp();
     }
 };
 
 class LLKMeshDeviceSingleCardFixture : public MeshDeviceSingleCardFixture {
 protected:
+    template <class F>
+    friend void detail::apply_shared_state(F&, const detail::LLKSharedDevices&);
+
     static detail::LLKSharedDevices& shared_state() {
         return detail::acquire_environment<LLKMeshDeviceSingleCardFixture>().state;
     }
@@ -183,44 +199,20 @@ protected:
         if (s.initialized) {
             return;
         }
-        s.arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
-        std::vector<ChipId> ids;
-        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
-            ids.push_back(id);
-        }
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        auto id_to_device = distributed::MeshDevice::create_unit_meshes(
-            ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
-        s.devices.clear();
-        for (const auto& [device_id, device] : id_to_device) {
-            s.devices.push_back(device);
-        }
-        s.max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-        s.initialized = true;
+        const auto& mmio = tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids();
+        std::vector<ChipId> ids(mmio.begin(), mmio.end());
+        detail::populate_shared_state(s, ids);
     }
 
     // Per-suite cleanup; LLKDeviceEnvironment::TearDown is the final safety net.
     static void TearDownTestSuite() { shared_state().reset(); }
-
-    bool validate_dispatch_mode() override {
-        this->DetectDispatchMode();
-        return true;
-    }
 
     void SetUp() override {
         auto& s = shared_state();
         if (!s.initialized) {
             SetUpTestSuite();
         }
-        const bool slow_dispatch = detail::detect_slow_dispatch();
-        detail::log_dispatch_mode(slow_dispatch);
-        this->slow_dispatch_ = slow_dispatch;
-        this->arch_ = s.arch;
-        this->devices_ = s.devices;
-        this->max_cbs_ = s.max_cbs;
-        this->num_devices_ = s.devices.size();
+        detail::apply_shared_state(*this, s);
     }
 
     void TearDown() override {
@@ -232,26 +224,20 @@ protected:
 class LLKBlackholeSingleCardFixture : public LLKMeshDeviceSingleCardFixture {
 protected:
     void SetUp() override {
+        if (detail::detect_arch() != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "This test can only be run on Blackhole cards";
+        }
         LLKMeshDeviceSingleCardFixture::SetUp();
-        if (::testing::Test::IsSkipped()) {
-            return;
-        }
-        if (this->arch_ != tt::ARCH::BLACKHOLE) {
-            GTEST_SKIP();
-        }
     }
 };
 
 class LLKQuasarMeshDeviceSingleCardFixture : public LLKMeshDeviceSingleCardFixture {
 protected:
     void SetUp() override {
-        LLKMeshDeviceSingleCardFixture::SetUp();
-        if (::testing::Test::IsSkipped()) {
-            return;
-        }
-        if (this->arch_ != tt::ARCH::QUASAR) {
+        if (detail::detect_arch() != tt::ARCH::QUASAR) {
             GTEST_SKIP() << "Not a Quasar device";
         }
+        LLKMeshDeviceSingleCardFixture::SetUp();
     }
 };
 
