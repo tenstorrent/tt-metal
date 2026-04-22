@@ -134,9 +134,70 @@ Keep the scope surgical:
 - Update `migration_blockers.md` or the relevant `*_analysis.md` to mark the kernel as migrated.
 - Cross-reference the helper feature(s) it now consumes so later removals notice the dependency.
 
+### Policy Mapping — Raw CB Lifecycle → Helper Policy
+
+Use this table when reading a raw kernel to choose `BinaryInputPolicy` and `BinaryOutputPolicy`.
+
+**Input policies**
+
+| Raw pattern | Policy |
+|-------------|--------|
+| `cb_wait_front(A, 1); ... cb_pop_front(A, 1)` per tile | `WaitAndPopPerTile` |
+| `cb_wait_front(A, N); ... cb_pop_front(A, N)` at end of block | `WaitUpfrontPopAtEnd` |
+| `cb_wait_front(A, N)` once before loop, never popped in loop (persistent) | `NoWaitNoPop` (caller manages) |
+| `cb_wait_front(A, N)` once before loop, popped once after loop | `WaitUpfrontPopAtEnd` if inside-helper block, `NoWaitPopAtEnd` if pre-waited by caller |
+| Tiles already present (pushed by reader/dataflow, no wait in compute) | `NoWaitNoPop` |
+| Cumulative wait (`cb_wait_front(A, base + i)` growing each iteration) | **Not supported** — leave on raw LLK |
+
+**Output policies**
+
+| Raw pattern | Policy |
+|-------------|--------|
+| `cb_reserve_back(1); pack_tile; cb_push_back(1)` per tile | `PerTile` |
+| `cb_reserve_back(N)` upfront, `pack_tile` sequential, `cb_push_back(N)` at end | `Bulk` |
+| `cb_reserve_back(chunk)` per chunk, `pack_tile` per tile, `cb_push_back(chunk)` per chunk | `PerChunk` |
+| CB pre-reserved by caller before this block, `pack_tile` sequential, `cb_push_back(N)` at end | `Bulk` — a second `cb_reserve_back` on an already-reserved CB is a no-op (just checks free slots; write pointer hasn't advanced) |
+
+### Blockers Checklist (Step 1 gate)
+
+Before writing a migration, check each stage of the raw kernel for these patterns. **Any hit → that stage stays on raw LLK** (log as NOT-MIGRATED or PARTIAL):
+
+1. **Non-zero absolute tile index on A or B** — `*_tiles(A, B, j, j + offset, j)` where `offset` is non-zero and runtime-varying or non-zero and compile-time. Helper tile indexing is sequential from 0.
+2. **Cumulative wait** — `cb_wait_front(CB, base + iter * step)` where the count grows each iteration. No helper policy covers this.
+3. **Non-sequential output pack** — `pack_tile(i, out_cb, absolute_idx)` where `absolute_idx` is not `base + i`. Helper `Bulk` packs sequentially; `PerChunk` packs at `wt` relative index.
+4. **Asymmetric wait/process/pop** — `cb_wait_front(N); process(M); cb_pop_front(N)` with `M < N`. Helper's wait count == process count == pop count.
+5. **In-place output with capacity=1** — output CB is the same as input A, AND the program factory allocates `num_tiles = 1` for that CB. Raw code does `cb_pop_front(A, 1); cb_reserve_back(A, 1)` (pop before reserve). Helper does `cb_reserve_back` before `cb_pop_front` — **deadlocks** on a capacity-1 CB. Check `{cb_name}_num_tiles` in the program factory before migrating. If capacity ≥ 2, migration is safe.
+6. **Runtime op selection** — `if (runtime_flag) mul_tiles(...) else add_tiles(...)` dispatching at runtime. Write two separate helper calls in branches; cannot lift into a single helper call.
+7. **L1 accumulation pack** — `pack_tile<true>(i, cb, 0)` with `llk_pack_reconfig_l1_acc(1)` that accumulates into the same output tile slot. No helper output policy covers this.
+8. **Matmul interleaved** — `matmul_tiles(...)` inside the same loop as binary ops. Helpers are eltwise-only; split into separate matmul block + binary helper.
+
+### Partial Migration
+
+A kernel that has SOME migratable stages and SOME blocked stages is **PARTIAL** — not NOT-MIGRATED. Replace only the migratable stages; leave blocked stages on raw LLK. Document which stages were migrated and which blockers remain.
+
+Good indicators that partial migration is worth doing:
+- The migratable stage involves multiple CB lifecycle calls (`wait + acquire + init + loop + commit + pack + release + pop`) — the helper reduces all of these to one call.
+- The blocker is in a different stage that has no dependency on the migratable stage's output CB.
+
+### Verifying the Test Exercises the Changed Kernel
+
+Kernel filenames are NOT unique across the repo (e.g. `rmsnorm_post_allgather.cpp` exists in multiple directories). A passing test only validates the kernel if the test's program factory compiles THAT file.
+
+Before trusting a passing test:
+
+1. Grep for the **exact relative path** string in program factories:
+   ```
+   grep -rn "path/to/kernel.cpp" ttnn/cpp --include="*.cpp"
+   ```
+2. Trace the factory back to the `ttnn.*` op it creates.
+3. Confirm the test file calls that op (grep for `ttnn.op_name` in the test).
+4. Optional paranoid check: introduce a `static_assert(false, "sentinel")` in the kernel, run the test, confirm it FAILS to compile, then revert.
+
 ### Anti-patterns (do NOT do these during migration)
 
 - Migrating across a helper gap by hand-coding the missing op inline. Fix the helper first.
 - Restructuring control flow to fit the helper. If the kernel's runtime conditionals don't fit a single chain, use multiple `sfpu_pipeline` calls or leave that branch on raw LLK.
 - Batching migrations of unrelated kernels in one commit. One kernel per commit; failures should bisect to a single change.
 - Silently dropping FP32_DEST_ACC-guarded reconfig calls. Verify the helper emits an equivalent or flag the gap.
+- Marking a kernel NOT-MIGRATED when only some stages are blocked. Log as PARTIAL, migrate the clean stages, record the specific blocker per blocked stage.
+- Assuming the first passing test validates your edit. Verify the test exercises your exact kernel file — same-named files in other directories can silently shadow the one you changed.
