@@ -50,6 +50,11 @@ class ElfsCache:
         self._total_bytes = 0
 
     def __getitem__(self, elf_path: str) -> ParsedElfFile:
+        if elf_path is None:
+            raise TTTriageError(
+                "ElfsCache indexed with None (no kernel/firmware ELF path). Callers must "
+                "check dispatcher_core_data.kernel_path / firmware_path before looking up."
+            )
         if not os.path.exists(elf_path):
             raise TTTriageError(f"ELF file {elf_path} does not exist.")
 

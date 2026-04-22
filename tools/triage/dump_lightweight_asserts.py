@@ -169,9 +169,15 @@ def dump_lightweight_asserts(
         code_private_memory = risc_debug.get_code_private_memory()
         if code_private_memory is not None and code_private_memory.contains_private_address(pc):
             dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
+            # No kernel is loaded on this core (e.g. RT-profiler-reserved worker launched via
+            # slow dispatch, which Inspector doesn't track). We can't resolve private-memory
+            # instructions without the kernel ELF, so bail out cleanly instead of letting
+            # elfs_cache[None] raise a TypeError from os.path.exists.
+            if dispatcher_core_data.kernel_path is None or dispatcher_core_data.kernel_offset is None:
+                return None
             elf = callstack_provider.elfs_cache[dispatcher_core_data.kernel_path].elf
             text_section = elf.get_section_by_name(".text")
-            if text_section is None or dispatcher_core_data.kernel_offset is None:
+            if text_section is None:
                 return None
             data: bytes = text_section.data()
             address: int = dispatcher_core_data.kernel_offset

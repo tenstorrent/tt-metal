@@ -50,7 +50,14 @@ __attribute__((noinline)) void push_entry_to_host(
     uint32_t host_fifo_start,
     uint32_t fifo_page_aligned_size) {
     noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
+    // Heartbeat: bump _pad[9] before we potentially block. If this keeps climbing without
+    // _pad[10] catching up, NCRISC is stuck inside socket_reserve_pages (i.e. the host D2H
+    // receiver is not draining). This is the primary signal for "host went away while the
+    // profiler was still pushing" and lines up with the "Failed to halt brisc core" class
+    // of triage failures where the NOC ends up choked.
+    ring_buffer->_pad[9]++;
     socket_reserve_pages(sock, 1);
+    ring_buffer->_pad[10]++;
 
     uint64_t pcie_dest_addr = (static_cast<uint64_t>(data_addr_hi) << 32) | static_cast<uint64_t>(host_write_ptr);
 
@@ -66,18 +73,28 @@ __attribute__((noinline)) void push_entry_to_host(
     socket_notify_receiver(sock);
 
     noc_async_write_barrier();
+    // Heartbeat: made it past the write barrier. If _pad[10] == _pad[11] but _pad[11] is
+    // stalled while _pad[10] keeps climbing, NCRISC is wedged in noc_async_write_barrier
+    // (NOC credits never returning), which is a different failure mode than a dead host.
+    ring_buffer->_pad[11]++;
 }
 
 // Heartbeat markers written to ring_buffer->_pad[] so host can diagnose NCRISC progress.
-// _pad[0] = stage (1=started, 2=config_wait, 3=socket_init, 4=main_loop, 5=pushing)
-// _pad[1] = config_buffer_addr seen by NCRISC
-// _pad[2] = pcie_xy_enc from socket config
-// _pad[3] = fifo_addr_lo from socket config
-// _pad[4] = loop iteration counter
-// _pad[5] = push count
-// _pad[6] = L1 address of realtime_profiler_mailbox (where NCRISC reads config_buffer_addr)
-// _pad[7] = raw 32-bit value at that address
-// _pad[8] = RING_BUFFER_ADDR define value
+// _pad[0]  = stage (1=started, 2=config_wait, 3=socket_init, 4=main_loop, 5=pushing)
+// _pad[1]  = config_buffer_addr seen by NCRISC
+// _pad[2]  = pcie_xy_enc from socket config
+// _pad[3]  = fifo_addr_lo from socket config
+// _pad[4]  = loop iteration counter
+// _pad[5]  = push count
+// _pad[6]  = L1 address of realtime_profiler_mailbox (where NCRISC reads config_buffer_addr)
+// _pad[7]  = raw 32-bit value at that address
+// _pad[8]  = RING_BUFFER_ADDR define value
+// _pad[9]  = socket_reserve_pages entries (incremented just before the blocking call).
+//           If _pad[9] != _pad[10] for a while, NCRISC is stuck waiting for the host
+//           D2H socket receiver, which is the classic "host died mid-run" signature.
+// _pad[10] = socket_reserve_pages exits (incremented once the call returned).
+// _pad[11] = noc_async_write_barrier exits after push_entry_to_host (useful to tell
+//           "stuck in write barrier waiting for NOC credits" from "stuck in reserve_pages").
 
 void kernel_main() {
     ring_buffer->_pad[0] = 1;  // stage: kernel started

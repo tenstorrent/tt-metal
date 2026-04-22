@@ -94,8 +94,12 @@ private:
     std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
     std::map<uint64_t, std::map<HalProgrammableCoreType, std::vector<KernelGroupData>>> program_id_to_kernel_groups;
     std::map<uint64_t, int> program_id_to_call_count;
-    // runtime_id -> list of kernel source paths for that program
+    // runtime_id -> list of kernel source paths for that program.
+    // Guarded by runtime_id_to_kernel_sources_mutex_ because RecordKernelSourceMap is
+    // called from the main (dispatch) thread while GetKernelSources*ForRuntimeId is
+    // called from the RealtimeProfiler receiver thread.
     std::map<uint64_t, std::vector<std::string>> runtime_id_to_kernel_sources;
+    mutable std::mutex runtime_id_to_kernel_sources_mutex_;
     // Registered real-time profiler callbacks (called from receiver thread).
     // mutable because IsRealtimeProfilerActive() is a logically-const query that still
     // needs to lock the mutex to safely read realtime_profiler_active_chips_.

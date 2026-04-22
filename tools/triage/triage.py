@@ -747,6 +747,95 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
             exit(1)
 
 
+def _dump_rt_profiler_heartbeat(device, emit) -> None:
+    """
+    Best-effort probe: on halt failure, find workers whose NOC master counters have
+    STOPPED advancing. That is the signature of a wedged core waiting on a NOC
+    transaction that will never come back — in particular, the RT profiler NCRISC
+    stuck inside socket_reserve_pages() when the host D2H receiver is dead.
+
+    Healthy idle workers keep moving counters at a low rate, so a two-sample probe
+    across a short delay is plenty to tell "stalled" from "busy". We specifically do
+    NOT use is_halted() as the filter because most workers on a live-but-hung chip are
+    still running firmware; is_halted() comes back false for everyone and is noise.
+    """
+    import time as _time
+
+    try:
+        block_locations = device.get_block_locations()
+    except Exception as e:  # noqa: BLE001
+        emit(f"[halt-diag]   rt-probe: get_block_locations failed: {type(e).__name__}: {e}")
+        return
+
+    # Collect register stores for each worker-like block on both NOCs.
+    probes = []  # list of (loc, noc_id, register_store)
+    for loc in block_locations:
+        try:
+            noc_block = device.get_block(loc)
+        except Exception:
+            continue
+        block_name = type(noc_block).__name__.lower()
+        if "worker" not in block_name and "tensix" not in block_name:
+            continue
+        for noc_id in (0, 1):
+            try:
+                rs = noc_block.get_register_store(noc_id=noc_id)
+            except Exception:
+                continue
+            probes.append((loc, noc_id, rs))
+
+    _COUNTERS = ("NIU_MST_CMD_ACCEPTED", "NIU_MST_WR_ACK_RECEIVED", "NIU_MST_RD_RESP_RECEIVED")
+
+    def _read_all():
+        out = []
+        for loc, noc_id, rs in probes:
+            vals = []
+            for reg in _COUNTERS:
+                try:
+                    vals.append(rs.read_register(reg))
+                except Exception:
+                    vals.append(None)
+            # Also read outstanding ID bucket for human context.
+            try:
+                outst = rs.read_register("NIU_MST_REQS_OUTSTANDING_ID")
+            except Exception:
+                outst = None
+            out.append((loc, noc_id, vals, outst))
+        return out
+
+    sample1 = _read_all()
+    _time.sleep(0.02)  # 20ms is enough for a healthy worker to tick counters
+    sample2 = _read_all()
+
+    reported = 0
+    for (loc1, noc1, v1, o1), (loc2, noc2, v2, o2) in zip(sample1, sample2):
+        assert loc1 == loc2 and noc1 == noc2
+        # Skip entries where any read failed.
+        if any(x is None for x in v1) or any(x is None for x in v2):
+            continue
+        outstanding_accepted_not_acked = v2[0] - v2[1] - v2[2]
+        # Stalled := NOC master counters didn't move at all across 20ms AND the core
+        # has accepted more commands than it has seen responses for (i.e. there's
+        # something outstanding). This fires cleanly on a core wedged in
+        # socket_reserve_pages / noc_async_write_barrier and should NOT fire on
+        # idle-firmware cores that keep polling over NOC.
+        stalled = v1 == v2
+        has_outstanding = outstanding_accepted_not_acked > 0 or (o2 is not None and o2 > 0)
+        if stalled and has_outstanding:
+            reported += 1
+            emit(
+                f"[halt-diag]   stalled-core: {loc2} NOC{noc2} "
+                f"accepted={v2[0]} wr_ack={v2[1]} rd_resp={v2[2]} "
+                f"outstanding_id={o2} accepted-acked={outstanding_accepted_not_acked}"
+            )
+            if reported >= 16:
+                emit("[halt-diag]   rt-probe: truncating after 16 stalled cores")
+                return
+
+    if reported == 0:
+        emit("[halt-diag]   rt-probe: no worker cores with stalled NOC masters found")
+
+
 def _patch_risc_debug() -> None:
     """
     Blackhole and Wormhole HW bug: HALT → READ/WRITE → CONTINUE breaks cores.
@@ -760,6 +849,7 @@ def _patch_risc_debug() -> None:
     """
 
     from ttexalens.hardware.baby_risc_debug import BabyRiscDebugHardware
+    from ttexalens.hardware.risc_debug import RiscHaltError
     from triage_session import get_triage_session
 
     def is_affected_by_cont_bug(device) -> bool:
@@ -778,13 +868,123 @@ def _patch_risc_debug() -> None:
         else original_hw_continue_without_debug(self)
     )
 
+    # Registers queried when a halt fails. Split into master/slave and a short label so the
+    # log is compact. We read these on both NOC0 and NOC1 for the failing core. The key
+    # invariant is: after halt fails, if MST_CMD_ACCEPTED - (MST_WR_ACK_RECEIVED +
+    # MST_RD_RESP_RECEIVED + MST_ATOMIC_RESP_RECEIVED) > 0, the core has outstanding NOC
+    # master transactions and the hardware halt command is likely blocked behind them.
+    _HALT_DIAG_NIU_REGS = (
+        ("MST_CMD_ACCEPTED", "NIU_MST_CMD_ACCEPTED"),
+        ("MST_WR_ACK_RECEIVED", "NIU_MST_WR_ACK_RECEIVED"),
+        ("MST_RD_RESP_RECEIVED", "NIU_MST_RD_RESP_RECEIVED"),
+        ("MST_ATOMIC_RESP_RECEIVED", "NIU_MST_ATOMIC_RESP_RECEIVED"),
+        ("MST_REQS_OUTSTANDING_ID", "NIU_MST_REQS_OUTSTANDING_ID"),
+        ("MST_WRITE_REQS_OUTGOING_ID", "NIU_MST_WRITE_REQS_OUTGOING_ID"),
+        ("SLV_REQ_ACCEPTED", "NIU_SLV_REQ_ACCEPTED"),
+        ("SLV_WR_ACK_SENT", "NIU_SLV_WR_ACK_SENT"),
+        ("SLV_RD_RESP_SENT", "NIU_SLV_RD_RESP_SENT"),
+    )
+
+    def _safe_read_register(register_store, reg_name: str):
+        try:
+            return register_store.read_register(reg_name)
+        except Exception as e:  # noqa: BLE001
+            return f"<read failed: {type(e).__name__}: {e}>"
+
+    def _format_niu_counters(noc_block, noc_id: int) -> str:
+        try:
+            rs = noc_block.get_register_store(noc_id=noc_id)
+        except Exception as e:  # noqa: BLE001
+            return f"NOC{noc_id}: <register store unavailable: {type(e).__name__}: {e}>"
+        parts = [f"NOC{noc_id}:"]
+        for label, reg in _HALT_DIAG_NIU_REGS:
+            val = _safe_read_register(rs, reg)
+            if isinstance(val, int):
+                parts.append(f"  {label}=0x{val:08x} ({val})")
+            else:
+                parts.append(f"  {label}={val}")
+        return "\n".join(parts)
+
+    def _dump_halt_failure_diagnostics(self, exc: Exception) -> None:
+        """
+        Called from patched_halt() when the underlying ttexalens halt failed. Dumps
+        enough state to tell the "RT profiler NCRISC wedged on dead D2H socket and the
+        dispatch core NOC is choked" story apart from other hang modes. Safe to call
+        under the broken condition: every read is try/except'd and no write is issued.
+        """
+        location = self.risc_info.noc_block.location
+        risc_name = self.risc_info.risc_name
+        device = self.risc_info.noc_block.device
+
+        lines = [f"[halt-diag] halt failed on {risc_name} @ {location} (device {device._id})"]
+        lines.append(f"[halt-diag]   reason: {type(exc).__name__}: {exc}")
+
+        # 1. Status register: decoded (halted / watchpoint / ebreak). We avoid reaching
+        #    through the name-mangled raw read so the diagnostic doesn't itself depend on
+        #    internal ttexalens attribute naming.
+        try:
+            status = self.read_status()
+            lines.append(
+                "[halt-diag]   status: halted={0} pc_wp={1} mem_wp={2} ebreak={3} wp_hits={4}".format(
+                    status.is_halted,
+                    status.is_pc_watchpoint_hit,
+                    status.is_memory_watchpoint_hit,
+                    status.is_ebreak_hit,
+                    list(getattr(status, "watchpoints_hit", []) or []),
+                )
+            )
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"[halt-diag]   status: <read failed: {type(e).__name__}: {e}>")
+
+        # 2. Reset state.
+        try:
+            in_reset = self.is_in_reset()
+        except Exception as e:  # noqa: BLE001
+            in_reset = f"<read failed: {type(e).__name__}: {e}>"
+        lines.append(f"[halt-diag]   is_in_reset={in_reset}")
+
+        # 3. NIU counters on NOC0 + NOC1. Outstanding transactions here are the single
+        #    most useful signal we have: if master counters show mismatched accepts vs
+        #    responses, the core is stuck waiting on a NOC round-trip.
+        noc_block = self.risc_info.noc_block
+        for noc_id in (0, 1):
+            try:
+                lines.append(
+                    "[halt-diag]   " + _format_niu_counters(noc_block, noc_id).replace("\n", "\n[halt-diag]   ")
+                )
+            except Exception as e:  # noqa: BLE001
+                lines.append(f"[halt-diag]   NOC{noc_id}: <niu read failed: {type(e).__name__}: {e}>")
+
+        # 4. RT-profiler heartbeat probe — full-chip stall detection. Off by default
+        #    because it produces false positives on devices that just happen to be idle
+        #    (counters don't move ≠ core is wedged, if there was no real work in flight).
+        #    Enable with TT_TRIAGE_HALT_RT_PROBE=1 when investigating a specific hang.
+        if os.environ.get("TT_TRIAGE_HALT_RT_PROBE") == "1":
+            try:
+                _dump_rt_profiler_heartbeat(device, lines.append)
+            except Exception as e:  # noqa: BLE001
+                lines.append(f"[halt-diag]   rt-probe failed: {type(e).__name__}: {e}")
+
+        for line in lines:
+            utils.WARN(line)
+
     def patched_halt(self):
         session = get_triage_session()
         location = self.risc_info.noc_block.location
         risc_name = self.risc_info.risc_name
         already_halted_by_triage = session.is_halted_core(location, risc_name)
         if not already_halted_by_triage:
-            original_hw_halt(self)
+            try:
+                original_hw_halt(self)
+            except RiscHaltError as exc:
+                try:
+                    _dump_halt_failure_diagnostics(self, exc)
+                except Exception as diag_exc:  # noqa: BLE001
+                    utils.WARN(
+                        f"[halt-diag] diagnostic dump itself raised "
+                        f"{type(diag_exc).__name__}: {diag_exc}; re-raising original halt error"
+                    )
+                raise
             session.add_halted_core(location, risc_name)
 
     BabyRiscDebugHardware.halt = patched_halt

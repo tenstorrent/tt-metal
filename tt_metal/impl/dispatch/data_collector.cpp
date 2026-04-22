@@ -131,9 +131,14 @@ void DataCollector::RecordProgramRun(uint64_t program_id) { program_id_to_call_c
 
 void DataCollector::RecordKernelSourceMap(ProgramImpl& program) {
     uint64_t runtime_id = program.get_runtime_id();
-    // Only record once per runtime_id
-    if (runtime_id_to_kernel_sources.count(runtime_id)) {
-        return;
+    {
+        // Fast path: only take the lock long enough to check whether we have already
+        // recorded this runtime_id. The expensive kernel-walk below happens without
+        // holding the lock so we don't block the RT profiler receiver thread.
+        std::lock_guard<std::mutex> lock(runtime_id_to_kernel_sources_mutex_);
+        if (runtime_id_to_kernel_sources.count(runtime_id)) {
+            return;
+        }
     }
     auto& hal = MetalContext::instance().hal();
     std::vector<std::string> sources;
@@ -142,10 +147,15 @@ void DataCollector::RecordKernelSourceMap(ProgramImpl& program) {
             sources.push_back(kernel->kernel_source().source_);
         }
     }
-    runtime_id_to_kernel_sources[runtime_id] = std::move(sources);
+    std::lock_guard<std::mutex> lock(runtime_id_to_kernel_sources_mutex_);
+    // Re-check under the lock in case another thread beat us to it.
+    auto [it, inserted] = runtime_id_to_kernel_sources.try_emplace(runtime_id, std::move(sources));
+    (void)it;
+    (void)inserted;
 }
 
 std::string DataCollector::GetKernelSourcesForRuntimeId(uint64_t runtime_id) const {
+    std::lock_guard<std::mutex> lock(runtime_id_to_kernel_sources_mutex_);
     auto it = runtime_id_to_kernel_sources.find(runtime_id);
     if (it == runtime_id_to_kernel_sources.end()) {
         return "";
@@ -161,6 +171,7 @@ std::string DataCollector::GetKernelSourcesForRuntimeId(uint64_t runtime_id) con
 }
 
 std::vector<std::string> DataCollector::GetKernelSourcesVecForRuntimeId(uint64_t runtime_id) const {
+    std::lock_guard<std::mutex> lock(runtime_id_to_kernel_sources_mutex_);
     auto it = runtime_id_to_kernel_sources.find(runtime_id);
     if (it == runtime_id_to_kernel_sources.end()) {
         return {};

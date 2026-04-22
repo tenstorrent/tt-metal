@@ -33,9 +33,16 @@ volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfile
 
 // Read timestamps from dispatch_s into the next ring buffer slot
 __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a) {
-    // Spin until ring buffer has space
-    while (rt_ring_full(ring_buffer)) {
-        invalidate_l1_cache();
+    // Heartbeat: _pad[12] counts the number of times BRISC entered the "ring full" spin
+    // (even if it exits immediately). Host can poll this post-mortem: if _pad[12] is stuck
+    // at a value N while ring->write_index - ring->read_index is still == CAPACITY, BRISC
+    // is wedged in this loop, which almost always means NCRISC is wedged in
+    // socket_reserve_pages (check _pad[9] / _pad[10] delta on NCRISC for confirmation).
+    if (rt_ring_full(ring_buffer)) {
+        ring_buffer->_pad[12]++;
+        while (rt_ring_full(ring_buffer)) {
+            invalidate_l1_cache();
+        }
     }
 
     uint32_t slot_addr = rt_ring_data_addr(ring_buffer, ring_buffer->write_index);
