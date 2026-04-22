@@ -995,12 +995,9 @@ def main():
         except Exception as e:
             utils.WARN(f"Failed to write triage summary: {e}")
 
-    try:
-        from elfs_cache import run as get_elfs_cache
+    from elfs_cache import run as get_elfs_cache
 
-        get_elfs_cache(args, context).log_stats()
-    except Exception as e:
-        utils.WARN(f"Failed to log elfs_cache stats: {e}")
+    get_elfs_cache(args, context).log_stats()
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)
