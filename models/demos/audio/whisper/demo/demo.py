@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import glob
 import os
 from os import listdir
 from os.path import isfile, join
@@ -10,8 +11,6 @@ from typing import List, Optional, Union
 import jiwer
 import pytest
 import torch
-import glob
-
 from datasets import load_dataset, load_from_disk
 from evaluate import load
 from loguru import logger
@@ -436,9 +435,13 @@ def run_demo_whisper_for_conditional_generation_dataset(
     # Prefer load_from_disk when HF_DATASETS_CACHE is set: it reads Arrow files
     # directly without writing lock files, which avoids EROFS on read-only mounts.
     _cache = os.environ.get("HF_DATASETS_CACHE")
-    _cached_dirs = glob.glob(os.path.join(_cache, "hf-internal-testing___parquet", "clean-*")) if _cache else []
-    ds = load_from_disk(sorted(_cached_dirs)[-1]) if _cached_dirs else load_dataset(
-        "hf-internal-testing/librispeech_asr_dummy", "clean", split="validation"
+    _cached_dirs = (
+        glob.glob(os.path.join(_cache, "hf-internal-testing___parquet", "clean-*")) if _cache else []
+    )
+    ds = (
+        load_from_disk(sorted(_cached_dirs)[-1])
+        if _cached_dirs
+        else load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
     )
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     # perform model inference
