@@ -263,6 +263,34 @@ share this pattern.)
 
 ---
 
+### Layernorm sharded / full family (bulk entry)
+**Files** (all share the same blockers):
+- `layernorm_sharded.cpp` — 5 stages
+- `layernorm_sharded_pre_allgather.cpp` — 3 stages
+- `layernorm_sharded_welford.cpp` — 4 stages
+- `layernorm.cpp` — 6 stages
+- `layernorm_large_tensor.cpp` — 6 stages
+- `layernorm_welford.cpp` — 6 stages
+- `layernorm_large_tensor_welford.cpp` — 9 stages
+- `layernorm_distributed/layernorm_pre_allgather_welford.cpp`
+- `layernorm_distributed/layernorm_pre_allgather_2d.cpp`
+- `groupnorm.cpp` / `groupnorm_sharded_v2.cpp` / Welford variants
+
+**Shared blockers**:
+1. **Absolute tile indexing in subblock inner loops** — `index = w + index_subblock_w_offset + index_h_offset` (or similar) everywhere in normalization stages. Affects both A and B access.
+2. **Cumulative wait** in pre_allgather variants — `cb_wait_front(cb_in, wt + blk)` pattern.
+3. **Non-sequential output pack** — `pack_tile(i, cb_out)` with `i` not equal to 0 in per-chunk pattern.
+
+These are structural to how the blocked sub-tile computation works across all non-trivial normalization kernels. The helper needs runtime `cb_tile_idx` support on both A and B sides (Helper gap #1 from recurring blockers section) to address them.
+
+### `ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/compute_depthwise_conv1d.cpp`
+- **Blockers**:
+  1. `eltwise_mul_and_add_block_v2`: runtime conditional `if (idx == 0)` dispatches between copy-tile-init and add-tiles-init — different ops in same loop. Cannot express in single helper template.
+  2. `out_cb` is read AND written (accumulate-then-copy pattern) — self-feeding accumulator blocker.
+  3. Fused with matmul and transpose_wh (FUSE_BIAS variant).
+
+---
+
 ## DEFERRED (evaluated, migration possible, deprioritized)
 
 *(none yet)*
