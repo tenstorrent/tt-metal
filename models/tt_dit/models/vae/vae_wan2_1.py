@@ -1279,7 +1279,7 @@ class WanDecoder3d(Module):
             dtype=dtype,
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
             conv_dims=lat_dims,
-            use_fused=True,  # DIAG: testing mid_block
+            use_fused=True,  # DIAG: testing mid_block (only mid_block fused)
         )
 
         # upsample blocks

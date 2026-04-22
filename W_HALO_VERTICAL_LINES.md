@@ -273,8 +273,11 @@ This confirms the bug is specific to the 2x4 topology, not C_in_block < C_in in 
 - [x] 2x2 tests pass (including mid_res_2x2_Wdev26_ones with C_in_block=96)
 - [x] bh-lb-09 topology confirmed as 2x2-only; cannot reproduce 2x4 locally
 - [x] Added diagnostic CI test entry to `blackhole_demo_tests.yaml` for LoudBox
-- [x] **ROOT CAUSE IDENTIFIED:** progress semaphore not reset on conv3d reader cores
-- [x] **FIX APPLIED:** `noc_semaphore_set(progress_sem_ptr, 0)` after wait in `reader_vol2col.cpp`
+- [x] **ROOT CAUSE 1 IDENTIFIED:** progress semaphore not reset on conv3d reader cores
+- [x] **FIX 1 APPLIED:** `noc_semaphore_set(progress_sem_ptr, 0)` after wait in `reader_vol2col.cpp`
+- [x] **ROOT CAUSE 2 IDENTIFIED (Session 7, Apr 22 2026):** In `neighbor_pad_conv3d_program_factory.cpp::override_runtime_arguments`, the W-reader's per-core `RTA[10]` (holding `input_buffer->address()`) was set only at program creation and never refreshed per dispatch. On dispatch 2+, the input tensor lived at a different DRAM address but the W-reader kept using the stale pointer, reading garbage and fabric-writing that garbage into the neighbor's halo buffer. D1 then read wrong W-left halo → seam at the D0/D1 boundary (col 416 on 2x2, col 416 on 2x4). All-ones single-layer unit tests missed it because the uniform input masked the wrong address (whatever stale memory contained, it still decoded to ~uniform on a single dispatch).
+- [x] **FIX 2 APPLIED:** Extended `override_runtime_arguments` to iterate `np_artifacts.fabric_core_range` and refresh `w_reader_args[10] = input_addr` each dispatch.
+- [x] **2x2 FULLY FUSED DECODER VERIFIED:** PCC = 1.000000, max_err = 0.000000, |jumpL|@col 416 = 0.0000 — bit-identical to standalone across all 81 frames.
 - [ ] Build fix and run on 2x4 LoudBox via CI to confirm seam is gone
 - [ ] Verify 2x2 tests still pass after the fix
 

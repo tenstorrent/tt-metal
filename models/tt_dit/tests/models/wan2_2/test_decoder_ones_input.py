@@ -200,9 +200,20 @@ def test_wan_decoder_ones_input(
     orig_conv2d_init = _vae_mod.WanConv2d.__init__
     patched = False
 
-    # DIAG: monkey-patch disabled — using model-source use_fused values
-    # (only conv_in is fused in vae_wan2_1.py, everything else standalone)
-    logger.info("monkey-patch disabled -> using model-source use_fused (only conv_in fused)")
+    if not single_block:
+
+        def _patched_causal_init(self, *args, **kwargs):
+            kwargs["use_fused"] = use_fused
+            orig_causal_init(self, *args, **kwargs)
+
+        def _patched_conv2d_init(self, *args, **kwargs):
+            kwargs["use_fused"] = use_fused
+            orig_conv2d_init(self, *args, **kwargs)
+
+        _vae_mod.WanCausalConv3d.__init__ = _patched_causal_init
+        _vae_mod.WanConv2d.__init__ = _patched_conv2d_init
+        patched = True
+        logger.info(f"monkey-patch active -> forcing use_fused={use_fused} for all WanCausalConv3d/WanConv2d")
 
     try:
         _run_decoder_ones(

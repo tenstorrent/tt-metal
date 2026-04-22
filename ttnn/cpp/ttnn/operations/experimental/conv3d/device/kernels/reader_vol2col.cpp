@@ -608,11 +608,14 @@ void kernel_main() {
 #if defined(CONV3D_INPUT_PROGRESS_SEM)
     if (input_progress_signal_count > 0) {
         noc_semaphore_wait_min(progress_sem_ptr, input_progress_signal_count);
-        // Reset so the next dispatch starts at 0 and must wait again.
-        // The W-readers signal this core's L1 address, but
-        // reset_global_semaphore_value() only resets the NP fabric cores (ccl_cores),
-        // not the conv3d reader cores. Without this reset the reader skips the wait
-        // on every subsequent dispatch, racing against the W-halo writes.
+        // Defensive reset after wait. The semaphore is created on ccl_cores (which spans
+        // the full compute grid, so conv3d reader cores are included), meaning
+        // reset_global_semaphore_value() from the host already clears it before each
+        // dispatch. This in-kernel reset is belt-and-braces: it ensures a clean slate on
+        // the conv3d reader core even if host-side reset ever gets decoupled from
+        // dispatch ordering. On 2x2 the bug was fixed by refreshing the W-reader
+        // input_addr RTA; Fix 1 is not strictly needed there. Keeping it for 2x4
+        // safety until CI-verified.
         noc_semaphore_set(progress_sem_ptr, 0);
     }
 #endif

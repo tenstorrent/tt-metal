@@ -414,44 +414,6 @@ class CCLManager:
         np_pad2_cluster_axis_val = axes[1] if dim2 is not None and len(axes) > 1 else 0
         np_pad2_num_links = num_links[1] if dim2 is not None and len(num_links) > 1 else 1
 
-        import sys
-
-        print(f"[DBG] About to call neighbor_pad_conv3d", file=sys.stderr, flush=True)
-        print(
-            f"[DBG] tensor={tensor.shape} weight={weight.shape} bias={'None' if bias is None else bias.shape}",
-            file=sys.stderr,
-            flush=True,
-        )
-        print(
-            f"[DBG] halo_buf={halo_buf.shape} h_halo_addr={conv_config.h_halo_buffer_addr}", file=sys.stderr, flush=True
-        )
-        print(f"[DBG] progress_sem_addr={conv_config.input_progress_sem_addr}", file=sys.stderr, flush=True)
-        print(f"[DBG] np_pad_dim2={np_pad_dim2_val} dim2={dim2} axes={axes}", file=sys.stderr, flush=True)
-        print(f"[DBG] compute_kernel_config={compute_kernel_config}", file=sys.stderr, flush=True)
-        print(f"[DBG] np_ring_size check: axis={axes[0]}", file=sys.stderr, flush=True)
-        print(
-            f"[DBG] kernel_size={kernel_size} stride={stride} padding={padding} dilation={dilation}",
-            file=sys.stderr,
-            flush=True,
-        )
-        print(f"[DBG] output_channels={output_channels} groups=1 dtype={dtype}", file=sys.stderr, flush=True)
-        print(
-            f"[DBG] np_pad2_left={np_pad2_left} np_pad2_right={np_pad2_right} np_pad2_cluster_axis={np_pad2_cluster_axis_val} np_pad2_num_links={np_pad2_num_links}",
-            file=sys.stderr,
-            flush=True,
-        )
-        print(
-            f"[DBG] np_padding_h={pad_left[0]} np_padding_w={pw} np_num_links={num_links[0]}",
-            file=sys.stderr,
-            flush=True,
-        )
-        print(
-            f"[DBG] h_neighbor_sem={neighbor_sems[0]} barrier_sem={barrier_sem} w_sem={w_sem}",
-            file=sys.stderr,
-            flush=True,
-        )
-        sys.stderr.flush()
-
         return ttnn.experimental.neighbor_pad_conv3d(
             tensor,
             weight,

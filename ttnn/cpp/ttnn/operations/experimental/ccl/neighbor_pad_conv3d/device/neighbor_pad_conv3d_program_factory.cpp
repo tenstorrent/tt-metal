@@ -1274,6 +1274,23 @@ void NpConv3dMeshWorkloadFactory::override_runtime_arguments(
                 wr[3] = op.conv_config.input_progress_sem_addr;
             }
 
+            // Per-core RTA[10] of the W-reader holds input_buffer->address() (set in
+            // create_at from the first dispatch's input). On subsequent dispatches the
+            // input tensor may be at a different DRAM address, so refresh RTA[10] here
+            // or the W-reader will pull halo sticks from a stale/garbage DRAM region
+            // and fabric-write garbage into the neighbor's halo buffer.
+            auto& w_reader_args_by_core = GetRuntimeArgs(program, shared_vars.np_artifacts.w_reader_kernel_id);
+            for (const auto& core_range : shared_vars.np_artifacts.fabric_core_range.ranges()) {
+                for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
+                    for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
+                        auto& w_reader_args = w_reader_args_by_core[x][y];
+                        if (w_reader_args.size() > 10) {
+                            w_reader_args[10] = input_addr;
+                        }
+                    }
+                }
+            }
+
             auto& ww = GetCommonRuntimeArgs(program, shared_vars.np_artifacts.w_writer_kernel_id);
             ww[0] = halo_buffer_addr;
             ww[1] = halo_buffer_addr;
