@@ -82,8 +82,12 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
                 expected_varargs,
                 args.size());
         }
-        // Every node with a schema vararg entry must have values provided.
+        // Every node with a non-zero schema vararg entry must have values provided.
+        // Zero-count entries should already be filtered out during schema expansion
         for (const auto& [node_coord, expected_count] : schema->num_runtime_varargs_per_node) {
+            if (expected_count == 0) {
+                continue;
+            }
             TT_FATAL(
                 nodes_with_vararg_params.contains(node_coord),
                 "Kernel '{}' is missing vararg runtime args for node {} (expected {} args)",

@@ -144,7 +144,7 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////////////////
 
     // Namespace for the kernel argument accessors in the kernel source code, e.g.
-    //   auto my_arg = get_argument(my_args_namespace::my_arg_name);
+    //   auto my_arg = get_arg(my_args_namespace::my_arg_name);
     // Use a custom namespace to avoid identifier collisions when fusing kernels;
     // otherwise, use the default "args" namespace.
     std::string args_namespace = "args";

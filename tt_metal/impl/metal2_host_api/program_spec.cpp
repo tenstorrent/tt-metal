@@ -1525,7 +1525,7 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
             }
         }
         runtime_schema.num_common_runtime_varargs = user_schema.num_common_runtime_varargs;
-        program_impl->register_kernel_rta_schema(kernel_spec.unique_id, std::move(runtime_schema));
+        program_impl->register_kernel_rta_schema(kernel_spec.unique_id, runtime_schema);
     }
 
     return Program(std::move(program_impl));
