@@ -31,7 +31,7 @@ def create_balanced_chunk_order(sp_factor: int) -> list[int]:
     return balanced_order
 
 
-def reorder_tensor_chunks(tensor: torch.Tensor, chunk_order: list[int], seq_dim: int = 2) -> torch.Tensor:
+def reorder_tensor_chunks(tensor: torch.Tensor, chunk_order: list[int], seq_dim: int = -2) -> torch.Tensor:
     """Reorder tensor chunks along sequence dimension according to chunk_order."""
     seq_len = tensor.shape[seq_dim]
     num_chunks = len(chunk_order)
@@ -54,7 +54,7 @@ def reorder_tensor_chunks(tensor: torch.Tensor, chunk_order: list[int], seq_dim:
     return torch.cat(reordered_chunks, dim=seq_dim)
 
 
-def reverse_reorder_tensor_chunks(tensor: torch.Tensor, chunk_order: list[int], seq_dim: int = 2) -> torch.Tensor:
+def reverse_reorder_tensor_chunks(tensor: torch.Tensor, chunk_order: list[int], seq_dim: int = -2) -> torch.Tensor:
     """Reverse the chunk reordering to restore original order."""
     # Create inverse permutation
     inverse_order = [0] * len(chunk_order)

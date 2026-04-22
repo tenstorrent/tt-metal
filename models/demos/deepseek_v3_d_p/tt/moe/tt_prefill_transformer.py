@@ -31,7 +31,11 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
-
+from models.demos.deepseek_v3_d_p.tt.mla.utils import (
+    create_balanced_chunk_order,
+    reorder_tensor_chunks,
+    reverse_reorder_tensor_chunks,
+)
 
 class TtPrefillTransformer(LightweightModule):
     """
@@ -209,6 +213,10 @@ class TtPrefillTransformer(LightweightModule):
             weight_cache_path=weight_cache_path,
         )
 
+        self.is_balanced = is_balanced
+        if (is_balanced):
+            self.chunk_order = create_balanced_chunk_order(mesh_device.shape[sp_axis]) if is_balanced else None
+
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
 
     def _to_host(self, tt_tensor):
@@ -280,6 +288,22 @@ class TtPrefillTransformer(LightweightModule):
         logits, (device_id, token_offset) = self.lm_head(h, global_token_id)
 
         logits_host = self.lm_head.logit_to_host(logits)
+
+        if return_intermediates:
+            intermediates["lm_head"] = logits_host.clone() # uh need better workaround for this
+
+        # reorder tensors if needed
+        # this is before first tokens are being selected? 
+        # logits_host cloned to avoid confusion; for now we order returned ones, but sample on the oriignal. 
+        if return_intermediates and self.is_balanced:
+            for key, tensor in intermediates.items():
+                if isinstance(tensor, torch.Tensor): 
+                    logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
+                    tensor = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
+                else:
+                    logger.debug(f"Skipping reordering for intermediate {key} of type {type(tensor)}")
+
+
         first_token_logits = self.lm_head.select_first_token(logits_host, device_id, token_offset)
 
         # Handle temperature as float or list
@@ -312,7 +336,6 @@ class TtPrefillTransformer(LightweightModule):
         )
 
         if return_intermediates:
-            intermediates["lm_head"] = logits_host
             intermediates["first_token"] = sweep_results
 
         return first_token_id, first_token_prob, intermediates
