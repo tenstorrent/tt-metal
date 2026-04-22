@@ -238,7 +238,7 @@ def test_matmul_no_mcast_fp32_acc_l1(
     function_level_defaults,
     num_loops,
 ):
-    torch.manual_seed(0)
+    torch.manual_seed(213919)
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:

@@ -842,7 +842,7 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy)
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
     Note: We do not enforce the same exception type or message.
     """
-    torch.manual_seed(0)
+    torch.manual_seed(42)
     if op not in ("std", "var") and use_legacy:
         pytest.skip("use_legacy only applies to std and var")
 
