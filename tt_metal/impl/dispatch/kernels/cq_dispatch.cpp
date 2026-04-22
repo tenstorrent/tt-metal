@@ -1511,8 +1511,19 @@ void kernel_main() {
     // noc_async_full_barrier() so the barrier reconciles with the NIU hardware ack count.
     // Sentinel +1 so the slot value is always nonzero once published.
     constexpr uint8_t kDispatchSProc = 1;  // dispatch_s runs on NCRISC
-    set_noc_counter_val<kDispatchSProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
-        upstream_noc_index, noc_nonposted_atomics_acked[upstream_noc_index] + 1);
+    {
+        const uint32_t local_atomics = noc_nonposted_atomics_acked[upstream_noc_index];
+        const uint32_t niu_atomics = NOC_STATUS_READ_REG(upstream_noc_index, NIU_MST_ATOMIC_RESP_RECEIVED);
+        DPRINT << "DBG18881 dispatch_d: upstream_noc_index=" << (uint32_t)upstream_noc_index
+               << " local_atomics_acked=" << local_atomics
+               << " niu_atomic_resp=" << niu_atomics
+               << " publishing(+1)=" << (local_atomics + 1) << ENDL();
+        set_noc_counter_val<kDispatchSProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
+            upstream_noc_index, local_atomics + 1);
+        DPRINT << "DBG18881 dispatch_d: published, slot_readback="
+               << get_noc_counter_val<kDispatchSProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index)
+               << ENDL();
+    }
 #endif
 
     if (is_h_variant && !is_d_variant) {

@@ -335,8 +335,16 @@ void kernel_main() {
 #ifndef COMPILE_FOR_IDLE_ERISC
     // Issue #18881: (TEMPORARY) zero the slot used by dispatch_d to publish its NOC 1 atomic count at
     // shutdown, so a stale value from a prior program doesn't race the merge below.
-    set_noc_counter_val<1 /* this RISC = NCRISC */, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
-        my_noc_index, 0);
+    {
+        const uint32_t pre_zero =
+            get_noc_counter_val<1, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(my_noc_index);
+        DPRINT << "DBG18881 dispatch_s: kernel_main entry, my_noc_index=" << (uint32_t)my_noc_index
+               << " slot_before_zero=" << pre_zero << ENDL();
+        set_noc_counter_val<1 /* this RISC = NCRISC */, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
+            my_noc_index, 0);
+        DPRINT << "DBG18881 dispatch_s: slot_after_zero="
+               << get_noc_counter_val<1, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(my_noc_index) << ENDL();
+    }
 #endif
     if constexpr (distributed_dispatcher) {
         for (size_t i = 0; i < max_num_worker_sems; i++) {
@@ -391,14 +399,35 @@ void kernel_main() {
     // into our local noc_nonposted_atomics_acked[NOC1] so the barrier below reconciles
     // against the NIU hardware ack count. Sentinel +1 distinguishes "ready" from "stale 0".
     constexpr uint8_t kSelfProc = 1;  // dispatch_s runs on NCRISC
+    {
+        const uint32_t pre_local = noc_nonposted_atomics_acked[my_noc_index];
+        const uint32_t pre_niu = NOC_STATUS_READ_REG(my_noc_index, NIU_MST_ATOMIC_RESP_RECEIVED);
+        DPRINT << "DBG18881 dispatch_s: pre-poll local_atomics_acked=" << pre_local
+               << " niu_atomic_resp=" << pre_niu << ENDL();
+    }
     uint32_t handoff_val;
+    uint32_t poll_iters = 0;
     do {
         invalidate_l1_cache();
         handoff_val = get_noc_counter_val<kSelfProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(my_noc_index);
+        if ((++poll_iters & 0xFFFF) == 0) {
+            DPRINT << "DBG18881 dispatch_s: still polling, iters=" << poll_iters
+                   << " handoff_val=" << handoff_val << ENDL();
+        }
     } while (handoff_val == 0);
     noc_nonposted_atomics_acked[my_noc_index] += handoff_val - 1;
+    {
+        const uint32_t post_local = noc_nonposted_atomics_acked[my_noc_index];
+        const uint32_t post_niu = NOC_STATUS_READ_REG(my_noc_index, NIU_MST_ATOMIC_RESP_RECEIVED);
+        DPRINT << "DBG18881 dispatch_s: handoff_val=" << handoff_val
+               << " merged_local=" << post_local
+               << " niu_atomic_resp=" << post_niu
+               << " match=" << (uint32_t)(post_local == post_niu) << ENDL();
+    }
 #endif
+    DPRINT << "DBG18881 dispatch_s: entering noc_async_full_barrier" << ENDL();
     noc_async_full_barrier();
+    DPRINT << "DBG18881 dispatch_s: exited noc_async_full_barrier" << ENDL();
     DPRINT << "dispatch_s : done" << ENDL();
     DEVICE_PRINT("dispatch_s : done\n");
     set_l1_data_cache<false>();
