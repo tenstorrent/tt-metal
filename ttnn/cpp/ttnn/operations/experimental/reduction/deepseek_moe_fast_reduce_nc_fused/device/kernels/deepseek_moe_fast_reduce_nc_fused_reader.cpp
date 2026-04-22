@@ -76,13 +76,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* scores_tile_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_write_ptr);
     const uint32_t tile_u16_stride = scores_tile_size / sizeof(uint16_t);  // 1024 uint16 per tile
 
-    // Clear the cb_scores_id tile if necessary
-    // volatile tt_l1_ptr uint32_t* scores_tile_perm_u32 = reinterpret_cast<volatile tt_l1_ptr
-    // uint32_t*>(scores_write_ptr); const uint32_t total_u32 = reduction_dim_size * scores_tile_size /
-    // sizeof(uint32_t); for (uint32_t i = 0; i < total_u32; ++i) {
-    //     scores_tile_perm_u32[i] = 0;
-    // }
-
     // [token][1][s=1][k] -> [k][1][t][s_padded=32]
     for (uint32_t k = 0; k < reduction_dim_size; ++k) {
         volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + k * tile_u16_stride;
@@ -90,10 +83,8 @@ void kernel_main() {
             uint16_t score = scores_rm_u16[t * cb_scores_rm_page_size / 2 + k];
             if (t < 16) {  // Face 0,1
                 expert_tile[t * 16] = score;
-                expert_tile[t * 16 + 256] = 0;
             } else {  // Face 2,3
                 expert_tile[512 + (t - 16) * 16] = score;
-                expert_tile[768 + (t - 16) * 16] = 0;
             }
         }
     }
