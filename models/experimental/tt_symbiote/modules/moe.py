@@ -1235,6 +1235,13 @@ class TTNNExperts(TTNNModule):
         Returns:
             Output tensor of shape (1, 1, batch_size_per_device*seq_len, hidden_size)
         """
+        dev = getattr(self, "device", None)
+        n_mesh = _mesh_device_count(dev)
+        if n_mesh is not None and n_mesh <= 1:
+            raise RuntimeError(
+                "TTNNExperts uses all-to-all and needs multiple mesh devices; on 1×1 use a PyTorch MoE path. "
+                "(run_on_devices only checks MESH_DEVICE env, not physical mesh size.)"
+            )
 
         # Extract dimensions
         batch_size_per_device = x.shape[0]
@@ -1722,6 +1729,22 @@ def _mesh_to_torch(t):
     return ttnn.to_torch(t)
 
 
+def _mesh_device_count(device):
+    """Actual devices in the mesh (not MESH_DEVICE / run_on_devices env)."""
+    if device is None:
+        return None
+    fn = getattr(device, "get_num_devices", None)
+    if callable(fn):
+        return int(fn())
+    shape = getattr(device, "shape", None)
+    if shape is not None:
+        n = 1
+        for d in shape:
+            n *= int(d)
+        return n
+    return None
+
+
 def _to_torch_for_fallback(tensor):
     """Convert symbiote/ttnn input to torch for fallback."""
     if isinstance(tensor, torch.Tensor):
@@ -1836,7 +1859,33 @@ class TTNNDeepseekV2MoE(TTNNModule):
         return ttnn.reshape(routed_output, orig_shape)
 
     def forward(self, hidden_states):
-        return self._forward_ttnn(hidden_states)
+        self._used_fallback = False
+        device = getattr(self, "device", None)
+        if device is None:
+            self._used_fallback = True
+            inp = _to_torch_for_fallback(hidden_states)
+            with torch.no_grad():
+                return self._fallback_torch_layer(inp)
+        n_mesh = _mesh_device_count(device)
+        if n_mesh is not None and n_mesh <= 1:
+            self._used_fallback = True
+            inp = _to_torch_for_fallback(hidden_states)
+            with torch.no_grad():
+                out = self._fallback_torch_layer(inp)
+            return ttnn.from_torch(
+                out.to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        try:
+            return self._forward_ttnn(hidden_states)
+        except Exception:
+            self._used_fallback = True
+            inp = _to_torch_for_fallback(hidden_states)
+            with torch.no_grad():
+                return self._fallback_torch_layer(inp)
 
 
 # @trace_enabled

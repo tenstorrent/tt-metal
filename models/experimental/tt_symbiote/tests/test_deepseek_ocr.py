@@ -215,10 +215,7 @@ def create_paged_kv_cache(model_config, device, batch_size=1):
     [
         {
             "N150": (1, 1),
-            "N300": (1, 2),
             "T3K": (1, 8),
-            "P150": (1, 1),
-            "P300": (1, 2),
         }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
