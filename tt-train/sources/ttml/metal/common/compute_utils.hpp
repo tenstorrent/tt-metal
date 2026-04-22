@@ -132,6 +132,35 @@ inline void pack_three_l1_acc_tiles(
 }
 
 /**
+ * Pack four DEST registers into four CBs using L1 accumulation.
+ * Does NOT reserve or push; caller must reserve/push around the full accumulation window.
+ * NOTE: Call after tile_regs_commit(). Waits for tile regs inside.
+ */
+inline void pack_four_l1_acc_tiles(
+    const bool first_block,
+    const uint32_t reg_0,
+    const uint32_t cb_0,
+    const uint32_t reg_1,
+    const uint32_t cb_1,
+    const uint32_t reg_2,
+    const uint32_t cb_2,
+    const uint32_t reg_3,
+    const uint32_t cb_3) {
+    tile_regs_wait();
+    pack_reconfig_l1_acc(first_block ? 0 : 1U);
+    pack_reconfig_data_format(cb_0);
+    pack_tile</* out_of_order_output = */ true>(reg_0, cb_0, 0U);
+    pack_reconfig_data_format(cb_1);
+    pack_tile</* out_of_order_output = */ true>(reg_1, cb_1, 0U);
+    pack_reconfig_data_format(cb_2);
+    pack_tile</* out_of_order_output = */ true>(reg_2, cb_2, 0U);
+    pack_reconfig_data_format(cb_3);
+    pack_tile</* out_of_order_output = */ true>(reg_3, cb_3, 0U);
+    pack_reconfig_l1_acc(0);
+    tile_regs_release();
+}
+
+/**
  * Fill DEST register i with zero.
  */
 inline void zero_dst_reg(const uint32_t i) {

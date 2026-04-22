@@ -18,7 +18,7 @@
 //
 //   Pass 1 — accumulate_all_sums_for_row():
 //     Read x and dout tiles once from DRAM. For each tile, compute and
-//     L1-accumulate 7 running sums across 3 register cycles:
+//     L1-accumulate 7 running sums across 2 register cycles:
 //       Σx², Σx⁴, Σx⁶, Σ(x·dout), Σ(x²·dout), Σ(x³·dout), Σdout
 //
 //   Reduce phase:
@@ -256,51 +256,53 @@ void compute_dw_and_ws(
 
 // --- Pass 1: single-pass accumulation ---
 
-// Accumulate all 7 sums for one tile of x and dout (3 register cycles).
+// Accumulate all 7 sums for one tile of x and dout (2 register cycles).
 // Each cycle: acquire → compute → commit → L1-pack-accumulate → release.
-//   Cycle 1: x → x², x⁴                  → accumulate Σx², Σx⁴
-//   Cycle 2: x, dout → x·dout, x²·dout   → accumulate Σ(x·dout), Σ(x²·dout), Σdout
-//   Cycle 3: x, dout → x⁶, x³·dout       → accumulate Σx⁶, Σ(x³·dout)
+//   Cycle A: x, dout → x², x⁴, x⁶, dout          → accumulate Σx², Σx⁴, Σx⁶, Σdout
+//   Cycle B: x, dout → x·dout, x²·dout, x³·dout  → accumulate Σ(x·dout), Σ(x²·dout), Σ(x³·dout)
 inline void accumulate_all_sums_for_tile(const uint32_t block_idx, const bool first) {
-    // Cycle 1: x² and x⁴
-    tile_regs_acquire();
-    copy_tile_to_reg(cb_x, block_idx, 0);
-    mul_binary_tile_init();
-    mul_binary_tile(0, 0, 1);  // r1 = x²
-    mul_binary_tile(1, 1, 2);  // r2 = x⁴
-    tile_regs_commit();
-    pack_two_l1_acc_tiles(first, /*reg_0=*/1U, cb_sum_x2, /*reg_1=*/2U, cb_sum_x4);
+    constexpr uint32_t reg_x_or_x6 = 3U;
+    constexpr uint32_t reg_x2_or_x2dout = 1U;
+    constexpr uint32_t reg_x4_or_xdout = 2U;
+    constexpr uint32_t reg_dout_or_x3dout = 0U;
 
-    // Cycle 2: x·dout, x²·dout, dout (for db)
+    // Cycle A: x², x⁴, x⁶, dout
     tile_regs_acquire();
-    copy_tile_to_reg(cb_x, block_idx, 0);
-    copy_tile_to_reg(cb_dout, block_idx, 1);
+    copy_tile_to_reg(cb_x, block_idx, reg_x_or_x6);  // r3 = x
     mul_binary_tile_init();
-    mul_binary_tile(0, 1, 2);  // r2 = x·dout
-    mul_binary_tile(0, 0, 0);  // r0 = x²
-    mul_binary_tile(0, 1, 3);  // r3 = x²·dout  (r1 = dout unchanged)
+    mul_binary_tile(reg_x_or_x6, reg_x_or_x6, reg_x2_or_x2dout);           // r1 = x²
+    mul_binary_tile(reg_x2_or_x2dout, reg_x2_or_x2dout, reg_x4_or_xdout);  // r2 = x⁴
+    mul_binary_tile(reg_x4_or_xdout, reg_x2_or_x2dout, reg_x_or_x6);       // r3 = x⁶
+    copy_tile_to_reg(cb_dout, block_idx, reg_dout_or_x3dout);              // r0 = dout
+    tile_regs_commit();
+    pack_four_l1_acc_tiles(
+        first,
+        /*reg_0=*/reg_dout_or_x3dout,
+        cb_db_acc,
+        /*reg_1=*/reg_x2_or_x2dout,
+        cb_sum_x2,
+        /*reg_2=*/reg_x4_or_xdout,
+        cb_sum_x4,
+        /*reg_3=*/reg_x_or_x6,
+        cb_sum_x6);
+
+    // Cycle B: x·dout, x²·dout, x³·dout
+    tile_regs_acquire();
+    copy_tile_to_reg(cb_x, block_idx, reg_dout_or_x3dout);   // r0 = x
+    copy_tile_to_reg(cb_dout, block_idx, reg_x2_or_x2dout);  // r1 = dout
+    mul_binary_tile_init();
+    mul_binary_tile(reg_dout_or_x3dout, reg_x2_or_x2dout, reg_x4_or_xdout);  // r2 = x·dout
+    mul_binary_tile(reg_x4_or_xdout, reg_dout_or_x3dout, reg_x_or_x6);       // r3 = x²·dout
+    mul_binary_tile(reg_x_or_x6, reg_dout_or_x3dout, reg_dout_or_x3dout);    // r0 = x³·dout
     tile_regs_commit();
     pack_three_l1_acc_tiles(
         first,
-        /*reg_0=*/2U,
+        /*reg_0=*/reg_x4_or_xdout,
         cb_sum_xdout,
-        /*reg_1=*/3U,
+        /*reg_1=*/reg_x_or_x6,
         cb_sum_x2dout,
-        /*reg_2=*/1U,  // dout for db
-        cb_db_acc);
-
-    // Cycle 3: x⁶, x³·dout
-    tile_regs_acquire();
-    copy_tile_to_reg(cb_x, block_idx, 0);
-    mul_binary_tile_init();
-    mul_binary_tile(0, 0, 1);                 // r1 = x²
-    mul_binary_tile(1, 0, 2);                 // r2 = x³
-    mul_binary_tile(2, 2, 3);                 // r3 = x⁶
-    copy_tile_to_reg(cb_dout, block_idx, 0);  // r0 = dout (x overwritten)
-    mul_binary_tile_init();
-    mul_binary_tile(2, 0, 1);  // r1 = x³·dout
-    tile_regs_commit();
-    pack_two_l1_acc_tiles(first, /*reg_0=*/3U, cb_sum_x6, /*reg_1=*/1U, cb_sum_x3dout);
+        /*reg_2=*/reg_dout_or_x3dout,
+        cb_sum_x3dout);
 }
 
 // Read x and dout tiles once per row, accumulating all 7 sums via L1-pack.
