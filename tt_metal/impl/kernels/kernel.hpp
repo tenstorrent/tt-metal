@@ -146,6 +146,11 @@ public:
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
     void process_dataflow_buffer_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
+    const std::vector<std::string>& get_named_runtime_args() const override { return named_runtime_args_; }
+    const std::vector<std::string>& get_named_common_runtime_args() const override {
+        return named_common_runtime_args_;
+    }
+    const std::string& get_args_namespace() const override { return args_namespace_; }
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     void validate_runtime_args_size(
@@ -197,7 +202,10 @@ protected:
         const std::vector<uint32_t>& compile_args,
         const std::map<std::string, std::string>& defines,
         const std::unordered_map<std::string, uint32_t>& named_compile_args,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {});
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const std::vector<std::string>& named_runtime_args = {},
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::string& args_namespace = "args");
 
     HalProgrammableCoreType programmable_core_type_;
     HalProcessorClassType processor_class_;
@@ -209,6 +217,12 @@ protected:
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
     const DataflowBufferLocalAccessorHandleMap dataflow_buffer_local_accessor_handles_;
+    // Metal 2.0 named-args schema. Order of these vectors determines byte-offset layout
+    // in the dispatch buffer; args_namespace_ controls the C++ namespace emitted into
+    // kernel_args_generated.h.
+    const std::vector<std::string> named_runtime_args_;
+    const std::vector<std::string> named_common_runtime_args_;
+    const std::string args_namespace_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
@@ -240,7 +254,10 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const DataMovementConfig& config,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const std::vector<std::string>& named_runtime_args = {},
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::string& args_namespace = "args") :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -249,7 +266,10 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
-            dataflow_buffer_local_accessor_handles),
+            dataflow_buffer_local_accessor_handles,
+            named_runtime_args,
+            named_common_runtime_args,
+            args_namespace),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
@@ -363,7 +383,10 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const ComputeConfig& config,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const std::vector<std::string>& named_runtime_args = {},
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::string& args_namespace = "args") :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -372,7 +395,10 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
-            dataflow_buffer_local_accessor_handles),
+            dataflow_buffer_local_accessor_handles,
+            named_runtime_args,
+            named_common_runtime_args,
+            args_namespace),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
@@ -435,7 +461,10 @@ public:
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
         const std::set<DataMovementProcessor>& dm_processors,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const std::vector<std::string>& named_runtime_args = {},
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::string& args_namespace = "args") :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -444,7 +473,10 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
-            dataflow_buffer_local_accessor_handles),
+            dataflow_buffer_local_accessor_handles,
+            named_runtime_args,
+            named_common_runtime_args,
+            args_namespace),
         config_(config),
         dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
@@ -493,7 +525,10 @@ public:
         const CoreRangeSet& cr_set,
         const QuasarComputeConfig& config,
         const std::set<QuasarComputeProcessor>& compute_processors,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const std::vector<std::string>& named_runtime_args = {},
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::string& args_namespace = "args") :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -502,7 +537,10 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
-            dataflow_buffer_local_accessor_handles),
+            dataflow_buffer_local_accessor_handles,
+            named_runtime_args,
+            named_common_runtime_args,
+            args_namespace),
         config_(config),
         compute_processors_(compute_processors.begin(), compute_processors.end()) {
         TT_FATAL(

@@ -21,7 +21,13 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 // Type alias for readability
 using KernelRTASchema = detail::ProgramImpl::KernelRTASchema;
 
-// Internal validation function - validates ProgramRunParams against the Program's schema
+// Internal validation function - validates ProgramRunParams against the Program's schema.
+//
+// Named RTAs/CRTAs and vararg RTAs/CRTAs are validated separately:
+//   - Named args must have EVERY declared name set (and no extras). Named RTA values are
+//     required for every node the kernel runs on.
+//   - Vararg counts per-node must match the schema. A node with no vararg entry in the schema
+//     expects zero varargs (but may still have named RTAs, if the schema declares them).
 void ValidateProgramRunParams(const Program& program, const ProgramRunParams& params) {
     const detail::ProgramImpl& program_impl = program.impl();
 
@@ -45,54 +51,113 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
             "Kernel '{}' has no RTA schema registered. Was the Program created from a ProgramSpec?",
             kernel_name);
 
-        // Validate per-node runtime args counts
-        std::unordered_set<NodeCoord> nodes_with_args;
+        // Nodes the kernel runs on — the required domain for named-RTA coverage.
+        const std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
+        const std::set<CoreCoord>& kernel_nodes = kernel->logical_cores();
+
+        // Validate vararg RTA counts per node
+        std::unordered_set<NodeCoord> nodes_with_vararg_params;
         for (const auto& [node_coord, args] : kernel_params.runtime_args) {
-            auto [it_node, node_inserted] = nodes_with_args.insert(node_coord);
+            auto [it_node, node_inserted] = nodes_with_vararg_params.insert(node_coord);
             TT_FATAL(
                 node_inserted,
                 "Duplicate node_coord {} in runtime_args for kernel '{}'.",
                 node_coord.str(),
                 kernel_name);
 
-            auto it = schema->num_runtime_args_per_node.find(node_coord);
             TT_FATAL(
-                it != schema->num_runtime_args_per_node.end(),
-                "Kernel {} is setting RTAs for node {}, but this is not a valid node for this kernel.",
+                kernel_nodes.contains(node_coord),
+                "Kernel '{}' is setting runtime_args for node {}, but the kernel does not run on that node.",
                 kernel_name,
                 node_coord.str());
+
+            auto it_schema = schema->num_runtime_args_per_node.find(node_coord);
+            const size_t expected_varargs =
+                (it_schema != schema->num_runtime_args_per_node.end()) ? it_schema->second : 0;
             TT_FATAL(
-                args.size() == it->second,
-                "Kernel '{}' node {} expects {} runtime args, but {} were provided",
+                args.size() == expected_varargs,
+                "Kernel '{}' node {} expects {} vararg runtime_args, but {} were provided",
                 kernel_name,
                 node_coord.str(),
-                it->second,
+                expected_varargs,
                 args.size());
         }
+        // Every node with a schema vararg entry must have values provided.
+        for (const auto& [node_coord, expected_count] : schema->num_runtime_args_per_node) {
+            TT_FATAL(
+                nodes_with_vararg_params.contains(node_coord),
+                "Kernel '{}' is missing vararg runtime_args for node {} (expected {} args)",
+                kernel_name,
+                node_coord.str(),
+                expected_count);
+        }
 
-        // Validate common runtime args count
+        // Validate vararg CRTA count
         TT_FATAL(
             kernel_params.common_runtime_args.size() == schema->num_common_runtime_args,
-            "Kernel '{}' expects {} common runtime args, but {} were provided",
+            "Kernel '{}' expects {} vararg common_runtime_args, but {} were provided",
             kernel_name,
             schema->num_common_runtime_args,
             kernel_params.common_runtime_args.size());
 
-        // Validate that all nodes in the schema have runtime args provided
-        for (const auto& [node_coord, expected_count] : schema->num_runtime_args_per_node) {
-            bool found = false;
-            for (const auto& [provided_node, args] : kernel_params.runtime_args) {
-                if (provided_node == node_coord) {
-                    found = true;
-                    break;
-                }
-            }
+        // Validate named RTAs: every declared name set per-node, no extras, no duplicate node entries.
+        const auto& named_rta_names = schema->named_runtime_args;
+        const std::unordered_set<std::string> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
+
+        std::unordered_set<NodeCoord> nodes_with_named_params;
+        for (const auto& node_params : kernel_params.named_runtime_args) {
+            auto [it_node, inserted_node] = nodes_with_named_params.insert(node_params.node);
             TT_FATAL(
-                found,
-                "Kernel '{}' is missing runtime args for node {} (expected {} args)",
+                inserted_node,
+                "Duplicate node_coord {} in named_runtime_args for kernel '{}'.",
+                node_params.node.str(),
+                kernel_name);
+            TT_FATAL(
+                kernel_nodes.contains(node_params.node),
+                "Kernel '{}' is setting named_runtime_args for node {}, but the kernel does not run on that node.",
                 kernel_name,
-                node_coord.str(),
-                expected_count);
+                node_params.node.str());
+            TT_FATAL(
+                node_params.args.size() == named_rta_names.size(),
+                "Kernel '{}' node {} expects {} named RTAs, but {} were provided",
+                kernel_name,
+                node_params.node.str(),
+                named_rta_names.size(),
+                node_params.args.size());
+            for (const auto& [name, _value] : node_params.args) {
+                (void)_value;
+                TT_FATAL(
+                    named_rta_name_set.contains(name),
+                    "Kernel '{}' node {} sets named RTA '{}' which is not declared in the schema.",
+                    kernel_name,
+                    node_params.node.str(),
+                    name);
+            }
+        }
+        if (!named_rta_names.empty()) {
+            for (const auto& node : kernel_nodes) {
+                TT_FATAL(
+                    nodes_with_named_params.contains(node),
+                    "Kernel '{}' has named RTAs declared but no named_runtime_args provided for node {}.",
+                    kernel_name,
+                    node.str());
+            }
+        }
+
+        // Validate named CRTAs: every declared name set, no extras.
+        const auto& named_crta_names = schema->named_common_runtime_args;
+        TT_FATAL(
+            kernel_params.named_common_runtime_args.size() == named_crta_names.size(),
+            "Kernel '{}' expects {} named CRTAs, but {} were provided",
+            kernel_name,
+            named_crta_names.size(),
+            kernel_params.named_common_runtime_args.size());
+        for (const auto& name : named_crta_names) {
+            TT_FATAL(
+                kernel_params.named_common_runtime_args.contains(name),
+                "Kernel '{}' is missing named CRTA '{}'.",
+                kernel_name,
+                name);
         }
     }
 
@@ -134,36 +199,101 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
 
     detail::ProgramImpl& program_impl = program.impl();
 
-    // Process kernel runtime arguments
+    // Process kernel runtime arguments.
+    // Named RTAs/CRTAs and vararg RTAs/CRTAs share a single dispatch buffer each (RTA + CRTA).
+    // Layout:
+    //   RTA per-node:  [named_rta_0 ... named_rta_N-1, vararg_0 ... vararg_M-1]
+    //   CRTA:          [named_crta_0 ... named_crta_K-1, vararg_0 ... vararg_L-1]
+    // Named args are placed first in schema declaration order (matches the byte-offset
+    // layout emitted into kernel_args_generated.h). The device-side get_vararg / get_common_vararg
+    // helpers add the named-arg offset transparently, so kernel code indexes varargs from 0.
     for (const auto& kernel_params : params.kernel_run_params) {
         std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_params.kernel_spec_name);
+        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_params.kernel_spec_name);
+        TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_params.kernel_spec_name);
 
-        // Set per-node runtime args
-        // set_runtime_args handles both first-time allocation and subsequent updates
-        for (const auto& [node_coord, args] : kernel_params.runtime_args) {
-            kernel->set_runtime_args(node_coord, args);
+        // Build a node -> named-RTA-values-map lookup for serialization.
+        std::unordered_map<NodeCoord, const std::unordered_map<std::string, uint32_t>*> named_rtas_by_node;
+        for (const auto& node_params : kernel_params.named_runtime_args) {
+            named_rtas_by_node[node_params.node] = &node_params.args;
         }
+
+        // Build a node -> vararg-values-span lookup.
+        std::unordered_map<NodeCoord, const std::vector<uint32_t>*> varargs_by_node;
+        for (const auto& [node, args] : kernel_params.runtime_args) {
+            varargs_by_node[node] = &args;
+        }
+
+        // Iterate over every node the kernel runs on. We need to set RTAs on any node that
+        // has either named RTAs or vararg RTAs. (Validation has already confirmed coverage.)
+        const std::set<CoreCoord>& kernel_nodes = kernel->logical_cores();
+        const bool kernel_has_named_rtas = !schema->named_runtime_args.empty();
+        for (const auto& node : kernel_nodes) {
+            auto named_it = named_rtas_by_node.find(node);
+            auto vararg_it = varargs_by_node.find(node);
+            const bool has_named = named_it != named_rtas_by_node.end();
+            const bool has_varargs = vararg_it != varargs_by_node.end();
+            if (!kernel_has_named_rtas && !has_varargs) {
+                continue;  // Nothing to set on this node.
+            }
+
+            std::vector<uint32_t> combined;
+            combined.reserve(schema->named_runtime_args.size() + (has_varargs ? vararg_it->second->size() : 0));
+            if (kernel_has_named_rtas) {
+                TT_FATAL(
+                    has_named,
+                    "Internal error: validation passed but named RTAs missing for kernel '{}' node {}.",
+                    kernel_params.kernel_spec_name,
+                    node.str());
+                for (const auto& name : schema->named_runtime_args) {
+                    auto v_it = named_it->second->find(name);
+                    TT_FATAL(
+                        v_it != named_it->second->end(),
+                        "Internal error: named RTA '{}' missing for kernel '{}' node {}.",
+                        name,
+                        kernel_params.kernel_spec_name,
+                        node.str());
+                    combined.push_back(v_it->second);
+                }
+            }
+            if (has_varargs) {
+                combined.insert(combined.end(), vararg_it->second->begin(), vararg_it->second->end());
+            }
+            kernel->set_runtime_args(node, combined);
+        }
+
+        // Combine named CRTAs and vararg CRTAs into one common buffer.
+        std::vector<uint32_t> combined_crtas;
+        combined_crtas.reserve(schema->named_common_runtime_args.size() + kernel_params.common_runtime_args.size());
+        for (const auto& name : schema->named_common_runtime_args) {
+            auto v_it = kernel_params.named_common_runtime_args.find(name);
+            TT_FATAL(
+                v_it != kernel_params.named_common_runtime_args.end(),
+                "Internal error: named CRTA '{}' missing for kernel '{}'.",
+                name,
+                kernel_params.kernel_spec_name);
+            combined_crtas.push_back(v_it->second);
+        }
+        combined_crtas.insert(
+            combined_crtas.end(), kernel_params.common_runtime_args.begin(), kernel_params.common_runtime_args.end());
 
         // Set common runtime args
         // TODO: Why on earth does SetCommonRuntimeArgs() only work the first time??
-        if (!kernel_params.common_runtime_args.empty()) {
+        if (!combined_crtas.empty()) {
             if (kernel->common_runtime_args().empty()) {
                 // First time: use the normal setter which allocates storage
-                kernel->set_common_runtime_args(kernel_params.common_runtime_args);
+                kernel->set_common_runtime_args(combined_crtas);
             } else {
                 // Subsequent calls: update in-place
                 // (set_common_runtime_args fatals if called twice, so use direct access)
                 RuntimeArgsData& crta = kernel->common_runtime_args_data();
                 TT_FATAL(
-                    crta.size() == kernel_params.common_runtime_args.size(),
+                    crta.size() == combined_crtas.size(),
                     "Kernel '{}' common runtime args count cannot change from {} to {}",
                     kernel_params.kernel_spec_name,
                     crta.size(),
-                    kernel_params.common_runtime_args.size());
-                std::memcpy(
-                    crta.data(),
-                    kernel_params.common_runtime_args.data(),
-                    kernel_params.common_runtime_args.size() * sizeof(uint32_t));
+                    combined_crtas.size());
+                std::memcpy(crta.data(), combined_crtas.data(), combined_crtas.size() * sizeof(uint32_t));
             }
         }
     }
