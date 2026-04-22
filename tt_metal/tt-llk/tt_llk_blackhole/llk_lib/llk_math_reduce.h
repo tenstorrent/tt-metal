@@ -67,13 +67,11 @@ inline void reduce_row_perform_transpose()
         }
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 
-        // Phase 2 hi: enable dst_32bit_addr_en=1 so MOVD2B/MOVB2D route through
-        // read_dst32b/write_dst32b(adj_row). Reads hi16 from face (dst=0), transposes,
-        // writes transposed hi16 back to face. (Face lo16 gets zeroed as side effect.)
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
-        _llk_math_dbg_feature_disable_(); // dst_32bit_addr_en = 1
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
-
+        // Phase 2 hi: with Fp32_enabled=1 (kernel-init default), MOVD2B uses the
+        // use_dst32b=true path and reads Dst32b natively via Adj32. MOVB2D with Fp32=1
+        // should also write via Dst32b per ISA. No dst_32bit_addr_en toggle needed on
+        // BH silicon. (ttsim has incomplete MOVB2D Fp32 modeling — removing the dbg
+        // toggle here may break ttsim but preserves HW correctness.)
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
@@ -81,12 +79,6 @@ inline void reduce_row_perform_transpose()
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
-
-        // Restore dst_32bit_addr_en=0 before Phase 2 lo (which needs direct physical
-        // addressing for LO16_STAGE scratch access).
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
-        _llk_math_dbg_feature_enable_(); // dst_32bit_addr_en = 0
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
 
         // Phase 2 lo: unchanged — transposes LO16_STAGE scratch in place.
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
