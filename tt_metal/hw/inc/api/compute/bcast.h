@@ -25,6 +25,15 @@
 
 namespace ckernel {
 
+#if defined(ARCH_QUASAR) && (defined(TRISC_UNPACK) || defined(TRISC_MATH))
+// Shared by unpack and math TRISCs: 32b dest uses unpack-to-dest.
+ALWI bool quasar_unary_bcast_unpack_to_dest_enabled(const uint32_t icb) {
+    const std::uint32_t dst_format = get_operand_dst_format(get_operand_id(icb));
+    return (dst_format == static_cast<std::uint32_t>(DataFormat::Float32)) ||
+           (dst_format == static_cast<std::uint32_t>(DataFormat::Int32));
+}
+#endif
+
 template <BroadcastType bcast_type>
 ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
@@ -57,14 +66,12 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     PACK((llk_pack_init<false>(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 #else
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    const bool quasar_unpack_to_dest = quasar_unary_bcast_unpack_to_dest_enabled(icb);
+#endif
 #ifdef TRISC_UNPACK
-    const std::uint32_t operand_id_u = get_operand_id(icb);
-    const std::uint32_t dst_format_u = get_operand_dst_format(operand_id_u);
-    const bool enable_unpack_to_dest_u = (dst_format_u == static_cast<std::uint32_t>(DataFormat::Float32)) ||
-                                         (dst_format_u == static_cast<std::uint32_t>(DataFormat::Int32));
-
     UNPACK((llk_unpack_hw_configure(icb)));
-    if (enable_unpack_to_dest_u) {
+    if (quasar_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(false, icb)));
     } else {
         UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(false, icb)));
@@ -72,12 +79,8 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
 #endif
 
 #ifdef TRISC_MATH
-    const std::uint32_t operand_id_m = get_operand_id(icb);
-    const std::uint32_t dst_format_m = get_operand_dst_format(operand_id_m);
-    const bool enable_unpack_to_dest_m = (dst_format_m == static_cast<std::uint32_t>(DataFormat::Float32)) ||
-                                         (dst_format_m == static_cast<std::uint32_t>(DataFormat::Int32));
-
-    if (enable_unpack_to_dest_m) {
+    const DataCopyType datacopy_type = quasar_unpack_to_dest ? DataCopyType::A2D : DataCopyType::B2D;
+    if (datacopy_type == DataCopyType::A2D) {
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type>(icb)));
     } else {
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type>(icb)));
@@ -112,13 +115,11 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
     }
 #endif
 #else
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    const bool quasar_unpack_to_dest = quasar_unary_bcast_unpack_to_dest_enabled(icb);
+#endif
 #ifdef TRISC_UNPACK
-    const std::uint32_t operand_id_u = get_operand_id(icb);
-    const std::uint32_t dst_format_u = get_operand_dst_format(operand_id_u);
-    const bool enable_unpack_to_dest_u = (dst_format_u == static_cast<std::uint32_t>(DataFormat::Float32)) ||
-                                         (dst_format_u == static_cast<std::uint32_t>(DataFormat::Int32));
-
-    if (enable_unpack_to_dest_u) {
+    if (quasar_unpack_to_dest) {
         UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(icb, in_tile_index)));
     } else {
         UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
@@ -126,12 +127,8 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
 #endif
 
 #ifdef TRISC_MATH
-    const std::uint32_t operand_id_m = get_operand_id(icb);
-    const std::uint32_t dst_format_m = get_operand_dst_format(operand_id_m);
-    const bool enable_unpack_to_dest_m = (dst_format_m == static_cast<std::uint32_t>(DataFormat::Float32)) ||
-                                         (dst_format_m == static_cast<std::uint32_t>(DataFormat::Int32));
-
-    if (enable_unpack_to_dest_m) {
+    const DataCopyType datacopy_type = quasar_unpack_to_dest ? DataCopyType::A2D : DataCopyType::B2D;
+    if (datacopy_type == DataCopyType::A2D) {
         MATH((
             llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type, true>(dst_tile_index, icb)));
     } else {
@@ -164,10 +161,9 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
     UNPACK((llk_unpack_A_uninit<bcast_type>(icb)));
 #endif
 #ifdef TRISC_MATH
-    const std::uint32_t dst_format_m = get_operand_dst_format(get_operand_id(icb));
-    const bool enable_unpack_to_dest_m = (dst_format_m == static_cast<std::uint32_t>(DataFormat::Float32)) ||
-                                         (dst_format_m == static_cast<std::uint32_t>(DataFormat::Int32));
-    if (enable_unpack_to_dest_m) {
+    const bool quasar_unpack_to_dest = quasar_unary_bcast_unpack_to_dest_enabled(icb);
+    const DataCopyType datacopy_type = quasar_unpack_to_dest ? DataCopyType::A2D : DataCopyType::B2D;
+    if (datacopy_type == DataCopyType::A2D) {
         MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, true>()));
     } else {
         MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, false>()));

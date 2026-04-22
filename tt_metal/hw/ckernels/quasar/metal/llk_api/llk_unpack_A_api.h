@@ -40,26 +40,16 @@ template <
 inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces = 0, const std::uint32_t operand = 0) {
     (void)acc_to_dest;
 
+    constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
     if constexpr (BType == BroadcastType::NONE) {
         if (transpose_of_faces != 0) {
-            if constexpr (unpack_to_dest) {
-                llk_unpack_unary_operand_init<p_unpacr::UNP_A, true, DST_ACCUM_MODE, binary_reuse_dest>(operand, 1);
-            } else {
-                llk_unpack_unary_operand_init<p_unpacr::UNP_B, true, DST_ACCUM_MODE, binary_reuse_dest>(operand, 1);
-            }
+            llk_unpack_unary_operand_init<unp_sel, true, DST_ACCUM_MODE, binary_reuse_dest>(operand, 1);
         } else {
-            if constexpr (unpack_to_dest) {
-                llk_unpack_unary_operand_init<p_unpacr::UNP_A, false, DST_ACCUM_MODE, binary_reuse_dest>(operand, 1);
-            } else {
-                llk_unpack_unary_operand_init<p_unpacr::UNP_B, false, DST_ACCUM_MODE, binary_reuse_dest>(operand, 1);
-            }
+            llk_unpack_unary_operand_init<unp_sel, false, DST_ACCUM_MODE, binary_reuse_dest>(operand, 1);
         }
     } else {
-        if constexpr (unpack_to_dest) {
-            llk_unpack_unary_broadcast_operands_init<p_unpacr::UNP_A, BType, true, false>(operand, 1);
-        } else {
-            llk_unpack_unary_broadcast_operands_init<p_unpacr::UNP_B, BType, false, DST_ACCUM_MODE>(operand, 1);
-        }
+        constexpr bool is_fp32_dest_acc_en = unpack_to_dest ? false : DST_ACCUM_MODE;
+        llk_unpack_unary_broadcast_operands_init<unp_sel, BType, unpack_to_dest, is_fp32_dest_acc_en>(operand, 1);
     }
 }
 
@@ -86,18 +76,11 @@ template <
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
     (void)acc_to_dest;
     WAYPOINT("UPAW");
+    constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
     if constexpr (BType == BroadcastType::NONE) {
-        if constexpr (unpack_to_dest) {
-            llk_unpack_unary_operand_tile<p_unpacr::UNP_A, binary_reuse_dest>(operand, tile_index);
-        } else {
-            llk_unpack_unary_operand_tile<p_unpacr::UNP_B, binary_reuse_dest>(operand, tile_index);
-        }
+        llk_unpack_unary_operand_tile<unp_sel, binary_reuse_dest>(operand, tile_index);
     } else {
-        if constexpr (unpack_to_dest) {
-            llk_unpack_unary_broadcast_operands<p_unpacr::UNP_A, true>(operand, tile_index);
-        } else {
-            llk_unpack_unary_broadcast_operands<p_unpacr::UNP_B, false>(operand, tile_index);
-        }
+        llk_unpack_unary_broadcast_operands<unp_sel, unpack_to_dest>(operand, tile_index);
     }
     WAYPOINT("UPAD");
 }

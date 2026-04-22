@@ -14,6 +14,9 @@
 /**
  * @brief Program unpack MOP for one unary operand (any unpack resource).
  * @param operand Logical dataflow buffer / CB id (resolved with get_operand_id).
+ * @param num_tiles Outer MOP tile count (default NUM_TILES). Face count is get_operand_num_faces(operand_id), like
+ *                  Wormhole/Blackhole `llk_unpack_A_init` (num_faces is not a public argument there either). Override
+ *                  via `_llk_unpack_unary_operand_init_` in tt_llk_quasar if needed (e.g. LLK tests).
  * @see tt_llk_quasar llk_unpack_unary_operand.h
  */
 template <
@@ -21,9 +24,9 @@ template <
     bool TRANSPOSE_EN,
     bool IS_32b_DEST_EN,
     EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_unpack_unary_operand_init(
-    const std::uint32_t operand, const std::uint32_t num_tiles = NUM_TILES, const std::uint32_t num_faces = NUM_FACES) {
+inline void llk_unpack_unary_operand_init(const std::uint32_t operand, const std::uint32_t num_tiles = NUM_TILES) {
     const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     _llk_unpack_unary_operand_init_<UNP_SEL, TRANSPOSE_EN, IS_32b_DEST_EN, reuse_dest>(
         operand_id, num_tiles, num_faces);
 }

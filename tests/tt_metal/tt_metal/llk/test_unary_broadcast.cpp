@@ -428,7 +428,8 @@ void run_single_core_unary_broadcast(
 
 using namespace unit_tests::compute::unary_broadcast;
 
-// 32 tiles in 4 blocks of 8; single src→dst DFB path (Quasar). ROW/COL/SCALAR only (not NONE).
+// 32 tiles in 4 blocks of 8; single src→dst DFB path (Quasar). ROW/COL/SCALAR in loop; TODO #38092 runs
+// SCALAR+Float16_b only.
 TEST_F(MeshDeviceFixture, TensixComputeUnaryBroadcastQuasarDfb) {
     if (this->arch_ != tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Unary broadcast DFB test requires Quasar";
@@ -444,7 +445,7 @@ TEST_F(MeshDeviceFixture, TensixComputeUnaryBroadcastQuasarDfb) {
     for (BroadcastDim bcast_dim : k_quasar_dims) {
         for (const auto& fmt : k_formats) {
             // TODO (#38092): Remove when we can run back to back tests on Quasar
-            if (bcast_dim != BroadcastDim::COL || fmt.in_t != tt::DataFormat::Float16_b) {
+            if (bcast_dim != BroadcastDim::SCALAR || fmt.in_t != tt::DataFormat::Float16_b) {
                 continue;
             }
             UnaryBroadcastConfig test_config = {

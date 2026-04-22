@@ -18,6 +18,9 @@
  */
 template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool unpack_to_dest, bool is_fp32_dest_acc_en>
 inline void llk_unpack_unary_broadcast_operands_init(const std::uint32_t operand, const std::uint32_t num_tiles) {
+    static_assert(
+        BROADCAST_TYPE != BroadcastType::NONE, "Unary broadcast unpack requires a broadcast dimension (not NONE)");
+
     const std::uint32_t operand_id = get_operand_id(operand);
     _llk_unpack_unary_broadcast_operands_init_<UNP_SEL, BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(
         operand_id, num_tiles);
@@ -28,6 +31,9 @@ inline void llk_unpack_unary_broadcast_operands_init(const std::uint32_t operand
  */
 template <std::uint32_t UNP_SEL, bool unpack_to_dest>
 inline void llk_unpack_unary_broadcast_operands(const std::uint32_t operand, const std::uint32_t tile_index) {
+    static_assert(
+        unpack_to_dest || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL must be p_unpacr::UNP_B when unpack_to_dest is false");
+
     const std::uint32_t operand_id = get_operand_id(operand);
     const auto& local_dfb = g_dfb_interface[operand_id];
     const std::uint32_t l1_tile_index = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx + tile_index;
