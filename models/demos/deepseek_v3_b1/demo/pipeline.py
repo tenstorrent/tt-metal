@@ -30,7 +30,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     StageKind,
 )
 from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock, StageMetadata
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlockKind, StageMetadata
 
 
 def create_fabric_router_config(max_payload_size: int) -> Any:
@@ -575,7 +575,7 @@ class Pipeline:
             my_stage_idx=self._my_stage_idx,
             stages_metadata=stages_metadata,
         )
-        self._pipeline_block: PipelineBlock | None = None
+        self._pipeline_block: PipelineBlockKind | None = None
 
     @property
     def my_mesh_id(self) -> int:
@@ -654,10 +654,50 @@ class Pipeline:
         ttnn.distributed_context_barrier()
 
     def terminate(self) -> None:
-        """Terminate the pipeline block and any auxiliary sockets."""
+        """Terminate the pipeline block.
+
+        Compute kernels and the d2d_exchange / host_io kernels are independent
+        persistent programs that communicate over sockets; each has its own
+        termination semaphore.
+
+        The shutdown sequence is:
+
+          1. Barrier — all ranks start teardown together.
+          2. Set the compute-kernel termination semaphore.  The flag is written
+             to L1 but no core observes it yet: they are all blocked at the
+             iteration gate (``persistent_next_iter_sem``) or mid-iteration.
+          3. Barrier — all ranks have written their termination flags.
+          4. Stage 0 pushes a dummy token and drains the round-trip result.
+             The token naturally triggers ``persistent_next_iter_sem`` via the
+             pipeline's socket/d2d flow, providing both the gate release AND
+             the data payload.  All cores complete this final iteration
+             together, loop back to the top-of-loop termination check, see the
+             flag, and break.
+          5. Barrier — non-stage-0 ranks wait for the dummy round-trip.
+             (No ``synchronize_device`` here: d2d/host_io kernels are still
+             running and would block.)
+          6. Tear down d2d_exchange / host_io via ``PipelineBlock.terminate``
+             (sets socket termination semaphores + ``synchronize_device``).
+          7. Final ``synchronize_device``.
+        """
+        if self._pipeline_block is None:
+            return
+
+        ttnn.distributed_context_barrier()
+
+        self._stage_kind.terminate(self._ctx, self._pipeline_block)
         self._stage_kind.terminate_auxiliary()
-        if self._pipeline_block is not None:
-            self._pipeline_block.terminate()
+
+        ttnn.distributed_context_barrier()
+
+        if self._pipeline_block.is_first_pipeline_stage():
+            self._pipeline_block.push_dummy_token()
+            self._pipeline_block.drain_dummy_output()
+
+        ttnn.distributed_context_barrier()
+
+        self._pipeline_block.terminate()
+        ttnn.synchronize_device(self._mesh_device)
 
 
 def create_single_pod_spec_decode_pipeline_configuration(
@@ -760,7 +800,7 @@ def create_single_pod_combined_spec_decode_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            shared_head_norm=weight_provider.load_shared_head_norm(device),
+            spec_weights=weight_provider.load_spec(device),
         )
 
     def passthrough_stage(device: ttnn.MeshDevice) -> StageKind:

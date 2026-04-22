@@ -20,10 +20,12 @@ import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
+from models.demos.deepseek_v3_b1.micro_ops.persistent_loop.op import PersistentLoop
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import (
     HostIoPlacement,
     LoopbackConfig,
     PipelineBlock,
+    PipelineBlockKind,
     StageMetadata,
 )
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
@@ -96,10 +98,10 @@ class StageKind(ABC):
     """Abstract stage kind: controls PipelineBlock creation, setup, and compute launch."""
 
     @abstractmethod
-    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
-        """Create and return the PipelineBlock for this stage."""
+    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlockKind:
+        """Create and return the pipeline block for this stage."""
 
-    def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+    def setup(self, ctx: StageContext, pipeline_block: PipelineBlockKind) -> None:
         """Post-creation setup (tensor allocation, etc).
 
         Decoder stages may also compile/build device programs here so ``launch_compute`` only
@@ -112,8 +114,17 @@ class StageKind(ABC):
     def terminate_auxiliary(self) -> None:
         """Terminate auxiliary sockets. Default: no-op."""
 
-    def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+    def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlockKind) -> None:
         """Run stage compute after ``pipeline_block.run()`` (execute pre-built programs where applicable). Default: no-op."""
+
+    def terminate(self, ctx: StageContext, pipeline_block: PipelineBlockKind) -> None:
+        """Signal the stage's persistent compute kernels to exit on the next iteration.
+
+        Concrete stages that launch persistent compute kernels (e.g. LMHead, Decoder)
+        override this to set a termination semaphore. The pipeline orchestrator then
+        pushes a dummy token through the pipeline so each stage can complete its final
+        iteration and break naturally at the top-of-loop termination check. Default: no-op.
+        """
 
 
 class PassthroughPayload(Enum):
@@ -511,8 +522,10 @@ class SpecLMHeadStage(StageKind):
             "global_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
             "global_stage2_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
         }
+        self._persistent_loop = PersistentLoop(mesh_device, worker_crs, self._persistent_mode)
         if self._persistent_mode:
-            self._state["persistent_next_iter_semaphore"] = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
+            self._state["persistent_next_iter_semaphore"] = self._persistent_loop.next_iter_semaphore
+            self._state["termination_semaphore"] = self._persistent_loop.termination_semaphore
 
     def run_auxiliary_sockets(self) -> None:
         pass
@@ -543,10 +556,14 @@ class SpecLMHeadStage(StageKind):
             socket_output=d["lmhead_output_socket"],
             persistent_mode=self._persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
+            termination_semaphore=d.get("termination_semaphore"),
             is_mtp_base_stage=False,
             is_mtp_verify_stage=True,
             metadata_tensor=d["metadata_tensor"],
         )
+
+    def terminate(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        self._persistent_loop.terminate()
 
 
 class BaseLMHeadStage(StageKind):
@@ -912,9 +929,10 @@ class BaseLMHeadStage(StageKind):
             num_cores = compute_grid_size.x * compute_grid_size.y
             available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
             self._lmhead_state["mtp_bcast_semaphores"] = [ttnn.create_global_semaphore(mesh_device, available_cores, 0)]
+        self._persistent_loop = PersistentLoop(mesh_device, worker_crs, self._persistent_mode)
         if self._persistent_mode:
-            persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
-            self._lmhead_state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
+            self._lmhead_state["persistent_next_iter_semaphore"] = self._persistent_loop.next_iter_semaphore
+            self._lmhead_state["termination_semaphore"] = self._persistent_loop.termination_semaphore
 
     def run_auxiliary_sockets(self) -> None:
         pass
@@ -952,6 +970,7 @@ class BaseLMHeadStage(StageKind):
             socket_output=d["lmhead_output_socket"],
             persistent_mode=self._persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
+            termination_semaphore=d.get("termination_semaphore"),
             is_mtp_base_stage=True,
             eh_gather_output_buf_tensor=d.get("eh_gather_output_buf"),
             metadata_tensor=d.get("metadata_tensor"),
@@ -961,6 +980,9 @@ class BaseLMHeadStage(StageKind):
             mtp_bcast_semaphores=d.get("mtp_bcast_semaphores"),
             base_token_buffer=d.get("base_token_buffer"),
         )
+
+    def terminate(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        self._persistent_loop.terminate()
 
 
 class _CombinedPipelineBlock:
@@ -1114,6 +1136,26 @@ class _CombinedPipelineBlock:
 
     def read_output(self, output_tensor) -> None:
         self.d2h_socket.read_tensor(output_tensor)
+
+    def push_dummy_token(self) -> None:
+        """Push a single zeroed token through the H2D socket. See :meth:`PipelineBlock.push_dummy_token`."""
+        page_words = TOKEN_PAGE_SIZE_BYTES // 4
+        dummy = ttnn.from_torch(
+            torch.zeros(1, page_words, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.h2d_socket.write_tensor(dummy)
+
+    def drain_dummy_output(self) -> None:
+        """Drain one page from the D2H socket. See :meth:`PipelineBlock.drain_dummy_output`."""
+        page_words = TOKEN_META_PAGE_SIZE_BYTES // 4
+        sink = ttnn.from_torch(
+            torch.zeros(1, page_words, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.d2h_socket.read_tensor(sink)
 
     def get_downstream_socket(self):
         """SpecLMHead reads activation+metadata from this socket (loopback entry downstream)."""
