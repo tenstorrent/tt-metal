@@ -2928,13 +2928,16 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, CompileAndConfigureFabric_JoinsAllFut
     // create() returns, racing on done_count and accessing freed BuildEnvManager state.
     std::string caught_message;
     bool threw = false;
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     try {
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig{mesh_shape},
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             1 /* num_command_queues */,
-            tt_fabric::FabricConfig::FABRIC_2D);
+            DispatchCoreConfig{});
     } catch (const std::exception& e) {
         threw = true;
         caught_message = e.what();
@@ -2956,7 +2959,7 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, CompileAndConfigureFabric_JoinsAllFut
     //  done_count == number of devices in the mesh.)
     // If any tasks were orphaned, done_count might be < N here (tasks still running
     // post-create), which would be flagged as a data race by TSAN.
-    const int expected_device_count = static_cast<int>(mesh_shape.num_devices());
+    const int expected_device_count = static_cast<int>(mesh_shape.mesh_size());
     // Allow one iteration for the throw path: device 0 increments before throwing.
     // Remaining devices each increment before sleeping 500ms.  All should have
     // incremented by the time create() returns (join-before-rethrow waits for them).
@@ -2975,13 +2978,16 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, CompileAndConfigureFabric_JoinsAllFut
     // Re-open cleanly so the fixture teardown doesn't crash.
     // If the mesh device was partially initialized by the failed create(), it will be
     // cleaned up by the exception path.  A fresh create() with real compile_fabric() should work.
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     ASSERT_NO_THROW(
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig{mesh_shape},
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             1 /* num_command_queues */,
-            tt_fabric::FabricConfig::FABRIC_2D))
+            DispatchCoreConfig{}))
         << "[Scenario Y] Re-open after injected failure should succeed";
 }
 
