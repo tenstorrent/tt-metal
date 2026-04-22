@@ -19,7 +19,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.broadcast_rms.op import BroadcastRMSNorm
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import HostIoPlacement, LoopbackConfig, PipelineBlock
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     build_broadcast_test_inputs,
     create_fabric_router_config,
@@ -98,6 +98,7 @@ def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim
             d2h_socket_fifo_size=embedding_fifo_size,
             d2h_socket_page_size=embedding_size_bytes,
             embedding_tensor=embedding_tensor,
+            loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
         )
     elif is_stage1:
         stage_entry_device = pipeline_config[my_mesh_id].entry_node_coord
@@ -112,6 +113,7 @@ def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim
             # Detach stage-1 exit path from the bcast input socket chain. This keeps the
             # stage-0->stage-1 input path clean while allowing later stages to be passive.
             exit_node_upstream=ttnn.MeshCoreCoord(stage_entry_device, pipeline_core),
+            loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
         )
     else:
         # Passive forwarding stages for rank >=2 when running on larger clusters.
@@ -122,6 +124,7 @@ def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim
             downstream_d2d_socket_fifo_size=embedding_fifo_size,
             upstream_d2d_socket_page_size=embedding_size_bytes,
             downstream_d2d_socket_page_size=embedding_size_bytes,
+            loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
         )
 
     logger.info(f"[rank={my_mesh_id}] pipeline block created")

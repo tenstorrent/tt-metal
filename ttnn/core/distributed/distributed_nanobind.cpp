@@ -1019,6 +1019,91 @@ void py_module(nb::module_& mod) {
                 >>> # All processes continue from here
         )doc");
 
+    // Allgather a single int from every rank; returns list[int] of length num_ranks.
+    mod.def(
+        "allgather_int",
+        [](int value) -> std::vector<int> {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            const auto& ctx = DistributedContext::get_current_world();
+            const int num_ranks = static_cast<int>(*ctx->size());
+            std::vector<int> recv_buf(num_ranks);
+            ctx->all_gather(
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&value), sizeof(int)),
+                ttsl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(recv_buf.data()), static_cast<std::size_t>(num_ranks) * sizeof(int)));
+            return recv_buf;
+        },
+        nb::arg("value"),
+        R"doc(
+            Allgather a single integer value from all processes.
+
+            Returns a list of length ``num_ranks`` where element ``i`` is the value
+            contributed by rank ``i``.
+
+            Raises:
+                RuntimeError: If the distributed context has not been initialized.
+        )doc");
+
+    // Blocking point-to-point: send raw bytes to dest rank.
+    mod.def(
+        "send_bytes",
+        [](nb::bytes data, int dest, int tag) {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            const auto& ctx = DistributedContext::get_current_world();
+            // MPI send does not modify the buffer; const_cast is safe here.
+            auto* ptr = const_cast<std::byte*>(reinterpret_cast<const std::byte*>(data.c_str()));
+            ctx->send(ttsl::Span<std::byte>(ptr, data.size()), Rank(dest), Tag(tag));
+        },
+        nb::arg("data"),
+        nb::arg("dest"),
+        nb::arg("tag") = 0,
+        R"doc(
+            Blocking MPI send of raw bytes to rank ``dest``.
+
+            Args:
+                data (bytes): The bytes to send.
+                dest (int): Destination rank.
+                tag (int): Message tag (default 0).
+
+            Raises:
+                RuntimeError: If the distributed context has not been initialized.
+        )doc");
+
+    // Blocking point-to-point: receive ``size`` bytes from source rank; returns bytes.
+    mod.def(
+        "recv_bytes",
+        [](std::size_t size, int source, int tag) -> nb::bytes {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            std::vector<char> buf(size);
+            const auto& ctx = DistributedContext::get_current_world();
+            ctx->recv(
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(buf.data()), buf.size()), Rank(source), Tag(tag));
+            return nb::bytes(buf.data(), buf.size());
+        },
+        nb::arg("size"),
+        nb::arg("source"),
+        nb::arg("tag") = 0,
+        R"doc(
+            Blocking MPI receive of ``size`` bytes from rank ``source``; returns the bytes.
+
+            Args:
+                size (int): Number of bytes to receive.
+                source (int): Source rank.
+                tag (int): Message tag (default 0).
+
+            Returns:
+                bytes: The received data.
+
+            Raises:
+                RuntimeError: If the distributed context has not been initialized.
+        )doc");
+
     auto m_experimental = mod.def_submodule("experimental", "experimental distributed operations");
     m_experimental.def(
         "get_worker_noc_hop_distance",
@@ -1080,6 +1165,7 @@ void py_module(nb::module_& mod) {
                 int: Hop count on the selected NOC.
         )doc");
     ttnn::pipeline_module::bind_blitz_decode_pipeline(m_experimental);
+    ttnn::pipeline_module::bind_pipeline_builder(m_experimental);
 }
 
 }  // namespace ttnn::distributed

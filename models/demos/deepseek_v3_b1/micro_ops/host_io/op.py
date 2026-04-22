@@ -473,15 +473,12 @@ class HostInterface:
 
     def run(self):
         entries = self._build_programs()
-
         dummy_tensor = ttnn.allocate_tensor_on_device(
             ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
         )
-
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for device_coord, program in entries:
             mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = program
-
         return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 
     def get_downstream_socket(self):
