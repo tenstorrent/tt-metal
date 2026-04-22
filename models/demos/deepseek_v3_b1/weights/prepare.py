@@ -293,6 +293,13 @@ class DeepSeekV3MTPWeights:
     eh_projection: ttnn.Tensor  # model.layers.61.eh_proj.weight
 
 
+@dataclass
+class DeepSeekV3SpecWeights:
+    """Weights used only by the speculative verify LM-head stage."""
+
+    shared_head_norm: ttnn.Tensor  # model.layers.61.shared_head.norm.weight
+
+
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
 NUM_ROUTED_EXPERTS = D.GATE_NUM_INDICES
 _ROUTED_GATE_UP_K = D.HIDDEN_SIZE  # 7168
@@ -1642,6 +1649,26 @@ def prepare_shared_head_norm(
     return shared_norm_tt
 
 
+def prepare_spec_weights(
+    state_dict: dict[str, torch.Tensor],
+    device,
+    *,
+    mtp_layer_idx: int = _MTP_LAYER_IDX,
+    move_to_device: bool = False,
+    cache_config: CacheConfig | None = None,
+) -> DeepSeekV3SpecWeights:
+    """Prepare weights used only by the speculative verify stage."""
+    return DeepSeekV3SpecWeights(
+        shared_head_norm=prepare_shared_head_norm(
+            state_dict,
+            device,
+            mtp_layer_idx=mtp_layer_idx,
+            move_to_device=move_to_device,
+            cache_config=cache_config,
+        )
+    )
+
+
 def prepare_mtp_weights(
     state_dict: dict[str, torch.Tensor],
     device,
@@ -1652,8 +1679,10 @@ def prepare_mtp_weights(
 ) -> DeepSeekV3MTPWeights:
     """Prepare lightweight MTP projection/norm weights from state dict.
 
-    Only the MTP-specific tensors (h_gamma, e_gamma, eh_projection) are prepared here.
-    The MTP decoder block (layer 61) is a regular MoE layer handled through ``prepare_moe_layer_weights``.
+    Prepares only the base-stage MTP tensors (h_gamma, e_gamma, eh_projection).
+    Spec-stage-only weights like ``shared_head_norm`` are handled separately by
+    ``prepare_spec_weights``. The MTP decoder block (layer 61) is a regular MoE
+    layer handled through ``prepare_moe_layer_weights``.
     """
     if cache_config is None:
         cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
@@ -1689,7 +1718,6 @@ def prepare_mtp_weights(
         preprocess=lambda t: _mtp_eh_proj_preprocess(t, _eh_key, eh_target.name),
         raw_tensors=lambda: {_eh_key: state_dict[_eh_key]},
     )
-
     logger.info("MTP weights prepared in {:.3f}s", time.perf_counter() - t0)
     return DeepSeekV3MTPWeights(
         h_gamma=h_gamma_tt,

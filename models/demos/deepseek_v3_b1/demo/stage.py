@@ -28,6 +28,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MTPWeights,
+    DeepSeekV3SpecWeights,
 )
 
 # Global constants used by multiple stage kinds (and exported to pipeline/cli)
@@ -35,10 +36,18 @@ TOKEN_PAGE_SIZE_BYTES = 64
 TOKEN_FIFO_NUM_PAGES = 64
 TOKEN_FIFO_SIZE = TOKEN_PAGE_SIZE_BYTES * TOKEN_FIFO_NUM_PAGES
 ACTIVATION_DIM = 7168
-FIFO_PAGE_SIZE = 1
+DEFAULT_ACTIVATION_FIFO_PAGES = 2
+SINGLE_BUFFER_FIFO_PAGES = 1
+
+
+def activation_fifo_size_bytes(page_size_bytes: int, fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES) -> int:
+    if fifo_pages < 1:
+        raise ValueError(f"fifo_pages must be >= 1, got {fifo_pages}")
+    return page_size_bytes * fifo_pages
+
 
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
-ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * FIFO_PAGE_SIZE
+ACTIVATION_FIFO_SIZE = activation_fifo_size_bytes(ACTIVATION_PAGE_SIZE_BYTES)
 PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 8)
 
 # Embedding core coords for the combined SpecLMHead+Embedding stage (column 12, outside mcast grid)
@@ -60,7 +69,7 @@ TOKEN_META_FIFO_SIZE = TOKEN_FIFO_SIZE
 
 # Activation + token metadata payload: logits + 1 metadata tile (token).
 ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES = ACTIVATION_PAGE_SIZE_BYTES + TOKEN_PAGE_SIZE_BYTES
-ACTIVATION_W_TOKEN_META_FIFO_SIZE = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+ACTIVATION_W_TOKEN_META_FIFO_SIZE = activation_fifo_size_bytes(ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES)
 
 
 @dataclass
@@ -179,17 +188,27 @@ class EmbeddingStage(StageKind):
 class PassthroughStage(StageKind):
     """Forward-only stage: activation or token passthrough."""
 
-    def __init__(self, payload: PassthroughPayload) -> None:
+    def __init__(
+        self,
+        payload: PassthroughPayload,
+        *,
+        upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+    ) -> None:
         self._payload = payload
+        self._upstream_fifo_pages = upstream_fifo_pages
+        self._downstream_fifo_pages = downstream_fifo_pages
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
         my_stage_idx = ctx.my_stage_idx
         if self._payload == PassthroughPayload.ACTIVATION:
-            up_fifo = down_fifo = ACTIVATION_FIFO_SIZE
+            up_fifo = activation_fifo_size_bytes(ACTIVATION_PAGE_SIZE_BYTES, self._upstream_fifo_pages)
+            down_fifo = activation_fifo_size_bytes(ACTIVATION_PAGE_SIZE_BYTES, self._downstream_fifo_pages)
             up_page = down_page = ACTIVATION_PAGE_SIZE_BYTES
         elif self._payload == PassthroughPayload.ACTIVATION_W_TOKEN_META:
-            up_fifo = down_fifo = ACTIVATION_W_TOKEN_META_FIFO_SIZE
+            up_fifo = activation_fifo_size_bytes(ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES, self._upstream_fifo_pages)
+            down_fifo = activation_fifo_size_bytes(ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES, self._downstream_fifo_pages)
             up_page = down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         elif self._payload == PassthroughPayload.TOKEN_META:
             up_fifo = down_fifo = TOKEN_META_FIFO_SIZE
@@ -231,12 +250,12 @@ class SpecLMHeadStage(StageKind):
         *,
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
-        shared_head_norm: ttnn.Tensor | None = None,
+        spec_weights: DeepSeekV3SpecWeights | None = None,
     ) -> None:
         self._weights = weights
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
-        self._shared_head_norm = shared_head_norm
+        self._spec_weights = spec_weights
         self._state: dict[str, Any] = {}
 
     def _get_sender_coord(self, ctx: StageContext, pipeline_block):
@@ -410,7 +429,7 @@ class SpecLMHeadStage(StageKind):
             }
         )
 
-        spec_gamma = self._shared_head_norm if self._shared_head_norm is not None else self._weights.final_norm
+        spec_gamma = self._spec_weights.shared_head_norm if self._spec_weights is not None else self._weights.final_norm
         self._state = {
             "input_tensor_mesh": input_tensor_mesh,
             "intermediate_tensor_mesh": intermediate_tensor_mesh,
@@ -489,6 +508,8 @@ class BaseLMHeadStage(StageKind):
         mtp_weights: DeepSeekV3MTPWeights | None = None,
         embedding_weights: DeepSeekV3EmbeddingLayerWeights | None = None,
         send_mtp_output_downstream: bool = False,
+        upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         self._weights = weights
         self._fp32_dest_acc_en = fp32_dest_acc_en
@@ -496,6 +517,10 @@ class BaseLMHeadStage(StageKind):
         self._mtp_weights = mtp_weights
         self._embedding_weights = embedding_weights
         self._enable_mtp = mtp_weights is not None
+        if self._enable_mtp and self._embedding_weights is None:
+            raise ValueError("embedding_weights are required when mtp_weights are provided")
+        self._upstream_fifo_pages = upstream_fifo_pages
+        self._downstream_fifo_pages = downstream_fifo_pages
         self._send_mtp_output_downstream = send_mtp_output_downstream and self._enable_mtp
         self._lmhead_state: dict[str, Any] = {}
 
@@ -510,14 +535,15 @@ class BaseLMHeadStage(StageKind):
             pipeline_config[my_stage_idx].exit_node_coord, BaseLMHeadStage.ARGMAX_FINAL_CORE
         )
         down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
-        down_fifo = ACTIVATION_W_TOKEN_META_FIFO_SIZE
-        # Flag here we are creating socket page size of
+        up_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+        up_fifo = activation_fifo_size_bytes(up_page, self._upstream_fifo_pages)
+        down_fifo = activation_fifo_size_bytes(down_page, self._downstream_fifo_pages)
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=ACTIVATION_W_TOKEN_META_FIFO_SIZE,
+            upstream_d2d_socket_fifo_size=up_fifo,
             downstream_d2d_socket_fifo_size=down_fifo,
-            upstream_d2d_socket_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
+            upstream_d2d_socket_page_size=up_page,
             downstream_d2d_socket_page_size=down_page,
             entry_node_downstream=lmhead_entry_core,
             exit_node_upstream=lmhead_exit_core,
@@ -842,6 +868,7 @@ class _CombinedPipelineBlock:
         lmhead_input_core: ttnn.CoreCoord,
         argmax_final_core: ttnn.CoreCoord,
         *,
+        loopback_input_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         my_stage_idx: int | None = None,
         pipeline_config: list | None = None,
         stages_metadata: dict[int, StageMetadata] | None = None,
@@ -903,9 +930,12 @@ class _CombinedPipelineBlock:
         # -- SpecLMHead input path (loopback entry from P3) --
         spec_root_device_coord = loopback_entry_coord
         self.spec_entry_coord = spec_root_device_coord
+        loopback_input_fifo_size = activation_fifo_size_bytes(
+            ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES, loopback_input_fifo_pages
+        )
         self.entry_socket_interface = SocketInterface(
             ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
-            ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
+            loopback_input_fifo_size,
             ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
             ttnn.MeshCoreCoord(prev_stage_exit_coord, PIPELINE_CORE_COORD),
             ttnn.MeshCoreCoord(loopback_entry_coord, PIPELINE_CORE_COORD),
@@ -994,15 +1024,17 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
         *,
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
-        shared_head_norm: ttnn.Tensor | None = None,
+        spec_weights: DeepSeekV3SpecWeights | None = None,
+        loopback_input_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         super().__init__(
             weights,
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            shared_head_norm=shared_head_norm,
+            spec_weights=spec_weights,
         )
         self._embedding_weights = embedding_weights
+        self._loopback_input_fifo_pages = loopback_input_fifo_pages
 
     def _get_sender_coord(self, ctx: StageContext, pipeline_block):
         return pipeline_block.spec_entry_coord
@@ -1016,6 +1048,7 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
             self._embedding_weights.embedding,
             SpecLMHeadStage.LMHEAD_INPUT_CORE,
             SpecLMHeadStage.ARGMAX_FINAL_CORE,
+            loopback_input_fifo_pages=self._loopback_input_fifo_pages,
             my_stage_idx=ctx.my_stage_idx,
             pipeline_config=ctx.pipeline_config,
             stages_metadata=ctx.stages_metadata,

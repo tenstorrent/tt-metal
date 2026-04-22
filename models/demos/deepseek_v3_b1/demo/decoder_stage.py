@@ -15,13 +15,13 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import yarn_get_mscale
 from models.demos.deepseek_v3.tt.rope import get_cos_sin_matrix, get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.demo.stage import (
-    ACTIVATION_FIFO_SIZE,
     ACTIVATION_PAGE_SIZE_BYTES,
-    ACTIVATION_W_TOKEN_META_FIFO_SIZE,
     ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
+    DEFAULT_ACTIVATION_FIFO_PAGES,
     PIPELINE_CORE_COORD,
     StageContext,
     StageKind,
+    activation_fifo_size_bytes,
 )
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
@@ -719,6 +719,8 @@ class DecoderStage(StageKind):
         use_hardcoded_expert_index: bool,
         enable_routing: bool,
         forward_metadata: bool = True,
+        upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         if not isinstance(weights, (DeepSeekV3MoELayerWeights, DeepSeekV3DenseLayerWeights)):
             raise ValueError(
@@ -741,6 +743,8 @@ class DecoderStage(StageKind):
         self._use_hardcoded_expert_index = use_hardcoded_expert_index
         self._enable_routing = enable_routing
         self._forward_metadata = forward_metadata
+        self._upstream_fifo_pages = upstream_fifo_pages
+        self._downstream_fifo_pages = downstream_fifo_pages
         self._num_links_bcast = 1
         self._num_links_allreduce = 2
         self._state: dict[str, Any] = {}
@@ -766,17 +770,17 @@ class DecoderStage(StageKind):
         exit_upstream_page_size = ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list)
 
         if self._forward_metadata:
-            fifo_size = ACTIVATION_W_TOKEN_META_FIFO_SIZE
             page_size = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         else:
-            fifo_size = ACTIVATION_FIFO_SIZE
             page_size = ACTIVATION_PAGE_SIZE_BYTES
+        upstream_fifo_size = activation_fifo_size_bytes(page_size, self._upstream_fifo_pages)
+        downstream_fifo_size = activation_fifo_size_bytes(page_size, self._downstream_fifo_pages)
 
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=fifo_size,
-            downstream_d2d_socket_fifo_size=fifo_size,
+            upstream_d2d_socket_fifo_size=upstream_fifo_size,
+            downstream_d2d_socket_fifo_size=downstream_fifo_size,
             upstream_d2d_socket_page_size=page_size,
             downstream_d2d_socket_page_size=page_size,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
@@ -974,6 +978,8 @@ class MoEDecoderStage(DecoderStage):
         enable_routing: bool = True,
         is_torus: bool = True,
         forward_metadata: bool = False,
+        upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         super().__init__(
             weights=weights,
@@ -988,6 +994,8 @@ class MoEDecoderStage(DecoderStage):
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             enable_routing=enable_routing,
             forward_metadata=forward_metadata,
+            upstream_fifo_pages=upstream_fifo_pages,
+            downstream_fifo_pages=downstream_fifo_pages,
         )
 
 
@@ -1009,6 +1017,8 @@ class DenseDecoderStage(DecoderStage):
         persistent_mode: bool = True,
         is_torus: bool = True,
         forward_metadata: bool = False,
+        upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         super().__init__(
             weights=weights,
@@ -1023,4 +1033,6 @@ class DenseDecoderStage(DecoderStage):
             use_hardcoded_expert_index=False,
             enable_routing=False,
             forward_metadata=forward_metadata,
+            upstream_fifo_pages=upstream_fifo_pages,
+            downstream_fifo_pages=downstream_fifo_pages,
         )

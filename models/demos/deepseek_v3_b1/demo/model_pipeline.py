@@ -225,9 +225,9 @@ class ModelPipeline:
         signal_to_exit = False
         while len(generated_tokens) < max_new_tokens or signal_to_exit:
             iteration += 1
-            logger.debug(
-                f"\n\nIteration {iteration}: Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
-            )
+            # logger.debug(
+            #     f"\n\nIteration {iteration}: Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
+            # )
 
             if pending:
                 result = pending.popleft()
@@ -235,19 +235,19 @@ class ModelPipeline:
                 result = self.model.read_result()
                 num_reads += 1
 
-            logger.debug("Got MD from Device: ")
-            logger.debug(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
-            logger.debug(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
-            logger.debug(
-                f"Token 0: {tokenizer.decode([result.token_0], skip_special_tokens=False)}, Token 1: {tokenizer.decode([result.token_1], skip_special_tokens=False)}"
-            )
-            logger.debug(f"Slot ID: {result.slot_id}")
+            # logger.debug("Got MD from Device: ")
+            # logger.debug(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
+            # logger.debug(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
+            # logger.debug(
+            #     f"Token 0: {tokenizer.decode([result.token_0], skip_special_tokens=False)}, Token 1: {tokenizer.decode([result.token_1], skip_special_tokens=False)}"
+            # )
+            # logger.debug(f"Slot ID: {result.slot_id}")
 
             if not unverified_spec_tokens and not verified_spec_tokens:
                 unverified_spec_tokens.append(result.token_1)
                 emit(result.token_0)
                 num_emits += 1
-                logger.debug("Prefill done")
+                # logger.debug("Prefill done")
             else:
                 if result.token_0_type == TokenType.BASE:
                     # On acceptance, we check that the base token matches the first token of the last unverified spec token
@@ -255,7 +255,7 @@ class ModelPipeline:
                         verified_spec_tokens.append(unverified_spec_tokens.pop())
                         emit(result.token_0)
                         base_accept += 1
-                        logger.debug("Base Accept")
+                        # logger.debug("Base Accept")
                         num_emits += 1
                         signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
                         continue
@@ -265,7 +265,7 @@ class ModelPipeline:
                         unverified_spec_tokens.append(result.token_1)
                         emit(result.token_0)
                         base_reject += 1
-                        logger.debug("Base Reject")
+                        # logger.debug("Base Reject")
                         num_emits += 1
                         signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
 
@@ -281,9 +281,9 @@ class ModelPipeline:
                         emit(result.token_0)
                         spec_accept += 1
                         num_emits += 1
-                        logger.debug("Spec Accept")
+                        # logger.debug("Spec Accept")
                     else:
-                        logger.debug("Spec Reject")
+                        # logger.debug("Spec Reject")
                         if signal_to_exit:
                             break
                         spec_reject += 1

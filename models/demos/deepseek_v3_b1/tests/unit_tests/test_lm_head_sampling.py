@@ -63,6 +63,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MTPWeights,
+    DeepSeekV3SpecWeights,
     prepare_lm_head_weights,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -1105,21 +1106,11 @@ def _prepare_reference_mtp_weights(device: ttnn.MeshDevice, hf_state_dict) -> De
         ttnn.ShardSpec(mcast_core_grid, (1, K), ttnn.ShardOrientation.ROW_MAJOR),
     )
 
-    torch_embedding = hf_state_dict["model.embed_tokens.weight"].to(torch.bfloat16).contiguous()
     torch_h_gamma = hf_state_dict[f"model.layers.{mtp_layer_idx}.hnorm.weight"].reshape(1, -1).to(torch.bfloat16)
     torch_e_gamma = hf_state_dict[f"model.layers.{mtp_layer_idx}.enorm.weight"].reshape(1, -1).to(torch.bfloat16)
     torch_eh_proj = hf_state_dict[f"model.layers.{mtp_layer_idx}.eh_proj.weight"].T.to(torch.bfloat16).contiguous()
     torch_eh_proj_padded = torch.zeros((K + embedding_dim, mtp_padded_dim), dtype=torch.bfloat16)
     torch_eh_proj_padded[:, :mtp_output_dim] = torch_eh_proj
-
-    ttnn_embedding = ttnn.from_torch(
-        torch_embedding,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
     ttnn_h_gamma = ttnn.from_torch(
         torch_h_gamma,
         dtype=ttnn.bfloat16,
@@ -1164,8 +1155,35 @@ def _prepare_reference_mtp_weights(device: ttnn.MeshDevice, hf_state_dict) -> De
     )
 
     return DeepSeekV3MTPWeights(
-        embedding=ttnn_embedding, h_gamma=ttnn_h_gamma, e_gamma=ttnn_e_gamma, eh_projection=ttnn_eh_proj
+        h_gamma=ttnn_h_gamma,
+        e_gamma=ttnn_e_gamma,
+        eh_projection=ttnn_eh_proj,
     )
+
+
+def _prepare_reference_spec_weights(device: ttnn.MeshDevice, hf_state_dict) -> DeepSeekV3SpecWeights:
+    _assert_hf_checkpoint_is_dequantized(hf_state_dict)
+    mtp_layer_idx = _infer_mtp_layer_idx(hf_state_dict)
+    mcast_core = ttnn.CoreCoord(10, 9)
+    mcast_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_core, mcast_core)])
+    input_a_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(mcast_core_grid, (1, _EMBED_HIDDEN), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    torch_shared_head_norm = (
+        hf_state_dict[f"model.layers.{mtp_layer_idx}.shared_head.norm.weight"].reshape(1, -1).to(torch.bfloat16)
+    )
+    ttnn_shared_head_norm = ttnn.from_torch(
+        torch_shared_head_norm,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_a_mem_config,
+        tile=ttnn.Tile([1, 32]),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+    return DeepSeekV3SpecWeights(shared_head_norm=ttnn_shared_head_norm)
 
 
 class _ReferencePayloadMTPWeightProvider:
@@ -1204,6 +1222,9 @@ class _ReferencePayloadMTPWeightProvider:
     def load_mtp_weights(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         return _prepare_reference_mtp_weights(device, self._hf_state_dict)
 
+    def load_spec_weights(self, device: ttnn.MeshDevice) -> DeepSeekV3SpecWeights:
+        return _prepare_reference_spec_weights(device, self._hf_state_dict)
+
 
 def _create_reference_spec_decode_pipeline_configuration(
     weight_provider: _ReferencePayloadMTPWeightProvider,
@@ -1230,6 +1251,7 @@ def _create_reference_spec_decode_pipeline_configuration(
             persistent_mode=persistent_mode,
             mtp_weights=weight_provider.load_mtp_weights(device),
             send_mtp_output_downstream=True,
+            embedding_weights=weight_provider.load_embedding(device),
         )
 
     def stage_2(device: ttnn.MeshDevice):
@@ -1240,6 +1262,7 @@ def _create_reference_spec_decode_pipeline_configuration(
             weights=weight_provider.load_base_lm_head(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
+            spec_weights=weight_provider.load_spec_weights(device),
         )
 
     return PipelineConfiguration({0: stage_0, 1: stage_1, 2: stage_2, 3: stage_3})
@@ -2023,7 +2046,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("seed", [123, 1337, 52098])
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
-@pytest.skip(reason="Skipping test for now, TODO: use new metadata format for test")
+@pytest.mark.skip(reason="Skipping test for now, TODO: use new metadata format for test")
 def test_single_device(
     bh_2d_mesh_device,
     use_fp32,
@@ -2178,7 +2201,7 @@ def test_single_device(
     ],
     indirect=True,
 )
-@pytest.skip(reason="Skipping test for now, TODO: use new metadata format for test")
+@pytest.mark.skip(reason="Skipping test for now, TODO: use new metadata format for test")
 def test_single_device_mtp(
     bh_2d_mesh_device,
     use_fp32,
@@ -3130,7 +3153,7 @@ def test_multidevice(
     ],
     indirect=True,
 )
-@pytest.skip(reason="Skipping test for now, TODO: use new metadata format for test")
+@pytest.mark.skip(reason="Skipping test for now, TODO: use new metadata format for test")
 def test_multidevice_mtp(
     bh_2d_mesh_device,
     use_fp32,
@@ -4405,7 +4428,7 @@ def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32, device_p
     ],
     indirect=True,
 )
-@pytest.skip(reason="Skipping test for now, TODO: use new metadata format for test")
+@pytest.mark.skip(reason="Skipping test for now, TODO: use new metadata format for test")
 def test_persistent_mode(mesh_device, use_fp32, device_params):
     """
     4-stage 4x2 single-galaxy pipeline:
@@ -4476,7 +4499,7 @@ def test_persistent_mode(mesh_device, use_fp32, device_params):
     ],
     indirect=True,
 )
-@pytest.skip(reason="Skipping test for now, TODO: use new metadata format for test")
+@pytest.mark.skip(reason="Skipping test for now, TODO: use new metadata format for test")
 def test_persistent_mode_mtp(mesh_device, use_fp32):
     """
     4-stage 4x2 single-galaxy pipeline with MTP + verification:

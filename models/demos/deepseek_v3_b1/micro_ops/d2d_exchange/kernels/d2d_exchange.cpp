@@ -7,6 +7,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
+#include "api/debug/dprint.h"
 
 constexpr uint32_t sender_socket_config_addr = get_compile_time_arg_val(0);
 constexpr uint32_t receiver_socket_config_addr = get_compile_time_arg_val(1);
@@ -146,6 +147,9 @@ void kernel_main() {
     set_receiver_socket_page_size(receiver_socket, page_size);
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
+    DPRINT << "Starting d2d exchange kernel" << ENDL();
+    DEVICE_PRINT("Starting d2d exchange kernel\n");
+
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,
         downstream_enc.d2d.downstream_noc_y,
@@ -163,6 +167,7 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
+
     if constexpr (use_fabric_on_sender) {
         downstream_data_packet_header_addr =
             reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
@@ -171,6 +176,7 @@ void kernel_main() {
 
         downstream_fabric_connection.open();
         downstream_fabric_connection_2.open();
+
         fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
     }

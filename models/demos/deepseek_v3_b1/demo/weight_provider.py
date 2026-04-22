@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
     DeepSeekV3MTPWeights,
+    DeepSeekV3SpecWeights,
     MoERoutedExpertWeights,
     OverlappedTensor,
     prepare_attention_weights,
@@ -39,7 +40,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_mtp_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
-    prepare_shared_head_norm,
+    prepare_spec_weights,
 )
 
 
@@ -61,7 +62,7 @@ class WeightProvider(Protocol):
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         ...
 
-    def load_shared_head_norm(self, device: ttnn.MeshDevice) -> ttnn.Tensor:
+    def load_spec(self, device: ttnn.MeshDevice) -> DeepSeekV3SpecWeights:
         ...
 
 
@@ -359,10 +360,8 @@ class CacheWeightProvider:
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         return prepare_mtp_weights(self._state_dict, device, cache_config=self._cache_config(device))
 
-    def load_shared_head_norm(self, device: ttnn.MeshDevice) -> ttnn.Tensor:
-        # Keep shared_head_norm out of the persistent cache for now so this
-        # provider remains compatible with existing cache contents.
-        return prepare_shared_head_norm(self._state_dict, device, move_to_device=True)
+    def load_spec(self, device: ttnn.MeshDevice) -> DeepSeekV3SpecWeights:
+        return prepare_spec_weights(self._state_dict, device, cache_config=self._cache_config(device))
 
 
 class SyntheticWeightProvider:
@@ -411,9 +410,9 @@ class SyntheticWeightProvider:
         sd = _build_synthetic_mtp_state_dict()
         return prepare_mtp_weights(sd, device, move_to_device=True)
 
-    def load_shared_head_norm(self, device: ttnn.MeshDevice) -> ttnn.Tensor:
+    def load_spec(self, device: ttnn.MeshDevice) -> DeepSeekV3SpecWeights:
         sd = _build_synthetic_mtp_state_dict()
-        return prepare_shared_head_norm(sd, device, move_to_device=True)
+        return prepare_spec_weights(sd, device, move_to_device=True)
 
 
 class StateDictWeightProvider:
@@ -446,5 +445,5 @@ class StateDictWeightProvider:
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         return prepare_mtp_weights(self._state_dict, device, move_to_device=True)
 
-    def load_shared_head_norm(self, device: ttnn.MeshDevice) -> ttnn.Tensor:
-        return prepare_shared_head_norm(self._state_dict, device, move_to_device=True)
+    def load_spec(self, device: ttnn.MeshDevice) -> DeepSeekV3SpecWeights:
+        return prepare_spec_weights(self._state_dict, device, move_to_device=True)

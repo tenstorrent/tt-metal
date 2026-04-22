@@ -738,10 +738,8 @@ void kernel_main() {
             constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t emb_cb = get_named_compile_time_arg_val("embedding_cb");
             constexpr uint32_t e_num_tiles = get_named_compile_time_arg_val("rmsnorm_e_num_tiles");
-            const InterleavedAddrGen<true> embedding_addr_gen = {
-                .bank_base_address = mtp_embedding_base,
-                .page_size = embedding_size_bytes,
-            };
+            auto embedding_addr_gen = TensorAccessor(
+                tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), mtp_embedding_base, embedding_size_bytes);
             invalidate_l1_cache();
             uint32_t metadata_src_addr = get_read_ptr(rmsnorm_input_cb) + embedding_size_bytes;
             auto* metadata_ptr =

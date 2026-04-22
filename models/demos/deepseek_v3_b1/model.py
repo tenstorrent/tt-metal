@@ -250,7 +250,7 @@ class DeepSeekV3:
         assert (
             input_tensor.shape[0] == self.batch_size
         ), f"Input tensor batch size must be {self.batch_size}, got {input_tensor.shape[0]}"
-
+        padded_input = to_padded_input(input_tensor, self.batch_size, self._page_size_datums)
         self._write_fn(padded_input)
         self._read_fn(self._output_buffer)
         self._position += 1
