@@ -7,7 +7,7 @@
 
 Layout mapping from the legacy rotary tests (``[W, Z, Y, X]`` with cos/sin ``[1, 1, cache, X]``):
 
-- **Prefill** (``is_decode=False``): HF expects ``[1, num_heads, seq, head_dim]``. Treat ``num_heads = W * Z``,
+- **Prefill** (``is_decode_mode=False``): HF expects ``[1, num_heads, seq, head_dim]``. Treat ``num_heads = W * Z``,
   ``seq = Y``, ``head_dim = X`` by reshaping activations to ``[1, W * Z, Y, X]``. Cos/sin stay
   ``[1, 1, cache_size, X]`` (kernel requires ``cache_size >= Y``).
 
@@ -20,10 +20,10 @@ Layout mapping from the legacy rotary tests (``[W, Z, Y, X]`` with cos/sin ``[1,
 - **Prefill vs batch / positions**: In this codebase prefill tensors are ``[1, num_heads, seq_len, head_dim]``;
   the leading ``1`` is not a multi-user batch axis. Different sequence positions use different rows of
   ``cos/sin`` along ``seq_len``—there is no shared ``token_idx`` across users. Per-batch **decode** positions
-  (different users at different cached steps) are what ``is_decode=True`` and ``[1, batch, …]`` cos/sin fix
+  (different users at different cached steps) are what ``is_decode_mode=True`` and ``[1, batch, …]`` cos/sin fix
   relative to the legacy op (see ``test_rotary_embedding_hf_decode_per_batch_position``).
 
-The HF op requires TILE layout and ``head_dim`` divisible by 64; ``test_rotary_embedding_hf_row_major`` skips
+The HF op requires TILE layout and ``head_dim`` divisible by ``2 * ttnn.TILE_SIZE``; ``test_rotary_embedding_hf_row_major`` skips
 because row-major inputs are rejected by validation.
 
 See ``ttnn/cpp/.../rotary_embedding_hf/device/rotary_embedding_hf_device_operation.cpp`` for shape rules.
@@ -147,7 +147,7 @@ def _decode_qk_heads_mem_config(device, batch: int, num_heads: int, head_dim: in
 
 
 def _decode_hf_cos_sin_sharded(device, batch: int, head_dim: int, cos_torch, sin_torch, *, dtype):
-    """Shard cos/sin like ``HfRotarySetupNew.get_rot_mats`` (HEIGHT ``(TILE_SIZE, head_dim)`` on batch grid)."""
+    """Shard cos/sin like ``HfRotarySetup.get_rot_mats`` (HEIGHT ``(TILE_SIZE, head_dim)`` on batch grid)."""
     core_grid = device.compute_with_storage_grid_size()
     num_cores = min(batch, core_grid.x * core_grid.y)
     batch_grid = ttnn.num_cores_to_corerangeset(num_cores, core_grid, row_wise=True)
@@ -254,7 +254,7 @@ def test_rotary_embedding_hf_prefill(
         xt,
         cost,
         sint,
-        is_decode=False,
+        is_decode_mode=False,
         memory_config=out_mem_config,
         compute_kernel_config=rope_cfg,
     )
@@ -327,7 +327,7 @@ def test_rotary_embedding_hf_decode_per_batch_position(device):
         input_tensor,
         cos_tt,
         sin_tt,
-        is_decode=True,
+        is_decode_mode=True,
         compute_kernel_config=rope_cfg,
     )
     out_torch = ttnn.to_torch(out_tt).to(torch.float32)
@@ -415,7 +415,7 @@ def test_rotary_embedding_hf_decode(
         xt,
         cost,
         sint,
-        is_decode=False,
+        is_decode_mode=False,
         memory_config=out_mem_config,
         compute_kernel_config=rope_cfg,
     )
@@ -497,7 +497,7 @@ def test_rotary_embedding_hf_prefill_fp32(
         xt,
         cost,
         sint,
-        is_decode=False,
+        is_decode_mode=False,
         memory_config=out_mem_config,
         compute_kernel_config=rope_cfg,
     )
@@ -579,7 +579,7 @@ def test_rotary_embedding_hf_decode_fp32(
         xt,
         cost,
         sint,
-        is_decode=False,
+        is_decode_mode=False,
         memory_config=out_mem_config,
         compute_kernel_config=rope_cfg,
     )
