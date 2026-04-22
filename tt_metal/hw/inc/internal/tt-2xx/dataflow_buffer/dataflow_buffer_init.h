@@ -35,6 +35,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     uint32_t num_dfbs =
         local_dfb_mask;  // kernel config holds local_cb_mask but it gets hijacked to hold number of dfbs
     volatile uint8_t* base_ptr = reinterpret_cast<volatile uint8_t*>(dfb_config_base);
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+    uint8_t compact_dfb_count = 0;
+#endif
 
     // each RISC populates its own g_dfb_interface entry
     for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
@@ -56,7 +59,16 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + risc_index;
 
             // Populate LocalDFBInterface from combined dfb_initializer_t + dfb_initializer_per_risc_t
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+            ASSERT(compact_dfb_count < dfb::MAX_ACTIVE_DFBS_PACK);
+            // Pack TRISC has smaller local memory so the LocalDFBInterface is tightly packed and a
+            // second lookup table is needed to map the logical DFB ID to the tightly packed index.
+            const uint8_t compact_dfb_id = compact_dfb_count++;
+            g_dfb_logical_to_compact[logical_dfb_id] = compact_dfb_id;
+            LocalDFBInterface& dfb_interface = g_dfb_interface[compact_dfb_id];
+#else
             LocalDFBInterface& dfb_interface = g_dfb_interface[logical_dfb_id];
+#endif
 
             // DPRINT << "risc_index: " << static_cast<uint32_t>(risc_index) << ENDL();
             // DEVICE_PRINT("risc_index: {}\n", static_cast<uint32_t>(risc_index));
@@ -66,34 +78,53 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
             // Address fields are in bytes on host; convert to 16B units on TRISC (cb_addr_shift=4), keep bytes on DM
             // (cb_addr_shift=0)
-            dfb_interface.entry_size = init_ptr->entry_size >> cb_addr_shift;
-            // DPRINT << "entry_size: " << static_cast<uint32_t>(dfb_interface.entry_size) << ENDL();
-            dfb_interface.stride_size = dfb_interface.entry_size * init_ptr->stride_in_entries;
-            // DPRINT << "stride_size: " << static_cast<uint32_t>(dfb_interface.stride_size) << ENDL();
 #ifdef COMPILE_FOR_TRISC
-            dfb_interface.stride_size_tiles = init_ptr->stride_in_entries;
+            dfb_interface.entry_size = static_cast<uint16_t>(init_ptr->entry_size >> cb_addr_shift);
+            dfb_interface.stride_size = static_cast<uint16_t>(
+                static_cast<uint32_t>(dfb_interface.entry_size) * static_cast<uint32_t>(init_ptr->stride_in_entries));
+            dfb_interface.stride_size_tiles = static_cast<uint8_t>(init_ptr->stride_in_entries);
+#if defined(UCK_CHLKC_PACK)
             dfb_interface.wr_entry_ptr = 0;
+#else
+            dfb_interface.tensix_trisc_mask = static_cast<uint8_t>(init_ptr->risc_mask_bits.tensix_trisc_mask);
+#endif
+#else
+            dfb_interface.entry_size = init_ptr->entry_size >> cb_addr_shift;
+            dfb_interface.stride_size = dfb_interface.entry_size * init_ptr->stride_in_entries;
 #endif
 
             for (uint8_t i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
                 uint32_t base = per_risc_ptr->base_addr[i] >> cb_addr_shift;
+                uint32_t limit_s = per_risc_ptr->limit[i] >> cb_addr_shift;
+                // ring_size (TRISC): linear span limit_s - base for this TC—the same bound legacy wr_ptr/rd_ptr used.
+                // In STRIDED layouts that span includes other producers' interleaved entries between this TC's tiles.
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
                 dfb_interface.tc_slots[i].base_addr = base;
-                dfb_interface.tc_slots[i].limit = per_risc_ptr->limit[i] >> cb_addr_shift;
+                dfb_interface.tc_slots[i].wr_offset = 0;
+                dfb_interface.tc_slots[i].ring_size = static_cast<uint16_t>(limit_s - base);
+                dfb_interface.tc_slots[i].packed_tile_counter = per_risc_ptr->packed_tile_counter[i];
+                dfb_interface.tc_slots[i].base_entry_idx = static_cast<uint16_t>(
+                    (base - dfb_interface.tc_slots[0].base_addr) / dfb_interface.entry_size);
+                dfb_interface.tc_slots[i].wr_entry_idx = dfb_interface.tc_slots[i].base_entry_idx;
+#elif defined(COMPILE_FOR_TRISC)
+                dfb_interface.tc_slots[i].base_addr = base;
+                dfb_interface.tc_slots[i].rd_offset = 0;
+                dfb_interface.tc_slots[i].ring_size = static_cast<uint16_t>(limit_s - base);
+                dfb_interface.tc_slots[i].packed_tile_counter = per_risc_ptr->packed_tile_counter[i];
+                dfb_interface.tc_slots[i].base_entry_idx = static_cast<uint16_t>(
+                    (base - dfb_interface.tc_slots[0].base_addr) / dfb_interface.entry_size);
+                dfb_interface.tc_slots[i].rd_entry_idx = dfb_interface.tc_slots[i].base_entry_idx;
+#else
+                dfb_interface.tc_slots[i].base_addr = base;
+                dfb_interface.tc_slots[i].limit = limit_s;
                 dfb_interface.tc_slots[i].rd_ptr = base;
                 dfb_interface.tc_slots[i].wr_ptr = base;
                 dfb_interface.tc_slots[i].packed_tile_counter = per_risc_ptr->packed_tile_counter[i];
-#ifdef COMPILE_FOR_TRISC
-                dfb_interface.tc_slots[i].base_entry_idx =
-                    (base - dfb_interface.tc_slots[0].base_addr) / dfb_interface.entry_size;
-                dfb_interface.tc_slots[i].rd_entry_idx = dfb_interface.tc_slots[i].base_entry_idx;
-                dfb_interface.tc_slots[i].wr_entry_idx = dfb_interface.tc_slots[i].base_entry_idx;
 #endif
             }
 
             dfb_interface.tc_idx = 0;
-#ifdef COMPILE_FOR_TRISC
-            dfb_interface.tensix_trisc_mask = init_ptr->risc_mask_bits.tensix_trisc_mask;
-#else
+#ifndef COMPILE_FOR_TRISC
             dfb_interface.broadcast_tc = per_risc_ptr->num_tcs_and_init.broadcast_tc;
 #endif
 
