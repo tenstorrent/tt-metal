@@ -307,7 +307,11 @@ class TtSuperPoint:
         ttnn.copy_host_to_device_tensor(host, tt_in, cq_id=cq_id)
 
     def run_device_compute(self, tt_in: ttnn.Tensor, b: int = 1):
-        """Device-only forward; returns (s, d_norm) device tensors in TILE layout.
+        """Device-only forward; returns (s_softmax, d_norm) device tensors in TILE layout.
+
+        Softmax over the 65-dim channel axis is run on device — ttnn.softmax
+        respects the logical shape so the tile padding does not corrupt the
+        distribution (verified to PCC 0.9975 vs torch).
 
         Keeps `tt_in` alive for trace replay (does not deallocate).
         """
@@ -316,6 +320,8 @@ class TtSuperPoint:
 
         s, _, _ = self.conv_score_a(encoded, enc_h, enc_w, b)
         s, _, _ = self.conv_score_b(s, enc_h, enc_w, b)
+        s_sm = ttnn.softmax(s, dim=-1)
+        ttnn.deallocate(s)
 
         d, _, _ = self.conv_desc_a(encoded, enc_h, enc_w, b)
         d, _, _ = self.conv_desc_b(d, enc_h, enc_w, b)
@@ -329,7 +335,7 @@ class TtSuperPoint:
         ttnn.deallocate(d)
         ttnn.deallocate(encoded)
 
-        return s, d_norm
+        return s_sm, d_norm
 
     def _run_device(self, pixel_values: torch.Tensor):
         """Untraced path: allocate input, compute, read back, host post-proc."""

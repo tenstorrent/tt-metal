@@ -81,13 +81,13 @@ def _keypoint_set_metrics(tt_scores: torch.Tensor, ref_scores: torch.Tensor, k: 
     return recall, precision, f1
 
 
-def _device_to_host_post(tt_model, s, d_norm, b, h, w):
+def _device_to_host_post(tt_model, s_sm, d_norm, b, h, w):
+    """Convert device outputs (softmax already applied on device) to NCHW host tensors."""
     enc_h, enc_w = h // 8, w // 8
-    scores_nhwc = ttnn.to_torch(s).reshape(b, enc_h, enc_w, KEYPOINT_DIM)
+    scores_nhwc = ttnn.to_torch(s_sm).reshape(b, enc_h, enc_w, KEYPOINT_DIM)
     descriptors_nhwc = ttnn.to_torch(d_norm).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
     scores_nchw = scores_nhwc.permute(0, 3, 1, 2).contiguous().float()
     descriptors_nchw = descriptors_nhwc.permute(0, 3, 1, 2).contiguous().float()
-    scores_nchw = torch.softmax(scores_nchw, dim=1)
     return scores_nchw, descriptors_nchw
 
 
@@ -166,8 +166,7 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         elapsed = time.perf_counter() - t0
         fps = n_iter / elapsed
 
-        # Second timed loop: end-to-end latency incl. D2H + host post-processing
-        # (softmax, NMS, keypoint extraction, grid-sample descriptors).
+        # Second timed loop: end-to-end latency incl. D2H + post-processing.
         t0 = time.perf_counter()
         for _ in range(n_iter):
             tt_model.load_input(tt_in, pixel_values)
@@ -182,15 +181,12 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         fps_e2e = n_iter / elapsed_e2e
 
         # Paper-matching slice: forward + D2H + descriptor sampling only (no NMS).
-        # Matches the paper's "13 ms" figure (11.15 ms forward + 1.5 ms descriptor).
         t0 = time.perf_counter()
         for _ in range(n_iter):
             tt_model.load_input(tt_in, pixel_values)
             ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
             scores_host, desc_host = _device_to_host_post(tt_model, s, d_norm, b, height, width)
             scores_pre = tt_model._decode_keypoints(scores_host, apply_nms=False)
-            # Paper doesn't run NMS in the timed path — use a cheap proxy of
-            # thresholding pre-NMS scores to get ~1000 keypoints, then sample.
             for i in range(b):
                 flat = scores_pre[i].flatten()
                 _, idx = torch.topk(flat, 1000)
