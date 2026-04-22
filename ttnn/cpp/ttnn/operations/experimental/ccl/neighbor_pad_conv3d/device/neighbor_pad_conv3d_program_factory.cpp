@@ -140,8 +140,9 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
 
     constexpr uint32_t MAX_PAD2_NUM_LINKS = 4;
     uint32_t total_fabric_cores = (num_links * 2) + (is_2d ? pad2_num_links * 2 : 0);
-    if (total_fabric_cores > compute_grid_size.x) {
-        uint32_t max_total = compute_grid_size.x;
+    // Fabric cores live in the first column (y-axis), so bound against compute_grid_size.y.
+    if (total_fabric_cores > compute_grid_size.y) {
+        uint32_t max_total = compute_grid_size.y;
         uint32_t h_cores = num_links * 2;
         if (is_2d) {
             uint32_t available_for_w = (max_total > h_cores) ? (max_total - h_cores) : 0;
@@ -163,7 +164,10 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         pad2_num_links,
         MAX_PAD2_NUM_LINKS);
 
-    CoreCoord np_core_grid(num_h_fabric_cores, 1);
+    // H fabric cores occupy column 0, rows [0, num_h_fabric_cores). W fabric cores
+    // follow in the same column. This gives conv3d a clean rectangular grid
+    // (cols [1, grid.x)) instead of the L-shape produced by a first-row layout.
+    CoreCoord np_core_grid(1, num_h_fabric_cores);
     auto
         [num_np_cores,
          np_worker_core_ranges,
@@ -236,12 +240,12 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         }
 
         for (uint32_t i = 0; i < num_w_fabric_cores; i++) {
-            CoreCoord wc = {num_h_fabric_cores + i, 0};
+            CoreCoord wc = {0, num_h_fabric_cores + i};
             w_fabric_logical_cores.push_back(wc);
             w_fabric_virtual_cores.push_back(mesh_device->worker_core_from_logical_core(wc));
         }
         w_fabric_core_range =
-            CoreRangeSet(CoreRange({num_h_fabric_cores, 0}, {num_h_fabric_cores + num_w_fabric_cores - 1, 0}));
+            CoreRangeSet(CoreRange({0, num_h_fabric_cores}, {0, num_h_fabric_cores + num_w_fabric_cores - 1}));
 
         // fabric_only: W exchange covers all H_dev + 2*ph rows per T
         uint32_t h_total = input_halo_dim_size + 2 * op.np_padding_h;
@@ -317,8 +321,8 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     h_reader_kernel_config.compile_args.push_back(is_2d ? recv_cb_index : 0);  // recv_cb_id
     auto h_reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
-        "minimal_default_reader.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/device/kernels/"
+        "np_h_reader.cpp",
         np_worker_core_ranges,
         h_reader_kernel_config);
     SetCommonRuntimeArgs(
@@ -340,14 +344,12 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     h_writer_kernel_config.compile_args.push_back(is_2d ? 1 : 0);    // handle_incoming_writes
     h_writer_kernel_config.compile_args.push_back(0);                // is_w_fabric_writer (false for H)
     h_writer_kernel_config.compile_args.push_back(op.np_ring_size);  // ring_size
-    if (conv_config.input_progress_t_batch_size > 0) {
-        h_writer_kernel_config.defines["NP_PROGRESS_SEM"] = "1";
-        h_writer_kernel_config.compile_args.push_back(conv_config.input_progress_t_batch_size);
-    }
+    // Per-batch progress-sem granularity is always passed; 0 disables the per-batch path.
+    h_writer_kernel_config.compile_args.push_back(conv_config.input_progress_t_batch_size);
     auto h_writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
-        "minimal_default_writer.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/device/kernels/"
+        "np_writer.cpp",
         np_worker_core_ranges,
         h_writer_kernel_config);
     {
@@ -376,8 +378,8 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         uint32_t link_dims_to_read = 0;
 
         for (uint32_t direction = 0; direction < num_directions; direction++) {
-            CoreCoord core = {link * num_directions + direction, 0};
-            CoreCoord opposite_core = {(link * num_directions) + (1 - direction), 0};
+            CoreCoord core = {0, link * num_directions + direction};
+            CoreCoord opposite_core = {0, (link * num_directions) + (1 - direction)};
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
             CoreCoord virtual_opposite_core = mesh_device->worker_core_from_logical_core(opposite_core);
             if (np_core_group_1.contains(core)) {
@@ -506,19 +508,18 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             w_num_targets_backward,
             mesh_device);
 
-        // W reader kernel
+        // W reader kernel — fused-owned copy: always fabric-only, always per-batch
+        // progress-sem signalling.
         auto w_reader_kernel_config = ReaderDataMovementConfig{};
         w_reader_kernel_config.compile_args = {sender_cb_index, is_padding_zeros, page_size};
         TensorAccessorArgs(*halo_buffer).append_to(w_reader_kernel_config.compile_args);
         TensorAccessorArgs(*input_buffer).append_to(w_reader_kernel_config.compile_args);
-        w_reader_kernel_config.defines["FABRIC_ONLY"] = "1";
-        if (conv_config.input_progress_t_batch_size > 0) {
-            w_reader_kernel_config.defines["NP_PROGRESS_SEM"] = "1";
-        }
+        // Per-batch signal granularity (matches conv3d reader's progress_t_batch_size CT arg).
+        w_reader_kernel_config.compile_args.push_back(conv_config.input_progress_t_batch_size);
         w_reader_kernel_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
-            "phase2_w_reader.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/device/kernels/"
+            "np_phase2_w_reader.cpp",
             w_fabric_core_range,
             w_reader_kernel_config);
         {
@@ -547,10 +548,14 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         w_writer_kernel_config.compile_args.push_back(0);            // handle_incoming_writes
         w_writer_kernel_config.compile_args.push_back(1);            // is_w_fabric_writer
         w_writer_kernel_config.compile_args.push_back(w_ring_size);  // ring_size
+        // progress_t_batch_size: W-writer doesn't per-batch-signal in 2D (gated by
+        // num_phase2_signal_targets > 0 at runtime), but the CT arg must be present to
+        // match np_writer.cpp's arg layout.
+        w_writer_kernel_config.compile_args.push_back(conv_config.input_progress_t_batch_size);
         w_writer_kernel_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
-            "minimal_default_writer.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/device/kernels/"
+            "np_writer.cpp",
             w_fabric_core_range,
             w_writer_kernel_config);
         SetCommonRuntimeArgs(
@@ -883,26 +888,23 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         H_shard_max,
         W_shard_max,
         patch_pad_bytes};
+    // Per-T-batch pipelining CT args (indices 36, 37).  Only the receiver-side W-reader
+    // (is_first_chip=FALSE) signals per batch, so per-batch signal count = pad2_num_links.
+    // max_progress_signals is the total signals per dispatch — a safety cap on the
+    // per-T-block wait threshold so the last t_block still makes forward progress.
+    const uint32_t progress_t_batch_size = conv_config.input_progress_t_batch_size;
+    const uint32_t max_progress_signals =
+        progress_t_batch_size > 0 ? (outer_dim_size + progress_t_batch_size - 1u) / progress_t_batch_size : 0u;
+    reader_compile_time_args.push_back(progress_t_batch_size);  // [36]
+    reader_compile_time_args.push_back(max_progress_signals);   // [37]
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
-
-    // Ablation defines
-    std::map<std::string, std::string> ablation_defines;
-    {
-        const char* ablate_env = std::getenv("CONV3D_ABLATE");
-        if (ablate_env != nullptr && std::string(ablate_env) == "profile") {
-            ablation_defines["PROFILE_ZONES"] = "1";
-        }
-    }
-    if (conv_config.input_progress_t_batch_size > 0) {
-        ablation_defines["CONV3D_INPUT_PROGRESS_SEM"] = "1";
-    }
-    ablation_defines["CONV3D_H_HALO"] = "1";
 
     auto conv3d_reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/reader_vol2col.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/device/kernels/"
+        "conv3d_reader_vol2col.cpp",
         core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, ablation_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Matmul parameters
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
@@ -946,14 +948,14 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
 
     auto conv3d_compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/compute.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/device/kernels/"
+        "conv3d_compute.cpp",
         core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = ablation_defines});
+            .compile_args = compute_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args = {
         cb_matmul_result_rm_id,
@@ -986,9 +988,10 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
 
     auto conv3d_writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/device/kernels/"
+        "conv3d_writer.cpp",
         core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, ablation_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     uint32_t input_addr = input_tensor.buffer()->address();
     uint32_t out_addr = output_tensor.buffer()->address();
@@ -1111,13 +1114,16 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         //   [9]  w_out_start
         //   [10] w_out_end
         //   [11] input_progress_sem_addr (L1 addr of progress sem, 0 if disabled)
-        //   [12] input_progress_signal_count (num_w_fabric_cores in 2D mode)
+        //   [12] input_progress_signal_count (per-batch count = num_w_fabric_cores)
         //   [13] h_halo_buffer_addr
         //   [14] h_halo_outer_dim_size
         //   [15] h_halo_H
         //   [16] h_halo_W
         //   [17] h_halo_padding_h
         //   [18] h_halo_padding_w
+        // max_progress_signals (safety cap for the in-T-loop wait threshold) is plumbed
+        // as a compile-time arg on the conv3d reader kernel (idx 37) — set once at
+        // program creation.
         reader_args_per_core[core_id] = {
             input_addr,
             c_in_block_start,
@@ -1132,7 +1138,10 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             w_out_end,
             // [11]: progress semaphore L1 address (static: same per-call since it is L1, not GlobalSemaphore)
             progress_sem_l1_addr,
-            num_w_fabric_cores,
+            // [12]: input_progress_signal_count — per-batch count = number of receivers
+            //   signalling per batch.  Each link has one receiver (the is_first_chip=FALSE
+            //   direction), so count = pad2_num_links = num_w_fabric_cores / 2.
+            num_w_fabric_cores / 2,
             // [13]: halo buffer DRAM address
             halo_buffer_addr,
             conv_config.h_halo_outer_dim_size,

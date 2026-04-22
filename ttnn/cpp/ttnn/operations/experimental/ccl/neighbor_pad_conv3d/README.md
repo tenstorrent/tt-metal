@@ -33,23 +33,25 @@ halo-write, halo-read, and conv3d compute on the same device program.
 
 ## Progress-sem contract
 
-Progress-sem signalling is enabled when `conv_config.input_progress_t_batch_size > 0`.
-- Factory sets `NP_PROGRESS_SEM` on H-writer and W-reader kernels, and
-  `CONV3D_INPUT_PROGRESS_SEM` on the conv3d reader.
-- Host resets the sem via `reset_global_semaphore_value(progress_sem, 0)`
-  before each dispatch. The sem is allocated on the full compute grid
-  (`ccl_cores` spans the whole grid), so conv3d reader cores *are* reset.
-- The W-reader signals after confirming `w_neighbor_sem ≥ expected_count`, which
-  (combined with fabric in-order delivery) guarantees all fabric-written sticks
-  have landed in DRAM before `progress_sem` increments.
-- The conv3d reader does a single `noc_semaphore_wait_min` then a defensive
-  in-kernel `noc_semaphore_set(progress_sem_ptr, 0)` (kept against host/dispatch
-  ordering drift; see `reader_vol2col.cpp`).
+Progress-sem signalling is always-on in the fused op; `conv_config.input_progress_t_batch_size`
+controls the per-T-batch granularity (0 = one signal at end of NP, N = one per N input T frames).
+- Host resets the sem via `reset_global_semaphore_value(progress_sem, 0)` before each dispatch.
+  The sem is allocated on the full compute grid (`ccl_cores` spans the whole grid),
+  so conv3d reader cores *are* reset.
+- **Receiver-side W-reader only** signals per batch (sender has no incoming-data wait,
+  its signal would fire before the remote fabric write for that batch has landed).
+  Receiver waits on `w_neighbor_sem ≥ (batch + 1) * sticks_per_batch` before each
+  increment — fabric in-order delivery guarantees the batch's data is in DRAM by then.
+- The conv3d reader does a per-T-block `noc_semaphore_wait_min(progress_sem, threshold)`
+  where `threshold = desired_batches × signal_count`, capped by `max_progress_signals`
+  (the total signals for this dispatch, passed as compile-time arg).
+- End-of-kernel defensive reset on the conv3d reader (kept against host/dispatch ordering drift).
 
-Today the signalling is **once per dispatch** (no per-T-batch pipelining).
-`PLAN_FUSED_CLEANUP.md` in the repo root tracks the design for per-T-batch
-signalling (W-reader + conv3d reader in-loop waits) that restores T-pipeline
-parity with the H-writer path.
+Per-batch signalling unlocks true T-pipelining: conv3d cores can process early t_out blocks
+while later NP batches are still in flight. Empirically the overlap only pays off on shapes
+where `T_out > t_out_parallel` (i.e. each conv3d core handles multiple t_out values). For
+small-T shapes the production code in `vae_wan2_1.py` routes to standalone NP+Conv3d
+instead — see `MIN_T_FOR_FUSED`.
 
 ## RTA refresh contract
 
