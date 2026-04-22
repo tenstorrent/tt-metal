@@ -690,12 +690,21 @@ def _make_positions_cached(B: int, hp: int, wp: int) -> torch.Tensor:
 
 
 def dust3r_forward(img1: torch.Tensor, img2: torch.Tensor, state: dict, device):
-    """Full end-to-end DUSt3R forward on TT — DPT runs on device too."""
-    tt_enc1 = full_encoder(img1, state, device, return_device=True)
-    tt_enc2 = full_encoder(img2, state, device, return_device=True)
+    """Full end-to-end DUSt3R forward on TT — DPT runs on device too.
+
+    Encoder is run once at B=2 (both views stacked) — the dispatch/queue
+    setup cost halves vs two sequential forwards; compute stays the same.
+    """
     B, C, H, W = img1.shape
     hp, wp = H // 16, W // 16
-    pos = _make_positions_cached(B, hp, wp)
+    img_batched = torch.cat([img1, img2], dim=0)   # (2, 3, H, W)
+    tt_enc_batched = full_encoder(img_batched, state, device, return_device=True)
+    # Split B=2 encoder output → two (1, N, 1024) device tensors.
+    N = hp * wp
+    # ttnn.slice on the batch dim.
+    tt_enc1 = ttnn.slice(tt_enc_batched, [0, 0, 0], [1, N, 1024])
+    tt_enc2 = ttnn.slice(tt_enc_batched, [1, 0, 0], [2, N, 1024])
+    pos = _make_positions_cached(1, hp, wp)
 
     _, _, dev_taps1, dev_taps2 = full_decoder(tt_enc1, tt_enc2, pos, state, device, compute_norm=False)
     feats1 = [tt_enc1, dev_taps1[0], dev_taps1[1], dev_taps1[2]]
