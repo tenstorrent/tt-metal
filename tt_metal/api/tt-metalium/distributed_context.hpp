@@ -169,7 +169,7 @@ public:
     [[nodiscard]] virtual Size size() const = 0;
     [[nodiscard]] virtual bool supports_fault_tolerance() const = 0;
 
-    //--- Sub-context layout (populated from TT_RUN_SUBCONTEXT_* env at create) ---
+    //--- Sub-context layout (split jobs: TT_RUN_SUBCONTEXT_ID + TT_RUN_SUBCONTEXT_SIZES from launcher) ---
     /// This process's sub-context id, or nullopt for a normal single-context job.
     [[nodiscard]] virtual std::optional<SubcontextId> subcontext_id() const { return std::nullopt; }
     /// Number of sub-contexts in the merged job (1 when not split).

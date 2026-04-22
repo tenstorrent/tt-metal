@@ -5,14 +5,18 @@
 // MPI sub-context bring-up: dual fabric modes + intra-context DistributedContext + inter-context MPI_COMM_WORLD.
 // Dispatch mirrors models/demos/deepseek_v3_b1/docs/example_dual_rankbindings_one_psd.md (PrefillDecodeDisaggregated).
 //
-// Launch (from repo root); join lines with shell line-continuation as needed:
-//   tt-run --mock-cluster-rank-binding
-//     tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml
-//     --rank-bindings-mapping
-//     tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml
-//     --mpi-args "--allow-run-as-root --oversubscribe"
-//     ./build/test/tt_metal/distributed/distributed_unit_tests
-//     --gtest_filter="MpiSubContext.*"
+// Launch example (from repo root). Use a block comment so shell `\` continuations do not trip -Wcomment on `//`
+// lines (GCC treats backslash-newline inside `//` as a multi-line // comment).
+/*
+ *   tt-run --mock-cluster-rank-binding \
+ *     tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml
+ * \
+ *     --rank-bindings-mapping \
+ *     tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml \
+ *     --mpi-args "--allow-run-as-root --oversubscribe" \
+ *     ./build/test/tt_metal/distributed/distributed_unit_tests \
+ *     --gtest_filter="MpiSubContext.*"
+ */
 
 #include <gtest/gtest.h>
 #include <mpi.h>
@@ -370,10 +374,9 @@ TEST(MpiSubContext, SingleGalaxySplitContext) {
     }
 
     const int sub_id = std::stoi(std::string(sub_env));
-    const char* sub_size_env = std::getenv("TT_RUN_SUBCONTEXT_SIZE");
-    ASSERT_NE(sub_size_env, nullptr);
-    const int sub_size = std::stoi(std::string(sub_size_env));
-    ASSERT_EQ(sub_size, 2) << "Quad 2×4 mapping uses two ranks per sub-context";
+    auto job_world = multihost::DistributedContext::get_world_context();
+    ASSERT_EQ(static_cast<int>(*job_world->subcontext_size(multihost::SubcontextId{sub_id})), 2)
+        << "Quad 2×4 mapping uses two ranks per sub-context";
     ASSERT_EQ(local_size, 2) << "MPI_Comm_split should yield communicator size 2 per sub-context";
 
     if (sub_id == 0) {

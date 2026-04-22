@@ -130,8 +130,6 @@ public:
     static void set_current_world(const ContextPtr& ctx);
 
 private:
-    static void refresh_launcher_layout_from_env();
-
     MPI_Comm comm_{MPI_COMM_NULL};
     MPI_Group group_{MPI_GROUP_NULL};
     int rank_{0};
