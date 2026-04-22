@@ -92,20 +92,25 @@
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
     PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
     mkdir -p $PIPELINE_DIR
-    echo "=== Generating pipeline configs ==="
+    echo "=== SP4 superpod: after mkdir ==="
+    pwd
+    ls -la $PIPELINE_DIR
+    echo "=== SP4 superpod: running generate_blitz_decode_pipeline_configs ==="
     python3 /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
       --mpi-user user \
       --hostfile /ci/ttrun/hostfile \
       --worker-tt-metal-home /home/user/tt-metal \
       --output-dir $PIPELINE_DIR \
       /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod_ci.yaml
-    echo "=== Generation exit code: $? ==="
-    echo "=== Files in $PIPELINE_DIR ==="
-    ls -la $PIPELINE_DIR
-    echo "=== Changing to $PIPELINE_DIR ==="
-    cd $PIPELINE_DIR
+    echo "=== SP4 superpod: after generate (exit $?) ==="
     pwd
-    echo "=== Running tt-run ==="
+    ls -la $PIPELINE_DIR
+    echo "=== SP4 superpod: cd to pipeline dir ==="
+    cd $PIPELINE_DIR
+    echo "=== SP4 superpod: before tt-run ==="
+    pwd
+    ls -la
+    echo "=== SP4 superpod: running tt-run ==="
     TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --skip-executable-check \
       --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
       --rank-binding blitz_decode_pipeline_rank_binding_superpod_ci.yaml \
