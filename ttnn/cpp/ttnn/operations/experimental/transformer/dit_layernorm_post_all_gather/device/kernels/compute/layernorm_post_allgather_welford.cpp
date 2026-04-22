@@ -17,6 +17,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
@@ -84,22 +85,17 @@ void kernel_main() {
 
         // Process tiles across width in blocks
         for (uint32_t col_tile = 0; col_tile < Wt; col_tile += block_size) {
-            // 1) x_minus_mean
-            reconfig_data_format(cb_inp, cb_stats_reduced);
-            pack_reconfig_data_format(cb_intermediate);
-            sub_bcast_cols_init_short(cb_inp, cb_stats_reduced);
-            cb_wait_front(cb_inp, block_size);
-            cb_reserve_back(cb_intermediate, block_size);
-            tile_regs_acquire();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < block_size; i++) {
-                sub_tiles_bcast_cols(cb_inp, cb_stats_reduced, i, 0, i);
-                pack_tile(i, cb_intermediate);
-            }
-            tile_regs_commit();
-            tile_regs_release();
-            cb_pop_front(cb_inp, block_size);
-            cb_push_back(cb_intermediate, block_size);
+            // 1) x_minus_mean = cb_inp - mean (tile 0 of cb_stats_reduced, COL bcast)
+            // cb_stats_reduced is waited by outer tile_row scope (NoWaitNoPop).
+            compute_kernel_lib::sub<
+                compute_kernel_lib::BroadcastDim::COL,
+                compute_kernel_lib::BinaryInputPolicy::WaitUpfrontPopAtEnd,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+                compute_kernel_lib::BinaryOutputPolicy::Bulk>(
+                cb_inp,
+                cb_stats_reduced,
+                cb_intermediate,
+                compute_kernel_lib::BinaryInputBlockShape::of(1, block_size));
 
             // 2) normalize: (x-mean) * inv_std
             constexpr uint32_t norm_target_cb = (do_gamma || do_beta) ? cb_intermediate : cb_out;
