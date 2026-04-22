@@ -203,6 +203,12 @@ def create_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SAMPLING_TOP_P,
         help=f"Top-p value for sampling (default: {DEFAULT_SAMPLING_TOP_P}).",
     )
+    p.add_argument(
+        "--sampling-seed",
+        type=int,
+        default=None,
+        help="Optional decode sampling seed for reproducibility.",
+    )
     p.add_argument("--cache-dir", type=str, required=True)
     # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
     p.add_argument(
@@ -444,6 +450,7 @@ def run_demo(
     sampling_temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
     sampling_top_k: int = DEFAULT_SAMPLING_TOP_K,
     sampling_top_p: float = DEFAULT_SAMPLING_TOP_P,
+    sampling_seed: int | None = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -467,6 +474,8 @@ def run_demo(
         raise SystemExit(
             "--sampling-top-k must be >= 0. For top-k=0, use --sample-on-host. See https://github.com/tenstorrent/tt-metal/issues/40236"
         )
+    if sampling_seed is not None and sampling_seed < 0:
+        raise SystemExit("--sampling-seed must be >= 0 when provided.")
     if sampling_top_k == 0 and sample_on_device:
         raise SystemExit(
             "--sampling-top-k=0 is not supported when sampling on device. Use --sample-on-host. See https://github.com/tenstorrent/tt-metal/issues/40236"
@@ -540,6 +549,7 @@ def run_demo(
         temperature=[sampling_temperature] * batch_size,
         top_p=[sampling_top_p] * batch_size,
         top_k=[sampling_top_k] * batch_size,
+        seed=([int(sampling_seed)] * batch_size) if sampling_seed is not None else None,
     )
 
     gen = None
@@ -830,6 +840,7 @@ def main() -> None:
         sampling_temperature=args.sampling_temperature,
         sampling_top_k=args.sampling_top_k,
         sampling_top_p=args.sampling_top_p,
+        sampling_seed=args.sampling_seed,
         stop_at_eos=bool(args.stop_at_eos),
         checkpoint_jsonl=args.checkpoint_jsonl,
         enable_mtp=(args.mtp == "on"),

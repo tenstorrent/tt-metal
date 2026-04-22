@@ -15,6 +15,10 @@ MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
+TOKEN_MATCHING_GOLDEN_DIR = Path(__file__).with_name("token_matching_goldens")
+TOKEN_MATCHING_UPDATE_ENV = "DEEPSEEK_V3_UPDATE_TOKEN_MATCHING_GOLDENS"
+TOKEN_MATCHING_SEED = 17
+TOKEN_MATCHING_PREFIX_TAIL_TOKENS = 24
 
 
 @lru_cache(maxsize=1)
@@ -46,6 +50,146 @@ def _assert_no_garbage_tokens(results: dict) -> None:
         pytest.fail("Garbage tokens detected during demo:\n" + "\n".join(failures))
 
 
+def _is_env_flag_enabled(env_name: str) -> bool:
+    value = os.getenv(env_name)
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _truncate_for_log(text: str, max_chars: int = 160) -> str:
+    compact = text.replace("\n", "\\n")
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 3] + "..."
+
+
+def _token_matching_golden_path(case: dict) -> Path:
+    return TOKEN_MATCHING_GOLDEN_DIR / f"{case['case_id']}.json"
+
+
+def _build_token_matching_payload(case: dict, prompts: list[str], results: dict) -> dict:
+    generations = []
+    for i, generation in enumerate(results.get("generations", []), start=1):
+        prompt_text = prompts[i - 1] if i - 1 < len(prompts) else "[empty prompt]"
+        generations.append(
+            {
+                "index": i,
+                "prompt": prompt_text,
+                "tokens": [int(token) for token in generation.get("tokens", [])],
+                "text": generation.get("text"),
+            }
+        )
+
+    return {
+        "case_id": case["case_id"],
+        "mesh_device": os.getenv("MESH_DEVICE", ""),
+        "max_new_tokens": case["max_new_tokens"],
+        "max_users_per_row": case["max_users_per_row"],
+        "sampling": {
+            "temperature": 0.0,
+            "top_k": 1,
+            "top_p": 1.0,
+            "seed": TOKEN_MATCHING_SEED,
+        },
+        "prompts": [generation["prompt"] for generation in generations],
+        "generations": generations,
+    }
+
+
+def _write_token_matching_golden(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
+
+
+def _assert_token_matching_against_golden(case: dict, prompts: list[str], results: dict) -> None:
+    if not case.get("token_matching_golden", False):
+        return
+
+    golden_path = _token_matching_golden_path(case)
+    run_payload = _build_token_matching_payload(case, prompts, results)
+    golden_exists = golden_path.exists()
+    should_refresh = _is_env_flag_enabled(TOKEN_MATCHING_UPDATE_ENV)
+
+    if should_refresh or not golden_exists:
+        _write_token_matching_golden(golden_path, run_payload)
+        action = "updated" if (golden_exists and should_refresh) else "created"
+        reason = f" ({TOKEN_MATCHING_UPDATE_ENV}=1)" if should_refresh else ""
+        print(f"\nToken-matching golden {action}: {golden_path}{reason}")
+        return
+
+    with open(golden_path, "r", encoding="utf-8") as handle:
+        golden_payload = json.load(handle)
+
+    failures = []
+    expected_generations = golden_payload.get("generations", [])
+    actual_generations = run_payload.get("generations", [])
+
+    if len(expected_generations) != len(actual_generations):
+        failures.append(
+            "generation_count mismatch: " f"golden={len(expected_generations)} current={len(actual_generations)}"
+        )
+
+    compared_count = min(len(expected_generations), len(actual_generations))
+    for idx in range(compared_count):
+        expected = expected_generations[idx]
+        actual = actual_generations[idx]
+
+        expected_prompt = str(expected.get("prompt", ""))
+        actual_prompt = str(actual.get("prompt", ""))
+        if expected_prompt != actual_prompt:
+            failures.append(
+                f"prompt_mismatch generation[{idx + 1}]: "
+                f"golden={_truncate_for_log(expected_prompt)!r} "
+                f"current={_truncate_for_log(actual_prompt)!r}"
+            )
+            continue
+
+        expected_tokens = [int(token) for token in expected.get("tokens", [])]
+        actual_tokens = [int(token) for token in actual.get("tokens", [])]
+        if expected_tokens == actual_tokens:
+            continue
+
+        mismatch_step = next(
+            (
+                step
+                for step, (expected_token, actual_token) in enumerate(zip(expected_tokens, actual_tokens))
+                if expected_token != actual_token
+            ),
+            min(len(expected_tokens), len(actual_tokens)),
+        )
+
+        expected_token = expected_tokens[mismatch_step] if mismatch_step < len(expected_tokens) else "<missing>"
+        actual_token = actual_tokens[mismatch_step] if mismatch_step < len(actual_tokens) else "<missing>"
+        generated_prefix = actual_tokens[:mismatch_step]
+        prefix_tail = generated_prefix[-TOKEN_MATCHING_PREFIX_TAIL_TOKENS:]
+
+        failures.append(
+            f"generation[{idx + 1}] first_divergence: "
+            f"prompt={_truncate_for_log(actual_prompt)!r} "
+            f"decode_step={mismatch_step} "
+            f"golden_token={expected_token} "
+            f"asic_token={actual_token} "
+            f"prefix_tail={prefix_tail} "
+            f"(prefix_len={len(generated_prefix)}, golden_len={len(expected_tokens)}, current_len={len(actual_tokens)})"
+        )
+
+    if failures:
+        shown = 30
+        details = "\n".join(failures[:shown])
+        remainder = (
+            "" if len(failures) <= shown else f"\n... {len(failures) - shown} additional mismatch entries omitted."
+        )
+        pytest.fail(
+            "Token-matching divergence against TT golden output.\n"
+            f"case={case['case_id']}\n"
+            f"golden={golden_path}\n"
+            f"{details}{remainder}\n"
+            f"To refresh this golden intentionally, rerun with {TOKEN_MATCHING_UPDATE_ENV}=1."
+        )
+
+
 def _demo_case(
     *,
     max_prompts: int,
@@ -59,6 +203,7 @@ def _demo_case(
     profile_decode: bool,
     stop_at_eos: bool | None,
     expect_full_length: bool,
+    token_matching_golden: bool = False,
     case_id: str,
     marks=None,
 ):
@@ -75,6 +220,8 @@ def _demo_case(
             "profile_decode": profile_decode,
             "stop_at_eos": stop_at_eos,
             "expect_full_length": expect_full_length,
+            "token_matching_golden": token_matching_golden,
+            "case_id": case_id,
         },
         id=case_id,
         marks=marks,
@@ -141,6 +288,7 @@ def _demo_case(
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
+            token_matching_golden=True,
             case_id="dual_full_demo_32upr",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
@@ -156,6 +304,7 @@ def _demo_case(
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
+            token_matching_golden=True,
             case_id="dual_full_demo_8upr",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
@@ -201,6 +350,7 @@ def _demo_case(
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
+            token_matching_golden=True,
             case_id="quad_full_demo_32upr",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
@@ -216,6 +366,7 @@ def _demo_case(
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
+            token_matching_golden=True,
             case_id="quad_full_demo_8upr",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
@@ -266,7 +417,7 @@ def _demo_case(
         ),
     ],
 )
-def test_demo(case: dict, force_recalculate_weight_config: bool):
+def test_demo(case: dict, force_recalculate_weight_config: bool, set_deterministic_env):
     # Path to the external JSON file containing prompts
     json_path = "models/demos/deepseek_v3/demo/test_prompts.json"
 
@@ -288,6 +439,13 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         force_recalculate=force_recalculate_weight_config,
         signpost=True,
     )
+    if case["token_matching_golden"]:
+        run_kwargs.update(
+            sampling_temperature=0.0,
+            sampling_top_k=1,
+            sampling_top_p=1.0,
+            sampling_seed=TOKEN_MATCHING_SEED,
+        )
     if case["override_num_layers"] is not None:
         run_kwargs["override_num_layers"] = case["override_num_layers"]
     if case["stop_at_eos"] is not None:
@@ -328,6 +486,7 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
                 {
                     "index": i + 1,
                     "prompt": prompt_text,
+                    "tokens": gen_result.get("tokens", []),
                     "text": gen_result.get("text"),
                 }
             )
@@ -337,4 +496,5 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
 
         print(f"\nDemo results saved to: {output_file}")
 
+    _assert_token_matching_against_golden(case, prompts, results)
     _assert_no_garbage_tokens(results)
