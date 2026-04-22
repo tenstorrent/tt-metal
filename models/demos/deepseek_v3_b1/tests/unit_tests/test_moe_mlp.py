@@ -547,7 +547,11 @@ def create_reference_moe_model(state_dict, layer_idx):
 
     hf_config = AutoConfig.from_pretrained("models/demos/deepseek_v3/reference", trust_remote_code=True)
     moe_prefix = f"model.layers.{layer_idx}.mlp."
-    moe_state = {k[len(moe_prefix) :]: v for k, v in state_dict.items() if k.startswith(moe_prefix)}
+    moe_state = {
+        k[len(moe_prefix) :]: v
+        for k, v in state_dict.items()
+        if k.startswith(moe_prefix) and not k.endswith("_folded_gamma")
+    }
 
     if any(k.endswith("_scale_inv") for k in moe_state):
         from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict

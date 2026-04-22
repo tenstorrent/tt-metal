@@ -3218,7 +3218,7 @@ class MoeOp:
         # RMSNorm(h) with gamma for MoE input.
         x = _as_2d(input_tensor)
         variance = x.pow(2).mean(-1, keepdim=True)
-        norm_x = x * torch.rsqrt(variance + rmsnorm_epsilon) * rmsnorm_gamma
+        norm_x = (x * torch.rsqrt(variance + rmsnorm_epsilon) * rmsnorm_gamma).to(x.dtype)
 
         # Shared expert branch: (SiLU(hWg) * (hWu))Wd + residual.
         sh_gate = _reshape_weight(shared_gate_weights, norm_x.shape[-1])
