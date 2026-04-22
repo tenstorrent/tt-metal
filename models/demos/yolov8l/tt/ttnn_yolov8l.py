@@ -261,6 +261,139 @@ class TtConv:
         return x, out_height, out_width
 
 
+class TtConv_2:
+    def __init__(
+        self,
+        device,
+        parameters,
+        path,
+        input_params,
+        groups=1,
+        dilation=1,
+        act_block_h=False,
+        block_shard=None,
+        bfloat8=True,
+        change_shard=False,
+        deallocate_activation=False,
+        output_layout=ttnn.TILE_LAYOUT,
+        is_fused=True,
+        is_detect_cv2=False,
+        width_shard=False,
+        act_blocks=32,
+        enable_act_double_buffer=True,
+        reshard_if_not_optimal=False,
+        batch_size=1,
+        packer_l1_acc=False,
+        enable_weights_double_buffer=False,
+    ):
+        self.device = device
+        self.parameters = parameters
+        self.path = path
+        self.input_params = input_params
+        self.groups = groups
+        self.dilation = dilation
+        self.act_block_h = act_block_h
+        self.block_shard = block_shard
+        self.bfloat8 = bfloat8
+        self.change_shard = change_shard
+        self.deallocate_activation = deallocate_activation
+        self.output_layout = output_layout
+        self.is_fused = is_fused
+        self.is_detect_cv2 = is_detect_cv2
+        self.width_shard = width_shard
+        self.act_blocks = act_blocks
+        self.enable_act_double_buffer = enable_act_double_buffer
+        self.reshard_if_not_optimal = reshard_if_not_optimal
+        self.batch_size = batch_size
+        self.packer_l1_acc = packer_l1_acc
+        self.enable_weights_double_buffer = enable_weights_double_buffer
+        self.conv_config = self._initialize_conv_config()
+        self.compute_config = self._initialize_compute_config()
+        self.weights, self.bias = self.parameters[path]
+
+    def _initialize_conv_config(self):
+        self.output_dtype = ttnn.bfloat16
+        conv_config = ttnn.Conv2dConfig(
+            weights_dtype=ttnn.bfloat16,
+            activation=None if self.is_detect_cv2 else ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            # shard_layout=shard_layout,
+            act_block_w_div=1,
+            transpose_shards=False,
+            deallocate_activation=False,
+            enable_act_double_buffer=self.enable_act_double_buffer,
+            enable_weights_double_buffer=self.enable_weights_double_buffer,
+            output_layout=self.output_layout,
+            reallocate_halo_output=False,
+            reshard_if_not_optimal=self.reshard_if_not_optimal,
+        )
+
+        if self.deallocate_activation:
+            conv_config.deallocate_activation = self.deallocate_activation
+
+        # if self.change_shard:
+        #     conv_config.shard_layout = None
+
+        if self.act_block_h:
+            conv_config.act_block_h_override = self.act_blocks
+
+        if self.block_shard:
+            conv_config.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+        if self.width_shard:
+            conv_config.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
+        if self.bfloat8:
+            conv_config.weights_dtype = ttnn.bfloat8_b
+            self.output_dtype = ttnn.bfloat8_b
+
+        return conv_config
+
+    def _initialize_compute_config(self):
+        return ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=self.packer_l1_acc,
+        )
+
+    def __call__(self, x):
+        if x.shape[1] != 1:
+            input_height = x.shape[1]
+            input_width = x.shape[2]
+        else:
+            input_height = int(math.sqrt(x.shape[2]) // self.batch_size)
+            input_width = int(math.sqrt(x.shape[2]) // self.batch_size)
+        [x, [out_height, out_width], [self.weights, self.bias]] = ttnn.conv2d(
+            input_tensor=x,
+            weight_tensor=self.weights,
+            in_channels=x.shape[-1],
+            out_channels=self.input_params[3],
+            device=self.device,
+            bias_tensor=self.bias,
+            kernel_size=(self.input_params[0], self.input_params[0]),
+            stride=(self.input_params[1], self.input_params[1]),
+            padding=(self.input_params[2], self.input_params[2]),
+            dilation=(self.dilation, self.dilation),
+            batch_size=self.batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            conv_config=self.conv_config,
+            compute_config=self.compute_config,
+            groups=self.groups,
+            memory_config=None,
+            return_weights_and_bias=True,
+            return_output_dim=True,
+            dtype=self.output_dtype,
+        )
+
+        if self.is_detect_cv2:
+            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            return x, out_height, out_width
+
+        return x, out_height, out_width
+
+
 class TtBottleneck:
     def __init__(
         self,
@@ -315,6 +448,66 @@ class TtBottleneck:
         if self.tilize:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
+        return ttnn.add(x, cv2) if self.shortcut else cv2
+
+
+class TtBottleneck_2:
+    def __init__(
+        self,
+        device,
+        parameters,
+        path,
+        shortcut,
+        input_params,
+        change_shard=False,
+        act_block_h=False,
+        block_shard=False,
+        deallocate_activation=False,
+        output_layout=ttnn.TILE_LAYOUT,
+        tilize=False,
+        cv1_bottleneck_dram_fallbacks=False,
+        cv2_bottleneck_dram_fallbacks=False,
+    ):
+        self.device = device
+        self.path = path
+        self.tilize = tilize
+        self.shortcut = shortcut
+        self.block_shard = block_shard
+        self.cv1_bottleneck_dram_fallbacks = cv1_bottleneck_dram_fallbacks
+        self.cv2_bottleneck_dram_fallbacks = cv2_bottleneck_dram_fallbacks
+        self.cv1 = TtConv_2(
+            device,
+            parameters,
+            f"{self.path}.cv1",
+            input_params,
+            # change_shard=change_shard,
+            # block_shard=self.block_shard,
+            deallocate_activation=deallocate_activation,
+            output_layout=output_layout,
+        )
+        self.cv2 = TtConv_2(
+            device,
+            parameters,
+            f"{self.path}.cv2",
+            input_params,
+            # act_block_h=act_block_h,
+            # change_shard=change_shard,
+            # block_shard=self.block_shard,
+            deallocate_activation=deallocate_activation,
+        )
+
+    def __call__(self, x, ensure_dram=False):
+        if self.cv1_bottleneck_dram_fallbacks:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        cv1, out_h, out_w = self.cv1(x)
+        if self.cv2_bottleneck_dram_fallbacks:
+            cv1 = ttnn.to_memory_config(cv1, ttnn.DRAM_MEMORY_CONFIG)
+        # import pdb; pdb.set_trace()
+        cv2, out_h, out_w = self.cv2(cv1)
+        cv2 = ttnn.sharded_to_interleaved(cv2, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(cv1)
         return ttnn.add(x, cv2) if self.shortcut else cv2
 
 
@@ -445,6 +638,148 @@ class TtC2f:
                 x = ttnn.concat(y, -1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             x = ttnn.concat(y, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        for i in range(len(y)):
+            ttnn.deallocate(y[i])
+
+        # Only move to DRAM if not already there
+        if x.memory_config().buffer_type != ttnn.BufferType.DRAM:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x, out_h, out_w = self.cv2(x)
+        return x, out_h, out_w
+
+
+class TtC2f_2:
+    def __init__(
+        self,
+        device,
+        parameters,
+        path,
+        n=1,
+        shortcut=False,
+        change_shard=None,
+        input_params=None,
+        act_block_h=False,
+        bfloat8=True,
+        block_shard=False,
+        deallocate_activation=False,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        cv1_bottleneck_dram_fallbacks=[],
+        cv2_bottleneck_dram_fallbacks=[],
+    ):
+        self.device = device
+        self.parameters = parameters
+        self.path = path
+        self.n = n
+        self.shortcut = shortcut
+        self.change_shard = change_shard
+        self.input_params = input_params
+        self.act_block_h = act_block_h
+        self.bfloat8 = bfloat8
+        self.block_shard = block_shard
+        self.deallocate_activation = deallocate_activation
+        self.output_layout = output_layout
+        self.cv1_a = TtConv_2(
+            device,
+            self.parameters,
+            f"{self.path}.cv1_a",
+            input_params=self.input_params[3],
+            bfloat8=self.bfloat8,
+            change_shard=self.change_shard,
+            deallocate_activation=self.deallocate_activation,
+            output_layout=self.output_layout,
+        )
+
+        self.cv1_b = TtConv_2(
+            device,
+            self.parameters,
+            f"{self.path}.cv1_b",
+            input_params=self.input_params[4],
+            bfloat8=self.bfloat8,
+            change_shard=self.change_shard,
+            deallocate_activation=self.deallocate_activation,
+            output_layout=self.output_layout,
+        )
+
+        self.cv2 = TtConv_2(
+            self.device,
+            self.parameters,
+            f"{self.path}.cv2",
+            input_params=self.input_params[1],
+            bfloat8=self.bfloat8,
+            # block_shard=self.block_shard,
+            change_shard=self.change_shard,
+            deallocate_activation=self.deallocate_activation,
+            block_shard=False,
+        )
+
+        self.bottleneck_modules = []
+        for i in range(self.n):
+            self.bottleneck_modules.append(
+                TtBottleneck_2(
+                    self.device,
+                    self.parameters,
+                    f"{self.path}.m.{i}",
+                    self.shortcut,
+                    # self.change_shard,
+                    input_params=self.input_params[2],
+                    act_block_h=self.act_block_h,
+                    # block_shard=self.block_shard,
+                    deallocate_activation=self.deallocate_activation,
+                    # tilize=self.tilize,
+                    cv1_bottleneck_dram_fallbacks=True if i in cv1_bottleneck_dram_fallbacks else False,
+                    cv2_bottleneck_dram_fallbacks=True if i in cv2_bottleneck_dram_fallbacks else False,
+                )
+            )
+
+    def __call__(self, x, reshard_bottleneck_input=False):
+        cv1_a, out_h_a, out_w_a = self.cv1_a(x)
+        cv1_b, out_h_b, out_w_b = self.cv1_b(x)
+
+        # Reduce DRAM transfers: only move when necessary
+        if reshard_bottleneck_input:
+            if cv1_a.memory_config().buffer_type != ttnn.BufferType.L1:
+                cv1_a = ttnn.to_memory_config(cv1_a, ttnn.L1_MEMORY_CONFIG)
+            if cv1_b.memory_config().buffer_type != ttnn.BufferType.L1:
+                cv1_b = ttnn.to_memory_config(cv1_b, ttnn.L1_MEMORY_CONFIG)
+
+        y = [cv1_a, cv1_b]
+
+        for i in range(self.n):
+            z = self.bottleneck_modules[i](y[-1], ensure_dram=reshard_bottleneck_input)
+            if (not self.shortcut) and reshard_bottleneck_input:
+                z = ttnn.to_memory_config(z, ttnn.L1_MEMORY_CONFIG)
+            y.append(z)
+
+        # total_width = sum(tensor.shape[-1] for tensor in y)
+
+        # if not reshard_bottleneck_input:
+        #     # Check if tensors are sharded before accessing shard_spec
+        #     if y[0].is_sharded():
+        #         input_sharded_memory_config = y[0].memory_config()
+        #         input_sharded_spec = input_sharded_memory_config.shard_spec
+        #         shard_height = input_sharded_spec.shape[0]
+        #         input_sharded_memory_layout = str(input_sharded_memory_config.memory_layout)
+        #         if "HEIGHT" in input_sharded_memory_layout:
+        #             out_sharded_memory_config_strategy = ttnn.ShardStrategy.HEIGHT
+        #         elif "BLOCK" in input_sharded_memory_layout:
+        #             out_sharded_memory_config_strategy = ttnn.ShardStrategy.BLOCK
+        #         elif "WIDTH" in input_sharded_memory_layout:
+        #             out_sharded_memory_config_strategy = ttnn.ShardStrategy.WIDTH
+
+        #         out_sharded_memory_config = ttnn.create_sharded_memory_config(
+        #             (shard_height, total_width),
+        #             core_grid=input_sharded_spec.grid,
+        #             strategy=out_sharded_memory_config_strategy,
+        #             use_height_and_width_as_shard_shape=True,
+        #         )
+        #         x = ttnn.concat(y, -1, memory_config=out_sharded_memory_config)
+        #     else:
+        #         # Handle DRAM tensors (no sharding)
+        #         import pdb; pdb.set_trace()
+        #         x = ttnn.concat(y, -1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # else:
+        x = ttnn.concat(y, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         for i in range(len(y)):
             ttnn.deallocate(y[i])
@@ -720,13 +1055,15 @@ class TtDetectionModel:
             input_params=conv_config["input_params"][2],
             deallocate_activation=False,
         )
-        self.c2f_4 = TtC2f(
+        self.c2f_4 = TtC2f_2(
             device,
             parameters,
             "model.4",
             n=6,
             shortcut=True,
             input_params=c2f_configs["model.4"]["input_params"],
+            cv2_bottleneck_dram_fallbacks=[2, 3],
+            cv1_bottleneck_dram_fallbacks=[4, 5],
         )
         self.conv_5 = TtConv(
             device,
@@ -736,7 +1073,7 @@ class TtDetectionModel:
             bfloat8=True,
             packer_l1_acc=True,
         )
-        self.c2f_6 = TtC2f(
+        self.c2f_6 = TtC2f_2(
             device,
             parameters,
             "model.6",
@@ -753,7 +1090,7 @@ class TtDetectionModel:
             bfloat8=True,
             packer_l1_acc=True,
         )
-        self.c2f_8 = TtC2f(
+        self.c2f_8 = TtC2f_2(
             device,
             parameters,
             "model.8",
@@ -764,7 +1101,7 @@ class TtDetectionModel:
         self.sppf_9 = TtSppf(
             device, parameters, "model.9", input_params=sppf_configs["input_params"], batch_size=self.batch_size
         )
-        self.c2f_12 = TtC2f(
+        self.c2f_12 = TtC2f_2(
             device,
             parameters,
             "model.12",
@@ -789,7 +1126,7 @@ class TtDetectionModel:
             bfloat8=True,
             packer_l1_acc=True,
         )
-        self.c2f_18 = TtC2f(
+        self.c2f_18 = TtC2f_2(
             device,
             parameters,
             "model.18",
@@ -805,7 +1142,7 @@ class TtDetectionModel:
             bfloat8=True,
             packer_l1_acc=True,
         )
-        self.c2f_21 = TtC2f(
+        self.c2f_21 = TtC2f_2(
             device,
             parameters,
             "model.21",
@@ -880,11 +1217,10 @@ class TtDetectionModel:
         x = sharded_concat([x, c2f_6])
 
         ttnn.deallocate(c2f_6)
-
         c2f_12, out_h, out_w = self.c2f_12(x)
+        # return c2f_12
         ttnn.deallocate(x)
         ttnn.deallocate(sppf_9)
-
         c2f_12 = ttnn.sharded_to_interleaved(c2f_12, ttnn.L1_MEMORY_CONFIG)
         c2f_12 = to_row_major_if_needed(c2f_12)
         twelve = ttnn.clone(c2f_12, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -910,36 +1246,30 @@ class TtDetectionModel:
 
         c2f_15, out_h, out_w = self.c2f_15(x)
         ttnn.deallocate(x)
-
-        c2f_15 = ttnn.sharded_to_interleaved(c2f_15, ttnn.L1_MEMORY_CONFIG)
         fifteen = ttnn.clone(c2f_15, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        c2f_15 = ttnn.to_memory_config(c2f_15, ttnn.DRAM_MEMORY_CONFIG)
         conv_16, out_h, out_w = self.conv_16(c2f_15)
         ttnn.deallocate(c2f_15)
-        conv_16 = ttnn.sharded_to_interleaved(conv_16, ttnn.L1_MEMORY_CONFIG)
-        conv_16 = to_row_major_if_needed(conv_16)
-        x = sharded_concat([conv_16, twelve])
-        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        conv_16 = ttnn.to_layout(conv_16, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.concat([conv_16, twelve], dim=3)
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(twelve)
         ttnn.deallocate(conv_16)
 
+        # import pdb; pdb.set_trace()
         c2f_18, out_h, out_w = self.c2f_18(x)
         ttnn.deallocate(x)
 
-        c2f_18 = ttnn.sharded_to_interleaved(c2f_18, ttnn.L1_MEMORY_CONFIG)
+        # import pdb; pdb.set_trace()
         eighteen = ttnn.clone(c2f_18, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         conv_19, out_h, out_w = self.conv_19(c2f_18)
         ttnn.deallocate(c2f_18)
-        conv_19 = ttnn.sharded_to_interleaved(conv_19, ttnn.L1_MEMORY_CONFIG)
-        conv_19 = to_row_major_if_needed(conv_19)
-        nine = to_row_major_if_needed(nine)
-        x = sharded_concat([conv_19, nine])
+
+        x = ttnn.concat([conv_19, nine], dim=3)
 
         ttnn.deallocate(nine)
         ttnn.deallocate(conv_19)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         c2f_21, out_h, out_w = self.c2f_21(x, reshard_bottleneck_input=True)
-        c2f_21 = ttnn.sharded_to_interleaved(c2f_21, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x)
         x = [fifteen, eighteen, c2f_21]
 
