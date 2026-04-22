@@ -53,6 +53,8 @@ inline void reduce_row_perform_transpose()
 
         // Phase 1: SFPU extracts lo16 only (hi16 read directly from face by Phase 2 hi).
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+        _llk_math_dbg_feature_disable_(); // dst_32bit_addr_en = 1
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
 #pragma GCC unroll 4
         for (std::uint32_t g = 0; g < 4; g++)
         {
@@ -65,14 +67,10 @@ inline void reduce_row_perform_transpose()
                 TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, lo_row + parity);
             }
         }
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 
         // Phase 2 hi: enable dst_32bit_addr_en=1 so MOVD2B/MOVB2D route through
         // read_dst32b/write_dst32b(adj_row). Reads hi16 from face (dst=0), transposes,
         // writes transposed hi16 back to face. (Face lo16 gets zeroed as side effect.)
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
-        _llk_math_dbg_feature_disable_(); // dst_32bit_addr_en = 1
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
 
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
@@ -82,6 +80,7 @@ inline void reduce_row_perform_transpose()
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
         // Restore dst_32bit_addr_en=0 before Phase 2 lo (which needs direct physical
         // addressing for LO16_STAGE scratch access).
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
