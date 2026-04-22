@@ -29,7 +29,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from functools import cached_property
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, get_args
 
 from inspector_data import run as get_inspector_data, InspectorData
 from triage import (
@@ -57,36 +57,18 @@ script_config = ScriptConfig(
     depends=["inspector_data", "metal_device_id_mapping"],
 )
 
-# List of block types that script returns, can be extended if other block types are needed
-BLOCK_TYPES = [
-    "idle_eth",
-    "active_eth",
-    "tensix",
-    "eth",
-    "dram",
-]
+# Block and core types that scripts return.
+BlockType: TypeAlias = Literal["idle_eth", "active_eth", "tensix", "eth", "dram"]
+CoreType: TypeAlias = Literal["brisc", "trisc0", "trisc1", "trisc2", "ncrisc", "erisc", "erisc0", "erisc1", "drisc"]
+
+BLOCK_TYPES: list[BlockType] = list(get_args(BlockType))
+CORE_TYPES: set[CoreType] = set(get_args(CoreType))
 
 # We need to map triage block types to inspector block types since we cannot use _ in capnp struct names
 INSPECTOR_BLOCK_TYPES = {
     "idle_eth": "idleEth",
     "active_eth": "activeEth",
 }
-
-# List of RISC cores currently supported
-CORE_TYPES = {
-    "brisc",
-    "trisc0",
-    "trisc1",
-    "trisc2",
-    "ncrisc",
-    "erisc",
-    "erisc0",
-    "erisc1",
-    "drisc",
-}
-
-BlockType: TypeAlias = Literal[BLOCK_TYPES]
-CoreType: TypeAlias = Literal[CORE_TYPES]
 
 
 # Classes for storing check results for devices, blocks and cores

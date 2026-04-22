@@ -198,6 +198,7 @@ class SocketInterface:
         upstream_sockets=None,
         upstream_core_coords=None,
         upstream_page_size=None,
+        forward_metadata_size_bytes=0,
     ):
         assert (
             sender_mesh.get_mesh_device() or receiver_mesh.get_mesh_device()
@@ -217,6 +218,7 @@ class SocketInterface:
 
         # Determine multi-upstream mode
         self.multi_upstream = upstream_sockets is not None or upstream_core_coords is not None
+        self.forward_metadata_size_bytes = forward_metadata_size_bytes
         if self.multi_upstream:
             assert upstream_page_size is not None, "upstream_page_size required for multi-upstream mode"
             assert upstream_socket is None, "Cannot mix upstream_socket (singular) with multi-upstream params"
@@ -240,9 +242,14 @@ class SocketInterface:
                     self.upstream_socket_pairs = []
                     buffer_depth = socket_fifo_size // page_size
                     upstream_fifo_size = self.upstream_page_size * buffer_depth
-                    for uc in upstream_core_coords:
+                    last_upstream_page_size = self.upstream_page_size + self.forward_metadata_size_bytes
+                    last_upstream_fifo_size = last_upstream_page_size * buffer_depth
+                    num_upstreams = len(upstream_core_coords)
+                    for idx, uc in enumerate(upstream_core_coords):
+                        is_last = idx == num_upstreams - 1
+                        fifo_size = last_upstream_fifo_size if is_last else upstream_fifo_size
                         socket_connection = ttnn.SocketConnection(uc, send_core_coord)
-                        socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, upstream_fifo_size)
+                        socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, fifo_size)
                         socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
                         pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
                         self.upstream_socket_pairs.append(pair)
@@ -439,12 +446,13 @@ class SocketInterface:
                 packet_header_cb_index,  # 8
                 use_fabric_on_receiver,  # 9
                 use_fabric_on_sender,  # 10
-                page_ready_sem_id,  # 11
-                ncrisc_done_sem_id,  # 12
-                socket_start_idx,  # 13
-                pkt_hdr_slot_start,  # 14
+                self.forward_metadata_size_bytes,  # 11: forward_metadata_size_bytes
+                page_ready_sem_id,  # 12
+                ncrisc_done_sem_id,  # 13
+                socket_start_idx,  # 14
+                pkt_hdr_slot_start,  # 15
             ]
-            ct_args.extend(socket_addrs)  # 15..15+len(socket_addrs)-1
+            ct_args.extend(socket_addrs)  # 16..16+len(socket_addrs)-1
             return ct_args
 
         core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)])

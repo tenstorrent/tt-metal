@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     constexpr uint32_t stick_nbytes = get_compile_time_arg_val(0);
@@ -17,27 +17,27 @@ void kernel_main() {
     constexpr uint32_t work_per_core = get_compile_time_arg_val(6);
     constexpr auto src_args = TensorAccessorArgs<9>();
 
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     const auto s_in = TensorAccessor(src_args, src_addr);
+
+    experimental::Noc noc;
+    experimental::CB cb_in0(cb_id_in0);
 
     uint32_t src_index = get_arg_val<uint32_t>(1);
     uint32_t curr_src_row_index = get_arg_val<uint32_t>(2);
     for (uint32_t input_idx = 0; input_idx < work_per_core; input_idx++) {
         uint32_t curr_src_offset = src_index;
         cb_in0.reserve_back(1);
-        uint32_t l1_write_addr = cb_in0.get_write_ptr();
+        uint32_t l1_offset = 0;
         for (uint32_t i = 0; i < stride_h; i++) {
             for (uint32_t j = 0; j < stride_w; j++) {
-                uint64_t src_noc_addr = get_noc_addr(curr_src_offset, s_in);
-                noc_async_read(src_noc_addr, l1_write_addr, stick_nbytes);
+                noc.async_read(s_in, cb_in0, stick_nbytes, {.page_id = curr_src_offset}, {.offset_bytes = l1_offset});
                 curr_src_offset++;
-                l1_write_addr += aligned_stick_nbytes_dram;
+                l1_offset += aligned_stick_nbytes_dram;
             }
             curr_src_offset += input_width - stride_w;
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         cb_in0.push_back(1);
 
         curr_src_row_index += stride_w;

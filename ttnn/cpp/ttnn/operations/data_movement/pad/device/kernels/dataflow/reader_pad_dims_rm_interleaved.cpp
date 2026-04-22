@@ -67,7 +67,7 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src_args, src_addr);
 
     const auto s_const = TensorAccessor(pad_tensor_args, pad_value_const_buffer_addr);
-    const uint64_t const_buffer_noc_addr = get_noc_addr(0, s_const);
+    const uint64_t const_buffer_noc_addr = s_const.get_noc_addr(0);
 
     uint16_t pad_value = pad_value_packed >> 16;
 
