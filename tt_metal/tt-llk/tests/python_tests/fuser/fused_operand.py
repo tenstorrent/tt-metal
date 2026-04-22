@@ -206,7 +206,7 @@ class OperandRegistry:
     def __init__(self):
         self.operands: dict[str, Operand] = {}
 
-    def get_input(
+    def create(
         self,
         name: str,
         dimensions: Tuple[int, int],
@@ -235,32 +235,15 @@ class OperandRegistry:
         self.operands[name] = operand
         return operand
 
-    def get_output(
+    def get(
         self,
         name: str,
-        dimensions: Tuple[int, int],
-        data_format: DataFormat,
-        address: int = None,
     ) -> Operand:
-        if name is None:
-            return
-
-        if name in self.operands:
-            raise ValueError(f"Output operand '{name}' already exists")
-
-        operand = Operand(
-            name=name,
-            dimensions=dimensions,
-            data_format=data_format,
-            l1_address=address,
-            is_output=True,
-        )
-        self.operands[name] = operand
-        return operand
-
-    def get(self, name: str) -> Operand:
         if name not in self.operands:
-            raise KeyError(f"Operand '{name}' not found")
+            raise ValueError(
+                f"Operand '{name}' not found in registry. Define it in the 'operands' section with dims and format."
+            )
+
         return self.operands[name]
 
     def get_all_inputs(self) -> list[Operand]:

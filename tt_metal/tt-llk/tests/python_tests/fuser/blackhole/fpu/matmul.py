@@ -79,7 +79,8 @@ class MatmulFpu(Fpu):
     ) -> str:
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
-        kt_dim = compute_unit.src_a.dimensions[1]
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
 
         return (
