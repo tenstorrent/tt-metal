@@ -467,7 +467,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
             mm_kernel_defines["SFPU_ACTIVATION"] = "1";
-            mm_kernel_defines["APPROX"] = math_approx_mode ? "1" : "0";
         }
     }
     if (packer_l1_acc_en) {
@@ -1403,7 +1402,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
             mm_kernel_defines["SFPU_ACTIVATION"] = "1";
-            mm_kernel_defines["APPROX"] = math_approx_mode ? "1" : "0";
         }
     }
     if (packer_l1_acc_en) {
@@ -2282,7 +2280,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         if (op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
-            mm_kernel_defines["APPROX"] = math_approx_mode ? "1" : "0";
             mm_kernel_defines["SFPU_ACTIVATION"] = "1";
             using operations::matmul::utilities::get_activation_type;
             compute_named_compile_args["activation_type"] = static_cast<uint32_t>(get_activation_type(op_type));

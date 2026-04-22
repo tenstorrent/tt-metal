@@ -578,7 +578,6 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
             mm_kernel_defines["SFPU_ACTIVATION"] = "1";
-            mm_kernel_defines["APPROX"] = math_approx_mode ? "1" : "0";
         }
     }
     if (packer_l1_acc_en) {
