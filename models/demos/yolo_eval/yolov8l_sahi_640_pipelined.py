@@ -13,6 +13,13 @@ Architecture (3-stage pipeline):
   - Main process:   host_prep + h2d + device compute + d2h
   - BG process:     per-tile NMS + cross-tile merge + draw + encode
 
+Optional dependency (for native-4K streaming without encode bottleneck):
+    sudo apt-get install -y libturbojpeg
+    pip install 'PyTurboJPEG<2'   # Ubuntu 22.04 ships libjpeg-turbo 2.x;
+                                  # PyTurboJPEG 2.x needs libjpeg-turbo 3.0+
+  Without it, the code transparently falls back to cv2.imencode (~5x slower,
+  saturates the 3-worker encode pool at native 4K — use --display-width 1920).
+
 Usage:
     python models/demos/yolo_eval/yolov8l_sahi_640_pipelined.py \\
         --input path/to/4k_video.mp4 --serve --port 9090 --display-width 1920
@@ -628,11 +635,39 @@ def _postprocess_worker_shm(
     t_wall_start = 0.0
     LOG_INTERVAL = 300
     nms_pool = ThreadPoolExecutor(max_workers=4)
-    # 3 encode workers: each cv2.imencode takes ~28ms, NMS+merge+draw takes ~13ms.
-    # With 3 workers, encode(N) completes before we need its slot (3*13=39 > 28ms),
-    # so the encode wait drops to ~0ms.
+    # 3 encode workers.  With TurboJPEG, a 4K encode is ~17 ms and a 1920 encode
+    # is ~5 ms — well under the NMS+draw cycle, so the pool rarely blocks.
     encode_pool = ThreadPoolExecutor(max_workers=3)
     encode_futures: list = []
+
+    # TurboJPEG is ~5-6× faster than cv2.imencode (which uses stock libjpeg
+    # even when libjpeg-turbo is installed — the cv2 build doesn't link it
+    # for encoding).  Each worker thread gets its own TurboJPEG object via
+    # threading.local() because the underlying C handle is not thread-safe.
+    try:
+        from turbojpeg import TJPF_BGR, TJSAMP_420, TurboJPEG
+
+        _tj_local = threading.local()
+
+        def _get_tj():
+            tj = getattr(_tj_local, "tj", None)
+            if tj is None:
+                tj = TurboJPEG()
+                _tj_local.tj = tj
+            return tj
+
+        def _encode_jpeg(img: np.ndarray, quality: int) -> bytes:
+            return _get_tj().encode(img, quality=quality, pixel_format=TJPF_BGR, jpeg_subsample=TJSAMP_420)
+
+        print(f"{TAG} Using TurboJPEG for encode (~5× faster than cv2.imencode)", flush=True)
+    except ImportError:
+
+        def _encode_jpeg(img: np.ndarray, quality: int) -> bytes:
+            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+            return buf.tobytes() if ok else b""
+
+        print(f"{TAG} TurboJPEG not available; falling back to cv2.imencode", flush=True)
+
     # Monotonic sequence guard: 3 encode workers finish out-of-order, so frame
     # N+1 can land before frame N.  Without this, the older frame overwrites the
     # newer one → backward jumps → visible jerkiness in the MJPEG stream.
@@ -640,12 +675,11 @@ def _postprocess_worker_shm(
     _write_seq = [0]
 
     def _write_frame_ts(path: str, img: np.ndarray, quality: int, seq: int):
-        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
-        if not ok:
+        data = _encode_jpeg(img, quality)
+        if not data:
             return
         if seq < _write_seq[0]:
             return
-        data = buf.tobytes()
         tmp = path + f".tmp.{threading.get_ident()}"
         with open(tmp, "wb") as f:
             f.write(data)
