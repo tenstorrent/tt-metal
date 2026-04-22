@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "device_fixture.hpp"
 #include "jit_build/build.hpp"
+#include "tt_metal/jit_build/build_cache_telemetry.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 
 namespace tt::tt_metal {
@@ -57,11 +58,14 @@ Program create_precompiled_program(
     return program;
 }
 
-void clear_jit_observability_state() {
-    // Keep tests independent when run together in a single process.
-    jit_build_cache_clear();
-    jit_build_reset_invocation_count();
-}
+// Snapshot of the process-wide srcs counter, which advances on every JitBuildState::compile()
+// call (the shared hot path of every jit_build* entry point). delta() > 0 after a
+// CompileProgram call means the JIT pipeline ran. Snapshotting (instead of resetting the
+// telemetry singleton) keeps other tests sharing the same process unaffected.
+struct JitSrcsBaseline {
+    uint32_t baseline = BuildCacheTelemetry::inst().get_srcs_count();
+    uint32_t delta() const { return BuildCacheTelemetry::inst().get_srcs_count() - baseline; }
+};
 
 Program create_regular_program(const std::string& kernel_path = kReaderKernelPath) {
     Program program = CreateProgram();
@@ -74,9 +78,10 @@ ScopedCopiedPrecompiledRoot precompiled_root_from_live_compile(IDevice* device) 
     // by compiling once on a live device, then copying the resulting kernel subtree into
     // a temporary directory used only as the "precompiled" source.
     Program jit_program = create_regular_program();
-    clear_jit_observability_state();
+    jit_build_cache_clear();
+    JitSrcsBaseline jit_srcs;
     detail::CompileProgram(device, jit_program);
-    TT_FATAL(jit_build_get_invocation_count() > 0, "Expected seed JIT compile to invoke jit_build");
+    TT_FATAL(jit_srcs.delta() > 0, "Expected seed JIT compile to invoke jit_build");
     const fs::path jit_kernel_root =
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env.get_out_kernel_root_path();
     const fs::path jit_kernel_subdir = jit_kernel_root / kReaderKernelName;
@@ -103,9 +108,10 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
         make_precompiled_config(copied_precompiled_root.root_.string(), BinaryPolicy::Error);
     Program program = create_precompiled_program(precompiled_config);
 
-    clear_jit_observability_state();
+    jit_build_cache_clear();
+    JitSrcsBaseline jit_srcs;
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
-    EXPECT_EQ(jit_build_get_invocation_count(), 0);
+    EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
 TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
@@ -113,9 +119,10 @@ TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
     Program program = create_precompiled_program(precompiled_config);
     auto* device = this->devices_.at(0)->get_devices().at(0);
 
-    clear_jit_observability_state();
+    jit_build_cache_clear();
+    JitSrcsBaseline jit_srcs;
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
-    EXPECT_GT(jit_build_get_invocation_count(), 0);
+    EXPECT_GT(jit_srcs.delta(), 0u);
 }
 
 TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
@@ -123,7 +130,8 @@ TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
     Program program = create_precompiled_program(precompiled_config);
     auto* device = this->devices_.at(0)->get_devices().at(0);
 
-    clear_jit_observability_state();
+    jit_build_cache_clear();
+    JitSrcsBaseline jit_srcs;
     try {
         detail::CompileProgram(device, program);
         FAIL() << "Expected PrecompiledKernelNotFoundError";
@@ -134,7 +142,7 @@ TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
     } catch (const std::exception& ex) {
         FAIL() << "Unexpected exception type: " << ex.what();
     }
-    EXPECT_EQ(jit_build_get_invocation_count(), 0);
+    EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
 }  // namespace tt::tt_metal
