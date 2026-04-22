@@ -60,6 +60,7 @@ def saturate_integer(result: torch.Tensor, data_format, torch_format) -> torch.T
     if is_unsigned:
         min_val, max_val = iinfo.min, iinfo.max
     else:
+        # +1 because hardware uses sign-magnitude representation
         min_val, max_val = iinfo.min + 1, iinfo.max
 
     # Convert to intermediate type (int64 or int32) to avoid overflow during clamping
