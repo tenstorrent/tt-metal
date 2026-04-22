@@ -845,14 +845,15 @@ class TtGatedDeltaNet(LightweightModule):
         padded = ttnn.concat([conv_pad, qkv_all], dim=2)  # [1, 1, seq_len + K-1, qkv_dim_tp]
         ttnn.deallocate(conv_pad)
 
-        # Compute weighted sum of shifted versions
-        # Match decode shift register ordering: tap[0] * oldest, tap[K-1] * current
-        # Decode: states = [oldest, ..., current], conv = sum(tap[j] * states[j])
-        # FIR:   padded = [zeros(K-1), qkv...], shift=j means tap[j] sees (K-1-j) positions back
+        # Compute weighted sum of shifted versions.
+        # Keep padded in row-major so non-tile-aligned shifted slices (shift>0)
+        # are cheap row-major copies instead of each triggering a full untilize.
+        padded = ttnn.to_layout(padded, ttnn.ROW_MAJOR_LAYOUT)
         conv_out_all = None
         for j in range(K):
-            shift = j  # tap[0] -> shift 0 (oldest/most-padded), tap[3] -> shift 3 (current)
+            shift = j
             shifted = ttnn.slice(padded, (0, 0, shift, 0), (1, 1, shift + seq_len, qkv_dim_tp))
+            shifted = ttnn.to_layout(shifted, ttnn.TILE_LAYOUT)
             tap_4d = ttnn.reshape(tw["conv_taps"][j], (1, 1, 1, qkv_dim_tp))
             if conv_out_all is None:
                 conv_out_all = ttnn.multiply(shifted, tap_4d)
@@ -870,17 +871,22 @@ class TtGatedDeltaNet(LightweightModule):
             _clast = _conv_cpu[0, 0, seq_len - 1, :].float()
             print(f"  GDN DIAG prefill conv1d out: last_tok_norm={_clast.norm():.4f} mean={_clast.mean():.6f}")
 
-        # Save last (K-1) tokens of qkv input into prefill conv states for decode
+        # Save last K tokens of qkv input into prefill conv states for decode.
+        # Block-slice all K tokens at once so the full qkv_all is untilized only
+        # once instead of K times (saves ~90us per chunk on BH).
         states = self._prefill_conv_states
+        last_k_start = max(seq_len - K, 0)
+        n_saved = seq_len - last_k_start
+        qkv_last_k = ttnn.slice(qkv_all, (0, 0, last_k_start, 0), (1, 1, seq_len, qkv_dim_tp))
+        ttnn.deallocate(qkv_all)
         for j in range(K):
-            # states[0] = qkv[seq_len - K], ..., states[K-1] = qkv[seq_len - 1]
-            t_idx = seq_len - K + j
-            if t_idx >= 0:
-                qkv_t = ttnn.slice(qkv_all, (0, 0, t_idx, 0), (1, 1, t_idx + 1, qkv_dim_tp))
+            src_idx = j - (K - n_saved)
+            if src_idx >= 0:
+                qkv_t = ttnn.slice(qkv_last_k, (0, 0, src_idx, 0), (1, 1, src_idx + 1, qkv_dim_tp))
                 qkv_t = ttnn.reshape(qkv_t, (1, B_pf, qkv_dim_tp))
                 ttnn.copy(qkv_t, states[j])
                 ttnn.deallocate(qkv_t)
-        ttnn.deallocate(qkv_all)
+        ttnn.deallocate(qkv_last_k)
 
         # ---- On-device recurrence via prefill kernel ----
         # Single kernel dispatch processes all seq_len tokens per head.
@@ -933,20 +939,15 @@ class TtGatedDeltaNet(LightweightModule):
         ttnn.deallocate(a_all)
         ttnn.deallocate(b_all)
 
-        # Reshape output on-device: [num_pairs * seq_len, 1, Dv] → [seq_len, Nv_TP, Dv]
-        # 4D reshape + permute (stays in TILE_LAYOUT, no CPU round-trip)
-        out_4d = ttnn.reshape(prefill_output, (1, num_pairs, seq_len, Dv))
+        # RMS norm directly on kernel output [num_pairs*seq_len, 1, Dv] — avoids
+        # two intermediate reshapes by normalising before the heads↔tokens permute.
+        out_n = ttnn.rms_norm(prefill_output, weight=tw["norm_w"], epsilon=1e-6)
         ttnn.deallocate(prefill_output)
-        out_4d = ttnn.permute(out_4d, (0, 2, 1, 3))  # [1, seq_len, num_pairs, Dv]
-        out_4d = ttnn.reshape(out_4d, (1, 1, seq_len, self.value_dim_tp))
-
-        # Batched RMS norm + SiLU gate (all tokens at once, no per-token loop)
-        out_r = ttnn.reshape(out_4d, (seq_len, Nv_TP, Dv))
-        ttnn.deallocate(out_4d)
-        out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6)
-        ttnn.deallocate(out_r)
-        out_f = ttnn.reshape(out_n, (1, 1, seq_len, self.value_dim_tp))
+        out_4d = ttnn.reshape(out_n, (1, num_pairs, seq_len, Dv))
         ttnn.deallocate(out_n)
+        out_4d = ttnn.permute(out_4d, (0, 2, 1, 3))  # [1, seq_len, num_pairs, Dv]
+        out_f = ttnn.reshape(out_4d, (1, 1, seq_len, self.value_dim_tp))
+        ttnn.deallocate(out_4d)
         z_act = ttnn.silu(z_all)
         ttnn.deallocate(z_all)
         out_f = _unshard(out_f)
