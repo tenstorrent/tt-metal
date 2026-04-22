@@ -30,7 +30,6 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     create_hf_model,
     extract_layer_state_dict,
     get_4d_causal_mask,
-    tokenize_prompt_to_isl,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -43,10 +42,11 @@ PCC_THRESHOLD_KVPE = 0.999
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, 1024, 2),
-        ("abc_1k", True, 1024, 2),
+        ("random", False, 1024),
+        ("abc_1k", False, 25 * 1024),
+        ("abc_1k", True, 1024),
     ],
-    ids=["smoke-random", "pcc-abc_1k"],
+    ids=["smoke-random", "perf-abc_1k", "pcc-abc_1k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
@@ -74,6 +74,7 @@ PCC_THRESHOLD_KVPE = 0.999
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "worker_l1_size": 1344544,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
             },
             2,
@@ -146,7 +147,9 @@ def test_prefill_block(
         )
         attention_mask = get_4d_causal_mask(attention_mask, causal_only=True)
         profiler.end("tokenization")
-        logger.info(f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
+        logger.info(
+            f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}"
+        )
         with torch.no_grad():
             torch_input = hf_model.embed_tokens(token_ids).to(torch.bfloat16)
         logger.info(f"Embedded input shape: {torch_input.shape}")
@@ -191,6 +194,8 @@ def test_prefill_block(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        capacity_factor=32,
+        is_balanced=True,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -210,7 +215,7 @@ def test_prefill_block(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(-2, -1)),
     )
 
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=True)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
 
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
