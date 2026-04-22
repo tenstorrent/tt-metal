@@ -3116,10 +3116,10 @@ class MoeOp:
 
         from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 
-        # Apply RMSNorm: raw input → normalized input (truncate to bfloat16 to match device)
+        # Apply RMSNorm with gamma: raw input → normalized input (truncate to bfloat16 to match device)
         x = input_tensor.float()
         variance = x.pow(2).mean(-1, keepdim=True)
-        normalized_input = (x * torch.rsqrt(variance + rmsnorm_epsilon)).bfloat16().float()
+        normalized_input = (x * torch.rsqrt(variance + rmsnorm_epsilon) * rmsnorm_gamma).bfloat16().float()
 
         # Shared expert: normalized input for compute, residual (raw input) added when include_residual=True
         residual = input_tensor.float() if include_residual else torch.zeros_like(input_tensor.float())
@@ -3215,10 +3215,10 @@ class MoeOp:
             topk_weight = topk_weight * scaling_factor
             return topk_weight, topk_idx
 
-        # RMSNorm(h) for MoE input.
+        # RMSNorm(h) with gamma for MoE input.
         x = _as_2d(input_tensor)
         variance = x.pow(2).mean(-1, keepdim=True)
-        norm_x = x * torch.rsqrt(variance + rmsnorm_epsilon)
+        norm_x = x * torch.rsqrt(variance + rmsnorm_epsilon) * rmsnorm_gamma
 
         # Shared expert branch: (SiLU(hWg) * (hWu))Wd + residual.
         sh_gate = _reshape_weight(shared_gate_weights, norm_x.shape[-1])
