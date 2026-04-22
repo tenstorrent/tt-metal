@@ -94,6 +94,21 @@ ALWI void Rpow<Slot>::init() const { rpow_tile_init(); }
 template <Dst Slot>
 ALWI void Rpow<Slot>::call(uint32_t d0) const { rpow_tile(d0, base_val); }
 
+template <Dst Slot>
+ALWI void FillScalar<Slot>::init() const { fill_tile_init(); }
+template <Dst Slot>
+ALWI void FillScalar<Slot>::call(uint32_t d0) const { fill_tile(d0, value); }
+
+template <uint32_t Bits, Dst Slot>
+ALWI void FillConst<Bits, Slot>::init() const { fill_tile_init(); }
+template <uint32_t Bits, Dst Slot>
+ALWI void FillConst<Bits, Slot>::call(uint32_t d0) const { fill_tile_bitcast(d0, Bits); }
+
+template <Approx approx, Dst Slot>
+ALWI void TanhDerivative<approx, Slot>::init() const { tanh_derivative_tile_init<static_cast<bool>(approx)>(); }
+template <Approx approx, Dst Slot>
+ALWI void TanhDerivative<approx, Slot>::call(uint32_t d0) const { tanh_derivative_tile<static_cast<bool>(approx)>(d0); }
+
 // Aliases
 template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
 ALWI void sfpu_exp(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Exp<>{}); }

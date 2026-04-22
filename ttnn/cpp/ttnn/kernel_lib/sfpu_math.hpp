@@ -11,6 +11,8 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/rpow.h"
 #include "api/compute/eltwise_unary/log1p.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/tanh_derivative.h"
 
 namespace compute_kernel_lib {
 
@@ -124,6 +126,54 @@ struct PowerIterative : UnaryOp<PowerIterative<Slot>, Slot> {
 template <Dst Slot = Dst::D0>
 struct Rpow : UnaryOp<Rpow<Slot>, Slot> {
     uint32_t base_val;
+    ALWI void init() const;
+    ALWI void call(uint32_t d0) const;
+};
+
+/**
+ * @brief Fill DEST[Slot] with a runtime float constant.
+ *
+ * Stores the value in the struct at construction. Use this when the fill value
+ * is only known at runtime (e.g. read from a kernel arg). For compile-time
+ * constants prefer FillConst<bits> which avoids the runtime field.
+ *
+ *   sfpu_chain(FillScalar<Dst::D0>{1.0f}, Load<cb_x, Dst::D1>{}, SfpuSub<D0, D1, D0>{})
+ *   // D0 = 1.0f - x  (rsub pattern)
+ */
+template <Dst Slot = Dst::D0>
+struct FillScalar : UnaryOp<FillScalar<Slot>, Slot> {
+    float value;
+    constexpr explicit FillScalar(float v) : value(v) {}
+    ALWI void init() const;
+    ALWI void call(uint32_t d0) const;
+};
+
+/**
+ * @brief Fill DEST[Slot] with a compile-time bit-pattern constant.
+ *
+ * Bits is the IEEE-754 uint32 representation of the desired float value.
+ * Zero runtime overhead — constant is embedded at compile time.
+ *
+ *   sfpu_chain(FillConst<0x3F800000u, Dst::D0>{}, ...)  // fills 1.0f
+ */
+template <uint32_t Bits, Dst Slot = Dst::D0>
+struct FillConst : UnaryOp<FillConst<Bits, Slot>, Slot> {
+    ALWI void init() const;
+    ALWI void call(uint32_t d0) const;
+};
+
+/**
+ * @brief Compute tanh derivative (sech²) in place on DEST[Slot].
+ *
+ * Uses the numerically stable sech²(x) = 4·exp(-2|x|) / (1 + exp(-2|x|))²
+ * formula to avoid catastrophic cancellation in 1 − tanh²(x).
+ *
+ * Typical chain usage (tanh backward — needs GAP-11 indexed Load to migrate fully):
+ *   sfpu_chain(Load<cb_input, Dst::D1>{}, TanhDerivative<Approx::Exact, Dst::D1>{},
+ *              Load<cb_grad, Dst::D0>{}, SfpuMul<Dst::D0, Dst::D1, Dst::D0>{})
+ */
+template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
+struct TanhDerivative : UnaryOp<TanhDerivative<approx, Slot>, Slot> {
     ALWI void init() const;
     ALWI void call(uint32_t d0) const;
 };
