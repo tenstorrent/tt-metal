@@ -63,6 +63,42 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.padded_shape()[2],
         tile_height);
 
+    // SHARD SPEC VALIDATION
+    if (a.is_sharded()) {
+        const auto& shard_spec = a.shard_spec().value();
+
+        // shard spec
+        std::cout << "Shard shape: H=" << shard_spec.shape[0] << " W=" << shard_spec.shape[1] << std::endl;
+
+        std::cout << "Shard orientation: " << (int)shard_spec.orientation << std::endl;
+
+        const auto& shard_grid = shard_spec.grid;
+
+        // shard grid
+        std::cout << "Shard grid num cores: " << shard_grid.num_cores() << std::endl;
+
+        // device grid
+        auto device_grid = a.device()->compute_with_storage_grid_size();
+        std::cout << "Device grid: x=" << device_grid.x << " y=" << device_grid.y << std::endl;
+
+        // program grid
+        auto program_grid =
+            std::visit([](const auto& config) { return config.compute_with_storage_grid_size; }, args.program_config);
+
+        std::cout << "Program grid: x=" << program_grid.x << " y=" << program_grid.y << std::endl;
+
+        // validation
+        TT_FATAL(shard_grid.num_cores() > 0, "Shard grid must have at least one core");
+
+        TT_FATAL(
+            program_grid.x <= device_grid.x && program_grid.y <= device_grid.y,
+            "Program grid must be within device grid");
+
+        CoreCoord end(program_grid.x - 1, program_grid.y - 1);
+        CoreRange program_range(CoreCoord(0, 0), end);
+
+        TT_FATAL(program_range.contains(shard_grid), "Shard grid must be within program grid");
+    }
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
             TT_FATAL(
