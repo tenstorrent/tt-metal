@@ -165,6 +165,21 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         _ = _device_to_host_post(tt_model, s, d_norm, b, height, width)
         elapsed = time.perf_counter() - t0
         fps = n_iter / elapsed
+
+        # Second timed loop: end-to-end latency incl. D2H + host post-processing
+        # (softmax, NMS, keypoint extraction, grid-sample descriptors).
+        t0 = time.perf_counter()
+        for _ in range(n_iter):
+            tt_model.load_input(tt_in, pixel_values)
+            ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+            scores_host, desc_host = _device_to_host_post(tt_model, s, d_norm, b, height, width)
+            scores_full = tt_model._decode_keypoints(scores_host, apply_nms=True)
+            for i in range(b):
+                kp, sc = tt_model._extract_keypoints_single(scores_full[i : i + 1])
+                if kp.shape[0] > 0:
+                    _ = tt_model._sample_descriptors(kp[None], desc_host[i : i + 1], scale=8)
+        elapsed_e2e = time.perf_counter() - t0
+        fps_e2e = n_iter / elapsed_e2e
     else:
         # Fallback for profilers: no trace, so per-op markers are visible.
         tt_model.load_input(tt_in, pixel_values)
@@ -185,6 +200,7 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         ttnn.synchronize_device(device)
         elapsed = time.perf_counter() - t0
         fps = n_iter / elapsed
+        fps_e2e = fps  # no-trace path doesn't separately time e2e
 
     # Build full SuperPoint output structure for accuracy comparison.
     tt_scores_pre_nms = tt_model._decode_keypoints(tt_scores_nchw, apply_nms=False)
@@ -219,6 +235,7 @@ def test_superpoint_benchmark(device, height, width, input_kind):
 
     print(f"input_kind={input_kind}")
     print(f"inference_speed={fps:.4f} fps")
+    print(f"inference_speed_e2e={fps_e2e:.4f} fps")
     print(f"accuracy={accuracy:.4f}")
     print(f"score_pcc={score_pcc:.6f}")
     print(f"descriptor_pcc={desc_pcc:.6f}")
