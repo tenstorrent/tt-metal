@@ -67,10 +67,12 @@ jobs:
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
         CI_RUNNER_LABEL: ${{ inputs.runner-label }}
         CI_ARCH_NAME: ${{ inputs.arch }}
+        HF_HUB_OFFLINE: 1
+        HF_HOME: /mnt/MLPerf/huggingface
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
     defaults:
       run:
         shell: bash
@@ -102,6 +104,8 @@ jobs:
           TTML_BUILD_DIR="$TT_METAL_RUNTIME_ROOT/build/tt-train/sources/ttml"
           echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
           echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
+
+          ls /mnt/MLPerf/
 
       - name: Install Python dependencies
         run: |
