@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-
+#
 # SPDX-License-Identifier: Apache-2.0
 
 """
-PipelineStageSync Operation using ttnn.generic_op
+ColumnWisePipelineStageSync Operation using ttnn.generic_op
 
 This module implements a multi-device synchronization on an arbitrary mesh.
 
@@ -14,48 +14,9 @@ import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreCompileTimeDescriptor, UnifiedKernelDescriptor
 
 
-def build_signalling_path(src_device_mesh_coord, dst_device_mesh_coord, mesh_rows, mesh_cols):
-    src_row, src_col = src_device_mesh_coord[0], src_device_mesh_coord[1]
-    dst_row, dst_col = dst_device_mesh_coord[0], dst_device_mesh_coord[1]
-
-    path = [ttnn.MeshCoordinate(src_row, src_col)]
-    current_row, current_col = src_row, src_col
-
-    # traverse across rows first (wrap around present)
-    positive_row_distance = (dst_row - src_row) % mesh_rows
-    negative_row_distance = (src_row - dst_row) % mesh_rows
-
-    if positive_row_distance <= negative_row_distance:
-        row_step = 1
-        row_num_hops = positive_row_distance
-    else:
-        row_step = -1
-        row_num_hops = negative_row_distance
-
-    for _ in range(row_num_hops):
-        current_row = (current_row + row_step) % mesh_rows
-        path.append(ttnn.MeshCoordinate(current_row, current_col))
-
-    # traverse across cols second (wrap around not present)
-    while current_col != dst_col:
-        current_col += 1 if dst_col > current_col else -1
-        path.append(ttnn.MeshCoordinate(current_row, current_col))
-
-    # signalling and intermediate signalling sets
-    signalling_devices = set(path[0:-1])
-    intermediate_signalling_devices = set(path[1:-1])
-
-    # build signalling device to target device mapping
-    signaller_device_mapping = {}
-    for i in range(len(path) - 1):
-        signaller_device_mapping[path[i]] = path[i + 1]
-
-    return signalling_devices, intermediate_signalling_devices, signaller_device_mapping
-
-
-class PipelineStageSync:
+class ColumnWisePipelineStageSync:
     """
-    Multi-device PipelineStageSync implementation using ttnn.generic_op.
+    Multi-device ColumnWisePipelineStageSync implementation using ttnn.generic_op.
     """
 
     @staticmethod
@@ -68,32 +29,24 @@ class PipelineStageSync:
         pseudo_input_tensor: ttnn.Tensor,
         pseudo_output_tensor: ttnn.Tensor,
         mesh_device: ttnn.MeshDevice,
-        semaphore,
-        src_device_mesh_coord: ttnn.MeshCoordinate,
-        signalling_core: ttnn.CoreCoord,
-        run_signalling_kernel_on_ncrisc: bool,
-        dst_device_mesh_coord: ttnn.MeshCoordinate,
-        stalling_core: ttnn.CoreCoord,
-        run_stalling_kernel_on_ncrisc: bool,
+        semaphores: list,
+        entry_device_mesh_col: int,
+        exit_device_mesh_col: int,
+        entry_device_core_coord: ttnn.CoreCoord,
+        run_entry_device_logic_on_ncrsic: bool,
+        exit_device_core_coord: ttnn.CoreCoord,
+        run_exit_device_logic_on_ncrsic: bool,
         num_iterations: int = 1,
     ) -> None:
         """
         Execute PipelineStageSync using generic_op.
 
-        Args:
-            mesh_device: mesh_device micro op operates on
-            semaphore: global semaphore used in op
-            src_device_mesh_coord: src mesh coordinate
-            signalling_core: core that signalling logic is executed on
-            run_signalling_kernel_on_ncrisc: whether to run the signalling kernel on ncrisc or brisc
-            dst_device_mesh_coord: dst mesh coordinate
-            stalling_core: core that stalling logic is executed on
-            run_stalling_kernel_on_ncrisc: whether to run the stalling kernel on ncrisc or brisc
-            num_iterations: Number of iterations to run inside the kernel
-
         Returns:
             None
         """
+
+        if entry_device_mesh_col == exit_device_mesh_col:
+            raise ValueError("entry and exit mesh columns cannot be the same")
 
         # mesh details
         mesh_shape = mesh_device.shape
@@ -104,92 +57,79 @@ class PipelineStageSync:
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 
         # kernel path
-        kernel_path = "models/demos/deepseek_v3_b1/micro_ops/pipeline_stage_sync/kernels/pipeline_stage_sync_kernel.cpp"
-
-        if src_device_mesh_coord == dst_device_mesh_coord:
-            raise ValueError("src and dst device cannot be the same")
+        kernel_path = "models/demos/deepseek_v3_b1/micro_ops/column_wise_pipeline_stage_sync/kernels/column_wise_pipeline_stage_sync_kernel.cpp"
 
         # cores
-        if stalling_core == signalling_core:
-            all_cores_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(stalling_core, stalling_core)])
+        if entry_device_core_coord == exit_device_core_coord:
+            all_cores_core_range_set = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(entry_device_core_coord, entry_device_core_coord)]
+            )
         else:
             all_cores_core_range_set = ttnn.CoreRangeSet(
                 [
-                    ttnn.CoreRange(stalling_core, stalling_core),
-                    ttnn.CoreRange(signalling_core, signalling_core),
+                    ttnn.CoreRange(entry_device_core_coord, entry_device_core_coord),
+                    ttnn.CoreRange(exit_device_core_coord, exit_device_core_coord),
                 ]
             )
 
-        signalling_core_phys = mesh_device.worker_core_from_logical_core(signalling_core)
-        signalling_core_noc_x_addr = signalling_core_phys.x
-        signalling_core_noc_y_addr = signalling_core_phys.y
-
-        stalling_core_phys = mesh_device.worker_core_from_logical_core(stalling_core)
-        stalling_core_noc_x_addr = stalling_core_phys.x
-        stalling_core_noc_y_addr = stalling_core_phys.y
+        entry_device_core_phys = mesh_device.worker_core_from_logical_core(entry_device_core_coord)
+        entry_device_core_noc_x_addr = entry_device_core_phys.x
+        entry_device_core_noc_y_addr = entry_device_core_phys.y
 
         # semaphores
-        semaphore_l1_addr = ttnn.get_global_semaphore_address(semaphore)
+        if len(semaphores) != 3:
+            raise ValueError("requires 3 semaphores")
+        r1_semaphore_l1_addr = ttnn.get_global_semaphore_address(semaphores[0])
+        r2_semaphore_l1_addr = ttnn.get_global_semaphore_address(semaphores[1])
+        r3_semaphore_l1_addr = ttnn.get_global_semaphore_address(semaphores[2])
 
-        # construct path
-        signalling_devices, intermediate_signalling_devices, signaller_device_mapping = build_signalling_path(
-            src_device_mesh_coord, dst_device_mesh_coord, mesh_rows, mesh_cols
-        )
+        # device loop
+        for mesh_row in range(mesh_rows):
+            for mesh_col in range(mesh_cols):
+                mesh_coord = ttnn.MeshCoordinate(mesh_row, mesh_col)
 
-        for row in range(mesh_rows):
-            for col in range(mesh_cols):
-                mesh_coord = ttnn.MeshCoordinate(row, col)
-                target_device = signaller_device_mapping.get(mesh_coord, None)
+                is_entry_device = mesh_col == entry_device_mesh_col
+                is_exit_device = mesh_col == exit_device_mesh_col
 
                 # === Compile-time args ===
 
                 # Reader (NCRISC) and Writer (BRISC) compile-time args
-                is_intermediate_signaller = mesh_coord in intermediate_signalling_devices
-                is_signalling_to_intermediate_signaller = (
-                    mesh_coord in signalling_devices and target_device in intermediate_signalling_devices
-                )
-
                 fabric_arg_base = 0
                 reader_named_ct_args = [
-                    ("is_intermediate_signaller", is_intermediate_signaller),
-                    ("is_signalling_to_intermediate_signaller", is_signalling_to_intermediate_signaller),
-                    ("signalling_core_noc_x_addr", signalling_core_noc_x_addr),
-                    ("signalling_core_noc_y_addr", signalling_core_noc_y_addr),
-                    ("stalling_core_noc_x_addr", stalling_core_noc_x_addr),
-                    ("stalling_core_noc_y_addr", stalling_core_noc_y_addr),
-                    ("semaphore_l1_addr", semaphore_l1_addr),
+                    ("entry_device_core_noc_x_addr", entry_device_core_noc_x_addr),
+                    ("entry_device_core_noc_y_addr", entry_device_core_noc_y_addr),
+                    ("r1_semaphore_l1_addr", r1_semaphore_l1_addr),
+                    ("r2_semaphore_l1_addr", r2_semaphore_l1_addr),
+                    ("r3_semaphore_l1_addr", r3_semaphore_l1_addr),
                     ("fabric_arg_base", fabric_arg_base),
                     ("num_iterations", num_iterations),
                 ]
                 writer_named_ct_args = reader_named_ct_args
                 compute_name_ct_args = [("num_iterations", num_iterations)]
 
+                # select risc for entry and exit device cores
+                if is_entry_device:
+                    if run_entry_device_logic_on_ncrsic:
+                        run_entry_device_logic_on_ncrisc = True
+                        run_entry_device_logic_on_brisc = False
+                    else:
+                        run_entry_device_logic_on_ncrisc = False
+                        run_entry_device_logic_on_brisc = True
+
+                    run_exit_device_logic_on_ncrisc = False
+                    run_exit_device_logic_on_brisc = False
+                else:
+                    if run_exit_device_logic_on_ncrsic:
+                        run_exit_device_logic_on_ncrisc = True
+                        run_exit_device_logic_on_brisc = False
+                    else:
+                        run_exit_device_logic_on_ncrisc = False
+                        run_exit_device_logic_on_brisc = True
+
+                    run_entry_device_logic_on_ncrisc = False
+                    run_entry_device_logic_on_brisc = False
+
                 # === Unified Kernel Descriptor ===
-
-                # select risc for signalling cores
-                if mesh_coord in signalling_devices:
-                    if run_signalling_kernel_on_ncrisc:
-                        run_signalling_logic_on_ncrisc = True
-                        run_signalling_logic_on_brisc = False
-                    else:
-                        run_signalling_logic_on_ncrisc = False
-                        run_signalling_logic_on_brisc = True
-                else:
-                    run_signalling_logic_on_ncrisc = False
-                    run_signalling_logic_on_brisc = False
-
-                # select risc for stalling cores
-                if mesh_coord == dst_device_mesh_coord:
-                    if run_stalling_kernel_on_ncrisc:
-                        run_stalling_logic_on_ncrisc = True
-                        run_stalling_logic_on_brisc = False
-                    else:
-                        run_stalling_logic_on_ncrisc = False
-                        run_stalling_logic_on_brisc = True
-                else:
-                    run_stalling_logic_on_ncrisc = False
-                    run_stalling_logic_on_brisc = False
-
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source=kernel_path,
                     core_ranges=all_cores_core_range_set,
@@ -200,23 +140,23 @@ class PipelineStageSync:
                     brisc_common_runtime_args=[],
                     per_core_compile_time_descriptors=[
                         PerCoreCompileTimeDescriptor(
-                            named_compile_time_arg="run_signalling_logic_on_ncrisc",
-                            core_values=[(signalling_core, run_signalling_logic_on_ncrisc)],
+                            named_compile_time_arg="run_entry_device_logic_on_ncrisc",
+                            core_values=[(entry_device_core_coord, run_entry_device_logic_on_ncrisc)],
                             other_value=0,
                         ),
                         PerCoreCompileTimeDescriptor(
-                            named_compile_time_arg="run_signalling_logic_on_brisc",
-                            core_values=[(signalling_core, run_signalling_logic_on_brisc)],
+                            named_compile_time_arg="run_entry_device_logic_on_brisc",
+                            core_values=[(entry_device_core_coord, run_entry_device_logic_on_brisc)],
                             other_value=0,
                         ),
                         PerCoreCompileTimeDescriptor(
-                            named_compile_time_arg="run_stalling_logic_on_ncrisc",
-                            core_values=[(stalling_core, run_stalling_logic_on_ncrisc)],
+                            named_compile_time_arg="run_exit_device_logic_on_ncrisc",
+                            core_values=[(exit_device_core_coord, run_exit_device_logic_on_ncrisc)],
                             other_value=0,
                         ),
                         PerCoreCompileTimeDescriptor(
-                            named_compile_time_arg="run_stalling_logic_on_brisc",
-                            core_values=[(stalling_core, run_stalling_logic_on_brisc)],
+                            named_compile_time_arg="run_exit_device_logic_on_brisc",
+                            core_values=[(exit_device_core_coord, run_exit_device_logic_on_brisc)],
                             other_value=0,
                         ),
                     ],
@@ -231,22 +171,57 @@ class PipelineStageSync:
                 )
 
                 # Setup fabric
-                if mesh_coord in signalling_devices:
-                    if run_signalling_kernel_on_ncrisc:
+                if is_entry_device:
+                    if run_entry_device_logic_on_ncrisc:
                         kernel_idx = kernel_result.get_group_by_arg(
-                            "run_signalling_logic_on_ncrisc", 1
+                            "run_entry_device_logic_on_ncrisc", 1
                         ).ncrisc_kernel_index
                     else:
                         kernel_idx = kernel_result.get_group_by_arg(
-                            "run_signalling_logic_on_brisc", 1
+                            "run_entry_device_logic_on_brisc", 1
                         ).brisc_kernel_index
-                    program.kernels[kernel_idx].runtime_args[signalling_core.x][signalling_core.y] = []
-                    per_core_rt_args_ref = program.kernels[kernel_idx].runtime_args[signalling_core.x][
-                        signalling_core.y
+                    program.kernels[kernel_idx].runtime_args[entry_device_core_coord.x][entry_device_core_coord.y] = []
+                    per_core_rt_args_ref = program.kernels[kernel_idx].runtime_args[entry_device_core_coord.x][
+                        entry_device_core_coord.y
                     ]
 
                     fabric_src_node_id = mesh_device.get_fabric_node_id(mesh_coord)
-                    fabric_dst_node_id = mesh_device.get_fabric_node_id(target_device)
+                    fabric_dst_node_one_id = mesh_device.get_fabric_node_id(
+                        ttnn.MeshCoordinate((mesh_row - 1) % mesh_rows, mesh_col)
+                    )
+                    fabric_dst_node_two_id = mesh_device.get_fabric_node_id(
+                        ttnn.MeshCoordinate((mesh_row + 1) % mesh_rows, mesh_col)
+                    )
+
+                    link_index = 0
+                    fabric_args = ttnn.setup_routing_plane_connection(
+                        fabric_src_node_id,
+                        [fabric_dst_node_one_id, fabric_dst_node_two_id],
+                        [link_index, link_index],
+                        program,
+                        kernel_idx,
+                        exit_device_core_coord,
+                    )
+                    per_core_rt_args_ref.extend(fabric_args)
+
+                else:
+                    if run_exit_device_logic_on_ncrisc:
+                        kernel_idx = kernel_result.get_group_by_arg(
+                            "run_exit_device_logic_on_ncrisc", 1
+                        ).ncrisc_kernel_index
+                    else:
+                        kernel_idx = kernel_result.get_group_by_arg(
+                            "run_exit_device_logic_on_brisc", 1
+                        ).brisc_kernel_index
+                    program.kernels[kernel_idx].runtime_args[exit_device_core_coord.x][exit_device_core_coord.y] = []
+                    per_core_rt_args_ref = program.kernels[kernel_idx].runtime_args[exit_device_core_coord.x][
+                        exit_device_core_coord.y
+                    ]
+
+                    fabric_src_node_id = mesh_device.get_fabric_node_id(mesh_coord)
+                    fabric_dst_node_id = mesh_device.get_fabric_node_id(
+                        ttnn.MeshCoordinate(mesh_row, (mesh_col + 1) % mesh_cols)
+                    )
 
                     link_index = 0
                     fabric_args = ttnn.setup_routing_plane_connection(
@@ -255,7 +230,7 @@ class PipelineStageSync:
                         [link_index],
                         program,
                         kernel_idx,
-                        signalling_core,
+                        exit_device_core_coord,
                     )
                     per_core_rt_args_ref.extend(fabric_args)
 
