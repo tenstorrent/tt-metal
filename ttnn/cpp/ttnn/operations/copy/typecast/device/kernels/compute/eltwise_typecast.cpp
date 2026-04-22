@@ -59,6 +59,7 @@ void kernel_main() {
     // the coprocessor backend to process its entire queue before RISC-V continues.
     // Without this, init_sfpu's own tensix_sync() (in llk_pack_dest_init) flushes
     // the stale REG2FLOP AFTER init_sfpu has already written the correct THCON value.
+    // TODO: move this tensix_sync() into init_sfpu / llk_pack_dest_init in a future LLK PR.
     tensix_sync();
     init_sfpu(intermediate_cb, output_cb);
 #if FP32_DEST_ACC_EN && !defined(TYPECAST_OUTPUT_32BIT)

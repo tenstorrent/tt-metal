@@ -166,7 +166,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     std::map<uint32_t, CoreRangeSet> count_to_cores;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto count = items_per_core[i];
-        if (count_to_cores.find(count) == count_to_cores.end()) {
+        if (!count_to_cores.contains(count)) {
             count_to_cores[count] = CoreRangeSet(CoreRange(cores_vec[i]));
         } else {
             count_to_cores[count] = count_to_cores[count].merge(CoreRangeSet(CoreRange(cores_vec[i])));

@@ -5,6 +5,7 @@
 #include "typecast_sharded_program_factory.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -95,7 +96,10 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
         kernel_desc.core_ranges = all_cores;
         kernel_desc.compile_time_args = {in_cb_id};
-        kernel_desc.common_runtime_args = {num_tile_per_core};
+        // reader_unary_sharded.cpp reads num_tiles_per_core via get_arg_val(0) (per-core arg).
+        for (const auto& core : tt::tt_metal::corerange_to_cores(all_cores)) {
+            kernel_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_per_core});
+        }
         kernel_desc.config = ReaderConfigDescriptor{};
         program_descriptor.kernels.push_back(std::move(kernel_desc));
     }
@@ -129,9 +133,11 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     auto descriptor = create_descriptor(args, tensor_args, output);
     Program program{descriptor};
 
-    // CB handles are assigned sequentially: in_cb=0, out_cb=1
-    constexpr CBHandle cb_src0 = 0;
-    constexpr CBHandle out_cb = 1;
+    // CBHandle is uintptr_t(CircularBufferImpl*) — get real handles from the built program.
+    // Descriptor CBs are ordered: in_cb first, out_cb second.
+    const auto cbs = program.circular_buffers();
+    const CBHandle cb_src0 = cbs[0]->id();
+    const CBHandle out_cb = cbs[1]->id();
 
     return cached_program_t{std::move(program), {cb_src0, out_cb}};
 }

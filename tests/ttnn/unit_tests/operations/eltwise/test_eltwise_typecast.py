@@ -602,6 +602,40 @@ def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
     assert torch.equal(npu_result, expected)
 
 
+def test_typecast_sharded_program_cache_hit(device):
+    """Regression: program cache hit on sharded typecast (TypecastShardedProgramFactory).
+
+    On a cache hit, override_runtime_arguments updates sharded CB addresses via CBHandles
+    stored in shared_variables_t.  Before the fix, those handles were initialised to 0
+    (null) instead of the real handles returned by Program::circular_buffers(); the second
+    call would therefore crash inside get_circular_buffer(0).  The reader kernel also read
+    num_tile_per_core via get_arg_val(0) (per-core arg), but the factory set it via
+    common_runtime_args; the first call could silently read the wrong count.
+    """
+    torch.manual_seed(0)
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_shape = [32, 128]
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    shape = [1, 1, 128, 128]
+    torch_input = torch.randint(0, 100, shape, dtype=torch.int32).float()
+    expected = torch_input.int()
+
+    # Two iterations with identical config → second call is a program cache hit.
+    # Bug 1 (common_runtime_args): reader gets wrong tile count → wrong/no output on call 1.
+    # Bug 2 (CBHandle=0): override_runtime_arguments throws on call 2.
+    for i in range(2):
+        input_tensor = ttnn.from_torch(
+            torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+        )
+        output_tensor = ttnn.typecast(input_tensor, dtype=ttnn.int32)
+        assert output_tensor.dtype == ttnn.int32
+        result = ttnn.to_torch(output_tensor)
+        assert torch.equal(result, expected), f"typecast sharded correctness failed on call {i + 1}"
+
+
 def test_typecast_rm_chunked_program_cache(device):
     """Regression: program cache hit on ROW_MAJOR typecast must not hang when num_rows % num_cores != 0."""
     torch.manual_seed(0)
