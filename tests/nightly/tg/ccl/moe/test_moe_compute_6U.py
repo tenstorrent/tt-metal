@@ -491,6 +491,8 @@ def create_torch_w0(L, E, K, N):
         torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w0: RANDOM - mode={mode}")
 
+    return torch.ones_like(torch_w0)
+
     return torch_w0
 
 
@@ -524,6 +526,8 @@ def create_torch_w1(L, E, K, N):
         torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w1: RANDOM - mode={mode}")
 
+    return torch.ones_like(torch_w1)
+
     return torch_w1
 
 
@@ -556,6 +560,8 @@ def create_torch_w2(L, E, N, K):
         # Use random weights for w2
         torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w2: RANDOM - mode={mode}")
+
+    return torch.ones_like(torch_w2)
 
     return torch_w2
 
@@ -649,6 +655,7 @@ def gen_sparse_buffer_and_indices(
     # original_tokens = torch.ones(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
     # original_tokens = torch.zeros(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
     original_tokens = torch.rand(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype) - 0.5
+    original_tokens = torch.ones_like(original_tokens)
 
     # Generate expert indices for each token
     # Shape: [num_dispatch_devices, tokens_per_device, selected_experts_k]

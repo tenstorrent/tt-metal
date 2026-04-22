@@ -21,6 +21,20 @@
 #include "llk_math_eltwise_binary_sfpu_binop.h"
 #endif
 
+inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
+    for (uint32_t page = 0; page < npages; ++page) {
+        DPRINT << start + page << ": ";
+        DEVICE_PRINT("{}: ", start + page);
+        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
+            DPRINT << BF16(*ptr) << " ";
+            DEVICE_PRINT("{} ", bf16_t(*ptr));
+        }
+        DPRINT << ENDL();
+        DEVICE_PRINT("\n");
+    }
+}
+
 namespace detail {
 
 FORCE_INLINE
@@ -185,8 +199,11 @@ void kernel_main() {
 
     // Precompute NUM_CHUNKS_PER_EXPERT
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
+    // DEBUG
+    uint32_t NUM_TOKENS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
+        NUM_TOKENS_PER_EXPERT[expert_id] = num_tokens;
         NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
 
@@ -218,6 +235,8 @@ void kernel_main() {
             detail::noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
+
+            // print_bf16_pages(get_tile_address(cb_s2c_in,0),config_t::NUM_W0_W1_TILES_H*32,NUM_TOKENS_PER_EXPERT[expert_id]);
 
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
@@ -323,11 +342,11 @@ void kernel_main() {
 
                 DPRINT << "COMPUTE: done with a2a \n";
 
-                fill_tile_init();
-                fill_tile(0, 1.0);
-                fill_tile(1, 1.0);
-                fill_tile(2, 1.0);
-                fill_tile(3, 1.0);
+                //                 fill_tile_init();
+                //                 fill_tile(0, 1.0);
+                //                 fill_tile(1, 1.0);
+                //                 fill_tile(2, 1.0);
+                //                 fill_tile(3, 1.0);
 
                 tile_regs_commit();
 

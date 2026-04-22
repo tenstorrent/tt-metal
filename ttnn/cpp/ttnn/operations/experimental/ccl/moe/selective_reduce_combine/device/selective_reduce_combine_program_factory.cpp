@@ -302,7 +302,6 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto token_expert_row_offset = input_tensor.logical_shape().volume() / input_shards /
                                          (hidden_size / num_data_parallel_cores / experts_per_device) /
                                          num_token_parallel_cores;
-    std::cout << "combine token_expert_row_offset: " << token_expert_row_offset << "\n";
 
     const auto expert_token_segment_buffer_block_size_bytes = token_segment_buffer_size_bytes * token_expert_row_offset;
     constexpr auto double_buffer = 2;
@@ -380,10 +379,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto [mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps] = detail::launch_mux_workers(
         *mesh_device, mux_core_range_set, fabric_node_id, neighbors, num_links, num_worker_cores, program);
 
-    const auto start_coord =
-        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().start_coord);
-    const auto end_coord =
-        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
+    const auto needed_worker_core_bounding_box = needed_worker_core_range_set.bounding_box();
+    const auto start_coord = mesh_device->worker_core_from_logical_core(needed_worker_core_bounding_box.start_coord);
+    const auto end_coord = mesh_device->worker_core_from_logical_core(needed_worker_core_bounding_box.end_coord);
 
     // launch reader kernel
     std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
@@ -406,6 +404,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"noc_y_start", start_coord.y},
         {"noc_x_end", end_coord.x},
         {"noc_y_end", end_coord.y},
+        {"worker_bounding_box_size", needed_worker_core_bounding_box.size()},
     };
 
     std::vector<uint32_t> reader_compile_time_args;
