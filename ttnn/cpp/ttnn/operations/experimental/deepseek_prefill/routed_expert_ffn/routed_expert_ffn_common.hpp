@@ -59,6 +59,7 @@ ttnn::Tensor routed_expert_ffn_bh(
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    std::optional<ttnn::Tensor> output);
+    std::optional<ttnn::Tensor> output,
+    const std::optional<ttnn::Tensor>& max_iter);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail

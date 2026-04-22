@@ -142,7 +142,8 @@ ttnn::Tensor routed_expert_ffn(
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    std::optional<ttnn::Tensor> output) {
+    std::optional<ttnn::Tensor> output,
+    const std::optional<ttnn::Tensor>& max_iter) {
     const uint32_t M_tiles = x.padded_shape()[-2] / ttnn::TILE_SIZE;
     const bool is_wormhole = x.device()->arch() == tt::ARCH::WORMHOLE_B0;
 
@@ -167,7 +168,7 @@ ttnn::Tensor routed_expert_ffn(
         return detail::routed_expert_ffn_wh(x, gate_proj, up_proj, down_proj, compute_kernel_config, output);
     }
     return detail::routed_expert_ffn_bh(
-        expert_iter, x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output));
+        expert_iter, x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output), max_iter);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn

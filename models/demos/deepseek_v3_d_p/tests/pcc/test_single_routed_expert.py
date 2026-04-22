@@ -20,6 +20,13 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 
 @pytest.mark.parametrize(
+    "use_routed_matmul",
+    [
+        # pytest.param(False, id="stock-matmul"),
+        pytest.param(True, id="routed-matmul-fake-maxiter-1000"),
+    ],
+)
+@pytest.mark.parametrize(
     "num_tokens, emb_dim, hidden_dim",
     [
         (1024, 7168, 2048),  # DeepSeek V3 dims, 1K tokens
@@ -47,6 +54,7 @@ def test_single_routed_expert(
     num_tokens: int,
     emb_dim: int,
     hidden_dim: int,
+    use_routed_matmul: bool,
 ):
     """
     Simplest test: 1 chip, 1 expert.
@@ -91,6 +99,28 @@ def test_single_routed_expert(
     )
     logger.debug(f"TTNN input shape: {tt_input.shape}")
 
+    # Optional: build a "fake" max_iter tensor to exercise the routed_matmul path.
+    # max_iter=1000 is far larger than any expert_iter we generate
+    # (expert_iters = ceil(tokens/MAX_EXPERT_LENGTH), small single digits here), so
+    # the guard — when enabled in the kernels — would always allow execution. With
+    # the guard currently inert this just switches dispatch to the routed_matmul
+    # device op and should match stock ttnn::matmul perf / PCC.
+    max_iter_tt = None
+    if use_routed_matmul:
+        FAKE_MAX_ITER = 1000
+        # DRAM uint32 tile-layout scalar. Only [0,0] is read by the kernel.
+        max_iter_torch = torch.full((1, 32, 32), FAKE_MAX_ITER, dtype=torch.int32)
+        max_iter_tt = ttnn.from_torch(
+            max_iter_torch,
+            dtype=ttnn.uint32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        ttnn.synchronize_device(mesh_device)
+        logger.debug(f"Fake max_iter={FAKE_MAX_ITER} tensor created, shape={max_iter_tt.shape}")
+
     # Create TtRoutedExpert
     logger.debug("Creating TtRoutedExpert...")
     tt_expert = TtRoutedExpert(
@@ -102,6 +132,7 @@ def test_single_routed_expert(
         torch_weights=[weights],  # List with single expert weights
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
+        max_iter=max_iter_tt,
     )
 
     # Run TTNN forward

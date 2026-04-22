@@ -3,22 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "routed_expert_ffn_common.hpp"
+#include "routed_matmul.hpp"
 
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
 
 ttnn::Tensor routed_expert_ffn_bh(
-    [[maybe_unused]] uint32_t expert_iter,
+    uint32_t expert_iter,
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    std::optional<ttnn::Tensor> output) {
+    std::optional<ttnn::Tensor> output,
+    const std::optional<ttnn::Tensor>& max_iter) {
+    const bool use_routed = max_iter.has_value();
     // Blackhole compute grid is fixed at 11x8 = 88 cores. All configs below
     // are tuned for this grid; bail loudly if the device can't supply it.
     // gate/up is output-sharded with per_core_N = div_up(N_gate, GRID_X),
@@ -77,27 +81,51 @@ ttnn::Tensor routed_expert_ffn_bh(
         gate_up_grid, {gate_up_per_core_M * ttnn::TILE_SIZE, gate_up_per_core_N * ttnn::TILE_SIZE});
     auto gate_up_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, gate_up_shard};
 
-    auto gate_result = ttnn::matmul(
-        /*input_tensor_a=*/x,
-        /*input_tensor_b=*/gate_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/gate_up_mem,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config,
-        /*activation=*/std::string("silu"),
-        /*compute_kernel_config=*/compute_kernel_config);
+    ttnn::Tensor gate_result;
+    ttnn::Tensor up_result;
+    if (use_routed) {
+        auto gate_config_silu = gate_up_config;
+        gate_config_silu.fused_activation =
+            ttnn::operations::unary::UnaryWithParam{ttnn::operations::unary::UnaryOpType::SILU};
+        gate_result = routed_matmul(
+            /*a=*/x,
+            /*b=*/gate_proj,
+            /*max_iter=*/max_iter.value(),
+            /*expert_iter=*/expert_iter,
+            /*program_config=*/gate_config_silu,
+            /*compute_kernel_config=*/compute_kernel_config.value(),
+            /*output_memory_config=*/gate_up_mem);
+        up_result = routed_matmul(
+            /*a=*/x,
+            /*b=*/up_proj,
+            /*max_iter=*/max_iter.value(),
+            /*expert_iter=*/expert_iter,
+            /*program_config=*/gate_up_config,
+            /*compute_kernel_config=*/compute_kernel_config.value(),
+            /*output_memory_config=*/gate_up_mem);
+    } else {
+        gate_result = ttnn::matmul(
+            /*input_tensor_a=*/x,
+            /*input_tensor_b=*/gate_proj,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false,
+            /*memory_config=*/gate_up_mem,
+            /*dtype=*/std::nullopt,
+            /*program_config=*/gate_up_config,
+            /*activation=*/std::string("silu"),
+            /*compute_kernel_config=*/compute_kernel_config);
 
-    auto up_result = ttnn::matmul(
-        /*input_tensor_a=*/x,
-        /*input_tensor_b=*/up_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/gate_up_mem,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config,
-        /*activation=*/std::nullopt,
-        /*compute_kernel_config=*/compute_kernel_config);
+        up_result = ttnn::matmul(
+            /*input_tensor_a=*/x,
+            /*input_tensor_b=*/up_proj,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false,
+            /*memory_config=*/gate_up_mem,
+            /*dtype=*/std::nullopt,
+            /*program_config=*/gate_up_config,
+            /*activation=*/std::nullopt,
+            /*compute_kernel_config=*/compute_kernel_config);
+    }
 
     // In-place multiply: writes into gate_result's block-sharded L1 buffer.
     // Reshard to L1 interleaved afterwards so the down matmul sees an unsharded
@@ -147,6 +175,22 @@ ttnn::Tensor routed_expert_ffn_bh(
         .transpose_mcast = false,
         .fuse_batch = false,
     };
+
+    if (use_routed) {
+        // down matmul output goes to DRAM interleaved (or the caller-provided output).
+        const auto down_out_mem_cfg =
+            output.has_value() ? output->memory_config()
+                               : tt::tt_metal::MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+        return routed_matmul(
+            /*a=*/activated,
+            /*b=*/down_proj,
+            /*max_iter=*/max_iter.value(),
+            /*expert_iter=*/expert_iter,
+            /*program_config=*/down_config,
+            /*compute_kernel_config=*/compute_kernel_config.value(),
+            /*output_memory_config=*/down_out_mem_cfg,
+            /*optional_output_tensor=*/std::move(output));
+    }
 
     return ttnn::matmul(
         /*input_tensor_a=*/activated,

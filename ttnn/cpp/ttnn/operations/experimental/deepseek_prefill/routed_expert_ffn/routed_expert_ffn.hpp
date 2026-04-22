@@ -18,7 +18,12 @@ ttnn::Tensor routed_expert_ffn(
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    std::optional<ttnn::Tensor> output = std::nullopt);
+    std::optional<ttnn::Tensor> output = std::nullopt,
+    // Optional max_iter tensor (uint32 DRAM scalar tile). When provided, each of
+    // the 3 BH matmuls dispatches via the forked routed_matmul device op that
+    // threads max_iter/expert_iter through to the reader/compute kernel guard.
+    // When absent, falls back to ttnn::matmul — identical to pre-routed behavior.
+    const std::optional<ttnn::Tensor>& max_iter = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn
 

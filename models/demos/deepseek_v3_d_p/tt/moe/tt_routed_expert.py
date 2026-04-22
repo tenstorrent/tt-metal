@@ -204,6 +204,7 @@ class TtRoutedExpert(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        max_iter: Optional[ttnn.Tensor] = None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -235,6 +236,11 @@ class TtRoutedExpert(LightweightModule):
         self.compute_kernel_config = compute_kernel_config
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
+        # Optional DRAM uint32 tile-layout scalar tensor. When set, the BH path
+        # dispatches via the forked routed_matmul device op (guard scaffolding in
+        # place; currently inert). None -> stock ttnn.matmul, preserving prior
+        # behavior.
+        self.max_iter = max_iter
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -366,6 +372,7 @@ class TtRoutedExpert(LightweightModule):
             down_proj,
             compute_kernel_config=self.compute_kernel_config,
             output=out,
+            max_iter=self.max_iter,
         )
 
     def _bh_forward_impl(

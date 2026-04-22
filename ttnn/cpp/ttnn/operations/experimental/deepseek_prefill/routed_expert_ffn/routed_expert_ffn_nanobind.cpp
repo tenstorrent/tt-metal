@@ -35,6 +35,7 @@ void bind_routed_expert_ffn(nb::module_& mod) {
         Keyword Args:
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration. Defaults to None.
             output (ttnn.Tensor, optional): Pre-allocated output tensor for in-place write of the final matmul result. Defaults to None.
+            max_iter (ttnn.Tensor, optional): DRAM uint32 tile-layout scalar tensor. When provided, the three Blackhole matmuls dispatch via the forked routed_matmul device op (reader/compute guard). When None, falls back to ttnn::matmul.
 
         Returns:
             ttnn.Tensor: Output tensor with the same shape as ``x``.
@@ -52,7 +53,8 @@ void bind_routed_expert_ffn(nb::module_& mod) {
         nb::arg("down_proj").noconvert(),
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("output") = nb::none());
+        nb::arg("output") = nb::none(),
+        nb::arg("max_iter") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail
