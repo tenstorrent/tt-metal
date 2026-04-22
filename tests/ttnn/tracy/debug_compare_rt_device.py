@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import csv, os, threading, time, torch, ttnn
 
 
