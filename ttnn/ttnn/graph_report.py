@@ -99,7 +99,8 @@ def compute_tensor_lifetime_records(
     - producer_operation_id: first op that lists the tensor as an output
     - last_use_operation_id: last op that lists the tensor as an input, **excluding**
       tensor-deallocation ops (those only free memory but also reference the tensor as input).
-      If none, falls back to the producer op.
+      ``None`` when no computational consumer exists — this lets callers distinguish "produced but
+      never used" (potential orphan) from "used exactly once at the producer" (same op id).
     - deallocate_operation_id: first op that looks like tensor deallocate with this tensor as input
     - producer_* / last_use_* source file and line from stack_traces when available (innermost /
       nearest-op frame; see :func:`_innermost_stack_frame`)
@@ -132,7 +133,9 @@ def compute_tensor_lifetime_records(
         out_ops = outputs_by_tid.get(tid_i)
         in_ops = inputs_by_tid.get(tid_i)
         producer_op = min(out_ops) if out_ops else None
-        last_use_op = max(in_ops) if in_ops else producer_op
+        # Leave None when no computational consumer exists so callers can distinguish
+        # "produced but never used" (orphan candidate) from "used once at the producer op".
+        last_use_op = max(in_ops) if in_ops else None
         dealloc_ops = dealloc_candidate_ops.get(tid_i, [])
         dealloc_op = min(dealloc_ops) if dealloc_ops else None
 

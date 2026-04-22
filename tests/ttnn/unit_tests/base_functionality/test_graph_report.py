@@ -219,10 +219,10 @@ class TestTensorLifetime:
             "FROM tensor_lifetime ORDER BY tensor_id"
         )
         rows = {r[0]: r for r in cursor.fetchall()}
-        assert rows[42][1] is None
-        assert rows[42][2] == 1
-        assert rows[101][1] == 1
-        assert rows[101][2] == 1
+        assert rows[42][1] is None  # tensor 42 has no producer op in this graph
+        assert rows[42][2] == 1  # tensor 42 is consumed by op 1 (ttnn::relu)
+        assert rows[101][1] == 1  # tensor 101 is produced by op 1
+        assert rows[101][2] is None  # tensor 101 is never consumed — orphan candidate
         conn.close()
 
     def test_tensor_consumers_mirror_input_tensors(self, tmp_path, single_relu_mock_graph):
