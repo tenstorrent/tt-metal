@@ -82,16 +82,6 @@ constexpr bool is_load_op_v = std::is_base_of_v<LoadTag, T>;
 // =============================================================================
 
 /**
- * @brief Input synchronization policy for SFPU pipeline
- *
- * Controls how Load ops wait for and consume input tiles:
- * - WaitAndPopPerTile: Wait/pop one tile per Load (streaming, default)
- * - WaitUpfrontNoPop: Wait for all tiles upfront, don't pop (persistent reuse)
- * - NoWaitNoPop: Caller manages wait/pop externally
- */
-enum class SfpuInputPolicy { WaitAndPopPerTile, WaitUpfrontNoPop, NoWaitNoPop };
-
-/**
  * @brief Output synchronization policy for SFPU pipeline
  *
  * Controls when to reserve/push output tiles:
@@ -105,11 +95,10 @@ enum class SfpuOutputPolicy { PerTile, Bulk };
  *
  * Controls whether unpacker/packer are reconfigured before the pipeline runs:
  * - NONE: Skip all reconfiguration
- * - INPUT: Reconfigure unpacker only
- * - OUTPUT: Reconfigure packer only
- * - INPUT_AND_OUTPUT: Reconfigure both (default, safest)
+ * - OUTPUT: Reconfigure packer (let Load elements handle input reconfig)
+ * - NONE: Skip all reconfiguration
  */
-enum class SfpuDataFormatReconfig { NONE = 0, INPUT = 1, OUTPUT = 2, INPUT_AND_OUTPUT = 3 };
+enum class SfpuDataFormatReconfig { NONE = 0, OUTPUT = 2 };
 
 /**
  * @brief Controls DEST batching behavior in sfpu_pipeline
@@ -410,10 +399,9 @@ inline constexpr bool chain_has_non_load_fpu_clash_v =
 // =============================================================================
 
 template <
-    SfpuBatching batching = SfpuBatching::Auto,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT,
+    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::NONE,
+    SfpuBatching batching = SfpuBatching::Disabled,
     typename Chain>
 ALWI void sfpu_pipeline(Chain chain, uint32_t ocb, uint32_t num_tiles, Dst pack_slot = Dst::D0);
 
@@ -423,10 +411,9 @@ ALWI void sfpu_pipeline(Chain chain, uint32_t ocb, uint32_t num_tiles, Dst pack_
 
 template <
     uint32_t ICB,
-    SfpuBatching batching = SfpuBatching::Auto,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT,
+    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::NONE,
+    SfpuBatching batching = SfpuBatching::Disabled,
     typename Op>
 ALWI void sfpu_op(uint32_t ocb, uint32_t num_tiles, Op op);
 

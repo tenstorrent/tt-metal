@@ -75,15 +75,15 @@ template <Dst Slot> ALWI void Prelu<Slot>::init() const { prelu_tile_init(); }
 template <Dst Slot> ALWI void Prelu<Slot>::call(uint32_t d0) const { prelu_tile(d0, weight); }
 
 // Aliases
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_sigmoid(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Sigmoid<>{}); }
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_tanh(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Tanh<>{}); }
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_gelu(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Gelu<>{}); }
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_silu(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Silu<>{}); }
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_relu(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Relu<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_sigmoid(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Sigmoid<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_tanh(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Tanh<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_gelu(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Gelu<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_silu(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Silu<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_relu(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Relu<>{}); }
 
 }  // namespace compute_kernel_lib

@@ -47,23 +47,23 @@ template <Dst Slot> ALWI void UnaryLe<Slot>::init() const { unary_le_tile_init()
 template <Dst Slot> ALWI void UnaryLe<Slot>::call(uint32_t d0) const { unary_le_tile(d0, param0); }
 
 // Aliases
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_isinf(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Isinf<>{}); }
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_isnan(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Isnan<>{}); }
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_isfinite(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Isfinite<>{}); }
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_gtz(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Gtz<>{}); }
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_ltz(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Ltz<>{}); }
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_lez(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Lez<>{}); }
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_gez(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Gez<>{}); }
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_eqz(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Eqz<>{}); }
-template <uint32_t ICB, SfpuBatching B, SfpuInputPolicy P, SfpuOutputPolicy O, SfpuDataFormatReconfig R>
-ALWI void sfpu_nez(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, B, P, O, R>(ocb, num_tiles, Nez<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_isinf(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Isinf<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_isnan(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Isnan<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_isfinite(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Isfinite<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_gtz(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Gtz<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_ltz(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Ltz<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_lez(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Lez<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_gez(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Gez<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_eqz(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Eqz<>{}); }
+template <uint32_t ICB, SfpuOutputPolicy O, SfpuDataFormatReconfig R, SfpuBatching B>
+ALWI void sfpu_nez(uint32_t ocb, uint32_t num_tiles) { sfpu_op<ICB, O, R, B>(ocb, num_tiles, Nez<>{}); }
 
 }  // namespace compute_kernel_lib

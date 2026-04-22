@@ -31,10 +31,7 @@ void kernel_main() {
             LoadPolicy::WaitAndPop>{});
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        sfpu_pipeline<
-            SfpuBatching::Auto,
-            SfpuInputPolicy::WaitAndPopPerTile,
-            SfpuOutputPolicy::Bulk,
-            SfpuDataFormatReconfig::NONE>(chain, cb_output, per_core_block_dim);
+        sfpu_pipeline<SfpuOutputPolicy::Bulk, SfpuDataFormatReconfig::NONE, SfpuBatching::Auto>(
+            chain, cb_output, per_core_block_dim);
     }
 }

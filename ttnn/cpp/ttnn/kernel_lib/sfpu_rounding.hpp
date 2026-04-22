@@ -49,31 +49,27 @@ struct StochasticRound : UnaryOp<StochasticRound<Slot>, Slot> {
 // --- Rounding aliases ---
 template <
     uint32_t ICB,
-    SfpuBatching B = SfpuBatching::Auto,
-    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
+    SfpuBatching B = SfpuBatching::Disabled>
 ALWI void sfpu_floor(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
-    SfpuBatching B = SfpuBatching::Auto,
-    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
+    SfpuBatching B = SfpuBatching::Disabled>
 ALWI void sfpu_ceil(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
-    SfpuBatching B = SfpuBatching::Auto,
-    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
+    SfpuBatching B = SfpuBatching::Disabled>
 ALWI void sfpu_trunc(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
-    SfpuBatching B = SfpuBatching::Auto,
-    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
+    SfpuBatching B = SfpuBatching::Disabled>
 ALWI void sfpu_frac(uint32_t ocb, uint32_t num_tiles);
 
 }  // namespace compute_kernel_lib

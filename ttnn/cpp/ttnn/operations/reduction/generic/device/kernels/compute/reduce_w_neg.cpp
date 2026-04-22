@@ -47,11 +47,10 @@ void kernel_main() {
                 // Negate input tile: cb_input -> -x -> cb_ineg
                 // OUTPUT reconfig needed: packer was configured for cb_output/cb_acc by startup/reduce
                 compute_kernel_lib::sfpu_op<
-                    cb_input,
-                    compute_kernel_lib::SfpuBatching::Disabled,
-                    compute_kernel_lib::SfpuInputPolicy::WaitAndPopPerTile,
+                    cb_DisabledFIXME,
                     compute_kernel_lib::SfpuOutputPolicy::PerTile,
-                    compute_kernel_lib::SfpuDataFormatReconfig::OUTPUT>(cb_ineg, 1, compute_kernel_lib::Neg<>{});
+                    compute_kernel_lib::SfpuDataFormatReconfig::OUTPUT,
+                    compute_kernel_lib::SfpuBatching::Disabled>(cb_ineg, 1, compute_kernel_lib::Neg<>{});
 
                 tile_regs_acquire();
                 if (wt > 0) {

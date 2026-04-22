@@ -128,66 +128,57 @@ struct UnaryLe : UnaryOp<UnaryLe<Slot>, Slot> {
 // --- Predicate aliases ---
 template <
     uint32_t ICB,
-    SfpuBatching B = SfpuBatching::Auto,
-    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
+    SfpuBatching B = SfpuBatching::Disabled>
 ALWI void sfpu_isinf(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
-    SfpuBatching B = SfpuBatching::Auto,
-    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
+    SfpuBatching B = SfpuBatching::Disabled>
 ALWI void sfpu_isnan(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
-    SfpuBatching B = SfpuBatching::Auto,
-    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
+    SfpuBatching B = SfpuBatching::Disabled>
 ALWI void sfpu_isfinite(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
-    SfpuBatching B = SfpuBatching::Auto,
-    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
+    SfpuBatching B = SfpuBatching::Disabled>
 ALWI void sfpu_gtz(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
-    SfpuBatching B = SfpuBatching::Auto,
-    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
+    SfpuBatching B = SfpuBatching::Disabled>
 ALWI void sfpu_ltz(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
-    SfpuBatching B = SfpuBatching::Auto,
-    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
+    SfpuBatching B = SfpuBatching::Disabled>
 ALWI void sfpu_lez(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
-    SfpuBatching B = SfpuBatching::Auto,
-    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
+    SfpuBatching B = SfpuBatching::Disabled>
 ALWI void sfpu_gez(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
-    SfpuBatching B = SfpuBatching::Auto,
-    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
+    SfpuBatching B = SfpuBatching::Disabled>
 ALWI void sfpu_eqz(uint32_t ocb, uint32_t num_tiles);
 template <
     uint32_t ICB,
-    SfpuBatching B = SfpuBatching::Auto,
-    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::NONE,
+    SfpuBatching B = SfpuBatching::Disabled>
 ALWI void sfpu_nez(uint32_t ocb, uint32_t num_tiles);
 
 }  // namespace compute_kernel_lib

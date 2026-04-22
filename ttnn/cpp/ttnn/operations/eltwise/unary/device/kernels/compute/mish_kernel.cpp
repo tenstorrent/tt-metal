@@ -31,11 +31,8 @@ void kernel_main() {
                 Log1p<Approx::Fast, Dst::D0>{},
                 Tanh<Approx::Exact, Dst::D0>{},
                 SfpuMul<Dst::D0, Dst::D1, Dst::D0>{});
-            sfpu_pipeline<
-                SfpuBatching::Auto,
-                SfpuInputPolicy::WaitAndPopPerTile,
-                SfpuOutputPolicy::Bulk,
-                SfpuDataFormatReconfig::NONE>(chain, cb_output, per_core_block_dim);
+            sfpu_pipeline<SfpuOutputPolicy::Bulk, SfpuDataFormatReconfig::NONE, SfpuBatching::Auto>(
+                chain, cb_output, per_core_block_dim);
         } else {
             auto chain = sfpu_chain(
                 Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
@@ -44,11 +41,8 @@ void kernel_main() {
                 Log1p<Approx::Exact, Dst::D0>{},
                 Tanh<Approx::Exact, Dst::D0>{},
                 SfpuMul<Dst::D0, Dst::D1, Dst::D0>{});
-            sfpu_pipeline<
-                SfpuBatching::Auto,
-                SfpuInputPolicy::WaitAndPopPerTile,
-                SfpuOutputPolicy::Bulk,
-                SfpuDataFormatReconfig::NONE>(chain, cb_output, per_core_block_dim);
+            sfpu_pipeline<SfpuOutputPolicy::Bulk, SfpuDataFormatReconfig::NONE, SfpuBatching::Auto>(
+                chain, cb_output, per_core_block_dim);
         }
     }
 #endif
@@ -71,11 +65,8 @@ void kernel_main() {
                 Dst::D0,
                 LoadPolicy::WaitAndPop>{});
         for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-            sfpu_pipeline<
-                SfpuBatching::Auto,
-                SfpuInputPolicy::WaitAndPopPerTile,
-                SfpuOutputPolicy::Bulk,
-                SfpuDataFormatReconfig::NONE>(chain, cb_output, per_core_block_dim);
+            sfpu_pipeline<SfpuOutputPolicy::Bulk, SfpuDataFormatReconfig::NONE, SfpuBatching::Auto>(
+                chain, cb_output, per_core_block_dim);
         }
     } else {
         auto chain = sfpu_chain(
@@ -90,11 +81,8 @@ void kernel_main() {
                 Dst::D0,
                 LoadPolicy::WaitAndPop>{});
         for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-            sfpu_pipeline<
-                SfpuBatching::Auto,
-                SfpuInputPolicy::WaitAndPopPerTile,
-                SfpuOutputPolicy::Bulk,
-                SfpuDataFormatReconfig::NONE>(chain, cb_output, per_core_block_dim);
+            sfpu_pipeline<SfpuOutputPolicy::Bulk, SfpuDataFormatReconfig::NONE, SfpuBatching::Auto>(
+                chain, cb_output, per_core_block_dim);
         }
     }
 #endif

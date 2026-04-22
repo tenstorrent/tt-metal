@@ -45,12 +45,8 @@ ALWI void Load<CB, Slot, Policy, Reconfig>::exec(uint32_t offset) const {
 
 namespace detail {
 
-constexpr bool sfpu_reconfig_input(SfpuDataFormatReconfig mode) {
-    return mode == SfpuDataFormatReconfig::INPUT || mode == SfpuDataFormatReconfig::INPUT_AND_OUTPUT;
-}
-
 constexpr bool sfpu_reconfig_output(SfpuDataFormatReconfig mode) {
-    return mode == SfpuDataFormatReconfig::OUTPUT || mode == SfpuDataFormatReconfig::INPUT_AND_OUTPUT;
+    return mode == SfpuDataFormatReconfig::OUTPUT;
 }
 
 /** @brief Get the CB of the first Load in a chain (for input reconfig) */
@@ -76,10 +72,9 @@ struct FirstLoadCB<SfpuChain<Load<CB, Slot, Policy, Reconfig>, Rest...>> {
 // =============================================================================
 
 template <
-    SfpuBatching batching,
-    SfpuInputPolicy input_policy,
     SfpuOutputPolicy output_policy,
     SfpuDataFormatReconfig reconfig,
+    SfpuBatching batching,
     typename Chain>
 ALWI void sfpu_pipeline(
     Chain chain,
@@ -95,10 +90,8 @@ ALWI void sfpu_pipeline(
 
     ASSERT(static_cast<uint32_t>(pack_slot) < chain_stride);
 
-    // Data format reconfiguration (once before the tile loop)
-    if constexpr (detail::sfpu_reconfig_input(reconfig)) {
-        reconfig_data_format_srca(detail::FirstLoadCB<Chain>::value);
-    }
+    // Packer reconfiguration (once before the tile loop).
+    // Input reconfig is handled per-Load via LoadReconfig::Input.
     if constexpr (detail::sfpu_reconfig_output(reconfig)) {
         pack_reconfig_data_format(ocb);
     }
@@ -166,14 +159,13 @@ ALWI void sfpu_pipeline(
 
 template <
     uint32_t ICB,
-    SfpuBatching batching,
-    SfpuInputPolicy input_policy,
     SfpuOutputPolicy output_policy,
     SfpuDataFormatReconfig reconfig,
+    SfpuBatching batching,
     typename Op>
 ALWI void sfpu_op(uint32_t ocb, uint32_t num_tiles, Op op) {
     auto chain = sfpu_chain(Load<ICB, Dst::D0>{}, op);
-    sfpu_pipeline<batching, input_policy, output_policy, reconfig>(chain, ocb, num_tiles);
+    sfpu_pipeline<output_policy, reconfig, batching>(chain, ocb, num_tiles);
 }
 
 }  // namespace compute_kernel_lib
