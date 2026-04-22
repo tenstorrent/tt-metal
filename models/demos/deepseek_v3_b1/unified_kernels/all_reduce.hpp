@@ -161,7 +161,8 @@ private:
 
     void impl([[maybe_unused]] const SenderArgs& args) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        if constexpr (CTArgs::link_index >= CTArgs::num_links) {
+        constexpr uint32_t packets_to_send = packets_to_send_for_writer();
+        if constexpr (CTArgs::link_index >= CTArgs::num_links || packets_to_send == 0) {
             return;
         }
 
@@ -200,11 +201,10 @@ private:
             noc_semaphore_inc(local_ready_noc_addr, 1);
         }
 
-        connection.open_start();
-
         constexpr bool use_posted_transport_writes = true;
+
+        connection.open_start();
         constexpr uint32_t max_header_ring_size = 2;
-        constexpr uint32_t packets_to_send = packets_to_send_for_writer();
         // A single packet never reuses a header, so the second header only pays setup cost with no flush savings.
         constexpr uint32_t header_ring_size = packets_to_send <= 1u ? 1u : max_header_ring_size;
 
@@ -221,7 +221,8 @@ private:
         std::array<volatile tt_l1_ptr PACKET_HEADER_TYPE*, header_ring_size> headers = {};
         for (uint32_t i = 0; i < header_ring_size; ++i) {
             headers[i] = PacketHeaderPool::allocate_header();
-            fabric_set_single_hop_unicast_route_from_direction(headers[i], connection_direction);
+            fabric_set_single_hop_unicast_route_from_direction(
+                headers[i], connection_direction, dst_chip_id, dst_mesh_id);
             headers[i]->to_noc_fused_unicast_write_atomic_inc(
                 {dst_noc_base, remote_sem_noc, 1, false}, regular_payload_bytes);
         }
@@ -239,6 +240,14 @@ private:
         // Amortize downstream free-slot queries across back-to-back payload sends.
         uint32_t cached_free_write_slots = 0;
 
+        auto flush_transport = [&]() __attribute__((always_inline)) {
+            if constexpr (use_posted_transport_writes) {
+                noc_async_posted_writes_flushed();
+            } else {
+                noc_async_writes_flushed();
+            }
+        };
+
         auto refill_free_write_slots = [&]() __attribute__((always_inline)) {
             do {
                 cached_free_write_slots = connection.get_num_free_write_slots();
@@ -254,11 +263,7 @@ private:
 
             if (current_header_idx == header_ring_size) {
                 current_header_idx = 0;
-                if constexpr (use_posted_transport_writes) {
-                    noc_async_posted_writes_flushed();
-                } else {
-                    noc_async_writes_flushed();
-                }
+                flush_transport();
             }
         };
 
@@ -295,7 +300,7 @@ private:
         if constexpr (use_posted_transport_writes) {
             // send_last_payload intentionally skips the wrap-time flush since the last packet never needs to
             // make a header reusable again. Drain that remaining posted tail here before teardown.
-            noc_async_posted_writes_flushed();
+            flush_transport();
         }
 
         connection.close_start();

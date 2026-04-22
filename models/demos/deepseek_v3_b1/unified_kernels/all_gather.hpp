@@ -174,7 +174,8 @@ private:
         PacketHeaderPool::reset();
         for (uint32_t i = 0; i < header_ring_size; ++i) {
             headers[i] = PacketHeaderPool::allocate_header();
-            fabric_set_single_hop_unicast_route_from_direction(headers[i], connection_direction);
+            fabric_set_single_hop_unicast_route_from_direction(
+                headers[i], connection_direction, dst_chip_id, dst_mesh_id);
             headers[i]->to_noc_fused_unicast_write_atomic_inc(
                 {dest_output_noc, dest_recv_sem_noc, /* placeholder inc_value */ 1, false}, CTArgs::chunk_size_bytes);
         }
