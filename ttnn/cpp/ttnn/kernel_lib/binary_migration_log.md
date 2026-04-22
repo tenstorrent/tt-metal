@@ -63,6 +63,19 @@ feature that does or does not fit the helper API.
   (NoWaitNoPop), runtime `in_cb`/`out_cb` from q/k selection — helpers take `uint32_t` OK
 - **Tests**: 16 decode tests passed (head_dim 128/64/256, batch 1/8/16/32, with program cache)
 
+### `ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/compute/layernorm_post_allgather_welford.cpp`
+- **Commit**: `3b46be49921`
+- **Stages migrated**: Stage 2 (x_minus_mean: sub COL bcast) only
+- **Helper features used**: `sub` COL bcast, `WaitUpfrontPopAtEnd/NoWaitNoPop/Bulk`,
+  `BinaryInputBlockShape::of(1, block_size)`. cb_stats_reduced tile 0 = mean,
+  pre-waited by outer tile_row scope → NoWaitNoPop.
+- **Blockers for remaining stages**:
+  1. Stage 1 (rsqrt): `add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0)` reads tile 1 (variance) — non-zero A tile index
+  2. Stage 3 (normalize mul): in-place output when `do_gamma||do_beta` (output = cb_intermediate = input); pop-before-reserve requires CB capacity ≥ 2×block_size (unverified)
+  3. Stages 4-5 (gamma/beta): `cb_wait_front(gamma, col_tile + block_size)` cumulative wait + non-zero B tile index `col_tile + i`
+- **Tests**: 12 tp1 passed (tile/row_major, no_affine/with_affine, dim 2048/2432/3072/5120)
+- **Path verification**: `dit_layernorm_post_all_gather_welford_program_factory.cpp` → this kernel
+
 ---
 
 ## NOT-MIGRATED
@@ -205,6 +218,48 @@ share this pattern.)
      migration of just that stage is possible but low value.
   4. Pre-existing `layernorm_binary_helpers_feasibility.md` in this dir
      already concluded these same issues for the sister `layernorm.cpp`.
+
+---
+
+### `ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/compute/rms_compute.cpp`
+- **Blockers**:
+  1. FUSE_PRE_ADD stage: `add_tiles(cb_in0, cb_in1, index, index, w)` with `index = w + offset + h_offset` — absolute non-sequential tile indexing for both A and B.
+  2. X^2 stage: same absolute indexing pattern.
+  3. mul_bcast_cols/rows gamma stages: absolute tile indices.
+  Only stage 5 (rsqrt: add+rsqrt inside `is_allgather_worker && enable_sqrt`) is migratable in isolation but low value (4 raw lines inside a runtime-gated branch).
+
+### `ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_pre_allgather_2d.cpp`
+- **Blockers**:
+  1. X^2 stage: cumulative wait + non-sequential pack (same as rmsnorm_pre_allgather.cpp).
+  2. merge_core section: `add_tiles(cb_x2_merge, cb_zero, i, 0, dst0)` accumulates tiles 0..num_cores_y-1 into single DST slot — not a CB streaming pattern.
+  Stage 2 (reduce): already helper-based.
+
+### `ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/layernorm_pre_allgather.cpp`
+- **Blockers**:
+  1. X^2 stage: cumulative wait + non-sequential pack (same as rmsnorm_pre_allgather.cpp).
+  Reduce stages already helper-based. No other stages.
+
+### `ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/layernorm_post_allgather_welford.cpp`
+- **Blockers**:
+  1. rsqrt: `add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0)` — reads tile 1 (variance) from A; non-zero A tile index.
+  2. chain_llk stages: `fixed_CB_B_index = 1` on x_minus_mean node (same non-zero B tile index).
+  No migratable stages beyond what's already done in the non-welford version.
+
+### `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/bcast_h.cpp` (and `bcast_w.cpp`, `bcast_hw.cpp`)
+- **Blockers**:
+  1. `BCAST_LLKOP` is an `EltwiseBinaryType` preprocessor macro; helper uses `BinaryOpType` enum. No reverse mapping exists without helper API change or `#if` chains.
+  The kernels are compiled once per op type with different defines — migration requires either a `BinaryOpType` macro or a map from `EltwiseBinaryType` to `BinaryOpType`.
+  Low priority: kernels are already 10-15 lines and simple.
+
+### `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/bcast_h_sharded_optimised.cpp`
+- **Blockers**:
+  1. Same `BCAST_LLKOP EltwiseBinaryType` → `BinaryOpType` mismatch.
+  2. `pack_tile<true>(htr, cb_out, current_index)` — L1 accumulation pack with absolute output tile index — same L1-acc blocker as rmsnorm_pre_allgather.cpp.
+
+### moreh optimizer/softmax kernels (`moreh_adam.cpp`, `moreh_adamw.cpp`, `moreh_sgd.cpp`, `moreh_norm_backward_kernel.cpp`, etc.)
+- **Blockers**:
+  1. Already use moreh-specific `*_to_cb` helpers from `moreh_common.hpp`. Replacing one helper layer with another is not a migration.
+  2. `moreh_norm_backward_kernel.cpp` has runtime bcast dispatch (`if (ht_need_bcast && wt_need_bcast)` etc.) — cannot express in a single helper template call.
 
 ---
 
