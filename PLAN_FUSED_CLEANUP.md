@@ -47,12 +47,26 @@ If a new seam surfaces only with up_blocks fused, it's almost certainly another 
 
 ---
 
-### Phase 3 — True T-pipelining across H and W halo signalling *(risk: high; perf win lives here)*
+### Phase 3 — True T-pipelining across H and W halo signalling *(DEFERRED — see Session 7 note below)*
 
-**Hang-avoidance protocol — blocking for this phase:**
+**Status:** First attempt committed the wrong threshold formula in the conv3d reader. Correctness regressed (`FUSED vs STANDALONE: Boundary PCC=98.3%, max_diff=1.4`) while H-only boundary stayed at 100%, interior stayed at 100%. Reverted.
+
+**Why the threshold was wrong:** The per-T-block wait I used (`(t_iter + 1) * signals_per_batch`) only covers the W-halo for the CURRENT T-input frame. A causal 3D conv with `kernel_t=3`, `padding_t=1` actually reads T-input frames `[k-1, k, k+1]` for T-output block `k`, so it needs W-halo *up to batch `k+1`* — i.e. the threshold needs a look-ahead.
+
+**Correct formula (for future retry):**
+```
+last_t_in_needed(k) = k * T_block_size * stride_t + kernel_t - 1 - padding_t
+t_batch_offset     = ceil((T_block_size * stride_t + kernel_t - 1 - padding_t) / progress_t_batch_size)
+threshold(t_iter)  = min(t_iter + t_batch_offset, total_batches) * signals_per_batch
+```
+For VAE mid_block (T_block_size=1, stride_t=1, kernel_t=3, padding_t=1, progress_t_batch_size=1):
+- `t_batch_offset = 2` → threshold at t_iter=0 is `2 * signals_per_batch`, at t_iter=1 is `3 * signals_per_batch`, etc.
+- Without the cap, the last t_iter over-waits → hang.
+
+**Hang-avoidance protocol — blocking when retry:**
 A mismatch between what signals the writers emit and what the reader waits for turns into a device hang that eats ~2 minutes per test run. To keep dev loop fast:
 1. **Test at the unit level first.** Before touching the full decoder, run `test_fused_production_shapes` (a single dispatch) for every shape after each kernel-side change. One dispatch can't hang on per-T-batch mismatch — a multi-dispatch test can.
-2. **Run with Watcher enabled** (`TT_METAL_WATCHER=60` or similar) during Phase 3 development so hangs abort instead of waiting out the pytest timeout.
+2. **Run with Watcher enabled** (`TT_METAL_WATCHER=60` or similar) during Phase 3 development so hangs abort instead of waiting out the pytest timeout. **Caveat observed 2026-04-22:** Watcher currently fails fabric firmware init with "Program size (27872) too large for kernel config buffer (25600) on ACTIVE_ETH" on bh-lb-09 — debug separately before relying on it.
 3. **Start `input_progress_signal_count` conservative.** Temporarily set it to the *expected total across all T-batches* (i.e., current behaviour) and verify the kernel logic still reaches the end, then flip to per-batch math.
 4. **Add a debug counter** next to each `noc_semaphore_wait_min` during development (number of iterations it waited for, logged via `DPRINT`). Removed before commit.
 5. Keep the existing `test_fused_ones_input_seam` unit test passing after each kernel edit — it's the canary.
@@ -135,9 +149,9 @@ New test `test_neighbor_pad_conv3d_fused_perf.py`:
 - [ ] Expected fused-vs-standalone speedup on 2x2 480p — to be measured in Phase 5 and promoted to a hard assert once stable.
 
 ## State
-- [ ] Phase 1 — Restore production defaults
-- [ ] Phase 2 — Full-fusion correctness gate
-- [ ] Phase 3 — True T-pipelining (H + W + reader)
-- [ ] Phase 4 — Test-suite consolidation
-- [ ] Phase 5 — Perf test
-- [ ] Phase 6 — Docs & Fix 1 decision
+- [x] Phase 1 — Restore production defaults  *(committed 2e140a5ba8)*
+- [x] Phase 2 — Full-fusion correctness gate  *(same commit — full-fused decoder verified PCC=1.0)*
+- [ ] Phase 3 — True T-pipelining (H + W + reader)  *(deferred; first attempt reverted after correctness regression, formula fixed above but not shipped)*
+- [x] Phase 4 — Test-suite consolidation  *(deleted test_fused_decoder_boundary.py, 1311 lines of investigation scaffolding)*
+- [x] Phase 5 — Perf test (log-only)  *(new test_neighbor_pad_conv3d_fused_perf.py; first run: mid_res_2x2_480p fused/standalone=1.200 — fused 20% SLOWER, quantifies gap T-pipelining would close)*
+- [x] Phase 6 — Docs & Fix 1 decision  *(deleted W_HALO_VERTICAL_LINES.md + W_SEAM_MINIMAL_TEST.md; added neighbor_pad_conv3d/README.md with pipeline diagram + RTA-refresh checklist. Fix 1 kept defensive pending 2x4 CI.)*
