@@ -95,7 +95,7 @@ if __name__ == "__main__":
         include_children=True,
     )
     if returncode:
-        logger.info(f"pytest exited with code {returncode} — skipping plot", file=sys.stderr)
+        logger.error(f"pytest exited with code {returncode} — skipping plot")
         sys.exit(returncode)
 
     mib = [m for m, _ in mem_ts]
