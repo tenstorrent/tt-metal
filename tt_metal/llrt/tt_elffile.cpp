@@ -376,7 +376,7 @@ void ElfFile::WriteImage(std::string const& path) {
                 return false;
             }
             const ssize_t n = ::write(f.fd, contents_.data(), contents_.size());
-            if (n != ssize_t{contents_.size()}) {
+            if (n != static_cast<ssize_t>(contents_.size())) {
                 const int e = errno;
                 if (n < 0) {
                     inner_ec.assign(e != 0 ? e : EIO, std::system_category());
