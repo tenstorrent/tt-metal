@@ -62,7 +62,6 @@ class YOLOv8lPerformanceRunnerInfra:
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:  # BH
             core_grid = ttnn.CoreGrid(y=12, x=10)
-            # exit("Unsupported device")
 
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
         assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
@@ -78,11 +77,6 @@ class YOLOv8lPerformanceRunnerInfra:
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-
-        torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).contiguous()
-        if c < c_padded:
-            pad_c = c_padded - c
-            torch_input_tensor = torch.nn.functional.pad(torch_input_tensor, (0, pad_c), mode="constant", value=0)
         input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
         tt_inputs_host = ttnn.from_host_shards(
             [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
@@ -127,9 +121,9 @@ class YOLOv8lPerformanceRunnerInfra:
 
 def yolov8l_dram_sharded_input_from_torch(device, torch_input_tensor):
     assert torch_input_tensor.ndim == 4, "Expected input shape (N, C, H, W)"
-    torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).contiguous()
+    # torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).contiguous()
     input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
     tt_inputs_host = ttnn.from_host_shards(
         [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
     )
-    return tt_inputs_host.to(device, ttnn.DRAM_MEMORY_CONFIG)
+    return tt_inputs_host.to(device, ttnn.L1_MEMORY_CONFIG)

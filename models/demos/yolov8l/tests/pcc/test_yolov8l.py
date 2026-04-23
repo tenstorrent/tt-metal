@@ -26,8 +26,9 @@ def _run_yolov8l_pcc(device, model_location_generator, input_res, use_pretrained
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)
     ttnn_model = TtYolov8lModel(device=device, parameters=parameters, res=(inp_h, inp_w))
 
-    torch_input_ch16 = F.pad(input_tensor, (0, 0, 0, 0, 0, 13))
-    ttnn_input = yolov8l_dram_sharded_input_from_torch(device, torch_input_ch16)
+    # torch_input_ch16 = F.pad(input_tensor, (0, 0, 0, 0, 0, 13))
+    # ttnn_input = yolov8l_dram_sharded_input_from_torch(device, torch_input_ch16)
+    ttnn_input = yolov8l_dram_sharded_input_from_torch(device, input_tensor)
 
     with torch.inference_mode():
         ttnn_model_output = ttnn_model(ttnn_input)[0]
