@@ -395,6 +395,16 @@ create_program_dram_sharded(
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
 
+    // ROW_MAJOR_OUTPUT: compute packs tiles at absolute CB offsets row-first. Factory
+    // enforces per_core_M = 1 → out_subblock_h = 1, so the pack LLK takes the
+    // pack_tile_block fast path and produces the same layout as the legacy subblock-major
+    // path. The output width may be padded above the in1 shard width (per_core_N_compute
+    // vs per_core_N_in1_sender) after the subblock-growth adjustment at lines ~153-170;
+    // the compute kernel threads out_block_w (padded) to the helper as out_row_width to
+    // keep row-major reserve/push aligned with the actual pack stride.
+    mm_kernel_defines["ROW_MAJOR_OUTPUT"] = "1";
+    mm_kernel_in1_sender_writer_defines["ROW_MAJOR_OUTPUT"] = "1";
+
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
@@ -537,7 +547,12 @@ create_program_dram_sharded(
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
 
-    if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
+    // This factory unconditionally emits ROW_MAJOR_OUTPUT=1 on the compute kernel
+    // (see mm_kernel_defines setup above), so the helper reserves/pushes out_cb
+    // per M-row-group. The shared out/interm0 L1 region would let out_cb writes
+    // overlap with interm0 partials that haven't yet been reloaded — force
+    // separate regions.
+    {
         // output
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
             {output_cb_index, output_data_format},
@@ -561,16 +576,6 @@ create_program_dram_sharded(
             interm0_single_tile_size,
             interm0_CB_size / interm0_single_tile_size,
             interm0_CB_size);
-    } else {
-        log_debug(tt::LogOp, "inplace interm and output cb");
-        // share buffer
-        std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
-            {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
-        output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-                               .set_page_size(output_cb_index, output_single_tile_size)
-                               .set_page_size(interm0_cb_index, interm0_single_tile_size)
-                               .set_tile_dims(output_cb_index, output_tile)
-                               .set_tile_dims(interm0_cb_index, output_tile);
     }
     tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, output_cb_config);
     log_debug(
