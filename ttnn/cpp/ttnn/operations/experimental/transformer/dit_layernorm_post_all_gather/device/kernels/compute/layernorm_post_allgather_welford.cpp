@@ -99,6 +99,12 @@ void kernel_main() {
                 compute_kernel_lib::BinaryInputBlockShape::of(1, block_size));
 
             // 2) normalize: (x-mean) * inv_std
+            // Raw (not migrated): when do_gamma || do_beta, norm_target_cb ==
+            // cb_intermediate → in-place write-after-read on the same CB. The
+            // hand-rolled pop-before-reserve sequence handles this; binary_op's
+            // Bulk output reserves upfront which would deadlock on in-place.
+            // Covered by GAP-5; migratable once an InplacePopFirst output
+            // policy exists OR when program factory bumps CB capacity to 2.
             constexpr uint32_t norm_target_cb = (do_gamma || do_beta) ? cb_intermediate : cb_out;
             reconfig_data_format(cb_intermediate, cb_recip_sqrt_var);
             pack_reconfig_data_format(norm_target_cb);
@@ -124,6 +130,11 @@ void kernel_main() {
             cb_push_back(norm_target_cb, block_size);
 
             // 3) optional gamma
+            // Raw (not migrated): when do_beta is true, gamma_out_cb == cb_intermediate
+            // which is also the input — in-place, blocked by GAP-5 (same reason as the
+            // normalization block above). When !do_beta, this would be migratable
+            // (gamma_out_cb = cb_out). Deferred until GAP-5 is handled since the
+            // common path has do_beta=true.
             if constexpr (do_gamma) {
                 constexpr uint32_t gamma_out_cb = do_beta ? cb_intermediate : cb_out;
                 reconfig_data_format(norm_target_cb, cb_gamma);
@@ -152,25 +163,28 @@ void kernel_main() {
             }
 
             // 4) optional beta (only if gamma was provided)
+            // cb_intermediate → cb_out + cb_beta[col_tile..col_tile+block_size). Always
+            // non-in-place (different input/output CBs). BCAST_ROWS preserved: cb_beta
+            // tiles are sparse (only row 0 carries the bias, replicated across the
+            // other 31 rows), so BroadcastDim::ROW → BroadcastType::ROW is required.
+            // Caller's cumulative wait on cb_beta stays explicit — helper's NoWaitNoPop
+            // skips the internal wait since the required visible count exceeds the
+            // block_size window the helper would otherwise wait for.
             if constexpr (do_beta) {
-                // Input is always in cb_intermediate, output is always cb_out
-                reconfig_data_format(cb_intermediate, cb_beta);
-                pack_reconfig_data_format(cb_out);
-                add_bcast_rows_init_short(cb_intermediate, cb_beta);
-
                 cb_wait_front(cb_beta, col_tile + block_size);
-                cb_wait_front(cb_intermediate, block_size);
-                cb_reserve_back(cb_out, block_size);
-                tile_regs_acquire();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < block_size; i++) {
-                    add_tiles_bcast_rows(cb_intermediate, cb_beta, i, col_tile + i, i);
-                    pack_tile(i, cb_out);
-                }
-                tile_regs_commit();
-                tile_regs_release();
-                cb_pop_front(cb_intermediate, block_size);
-                cb_push_back(cb_out, block_size);
+                compute_kernel_lib::add<
+                    compute_kernel_lib::BroadcastDim::ROW,
+                    compute_kernel_lib::BinaryInputPolicy::WaitUpfrontPopAtEnd,
+                    compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+                    compute_kernel_lib::BinaryOutputPolicy::Bulk>(
+                    cb_intermediate,
+                    cb_beta,
+                    cb_out,
+                    compute_kernel_lib::BinaryInputBlockShape::of(1, block_size),
+                    compute_kernel_lib::NoOp{},
+                    compute_kernel_lib::NoAccumulation{},
+                    compute_kernel_lib::BinaryInputExtras{.base = 0},
+                    compute_kernel_lib::BinaryInputExtras{.base = col_tile});
             }
         }
 
