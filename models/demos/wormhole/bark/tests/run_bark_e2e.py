@@ -31,9 +31,7 @@ def _sanitize_output_dir(output_dir: str) -> str:
     base = os.path.abspath(os.getcwd())
     resolved = os.path.abspath(output_dir)
     if not resolved.startswith(base):
-        raise ValueError(
-            f"output_dir must be under the working directory ({base}), got {resolved}"
-        )
+        raise ValueError(f"output_dir must be under the working directory ({base}), got {resolved}")
     return resolved
 
 
@@ -152,9 +150,10 @@ def run_e2e_tests(output_dir: str = "bark_e2e_outputs"):
         all_pass = True
         for r in results:
             sem_ok = r["semantic_tps"] >= 20
+            coarse_ok = r["coarse_tps"] >= 60
             rtf_ok = r["rtf"] < 0.8
-            status = "PASS" if (sem_ok and rtf_ok) else "WARN"
-            if not (sem_ok and rtf_ok):
+            status = "PASS" if (sem_ok and coarse_ok and rtf_ok) else "WARN"
+            if not (sem_ok and coarse_ok and rtf_ok):
                 all_pass = False
             print(
                 f"{r['name']:<12} {r['semantic_tps']:>10.1f} {r['coarse_tps']:>14.1f} {r['audio_duration']:>10.2f} {r['rtf']:>8.3f} {status:>8}"
