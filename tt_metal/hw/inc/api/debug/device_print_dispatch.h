@@ -114,7 +114,7 @@ public:
         if (enabled && get_timestamp() >= next_stall_detection_timestamp) {
             read_rw_pointers();
             find_noc_locations_to_process<true>();
-            process_noc_locations<true>();
+            process_noc_locations();
 
             // Update timestamp for next stall detection
             next_stall_detection_timestamp = get_timestamp() + cycles_for_stall_detection;
@@ -130,7 +130,7 @@ public:
             }
 
             find_noc_locations_to_process<false>();
-            process_noc_locations<false>();
+            process_noc_locations();
 
             // Update timestamp for next full dispatch
             next_full_dispatch_timestamp = get_timestamp() + cycles_for_full_dispatch;
@@ -233,7 +233,8 @@ private:
             }
 
             // Check if there is enough space in the buffer
-            uint32_t local_buffer_end = current_l1_buffer_address + buffer_l1_alignment + remote_buffer_size;
+            uint32_t local_buffer_end =
+                dram_align(current_l1_buffer_address + buffer_l1_alignment + remote_buffer_size);
 
             if (local_buffer_end > l1_cache_buffer_end) {
                 // Wait for all NOC read transfers to finish.
