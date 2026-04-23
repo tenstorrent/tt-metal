@@ -27,7 +27,7 @@ void kernel_main() {
         uint32_t l1_read_addr = cb_output.get_read_ptr();
 
         for (uint32_t i = 0; i < num_read_per_barrier; ++i) {
-            uint64_t write_noc_addr = get_noc_addr(i_stick, s);
+            uint64_t write_noc_addr = s.get_noc_addr(i_stick);
             // Use legacy NOC API for raw address writes
             noc_async_write(l1_read_addr, write_noc_addr, new_stick_size);
             l1_read_addr += new_stick_size;
