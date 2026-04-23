@@ -32,6 +32,7 @@ void kernel_main() {
         deepseek_b1_ops::AllReduce::WriterSingleLink<WriterCT> writer;
         {
             DeviceZoneScopedN("CCL_SENDER_WRITER");
+            writer.open_connections(args);
             writer(args);
         }
     }
