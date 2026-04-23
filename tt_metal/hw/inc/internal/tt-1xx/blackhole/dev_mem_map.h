@@ -175,10 +175,18 @@
 #error "Packet header pool base and size must be 16-byte aligned"
 #endif
 
+// ttnvtop on-chip perf-counter sampler (Phase 2.1.a). See WH dev_mem_map.h
+// for rationale. BH uses the same reservation; HAL mapping comes in 2.1.b.
+#define MEM_UTIL_SAMPLER_BASE (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
+#define MEM_UTIL_SAMPLER_SIZE 1024
+#if (MEM_UTIL_SAMPLER_BASE % 16 != 0) || (MEM_UTIL_SAMPLER_SIZE % 16 != 0)
+#error "util sampler base and size must be 16-byte aligned"
+#endif
+
 // Read-only reserved memory boundary for watcher checks
 #define MEM_MAP_READ_ONLY_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO)
 // Read-write reserved memory boundary for watcher checks
-#define MEM_MAP_END (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
+#define MEM_MAP_END (MEM_UTIL_SAMPLER_BASE + MEM_UTIL_SAMPLER_SIZE)
 
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"

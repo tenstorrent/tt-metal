@@ -50,7 +50,8 @@ enum class HalL1MemAddrType : uint8_t {
     ETH_FW_MAILBOX,
     TENSIX_FABRIC_CONNECTIONS,
     FABRIC_CONNECTION_LOCK,
-    COUNT  // Keep this last so it always indicates number of enum options
+    UTIL_SAMPLER,  // ttnvtop Phase 2.1: on-chip perf-counter ring at MEM_UTIL_SAMPLER_BASE
+    COUNT          // Keep this last so it always indicates number of enum options
 };
 
 enum class HalMemType : uint8_t { L1 = 0, DRAM = 1, HOST = 2, COUNT = 3 };
