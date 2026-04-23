@@ -62,7 +62,7 @@ class TestParametrized:
         "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_inference_time",
         (
             ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.064),
-            ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.41),
+            ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.31),
             ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.89),
             ("decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.063),
             ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.065),
