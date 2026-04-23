@@ -907,7 +907,8 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                     "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} is NOT a "
                     "valid EDMStatus value and NOT the base-UMD sentinel — ERISC L1 appears CORRUPT "
                     "(see #42429). NOT sending TERMINATE. Zeroing edm_status_address to prevent "
-                    "cascade. configure_fabric_cores() will issue soft-reset to recover.",
+                    "cascade. Adding to probe_dead_channels so configure_fabric treats soft-reset "
+                    "failure as pre-known (degraded mode) instead of throwing.",
                     dev->id(),
                     eth_chan_id,
                     status_buf[0]);
@@ -928,10 +929,15 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                     // write failed — best effort; the channel may truly be unreachable
                 }
             }
-            // In both sub-cases: do NOT add to probe_dead_channels.
-            // The probe read above SUCCEEDED (we're in the !known_status path, not the catch
-            // path), proving the ETH relay to this channel is functional.
-            // configure_fabric_cores() will handle soft-reset and firmware load.
+            // FIX O (#42429): Add corrupt channels to probe_dead_channels.
+            //
+            // While the probe L1 read SUCCEEDED (relay functional), deassert_risc_reset requires an
+            // operational NOC — which may be dead if a previous session left this channel in
+            // assert_risc_reset state (the FIX M crash pattern, status 0x49705180).
+            // Marking it pre-known dead lets configure_fabric run in degraded mode (skip those
+            // channels with a warning) rather than throwing "newly-dead ETH channel(s)".
+            // The zero-write above ensures the NEXT session sees a clean 0.
+            probe_dead_channels.insert(eth_chan_id);
             corrupt_count++;
             continue;
         }
