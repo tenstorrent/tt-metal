@@ -849,75 +849,80 @@ std::pair<std::unordered_set<uint32_t>, bool> FabricFirmwareInitializer::termina
             continue;  // clean — nothing to do
         }
 
-        // Fix F4 / FIX K (#42429): if the status word is not a valid EDMStatus value, the L1
-        // slot is corrupt OR shows the base-UMD-firmware sentinel (0x49706550 = "iPeP").
-        // Skip the 50ms wait per channel (saves ~42s on a T3K with ~840 such channels).
-        // Do NOT send TERMINATE — see FIX K comment below for why that kills the ETH relay.
-        // configure_fabric_cores() will clear the L1 via soft-reset and load new firmware;
-        // whether that recovers cleanly is observed downstream at wait_for_fabric_endpoint_ready.
+        // Fix F4 / FIX K / FIX L (#42429): if the status word is not a valid EDMStatus value,
+        // the L1 slot is either the base-UMD-firmware sentinel (0x49706550 = "iPeP" — live relay)
+        // or truly corrupt garbage.  Skip the 50ms TERMINATE poll in both cases.
+        // See the FIX K / FIX L comment below for why any writes to the relay kill it.
         const bool known_status = is_known_edm_status(status_buf[0]);
         if (!known_status) {
-            // FIX K (#42429): Do NOT send TERMINATE to corrupt/unknown-status channels.
+            // FIX K / FIX L (#42429): Handle unknown-status channels WITHOUT disturbing the ETH relay.
             //
             // 0x49706550 ("iPeP") is the base-UMD-firmware sentinel — it means the ERISC is
-            // running the stock UMD relay firmware, NOT stale fabric firmware.  Base UMD firmware
-            // actively polls the termination_signal_address; writing TERMINATE causes it to exit
-            // gracefully.  On MMIO devices (chips 0-3) this kills the ETH relay that non-MMIO
-            // devices (chips 4-7) depend on for ALL L1 / register / reset operations.
+            // running the stock UMD relay firmware, NOT stale fabric firmware.  This is the NORMAL
+            // state on a T3K after a clean boot or proper teardown (ALL active ETH channels on
+            // non-fabric-initialized hardware show this value).
             //
-            // The original rationale was "give unknown firmware a best-effort chance to stop".
-            // In practice this was harmful: sending TERMINATE to a live relay ERISC kills it
-            // ~9 ms into PHASE 1, and by the time PHASE 2 tries to soft-reset non-MMIO Device 4
-            // (which goes through that same relay), the relay is already dead → 5 s UMD timeout.
+            // Base UMD relay firmware monitors BOTH:
+            //   1. termination_signal_address — exits gracefully on TERMINATE (FIX K: don't write this)
+            //   2. router_sync_address (edm_status_address) — exits when it sees 0 here (FIX L: don't zero)
             //
-            // configure_fabric_cores() issues a hard BRISC soft-reset (assert+deassert) which
-            // reliably restarts the ERISC regardless of its prior firmware state, so no graceful
-            // TERMINATE handshake is needed here.
-            log_error(
-                tt::LogMetal,
-                "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} is NOT a "
-                "valid EDMStatus value — ERISC L1 appears CORRUPT or shows base-UMD-firmware "
-                "sentinel (see #42429). NOT sending TERMINATE (would kill ETH relay). "
-                "configure_fabric_cores() will issue soft-reset to recover.",
-                dev->id(),
-                eth_chan_id,
-                status_buf[0]);
-            // Fix #42429 (cascade prevention): zero edm_status_address so the NEXT session's
-            // terminate_stale_erisc_routers() sees a clean 0 instead of the same garbage value.
-            // Without this, the corrupt status persists in L1 across container restarts (bare
-            // metal L1 is NOT cleared on process exit), causing every subsequent session to
-            // re-classify this channel as corrupt → add to probe_dead_channels → skip L1 clear
-            // → garbage persists → cascade forever until hardware reset.
+            // Both writes were killing MMIO Device 0-3 relay ERISCs during PHASE 1.  By the time
+            // PHASE 2 tried to soft-reset non-MMIO Device 4 (relay-dependent), the relay was dead
+            // → 5 s UMD timeout.
             //
-            // The probe read above SUCCEEDED (we're in the !known_status path, not the catch
-            // path), so the write path to this channel works.  Zeroing edm_status_address lets
-            // the next session treat this channel as clean and attempt normal initialization,
-            // which will either succeed (the ETH link recovered) or fail at soft reset (caught
-            // by configure_fabric_cores) — either way, no infinite cascade.
-            try {
-                std::vector<uint32_t> zero_buf(1, 0);
-                detail::WriteToDeviceL1(dev, eth_logical_core, router_sync_address, zero_buf, CoreType::ETH);
-                log_warning(
+            // For 0x49706550: DO NOTHING.  The firmware is live and serving as a relay; we must
+            // not disturb it.  configure_fabric_cores() will issue a BRISC soft-reset which
+            // cleanly restarts the ERISC and loads new firmware, regardless of prior state.
+            //
+            // For other unknown (truly-corrupt) values: send no TERMINATE (we don't know what
+            // firmware, if any, is running), but DO zero edm_status_address to break the
+            // cascade — corrupt L1 values persist across container restarts and would otherwise
+            // re-poison every subsequent session until hardware reset.
+            static constexpr uint32_t kBaseUmdFirmwareSentinel = 0x49706550u;
+            const bool is_base_umd = (status_buf[0] == kBaseUmdFirmwareSentinel);
+
+            if (is_base_umd) {
+                // Live relay firmware — touch nothing.  configure_fabric_cores() handles reset.
+                log_info(
                     tt::LogMetal,
-                    "terminate_stale_erisc_routers: Device {} chan={} zeroed edm_status_address "
-                    "(was 0x{:08x}) to break corruption cascade for next session",
+                    "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
+                    "(base-UMD-firmware sentinel) — relay is live, skipping all writes.",
                     dev->id(),
                     eth_chan_id,
                     status_buf[0]);
-            } catch (...) {
-                // write failed — best effort; the channel may truly be unreachable
+            } else {
+                // Truly corrupt / unknown value — no TERMINATE (unknown firmware), but zero
+                // edm_status_address to prevent cascade into the next session.
+                log_error(
+                    tt::LogMetal,
+                    "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} is NOT a "
+                    "valid EDMStatus value and NOT the base-UMD sentinel — ERISC L1 appears CORRUPT "
+                    "(see #42429). NOT sending TERMINATE. Zeroing edm_status_address to prevent "
+                    "cascade. configure_fabric_cores() will issue soft-reset to recover.",
+                    dev->id(),
+                    eth_chan_id,
+                    status_buf[0]);
+                // Cascade prevention: zero edm_status_address so the NEXT session sees a clean 0
+                // instead of the same garbage value.  Bare-metal L1 is NOT cleared on process exit,
+                // so without this the corrupt status persists across container restarts forever.
+                try {
+                    std::vector<uint32_t> zero_buf(1, 0);
+                    detail::WriteToDeviceL1(dev, eth_logical_core, router_sync_address, zero_buf, CoreType::ETH);
+                    log_warning(
+                        tt::LogMetal,
+                        "terminate_stale_erisc_routers: Device {} chan={} zeroed edm_status_address "
+                        "(was 0x{:08x}) to break corruption cascade for next session",
+                        dev->id(),
+                        eth_chan_id,
+                        status_buf[0]);
+                } catch (...) {
+                    // write failed — best effort; the channel may truly be unreachable
+                }
             }
-            // Fix #42429 (corrupt path): do NOT add to probe_dead_channels here.
+            // In both sub-cases: do NOT add to probe_dead_channels.
             // The probe read above SUCCEEDED (we're in the !known_status path, not the catch
-            // path), proving the ETH relay to this channel is functional.  assert_risc_reset_at_core()
-            // in configure_fabric_cores() uses the same relay path (UMD register write through ETH),
-            // so it should also succeed.  Let it attempt normal soft reset — if it times out, THAT
-            // timeout catches the dead channel at configure_fabric_cores() level.
-            //
-            // Previously, we added corrupt channels to probe_dead_channels, which caused
-            // configure_fabric_cores() to skip soft reset entirely.  Without the soft reset,
-            // BRISC stayed halted and new firmware couldn't start → configure_fabric_cores()
-            // returned false → session failed, even though the channel was actually reachable.
+            // path), proving the ETH relay to this channel is functional.
+            // configure_fabric_cores() will handle soft-reset and firmware load.
             corrupt_count++;
             continue;
         }
