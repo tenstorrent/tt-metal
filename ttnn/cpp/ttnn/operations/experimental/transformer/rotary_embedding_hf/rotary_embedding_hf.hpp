@@ -11,6 +11,7 @@
 
 namespace ttnn::experimental {
 
+// All tensor arguments must be allocated on device (TILE layout and shape rules apply; see device op validation).
 ttnn::Tensor rotary_embedding_hf(
     const Tensor& input_tensor,
     const Tensor& cos_cache,

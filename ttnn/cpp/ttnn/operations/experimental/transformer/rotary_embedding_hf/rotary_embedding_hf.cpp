@@ -27,11 +27,22 @@ Tensor rotary_embedding_hf(
     const bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    auto output_mem_config = memory_config.value_or(
-        input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.memory_config()
-                                                           : tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    // Device-only op: kernel config needs arch() and the primitive enqueues on device.
+    TT_FATAL(
+        input_tensor.storage_type() == StorageType::DEVICE,
+        "rotary_embedding_hf requires input_tensor on device; host tensors are not supported.");
+    TT_FATAL(
+        cos_cache.storage_type() == StorageType::DEVICE,
+        "rotary_embedding_hf requires cos_cache on device; host tensors are not supported.");
+    TT_FATAL(
+        sin_cache.storage_type() == StorageType::DEVICE,
+        "rotary_embedding_hf requires sin_cache on device; host tensors are not supported.");
 
-    auto arch = input_tensor.device()->arch();
+    auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
+
+    auto* mesh_device = input_tensor.device();
+    TT_FATAL(mesh_device != nullptr, "rotary_embedding_hf requires a non-null device on input_tensor.");
+    auto arch = mesh_device->arch();
     auto kernel_config = init_device_compute_kernel_config(
         arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
 
