@@ -131,9 +131,9 @@ DataFormat get_single_unpack_dst_format(
     }
 
     if (src_format == DataFormat::MxFp4) {
-        dst_format = DataFormat::Float16_b;
+        dst_format = DataFormat::Float16_b;  // Fixed unpack_dst format for mx formats.
     }
-    
+
     return dst_format;
 }
 
