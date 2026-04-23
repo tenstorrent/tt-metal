@@ -8,6 +8,7 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/debug/dprint.h"
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
@@ -148,6 +149,15 @@ void kernel_main() {
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+#ifdef UCK_CHLKC_UNPACK
+        DPRINT << "[RING] rix=" << ring_index << " iter=" << ring_iter << " rid=" << ring_id << ENDL();
+#endif
+#ifdef RING_ITER_ONLY_ENABLED
+        // Measurement hook: sync still advances, but compute is skipped for non-target iters.
+        if (ring_iter != RING_ITER_ONLY_TARGET) {
+            continue;
+        }
+#endif
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 

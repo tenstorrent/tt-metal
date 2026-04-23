@@ -23,6 +23,9 @@ struct RingJointSDPASharedVariables {
     tt::tt_metal::KernelHandle compute_kernels_id{};
     experimental::prim::RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::shared_variables_t
         all_gather_shared_variables;
+    // When true, AllGather was skipped (TT_METAL_RING_ITER_ONLY measurement mode);
+    // override_runtime_arguments must skip the AG override as well.
+    bool skip_all_gather = false;
 };
 
 struct RingJointSDPAProgramFactory {
