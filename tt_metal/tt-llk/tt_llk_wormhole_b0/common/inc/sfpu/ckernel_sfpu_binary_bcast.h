@@ -78,10 +78,6 @@ namespace sfpu
 //   LREG_{4+k} holds bcast row k (only LREG4 - bcast row 0 - is useful).
 //   Op LREG_k with LREG4 for each k in [0..3]. SFPTRANSP back, store.
 //
-//   NOTE: The SFPTRANSP semantics and LREG aliasing have been validated
-//         by analogy with ckernel_sfpu_reshuffle_rows.h but should be
-//         sanity-checked on real silicon.
-
 // ============================================================================
 // Layout constants
 // ============================================================================
