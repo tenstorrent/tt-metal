@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1748,8 +1749,9 @@ def prepare_compressed_sram_slots(
     layer_idx: int,
     initial_expert_indices: list[int],
     core_grids: SramExpertCoreGrids,
-    assigner: CompressedTensorAssigner,
+    assigner: CompressedTensorAssigner | None = None,
     *,
+    assignment_provider: Callable[[int, int], np.ndarray] | None = None,
     move_to_device: bool = True,
 ) -> SramCompressedExpertSlots:
     """Allocate SRAM hot expert slots as per-core L1 CompressedTensors.
@@ -1770,9 +1772,16 @@ def prepare_compressed_sram_slots(
             the routed-expert pipeline's per-projection layout (e.g.
             64 / 64 / 112 cores on Blackhole).  For symmetric unit-test
             weights use :meth:`SramExpertCoreGrids.uniform`.
-        assigner: ``CompressedTensorAssigner`` for mixed-precision encoding.
+        assigner: ``CompressedTensorAssigner`` for on-the-fly mixed-precision
+            encoding.  Mutually exclusive with ``assignment_provider``.
+        assignment_provider: Callable ``(expert_idx, proj_idx) -> np.ndarray``
+            returning a pre-computed tile assignment (e.g. from a BSPM file).
+            Mutually exclusive with ``assigner``.  Only used on the TP=1
+            single-device path; the TP>1 height-sharded path always uses
+            ``assigner``.
         move_to_device: Whether to place tensors on device.
     """
+    assert (assigner is None) != (assignment_provider is None), "Provide exactly one of assigner or assignment_provider"
     grids = core_grids
     num_slots = len(initial_expert_indices)
     logger.info(
@@ -1875,6 +1884,7 @@ def prepare_compressed_sram_slots(
                     gate_w,
                     grids.gate,
                     assigner=assigner,
+                    assignment=assignment_provider(expert_idx, 0) if assignment_provider is not None else None,
                     device=device_for_torch,
                     mesh_mapper_config=mesh_mapper_config,
                 )
@@ -1884,6 +1894,7 @@ def prepare_compressed_sram_slots(
                     up_w,
                     grids.up,
                     assigner=assigner,
+                    assignment=assignment_provider(expert_idx, 1) if assignment_provider is not None else None,
                     device=device_for_torch,
                     mesh_mapper_config=mesh_mapper_config,
                 )
@@ -1930,6 +1941,7 @@ def prepare_compressed_sram_slots(
                     down_w,
                     grids.down,
                     assigner=assigner,
+                    assignment=assignment_provider(expert_idx, 2) if assignment_provider is not None else None,
                     device=device_for_torch,
                     mesh_mapper_config=mesh_mapper_config,
                 )
