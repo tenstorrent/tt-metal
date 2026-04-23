@@ -86,10 +86,10 @@ Alignment legacyShapeToAlignment(
         values[padded_rank - 2] = legacy_padded_shape[-2];
     }
 
-    uint32_t cumulative_padded = legacy_padded_shape[-2];
-    for (int i = padded_rank - 3; i >= 0; i--) {
-        values[i] = legacy_padded_shape[i] * cumulative_padded;
-        cumulative_padded *= legacy_padded_shape[i];
+    uint32_t cumulative_padded_volume = legacy_padded_shape[-2];
+    for (int dim = padded_rank - 3; dim >= 0; dim--) {
+        cumulative_padded_volume *= legacy_padded_shape[dim];
+        values[dim] = cumulative_padded_volume;
     }
 
     for (auto& value : values) {
