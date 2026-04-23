@@ -10,6 +10,7 @@ from enum import Enum
 class F0Method(str, Enum):
     RAPT = "rapt"
     DIO = "dio"
+    HARVEST = "harvest"
     RMVPE = "rmvpe"
 
     @classmethod

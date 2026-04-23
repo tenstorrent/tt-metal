@@ -195,6 +195,23 @@ class Pipeline:
             f0 = pw.stonemask(audio_np, f0, t, self.sr)
             f0 = torch.from_numpy(f0.astype(np.float32))
             f0 = f0.unsqueeze(0)
+        elif self.f0_method is F0Method.HARVEST:
+            import time
+
+            start_time = time.time()
+            audio_np = audio.detach().cpu().reshape(-1).numpy().astype(np.float64)
+            frame_period = self.window / self.sr * 1000.0
+            f0, _ = pw.harvest(
+                audio_np,
+                self.sr,
+                f0_floor=f0_min,
+                f0_ceil=f0_max,
+                frame_period=frame_period,
+            )
+            f0 = torch.from_numpy(f0.astype(np.float32))
+            f0 = f0.unsqueeze(0)
+            end_time = time.time()
+            print(f"Harvest F0 extraction took {end_time - start_time:.2f} seconds.")
         elif self.f0_method is F0Method.RMVPE:
             f0 = self._get_rmvpe_pitch_algorithm().extract_pitch(audio)
         else:

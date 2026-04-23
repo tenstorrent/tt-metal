@@ -16,7 +16,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run RVC Nano TTNN inference from a wav file.")
     parser.add_argument("-o", "--output", required=True, help="Output audio path (wav).")
     parser.add_argument("--speaker-id", type=int, default=0, help="Speaker ID (default: 0).")
-    parser.add_argument("--f0-method", default="rapt", choices=["rapt", "dio", "rmvpe"], help="F0 method.")
+    parser.add_argument("--f0-method", default="rapt", choices=["rapt", "dio", "rmvpe", "harvest"], help="F0 method.")
     parser.add_argument("--f0-up-key", type=int, default=0, help="Pitch shift in semitones.")
     parser.add_argument("--index-rate", type=float, default=0.75, help="Index rate (unused if no index).")
     parser.add_argument("--rms-mix-rate", type=float, default=0.25, help="RMS mix rate.")
