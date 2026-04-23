@@ -636,7 +636,12 @@ public:
 
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
-    bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
+    bool get_simulator_enabled() const {
+        // Also returns true when TT_METAL_SIMULATOR was set (non-empty path) even if
+        // TT_METAL_EMULATED_MODE later overwrote target to Emulated.  This lets
+        // tests that gate on get_simulator_enabled() run under emulation.
+        return runtime_target_device_ == TargetDevice::Simulator || !simulator_path.empty();
+    }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
     bool get_erisc_iram_enabled() const {

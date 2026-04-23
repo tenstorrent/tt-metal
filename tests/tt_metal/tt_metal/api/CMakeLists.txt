@@ -65,4 +65,14 @@ set_target_properties(
 
 if(TT_METAL_USE_EMULE)
     target_link_options(unit_tests_api PRIVATE -rdynamic)
+
+    # DST capacity tests depend on tt_emule headers (standalone DstRegisterFile
+    # + jit_hw/compute/common.h), so only compile them when emule is enabled.
+    # Skip unity build — jit_hw/compute/common.h redefines CBIndex/MathFidelity.
+    target_sources(unit_tests_api_lib PRIVATE test_dst_capacity.cpp)
+    set_source_files_properties(
+        test_dst_capacity.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+    target_link_libraries(unit_tests_api_lib PRIVATE tt_emule_headers)
+    get_target_property(_EMULE_JIT_DIR tt_emule_headers TT_EMULE_JIT_INCLUDE_DIR)
+    target_include_directories(unit_tests_api_lib PRIVATE ${_EMULE_JIT_DIR})
 endif()
