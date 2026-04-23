@@ -35,37 +35,18 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     const ttnn::MeshCoordinate& mesh_coord,
     const RMSAllGatherInputs& tensor_args,
     Tensor& tensor_return_value) {
-    // Setup device information
+    // Setup device information using coordinate-based abstractions (multi-host safe)
     ttnn::MeshDevice* mesh_device = tensor_args.input.device();
-    auto* const target_device = mesh_device->get_device(mesh_coord);
-    const auto mesh_view = mesh_device->get_view();
-    TT_FATAL(
-        mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
-                                        ? mesh_view.get_devices_on_column(mesh_coord[1])
-                                        : mesh_view.get_devices_on_row(mesh_coord[0]);
-    const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
-                                     ? mesh_view.get_fabric_node_ids_on_column(mesh_coord[1])
-                                     : mesh_view.get_fabric_node_ids_on_row(mesh_coord[0]);
 
-    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
-    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
-    uint32_t device_index = 0;
-    for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-        if (devices.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_fabric_node_id = fabric_node_ids.at(i - 1);
-            } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                backward_fabric_node_id = fabric_node_ids.at(operation_attributes.ring_size - 1);
-            }
-            if (i != operation_attributes.ring_size - 1) {
-                forward_fabric_node_id = fabric_node_ids.at(i + 1);
-            } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                forward_fabric_node_id = fabric_node_ids.at(0);
-            }
-        }
-    }
+    // Compute device_index from mesh coordinate without IDevice* pointer comparison
+    uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
+        tensor_args.input, mesh_coord, operation_attributes.cluster_axis);
+
+    // Compute forward/backward neighbor coordinates without using mesh_view or IDevice*
+    const std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input, mesh_coord, 1, operation_attributes.topology, operation_attributes.cluster_axis);
+    const std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input, mesh_coord, -1, operation_attributes.topology, operation_attributes.cluster_axis);
 
     const auto& a = tensor_args.input;
     const auto& b = tensor_args.residual_input_tensor;
@@ -1038,18 +1019,20 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             all_gather_rts.insert(all_gather_rts.end(), stats_tensor_cores_x.begin(), stats_tensor_cores_x.end());
             all_gather_rts.insert(all_gather_rts.end(), stats_tensor_cores_y.begin(), stats_tensor_cores_y.end());
 
-            all_gather_rts.push_back(forward_fabric_node_id.has_value());
-            if (forward_fabric_node_id.has_value()) {
-                const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
+            all_gather_rts.push_back(forward_coord.has_value());
+            if (forward_coord.has_value()) {
+                const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
+                const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device_fabric_node_id, forward_fabric_node_id.value(), i, program, {core}, all_gather_rts);
+                    src_fabric_node_id, dst_fabric_node_id, i, program, {core}, all_gather_rts);
             }
 
-            all_gather_rts.push_back(backward_fabric_node_id.has_value());
-            if (backward_fabric_node_id.has_value()) {
-                const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
+            all_gather_rts.push_back(backward_coord.has_value());
+            if (backward_coord.has_value()) {
+                const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
+                const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device_fabric_node_id, backward_fabric_node_id.value(), i, program, {core}, all_gather_rts);
+                    src_fabric_node_id, dst_fabric_node_id, i, program, {core}, all_gather_rts);
             }
         }
         // Set writer runtime args
