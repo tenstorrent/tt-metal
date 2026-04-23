@@ -35,6 +35,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -160,6 +161,43 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
     return tilized_packed_res;
 }
 
+namespace {
+
+// On mismatch, dump full unpacked vectors (32 floats per row). Cost is O(n) vs compare; negligible vs device run.
+void log_unpacked_vectors_for_mismatch(
+    std::string_view result_label, const std::vector<bfloat16>& gold_bf16, const std::vector<bfloat16>& res_bf16) {
+    std::vector<float> gold_f(gold_bf16.size());
+    std::vector<float> res_f(res_bf16.size());
+    for (size_t k = 0; k < gold_bf16.size(); ++k) {
+        gold_f[k] = static_cast<float>(gold_bf16[k]);
+        res_f[k] = static_cast<float>(res_bf16[k]);
+    }
+    log_info(
+        tt::LogTest,
+        "{} — full unpacked golden vs device ({} elements; 32 values per row)",
+        result_label,
+        gold_f.size());
+    std::cout << "golden:\n";
+    print_vector_fixed_numel_per_row(gold_f, 32);
+    std::cout << "device:\n";
+    print_vector_fixed_numel_per_row(res_f, 32);
+}
+
+void log_unpacked_vectors_for_mismatch(
+    std::string_view result_label, const std::vector<float>& gold_f, const std::vector<float>& res_f) {
+    log_info(
+        tt::LogTest,
+        "{} — full unpacked golden vs device ({} elements; 32 values per row)",
+        result_label,
+        gold_f.size());
+    std::cout << "golden:\n";
+    print_vector_fixed_numel_per_row(gold_f, 32);
+    std::cout << "device:\n";
+    print_vector_fixed_numel_per_row(res_f, 32);
+}
+
+}  // namespace
+
 bool check_is_close(
     std::vector<uint32_t>& packed_golden,
     std::vector<uint32_t>& device_res,
@@ -173,6 +211,7 @@ bool check_is_close(
         auto res_bf16 = unpack_vector<bfloat16, uint32_t>(device_res);
         for (size_t i = 0; i < gold_bf16.size(); i++) {
             if (!is_close(gold_bf16[i], res_bf16[i], 0.0)) {
+                log_unpacked_vectors_for_mismatch(result_label, gold_bf16, res_bf16);
                 TT_THROW(
                     "{} mismatch at index {} golden={} device={}",
                     result_label,
@@ -192,6 +231,7 @@ bool check_is_close(
         }
         for (size_t i = 0; i < gold_refloat.size(); i++) {
             if (std::fabs(gold_refloat[i] - res_refloat[i]) > atol) {
+                log_unpacked_vectors_for_mismatch(result_label, gold_refloat, res_refloat);
                 TT_THROW(
                     "{} mismatch at index {} A={} B={} atol={}",
                     result_label,
@@ -428,8 +468,8 @@ void run_single_core_unary_broadcast(
 
 using namespace unit_tests::compute::unary_broadcast;
 
-// 32 tiles in 4 blocks of 8; single src→dst DFB path (Quasar). ROW/COL/SCALAR in loop; TODO #38092 runs
-// SCALAR+Float16_b only.
+// 32 tiles in 4 blocks of 8; single src→dst DFB path (Quasar). ROW/COL/SCALAR only (not NONE).
+// Quasar loop currently exercises SCALAR + Float16_b only (see TODO #38092).
 TEST_F(MeshDeviceFixture, TensixComputeUnaryBroadcastQuasarDfb) {
     if (this->arch_ != tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Unary broadcast DFB test requires Quasar";

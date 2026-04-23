@@ -111,7 +111,6 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TileShape& tile_
 
         ckernel_template temp(outer, inner, movb2d(ADDR_MOD_0));
         temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
-
         if constexpr (BROADCAST_TYPE == BroadcastType::SCALAR)
         {
             temp.set_last_outer_loop_instr(movb2d(ADDR_MOD_1));

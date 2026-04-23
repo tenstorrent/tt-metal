@@ -35,7 +35,7 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
 
     const std::uint32_t MOP_OUTER_LOOP            = num_tiles;
     constexpr std::uint32_t MOP_INNER_LOOP        = 1;
-    constexpr static std::uint32_t replay_buf_len = BROADCAST_TYPE == BroadcastType::SCALAR ? 1u : (unpack_to_dest ? 2u : 4u);
+    constexpr static std::uint32_t replay_buf_len = BROADCAST_TYPE == BroadcastType::SCALAR ? (unpack_to_dest ? 1u : 2u) : (unpack_to_dest ? 2u : 4u);
 
     if constexpr (BROADCAST_TYPE == BroadcastType::SCALAR)
     {
@@ -48,7 +48,8 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
                 }
                 else
                 {
-                    TT_UNPACR1_ROW(0 /*Dst_Row_Idx*/, 0 /*Src_Row_Idx*/, 0 /*Dst_Face_Idx*/, 0 /*Src_Face_Idx*/, 0, 0, buf_desc_id, 1 /*SetDatValid*/);
+                    TT_UNPACR1_ROW(0 /*Dst_Row_Idx*/, 0 /*Src_Row_Idx*/, 0 /*Dst_Face_Idx*/, 0 /*Src_Face_Idx*/, 0, 0, buf_desc_id, 0 /*SetDatValid*/);
+                    TT_UNPACR_NOP(0x1, 0, 0, 0, 0, 0x2);
                 }
             });
     }
