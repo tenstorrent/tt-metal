@@ -1208,12 +1208,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     if has_counter("L1_0_UNPACKER_0") and has_counter("L1_0_UNPACKER_0_GRANT"):
         req = get_counter_series("L1_0_UNPACKER_0")
         grant = get_counter_series("L1_0_UNPACKER_0_GRANT")
-        # On BH, the L1 unpacker grant counter measures a different event than
-        # the req counter (grant ~25-45 while req ~8000+, and grant > req on some
-        # cores). The resulting 96-100% backpressure is an artifact of signal
-        # mismatch, not real L1 contention. Only compute when the median
-        # grant/req ratio is reasonable (>10%), indicating the counters track
-        # related events.
+        # Skip when grant and req measure unrelated events (BH signal-mismatch case).
         req, grant = req.align(grant, join="inner")
         valid = req[req > 0]
         grant_valid = grant[req > 0]
@@ -1368,8 +1363,6 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["NOC vs Compute Balance"] = _group_to_stat_dict(ratio)
 
     # === Stall Cause Overlap Factor ===
-    # sum(all 9 stall reasons) / THREAD_STALLS per thread.
-    # >1.0 means multiple stall conditions overlap (hardware busy simultaneously).
     for t in [0, 1, 2]:
         stalls_name = f"THREAD_STALLS_{t}"
         reason_names = [
