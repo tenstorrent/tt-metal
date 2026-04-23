@@ -40,42 +40,61 @@ constexpr auto cb_weighted_coeffs = tt::CBIndex::c_11;
 // CB with output data
 constexpr auto cb_output = tt::CBIndex::c_10;
 
-// Consume one sum tile from cb_sum and produce one inverse-RMS tile in cb_inv_rms:
-// inv_rms = 1 / sqrt(sum * (1/C) + eps).
+// Fused: row-reduce all three power sums [sum(x^2), sum(x^4), sum(x^6)] from cb_sum_pows
+// into inv_rms triplet [inv_rms(x), inv_rms(x^2), inv_rms(x^3)] in cb_inv_rms, in a single
+// tile_regs_acquire/commit cycle.
 //
-// Important ordering note for this kernel:
-// - cb_sum_pows front order is [sum(x^2), sum(x^4), sum(x^6)].
-// - kernel_main calls this helper three times in that order, so cb_inv_rms is produced as
-//   [inv_rms(x), inv_rms(x^2), inv_rms(x^3)] and consumed by prepare_weighted_coeffs_for_row().
-void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
-    cb_wait_front(cb_sum, onetile);
+// Mathematically per channel: inv_rms_k = 1 / sqrt(sum_k * (1/C) + eps).
+//
+// Savings over 3 sequential reduce_sum_to_inv_rms calls (per row):
+//   - 2 fewer tile_regs_acquire/commit/pack cycles
+//   - 2 fewer add/sqrt/recip init sequences
+//   - 1 copy_tile(cb_eps) instead of 3
+void reduce_sum_pows_to_inv_rms_triplet() {
+    cb_wait_front(cb_sum_pows, /*num_tiles=*/3U);
     cb_wait_front(cb_scaler, onetile);
     cb_wait_front(cb_eps, onetile);
+    cb_reserve_back(cb_inv_rms, /*num_tiles=*/3U);
 
     tile_regs_acquire();
-    constexpr uint32_t reg_acc = 0U;
-    constexpr uint32_t reg_eps = 1U;
-    reconfig_data_format(cb_sum, cb_scaler);
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_scaler, cb_inv_rms);
-    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_scaler, 0, 0, reg_acc);
+    constexpr uint32_t reg_a0 = 0U;  // sum(x^2) → inv_rms(x)
+    constexpr uint32_t reg_a1 = 1U;  // sum(x^4) → inv_rms(x^2)
+    constexpr uint32_t reg_a2 = 2U;  // sum(x^6) → inv_rms(x^3)
+    constexpr uint32_t reg_eps = 3U;
+
+    // Row-reduce the three power sums into reg_a0/reg_a1/reg_a2.
+    reconfig_data_format(cb_sum_pows, cb_scaler);
+    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum_pows, cb_scaler, cb_inv_rms);
+    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum_pows, cb_scaler, /*itile=*/0U, 0U, reg_a0);
+    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum_pows, cb_scaler, /*itile=*/1U, 0U, reg_a1);
+    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum_pows, cb_scaler, /*itile=*/2U, 0U, reg_a2);
     reduce_uninit();
 
+    // Load eps once and apply to all three accumulators.
     reconfig_data_format_srca(cb_eps);
     copy_tile_init(cb_eps);
     copy_tile(cb_eps, 0, reg_eps);
 
-    reconfig_data_format(cb_sum, cb_eps);
     add_binary_tile_init();
-    add_binary_tile(reg_acc, reg_eps, reg_acc);
+    add_binary_tile(reg_a0, reg_eps, reg_a0);
+    add_binary_tile(reg_a1, reg_eps, reg_a1);
+    add_binary_tile(reg_a2, reg_eps, reg_a2);
 
+    // sqrt then reciprocal to produce inv_rms.
     sqrt_tile_init();
-    sqrt_tile(reg_acc);
+    sqrt_tile(reg_a0);
+    sqrt_tile(reg_a1);
+    sqrt_tile(reg_a2);
+
     recip_tile_init();
-    recip_tile(reg_acc);
+    recip_tile(reg_a0);
+    recip_tile(reg_a1);
+    recip_tile(reg_a2);
 
     tile_regs_commit();
-    pack_and_push(reg_acc, cb_inv_rms);
-    cb_pop_front(cb_sum, onetile);
+    pack_l1_acc_block(cb_inv_rms, /*first_block=*/true, /*num_tiles=*/3U, /*dst_start_index=*/0U);
+    cb_push_back(cb_inv_rms, /*num_tiles=*/3U);
+    cb_pop_front(cb_sum_pows, /*num_tiles=*/3U);
 }
 
 // Pass-1 (per row):
@@ -85,7 +104,8 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
 //     tile 0 -> sum(x^2), tile 1 -> sum(x^4), tile 2 -> sum(x^6).
 //
 // We reserve/push all 3 sum tiles once per row and use L1-accumulation to fold every row tile
-// into the same 3 output slots.
+// into the same 3 output slots. The triplet is consumed in one shot by
+// reduce_sum_pows_to_inv_rms_triplet() which produces the inv_rms triplet.
 void accumulate_sum_x2_x4_x6_for_row() {
     constexpr uint32_t reg_x2 = 0U;
     constexpr uint32_t reg_x4 = 1U;
@@ -158,6 +178,13 @@ void prepare_weighted_coeffs_for_row() {
 // - For each input tile, compute and accumulate:
 //     coeff2 * x^3 + coeff1 * x^2 + coeff0 * x + bias.
 // - Emit one output tile to cb_output at the matching block index.
+//
+// Register schedule (4 regs):
+//   reg_acc   — running output accumulator.
+//   reg_x     — loaded once from cb_input_pass_2.
+//   reg_tmp   — holds x^2 across term3 and term2 (saves one recomputation per tile),
+//               then gets reused for per-term partial products.
+//   reg_bcast — column-broadcast scalar (coeff_k) or full-tile scalar (bias).
 void emit_output_for_row() {
     constexpr uint32_t reg_acc = 0U;
     constexpr uint32_t reg_x = 1U;
@@ -173,26 +200,27 @@ void emit_output_for_row() {
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             tile_regs_acquire();
 
-            // term3 (cubic branch): coeff2 * x^3.
+            // Load x and precompute x^2 once; x^2 stays in reg_tmp and is reused by term2.
             unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/2U, reg_bcast_or_scalar);
             copy_tile_init(cb_input_pass_2);
             copy_tile(cb_input_pass_2, block_idx, reg_x);
             mul_binary_tile_init();
-            mul_binary_tile(reg_x, reg_x, reg_tmp);    // x^2
-            mul_binary_tile(reg_tmp, reg_x, reg_tmp);  // x^3
+            mul_binary_tile(reg_x, reg_x, reg_tmp);  // reg_tmp = x^2 (kept for term2)
+
+            // term3 (cubic branch): coeff2 * x^3, using x^2 kept in reg_tmp.
+            // reg_acc = x^3 via (x^2 * x), then multiplied by coeff2.
             reconfig_data_format(cb_input_pass_2, cb_weighted_coeffs);
             mul_binary_tile_init();
-            mul_binary_tile(reg_tmp, reg_bcast_or_scalar, reg_acc);  // accumulator init: coeff2 * x^3
+            mul_binary_tile(reg_tmp, reg_x, reg_acc);                // reg_acc = x^3
+            mul_binary_tile(reg_acc, reg_bcast_or_scalar, reg_acc);  // reg_acc = coeff2 * x^3
 
-            // term2 (quadratic branch): coeff1 * x^2.
+            // term2 (quadratic branch): coeff1 * x^2 (reuses reg_tmp = x^2 from above).
             unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/1U, reg_bcast_or_scalar);
-            mul_binary_tile_init();
-            mul_binary_tile(reg_x, reg_x, reg_tmp);  // x^2
             reconfig_data_format(cb_input_pass_2, cb_weighted_coeffs);
             mul_binary_tile_init();
-            mul_binary_tile(reg_tmp, reg_bcast_or_scalar, reg_tmp);  // coeff1 * x^2
+            mul_binary_tile(reg_tmp, reg_bcast_or_scalar, reg_tmp);  // reg_tmp = coeff1 * x^2
             add_binary_tile_init();
             add_binary_tile(reg_acc, reg_tmp, reg_acc);
 
@@ -201,7 +229,7 @@ void emit_output_for_row() {
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/0U, reg_bcast_or_scalar);
             reconfig_data_format(cb_input_pass_2, cb_weighted_coeffs);
             mul_binary_tile_init();
-            mul_binary_tile(reg_x, reg_bcast_or_scalar, reg_tmp);  // coeff0 * x
+            mul_binary_tile(reg_x, reg_bcast_or_scalar, reg_tmp);  // reg_tmp = coeff0 * x
             add_binary_tile_init();
             add_binary_tile(reg_acc, reg_tmp, reg_acc);
 
@@ -224,7 +252,7 @@ void emit_output_for_row() {
 
 // Main row pipeline on this core:
 //   1) accumulate row sums for x^2/x^4/x^6
-//   2) convert each sum to inv_rms (three calls preserve sum order)
+//   2) fused: row-reduce all three sums → inv_rms triplet
 //   3) fold w0/w1/w2 into inv_rms to produce preweighted coefficients
 //   4) consume preweighted coefficients and emit final PolyNorm output tiles
 void kernel_main() {
@@ -241,11 +269,7 @@ void kernel_main() {
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         (void)row;
         accumulate_sum_x2_x4_x6_for_row();
-
-        reduce_sum_to_inv_rms(cb_sum_pows, cb_inv_rms);
-        reduce_sum_to_inv_rms(cb_sum_pows, cb_inv_rms);
-        reduce_sum_to_inv_rms(cb_sum_pows, cb_inv_rms);
-
+        reduce_sum_pows_to_inv_rms_triplet();
         prepare_weighted_coeffs_for_row();
         emit_output_for_row();
     }
