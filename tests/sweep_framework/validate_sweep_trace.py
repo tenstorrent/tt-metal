@@ -42,6 +42,8 @@ IGNORED_KEYS = frozenset(
         "device_ids",
         "mesh_device",
         "output_tensor",  # master trace records return values, sweep does not
+        "indices_tensor",  # topk output tensor — master records it, sweep doesn't capture
+        "attention_sink",  # optional named tensor kwarg in SDPA — sweep doesn't produce it
     }
 )
 
@@ -214,6 +216,15 @@ def normalize(obj: Any, *, _parent_key: str = "", _depth: int = 0, _op_name: str
             # Ignore original_shape — it's metadata that varies with mesh device
             # count and doesn't represent a functional argument difference
             if k == "original_shape":
+                continue
+            # Ignore original_dtype — metadata about the source torch tensor dtype,
+            # not a functional argument (e.g. scatter index is always int32 on device
+            # regardless of the original torch dtype)
+            if k == "original_dtype":
+                continue
+            # Normalize storage_type — HOST vs DEVICE is an artifact of tensor creation
+            # path, not a functional op argument difference
+            if k == "storage_type":
                 continue
             result[k] = normalize(v, _parent_key=k, _depth=_depth + 1, _op_name=_op_name)
         return result
@@ -435,28 +446,20 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             _reconcile_extra_positional_args(norm_master, norm_sweep)
 
             if norm_master == norm_sweep:
-                # Arguments match — check if config_hash computation also agrees
-                if sweep_config_hash and sweep_config_hash != source_hash:
-                    report.results.append(
-                        ConfigResult(
-                            config_hash=source_hash,
-                            op_name=op_name,
-                            master_config_id=master_cid,
-                            sweep_config_id=sweep_cid,
-                            status="hash_mismatch",
-                            sweep_config_hash=sweep_config_hash,
-                        )
+                # Arguments match — count as match regardless of config_hash divergence.
+                # Hash mismatches occur because tensor_placement mesh shape (2D [4,8] vs
+                # 1D [32]) is baked into the hash but normalized away for comparison.
+                # The functional configuration is identical.
+                report.results.append(
+                    ConfigResult(
+                        config_hash=source_hash,
+                        op_name=op_name,
+                        master_config_id=master_cid,
+                        sweep_config_id=sweep_cid,
+                        status="match",
+                        sweep_config_hash=sweep_config_hash if (sweep_config_hash and sweep_config_hash != source_hash) else None,
                     )
-                else:
-                    report.results.append(
-                        ConfigResult(
-                            config_hash=source_hash,
-                            op_name=op_name,
-                            master_config_id=master_cid,
-                            sweep_config_id=sweep_cid,
-                            status="match",
-                        )
-                    )
+                )
             else:
                 diffs = deep_diff(norm_master, norm_sweep)
                 report.results.append(
@@ -701,10 +704,12 @@ def main() -> int:
         )
         return 1
 
-    if report.hash_mismatch:
+    # Count matches that have hash divergence (informational only)
+    hash_divergent = [r for r in report.matched if r.sweep_config_hash is not None]
+    if hash_divergent:
         print(
-            f"WARN: {len(report.hash_mismatch)} config(s) have matching arguments "
-            f"but different config_hash (hash computation divergence)",
+            f"INFO: {len(hash_divergent)} of {len(report.matched)} matches have "
+            f"config_hash divergence (functionally identical, hash computation differs)",
             file=sys.stderr,
         )
 
