@@ -91,25 +91,16 @@ def _device_to_host_post(tt_model, s_sm, d_norm, b, h, w):
     return scores_nchw, descriptors_nchw
 
 
-def _device_to_host_post_with_nms(tt_model, s_sm, s_pooled, d_norm, b, h, w):
-    """Pull softmax, device-pooled (32-ch padded) NMS map, and descriptors.
-    Host picks channel 0 from pooled, re-folds softmax, compares bf16, and
-    applies the mask.  Closing the mask on device via ttnn.slice + eq +
-    multiply was tried and net-negative (~6 ms of per-op Python dispatch
-    overhead eats the savings).
+def _device_to_host_post_with_nms(tt_model, s_pooled, d_norm, b, h, w):
+    """Hot-loop D2H: pull the device-NMS'd map (single-channel, row-major)
+    and descriptors. ``sp_eq_mul_mask`` + on-device channel-0 slice make the
+    D2H payload 32× smaller than the 32-padded eq-mul output.
     """
     enc_h, enc_w = h // 8, w // 8
-    scores_nhwc = ttnn.to_torch(s_sm).reshape(b, enc_h, enc_w, KEYPOINT_DIM)
     descriptors_nhwc = ttnn.to_torch(d_norm).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
-    pooled_padded = ttnn.to_torch(s_pooled).reshape(b, h, w, 32)
-    scores_pooled = pooled_padded[..., 0]
-
-    scores_nchw = scores_nhwc.permute(0, 3, 1, 2).contiguous().float()
+    nms_scores = ttnn.to_torch(s_pooled).reshape(b, h, w).float()
     descriptors_nchw = descriptors_nhwc.permute(0, 3, 1, 2).contiguous().float()
-    dense = tt_model._decode_keypoints(scores_nchw, apply_nms=False)
-    mask = dense.to(torch.bfloat16) == scores_pooled.to(torch.bfloat16)
-    nms_scores = torch.where(mask, dense, torch.zeros_like(dense))
-    return dense, nms_scores, descriptors_nchw
+    return nms_scores, descriptors_nchw
 
 
 @pytest.mark.parametrize("height,width", [(480, 640)])
@@ -224,26 +215,47 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         elapsed = time.perf_counter() - t0
         fps = n_iter / elapsed
 
-        # Second timed loop: end-to-end latency incl. D2H + post-processing.
+        # Second timed loop: end-to-end throughput with dual-CQ pipelining.
+        # CQ1 issues the next frame's H2D while CQ0 runs the current trace;
+        # D2H + host post-processing for the current frame run afterward on
+        # the Python thread. Steady-state per-iter cost becomes
+        # max(H2D, compute) + D2H + post.
+        e2e_phase_times = {"compute": 0.0, "d2h": 0.0, "post": 0.0}
         t0 = time.perf_counter()
+        write_event = None
         for _ in range(n_iter):
-            tt_model.load_input_prepared(tt_in, host_input)
-            ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+            tp0 = time.perf_counter()
+            if write_event is not None:
+                ttnn.wait_for_event(0, write_event)
+            ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+            compute_event = ttnn.record_event(device, 0)
+            ttnn.wait_for_event(1, compute_event)
+            tt_model.load_input_prepared(tt_in, host_input, cq_id=1)
+            write_event = ttnn.record_event(device, 1)
+            ttnn.synchronize_device(device)
+            tp2 = time.perf_counter()
             if trace_nms:
-                dense, nms_scores, desc_host = _device_to_host_post_with_nms(
-                    tt_model, s, s_pooled, d_norm, b, height, width
+                nms_scores, desc_host = _device_to_host_post_with_nms(
+                    tt_model, s_pooled, d_norm, b, height, width
                 )
+                tp3 = time.perf_counter()
                 for i in range(b):
                     kp, sc = tt_model._extract_keypoints_single(nms_scores[i : i + 1])
                     if kp.shape[0] > 0:
                         _ = tt_model._sample_descriptors(kp[None], desc_host[i : i + 1], scale=8)
+                tp4 = time.perf_counter()
             else:
                 scores_host, desc_host = _device_to_host_post(tt_model, s, d_norm, b, height, width)
+                tp3 = time.perf_counter()
                 scores_full = tt_model._decode_keypoints(scores_host, apply_nms=True)
                 for i in range(b):
                     kp, sc = tt_model._extract_keypoints_single(scores_full[i : i + 1])
                     if kp.shape[0] > 0:
                         _ = tt_model._sample_descriptors(kp[None], desc_host[i : i + 1], scale=8)
+                tp4 = time.perf_counter()
+            e2e_phase_times["compute"] += tp2 - tp0  # fused H2D+compute via dual CQ
+            e2e_phase_times["d2h"] += tp3 - tp2
+            e2e_phase_times["post"] += tp4 - tp3
         elapsed_e2e = time.perf_counter() - t0
         fps_e2e = n_iter / elapsed_e2e
 
@@ -323,6 +335,9 @@ def test_superpoint_benchmark(device, height, width, input_kind):
     print(f"inference_speed={fps:.4f} fps")
     print(f"inference_speed_compute_only={fps_compute_only:.4f} fps")
     print(f"inference_speed_e2e={fps_e2e:.4f} fps")
+    if use_trace:
+        for k, v in e2e_phase_times.items():
+            print(f"e2e_phase_ms_{k}={v / n_iter * 1000:.3f}")
     print(f"inference_speed_match_paper={fps_match_paper:.4f} fps")
     print(f"accuracy={accuracy:.4f}")
     print(f"score_pcc={score_pcc:.6f}")

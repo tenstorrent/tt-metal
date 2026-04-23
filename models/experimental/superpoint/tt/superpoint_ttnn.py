@@ -419,13 +419,30 @@ class TtSuperPoint:
             padding=[self.nms_radius, self.nms_radius],
             dilation=[1, 1],
         )
+        # Close the NMS loop on device with the fused C++ kernel:
+        # output[i] = s_padded[i] if s_padded[i] == s_pooled[i] else 0.
+        # max_pool2d returns a height-sharded tensor, so re-interleave into
+        # DRAM before TILE conversion (sharded->tile is rejected unless every
+        # shard is tile-aligned).
+        s_pooled_dram = ttnn.to_memory_config(s_pooled, DRAM)
+        ttnn.deallocate(s_pooled)
+        s_padded_tile = ttnn.to_layout(s_padded, ttnn.TILE_LAYOUT, memory_config=DRAM)
+        s_pooled_tile = ttnn.to_layout(s_pooled_dram, ttnn.TILE_LAYOUT, memory_config=DRAM)
         ttnn.deallocate(s_padded)
-        # Return the 32-channel pooled map; host picks channel 0 and compares.
-        # A prior attempt closed the loop on device (ttnn.slice + eq + multiply)
-        # but each extra Python-composed op added ~1.5 ms, giving a net loss
-        # vs. 19 MB D2H + host bf16 compare. The fused C++ kernel path would
-        # finish the NMS without intermediate materialisation.
-        return s_pooled
+        ttnn.deallocate(s_pooled_dram)
+        s_nms = ttnn.experimental.sp_eq_mul_mask(s_padded_tile, s_pooled_tile)
+        ttnn.deallocate(s_padded_tile)
+        ttnn.deallocate(s_pooled_tile)
+        # Channels 1-31 of s_nms are exact zeros (s_padded was zero-padded
+        # there), so only c0 carries information. Slice to a 1-channel
+        # row-major output — shrinks the D2H payload by 32× (19 MB → 614 KB).
+        s_nms_rm = ttnn.to_layout(s_nms, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        ttnn.deallocate(s_nms)
+        s_nms_c0 = ttnn.slice(
+            s_nms_rm, [0, 0, 0, 0], [1, 1, b * H * W, 1], memory_config=DRAM
+        )
+        ttnn.deallocate(s_nms_rm)
+        return s_nms_c0
 
     def _run_device(self, pixel_values: torch.Tensor):
         """Untraced path: allocate input, compute, read back, host post-proc."""
