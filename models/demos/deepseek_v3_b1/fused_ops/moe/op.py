@@ -197,12 +197,9 @@ class _MoeRoutedExpertContext:
     residual_mcast_params: dict
 
     # RMSNorm (sender core: raw input → normalized input before input mcast)
-    rmsnorm_gamma_cb: int
-    rmsnorm_gamma_cb_descriptor: Any
     rmsnorm_epsilon_packed: int
     rmsnorm_scalar_packed: int
     rmsnorm_num_tiles: int
-    rmsnorm_gamma_num_pages: int
 
     # Per-core values (for core descriptors)
     bank_id_core_values: list
@@ -945,7 +942,6 @@ class MoeRoutedExpertOp:
 
         # Tensor-backed CBs with reinterpreted rmsnorm tile
         residual_mcast_src_cb = cb_id_context.get_cb_id(data_format, rmsnorm_tile_descriptor)
-        rmsnorm_gamma_cb = cb_id_context.get_cb_id(data_format, rmsnorm_tile_descriptor)
         rmsnorm_output_cb = cb_id_context.get_cb_id(data_format, rmsnorm_tile_descriptor)
 
         # ==================================================================
@@ -986,18 +982,8 @@ class MoeRoutedExpertOp:
         rmsnorm_output_cb_descriptor.format_descriptors[0].tile = rmsnorm_tile_descriptor
         rmsnorm_output_cb_descriptor.format_descriptors[0].page_size = rmsnorm_cb_page_size
 
-        rmsnorm_gamma_fused_device0 = ttnn.get_device_tensors(rmsnorm_gamma_tensor.fused_tensor)[0]
-        rmsnorm_gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
-            rmsnorm_gamma_cb, rmsnorm_gamma_tensor, rmsnorm_gamma_fused_device0
-        )
-        rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = rmsnorm_tile_descriptor
-        rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = rmsnorm_cb_page_size
-
         rmsnorm_epsilon_packed = float_to_uint32(epsilon)
         rmsnorm_scalar_packed = float_to_uint32(1.0 / math.sqrt(float(K)))
-
-        # setup_sharded_buffer num_pages for gamma: use reinterpreted 32x32 tile count
-        rmsnorm_gamma_num_pages = rmsnorm_num_tiles
 
         # ==================================================================
         # RMSNorm Mcast (broadcasts normalized input from rmsnorm_output_cb to all cores)
@@ -1448,12 +1434,9 @@ class MoeRoutedExpertOp:
             residual_mcast_src_cb_descriptor=residual_mcast_src_cb_descriptor,
             residual_mcast_params=residual_mcast_params,
             # RMSNorm
-            rmsnorm_gamma_cb=rmsnorm_gamma_cb,
-            rmsnorm_gamma_cb_descriptor=rmsnorm_gamma_cb_descriptor,
             rmsnorm_epsilon_packed=rmsnorm_epsilon_packed,
             rmsnorm_scalar_packed=rmsnorm_scalar_packed,
             rmsnorm_num_tiles=rmsnorm_num_tiles,
-            rmsnorm_gamma_num_pages=rmsnorm_gamma_num_pages,
             # Per-core values
             bank_id_core_values=bank_id_core_values,
             vc_core_values=vc_core_values,
@@ -1522,9 +1505,6 @@ class MoeRoutedExpertOp:
             ("shared_residual_mcast_data_receiver_semaphore_addr", ctx.residual_mcast_receiver_semaphore_addr),
             ("shared_residual_cb", ctx.residual_mcast_dst_cb),
             ("shared_residual_num_pages", ctx.residual_mcast_params["dst_num_pages"]),
-            # RMSNorm (setup_sharded_buffer for gamma on sender core)
-            ("moe_rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
-            ("moe_rmsnorm_gamma_num_pages", ctx.rmsnorm_gamma_num_pages),
             # Gate matmul reader (routing only — 0 when disabled)
             ("gate_mm_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else 0),
             ("gate_mm_in1", ctx.gate_mm_params["in1_cb"] if ctx.enable_routing else 0),
@@ -1727,7 +1707,6 @@ class MoeRoutedExpertOp:
         trisc_named_compile_time_args = [
             # RMSNorm compute (sender core only)
             ("moe_rmsnorm_input_cb", ctx.residual_mcast_src_cb),
-            ("moe_rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
             ("moe_rmsnorm_output_cb", ctx.rmsnorm_output_cb),
             ("moe_rmsnorm_fp32_acc", 0),
             ("moe_rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
@@ -1868,7 +1847,6 @@ class MoeRoutedExpertOp:
             ctx.add_params["cb_out_descriptor"],
             ctx.residual_mcast_src_cb_descriptor,
             ctx.residual_mcast_params["dst_cb_descriptor"],
-            ctx.rmsnorm_gamma_cb_descriptor,
         ]
 
         # Reduce CBs (39-45)
