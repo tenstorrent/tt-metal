@@ -516,7 +516,7 @@ void kernel_main() {
                                         Sk_chunk_t,
                                         DHt);
                                 } else {
-                                    read_chunk_with_padding<k_tile_bytes>(
+                                    read_chunk_with_padding<k_tile_bytes, decltype(k_reader), true, false>(
                                         k_reader,
                                         cb_k_in,
                                         k_start_tile_id,
@@ -679,7 +679,7 @@ void kernel_main() {
                                         vDHt,
                                         skip_src_cols);
                                 } else {
-                                    read_chunk_with_padding<v_tile_bytes>(
+                                    read_chunk_with_padding<v_tile_bytes, decltype(v_reader), true, false>(
                                         v_reader,
                                         cb_v_in,
                                         v_start_tile_id,
