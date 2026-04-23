@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from models.demos.deepseek_v3.tests.unit.utils import run_test
 from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, create_sharded_norm_config
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -217,6 +218,7 @@ def test_rmsnorm_pre_all_gather_mesh_device(mesh_device, enable_trace, device_pa
 # =============================================================================
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_rmsnorm_post_all_gather(device):
     """
     Test rms_norm_post_all_gather operation.

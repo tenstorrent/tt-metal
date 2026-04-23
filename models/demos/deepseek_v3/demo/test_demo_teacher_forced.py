@@ -11,14 +11,14 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.demo.demo import run_demo
 from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
-from models.demos.deepseek_v3.utils.config_helpers import DEFAULT_MAX_SEQ_LEN, K_CHUNK_SIZE, USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import DEFAULT_MAX_SEQ_LEN, K_CHUNK_SIZE
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
 MODEL_PATH = Path(
     os.getenv(
         "DEEPSEEK_V3_HF_MODEL",
-        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized",
+        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked",
     )
 )
 CACHE_DIR = Path(
@@ -76,8 +76,13 @@ def _tile_align(length: int) -> int:
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("reference_file", [REFERENCE_FILE])
 @pytest.mark.parametrize("max_new_tokens", [128, 2048, 8192], ids=["128", "2048", "8192"])
+@pytest.mark.parametrize("max_users_per_row", [8, 32], ids=["8", "32"])
 def test_demo_teacher_forcing_accuracy(
-    reference_file: Path, max_new_tokens: int, is_ci_env: bool, force_recalculate_weight_config: bool
+    reference_file: Path,
+    max_new_tokens: int,
+    is_ci_env: bool,
+    force_recalculate_weight_config: bool,
+    max_users_per_row: int,
 ):
     """
     Test DeepSeek v3 demo with teacher forcing to verify accuracy.
@@ -133,7 +138,7 @@ def test_demo_teacher_forcing_accuracy(
     if requested_system_name is None:
         pytest.fail("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, TG, or T3K.")
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
-    num_users = USERS_PER_ROW * mesh_shape[0]
+    num_users = max_users_per_row * mesh_shape[0]
     prompt_text_for_users = payload.get("prompt", "")
 
     # Print token ID metadata if available
@@ -214,7 +219,7 @@ def test_demo_teacher_forcing_accuracy(
     # Check results
     assert "generations" in results
     assert len(results["generations"]) == num_users, (
-        f"Expected {num_users} generations (USERS_PER_ROW={USERS_PER_ROW}, rows={mesh_shape[0]}), "
+        f"Expected {num_users} generations (USERS_PER_ROW={max_users_per_row}, rows={mesh_shape[0]}), "
         f"got {len(results['generations'])}"
     )
 

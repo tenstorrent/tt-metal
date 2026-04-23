@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 #include "api/debug/dprint.h"
 
@@ -37,14 +40,18 @@ void kernel_main() {
     constexpr uint32_t one_tile = 1;
 
     // Input tensor config
-    constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
-    const auto input_tensor_dram =
-        TensorAccessor(input_tensor_args, input_tensor_buffer_addr, input_tensor_tile_size_bytes);
+    const auto input_tensor_dram = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
 
     // Output tensor config
+    const auto output_tensor_dram = TensorAccessor(output_tensor_args, output_tensor_buffer_addr);
+
+    // Tile size in bytes for input and output tensors
+    constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
     constexpr uint32_t output_tensor_tile_size_bytes = get_tile_size(output_tensor_cb_index);
-    const auto output_tensor_dram =
-        TensorAccessor(output_tensor_args, output_tensor_buffer_addr, output_tensor_tile_size_bytes);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer input_cb(input_tensor_cb_index);
+    experimental::CircularBuffer output_cb(output_tensor_cb_index);
 
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
@@ -54,20 +61,28 @@ void kernel_main() {
             }
             // Read input data
             for (uint32_t w = 0; w < Wt_input; w++) {
-                cb_reserve_back(input_tensor_cb_index, one_tile);
-                const uint32_t l1_write_addr = get_write_ptr(input_tensor_cb_index);
-                noc_async_read_tile(h * Wt_input + w, input_tensor_dram, l1_write_addr);
-                noc_async_read_barrier();
-                cb_push_back(input_tensor_cb_index, one_tile);
+                input_cb.reserve_back(one_tile);
+                noc.async_read(
+                    input_tensor_dram,
+                    input_cb,
+                    input_tensor_tile_size_bytes,
+                    {.page_id = h * Wt_input + w},
+                    {.offset_bytes = 0});
+                noc.async_read_barrier();
+                input_cb.push_back(one_tile);
             }  // Wt_input loop
 
             // Write output data
-            cb_wait_front(output_tensor_cb_index, one_tile);
+            output_cb.wait_front(one_tile);
 
-            const uint32_t l1_write_addr_output = get_read_ptr(output_tensor_cb_index);
-            noc_async_write_tile(h * Wt_index + current_index_tile_id, output_tensor_dram, l1_write_addr_output);
-            noc_async_write_barrier();
-            cb_pop_front(output_tensor_cb_index, one_tile);
+            noc.async_write(
+                output_cb,
+                output_tensor_dram,
+                output_tensor_tile_size_bytes,
+                {.offset_bytes = 0},
+                {.page_id = h * Wt_index + current_index_tile_id});
+            noc.async_write_barrier();
+            output_cb.pop_front(one_tile);
 
         }  // core_loop_count loop
     }  // h loop

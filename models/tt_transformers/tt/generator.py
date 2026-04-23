@@ -96,6 +96,13 @@ class Generator(WarmupForwardMixin):
             if sampling_module is not None:
                 sampling_module.enable_internal_trace = enabled
 
+    def _get_sampling_contract(self, model_id: int):
+        sampling_module = getattr(self.model[model_id], "sampling", None)
+        sampling_dp = getattr(self.model[model_id], "sampling_dp", 1)
+        group_batch = sampling_module.tt_sampling.max_batch_size if sampling_module is not None else None
+        total_sampling_batch = group_batch * sampling_dp if group_batch is not None else None
+        return sampling_module, sampling_dp, group_batch, total_sampling_batch
+
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
         ret = dict()
         ret["tokens"] = torch.zeros(batch_size, seq_len, dtype=torch.long)
@@ -301,17 +308,18 @@ class Generator(WarmupForwardMixin):
             logger.info("Done Capturing Prefill Trace")
             return trace_id, tt_out_trace, *device_inputs
 
-    def _capture_trace_prefill_sampling(self, model_id, padded_batch):
+    def _capture_trace_prefill_sampling(self, model_id, sampling_batch):
         """Capture a trace for batched prefill post-processing: norm + lm_head + sampling.
 
-        Input buffer: [1, 1, padded_batch, full_dim] host → column-sharded to [1, 1, padded_batch, dim_per_device].
+        Input buffer: [1, 1, sampling_batch, full_dim] host → column-sharded to
+        [1, 1, sampling_batch, dim_per_device].
         Output: (tt_tokens, tt_log_probs) from sampling.
         """
         mesh_device = self.model_args[model_id].mesh_device
         full_dim = self.model_args[model_id].dim
 
         dummy_input = ttnn.from_torch(
-            torch.zeros(1, 1, padded_batch, full_dim, dtype=torch.bfloat16),
+            torch.zeros(1, 1, sampling_batch, full_dim, dtype=torch.bfloat16),
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -324,7 +332,7 @@ class Generator(WarmupForwardMixin):
         logger.info("Done compiling prefill sampling")
 
         trace_input = ttnn.from_torch(
-            torch.zeros(1, 1, padded_batch, full_dim, dtype=torch.bfloat16),
+            torch.zeros(1, 1, sampling_batch, full_dim, dtype=torch.bfloat16),
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -339,6 +347,36 @@ class Generator(WarmupForwardMixin):
         logger.info("Done capturing prefill sampling trace")
 
         return trace_id, (tt_tokens, tt_log_probs), trace_input
+
+    def _row_sharded_batched_prefill(
+        self,
+        tokens,
+        page_table,
+        kv_cache,
+        prompt_lens,
+        prefill_seq_lens,
+        enable_trace=True,
+        sampling_params=None,
+    ):
+        """Dispatch to model's row-sharded batched prefill."""
+        assert (
+            self.data_parallel == 1
+        ), "Row-sharded batched prefill requires data_parallel=1 (model handles DP internally)"
+        return self.model[0].row_sharded_batched_prefill(
+            tokens,
+            page_table,
+            kv_cache[0],
+            prompt_lens,
+            prefill_seq_lens,
+            enable_trace=enable_trace,
+            sampling_params=sampling_params,
+            model_args=self.model_args[0],
+            trace_cache={
+                "ids": self.trace_id_prefill,
+                "inputs": self.trace_inputs_prefill,
+                "outputs": self.trace_output_prefill,
+            },
+        )
 
     def _easy_trace_prefill(
         self,
@@ -475,6 +513,29 @@ class Generator(WarmupForwardMixin):
             prompt_lens = prompt_lens.tolist()
 
         prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
+        # Row-sharded batched prefill: process 1 user per row per iteration.
+        # Only used when device sampling is active (sampling_params is not None)
+        # and the prompt uses the harmony chat template (first token is <|start|>=200006).
+        # Host sampling (sampling_params=None) needs the single-user prefill path
+        # that returns full logits per user.
+        model_0 = self.model[0]
+        is_harmony = tokens.shape[1] > 0 and int(tokens[0, 0]) == 200006
+        if (
+            getattr(model_0, "users_row_sharded", False)
+            and batch_size > 1
+            and sampling_params is not None
+            and is_harmony
+        ):
+            return self._row_sharded_batched_prefill(
+                tokens,
+                page_table,
+                kv_cache,
+                prompt_lens,
+                prefill_seq_lens=prefill_seq_lens,
+                enable_trace=enable_trace,
+                sampling_params=sampling_params,
+            )
+
         # Batched prefill: all prompts share the same padded length so they can
         # be processed in a single forward pass. padded_batch is rounded up to
         # the nearest SUPPORTED_PREFILL_BATCH_SIZES entry (not max_batch_size)
@@ -485,6 +546,14 @@ class Generator(WarmupForwardMixin):
             and self.data_parallel == 1
             and not getattr(self.model_args[0], "disable_batched_prefill", False)
         )
+
+        if use_batched_prefill and sampling_on_device_requested:
+            sampling_module, sampling_dp, _, _ = self._get_sampling_contract(0)
+            if sampling_module is not None and sampling_dp > 1:
+                # NOTE: Batched prefill disabled: on-device sampling
+                # must fall back to sequential prefill until a row-sharded
+                # batched-prefill sampling contract is implemented.
+                use_batched_prefill = False
 
         if use_batched_prefill:
             padded_batch = next(
@@ -661,34 +730,39 @@ class Generator(WarmupForwardMixin):
                 if sampling_enabled:
                     sampling_executed = True
 
-                    combined_params = format_sampling_params(sampling_params, padded_batch)
+                    sampling_module, sampling_dp, sampling_batch, _ = self._get_sampling_contract(model_id)
+                    assert sampling_module is not None
+                    assert sampling_batch is not None
+                    combined_params = format_sampling_params(sampling_params, sampling_batch)
                     max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
-                    combined_prompt_tokens = torch.zeros(padded_batch, max_prompt_len, dtype=torch.long)
+                    combined_prompt_tokens = torch.zeros(sampling_batch, max_prompt_len, dtype=torch.long)
                     for local_idx, slot in enumerate(empty_slots):
                         plen = int(prompt_lens[local_idx])
                         combined_prompt_tokens[slot, :plen] = prefill_ids[slot, :plen]
 
-                    sampling_module = self.model[model_id].sampling
-                    sampling_module.reset_sampling_params(combined_params)
-                    if getattr(combined_params, "seed", None) is not None:
-                        sampling_module.seed_manager.reset_seed(combined_params.seed, empty_slots)
-                    sampling_module.seed_manager.get_new_values(empty_slots, replicate_seeds=False)
-                    if combined_prompt_tokens is not None:
-                        sampling_module.reset_prompt_tokens(combined_prompt_tokens)
-                    sampling_module.reset_output_state()
-
-                    user_hidden = self.model[model_id].extract_last_tokens_batched_prefill(
-                        logits, last_token_idx, padded_batch, prefill_seq_len
+                    sampling_module.apply_prefill_state(
+                        sampling_params=combined_params,
+                        prompt_tokens=combined_prompt_tokens,
+                        empty_slots=empty_slots,
+                        replicate_seeds=False,
                     )
 
-                    sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}"
+                    user_hidden = self.model[model_id].extract_last_tokens_batched_prefill(
+                        logits,
+                        last_token_idx,
+                        padded_batch,
+                        prefill_seq_len,
+                        target_batch=sampling_batch,
+                    )
+
+                    sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}_{sampling_batch}_{sampling_dp}"
                     if enable_trace_current_prompt:
                         if self.trace_id_prefill_sampling[sampling_trace_key] is None:
                             (
                                 s_trace_id,
                                 s_trace_output,
                                 s_trace_input,
-                            ) = self._capture_trace_prefill_sampling(model_id, padded_batch)
+                            ) = self._capture_trace_prefill_sampling(model_id, sampling_batch)
                             self.trace_id_prefill_sampling[sampling_trace_key] = s_trace_id
                             self.trace_output_prefill_sampling[sampling_trace_key] = s_trace_output
                             self.trace_input_prefill_sampling[sampling_trace_key] = s_trace_input
@@ -822,6 +896,7 @@ class Generator(WarmupForwardMixin):
                     )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+
         if sampling_executed:
             return output_tokens, reformat_logprobs(output_log_probs, batch_size)
         else:
@@ -972,6 +1047,7 @@ class Generator(WarmupForwardMixin):
         reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        slot_remap=None,
         **kwargs,
     ):
         mode_switched = False
@@ -1043,6 +1119,11 @@ class Generator(WarmupForwardMixin):
                     prompt_tokens=model_prompt,
                     output_tokens=model_output,
                 )
+                # Apply slot remap from condense before advancing seeds.
+                if slot_remap is not None:
+                    sm_bs = sampling_module.seed_manager.max_batch_size
+                    rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
+                    sampling_module.seed_manager.apply_slot_remap(rank_remap)
                 sampling_module.seed_manager.get_new_values()
 
         decode_kwargs = {
@@ -2360,7 +2441,10 @@ class Generator(WarmupForwardMixin):
                 for trace_key, trace_id in self.trace_id_prefill_sampling.items():
                     if trace_id is not None:
                         parts = trace_key.split("_")
-                        m_id = int(parts[-1]) if len(parts) >= 2 else 0
+                        if parts and parts[0] == "sampling" and len(parts) >= 3:
+                            m_id = int(parts[2])
+                        else:
+                            m_id = int(parts[-1]) if len(parts) >= 2 else 0
                         try:
                             ttnn.release_trace(self.model_args[m_id].mesh_device, trace_id)
                         except Exception:

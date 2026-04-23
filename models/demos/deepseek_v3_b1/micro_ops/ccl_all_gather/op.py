@@ -38,7 +38,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 
 RECV_SEM_BITS_PER_SLOT = 4
 RING_SIZE = 4
-MAX_NUM_LINKS = 2
+MAX_NUM_LINKS = 1
 
 
 def _get_neighbor_coord(mesh_shape, row, col, offset, cluster_axis=0):
@@ -94,7 +94,6 @@ def _transport_named_ct_schema(
     num_chunks=0,
     chunk_size_bytes=0,
     last_chunk_bytes=0,
-    num_links=0,
     recv_sem_bits_per_slot=RECV_SEM_BITS_PER_SLOT,
     r2_active=0,
 ):
@@ -103,7 +102,7 @@ def _transport_named_ct_schema(
         ("allgather_num_chunks", int(num_chunks)),
         ("allgather_chunk_size_bytes", int(chunk_size_bytes)),
         ("allgather_last_chunk_bytes", int(last_chunk_bytes)),
-        ("allgather_num_links", int(num_links)),
+        ("allgather_num_links", MAX_NUM_LINKS),
         ("allgather_recv_sem_bits_per_slot", int(recv_sem_bits_per_slot)),
         ("allgather_r2_active", int(r2_active)),
     ]
@@ -133,7 +132,7 @@ def _gather_common_rt_schema(
     transport_scratch_base_addr=0,
     transport_noc_x=0,
     transport_noc_y=0,
-    handoff_sem_bank_addr=0,
+    handoff_sem_addr=0,
     recv_sem_addr=0,
     r2_src_slot_index=0,
 ):
@@ -145,7 +144,7 @@ def _gather_common_rt_schema(
         int(transport_scratch_base_addr),
         int(transport_noc_x),
         int(transport_noc_y),
-        int(handoff_sem_bank_addr),
+        int(handoff_sem_addr),
         int(recv_sem_addr),
         int(r2_src_slot_index),
     ]
@@ -161,7 +160,11 @@ def _transport_common_rt_schema(
     dest_recv_sem_addr=0,
     r2_dest_slot_index=0,
 ):
-    """Transport core common RT args (shared by BRISC fwd and NCRISC bwd)."""
+    """Transport core common RT args.
+
+    handoff_sem_bank_addr is the shared handoff semaphore address.
+    Both BRISC and NCRISC use the same semaphore.
+    """
     return [
         int(scratch_base_addr),
         int(handoff_sem_bank_addr),
@@ -180,32 +183,56 @@ def _transport_common_rt_schema(
 
 
 class AllGatherConfig:
-    """Standalone all-gather config for a 4-device torused ring.
+    """All-gather host-side config for a 4-device torused ring.
 
-    Cores are derived from tensor shard grids:
-      gather_core  — from input_tensor_mesh shard grid start
-      transport_core — from scratch_tensor_mesh shard grid start
+    The transport path is currently single-link only.
+
+    Two init modes:
+
+    1. **Tensor-owned mode** (standalone): pass tensor meshes + semaphores.
+       Addresses, cores, slice size, and semaphore addresses are all derived
+       from the tensors.
+
+    2. **No-ownership mode** (fused kernels): pass explicit
+       ``slice_size_bytes``, ``output_addr``, ``scratch_base_addr``,
+       ``handoff_sem_addr``, ``recv_sem_addr``, ``gather_noc_core``,
+       ``transport_noc_core``. Used when the gather/transport cores and
+       memory regions live inside a larger fused kernel's CBs and are not
+       backed by dedicated ttnn tensors. Optionally pass ``output_cb_id`` +
+       ``output_num_tiles`` to emit those as named CT args for the fused
+       kernel.
 
     Public API mirrors the all-reduce config pattern:
       Named CT:   get_ncrisc_named_ct_args, get_brisc_named_ct_args, get_trisc_named_ct_args
-      Common RT:  get_gather_ncrisc_common_rt_args, get_transport_common_rt_args
+                  (+ get_fused_* variants that also emit address/slot/noc as named CT)
+      Common RT:  get_gather_ncrisc_common_rt_args, get_transport_common_rt_args (tensor-owned only)
       Per-core RT: get_transport_brisc_per_core_rt_args, get_transport_ncrisc_per_core_rt_args
     """
 
     def __init__(
         self,
         mesh_device,
-        input_tensor_mesh,
-        output_tensor_mesh,
-        scratch_tensor_mesh,
-        semaphores,
+        input_tensor_mesh=None,
+        output_tensor_mesh=None,
+        scratch_tensor_mesh=None,
+        semaphores=None,
         cluster_axis=0,
         num_links=1,
         max_chunk_size_bytes=None,
+        # No-ownership mode
+        slice_size_bytes=None,
+        output_addr=None,
+        scratch_base_addr=None,
+        handoff_sem_addr=None,
+        recv_sem_addr=None,
+        gather_noc_core=None,
+        transport_noc_core=None,
+        output_cb_id=None,
+        output_num_tiles=None,
     ):
         self.mesh_device = mesh_device
         self.cluster_axis = int(cluster_axis)
-        self.num_links = int(num_links)
+        requested_num_links = int(num_links)
 
         self._resolve_role_assignment()
 
@@ -213,53 +240,30 @@ class AllGatherConfig:
         ring_size = mesh_shape[self.cluster_axis]
         if ring_size != RING_SIZE:
             raise ValueError(f"All-gather requires ring size {RING_SIZE}, got {ring_size}")
-        if len(semaphores) < 2:
-            raise ValueError(f"Need 2 semaphores (handoff + recv), got {len(semaphores)}")
-        if self.num_links < 1 or self.num_links > MAX_NUM_LINKS:
-            raise ValueError(f"num_links must be in [1, {MAX_NUM_LINKS}], got {self.num_links}")
+        if requested_num_links != MAX_NUM_LINKS:
+            raise ValueError(f"All-gather transport is single-link only, got num_links={requested_num_links}")
+        self.num_links = MAX_NUM_LINKS
 
-        input_per_device = ttnn.get_device_tensors(input_tensor_mesh)
-        output_per_device = ttnn.get_device_tensors(output_tensor_mesh)
-        scratch_per_device = ttnn.get_device_tensors(scratch_tensor_mesh)
-        self.input_per_device = input_per_device
-        self.output_per_device = output_per_device
-        self.scratch_per_device = scratch_per_device
+        self._owns_tensors = input_tensor_mesh is not None
+        if self._owns_tensors:
+            self._init_tensor_owned(
+                input_tensor_mesh, output_tensor_mesh, scratch_tensor_mesh, semaphores, max_chunk_size_bytes
+            )
+        else:
+            self._init_no_ownership(
+                slice_size_bytes=slice_size_bytes,
+                output_addr=output_addr,
+                scratch_base_addr=scratch_base_addr,
+                handoff_sem_addr=handoff_sem_addr,
+                recv_sem_addr=recv_sem_addr,
+                gather_noc_core=gather_noc_core,
+                transport_noc_core=transport_noc_core,
+                max_chunk_size_bytes=max_chunk_size_bytes,
+            )
 
-        # Derive cores from tensor shard grids
-        gather_grid_start = input_per_device[0].memory_config().shard_spec.grid.bounding_box().start
-        self.gather_core = ttnn.CoreCoord(int(gather_grid_start.x), int(gather_grid_start.y))
-
-        transport_grid_start = scratch_per_device[0].memory_config().shard_spec.grid.bounding_box().start
-        self.transport_core = ttnn.CoreCoord(int(transport_grid_start.x), int(transport_grid_start.y))
-
-        # Slice size from input tensor shard
-        input_shard = input_per_device[0].memory_config().shard_spec
-        element_size = 2  # bf16
-        shard_elements = input_shard.shape[0] * input_shard.shape[1]
-        self.slice_size_bytes = shard_elements * element_size
-
-        self.chunk = resolve_byte_chunk_config(self.slice_size_bytes, max_chunk_size_bytes)
-
-        # L1 addresses (uniform across devices for same tensor allocation)
-        self.input_addr = input_per_device[0].buffer_address()
-        self.output_addr = output_per_device[0].buffer_address()
-        self.scratch_base_addr = scratch_per_device[0].buffer_address()
-
-        # Global semaphore addresses
-        self.handoff_sem_addr = ttnn.get_global_semaphore_address(semaphores[0])
-        self.recv_sem_addr = ttnn.get_global_semaphore_address(semaphores[1])
-
-        # Physical NOC coords (uniform across devices)
-        ref_device = input_per_device[0].device()
-        gather_phys = ref_device.worker_core_from_logical_core(self.gather_core)
-        transport_phys = ref_device.worker_core_from_logical_core(self.transport_core)
-        self.gather_noc_x = gather_phys.x
-        self.gather_noc_y = gather_phys.y
-        self.transport_noc_x = transport_phys.x
-        self.transport_noc_y = transport_phys.y
-
-        self.gather_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(self.gather_core, self.gather_core)])
-        self.transport_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(self.transport_core, self.transport_core)])
+        # Optional fused-kernel output CB fields (None in tensor-owned mode)
+        self.output_cb_id = int(output_cb_id) if output_cb_id is not None else None
+        self.output_num_tiles = int(output_num_tiles) if output_num_tiles is not None else None
 
         # Per-device schedule
         mesh_rows, mesh_cols = mesh_shape
@@ -307,6 +311,104 @@ class AllGatherConfig:
                     "r2_dest_slot_index": r2_src_slot,
                 }
 
+    def _init_tensor_owned(
+        self, input_tensor_mesh, output_tensor_mesh, scratch_tensor_mesh, semaphores, max_chunk_size_bytes
+    ):
+        if semaphores is None or len(semaphores) < 2:
+            raise ValueError(f"Need 2 semaphores (handoff + recv), got {len(semaphores) if semaphores else 0}")
+
+        input_per_device = ttnn.get_device_tensors(input_tensor_mesh)
+        output_per_device = ttnn.get_device_tensors(output_tensor_mesh)
+        scratch_per_device = ttnn.get_device_tensors(scratch_tensor_mesh)
+        self.input_per_device = input_per_device
+        self.output_per_device = output_per_device
+        self.scratch_per_device = scratch_per_device
+
+        # Derive cores from tensor shard grids
+        gather_grid_start = input_per_device[0].memory_config().shard_spec.grid.bounding_box().start
+        self.gather_core = ttnn.CoreCoord(int(gather_grid_start.x), int(gather_grid_start.y))
+
+        transport_grid_start = scratch_per_device[0].memory_config().shard_spec.grid.bounding_box().start
+        self.transport_core = ttnn.CoreCoord(int(transport_grid_start.x), int(transport_grid_start.y))
+
+        # Slice size from input tensor shard
+        input_shard = input_per_device[0].memory_config().shard_spec
+        element_size = 2  # bf16
+        shard_elements = input_shard.shape[0] * input_shard.shape[1]
+        self.slice_size_bytes = shard_elements * element_size
+
+        self.chunk = resolve_byte_chunk_config(self.slice_size_bytes, max_chunk_size_bytes)
+
+        # L1 addresses (uniform across devices for same tensor allocation)
+        self.input_addr = input_per_device[0].buffer_address()
+        self.output_addr = output_per_device[0].buffer_address()
+        self.scratch_base_addr = scratch_per_device[0].buffer_address()
+
+        # Global semaphore addresses
+        self.handoff_sem_addr = ttnn.get_global_semaphore_address(semaphores[0])
+        self.recv_sem_addr = ttnn.get_global_semaphore_address(semaphores[1])
+
+        # Physical NOC coords (uniform across devices)
+        ref_device = input_per_device[0].device()
+        gather_phys = ref_device.worker_core_from_logical_core(self.gather_core)
+        transport_phys = ref_device.worker_core_from_logical_core(self.transport_core)
+        self.gather_noc_x = gather_phys.x
+        self.gather_noc_y = gather_phys.y
+        self.transport_noc_x = transport_phys.x
+        self.transport_noc_y = transport_phys.y
+
+        self.gather_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(self.gather_core, self.gather_core)])
+        self.transport_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(self.transport_core, self.transport_core)])
+
+    def _init_no_ownership(
+        self,
+        slice_size_bytes,
+        output_addr,
+        scratch_base_addr,
+        handoff_sem_addr,
+        recv_sem_addr,
+        gather_noc_core,
+        transport_noc_core,
+        max_chunk_size_bytes,
+    ):
+        required = {
+            "slice_size_bytes": slice_size_bytes,
+            "output_addr": output_addr,
+            "scratch_base_addr": scratch_base_addr,
+            "handoff_sem_addr": handoff_sem_addr,
+            "recv_sem_addr": recv_sem_addr,
+            "gather_noc_core": gather_noc_core,
+            "transport_noc_core": transport_noc_core,
+        }
+        missing = [k for k, v in required.items() if v is None]
+        if missing:
+            raise ValueError(f"No-ownership mode requires: {missing}")
+
+        self.input_per_device = None
+        self.output_per_device = None
+        self.scratch_per_device = None
+        self.input_addr = None  # Not used — fused kernel sources input from a CB.
+        self.output_addr = int(output_addr)
+        self.scratch_base_addr = int(scratch_base_addr)
+        self.handoff_sem_addr = int(handoff_sem_addr)
+        self.recv_sem_addr = int(recv_sem_addr)
+        self.slice_size_bytes = int(slice_size_bytes)
+        self.chunk = resolve_byte_chunk_config(self.slice_size_bytes, max_chunk_size_bytes)
+
+        # NOC coords passed directly (caller already resolved them to the
+        # fused kernel's owning cores).
+        self.gather_noc_x = int(gather_noc_core.x)
+        self.gather_noc_y = int(gather_noc_core.y)
+        self.transport_noc_x = int(transport_noc_core.x)
+        self.transport_noc_y = int(transport_noc_core.y)
+
+        # Logical cores / core sets unused in no-ownership mode (fused kernel
+        # owns its own core grid).
+        self.gather_core = None
+        self.transport_core = None
+        self.gather_core_set = None
+        self.transport_core_set = None
+
     # ======================================================================
     # Named compile-time args
     # ======================================================================
@@ -318,7 +420,6 @@ class AllGatherConfig:
             num_chunks=self.chunk.num_chunks,
             chunk_size_bytes=self.chunk.chunk_size_bytes,
             last_chunk_bytes=self.chunk.last_chunk_bytes,
-            num_links=self.num_links,
             r2_active=info["ncrisc_r2_active"],
         )
         gather_ct = _gather_named_ct_schema(
@@ -334,11 +435,61 @@ class AllGatherConfig:
             num_chunks=self.chunk.num_chunks,
             chunk_size_bytes=self.chunk.chunk_size_bytes,
             last_chunk_bytes=self.chunk.last_chunk_bytes,
-            num_links=self.num_links,
             r2_active=info["brisc_r2_active"],
         )
 
     def get_trisc_named_ct_args(self, coord):
+        return []
+
+    # ======================================================================
+    # Fused-kernel named CT args
+    #
+    # Fused kernels can't use positional common RT args for the all-gather
+    # block (they interleave with other fused-op RT args), so these methods
+    # emit the address/slot/noc values as NAMED CT args instead.  The fused
+    # kernel reads them via get_named_compile_time_arg_val.
+    # ======================================================================
+
+    def _transport_addr_named_ct(self, coord):
+        info = self._per_device[coord]
+        return [
+            ("allgather_handoff_sem_addr", self.handoff_sem_addr),
+            ("allgather_scratch_base_addr", self.scratch_base_addr),
+            ("allgather_dest_output_base_addr", self.output_addr),
+            ("allgather_r1_dest_slot_index", info["r1_dest_slot_index"]),
+            ("allgather_dest_noc_x", self.gather_noc_x),
+            ("allgather_dest_noc_y", self.gather_noc_y),
+            ("allgather_dest_recv_sem_addr", self.recv_sem_addr),
+            ("allgather_r2_dest_slot_index", info["r2_dest_slot_index"]),
+        ]
+
+    def _gather_addr_named_ct(self, coord):
+        info = self._per_device[coord]
+        out = [
+            ("allgather_self_slot_index", info["self_rank"]),
+            ("allgather_r2_src_slot_index", info["r2_src_slot_index"]),
+            ("allgather_transport_noc_x", self.transport_noc_x),
+            ("allgather_transport_noc_y", self.transport_noc_y),
+            ("allgather_handoff_sem_addr", self.handoff_sem_addr),
+            ("allgather_recv_sem_addr", self.recv_sem_addr),
+        ]
+        if self.output_cb_id is not None:
+            out.append(("output_cb_id", self.output_cb_id))
+        if self.output_num_tiles is not None:
+            out.append(("output_num_tiles", self.output_num_tiles))
+        return out
+
+    def get_fused_ncrisc_named_ct_args(self, coord):
+        return (
+            self.get_ncrisc_named_ct_args(coord)
+            + self._transport_addr_named_ct(coord)
+            + self._gather_addr_named_ct(coord)
+        )
+
+    def get_fused_brisc_named_ct_args(self, coord):
+        return self.get_brisc_named_ct_args(coord) + self._transport_addr_named_ct(coord)
+
+    def get_fused_trisc_named_ct_args(self, coord):
         return []
 
     # ======================================================================
@@ -391,18 +542,13 @@ class AllGatherConfig:
             transport_scratch_base_addr=self.scratch_base_addr,
             transport_noc_x=self.transport_noc_x,
             transport_noc_y=self.transport_noc_y,
-            handoff_sem_bank_addr=self.handoff_sem_addr,
+            handoff_sem_addr=self.handoff_sem_addr,
             recv_sem_addr=self.recv_sem_addr,
             r2_src_slot_index=info["r2_src_slot_index"],
         )
 
     def get_transport_common_rt_args(self, coord):
-        """Common RT args shared by both transport BRISC (fwd) and NCRISC (bwd).
-
-        Destination NOC coords and L1 addresses are direction-independent
-        because all devices share the same physical layout.  The actual
-        fabric routing is determined by per-core RT args (fabric connection).
-        """
+        """Common RT args shared by transport BRISC (fwd sender) and NCRISC (bwd sender)."""
         info = self._per_device[coord]
         return _transport_common_rt_schema(
             scratch_base_addr=self.scratch_base_addr,
@@ -416,31 +562,30 @@ class AllGatherConfig:
         )
 
     # ======================================================================
-    # Per-core runtime args (fabric connections, one per link)
+    # Per-core runtime args (single fabric connection per direction)
     # ======================================================================
 
     def _build_transport_per_core_rt_args(self, coord, program, core, dst_fabric_node_id):
         """Build per-core RT args for one transport RISC direction.
 
-        Layout: [dst_mesh_id, dst_chip_id, <link 0 fabric args>, <link 1 fabric args>, ...]
-        The kernel reads dst_mesh_id / dst_chip_id once, then builds num_links
-        connections by iterating over the remaining args.
+        Layout: [dst_mesh_id, dst_chip_id, <single-link fabric args>]
+        The kernel reads dst_mesh_id / dst_chip_id once, then builds the
+        single transport connection from the remaining args.
         """
         info = self._per_device[coord]
         out = [
             int(dst_fabric_node_id.mesh_id),
             int(dst_fabric_node_id.chip_id),
         ]
-        for link_idx in range(self.num_links):
-            out.extend(
-                ttnn.setup_fabric_connection(
-                    src_fabric_node_id=info["fabric_node_id"],
-                    dst_fabric_node_id=dst_fabric_node_id,
-                    link_idx=link_idx,
-                    program_descriptor=program,
-                    worker_core=core,
-                )
+        out.extend(
+            ttnn.setup_fabric_connection(
+                src_fabric_node_id=info["fabric_node_id"],
+                dst_fabric_node_id=dst_fabric_node_id,
+                link_idx=0,
+                program_descriptor=program,
+                worker_core=core,
             )
+        )
         return out
 
     def get_transport_brisc_per_core_rt_args(self, coord, program, core):
@@ -551,13 +696,13 @@ class DeepseekMinimalAllGather:
                 program.kernels[gather_group.brisc_kernel_index].common_runtime_args = []
                 program.kernels[gather_group.trisc_kernel_index].common_runtime_args = []
 
-                # Transport core common RT args
-                transport_rt = config.get_transport_common_rt_args(coord)
-                program.kernels[transport_group.ncrisc_kernel_index].common_runtime_args = transport_rt
-                program.kernels[transport_group.brisc_kernel_index].common_runtime_args = transport_rt
+                # Transport core common RT args (shared layout across BRISC + NCRISC)
+                transport_common_rt = config.get_transport_common_rt_args(coord)
+                program.kernels[transport_group.brisc_kernel_index].common_runtime_args = transport_common_rt
+                program.kernels[transport_group.ncrisc_kernel_index].common_runtime_args = transport_common_rt
                 program.kernels[transport_group.trisc_kernel_index].common_runtime_args = []
 
-                # Append fabric per-core RT args (one connection per link per direction)
+                # Append fabric per-core RT args (single connection per direction)
                 brisc_per_core = program.kernels[transport_group.brisc_kernel_index].runtime_args[transport_core.x][
                     transport_core.y
                 ]

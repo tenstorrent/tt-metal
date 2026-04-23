@@ -4,12 +4,14 @@
 
 #include "build.hpp"
 
+#include "build_cache_telemetry.hpp"
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -61,12 +63,6 @@ void build_failure(const string& target_name, const string& op, const string& cm
     } else {
         TT_THROW("Failed to open {} failure log file {}", op, log_file);
     }
-}
-
-void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
-    const string out_dir = (settings == nullptr) ? build.get_out_path() + "/"
-                                                 : build.get_out_path() + settings->get_full_kernel_name() + "/";
-    std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
@@ -132,7 +128,9 @@ void JitBuildEnv::init(
     }
 
     // Flags
-    string common_flags = "-std=c++17 -flto=auto -ffast-math -fno-exceptions ";
+    string common_flags =
+        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval"
+        " -flto=auto -ffast-math -fno-exceptions ";
 
     if (rtoptions.get_jit_analytics_enabled()) {
         common_flags += "-fdump-rtl-all -fdump-tree-original ";
@@ -257,7 +255,7 @@ void JitBuildEnv::init(
 
     if (!rtoptions.get_watcher_enabled() && !rtoptions.get_lightweight_kernel_asserts() &&
         rtoptions.get_llk_asserts()) {
-        this->defines_ += "-DENV_LLK_INFRA ";
+        this->defines_ += "-DENABLE_LLK_ASSERT_ONLY ";
     }
 
     if (rtoptions.get_disable_sfploadmacro()) {
@@ -583,10 +581,14 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
             launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
+            BuildCacheTelemetry::inst().record_cache_hit();
         }
     }
 
     sync_build_steps(events);
+
+    BuildCacheTelemetry::inst().record_compile(
+        static_cast<uint32_t>(this->srcs_.size()), static_cast<uint32_t>(compiled.count()));
 
     if (env_.get_rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
@@ -696,6 +698,7 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
 
 void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets) const {
     // ZoneScoped;
+    auto t0_build = std::chrono::steady_clock::now();
     auto kernel_name = settings ? std::string_view{settings->get_full_kernel_name()} : "";
     std::string out_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);
 
@@ -720,6 +723,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         if (!link_objs.empty()) {
             return;
         }
+        uint32_t reused_objs = 0;
         for (size_t i = 0; i < num_objs; ++i) {
             auto temp_obj = out_dir + this->temp_objs_[i];
             if (!compiled.test(i)) {
@@ -730,9 +734,13 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                 // 3. LTO linker opens the object file multiple times. Atomic rename doesn't prevent the linker from
                 //    getting confused.
                 hard_link_or_copy(out_dir + this->objs_[i], temp_obj);
+                ++reused_objs;
             }
             link_objs += temp_obj;
             link_objs += " ";
+        }
+        if (reused_objs != 0) {
+            BuildCacheTelemetry::inst().record_merge(reused_objs);
         }
     };
 
@@ -772,20 +780,92 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     // `extract_zone_src_locations` must be called every time, because it writes to a global file
     // that gets cleared in each run.
     extract_zone_src_locations(out_dir);
+
+    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_build).count();
+    static auto& tok_build = BuildCacheTelemetry::inst().register_metric("JitBuildState::build");
+    tok_build.record(elapsed_ms);
+}
+
+tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSettings* settings) const {
+    tt::jit_build::TargetRecipe target;
+    target.target_name = target_name_;
+    target.cflags = cflags_;
+    target.lflags = lflags_;
+    target.linker_script = linker_script_;
+    target.extra_link_objs = extra_link_objs_;
+    target.firmware_is_kernel_object = firmware_is_kernel_object_;
+    target.weakened_firmware_name = fs::path(weakened_firmware_name_).filename().string();
+
+    for (const auto& src : srcs_) {
+        target.srcs.push_back(src);
+    }
+    for (const auto& obj : objs_) {
+        target.objs.push_back(obj);
+    }
+
+    // Optimization levels: use kernel-specified levels if available, else defaults.
+    if (settings) {
+        target.compiler_opt_level = std::string(settings->get_compiler_opt_level());
+        target.linker_opt_level = std::string(settings->get_linker_opt_level());
+    } else {
+        target.compiler_opt_level = default_compile_opt_level_;
+        target.linker_opt_level = default_linker_opt_level_;
+    }
+
+    // Build defines: start with build-state base, then enrich with kernel-specific defines.
+    std::vector<std::string> defines = tt::jit_build::utils::tokenize_flags(defines_);
+    if (settings && process_defines_at_compile_) {
+        settings->process_defines([&defines](const std::string& define, const std::string& value) {
+            defines.push_back(fmt::format("-D{}={}", define, value));
+        });
+    }
+    if (settings) {
+        settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
+            if (!values.empty()) {
+                defines.push_back(fmt::format("-DKERNEL_COMPILE_TIME_ARGS={}", fmt::join(values, ",")));
+            }
+        });
+        settings->process_named_compile_time_args(
+            [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
+                if (!named_args.empty()) {
+                    std::string compile_time_arg_map = "-DKERNEL_COMPILE_TIME_ARG_MAP=";
+                    auto it = std::back_inserter(compile_time_arg_map);
+                    for (const auto& [name, value] : named_args) {
+                        fmt::format_to(it, "{{\"{}\",{}}},", name, value);
+                    }
+                    defines.push_back(std::move(compile_time_arg_map));
+                }
+            });
+    }
+    target.defines = std::move(defines);
+
+    // Build includes: start with build-state base, then add kernel-specific paths.
+    std::string includes = includes_;
+    if (settings) {
+        settings->process_include_paths([&includes](const std::string& path) { includes += "-I" + path + " "; });
+    }
+    target.includes = std::move(includes);
+
+    return target;
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
-
+    auto t0 = std::chrono::steady_clock::now();
     build.build(settings);
-    write_successful_jit_build_marker(build, settings);
+    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build");
+    tok.record(elapsed_ms);
 }
 
 void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
     TT_ASSERT(!targets.empty());
+    auto t0 = std::chrono::steady_clock::now();
     const JitBuildState& primary = *targets[0];
     primary.build(settings, targets);
-    write_successful_jit_build_marker(primary, settings);
+    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build_for_processors");
+    tok.record(elapsed_ms);
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
@@ -796,9 +876,6 @@ void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* 
     }
 
     sync_build_steps(events);
-    for (const auto& build : build_subset) {
-        write_successful_jit_build_marker(build, settings);
-    }
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
@@ -812,7 +889,9 @@ void sync_build_steps(std::vector<std::shared_future<void>>& events) {
 }
 
 void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
-    JitBuildCache::inst().build_once(hash, build_fn);
+    if (!JitBuildCache::inst().build_once(hash, build_fn)) {
+        BuildCacheTelemetry::inst().record_jit_once_dedup();
+    }
 }
 
 void jit_build_cache_clear() {

@@ -6,28 +6,24 @@
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
 
-// Read a KV chunk into a CB for L1-L1 forwarding.
-// Skips intermediate read barriers (single barrier at end) for lower latency.
-// Returns the CB write pointer (start address of the data) for use as the forwarding source.
+// Fetch a KV chunk into L1 for forwarding. No CB lifecycle — caller manages
+// cb_reserve_back / cb_push_back. Single read barrier at end for lower latency.
 template <uint32_t tile_bytes, bool transpose, typename ReaderType>
-FORCE_INLINE uint32_t read_chunk_for_forwarding(
+FORCE_INLINE void read_chunk_for_forwarding(
     const ReaderType& reader,
-    const uint32_t cb_id,
+    const uint32_t dst_addr,
     uint32_t start_tile_id,
     const uint32_t src_rows,
     const uint32_t src_cols,
     const uint32_t dst_rows,
     const uint32_t dst_cols,
     const uint32_t skip_src_cols = 0) {
-    const uint32_t num_tiles = dst_rows * dst_cols;
-    cb_reserve_back(cb_id, num_tiles);
-    const uint32_t base_write_ptr = get_write_ptr(cb_id);
     const uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
     const uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
 
     uint32_t tile_id = start_tile_id;
     for (uint32_t row = 0; row < src_rows; ++row) {
-        uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
+        uint32_t write_ptr = dst_addr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < src_cols; ++col) {
             noc_async_read_tile(tile_id++, reader, write_ptr);
             write_ptr += inner_ptr_stride;
@@ -40,12 +36,10 @@ FORCE_INLINE uint32_t read_chunk_for_forwarding(
                 continue;
             }
             uint32_t tile_idx = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_tile_zeros<tile_bytes, false>(cb_id, tile_idx);
+            fill_zeros_async(dst_addr + tile_idx * tile_bytes, tile_bytes);
         }
     }
     noc_async_read_barrier();
-    cb_push_back(cb_id, num_tiles);
-    return base_write_ptr;
 }
 
 void kernel_main() {
@@ -225,13 +219,12 @@ void kernel_main() {
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
-    const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
-    const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
-    const auto v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
-    const auto mask_reader = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
-    const auto attention_sink_reader =
-        TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
-    const auto chunk_start_idx_reader = TensorAccessor(chunk_start_idx_args, chunk_start_idx_addr, 4);
+    const auto q_reader = TensorAccessor(q_args, q_addr);
+    const auto k_reader = TensorAccessor(k_args, k_addr);
+    const auto v_reader = TensorAccessor(v_args, v_addr);
+    const auto mask_reader = TensorAccessor(mask_args, mask_addr);
+    const auto attention_sink_reader = TensorAccessor(attention_sink_args, attention_sink_addr);
+    const auto chunk_start_idx_reader = TensorAccessor(chunk_start_idx_args, chunk_start_idx_addr);
 
     constexpr uint32_t skip_src_cols = (use_mla && mla_kv_overlap) ? DHt - vDHt : 0;
 
@@ -437,8 +430,16 @@ void kernel_main() {
                                 );
                             } else {
                                 if (should_forward) {
-                                    cb_k_start_address = read_chunk_for_forwarding<k_tile_bytes, true>(
-                                        k_reader, cb_k_in, k_start_tile_id, kv_row_tile_count, DHt, Sk_chunk_t, DHt);
+                                    cb_reserve_back(cb_k_in, k_chunk_tiles);
+                                    cb_k_start_address = get_write_ptr(cb_k_in);
+                                    read_chunk_for_forwarding<k_tile_bytes, true>(
+                                        k_reader,
+                                        cb_k_start_address,
+                                        k_start_tile_id,
+                                        kv_row_tile_count,
+                                        DHt,
+                                        Sk_chunk_t,
+                                        DHt);
                                 } else {
                                     read_chunk_with_padding<k_tile_bytes>(
                                         k_reader,
@@ -472,6 +473,10 @@ void kernel_main() {
                                     mcast_num_dests,
                                     true /* linked: semaphore mcast follows */);
                                 noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
+                                noc_async_writes_flushed();
+                                if (!should_receive) {
+                                    cb_push_back(cb_k_in, k_chunk_tiles);
+                                }
                             } else {
                                 uint64_t k_unicast_data_addr =
                                     get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
@@ -523,6 +528,9 @@ void kernel_main() {
                         if (should_forward) {
                             if constexpr (!mcast_enabled) {
                                 noc_async_writes_flushed();
+                                if (!should_receive) {
+                                    cb_push_back(cb_k_in, k_chunk_tiles);
+                                }
                                 noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                             }
                         }
@@ -584,9 +592,11 @@ void kernel_main() {
                                     skip_src_cols);
                             } else {
                                 if (should_forward) {
-                                    cb_v_start_address = read_chunk_for_forwarding<v_tile_bytes, false>(
+                                    cb_reserve_back(cb_v_in, v_chunk_tiles);
+                                    cb_v_start_address = get_write_ptr(cb_v_in);
+                                    read_chunk_for_forwarding<v_tile_bytes, false>(
                                         v_reader,
-                                        cb_v_in,
+                                        cb_v_start_address,
                                         v_start_tile_id,
                                         kv_row_tile_count,
                                         vDHt,
@@ -609,7 +619,8 @@ void kernel_main() {
                             }
                         }
 
-                        // Forward V chunk to next core(s) if applicable
+                        // Forward V chunk to next core(s) before push_back — prevents compute from
+                        // popping the buffer while the mcast is still reading from it.
                         if (should_forward) {
                             noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                             noc_semaphore_set(sender_semaphore_addr_ptr, 0);
@@ -626,8 +637,13 @@ void kernel_main() {
                                 uint64_t v_unicast_data_addr =
                                     get_noc_addr(next_physical_x, next_physical_y, cb_v_start_address);
                                 noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
-                                noc_async_writes_flushed();
+                            }
+                            noc_async_writes_flushed();
+                            if constexpr (!mcast_enabled) {
                                 noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
+                            }
+                            if (!should_receive) {
+                                cb_push_back(cb_v_in, v_chunk_tiles);
                             }
                         }
                     }
