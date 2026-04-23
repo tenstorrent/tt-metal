@@ -107,7 +107,11 @@ void kernel_main() {
     // Runtime arguments
     uint32_t arg_idx = 0;
     const bool do_reduce = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const bool apply_mask_at_last_chunk = do_reduce && is_causal;
+    // Apply causal mask on all nodes (root and workers) to prevent zero-padded
+    // tokens in the partial last page from contributing to attention with exp(0)=1.
+    // Previously gated on do_reduce, causing worker nodes to skip the mask and
+    // produce NaN when all users simultaneously hit a partial last KV page.
+    const bool apply_mask_at_last_chunk = is_causal;
     const bool do_output = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t cur_head = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
