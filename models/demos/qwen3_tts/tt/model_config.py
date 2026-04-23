@@ -64,6 +64,12 @@ class Qwen3TTSCodePredictorConfig:
         return (self.num_attention_heads + 2 * self.num_key_value_heads) * self.head_dim
 
 
+def get_device_core_grid(device) -> ttnn.CoreGrid:
+    """Full compute grid for ``ttnn.linear`` / matmul (improves utilization on small-M decode)."""
+    gs = device.compute_with_storage_grid_size()
+    return ttnn.CoreGrid(y=gs.y, x=gs.x)
+
+
 def get_compute_kernel_config():
     """Returns compute kernel config for high-fidelity computations."""
     return ttnn.WormholeComputeKernelConfig(

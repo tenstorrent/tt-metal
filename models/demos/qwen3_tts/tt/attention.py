@@ -43,6 +43,7 @@ from typing import Optional, Tuple
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.model_config import get_device_core_grid
 from models.demos.qwen3_tts.tt.rope import ttnn_rearrange_to_interleaved, ttnn_rearrange_to_noninterleaved
 
 
@@ -72,6 +73,7 @@ class Attention(LightweightModule):
     ):
         super().__init__()
         self.device = device
+        self._matmul_core_grid = get_device_core_grid(device)
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.num_kv_heads = num_kv_heads
@@ -367,7 +369,11 @@ class Attention(LightweightModule):
 
         # QKV projection
         xqkv = ttnn.linear(
-            x, self.wqkv, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG
+            x,
+            self.wqkv,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self._matmul_core_grid,
         )
 
         # Split: Q [b, num_heads, seq, head_dim], K/V [b, num_kv_heads, seq, head_dim]
@@ -620,7 +626,11 @@ class Attention(LightweightModule):
         q_seq = q_f32.shape[2]
         k_t = ttnn.transpose(k_exp, -2, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
         scores = ttnn.matmul(
-            q_f32, k_t, compute_kernel_config=self.sdpa_compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG
+            q_f32,
+            k_t,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self._matmul_core_grid,
         )
         ttnn.deallocate(k_t)
         ttnn.deallocate(q_f32)
@@ -686,6 +696,7 @@ class Attention(LightweightModule):
             v_exp,
             compute_kernel_config=self.sdpa_compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self._matmul_core_grid,
         )
         ttnn.deallocate(attn_weights)
         ttnn.deallocate(v_exp)
@@ -702,6 +713,7 @@ class Attention(LightweightModule):
             self.wo,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self._matmul_core_grid,
         )
         ttnn.deallocate(attn_output)
 

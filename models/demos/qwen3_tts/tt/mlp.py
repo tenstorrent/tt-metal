@@ -8,6 +8,7 @@ SwiGLU MLP implementation for Qwen3-TTS.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.model_config import get_device_core_grid
 
 
 class MLP(LightweightModule):
@@ -136,6 +137,8 @@ class MLP(LightweightModule):
         self.up_proj = _build_proj_weight(f"{layer_prefix}.mlp.up_proj.weight", "up_proj")
         self.down_proj = _build_proj_weight(f"{layer_prefix}.mlp.down_proj.weight", "down_proj")
 
+        self._matmul_core_grid = get_device_core_grid(device)
+
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
@@ -169,6 +172,7 @@ class MLP(LightweightModule):
             self.gate_proj,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=mem_cfg,
+            core_grid=self._matmul_core_grid,
         )
 
         # Up projection
@@ -177,6 +181,7 @@ class MLP(LightweightModule):
             self.up_proj,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=mem_cfg,
+            core_grid=self._matmul_core_grid,
         )
 
         # SwiGLU: silu(gate) * up
@@ -196,6 +201,7 @@ class MLP(LightweightModule):
             self.down_proj,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=mem_cfg,
+            core_grid=self._matmul_core_grid,
         )
 
         ttnn.deallocate(hidden)
