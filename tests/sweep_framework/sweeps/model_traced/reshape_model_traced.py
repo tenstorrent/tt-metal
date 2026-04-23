@@ -175,9 +175,12 @@ def run(
         input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # Always call reshape with 2 positional args to match the master trace signature.
-    # arg2 (padded output shape) is used only for the golden reference above.
-    output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
+    # Pass arg2 (padded output shape) when the master trace recorded it as a
+    # third positional argument so that the sweep trace matches the master.
+    if arg2 is not None:
+        output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2, **op_kwargs)
+    else:
+        output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

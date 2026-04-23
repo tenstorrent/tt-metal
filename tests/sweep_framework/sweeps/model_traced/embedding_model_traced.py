@@ -201,6 +201,10 @@ def run(
         embedding_kwargs["dtype"] = dtype
     if memory_config is not None:
         embedding_kwargs["memory_config"] = memory_config
+    if layout is not None:
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        embedding_kwargs["layout"] = parse_dict_value("layout", layout) if isinstance(layout, dict) else layout
     embedding_kwargs.update(op_kwargs)
     output_tensor = ttnn.embedding(input_tensor, weight_tensor, **embedding_kwargs)
     e2e_perf = stop_measuring_time(start_time)

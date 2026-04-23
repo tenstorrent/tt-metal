@@ -69,6 +69,13 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
+    # build_op_kwargs filters memory_config by default. If the master trace had it,
+    # add it back so the sweep call matches.
+    if "memory_config" in kwargs and kwargs["memory_config"] is not None and kwargs["memory_config"] != "__ABSENT__":
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        op_kwargs["memory_config"] = parse_dict_value("memory_config", kwargs["memory_config"])
+
     if isinstance(input_a_shape, (tuple, list)):
         shape = tuple(input_a_shape)
     else:

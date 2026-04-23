@@ -106,14 +106,20 @@ def run(
     if program_config is not None:
         op_kwargs["program_config"] = program_config
 
-    # Use named memory_config for output if output_memory_config not set
-    if output_memory_config is None and "memory_config" in op_kwargs:
-        output_memory_config = op_kwargs.pop("memory_config")
-    # If output_memory_config is explicitly set, remove duplicate memory_config from op_kwargs
-    elif "memory_config" in op_kwargs:
-        op_kwargs.pop("memory_config")
-    if output_memory_config is not None:
-        op_kwargs["memory_config"] = output_memory_config
+    # Only pass memory_config to the op if the master trace actually had it.
+    # The sweep may provide output_memory_config even when the traced config does
+    # not include memory_config — in that case we must not inject it.
+    if "memory_config" in op_kwargs:
+        # build_op_kwargs already parsed it from the traced config; use output_memory_config
+        # as override if available, otherwise keep the parsed value.
+        if output_memory_config is not None:
+            op_kwargs["memory_config"] = output_memory_config
+    elif output_memory_config is not None:
+        # Check whether the master trace actually had memory_config
+        traced_memory_config = kwargs.get("memory_config")
+        if traced_memory_config is not None and traced_memory_config != "__ABSENT__":
+            op_kwargs["memory_config"] = output_memory_config
+    # If the master trace did not have memory_config, do NOT inject it
 
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 

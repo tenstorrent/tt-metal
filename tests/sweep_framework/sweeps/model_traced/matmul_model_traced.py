@@ -86,16 +86,15 @@ def run(
     op_kwargs = build_op_kwargs(kwargs)
 
     # matmul needs memory_config for output placement. build_op_kwargs filters
-    # memory_config by default, so restore the traced memory_config when present,
-    # falling back to output_memory_config.
+    # memory_config by default, so restore the traced memory_config when present.
+    # Only pass memory_config if the master trace actually had it — the sweep may
+    # provide output_memory_config even when the traced config does not include it.
     if "memory_config" not in op_kwargs:
         traced_memory_config = kwargs.get("memory_config")
         if traced_memory_config is not None and traced_memory_config != "__ABSENT__":
             from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
             op_kwargs["memory_config"] = parse_dict_value("memory_config", traced_memory_config)
-        elif output_memory_config is not None:
-            op_kwargs["memory_config"] = output_memory_config
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

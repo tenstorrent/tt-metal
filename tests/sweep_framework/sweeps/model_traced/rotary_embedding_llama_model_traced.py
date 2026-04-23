@@ -616,8 +616,14 @@ def run(
     start_time = start_measuring_time()
 
     rope_call_kwargs = {"is_decode_mode": is_decode_mode}
-    if output_memory_config is not None:
-        rope_call_kwargs["memory_config"] = output_memory_config
+    # Only pass memory_config when the master trace actually had it as a kwarg.
+    # build_op_kwargs filters memory_config, so check the raw _kwargs for the key.
+    # If the master trace didn't have memory_config, we must NOT pass it (sweep extra).
+    raw_memory_config = _kwargs.get("memory_config", "__ABSENT__")
+    if raw_memory_config is not None and raw_memory_config != "__ABSENT__":
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        rope_call_kwargs["memory_config"] = parse_dict_value("memory_config", raw_memory_config)
     rope_call_kwargs.update(op_kwargs)
     output_tensor = ttnn.experimental.rotary_embedding_llama(
         input_tensor_a,

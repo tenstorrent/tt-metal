@@ -142,6 +142,12 @@ def run(
 
     op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config)
 
+    # The master trace may record attention_sink and sliding_window_size as explicit kwargs
+    # (possibly None). build_op_kwargs filters None values, so add them back when present.
+    for key in ("attention_sink", "sliding_window_size"):
+        if key in kwargs and kwargs[key] is None and key not in op_kwargs:
+            op_kwargs[key] = None
+
     # Clear sharded memory_config from op_kwargs too
 
     # Validate program_config grid fits current device

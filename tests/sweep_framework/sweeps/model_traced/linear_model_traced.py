@@ -136,6 +136,12 @@ def run(
     # When program_config is None (grid-based configs dropped), the shard_spec in
     # memory configs was computed for the original device and is invalid. Clear sharded
     # configs so ttnn.linear auto-determines compatible settings.
+    # Track whether the original test vector had memory_config and compute_kernel_config.
+    # These may be cleared below for correctness, but we need to pass them to the op
+    # so that the sweep kwargs match the master trace.
+    original_memory_config = memory_config
+    original_compute_kernel_config = compute_kernel_config
+
     if program_config is None:
         if memory_config is not None and "SHARDED" in str(memory_config):
             memory_config = None
@@ -337,6 +343,10 @@ def run(
 
         if memory_config is not None:
             linear_kwargs["memory_config"] = memory_config
+        elif original_memory_config is not None:
+            # The master trace had memory_config but it was cleared (e.g. sharded).
+            # Pass DRAM fallback so the kwarg is present in the sweep call.
+            linear_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
         elif output_memory_config is not None:
             linear_kwargs["memory_config"] = output_memory_config
 
@@ -348,6 +358,10 @@ def run(
 
         if compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
+        elif original_compute_kernel_config is not None:
+            # Parsing may have returned None but the master trace had this kwarg.
+            # Pass the original value so the sweep call matches.
+            linear_kwargs["compute_kernel_config"] = original_compute_kernel_config
 
         if core_grid is not None:
             linear_kwargs["core_grid"] = core_grid
