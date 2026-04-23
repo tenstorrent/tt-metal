@@ -1195,31 +1195,24 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 in0_mcast_no_work_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
             }
         } else if (in1_idx == 0) {
-            std::vector<uint32_t> mm_in0_sender_args = {
-                // in0 tensor args
-                (std::uint32_t)in0_buffer->address(),
-                (std::uint32_t)in0_tensor_start_tile_id_stride * in0_idx,  // in0_tensor_start_tile_id
-                // in0 mcast args
-                (std::uint32_t)in0_mcast_start.x,  // in0_mcast_dest_noc_start_x
-                (std::uint32_t)in0_mcast_start.y,  // in0_mcast_dest_noc_start_y
-                (std::uint32_t)in0_mcast_end.x,    // in0_mcast_dest_noc_end_x
-                (std::uint32_t)in0_mcast_end.y,    // in0_mcast_dest_noc_end_y
-            };
-            if (in0_idx == in0_end_idx) {
-                // padding args (READER)
-                mm_in0_sender_args.push_back(last_out_block_h);  // last_out_block_h
-            } else {
-                mm_in0_sender_args.push_back(out_block_h);
-            }
-
-            // sparsity args
-            mm_in0_sender_args.push_back(0);  // sparsity_addr
+            KernelDescriptor::RTArgList mm_in0_sender_args;
+            mm_in0_sender_args.push_back(in0_buffer);                                 // in0_tensor_addr
+            mm_in0_sender_args.push_back(in0_tensor_start_tile_id_stride * in0_idx);  // in0_tensor_start_tile_id
+            mm_in0_sender_args.push_back(uint32_t(in0_mcast_start.x));                // in0_mcast_dest_noc_start_x
+            mm_in0_sender_args.push_back(uint32_t(in0_mcast_start.y));                // in0_mcast_dest_noc_start_y
+            mm_in0_sender_args.push_back(uint32_t(in0_mcast_end.x));                  // in0_mcast_dest_noc_end_x
+            mm_in0_sender_args.push_back(uint32_t(in0_mcast_end.y));                  // in0_mcast_dest_noc_end_y
+            // padding args (READER)
+            mm_in0_sender_args.push_back(in0_idx == in0_end_idx ? last_out_block_h : out_block_h);
+            mm_in0_sender_args.push_back(uint32_t(0));  // sparsity_addr
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
-                fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
+                std::vector<uint32_t> fuse_args;
+                fused_op_signaler->push_matmul_fused_op_rt_args(fuse_args, false);
+                mm_in0_sender_args.append(fuse_args);
             }
 
-            in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
+            in0_sender_kernel_desc.emplace_runtime_args(core, std::move(mm_in0_sender_args));
 
             // in0 receiver
         } else {
@@ -1241,34 +1234,29 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         if (in0_idx < num_blocks_y and in1_idx < num_blocks_x) {
             // in1 sender
             if (in0_idx == 0) {
-                std::vector<uint32_t> mm_in1_sender_writer_args = {
-                    // READER
-                    // in1 tensor args
-                    (std::uint32_t)in1_buffer->address(),
-                    (std::uint32_t)in1_tensor_start_tile_id_stride * in1_idx,  // in1_tensor_start_tile_id
-                    // in1 mcast args
-                    (std::uint32_t)in1_mcast_start.x,  // in1_mcast_dest_noc_start_x
-                    (std::uint32_t)in1_mcast_start.y,  // in1_mcast_dest_noc_start_y
-                    (std::uint32_t)in1_mcast_end.x,    // in1_mcast_dest_noc_end_x
-                    (std::uint32_t)in1_mcast_end.y,    // in1_mcast_dest_noc_end_y
-
-                    // sparsity args
-                    (std::uint32_t)0,  // sparsity_addr
-
-                    // WRITER
-                    // out tensor args
-                    (std::uint32_t)out_buffer->address(),
-                    ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
-                };
+                KernelDescriptor::RTArgList mm_in1_sender_writer_args;
+                // READER: in1 tensor args
+                mm_in1_sender_writer_args.push_back(in1_buffer);  // in1_tensor_addr
+                mm_in1_sender_writer_args.push_back(
+                    in1_tensor_start_tile_id_stride * in1_idx);  // in1_tensor_start_tile_id
+                // in1 mcast args
+                mm_in1_sender_writer_args.push_back(uint32_t(in1_mcast_start.x));  // in1_mcast_dest_noc_start_x
+                mm_in1_sender_writer_args.push_back(uint32_t(in1_mcast_start.y));  // in1_mcast_dest_noc_start_y
+                mm_in1_sender_writer_args.push_back(uint32_t(in1_mcast_end.x));    // in1_mcast_dest_noc_end_x
+                mm_in1_sender_writer_args.push_back(uint32_t(in1_mcast_end.y));    // in1_mcast_dest_noc_end_y
+                mm_in1_sender_writer_args.push_back(uint32_t(0));                  // sparsity_addr
+                // WRITER: out tensor args
+                mm_in1_sender_writer_args.push_back(out_buffer);  // out_tensor_addr
+                mm_in1_sender_writer_args.push_back(
+                    (in1_idx * per_core_N) + (in0_idx * per_core_M * N));  // out_tensor_start_tile_id
 
                 if (in1_idx == in1_end_idx) {  // right cores when no transpose_mcast
                     // padding args (READER)
                     mm_in1_sender_writer_args.push_back(last_out_block_w);
-
                     // padding args (WRITER)
                     mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_sender_writer_args.push_back(out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(uint32_t(0));
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                     mm_in1_sender_writer_args.push_back(last_subblock_of_last_block_w);
@@ -1277,47 +1265,47 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 } else {
                     // padding args (READER)
                     mm_in1_sender_writer_args.push_back(out_block_w);
-
                     // padding args (WRITER)
                     mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_sender_writer_args.push_back(out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(uint32_t(0));
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_subblock_w);
-                    mm_in1_sender_writer_args.push_back(0);
-                    mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(uint32_t(0));
+                    mm_in1_sender_writer_args.push_back(uint32_t(0));
                 }
 
-                mm_in1_sender_writer_args.push_back(bias_buffer ? (std::uint32_t)bias_buffer->address() : 0);
-                mm_in1_sender_writer_args.push_back(
-                    bias_buffer ? (std::uint32_t)per_core_N * in1_idx : 0);  // in1_tensor_start_tile_id
+                if (bias_buffer) {
+                    mm_in1_sender_writer_args.push_back(bias_buffer);  // bias_tensor_addr (auto-registered)
+                } else {
+                    mm_in1_sender_writer_args.push_back(uint32_t(0));
+                }
+                mm_in1_sender_writer_args.push_back(bias_buffer ? per_core_N * in1_idx : uint32_t(0));
                 if (!output_is_sharded) {
-                    if (in1_idx == in1_end_idx) {  // right cores when no transpose_mcast
-                        mm_in1_sender_writer_args.push_back(last_out_num_blocks_w);
-                    } else {
-                        mm_in1_sender_writer_args.push_back(out_num_blocks_x);
-                    }
+                    mm_in1_sender_writer_args.push_back(
+                        in1_idx == in1_end_idx ? last_out_num_blocks_w : out_num_blocks_x);
                 }
 
                 if (in1_is_sharded and in1_is_dram) {  // in1 is dram sharded
                     if (in1_is_width_sharded) {
-                        uint32_t num_iter_index = mm_in1_sender_writer_args.size() + 1;
                         vc = vc == 3 ? 0 : vc + 1;
                         mm_in1_sender_writer_args.push_back(vc);
 
-                        uint32_t num_iter = 0;  // iterate how many banks, till fill the current worker block
+                        // Collect bank descriptors first so num_iter is known before pushing it.
+                        std::vector<uint32_t> dram_bank_args;
+                        uint32_t num_iter = 0;
 
                         if (curr_storage_core < num_dram_banks) {
                             num_iter++;
 
                             worker_core_stride = per_core_N_storage - storage_core_stride;
 
-                            mm_in1_sender_writer_args.push_back(
+                            dram_bank_args.push_back(
                                 storage_core_stride * in1_single_tile_size);  // dram_tensor_start_offset
-                            mm_in1_sender_writer_args.push_back(
-                                worker_core_stride * in1_single_tile_size);          // per_core_N_dram_bytes
-                            mm_in1_sender_writer_args.push_back(curr_storage_core);  // current_dram_bank_id
+                            dram_bank_args.push_back(
+                                worker_core_stride * in1_single_tile_size);  // per_core_N_dram_bytes
+                            dram_bank_args.push_back(curr_storage_core);     // current_dram_bank_id
 
                             log_debug(
                                 tt::LogOp,
@@ -1341,9 +1329,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                                 uint32_t stride = worker_core_stride + per_core_N_storage;
                                 stride = std::min(stride, per_core_N);
 
-                                mm_in1_sender_writer_args.push_back(
+                                dram_bank_args.push_back(
                                     (stride - worker_core_stride) * in1_single_tile_size);  // per_core_N_dram_bytes
-                                mm_in1_sender_writer_args.push_back(curr_storage_core);     // current_dram_bank_id
+                                dram_bank_args.push_back(curr_storage_core);                // current_dram_bank_id
 
                                 log_debug(
                                     tt::LogOp,
@@ -1361,36 +1349,36 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                                 worker_core_stride = stride;
                             }
                         }
-                        mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + num_iter_index, num_iter);
+                        mm_in1_sender_writer_args.push_back(num_iter);
+                        mm_in1_sender_writer_args.append(dram_bank_args);
                     } else {
                         // Height sharded: no additional runtime args needed
                         // (bank/offset computed from compile-time args + batch index)
                     }
                 }
                 if (fuse_op) {
+                    std::vector<uint32_t> fuse_args;
                     if (fused_op_signaler->is_all_gather()) {
-                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
+                        fused_op_signaler->push_matmul_fused_op_rt_args(fuse_args, true);
                     } else if (fused_op_signaler->is_reduce_scatter()) {
-                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, in0_idx, in1_idx);
+                        fused_op_signaler->push_matmul_fused_op_rt_args(fuse_args, in0_idx, in1_idx);
                     } else {
                         TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
                     }
+                    mm_in1_sender_writer_args.append(fuse_args);
                 }
-                in1_sender_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_sender_writer_args);
+                in1_sender_writer_kernel_desc.emplace_runtime_args(core, std::move(mm_in1_sender_writer_args));
 
                 // in1 receiver
             } else {
-                std::vector<uint32_t> mm_in1_receiver_writer_args = {
-                    // READER
-                    // in1 mcast args
-                    (std::uint32_t)in1_mcast_sender.x,  // in1_mcast_sender_noc_x
-                    (std::uint32_t)in1_mcast_sender.y,  // in1_mcast_sender_noc_y
-
-                    // WRITER
-                    // out tensor args
-                    (std::uint32_t)out_buffer->address(),                               // out_tensor_addr
-                    ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
-                };
+                KernelDescriptor::RTArgList mm_in1_receiver_writer_args;
+                // READER: in1 mcast args
+                mm_in1_receiver_writer_args.push_back(uint32_t(in1_mcast_sender.x));  // in1_mcast_sender_noc_x [0]
+                mm_in1_receiver_writer_args.push_back(uint32_t(in1_mcast_sender.y));  // in1_mcast_sender_noc_y [1]
+                // WRITER: out tensor args
+                mm_in1_receiver_writer_args.push_back(out_buffer);  // out_tensor_addr [2]
+                mm_in1_receiver_writer_args.push_back(
+                    (uint32_t(in1_idx) * per_core_N) + (in0_idx * per_core_M * N));  // out_tensor_start_tile_id [3]
 
                 if (in1_idx == in1_end_idx and in0_idx == in0_end_idx) {  // bottom-right core when no transpose_mcast
                     // padding args (WRITER)
@@ -1412,14 +1400,14 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(out_subblock_w);
-                    mm_in1_receiver_writer_args.push_back(0);
-                    mm_in1_receiver_writer_args.push_back(0);
+                    mm_in1_receiver_writer_args.push_back(uint32_t(0));
+                    mm_in1_receiver_writer_args.push_back(uint32_t(0));
                 } else if (in1_idx == in1_end_idx) {  // right cores except bottom when no transpose_mcast
                     // padding args (WRITER)
                     mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(out_subblock_h);
-                    mm_in1_receiver_writer_args.push_back(0);
+                    mm_in1_receiver_writer_args.push_back(uint32_t(0));
                     mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                     mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_w);
@@ -1430,12 +1418,12 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                     mm_in1_receiver_writer_args.push_back(out_subblock_h);
-                    mm_in1_receiver_writer_args.push_back(0);
+                    mm_in1_receiver_writer_args.push_back(uint32_t(0));
                     mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(out_subblock_w);
-                    mm_in1_receiver_writer_args.push_back(0);
-                    mm_in1_receiver_writer_args.push_back(0);
+                    mm_in1_receiver_writer_args.push_back(uint32_t(0));
+                    mm_in1_receiver_writer_args.push_back(uint32_t(0));
                 }
                 if (!output_is_sharded) {
                     if (in1_idx == in1_end_idx and
@@ -1455,16 +1443,19 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 }
 
                 if (fuse_op && fused_op_signaler->is_reduce_scatter()) {
-                    fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_receiver_writer_args, in0_idx, in1_idx);
+                    std::vector<uint32_t> fuse_args;
+                    fused_op_signaler->push_matmul_fused_op_rt_args(fuse_args, in0_idx, in1_idx);
+                    mm_in1_receiver_writer_args.append(fuse_args);
                 }
 
                 // left half
                 if (core.x <= half_core || (transpose_mcast and core.y == start_core_y)) {
-                    in1_receiver_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_receiver_writer_args);
+                    in1_receiver_writer_kernel_desc.emplace_runtime_args(core, std::move(mm_in1_receiver_writer_args));
                 }
                 // right half
                 else {
-                    in1_receiver_writer_other_kernel_desc.runtime_args.emplace_back(core, mm_in1_receiver_writer_args);
+                    in1_receiver_writer_other_kernel_desc.emplace_runtime_args(
+                        core, std::move(mm_in1_receiver_writer_args));
                 }
             }
         }
