@@ -151,13 +151,6 @@ bool run_dm_2d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     uint32_t in1_col_data_size_uint32 = in1_input.size() / C;
     uint32_t in1_k_subblock_size_uint32 = in1_k_subblock_size_bytes / sizeof(uint32_t);
 
-    // ---- Clear all matmul cores L1 ----
-    uint32_t total_clear_size = risc1_local_barrier_addr + 16 - l1_base_address;
-    vector<uint32_t> zeros(total_clear_size / sizeof(uint32_t), 0);
-    for (const auto& core : matmul_cores_list) {
-        detail::WriteToDeviceL1(device, core, l1_base_address, zeros);
-    }
-
     // ---- Distribute in0 data round-robin across columns ----
     // Golden data map: row_y -> full row data (for in0 verification)
     unordered_map<uint32_t, vector<uint32_t>> dim_r_to_in0_pages_map;
@@ -384,19 +377,53 @@ bool run_dm_2d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
 }
 
 bool run_single_test(const shared_ptr<distributed::MeshDevice>& mesh_device, MatmulTestConfig test_config) {
-    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        unit_tests::dm::compute_physical_constraints(mesh_device);
-    test_config.page_size_bytes = bytes_per_page;
+    test_config.page_size_bytes = 2048;
     test_config.end_logical_core = CoreCoord(
         test_config.start_logical_core.x + test_config.num_subblocks_c_dim - 1,
         test_config.start_logical_core.y + test_config.num_subblocks_r_dim - 1);
     return run_dm_2d_matmul(mesh_device, test_config);
 }
 
+bool run_multiple_test(const shared_ptr<distributed::MeshDevice>& mesh_device, const MatmulTestConfig& test_config) {
+    auto or_scalar = [](const std::vector<uint32_t>& v, uint32_t scalar) {
+        return v.empty() ? std::vector<uint32_t>{scalar} : v;
+    };
+
+    auto nr_vals = or_scalar(test_config.num_subblocks_r_dim_sweep, test_config.num_subblocks_r_dim);
+    auto nc_vals = or_scalar(test_config.num_subblocks_c_dim_sweep, test_config.num_subblocks_c_dim);
+    auto nk_vals = or_scalar(test_config.num_subblocks_k_dim_sweep, test_config.num_subblocks_k_dim);
+    auto sr_vals = or_scalar(test_config.subblock_r_dim_sweep, test_config.subblock_r_dim);
+    auto sc_vals = or_scalar(test_config.subblock_c_dim_sweep, test_config.subblock_c_dim);
+    auto sk_vals = or_scalar(test_config.subblock_k_dim_sweep, test_config.subblock_k_dim);
+
+    bool all_pass = true;
+    for (uint32_t nr : nr_vals) {
+        for (uint32_t nc : nc_vals) {
+            for (uint32_t nk : nk_vals) {
+                for (uint32_t sr : sr_vals) {
+                    for (uint32_t sc : sc_vals) {
+                        for (uint32_t sk : sk_vals) {
+                            MatmulTestConfig single = test_config;
+                            single.num_subblocks_r_dim = nr;
+                            single.num_subblocks_c_dim = nc;
+                            single.num_subblocks_k_dim = nk;
+                            single.subblock_r_dim = sr;
+                            single.subblock_c_dim = sc;
+                            single.subblock_k_dim = sk;
+                            all_pass &= run_single_test(mesh_device, single);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return all_pass;
+}
+
 }  // namespace unit_tests::dm::two_d_matmul
 
 TEST_P(Matmul2DParamFixture, Test2DMatmul) {
-    EXPECT_TRUE(unit_tests::dm::two_d_matmul::run_single_test(get_mesh_device(), GetParam()));
+    EXPECT_TRUE(unit_tests::dm::two_d_matmul::run_multiple_test(get_mesh_device(), GetParam()));
 }
 
 INSTANTIATE_TEST_SUITE_P(

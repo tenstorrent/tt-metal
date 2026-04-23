@@ -56,7 +56,7 @@ Both API versions run the same test cases but use different underlying implement
 | Transaction ID              | 600-602, 610-611                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
 | PCIe Read Bandwidth         | 603, 605                        | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
 | PCIe Write Bandwidth        | 604                             | Measures PCIe write bandwidth from L1 to host memory on a single Tensix core.           |
-| Matmul                      | 1000-1026                       | 1D and 2D matmul DM tests across grid shapes, subblock dims, K depths, non-origin starts, and DRAM banks. 1D: in0 multicast + in1 DRAM read. 2D: in0 row multicast + in1 column multicast (all L1, no DRAM). |
+| Matmul                      | 1000-1028                       | 1D and 2D matmul DM tests across grid shapes, subblock dims, K depths, non-origin starts, and DRAM banks. 1D: in0 multicast + in1 DRAM read. 2D: in0 row multicast + in1 column multicast (all L1, no DRAM). |
 | NOC API Latency             | 700-706                         | Measures latency (cycles) of NOC API calls using experimental dataflow 2.0 API.         |
 | NOC Estimator               | 800-817                         | Comprehensive bandwidth sweeps for NOC estimation across all patterns and mechanisms.    |
 | Quasar Addrgen              | 900-909                         | Quasar-only: example kernels exercising the hardware address generator (1D/2D/face/interleaved). Requires Quasar simulator. |

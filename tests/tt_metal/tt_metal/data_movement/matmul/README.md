@@ -325,7 +325,7 @@ After program execution, the host reads back L1 memory from every core and verif
 
 | Parameter             | Type         | Description |
 |-----------------------|--------------|-------------|
-| `test_id`             | `uint32_t`   | Unique test case identifier (1000-1025). |
+| `test_id`             | `uint32_t`   | Unique test case identifier (1000-1027). |
 | `start_logical_core`  | `CoreCoord`  | Top-left logical coordinate of the core grid. Default: (0,0). |
 | `num_subblocks_r_dim` | `uint32_t`   | R — number of rows of cores. Default: 2. |
 | `num_subblocks_c_dim` | `uint32_t`   | C — number of columns of cores. Default: 2. |
@@ -440,6 +440,19 @@ pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtes
 
 # 1D V2 matmul
 pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter="Test1DMatmulV2/ID1026" --plot --verbose-log
+```
+
+The R subblock size sweep (test ID 1027) varies `subblock_r_dim` ∈ {1, 2, 4, 8} while holding the 4x4 grid, K=4, `subblock_k_dim`=4, and `subblock_c_dim`=1 fixed.
+
+```bash
+# 2D matmul
+pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter="Test2DMatmul/ID1027" --plot --verbose-log
+
+# 1D matmul
+pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter="Test1DMatmul/ID1027" --plot --verbose-log
+
+# 1D V2 matmul
+pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter="Test1DMatmulV2/ID1027" --plot --verbose-log
 ```
 
 Graphs are saved to `tests/tt_metal/tt_metal/data_movement/data/<arch>/`.
