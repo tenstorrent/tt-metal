@@ -16,7 +16,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 #include <umd/device/chip_helpers/tlb_manager.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <cstdlib>
 #include <cstring>
 #include <sys/mman.h>
@@ -368,10 +367,9 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
             _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
             _mm_lfence();
             return *hugepage_bytes_sent_host_ptr_;
-        } else {
-            tt_driver_atomics::mfence();
-            return bytes_sent_ptr_[0];
         }
+        tt_driver_atomics::mfence();
+        return bytes_sent_ptr_[0];
     };
 
     volatile uint32_t bytes_sent_value = read_bytes_sent();
