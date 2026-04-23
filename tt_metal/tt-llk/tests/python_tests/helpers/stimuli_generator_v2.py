@@ -1065,7 +1065,12 @@ def _get_dtype_for_format(stimuli_format: DataFormat) -> torch.dtype:
 
 
 def _get_integer_bounds(stimuli_format: DataFormat) -> tuple[int, int]:
-    """Return the valid integer range (min, max) inclusive for *stimuli_format*."""
+    """Return the valid integer range (min, max) inclusive for *stimuli_format*.
+
+    For signed formats we exclude the most negative value (min + 1) because our
+    integer paths use sign-magnitude encoding, and the INT_MIN bit pattern cannot
+    be represented correctly in that scheme.
+    """
     bounds: Dict[DataFormat, tuple[int, int]] = {
         DataFormat.Int8: (torch.iinfo(torch.int8).min + 1, torch.iinfo(torch.int8).max),
         DataFormat.UInt8: (torch.iinfo(torch.uint8).min, torch.iinfo(torch.uint8).max),
