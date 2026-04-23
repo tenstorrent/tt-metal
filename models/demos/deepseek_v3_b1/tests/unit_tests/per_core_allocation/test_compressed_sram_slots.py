@@ -9,9 +9,14 @@ Validates:
   - Single-device slot preparation with per-core L1 allocation
   - ExpertKernel fmt metadata tensor creation from slots
   - Expert index encoding and selection meta for SRAM/DRAM routing
+  - BSPM real-assignment path: 0 bfp8 tiles, real {bfp4, bfp2, zero} assignment
 """
 
+import os
+from pathlib import Path
+
 import numpy as np
+import pytest
 import torch
 from loguru import logger
 
@@ -442,3 +447,298 @@ def test_build_sram_hot_expert_config_multi_layer():
     assert len(config[3]) == 3
     assert len(config[5]) == 2
     logger.info(f"Multi-layer config: {config}")
+
+
+# ---------------------------------------------------------------------------
+# BSPM real-assignment tests
+#
+# All tests in this section require BSPM_RESULTS_DIR to point to a BitSculpt
+# results directory containing:
+#   deepseek-r1-0528/layer_4/precision_eval/precision_map_B_3.5.bspm
+#
+# The layer-4 Variant-B 3.5 b/e assignment has 0 bfp8 tiles — the exact
+# condition that exercises the BSPM path through _build_l1_compressed_tensor
+# and prepare_compressed_sram_slots.
+# ---------------------------------------------------------------------------
+
+# DeepSeek gate/up and down projection shapes (K, N) in compute layout.
+# HF state dict stores weights as (out_features, in_features); .T gives (K, N).
+_BSPM_LAYER_IDX = 4
+_GATE_UP_SHAPE = (7168, 2048)  # K=7168, N=2048
+_DOWN_SHAPE = (2048, 7168)  # K=2048, N=7168
+_PROJ_SHAPES = [_GATE_UP_SHAPE, _GATE_UP_SHAPE, _DOWN_SHAPE]  # indexed by proj_idx
+
+# Projection index constants matching BSPM file convention.
+_PROJ_GATE = 0
+_PROJ_UP = 1
+_PROJ_DOWN = 2
+
+# Core counts: N must be divisible by num_cores and N/num_cores must be
+# tile-aligned (multiple of 32).
+# gate/up: N=2048, 16 cores → 128 cols/core → 4 tile-cols (valid)
+# down:    N=7168, 28 cores → 256 cols/core → 8 tile-cols (valid)
+_GATE_UP_NUM_CORES = 16
+_DOWN_NUM_CORES = 28
+
+
+def _get_bspm_path() -> Path:
+    """Return path to layer-4 BSPM file, or pytest.skip if unavailable."""
+    bspm_dir = os.environ.get("BSPM_RESULTS_DIR")
+    if not bspm_dir:
+        pytest.skip("BSPM_RESULTS_DIR not set")
+    bspm_path = Path(bspm_dir) / "deepseek-r1-0528" / "layer_4" / "precision_eval" / "precision_map_B_3.5.bspm"
+    if not bspm_path.exists():
+        pytest.skip(f"BSPM file not found: {bspm_path}")
+    return bspm_path
+
+
+def _make_bspm_assignment_provider(bspm_path: Path):
+    """Return a callable (expert_idx, proj_idx) -> np.ndarray for load_bspm_for_expert."""
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+
+    def provider(expert_idx: int, proj_idx: int) -> np.ndarray:
+        K, N = _PROJ_SHAPES[proj_idx]
+        return load_bspm_for_expert(
+            str(bspm_path),
+            expert_idx=expert_idx,
+            proj_idx=proj_idx,
+            tile_rows=K // TILE_W,
+            tile_cols=N // TILE_W,
+        )
+
+    return provider
+
+
+def _make_bspm_state_dict(layer_idx: int, expert_indices: list[int]) -> dict:
+    """Random weights at actual DeepSeek projection shapes (HF layout: out × in)."""
+    sd = {}
+    K_gate, N_gate = _GATE_UP_SHAPE
+    K_down, N_down = _DOWN_SHAPE
+    for e in expert_indices:
+        torch.manual_seed(e * 1000 + layer_idx)
+        sd[f"model.layers.{layer_idx}.mlp.experts.{e}.gate_proj.weight"] = torch.randn(N_gate, K_gate)
+        sd[f"model.layers.{layer_idx}.mlp.experts.{e}.up_proj.weight"] = torch.randn(N_gate, K_gate)
+        sd[f"model.layers.{layer_idx}.mlp.experts.{e}.down_proj.weight"] = torch.randn(N_down, K_down)
+    return sd
+
+
+def _make_bspm_core_grids(device) -> SramExpertCoreGrids:
+    """Production-matching core grids for the BSPM shapes."""
+    gate_grid = _build_sram_core_grid(device, _GATE_UP_NUM_CORES)
+    down_grid = _build_sram_core_grid(device, _DOWN_NUM_CORES)
+    return SramExpertCoreGrids(gate=gate_grid, up=gate_grid, down=down_grid)
+
+
+def test_build_l1_compressed_tensor_bspm(device):
+    """_build_l1_compressed_tensor with a real BSPM gate_proj assignment (0 bfp8 tiles).
+
+    Exercises the assignment= path in _build_l1_compressed_tensor using the layer-4
+    Variant-B 3.5 b/e BSPM assignment for expert 0.  Verifies the CT is allocated in
+    L1 with 0 bfp8 tiles and valid per-core addresses.
+    Requires BSPM_RESULTS_DIR.
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+
+    bspm_path = _get_bspm_path()
+    K, N = _GATE_UP_SHAPE
+    core_grid = _build_sram_core_grid(device, _GATE_UP_NUM_CORES)
+
+    assignment = load_bspm_for_expert(
+        str(bspm_path), expert_idx=0, proj_idx=_PROJ_GATE, tile_rows=K // TILE_W, tile_cols=N // TILE_W
+    )
+
+    torch.manual_seed(0)
+    weight = torch.randn(K, N).float()
+
+    ct = _build_l1_compressed_tensor(weight, core_grid, assignment=assignment, device=device)
+
+    assert isinstance(ct, CompressedTensor)
+    assert (
+        ct.tile_counts.get("bfp8", 0) == 0
+    ), f"Real BSPM 3.5 b/e should have 0 bfp8 tiles, got tile_counts={ct.tile_counts}"
+    assert ct.tile_counts.get("bfp4", 0) > 0, f"Expected bfp4 tiles, got {ct.tile_counts}"
+
+    cores = ttnn.corerange_to_cores(core_grid)
+    for c in cores:
+        addr = ct.get_data_l1_address_per_core(c)
+        assert addr > 0, f"core ({c.x},{c.y}) has invalid L1 address"
+
+    logger.info(f"BSPM gate_proj L1 CT tile_counts: {ct.tile_counts} on {len(cores)} cores")
+
+
+def test_build_l1_compressed_tensor_bspm_down_proj(device):
+    """_build_l1_compressed_tensor with real BSPM down_proj assignment (K=2048, N=7168).
+
+    28 cores: N=7168/28=256 cols/core → 8 tile-cols (tile-aligned).
+    Requires BSPM_RESULTS_DIR.
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+
+    bspm_path = _get_bspm_path()
+    K, N = _DOWN_SHAPE
+    core_grid = _build_sram_core_grid(device, _DOWN_NUM_CORES)
+
+    assignment = load_bspm_for_expert(
+        str(bspm_path), expert_idx=0, proj_idx=_PROJ_DOWN, tile_rows=K // TILE_W, tile_cols=N // TILE_W
+    )
+
+    torch.manual_seed(1)
+    weight = torch.randn(K, N).float()
+
+    ct = _build_l1_compressed_tensor(weight, core_grid, assignment=assignment, device=device)
+
+    assert isinstance(ct, CompressedTensor)
+    assert ct.tile_counts.get("bfp8", 0) == 0, f"Real BSPM 3.5 b/e should have 0 bfp8 tiles, got {ct.tile_counts}"
+    assert ct.tile_counts.get("bfp4", 0) > 0, f"Expected bfp4 tiles, got {ct.tile_counts}"
+
+    cores = ttnn.corerange_to_cores(core_grid)
+    for c in cores:
+        addr = ct.get_data_l1_address_per_core(c)
+        assert addr > 0, f"core ({c.x},{c.y}) has invalid L1 address"
+
+    logger.info(f"BSPM down_proj L1 CT tile_counts: {ct.tile_counts} on {len(cores)} cores")
+
+
+def test_prepare_compressed_sram_slots_bspm(device):
+    """prepare_compressed_sram_slots with real BSPM assignments for all three projections.
+
+    Uses the assignment_provider path: real {bfp4, bfp2, zero} assignments from the
+    layer-4 Variant-B 3.5 b/e BSPM file.  Uses expert_idx=5 (non-zero) to verify
+    that per-expert BSPM loading is not accidentally hardcoded to expert 0.
+    Validates that all slots allocate to L1 with 0 bfp8 tiles across gate, up, and
+    down projections.
+    Requires BSPM_RESULTS_DIR.
+    """
+    bspm_path = _get_bspm_path()
+    expert_idx = 5
+
+    sd = _make_bspm_state_dict(_BSPM_LAYER_IDX, [expert_idx])
+    core_grids = _make_bspm_core_grids(device)
+    assignment_provider = _make_bspm_assignment_provider(bspm_path)
+
+    slots = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=_BSPM_LAYER_IDX,
+        initial_expert_indices=[expert_idx],
+        core_grids=core_grids,
+        assignment_provider=assignment_provider,
+        move_to_device=True,
+    )
+
+    assert slots.num_slots == 1
+    assert slots.slot_experts == [expert_idx]
+
+    proj_grids = {
+        "gate": (slots.gate_proj, core_grids.gate),
+        "up": (slots.up_proj, core_grids.up),
+        "down": (slots.down_proj, core_grids.down),
+    }
+    for proj_name, (cts, grid) in proj_grids.items():
+        ct = cts[0]
+        assert isinstance(ct, CompressedTensor), f"{proj_name}: expected CompressedTensor"
+        assert ct.tile_counts.get("bfp8", 0) == 0, f"{proj_name}: expected 0 bfp8 tiles, got {ct.tile_counts}"
+        assert ct.tile_counts.get("bfp4", 0) > 0, f"{proj_name}: expected bfp4 tiles"
+        cores = ttnn.corerange_to_cores(grid)
+        for c in cores:
+            addr = ct.get_data_l1_address_per_core(c)
+            assert addr > 0, f"{proj_name} core ({c.x},{c.y}): invalid L1 address"
+        logger.info(f"  BSPM {proj_name}: {ct.tile_counts}")
+
+
+def test_sram_slot_fmt_tensors_bspm(device):
+    """create_expert_fmt_tensors produces valid metadata tensors from BSPM-sourced slots.
+
+    Mirrors test_sram_slot_fmt_tensors but uses the assignment_provider path with
+    production shapes (gate_proj 7168×2048, 16 cores) and 1 expert.  One expert
+    fills ~91% of the L1 bank (1327 KB / 1462 KB); a second would cause OOM.
+    Verifies that fmt tensors are on-device and have the correct per-core structure
+    when the underlying CTs come from real {bfp4, bfp2, zero} BSPM assignments.
+    Requires BSPM_RESULTS_DIR.
+    """
+    bspm_path = _get_bspm_path()
+    expert_indices = [0]
+
+    sd = _make_bspm_state_dict(_BSPM_LAYER_IDX, expert_indices)
+    core_grids = _make_bspm_core_grids(device)
+    assignment_provider = _make_bspm_assignment_provider(bspm_path)
+
+    slots = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=_BSPM_LAYER_IDX,
+        initial_expert_indices=expert_indices,
+        core_grids=core_grids,
+        assignment_provider=assignment_provider,
+        move_to_device=True,
+    )
+
+    K_gate, N_gate = _GATE_UP_SHAPE
+    tiles_per_core = (K_gate // TILE_W) * (N_gate // _GATE_UP_NUM_CORES // TILE_W)
+    fmt_tensors = create_expert_fmt_tensors(slots.gate_proj, device, core_grids.gate, tiles_per_core)
+
+    assert len(fmt_tensors) > 0
+    for coord, core_tensors in fmt_tensors.items():
+        assert (
+            len(core_tensors) == _GATE_UP_NUM_CORES
+        ), f"Expected {_GATE_UP_NUM_CORES} core entries, got {len(core_tensors)}"
+        for idx, t in core_tensors.items():
+            assert ttnn.is_tensor_storage_on_device(t), f"fmt tensor core {idx} not on device"
+    logger.info(
+        f"BSPM fmt_tensors: {len(fmt_tensors)} device coords, "
+        f"{_GATE_UP_NUM_CORES} cores each, tiles_per_core={tiles_per_core}"
+    )
+
+
+def test_compute_expert_l1_bytes_bspm():
+    """compute_expert_l1_bytes with real BSPM assignments at production shapes.
+
+    Loads all three projection assignments from the layer-4 3.5 b/e BSPM file
+    and verifies the L1 footprint is positive and strictly smaller than all-bfp8
+    (since bfp4 tiles are 576 bytes vs bfp8's 1088 bytes).
+    Does not require a device — pure host-side computation.
+    Requires BSPM_RESULTS_DIR.
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import bfp_tile_packed_size
+
+    bspm_path = _get_bspm_path()
+
+    assignments = []
+    shapes = []
+    for proj_idx, (K, N) in enumerate(_PROJ_SHAPES):
+        asgn = load_bspm_for_expert(
+            str(bspm_path), expert_idx=0, proj_idx=proj_idx, tile_rows=K // TILE_W, tile_cols=N // TILE_W
+        )
+        assignments.append(asgn)
+        shapes.append((K, N))
+
+    # Use simple rectangular grids — compute_expert_l1_bytes is device-agnostic.
+    # gate/up: 16 cores along a row; down: 28 cores = 13-core row + 15-core row.
+    gate_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(15, 0))])
+    down_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 0)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(14, 1)),
+        ]
+    )
+    core_grids = SramExpertCoreGrids(gate=gate_grid, up=gate_grid, down=down_grid)
+
+    computed = compute_expert_l1_bytes(assignments, shapes, core_grids)
+    assert computed > 0, "L1 bytes must be positive for a non-empty BSPM assignment"
+
+    # All-bfp8 upper bound: every tile at bfp8 cost.
+    bfp8_bytes = bfp_tile_packed_size(7, TILE_W)
+    bfp4_bytes = bfp_tile_packed_size(3, TILE_W)
+    all_bfp8_cost = sum((K // TILE_W) * (N // TILE_W) * bfp8_bytes for K, N in shapes)
+    assert (
+        computed < all_bfp8_cost
+    ), f"BSPM (bfp4-dominant) L1 cost {computed} should be < all-bfp8 cost {all_bfp8_cost}"
+
+    # Sanity: bfp4 lower bound — all tiles at bfp4.
+    all_bfp4_cost = sum((K // TILE_W) * (N // TILE_W) * bfp4_bytes for K, N in shapes)
+    assert computed <= all_bfp4_cost, f"BSPM cost {computed} must be <= all-bfp4 {all_bfp4_cost} (no bfp8 tiles)"
+
+    logger.info(
+        f"BSPM expert L1 cost: {computed:,} bytes " f"(all-bfp8: {all_bfp8_cost:,}, all-bfp4: {all_bfp4_cost:,})"
+    )
