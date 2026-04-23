@@ -200,7 +200,7 @@ def _aggregate(
         output=out,
         cache_read=cr,
         cache_creation=cc,
-        total=inp + out + cr + cc,
+        total=inp + out,
         cost_usd=round(cost, 6),
     )
 
@@ -306,12 +306,7 @@ def main(argv: list[str] | None = None) -> int:
                 totals[k] += sub_t[k]
             totals["cost_usd"] += sub_t["cost_usd"]
 
-    totals["total"] = (
-        totals["input"]
-        + totals["output"]
-        + totals["cache_read"]
-        + totals["cache_creation"]
-    )
+    totals["total"] = totals["input"] + totals["output"]
     totals["cost_usd"] = round(totals["cost_usd"], 6)
 
     if args.log_dir:
