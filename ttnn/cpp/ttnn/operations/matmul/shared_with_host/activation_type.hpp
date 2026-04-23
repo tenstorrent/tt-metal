@@ -6,10 +6,4 @@
 
 #include <cstdint>
 
-enum class KernelActivation : uint32_t {
-    NONE,
-    GELU,
-    TANH,
-    SILU,
-    RELU6,
-};
+enum class KernelActivation : uint32_t { NONE, GELU, TANH, SILU, RELU6, SIGMOID, HARDSIGMOID };
