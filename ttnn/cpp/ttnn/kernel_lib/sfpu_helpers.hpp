@@ -61,6 +61,7 @@
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/add_int_sfpu.h"
 #include "api/compute/binary_max_min.h"
+#include "api/compute/copy_dest_values.h"
 #include "api/compute/compute_kernel_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
 
@@ -187,9 +188,33 @@ using namespace ckernel;
  * @brief Self-documenting DEST register slot indices
  *
  * Used as compile-time template parameters for op structs and Load.
- * Maximum 8 slots (hardware limit in half-sync fp16 mode).
+ * Hardware limit depends on sync mode and accumulation format:
+ *   SyncHalf + fp16:      8 slots  (D0–D7)
+ *   SyncHalf + fp32accum: 4 slots  (D0–D3)
+ *   SyncFull + fp16:     16 slots  (D0–D15)
+ *   SyncFull + fp32accum: 8 slots  (D0–D7)
+ * The compile-time static_assert guards against the absolute hardware maximum (16).
+ * Runtime validation via DEST_AUTO_LIMIT (in sfpu_pipeline ASSERT) enforces the
+ * mode-specific limit.
  */
-enum class Dst : uint32_t { D0 = 0, D1 = 1, D2 = 2, D3 = 3, D4 = 4, D5 = 5, D6 = 6, D7 = 7 };
+enum class Dst : uint32_t {
+    D0 = 0,
+    D1 = 1,
+    D2 = 2,
+    D3 = 3,
+    D4 = 4,
+    D5 = 5,
+    D6 = 6,
+    D7 = 7,
+    D8 = 8,
+    D9 = 9,
+    D10 = 10,
+    D11 = 11,
+    D12 = 12,
+    D13 = 13,
+    D14 = 14,
+    D15 = 15,
+};
 
 // =============================================================================
 // Approximation Mode Enums (self-documenting template params)
@@ -297,7 +322,7 @@ template <typename Derived, Dst Slot>
 struct UnaryOp {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static constexpr uint32_t max_dst = dst_idx;
-    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    static_assert(dst_idx < 16, "DEST slot exceeds hardware maximum (16)");
     ALWI void exec(uint32_t offset = 0) const { static_cast<const Derived*>(this)->call(dst_idx + offset); }
     ALWI void apply(uint32_t offset = 0) const {
         static_cast<const Derived*>(this)->init();
@@ -317,9 +342,9 @@ struct BinaryOp {
     static constexpr uint32_t in1 = static_cast<uint32_t>(In1);
     static constexpr uint32_t out = static_cast<uint32_t>(Out);
     static constexpr uint32_t max_dst = (in0 > in1) ? ((in0 > out) ? in0 : out) : ((in1 > out) ? in1 : out);
-    static_assert(in0 < 8, "DEST slot In0 exceeds maximum capacity (8)");
-    static_assert(in1 < 8, "DEST slot In1 exceeds maximum capacity (8)");
-    static_assert(out < 8, "DEST slot Out exceeds maximum capacity (8)");
+    static_assert(in0 < 16, "DEST slot In0 exceeds hardware maximum (16)");
+    static_assert(in1 < 16, "DEST slot In1 exceeds hardware maximum (16)");
+    static_assert(out < 16, "DEST slot Out exceeds hardware maximum (16)");
     ALWI void exec(uint32_t offset = 0) const {
         static_cast<const Derived*>(this)->call(in0 + offset, in1 + offset, out + offset);
     }
@@ -344,7 +369,7 @@ struct TernaryOp {
     static constexpr uint32_t max_dst = (in0 > in1)
                                             ? ((in0 > in2) ? ((in0 > out) ? in0 : out) : ((in2 > out) ? in2 : out))
                                             : ((in1 > in2) ? ((in1 > out) ? in1 : out) : ((in2 > out) ? in2 : out));
-    static_assert(in0 < 8 && in1 < 8 && in2 < 8 && out < 8, "DEST slot exceeds maximum capacity (8)");
+    static_assert(in0 < 16 && in1 < 16 && in2 < 16 && out < 16, "DEST slot exceeds hardware maximum (16)");
     ALWI void exec(uint32_t offset = 0) const {
         static_cast<const Derived*>(this)->call(in0 + offset, in1 + offset, in2 + offset, out + offset);
     }
@@ -391,7 +416,7 @@ struct Load : LoadTag {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static constexpr uint32_t max_dst = dst_idx;
     static constexpr LoadPolicy policy = Policy;
-    static_assert(static_cast<uint32_t>(Slot) < 8, "DEST slot exceeds maximum capacity (8)");
+    static_assert(static_cast<uint32_t>(Slot) < 16, "DEST slot exceeds hardware maximum (16)");
 
     ALWI void init() const {}
 
@@ -1196,6 +1221,22 @@ struct Addcdiv : TernaryOp<Addcdiv<df, In0, In1, In2, Out>, In0, In1, In2, Out> 
     uint32_t value;
     ALWI void init() const;
     ALWI void call(uint32_t a, uint32_t b, uint32_t c, uint32_t d) const;
+};
+
+// CopyDest: copy DEST[From] → DEST[To] (pure DEST-to-DEST move, no CB involved)
+template <Dst From = Dst::D0, Dst To = Dst::D1>
+struct CopyDest {
+    static constexpr uint32_t src_idx = static_cast<uint32_t>(From);
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(To);
+    static constexpr uint32_t max_dst = (src_idx > dst_idx) ? src_idx : dst_idx;
+    static_assert(src_idx < 16 && dst_idx < 16, "DEST slot exceeds hardware maximum (16)");
+
+    ALWI void init() const;
+    ALWI void exec(uint32_t offset = 0) const;
+    ALWI void apply(uint32_t offset = 0) const {
+        init();
+        exec(offset);
+    }
 };
 
 // =============================================================================

@@ -68,6 +68,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/add_int_sfpu.h"
+#include "api/compute/copy_dest_values.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/debug/assert.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
@@ -531,6 +532,13 @@ ALWI void LgammaAdjusted<In0, In1, In2, Out>::init() const { lgamma_adjusted_til
 template <Dst In0, Dst In1, Dst In2, Dst Out>
 ALWI void LgammaAdjusted<In0, In1, In2, Out>::call(uint32_t a, uint32_t b, uint32_t c, uint32_t d) const {
     lgamma_adjusted_tile(a, b, c, d);
+}
+
+template <Dst From, Dst To>
+ALWI void CopyDest<From, To>::init() const { copy_dest_values_init(); }
+template <Dst From, Dst To>
+ALWI void CopyDest<From, To>::exec(uint32_t offset) const {
+    copy_dest_values(src_idx + offset, dst_idx + offset);
 }
 
 template <DataFormat df, Dst In0, Dst In1, Dst In2, Dst Out>
