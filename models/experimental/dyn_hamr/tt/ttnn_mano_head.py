@@ -43,6 +43,11 @@ def _t(weight: torch.Tensor, device: Any) -> Any:
 def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
     head = ref.head
     td = head.transformer
+    # Fuse the three regression projections (pose 96, shape 10, cam 3) into a
+    # single (1024, 109) matmul + (109,) bias.  One device→host transfer at
+    # the end instead of three.
+    dec_w = torch.cat([head.decpose.weight, head.decshape.weight, head.deccam.weight], dim=0).t()
+    dec_b = torch.cat([head.decpose.bias, head.decshape.bias, head.deccam.bias], dim=0)
     params: Dict[str, Any] = {
         "to_token_embedding": {
             "weight": _t(td.to_token_embedding.weight.t(), device),  # (1, 1024)
@@ -50,18 +55,9 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
         },
         "pos_embedding": _t(td.pos_embedding.squeeze(0), device),    # (1, 1024)
         "layers": [],
-        "decpose": {
-            "weight": _t(head.decpose.weight.t(), device),
-            "bias": _t(head.decpose.bias, device),
-        },
-        "decshape": {
-            "weight": _t(head.decshape.weight.t(), device),
-            "bias": _t(head.decshape.bias, device),
-        },
-        "deccam": {
-            "weight": _t(head.deccam.weight.t(), device),
-            "bias": _t(head.deccam.bias, device),
-        },
+        "dec_w": _t(dec_w, device),
+        "dec_b": _t(dec_b, device),
+        "dec_split": (head.decpose.out_features, head.decshape.out_features, head.deccam.out_features),
     }
     for blk in td.layers:
         params["layers"].append({
@@ -195,18 +191,14 @@ def forward(
     for i in range(depth):
         x = _decoder_block(x, feature_tokens, params["layers"][i])
 
-    # Three regression heads stay on device, then squeeze + add init params on host.
-    pose = x @ params["decpose"]["weight"]
-    pose = pose + params["decpose"]["bias"]
-    betas = x @ params["decshape"]["weight"]
-    betas = betas + params["decshape"]["bias"]
-    cam = x @ params["deccam"]["weight"]
-    cam = cam + params["deccam"]["bias"]
-
-    # Pull tiny tensors back to host (each is (B, 1, dim_out)) — total ~1KB.
-    pose_h = ttnn.to_torch(pose).to(torch.float32).reshape(B, -1) + init_hand_pose
-    betas_h = ttnn.to_torch(betas).to(torch.float32).reshape(B, -1) + init_betas
-    cam_h = ttnn.to_torch(cam).to(torch.float32).reshape(B, -1) + init_cam
+    # Single fused regression matmul → one device→host transfer.
+    dec = x @ params["dec_w"]                              # (B, 1, 109_padded)
+    dec = dec + params["dec_b"]
+    dec_h = ttnn.to_torch(dec).to(torch.float32).reshape(B, -1)
+    np_pose, np_shape, np_cam = params["dec_split"]
+    pose_h = dec_h[:, :np_pose] + init_hand_pose
+    betas_h = dec_h[:, np_pose : np_pose + np_shape] + init_betas
+    cam_h = dec_h[:, np_pose + np_shape : np_pose + np_shape + np_cam] + init_cam
 
     rotmats = _rot6d_to_rotmat_torch(pose_h).view(B, num_hand_joints + 1, 3, 3)
     return torch.cat([rotmats.reshape(B, -1), betas_h, cam_h], dim=-1)  # (B, 157)
