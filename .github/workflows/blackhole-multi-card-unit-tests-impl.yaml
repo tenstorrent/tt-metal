@@ -114,6 +114,7 @@ jobs:
               pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py -vvv --tb=short --timeout=900
               pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device" -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_moe_grouped_topk.py -k "realistic" -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900
             timeout: 60
             test-type: loudbox
             owner_id: U08E1JCMAJF # Marko Bezulj
