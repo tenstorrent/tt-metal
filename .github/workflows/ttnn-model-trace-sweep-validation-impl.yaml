@@ -136,11 +136,6 @@ jobs:
             "$PINNED_TRACE_ID" \
             model_tracer/traced_operations/ttnn_operations_master.json
 
-      - name: Prepare master JSON for validation
-        run: |
-          python3 model_tracer/prepare_master_for_validation.py \
-            model_tracer/traced_operations/ttnn_operations_master.json
-
       - name: Run config hash preflight
         run: |
           python3 model_tracer/config_hash_preflight.py \
