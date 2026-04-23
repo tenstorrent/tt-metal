@@ -1410,21 +1410,7 @@ void kernel_main() {
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
     DEVICE_PRINT("dispatch_{}{}: start\n", is_h_variant, is_d_variant);
 #endif
-#ifndef COMPILE_FOR_IDLE_ERISC
-    // Issue #18881: snapshot our NOC1 atomic-acked counter at kernel entry so we can
-    // publish only the *delta* (atomics this kernel issued) to dispatch_s. The absolute
-    // value is seeded from the NIU register at startup and would otherwise double-count
-    // when merged into dispatch_s's local counter (also seeded from the same NIU).
-    constexpr uint8_t kDispatchDProc = 0;  // dispatch_d runs on BRISC
-    const uint32_t dispatch_d_atomics_acked_start = NOC_STATUS_READ_REG(upstream_noc_index, NIU_MST_ATOMIC_RESP_RECEIVED);
-    const uint32_t dispatch_d_slot_start =
-        get_noc_counter_val<kDispatchDProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index);
-    DPRINT << "DBG18881 dispatch_d: snapshot at start, upstream_noc_index="
-           << (uint32_t)upstream_noc_index
-           << " local_atomics_acked_start=" << dispatch_d_atomics_acked_start
-           << " dispatch_d_slot=" << dispatch_d_slot_start
-           << ENDL();
-#endif
+
     // Get runtime args
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
@@ -1435,6 +1421,22 @@ void kernel_main() {
     if constexpr (my_noc_index != upstream_noc_index) {
         noc_local_state_init(upstream_noc_index);
     }
+
+#ifndef COMPILE_FOR_IDLE_ERISC
+    // Issue #18881: snapshot our NOC1 atomic-acked counter at kernel entry so we can
+    // publish only the *delta* (atomics this kernel issued) to dispatch_s. The absolute
+    // value is seeded from the NIU register at startup and would otherwise double-count
+    // when merged into dispatch_s's local counter (also seeded from the same NIU).
+    constexpr uint8_t kDispatchDProc = 0;  // dispatch_d runs on BRISC
+    const uint32_t dispatch_d_atomics_acked_start = noc_nonposted_atomics_acked[upstream_noc_index];
+    const uint32_t dispatch_d_counter_val_start =
+        get_noc_counter_val<kDispatchDProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index);
+    DPRINT << "DBG18881 dispatch_d: snapshot at start, upstream_noc_index="
+           << (uint32_t)upstream_noc_index
+           << " local_atomics_acked_start=" << dispatch_d_atomics_acked_start
+           << " dispatch_d_counter_val_start=" << dispatch_d_counter_val_start
+           << ENDL();
+#endif
 
     for (size_t i = 0; i < max_num_worker_sems; i++) {
         uint32_t index = i + first_stream_used;
@@ -1527,27 +1529,24 @@ void kernel_main() {
     // Sentinel +1 so the slot value is always nonzero once published.
     constexpr uint8_t kDispatchSProc = 1;  // dispatch_s runs on NCRISC
     {
-        const uint32_t local_atomics = noc_nonposted_atomics_acked[upstream_noc_index];
-        const uint32_t niu_atomics = NOC_STATUS_READ_REG(upstream_noc_index, NIU_MST_ATOMIC_RESP_RECEIVED);
-        const uint32_t dispatch_d_slot_end =
+        // const uint32_t niu_atomics = NOC_STATUS_READ_REG(upstream_noc_index, NIU_MST_ATOMIC_RESP_RECEIVED);
+
+        const uint32_t dispatch_d_atomics_acked_stop = noc_nonposted_atomics_acked[upstream_noc_index];
+        const uint32_t dispatch_d_counter_val_stop =
             get_noc_counter_val<kDispatchDProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index);
-        // Publish the DELTA, not the absolute. Local counter was seeded from the NIU at
-        // kernel start; dispatch_s's local was seeded the same way. Adding the absolute
-        // would double-count the seed. Sentinel +1 keeps the slot nonzero post-publish.
-        const uint32_t delta = local_atomics - dispatch_d_atomics_acked_start;
+
+        // const uint32_t delta = local_atomics - dispatch_d_atomics_acked_start;
         DPRINT << "DBG18881 dispatch_d: upstream_noc_index=" << (uint32_t)upstream_noc_index
                << " my_noc_index=" << (uint32_t)my_noc_index
-               << " local_atomics_acked=" << local_atomics
-               << " local_atomics_acked_start=" << dispatch_d_atomics_acked_start
-               << " delta=" << delta
-               << " niu_atomic_resp=" << niu_atomics
-               << " dispatch_d_slot_start=" << dispatch_d_slot_start
-               << " dispatch_d_slot_end=" << dispatch_d_slot_end
-               << " publishing(delta+1)=" << (delta + 1) << ENDL();
+               << " dispatch_d_atomics_acked_stop=" << dispatch_d_atomics_acked_stop
+               << " dispatch_d_counter_val_stop=" << dispatch_d_counter_val_stop
+               << ENDL();
+        uint32_t delta = dispatch_d_atomics_acked_stop - dispatch_d_atomics_acked_start;
         set_noc_counter_val<kDispatchSProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
-            upstream_noc_index, delta + 1);
+            upstream_noc_index, delta);
         DPRINT << "DBG18881 dispatch_d: published, slot_readback="
                << get_noc_counter_val<kDispatchSProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index)
+               << " delta=" << delta
                << ENDL();
     }
 #endif
