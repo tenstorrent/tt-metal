@@ -132,7 +132,7 @@ def prepare_gpt_oss_generator_args(
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput,
             use_deepseek_prefill=use_throughput,  # Use DeepSeek prefill ops when throughput experts enabled
-            prefill_seq_len=128,
+            prefill_seq_len=128 * int(os.environ.get("GPT_OSS_USERS_PER_ROW", 1)),
             num_layers=int(os.environ.get("GPT_OSS_NUM_LAYERS", 0)) or None,
         )
         model_args.append(model_args_i)
