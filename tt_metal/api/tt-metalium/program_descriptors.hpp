@@ -148,6 +148,8 @@ struct KernelDescriptor {
     // as buffer bindings at their position.  Use this instead of
     // runtime_args.emplace_back() when some args are buffer base addresses.
     void emplace_runtime_args(const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args);
+    // Vector overload for dynamically-built arg lists.
+    void emplace_runtime_args(const CoreCoord& core, std::vector<std::variant<uint32_t, Buffer*>> args);
 };
 
 struct ProgramDescriptor {
