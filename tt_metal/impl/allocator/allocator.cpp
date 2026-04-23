@@ -412,7 +412,8 @@ std::optional<DeviceAddr> AllocatorImpl::get_lowest_occupied_l1_address(uint32_t
     // l1_manager always sits below l1_small_manager in the address space, so there is no need to check l1_small_manager
     using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
     auto lowest = l1_manager_->lowest_occupied_address(bank_id, AllocatorID{0});
-    // In HYBRID mode, also check this bank's per-core allocator (AllocatorID{bank_id+1}) since it may have occupied
+    // In HYBRID mode, also check this bank's per-core allocator (AllocatorID{bank_id + 1}), since it may
+    // have occupied a lower address range in this bank.
     if (config_->allocator_mode == AllocatorMode::HYBRID) {
         auto per_core = l1_manager_->lowest_occupied_address(bank_id, AllocatorID{bank_id + 1});
         if (per_core.has_value()) {

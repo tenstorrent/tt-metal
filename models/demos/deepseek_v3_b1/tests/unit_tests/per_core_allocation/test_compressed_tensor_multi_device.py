@@ -646,7 +646,7 @@ def test_per_core_cb_collision_errors_on_same_cores(mesh_device, use_from_torch)
 
     # Huge CB on the SAME cores as the per-core tensor: should trip validate_circular_buffer_region.
     with pytest.raises(RuntimeError, match=r"clash|circular buffer|L1"):
-        _run_cb_heavy_noop_program(io_tensors, same_grid, cb_total_size_bytes=512 * 1024)
+        _run_cb_heavy_noop_program(io_tensors, same_grid, cb_total_size_bytes=1024 * 1024)
 
 
 @pytest.mark.parametrize("use_from_torch", [False, True], ids=["experimental_to_single_device", "from_torch_replicate"])
@@ -661,18 +661,21 @@ def test_per_core_cb_no_collision_on_disjoint_cores(mesh_device, use_from_torch)
 
     # Same-size CB, but on cores B (disjoint from A). Should succeed: per-core tensor on A must
     # not tighten B's budget.
-    _run_cb_heavy_noop_program(io_tensors, b_grid, cb_total_size_bytes=512 * 1024)
+    _run_cb_heavy_noop_program(io_tensors, b_grid, cb_total_size_bytes=1024 * 1024)
 
 
 def _alloc_large_per_core_compressed_tensor(mesh_device, grid):
-    """Allocate a CompressedTensor with per_core_allocation=True consuming ~1.2 MB per core.
-    CompressedTensor allocates the source bfloat16 size (with ~6% overhead), not the compressed
-    bfp8 size, so we size for raw bfloat16 budget."""
+    """Allocate a CompressedTensor with per_core_allocation=True. Sized to consume ~80% of L1
+    after bfp8 compression (the larger-per-tile of the two formats), to repro the segfault
+    that the copilot-style derived-from-worker_l1 sizing originally triggered."""
     num_devices = mesh_device.get_num_devices()
     tile = 32
-    # Target ~1.2 MB per core after width-shard:
-    #   32 rows * shard_w cols * 2 B (bfloat16) ≈ 1.2 MB → shard_w ≈ 18750, tile-aligned to 18752.
-    shard_w = (18752 // tile) * tile
+    worker_l1 = ttnn._ttnn.reports.get_device_info(mesh_device).worker_l1_size
+    target_per_core_bytes = worker_l1 * 80 // 100
+    # Canonical bfp8 tile size: 1024 mantissa B + 64 shared-exp B = 1088 B/tile.
+    bfp8_tile_bytes = 1088
+    tiles_per_shard = max(1, target_per_core_bytes // bfp8_tile_bytes)
+    shard_w = tiles_per_shard * tile
     total_w = shard_w * grid.num_cores()
     # Shard data on dim 0 across mesh devices so each device gets `tile` rows.
     x = torch.randn(tile * num_devices, total_w)
@@ -703,11 +706,10 @@ def _try_compressed_per_core_collision(mesh_device, per_core_grid, cb_grid):
     io_tensors = _make_io_tensors(mesh_device, cb_grid)
     _ct = _alloc_large_per_core_compressed_tensor(mesh_device, per_core_grid)
     # Multi-format CompressedTensor's per-core size depends on which format the assigner chose
-    # per tile (bfp4 ~544 B/tile, bfp8 ~1056 B/tile). Use a CB big enough that even the smallest
-    # per-core allocation collides: 1.1 MB CB + ~319 KB per-core (all-bfp4 worst case) > 1.4 MB
-    # bank → guaranteed collision.
+    # per tile (bfp4 = 576 B/tile, bfp8 = 1088 B/tile). Use a CB big enough that even the smallest
+    # per-core allocation still collides.
     try:
-        _run_cb_heavy_noop_program(io_tensors, cb_grid, cb_total_size_bytes=1100 * 1024)
+        _run_cb_heavy_noop_program(io_tensors, cb_grid, cb_total_size_bytes=1024 * 1024)
         return None
     except RuntimeError as e:
         return str(e)
