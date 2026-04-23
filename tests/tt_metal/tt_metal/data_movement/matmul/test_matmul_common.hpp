@@ -14,6 +14,12 @@ namespace tt::tt_metal::unit_tests::dm::matmul {
 
 constexpr uint32_t L1_DEBUG_PADDING_BYTES = 0x10;
 
+// Per-variant test_id offsets. Each matmul variant shares the same MatmulTestConfig list,
+// so we offset the test_id per variant to keep profiler results (CSVs/plots) separate.
+constexpr uint32_t MATMUL_1D_TEST_ID_OFFSET = 0;
+constexpr uint32_t MATMUL_1D_V2_TEST_ID_OFFSET = 100;
+constexpr uint32_t MATMUL_2D_TEST_ID_OFFSET = 200;
+
 struct MatmulTestConfig {
     uint32_t test_id = 0;
     CoreCoord start_logical_core;

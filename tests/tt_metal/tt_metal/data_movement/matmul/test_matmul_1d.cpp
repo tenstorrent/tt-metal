@@ -310,6 +310,7 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
 }
 
 bool run_single_test(const shared_ptr<distributed::MeshDevice>& mesh_device, MatmulTestConfig test_config) {
+    test_config.test_id += unit_tests::dm::matmul::MATMUL_1D_TEST_ID_OFFSET;
     test_config.page_size_bytes = 2048;
     test_config.end_logical_core = CoreCoord(
         test_config.start_logical_core.x + test_config.num_subblocks_c_dim - 1,

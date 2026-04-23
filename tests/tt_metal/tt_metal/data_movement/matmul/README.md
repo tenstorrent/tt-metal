@@ -18,6 +18,18 @@ Three variants are tested, covering different strategies for distributing input 
 
 All three variants share test configurations defined in `test_matmul_common.hpp`. Each configuration runs as a 1D v1, 1D v2, and 2D test, producing 78 total test cases (26 per variant).
 
+### Per-variant test IDs
+
+Because all three variants share the same `MatmulTestConfig` list, a per-variant offset is added to `test_id` so that profiler output (CSVs, plots) from the three variants do not collide. The base IDs below (1000–1028) are the values in `test_matmul_common.hpp`; the actual IDs recorded in the profiler are shifted:
+
+| Variant | Offset | ID range |
+|---------|--------|----------|
+| 1D v1   | +0     | 1000–1028 |
+| 1D v2   | +100   | 1100–1128 |
+| 2D      | +200   | 1200–1228 |
+
+For example, the base config with `test_id = 1026` produces profiler entries `1026` (1D v1), `1126` (1D v2), and `1226` (2D) — one CSV/plot per variant. The offsets are defined as `MATMUL_{VARIANT}_TEST_ID_OFFSET` constants in `test_matmul_common.hpp` and applied at the top of each variant's `run_single_test`.
+
 ## Dimensions and Core Grid Mapping
 
 A 2D grid of `R x C` Tensix cores is allocated, where:
@@ -325,7 +337,7 @@ After program execution, the host reads back L1 memory from every core and verif
 
 | Parameter             | Type         | Description |
 |-----------------------|--------------|-------------|
-| `test_id`             | `uint32_t`   | Unique test case identifier (1000-1027). |
+| `test_id`             | `uint32_t`   | Base test case identifier (1000-1028). A per-variant offset is added at runtime: 1D v1 +0, 1D v2 +100, 2D +200. See [Per-variant test IDs](#per-variant-test-ids). |
 | `start_logical_core`  | `CoreCoord`  | Top-left logical coordinate of the core grid. Default: (0,0). |
 | `num_subblocks_r_dim` | `uint32_t`   | R — number of rows of cores. Default: 2. |
 | `num_subblocks_c_dim` | `uint32_t`   | C — number of columns of cores. Default: 2. |
@@ -339,8 +351,8 @@ After program execution, the host reads back L1 memory from every core and verif
 
 ## Test Cases
 
-All 26 configurations are defined in `test_matmul_common.hpp` and shared by both v1 and v2.
-Test names follow the pattern: `ID{id}_R{r}_C{c}_K{k}_sr{sr}_sc{sc}_sk{sk}_X{x}Y{y}_bank{b}`
+All 26 configurations are defined in `test_matmul_common.hpp` and shared by 1D v1, 1D v2, and 2D.
+Test names follow the pattern: `ID{id}_R{r}_C{c}_K{k}_sr{sr}_sc{sc}_sk{sk}_X{x}Y{y}_bank{b}` where `{id}` is the BASE id from the config. The actual profiler `test_id` has the per-variant offset added (see [Per-variant test IDs](#per-variant-test-ids)).
 
 ### Grid Shape Tests
 
@@ -429,20 +441,22 @@ These test the three key relationships between K and C that affect v2's rotating
 
 ## Performance Graphs
 
-To generate performance graphs for the K subblock size sweep (test ID 1026), use the following commands. Each must be run separately since they share the same profiler log file. The gtest fixture name selects which variant runs.
+To generate performance graphs for the K subblock size sweep (base test ID 1026), use the following commands. Each must be run separately since they share the same profiler log file. The gtest fixture name selects which variant runs.
+
+The gtest filter `ID1026` still refers to the base ID (from `test_matmul_common.hpp`), but the resulting CSV/plot is keyed by the offset-adjusted profiler ID: 1026 for 1D v1, 1126 for 1D v2, 1226 for 2D. So each variant produces a distinct output file.
 
 ```bash
-# 2D matmul
+# 2D matmul → profiler ID 1226, plot name "2D Matmul Test 1226 - ..."
 pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter="Test2DMatmul/ID1026" --plot --verbose-log
 
-# 1D matmul
+# 1D matmul → profiler ID 1026, plot name "1D Matmul Test 1026 - ..."
 pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter="Test1DMatmul/ID1026" --plot --verbose-log
 
-# 1D V2 matmul
+# 1D V2 matmul → profiler ID 1126, plot name "1D V2 Matmul Test 1126 - ..."
 pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter="Test1DMatmulV2/ID1026" --plot --verbose-log
 ```
 
-The R subblock size sweep (test ID 1027) varies `subblock_r_dim` ∈ {1, 2, 4, 8} while holding the 4x4 grid, K=4, `subblock_k_dim`=4, and `subblock_c_dim`=1 fixed.
+The R subblock size sweep (base test ID 1027) varies `subblock_r_dim` ∈ {1, 2, 4, 8} while holding the 4x4 grid, K=4, `subblock_k_dim`=4, and `subblock_c_dim`=1 fixed. Profiler IDs: 1027 (1D), 1127 (1D v2), 1227 (2D).
 
 ```bash
 # 2D matmul
