@@ -216,8 +216,8 @@ void KernelDescriptor::emplace_runtime_args(
     emplace_runtime_args_impl(*this, core, args);
 }
 
-void KernelDescriptor::emplace_runtime_args(const CoreCoord& core, std::vector<std::variant<uint32_t, Buffer*>> args) {
-    emplace_runtime_args_impl(*this, core, args);
+void KernelDescriptor::emplace_runtime_args(const CoreCoord& core, RTArgList args) {
+    emplace_runtime_args_impl(*this, core, args.items_);
 }
 
 ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& desc) {
