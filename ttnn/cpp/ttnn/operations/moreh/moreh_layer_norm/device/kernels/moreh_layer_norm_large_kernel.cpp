@@ -402,7 +402,10 @@ void kernel_main() {
             cb_pop_front(cb_reuse, block_size);
             cb_push_back(cb_gamma_beta_or_out, block_size);
 
-            // * gamma
+            // * gamma — not migrated; same rationale as moreh_layer_norm_small_kernel.cpp:
+            // three runtime-gated variants (SCALAR groupnorm / ROW lastdim / NONE) where
+            // the SCALAR variant uses per-tile scalar carriers (B has block_size scalar
+            // tiles, not 1) which binary_op's SCALAR broadcast doesn't model.
             if (gamma_has_value) {
                 constexpr auto cb_outg = beta_has_value ? cb_gamma_beta : cb_out;
                 cb_wait_front(cb_gamma_beta_or_out, block_size);
@@ -433,7 +436,7 @@ void kernel_main() {
                 cb_push_back(cb_outg, block_size);
             }
 
-            // + beta
+            // + beta — same unmigrated rationale as the gamma block above.
             if (beta_has_value) {
                 cb_wait_front(cb_gamma_beta, block_size);
                 cb_wait_front(cb_beta, block_size);
