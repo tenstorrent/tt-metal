@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import time
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import soundfile as sf
@@ -51,6 +52,28 @@ from models.experimental.speecht5_vc.ttnn_speech_prenet import (
     TTNNSpeechEncoderPrenetConfig,
     preprocess_speech_encoder_prenet_parameters,
 )
+
+
+def _resolve_workspace_path(path: str, workspace_root: Path) -> Path:
+    if not path:
+        raise ValueError("Path cannot be empty.")
+    if "\x00" in path:
+        raise ValueError("Path must not contain null bytes.")
+
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        resolved = candidate.resolve(strict=False)
+    else:
+        resolved = (workspace_root / candidate).resolve(strict=False)
+
+    try:
+        resolved.relative_to(workspace_root)
+    except ValueError as err:
+        raise ValueError(
+            f"Path must stay within workspace root '{workspace_root}': {path}"
+        ) from err
+
+    return resolved
 
 
 def load_audio_16khz_mono(path: str) -> torch.Tensor:
@@ -288,6 +311,17 @@ def convert_voice(
     num_command_queues: int,
 ):
     """Run end-to-end SpeechT5 voice conversion."""
+    workspace_root = Path.cwd().resolve()
+    safe_output_audio_path = _resolve_workspace_path(output_audio_path, workspace_root)
+    safe_output_audio_path.parent.mkdir(parents=True, exist_ok=True)
+
+    safe_perf_report_path = None
+    if perf_report_path:
+        safe_perf_report_path = _resolve_workspace_path(perf_report_path, workspace_root)
+        if safe_perf_report_path.suffix.lower() != ".json":
+            raise ValueError("--perf_report must point to a .json file")
+        safe_perf_report_path.parent.mkdir(parents=True, exist_ok=True)
+
     print("Loading HuggingFace SpeechT5-VC models...")
     processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_vc")
     hf_model = SpeechT5ForSpeechToSpeech.from_pretrained("microsoft/speecht5_vc")
@@ -398,19 +432,19 @@ def convert_voice(
             else 0.0
         )
 
-        sf.write(output_audio_path, speech.squeeze().cpu().numpy(), samplerate=16000)
+        sf.write(str(safe_output_audio_path), speech.squeeze().cpu().numpy(), samplerate=16000)
 
         print("\n=== Voice Conversion Summary ===")
-        print(f"Output file: {output_audio_path}")
+        print(f"Output file: {safe_output_audio_path}")
         print(f"Steps completed: {int(stats['steps_completed'])}")
         print(f"Token/s: {stats['token_per_sec']:.2f}")
         print(f"TTFT: {stats['ttft_s'] * 1000.0:.1f} ms")
         print(f"RTF: {stats['rtf']:.3f}")
 
-        if perf_report_path:
-            with open(perf_report_path, "w", encoding="utf-8") as f:
+        if safe_perf_report_path:
+            with safe_perf_report_path.open("w", encoding="utf-8") as f:
                 json.dump(stats, f, indent=2)
-            print(f"Perf report written to: {perf_report_path}")
+            print(f"Perf report written to: {safe_perf_report_path}")
 
     finally:
         ttnn.close_device(device)

@@ -20,7 +20,6 @@ Notes:
 
 import argparse
 import json
-import os
 import re
 import time
 from dataclasses import dataclass
@@ -203,8 +202,30 @@ def _avg(values: List[float]) -> Optional[float]:
     return float(sum(values) / len(values)) if values else None
 
 
-def _ensure_dir(path: str):
-    Path(path).mkdir(parents=True, exist_ok=True)
+def _resolve_workspace_path(path: str, workspace_root: Path) -> Path:
+    if not path:
+        raise ValueError("Path cannot be empty.")
+    if "\x00" in path:
+        raise ValueError("Path must not contain null bytes.")
+
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        resolved = candidate.resolve(strict=False)
+    else:
+        resolved = (workspace_root / candidate).resolve(strict=False)
+
+    try:
+        resolved.relative_to(workspace_root)
+    except ValueError as err:
+        raise ValueError(
+            f"Path must stay within workspace root '{workspace_root}': {path}"
+        ) from err
+
+    return resolved
+
+
+def _ensure_dir(path: Path):
+    path.mkdir(parents=True, exist_ok=True)
 
 
 def _build_ttnn_modules(
@@ -424,6 +445,11 @@ def main():
         raise ValueError("--reference_texts must be omitted or have exactly one entry per input wav")
     if args.target_speaker_wavs is not None and len(args.target_speaker_wavs) not in (0, 1, len(args.input_wavs)):
         raise ValueError("--target_speaker_wavs must be omitted, a single path, or one path per input wav")
+    workspace_root = Path.cwd().resolve()
+    output_dir = _resolve_workspace_path(args.output_dir, workspace_root)
+    report_json_path = _resolve_workspace_path(args.report_json, workspace_root)
+    if report_json_path.suffix.lower() != ".json":
+        raise ValueError("--report_json must point to a .json file")
 
     thresholds = Thresholds(
         min_token_per_sec=args.min_token_per_sec,
@@ -433,7 +459,8 @@ def main():
         min_token_accuracy_percent=args.min_token_accuracy_percent,
     )
 
-    _ensure_dir(args.output_dir)
+    _ensure_dir(output_dir)
+    _ensure_dir(report_json_path.parent)
     torch.manual_seed(args.seed)
 
     print("Loading models (HF + TTNN)...")
@@ -559,8 +586,8 @@ def main():
                 tt_speech = vocoder(tt_mel)
             vocoder_time = time.time() - vocoder_start
 
-            output_path = os.path.join(args.output_dir, f"converted_{idx:03d}.wav")
-            sf.write(output_path, tt_speech.squeeze().cpu().numpy(), samplerate=16000)
+            output_path = output_dir / f"converted_{idx:03d}.wav"
+            sf.write(str(output_path), tt_speech.squeeze().cpu().numpy(), samplerate=16000)
 
             output_audio_seconds = float(tt_speech.numel() / 16000.0)
             rtf_end_to_end_output = (
@@ -601,7 +628,7 @@ def main():
             wer_percent = None
             if asr_pipe is not None:
                 source_asr_text = _transcribe(asr_pipe, wav_path, args.asr_language, args.asr_task)
-                output_asr_text = _transcribe(asr_pipe, output_path, args.asr_language, args.asr_task)
+                output_asr_text = _transcribe(asr_pipe, str(output_path), args.asr_language, args.asr_task)
 
                 reference_text = (
                     _normalize_text(args.reference_texts[idx])
@@ -622,7 +649,7 @@ def main():
             # Speaker cosine metric
             speaker_cosine = None
             if speaker_extractor is not None and speaker_model is not None:
-                out_audio = load_audio_16khz_mono(output_path)
+                out_audio = load_audio_16khz_mono(str(output_path))
                 out_vec = _extract_xvector(speaker_extractor, speaker_model, out_audio, sample_rate=16000)
                 if target_reference_vectors is not None:
                     ref_idx = idx if len(target_reference_vectors) == len(args.input_wavs) else 0
@@ -634,7 +661,7 @@ def main():
 
             sample_report = {
                 "input_wav": wav_path,
-                "output_wav": output_path,
+                "output_wav": str(output_path),
                 "source_audio_seconds": source_audio_seconds,
                 "decoder_token_per_sec": decoder_token_per_sec,
                 "token_per_sec": float(tt_stats["token_per_sec"]),
@@ -752,7 +779,7 @@ def main():
             },
         }
 
-        with open(args.report_json, "w", encoding="utf-8") as f:
+        with report_json_path.open("w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
 
         print("\n=== Stage-1 Validation Summary ===")
@@ -771,7 +798,7 @@ def main():
         if not args.skip_wer:
             print(f"Avg WER (%): {avg_wer_percent if avg_wer_percent is not None else 'N/A'}")
         print(f"Overall pass: {overall_pass}")
-        print(f"Report: {args.report_json}")
+        print(f"Report: {report_json_path}")
 
     finally:
         ttnn.close_device(device)
