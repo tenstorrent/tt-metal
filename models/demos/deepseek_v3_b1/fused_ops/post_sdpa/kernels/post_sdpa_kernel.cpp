@@ -593,6 +593,7 @@ void kernel_main() {
         args.dest_noc_y = get_common_arg_val<uint32_t>(2);
         args.per_core_rta_start_idx = 0;
         deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceWriterCTArgs> writer;
+        writer.open_connections(args);
         writer(args);
     }
     if constexpr (Core::is_allreduce_receiver_core) {
@@ -626,6 +627,7 @@ void kernel_main() {
         args.dest_noc_y = get_common_arg_val<uint32_t>(2);
         args.per_core_rta_start_idx = 0;
         deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceBriscWriterCTArgs> writer;
+        writer.open_connections(args);
         writer(args);
     }
 
