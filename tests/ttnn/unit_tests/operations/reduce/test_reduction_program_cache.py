@@ -97,6 +97,7 @@ def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
 
 def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
     """Different reduce math ops (sum vs max) -> different cache entries."""
+    torch.manual_seed(0)
     shape = [1, 1, 64, 64]
 
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
@@ -126,6 +127,7 @@ def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
 
 def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
     """Different reduce dims (W vs H) -> different program factories -> different cache entries."""
+    torch.manual_seed(0)
     shape = [1, 1, 64, 64]
 
     # dim=-1 (W): ReduceMultiCoreWProgramFactory
@@ -157,6 +159,7 @@ def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
 
 def test_reduce_cache_miss_different_input_dtypes(device, isolate_program_cache):
     """Different input dtypes -> different cache entries."""
+    torch.manual_seed(0)
     shape = [1, 1, 64, 64]
 
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
@@ -186,6 +189,7 @@ def test_reduce_cache_miss_different_input_dtypes(device, isolate_program_cache)
 
 def test_reduce_cache_miss_different_memory_configs(device, isolate_program_cache):
     """Different memory configs -> different cache entries."""
+    torch.manual_seed(0)
     shape = [1, 1, 64, 64]
 
     torch_ref1, tt_out1 = run_reduce_op(
@@ -222,6 +226,7 @@ def test_reduce_cache_miss_different_memory_configs(device, isolate_program_cach
 def test_reduce_cache_miss_different_shapes(device, isolate_program_cache):
     """Different padded shapes -> different cache entries.
     padded_shape is included in compute_program_hash() because Ht, Wt are compile-time args."""
+    torch.manual_seed(0)
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, [1, 1, 32, 64], dim=-1, dtype=ttnn.bfloat16)
 
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, [1, 1, 64, 64], dim=-1, dtype=ttnn.bfloat16)
@@ -251,6 +256,7 @@ def test_reduce_cache_miss_different_shapes(device, isolate_program_cache):
 def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
     """Different sub_core_grids -> different cache entries.
     sub_core_grids is in compute_program_hash() and affects work distribution (compile-time)."""
+    torch.manual_seed(0)
     shape = [1, 1, 64, 64]
     torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
 

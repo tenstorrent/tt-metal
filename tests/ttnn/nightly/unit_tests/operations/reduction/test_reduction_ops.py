@@ -317,6 +317,7 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "std", "var"])
 def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op):
+    torch.manual_seed(0)
     dim = -2
     input_shape, shard_shape, end_x, end_y = shapes
 
@@ -404,6 +405,7 @@ def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "std", "var"])
 def test_generic_ops_wh_shard(device, input_shape, shard_2d_shape, end_x, end_y, memory_layout, keepdim, layout, op):
+    torch.manual_seed(0)
     dim = -2
 
     shard_spec = ttnn.ShardSpec(

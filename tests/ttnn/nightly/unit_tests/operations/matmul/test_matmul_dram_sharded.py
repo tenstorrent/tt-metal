@@ -247,6 +247,7 @@ def test_matmul_in1_dram_sharded_with_program_cache(
     out_dtype,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     for _ in range(2):
         run_test_matmul_in1_dram_sharded(
             device,
@@ -417,6 +418,7 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
     out_dtype,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     M = 32
     K = 4096
     N = 4096
@@ -477,6 +479,7 @@ def test_matmul_2d_in1_dram_sharded(
     fuse_batch,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     if is_blackhole():
         num_banks = device.dram_grid_size().x  # need to match harvesting of dram
     else:

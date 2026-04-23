@@ -184,6 +184,7 @@ def test_softmax_cache_miss_different_dims_5d(device, isolate_program_cache):
 
 def test_softmax_cache_miss_different_factories(device, isolate_program_cache):
     """5D W-softmax vs 4D last-dim softmax -> different factories -> different cache entries."""
+    torch.manual_seed(0)
     shape_5d = [1, 1, 1, 32, 64]
     shape_4d = [1, 1, 32, 64]
 
@@ -218,6 +219,7 @@ def test_softmax_cache_miss_different_factories(device, isolate_program_cache):
 
 def test_softmax_cache_miss_different_input_dtypes(device, isolate_program_cache):
     """Different input dtypes -> different cache entries."""
+    torch.manual_seed(0)
     shape = [1, 1, 32, 64]
 
     torch_ref1, tt_out1 = run_softmax_4d(device, shape, dim=-1, dtype=ttnn.bfloat16)
@@ -247,6 +249,7 @@ def test_softmax_cache_miss_different_input_dtypes(device, isolate_program_cache
 
 def test_softmax_cache_miss_different_memory_configs(device, isolate_program_cache):
     """Different memory configs -> different cache entries."""
+    torch.manual_seed(0)
     shape = [1, 1, 32, 64]
 
     torch_ref1, tt_out1 = run_softmax_4d(
@@ -279,6 +282,7 @@ def test_softmax_cache_miss_different_memory_configs(device, isolate_program_cac
 def test_softmax_cache_miss_different_shapes(device, isolate_program_cache):
     """Different logical shapes -> different cache entries.
     logical_shape is in compute_program_hash() determining Wt, Ht, work distribution."""
+    torch.manual_seed(0)
     torch_ref1, tt_out1 = run_softmax_4d(device, [1, 1, 32, 64], dim=-1, dtype=ttnn.bfloat16)
     assert_numeric_metrics(
         torch_ref1,
@@ -314,6 +318,7 @@ def test_scale_mask_softmax_cache_miss_different_mask_dtypes(device, isolate_pro
     embedded in the program. Before the fix, both calls would hit the same cache entry,
     potentially using the wrong CB format for the second mask dtype.
     """
+    torch.manual_seed(0)
     batch = 1
     seq = 32
     inner = 64
@@ -366,6 +371,7 @@ def test_scale_mask_softmax_cache_miss_different_mask_memory_configs(device, iso
     Before the fix, both calls would hit the same cache entry using the wrong accessor
     for the second call.
     """
+    torch.manual_seed(0)
     batch = 1
     seq = 32
     inner = 64
