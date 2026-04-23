@@ -51,7 +51,7 @@ void kernel_main() {
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t dst_noc_addr = get_noc_addr(curr_stick_id, s) + offset;
+            uint64_t dst_noc_addr = s.get_noc_addr(curr_stick_id) + offset;
 
             // Write out tmp buffer
             noc_async_write(l1_read_addr, dst_noc_addr, block_size);

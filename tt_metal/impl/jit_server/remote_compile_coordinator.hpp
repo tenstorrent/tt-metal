@@ -26,8 +26,6 @@ struct KernelCompileDescriptor {
     jit_server::CompileRequest request;
     // Local file paths where the resulting ELF blobs should be written.
     std::vector<std::string> expected_elf_paths;
-    // Kernel output directory where the .SUCCESS marker is written.
-    std::string output_dir;
 };
 
 // Orchestrates remote JIT compilation for a batch of kernels.
@@ -53,8 +51,8 @@ public:
     // Sends the RPC immediately for new kernels; deduped kernels just record the future.
     void submit(KernelCompileDescriptor descriptor);
 
-    // Collect all outstanding RPC responses, write ELF blobs and .SUCCESS
-    // markers to disk, and wait for any dedup'd kernels to complete.
+    // Collect all outstanding RPC responses, write ELF blobs to disk,
+    // and wait for any dedup'd kernels to complete.
     void finish();
 
 private:

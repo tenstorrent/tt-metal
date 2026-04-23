@@ -75,7 +75,7 @@ void kernel_main() {
                 reduced_l1_ptr[e] = 1;
             }
         }
-        const uint64_t output_noc_addr = get_noc_addr(bs, output_mapping_addrgen);
+        const uint64_t output_noc_addr = output_mapping_addrgen.get_noc_addr(bs);
         noc_async_write(output_l1_addr, output_noc_addr, output_mapping_page_size_bytes);
 
         if (found) {
@@ -84,7 +84,7 @@ void kernel_main() {
         }
 
         if (reduction_count == reduction_size - 1) {
-            const uint64_t output_reduced_noc_addr = get_noc_addr(reduce_idx++, output_reduced_addrgen);
+            const uint64_t output_reduced_noc_addr = output_reduced_addrgen.get_noc_addr(reduce_idx++);
             noc_async_write(reduced_l1_addr, output_reduced_noc_addr, output_reduced_page_size_bytes);
             noc_async_write_barrier();
             tt::data_movement::common::fill_with_val<uint16_t>(reduced_l1_addr, num_local_experts, 0u);

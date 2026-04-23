@@ -16,6 +16,7 @@ with :class:`~weights.cache.CacheConfig` and the ``prepare_*`` functions
 
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
 from models.demos.deepseek_v3_b1.weights.cache import (
+    BspmVariant,
     CacheConfig,
     CompressedTensorBuildInputs,
     CompressedTensorTarget,
@@ -37,6 +39,7 @@ from models.demos.deepseek_v3_b1.weights.cache import (
     SourceTensorSelection,
     TensorTarget,
 )
+from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import get_or_create_bspm_expert
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     DOWN_PROJ_SINGLE_DEVICE_SPEC,
@@ -293,6 +296,13 @@ class DeepSeekV3MTPWeights:
     eh_projection: ttnn.Tensor  # model.layers.61.eh_proj.weight
 
 
+@dataclass
+class DeepSeekV3SpecWeights:
+    """Weights used only by the speculative verify LM-head stage."""
+
+    shared_head_norm: ttnn.Tensor  # model.layers.61.shared_head.norm.weight
+
+
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
 NUM_ROUTED_EXPERTS = D.GATE_NUM_INDICES
 _ROUTED_GATE_UP_K = D.HIDDEN_SIZE  # 7168
@@ -392,6 +402,7 @@ def _mtp_norm_target(name: str) -> TensorTarget:
 
 
 def _mtp_eh_proj_target(K: int, N: int) -> TensorTarget:
+    k_per_device = K // 8
     n_per_bank = N // _MTP_NUM_DRAM_BANKS
     eh_shard_grid = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_MTP_NUM_DRAM_BANKS - 1, 0))}
@@ -403,9 +414,10 @@ def _mtp_eh_proj_target(K: int, N: int) -> TensorTarget:
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(eh_shard_grid, (K, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(eh_shard_grid, (k_per_device, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
         ),
         transform_version=1,
+        mesh_mapper_config=ShardMeshMapper(dim=0),
     )
 
 
@@ -1109,7 +1121,7 @@ def prepare_moe_routed_experts_bspm(
     *,
     move_to_device: bool,
     cache_config: "CacheConfig",
-    bspm_variant: str = "B",
+    bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
 ) -> MoERoutedExpertWeights:
     """Upload MoE routed experts as BSPM-encoded CompressedTensor objects.
@@ -1143,35 +1155,34 @@ def prepare_moe_routed_experts_bspm(
             for e in range(num_routed_experts)
         ]
 
-        tgt = CompressedTensorTarget(
-            name=proj_name,
-            K=K,
-            N_padded=N_padded,
-            num_banks=num_banks,
-            bspm_variant=bspm_variant,
-            bspm_budget=bspm_budget,
-        )
-
         for e, key in enumerate(keys):
             assignment_logical = all_assignments[e]
+            assignment_hash = hashlib.sha256(assignment_logical.tobytes()).hexdigest()[:16]
+            tgt = CompressedTensorTarget(
+                name=proj_name,
+                K=K,
+                N_padded=N_padded,
+                num_banks=num_banks,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
+                assignment_hash=assignment_hash,
+            )
             fp = cache_config.context.fingerprint(
                 source=SourceTensorSelection(names=(key,)),
                 target=tgt,
             )
-            ct = cache_config.cache.get_or_create(
+            ct = get_or_create_bspm_expert(
+                cache_config.cache,
                 fp,
                 device,
-                preprocess=lambda tensors, _k=key, _a=assignment_logical, _N=N, _N_padded=N_padded: {
-                    proj_name: CompressedTensorBuildInputs(
-                        w_logical=torch.nn.functional.pad(
-                            tensors[_k].T.contiguous().float(), (0, _N_padded - _N)
-                        ).numpy()
-                        if _N_padded != _N
-                        else tensors[_k].T.contiguous().float().numpy(),
-                        assignment_logical=_a,
-                    )
-                },
                 raw_tensors=lambda _k=key: {_k: state_dict[_k]},
+                preprocess=lambda tensors, _k=key, _a=assignment_logical, _N=N, _N_padded=N_padded: CompressedTensorBuildInputs(
+                    w=torch.nn.functional.pad(tensors[_k].T.contiguous().float(), (0, _N_padded - _N)).numpy()
+                    if _N_padded != _N
+                    else tensors[_k].T.contiguous().float().numpy(),
+                    assignment=_a,
+                ),
+                move_to_device=move_to_device,
             )
             results[proj_idx].append(ct)
 
@@ -1198,7 +1209,7 @@ def prepare_routed_expert_weights(
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
     bspm_dir: Path | None = None,
-    bspm_variant: str = "B",
+    bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
 ) -> DenseRoutedExpertWeights | MoERoutedExpertWeights:
     """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts).
@@ -1442,7 +1453,7 @@ def prepare_moe_layer_weights(
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
     bspm_dir: Path | None = None,
-    bspm_variant: str = "B",
+    bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer.
@@ -1597,17 +1608,76 @@ def prepare_lm_head_weights(
 def _transform_eh_proj(eh_proj_weight_T: torch.Tensor) -> torch.Tensor:
     """Pad to DRAM bank alignment and tile-shuffle. Input: already transposed (K, N)."""
     K, N = eh_proj_weight_T.shape
+    num_devices = 8
+    k_per_device = K // num_devices
+    assert K % num_devices == 0, f"eh_proj K={K} must be divisible by {num_devices} devices"
     assert N % _MTP_NUM_DRAM_BANKS == 0, f"eh_proj N={N} must be divisible by {_MTP_NUM_DRAM_BANKS} DRAM banks"
     n_per_bank = N // _MTP_NUM_DRAM_BANKS
     padded_N = _MTP_NUM_DRAM_BANKS * n_per_bank
-    eh_padded = torch.zeros((K, padded_N), dtype=eh_proj_weight_T.dtype)
-    eh_padded[:, :N] = eh_proj_weight_T
-    return shuffle_dram_tiles(eh_padded, 32, _MTP_NUM_DRAM_BANKS).contiguous()
+    device_slices = []
+    for d in range(num_devices):
+        slice_d = eh_proj_weight_T[d * k_per_device : (d + 1) * k_per_device, :]
+        padded_d = torch.zeros((k_per_device, padded_N), dtype=slice_d.dtype)
+        padded_d[:, :N] = slice_d
+        device_slices.append(shuffle_dram_tiles(padded_d, 32, _MTP_NUM_DRAM_BANKS))
+    return torch.cat(device_slices, dim=0).contiguous()
 
 
 def _mtp_eh_proj_preprocess(raw: dict[str, torch.Tensor], src_key: str, target_name: str) -> dict[str, torch.Tensor]:
     """Preprocess eh_proj for cache: transpose, pad to DRAM bank alignment, tile-shuffle."""
     return {target_name: _transform_eh_proj(raw[src_key].T.contiguous())}
+
+
+def prepare_shared_head_norm(
+    state_dict: dict[str, torch.Tensor],
+    device,
+    *,
+    mtp_layer_idx: int = _MTP_LAYER_IDX,
+    move_to_device: bool = False,
+    cache_config: CacheConfig | None = None,
+) -> ttnn.Tensor:
+    """Prepare only the MTP shared_head.norm tensor.
+
+    This intentionally mirrors the ``prepare_*`` flow used by the other weight
+    helpers. Callers that want to avoid writing a persistent cache artifact can
+    omit ``cache_config`` and rely on the default ephemeral cache.
+    """
+    if cache_config is None:
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+
+    _shared_norm_key = _key(mtp_layer_idx, "shared_head.norm.weight")
+    shared_norm_target = _mtp_norm_target("shared_head_norm")
+    shared_norm_fingerprint = cache_config.context.fingerprint(
+        source=SourceTensorSelection(names=(_shared_norm_key,)),
+        target=shared_norm_target,
+    )
+    shared_norm_tt = cache_config.cache.get_or_create(
+        shared_norm_fingerprint,
+        device,
+        preprocess=lambda t: {shared_norm_target.name: t[_shared_norm_key].unsqueeze(0).contiguous()},
+        raw_tensors=lambda: {_shared_norm_key: state_dict[_shared_norm_key]},
+    )
+    return shared_norm_tt
+
+
+def prepare_spec_weights(
+    state_dict: dict[str, torch.Tensor],
+    device,
+    *,
+    mtp_layer_idx: int = _MTP_LAYER_IDX,
+    move_to_device: bool = False,
+    cache_config: CacheConfig | None = None,
+) -> DeepSeekV3SpecWeights:
+    """Prepare weights used only by the speculative verify stage."""
+    return DeepSeekV3SpecWeights(
+        shared_head_norm=prepare_shared_head_norm(
+            state_dict,
+            device,
+            mtp_layer_idx=mtp_layer_idx,
+            move_to_device=move_to_device,
+            cache_config=cache_config,
+        )
+    )
 
 
 def prepare_mtp_weights(
@@ -1620,8 +1690,10 @@ def prepare_mtp_weights(
 ) -> DeepSeekV3MTPWeights:
     """Prepare lightweight MTP projection/norm weights from state dict.
 
-    Only the MTP-specific tensors (h_gamma, e_gamma, eh_projection) are prepared here.
-    The MTP decoder block (layer 61) is a regular MoE layer handled through ``prepare_moe_layer_weights``.
+    Prepares only the base-stage MTP tensors (h_gamma, e_gamma, eh_projection).
+    Spec-stage-only weights like ``shared_head_norm`` are handled separately by
+    ``prepare_spec_weights``. The MTP decoder block (layer 61) is a regular MoE
+    layer handled through ``prepare_moe_layer_weights``.
     """
     if cache_config is None:
         cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
@@ -1657,7 +1729,6 @@ def prepare_mtp_weights(
         preprocess=lambda t: _mtp_eh_proj_preprocess(t, _eh_key, eh_target.name),
         raw_tensors=lambda: {_eh_key: state_dict[_eh_key]},
     )
-
     logger.info("MTP weights prepared in {:.3f}s", time.perf_counter() - t0)
     return DeepSeekV3MTPWeights(
         h_gamma=h_gamma_tt,

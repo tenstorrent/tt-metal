@@ -62,6 +62,7 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
 def test_ttnn_linear(
     device, input_a_is_sharded, output_is_sharded, m_size, k_size, n_size, num_cores, input_a_dtype, input_b_dtype
 ):
+    torch.manual_seed(0)
     grid_size = (6, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
 

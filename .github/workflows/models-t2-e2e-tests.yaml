@@ -1,6 +1,9 @@
-name: "[Tier 2] Models End-To-End Tests"
+name: "(Tier 2) Models End-To-End Tests"
 
 on:
+  schedule:
+    # Once a day at 03:00 UTC — all models, all SKUs
+    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       model:
@@ -11,15 +14,19 @@ on:
         options:
           - all
           - llama3.1-8b
+          - llama3.1-8b-dp
           - llama3.3-70b
+          - llama3.3-70b-dp
           - llama90b-vl
           - qwen3-32b
           - qwen2.5-32b
           - qwen2.5-coder-32b
           - qwen2.5-72b-vl
           - mistral-7b
+          - gemma-3-4b
           - gemma-3-27b
           - mixtral-8x7b
+          - gpt-oss-20b
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -27,6 +34,7 @@ on:
         type: choice
         options:
           - all
+          - "wh_n150 (N150)"
           - "wh_llmbox_perf (T3000)"
       platform:
         required: false
@@ -62,24 +70,34 @@ permissions:
   packages: write
   contents: write
 
+run-name: "(Tier 2) Models E2E${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
+
 jobs:
   resolve-skus:
     runs-on: ubuntu-latest
     outputs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
+      model: ${{ steps.resolve.outputs.model }}
     steps:
-      - name: Resolve SKU selection
+      - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_llmbox_perf"
-          SKU_INPUT="${{ inputs.sku || 'all' }}"
-          if [[ "$SKU_INPUT" == "all" ]]; then
-            echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
-          else
-            # Extract SKU name before the parenthetical description
-            SKU_NAME=$(echo "$SKU_INPUT" | sed 's/ (.*//')
-            echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
+          ALL_SKUS="wh_n150,wh_llmbox_perf"
+          EVENT="${{ github.event_name }}"
+          if [[ "$EVENT" == "workflow_dispatch" ]]; then
+            SKU_INPUT="${{ inputs.sku || 'all' }}"
+            if [[ "$SKU_INPUT" == "all" ]]; then
+              echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+            else
+              SKU_NAME=$(echo "$SKU_INPUT" | sed 's/ (.*//')
+              echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
+            fi
+            echo "model=${{ inputs.model }}" >> $GITHUB_OUTPUT
+            exit 0
           fi
+          # Scheduled runs: all models, all SKUs
+          echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+          echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -99,6 +117,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
-      model: ${{ inputs.model || 'all' }}
+      model: ${{ needs.resolve-skus.outputs.model }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       tier: "2"

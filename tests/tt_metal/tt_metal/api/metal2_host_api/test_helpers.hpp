@@ -34,8 +34,7 @@ inline KernelSpec MakeMinimalDMKernel(
     const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
     return KernelSpec{
         .unique_id = name,
-        .source = MINIMAL_KERNEL_SOURCE,
-        .source_type = KernelSpec::SourceType::SOURCE_CODE,
+        .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .target_nodes = nodes,
         .num_threads = num_threads,
         .config_spec =
@@ -52,8 +51,7 @@ inline KernelSpec MakeMinimalGen1DMKernel(
     tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0) {
     return KernelSpec{
         .unique_id = name,
-        .source = MINIMAL_KERNEL_SOURCE,
-        .source_type = KernelSpec::SourceType::SOURCE_CODE,
+        .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .target_nodes = nodes,
         .num_threads = 1,
         .config_spec =
@@ -71,8 +69,7 @@ inline KernelSpec MakeMinimalComputeKernel(
     const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
     return KernelSpec{
         .unique_id = name,
-        .source = MINIMAL_KERNEL_SOURCE,
-        .source_type = KernelSpec::SourceType::SOURCE_CODE,
+        .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .target_nodes = nodes,
         .num_threads = num_threads,
         .config_spec = ComputeConfiguration{},

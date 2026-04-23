@@ -4,6 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     // Retrieve arguments
@@ -43,6 +44,9 @@ void kernel_main() {
 
     // Initialize address generator
     const auto s = TensorAccessor(dst_args, dst_addr);
+
+    experimental::CircularBuffer cb(cb_id_out0);
+    experimental::CircularBuffer cb_padding(tt::CBIndex::c_1);
 
     // Calculate actual data height in the last tile
     constexpr uint32_t H_last_tile = H - (H_t - 1) * TILE_HEIGHT;
@@ -84,8 +88,8 @@ void kernel_main() {
         uint32_t output_h = h * TILE_HEIGHT;
 
         // Synchronization and read address retrieval
-        cb_wait_front(cb_id_out0, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        cb.wait_front(1);
+        uint32_t l1_read_addr = cb.get_read_ptr();
 
         // Determine the number of faces in the height dimension
         uint8_t num_faces_h = (h == H_t - 1) ? remainder_faces_h : NUM_FACES_H;
@@ -147,14 +151,14 @@ void kernel_main() {
         noc_async_write_barrier();
 
         // Remove the processed tile from the front of the buffer
-        cb_pop_front(cb_id_out0, 1);
+        cb.pop_front(1);
     }
 
     // add padding
     if constexpr (needs_padding) {
-        cb_wait_front(tt::CBIndex::c_1, 1);
+        cb_padding.wait_front(1);
 
-        uint32_t l1_read_ptr = get_read_ptr(tt::CBIndex::c_1);
+        uint32_t l1_read_ptr = cb_padding.get_read_ptr();
 
         constexpr uint32_t c_t = C_t - 1;
         constexpr uint8_t C_in_tile = C % TILE_HEIGHT;
@@ -188,6 +192,6 @@ void kernel_main() {
             }
         }
         noc_async_write_barrier();
-        cb_pop_front(tt::CBIndex::c_1, 1);
+        cb_padding.pop_front(1);
     }
 }

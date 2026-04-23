@@ -79,7 +79,7 @@ class NanoGPT(AbstractModuleBase):
         )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            self.tok_emb.weight = self.fc.weight.tensor
+            self.tok_emb.weight = self.fc.weight
 
         if config.positional_embedding_type == "trainable":
             self.pos_emb = TrainablePositionalEmbedding(

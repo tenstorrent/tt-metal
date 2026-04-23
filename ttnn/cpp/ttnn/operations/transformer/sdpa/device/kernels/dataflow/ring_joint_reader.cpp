@@ -205,6 +205,12 @@ void kernel_main() {
         // Indexes are updated accordingly; compute is skipped
         if (is_causal && is_balanced && ring_index > ring_id) {
             iter_num_kv_chunks /= 2;
+            // Mirror compute's K-loop extension: include the straddle chunk so K/V tiles
+            // for it get loaded. Compute -inf-masks its late-half columns via lw_mask.
+            using Straddle = KCausalStraddleInfo<local_padded_Nt, Sk_chunk_t>;
+            if constexpr (Straddle::has_straddle) {
+                iter_num_kv_chunks = Straddle::straddle_chunk_id + 1;
+            }
         }
 
         for (uint32_t q_iter = 0; global_q_start + q_iter < global_q_end; ++q_iter) {

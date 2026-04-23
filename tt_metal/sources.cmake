@@ -27,6 +27,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
     api/tt-metalium/experimental/inspector.hpp
+    api/tt-metalium/experimental/offline_kernel_compile.hpp
     api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/experimental/fabric/fabric.hpp
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
@@ -111,6 +112,9 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/udm/mesh_semaphore.hpp
     api/tt-metalium/experimental/udm/mesh_tensor_builder.hpp
     api/tt-metalium/experimental/udm/mesh_utils.hpp
+    api/tt-metalium/experimental/core_subset_write/buffer_write.hpp
+    api/tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp
+    api/tt-metalium/experimental/core_subset_write/tensor.hpp
     api/tt-metalium/experimental/context/metal_env.hpp
     api/tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp
     api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp
@@ -125,7 +129,7 @@ set(TT_METAL_PUBLIC_API
 
 set(TT_METAL_SOURCES
     tt_metal.cpp
-    graph/graph_tracking.cpp
+    impl/graph/graph_tracking.cpp
     hal.cpp
 )
 

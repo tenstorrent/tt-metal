@@ -25,6 +25,25 @@ if(NOT HWLOC_LIBRARY)
 endif()
 
 ############################################################################################################################
+# BLAKE3 : https://github.com/BLAKE3-team/BLAKE3
+############################################################################################################################
+
+CPMAddPackage(
+    NAME blake3
+    GITHUB_REPOSITORY BLAKE3-team/BLAKE3
+    GIT_TAG 1.8.4
+    SOURCE_SUBDIR c
+    PATCHES
+        blake3_install_dir.patch
+    OPTIONS
+        "BUILD_SHARED_LIBS OFF"
+        "BLAKE3_USE_TBB OFF"
+        "BLAKE3_FETCH_TBB OFF"
+        "BUILD_TESTING OFF"
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
+
+############################################################################################################################
 # Boost
 ############################################################################################################################
 
@@ -413,3 +432,15 @@ CPMAddPackage(
         capnproto_capture_this.patch
         capnproto_pthread.patch
 )
+
+############################################################################################################################
+# tt-emule (software emulation, header-only consumption)
+############################################################################################################################
+if(TT_METAL_USE_EMULE)
+    CPMAddPackage(
+        NAME tt_emule
+        GITHUB_REPOSITORY tenstorrent/tt-emule
+        GIT_TAG 67266c752b51e97d1c73a2abc5910a37901af4eb
+        EXCLUDE_FROM_ALL YES
+    )
+endif()

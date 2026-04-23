@@ -106,6 +106,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     bool output_is_sharded,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    bool row_broadcast_bias,
     CoreCoord sub_device_start_core = {0, 0}) {
     using tt::tt_metal::num_cores_to_corerangeset;
 
@@ -687,6 +688,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         false,         // get_batch_from_reader
         in0_transpose_tile,
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
+    }
 
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
@@ -1097,6 +1101,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     bool in0_is_sharded,
     bool output_is_sharded,
     bool untilize_out,
+    bool row_broadcast_bias,
     CoreCoord sub_device_start_core = {0, 0}) {
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -1559,6 +1564,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         false,         // get_batch_from_reader
         in0_transpose_tile,
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
+    }
 
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
@@ -2903,6 +2911,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
+    const bool row_broadcast_bias = operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias);
+
     tt_metal::IDevice* device = a.device();
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
@@ -3104,6 +3114,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             output.memory_config().is_sharded(),
             untilize_out,
             fused_op_signaler,
+            row_broadcast_bias,
             sub_device_start_core);
     }
     return reuse_mcast_1d_optimized_helpers::process_mcast_in1_program_and_create_override_variables(
@@ -3147,6 +3158,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         a.memory_config().is_sharded(),
         output.memory_config().is_sharded(),
         untilize_out,
+        row_broadcast_bias,
         sub_device_start_core);
 }
 

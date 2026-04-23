@@ -271,7 +271,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
-            init_zeros=True,
+            init_zeros=False,
         )
 
         # Initialize routed expert
@@ -472,7 +472,12 @@ class TtMoe(LightweightModule):
         # TtReduceModule uses fused post_combine_reduce kernel:
         # 1. Fused weighted sum over topk (dim=3): reads ROW_MAJOR, outputs TILE_LAYOUT
         # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
-        routed_output = self.reduce_module(combined_output, weights=scores)
+        routed_output = self.reduce_module(
+            combined_output,
+            weights=scores,
+            indices=indices,
+            expert_dispatch_table=self.tt_expert_dispatch_table,
+        )
         logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
 
         # Remove extra batch dimensions to match shared_output shape

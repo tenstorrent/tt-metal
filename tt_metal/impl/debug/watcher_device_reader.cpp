@@ -753,9 +753,6 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (NOC transaction overflows a circular buffer).";
             break;
-        case dev_msgs::DebugSanitizeWriteInProgress:
-            // Quasar: DM is atomically writing error metadata; ignore until complete
-            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
@@ -779,8 +776,7 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
-    if (assert_status.tripped() == dev_msgs::DebugAssertOK ||
-        assert_status.tripped() == dev_msgs::DebugAssertWriteInProgress) {
+    if (assert_status.tripped() == dev_msgs::DebugAssertOK) {
         if (assert_status.line_num() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
             assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
             TT_THROW(

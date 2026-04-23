@@ -38,7 +38,7 @@ void kernel_main() {
         cb_wait_front(cb_id_out0, num_tiles_per_row * has_rows);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t dst_noc_addr = get_noc_addr(base_stick_id + k, s);
+            uint64_t dst_noc_addr = s.get_noc_addr(base_stick_id + k);
 
             // Write out tmp buffer
             noc_async_write(l1_read_addr, dst_noc_addr, unpadded_X_size);

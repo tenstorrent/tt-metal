@@ -441,17 +441,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             kernel.compiler_options.include_paths.empty(),
             "KernelSpec '{}' specifies include_paths -- this feature is not yet implemented. (Coming soon!)",
             kernel.unique_id);
-        TT_FATAL(
-            kernel.compiler_options.macros.empty(),
-            "KernelSpec '{}' specifies macros -- this feature is not yet implemented.",
-            kernel.unique_id);
     }
 
     // Validate no per-node thread maps are used (not yet implemented)
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(
-            !kernel.thread_node_map.has_value(),
-            "KernelSpec '{}' specifies thread_node_map, but per-node thread counts are not implemented.",
+            !kernel.node_specific_thread_counts.has_value(),
+            "KernelSpec '{}' specifies node_specific_thread_counts, but per-node thread counts are not implemented.",
             kernel.unique_id);
     }
 
@@ -1160,10 +1156,20 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
 // ----------------------------------------------------------------------------
 
 KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
-    KernelSource::SourceType source_type = (kernel_spec.source_type == KernelSpec::SourceType::FILE_PATH)
-                                               ? KernelSource::SourceType::FILE_PATH
-                                               : KernelSource::SourceType::SOURCE_CODE;
-    return KernelSource(kernel_spec.source, source_type);
+    return std::visit(
+        [&](const auto& src) -> KernelSource {
+            using T = std::decay_t<decltype(src)>;
+            if constexpr (std::is_same_v<T, KernelSpec::SourceFilePath>) {
+                TT_FATAL(!src.path.empty(), "KernelSpec '{}' has empty source file path", kernel_spec.unique_id);
+                return KernelSource(src.path.string(), KernelSource::SourceType::FILE_PATH);
+            } else if constexpr (std::is_same_v<T, KernelSpec::SourceCode>) {
+                TT_FATAL(!src.code.empty(), "KernelSpec '{}' has empty inline source code", kernel_spec.unique_id);
+                return KernelSource(src.code, KernelSource::SourceType::SOURCE_CODE);
+            } else {
+                static_assert(!sizeof(T*), "Unhandled KernelSpec::source alternative");
+            }
+        },
+        kernel_spec.source);
 }
 
 // ----------------------------------------------------------------------------

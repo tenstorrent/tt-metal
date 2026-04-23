@@ -56,18 +56,13 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 "DEEPSEEK_V3_HF_MODEL is not set. Set the environment variable or initialize via the demo "
                 "entrypoint with an explicit --model-path."
             )
-        if not cache_dir:
-            raise ValueError(
-                "DEEPSEEK_V3_CACHE is not set. Set the environment variable or initialize via the demo "
-                "entrypoint with an explicit --cache-dir."
-            )
         tokenizer = load_tokenizer(model_path)
 
         model = cls(
             hf_config=hf_config,
             mesh_device=mesh_device,
             model_path=Path(model_path),
-            cache_dir=Path(cache_dir),
+            cache_dir=Path(cache_dir) if cache_dir else None,
             tokenizer=tokenizer,
             max_seq_len=max_seq_len,
         )
