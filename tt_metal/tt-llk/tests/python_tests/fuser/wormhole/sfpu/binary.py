@@ -112,7 +112,10 @@ class BinarySfpu(Sfpu):
 
         return (
             f"    test_utils::call_binary_sfpu_operation_init<{approx_mode}, {op}, {iterations}, {format}>();\n"
-            f"    test_utils::call_binary_sfpu_operation<{approx_mode}, {op}, {iterations}, {format}>({src1} /* dst_index_in0 */, {src2} /* dst_index_in1 */, {dst} /* dst_index_out */);\n"
+            f"    test_utils::call_binary_sfpu_operation<"
+            f"ckernel::DstSync::SyncHalf, is_fp32_dest_acc_en, "
+            f"{approx_mode}, {op}, {iterations}, {format}"
+            f">({src1} /* dst_index_in0 */, {src2} /* dst_index_in1 */, {dst} /* dst_index_out */);\n"
         )
 
     def __str__(self) -> str:

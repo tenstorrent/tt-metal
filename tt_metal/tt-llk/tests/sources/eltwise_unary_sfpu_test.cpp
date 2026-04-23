@@ -95,6 +95,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // calling sfpu function from ckernel
             // this part is where parametrization of operation takes part
             test_utils::call_unary_sfpu_operation<
+                DST_SYNC,
+                is_fp32_dest_acc_en,
                 SFPU_UNARY_OPERATION,
                 APPROX_MODE,
                 is_fp32_dest_acc_en,
