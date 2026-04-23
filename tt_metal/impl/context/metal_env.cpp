@@ -227,7 +227,9 @@ bool MetalEnvImpl::set_fabric_config(
     // Must happen while fabric_config_ is still active and fabric context is alive.
     bool is_tearing_down_fabric =
         fabric_config == tt_fabric::FabricConfig::DISABLED && this->fabric_config_ != tt_fabric::FabricConfig::DISABLED;
-    if (is_tearing_down_fabric) {
+    // Only export trimming capture if control_plane_ was actually initialized — if SetUp threw (e.g.
+    // FIX P on degraded hardware) control_plane_ will be null and we must not re-trigger discovery.
+    if (is_tearing_down_fabric && control_plane_) {
         tt::tt_fabric::export_channel_trimming_capture(*this);
     }
 

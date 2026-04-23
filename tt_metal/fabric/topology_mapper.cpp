@@ -1592,8 +1592,9 @@ std::vector<MeshShape> generate_possible_cluster_shapes(std::uint32_t total_numb
                     shape = MeshShape(2, 4);
                 }
 
-                // if odd shape then skip
-                if ((larger_dim % 2 != 0 && larger_dim != 1) || (smaller_dim % 2 != 0 && smaller_dim != 1)) {
+                // if both non-unit dimensions are odd then skip (e.g. 3x3, 5x3)
+                // Mixed shapes like 3x2 (one odd, one even) are valid — e.g. 6-chip runner (3 MMIO + 3 remote)
+                if ((larger_dim % 2 != 0 && larger_dim != 1) && (smaller_dim % 2 != 0 && smaller_dim != 1)) {
                     continue;
                 }
 
