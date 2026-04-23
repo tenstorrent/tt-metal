@@ -249,24 +249,24 @@ class TestPerfCountersSingleOp:
             "Unpacker-to-Math Data Flow Median (%)": 0.0,
             "Unpacker-to-Math Data Flow Max (%)": 0.0,
             "Unpacker-to-Math Data Flow Avg (%)": 0.0,
-            # INSTRN_THREAD: Thread stall rates
+            # INSTRN_THREAD thread stall rates
             "Thread 0 Stall Rate Min (%)": 0.0,
             "Thread 0 Stall Rate Avg (%)": 0.0,
             "Thread 1 Stall Rate Min (%)": 0.0,
             "Thread 1 Stall Rate Avg (%)": 0.0,
             "Thread 2 Stall Rate Min (%)": 0.0,
             "Thread 2 Stall Rate Avg (%)": 0.0,
-            # INSTRN_THREAD: Pipeline waits
+            # INSTRN_THREAD pipeline waits
             "SrcA Valid Wait Min (%)": 0.0,
             "SrcB Valid Wait Min (%)": 0.0,
             "Math Idle Wait T1 Min (%)": 0.0,
             "Pack Idle Wait T2 Min (%)": 0.0,
             "Unpack Idle Wait T0 Min (%)": 0.0,
-            # INSTRN_THREAD: Semaphore waits
+            # INSTRN_THREAD semaphore waits
             "Semaphore Zero Wait T0 Min (%)": 0.0,
             "Semaphore Zero Wait T1 Min (%)": 0.0,
             "Semaphore Zero Wait T2 Min (%)": 0.0,
-            # TDMA_UNPACK: Data hazard stalls
+            # TDMA_UNPACK data hazard stalls
             "Data Hazard Stall Rate Min (%)": 0.0,
             # L1 Bank 0 metrics
             "L1 Unpacker Port Util Min (%)": 0.0,

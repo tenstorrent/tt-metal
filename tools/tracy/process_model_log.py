@@ -199,7 +199,7 @@ def run_device_profiler(
     python_post_process=True,
     capture_perf_counters_groups=[],
     sum_profiling=False,
-    # 1.333x matches the historical reserve that some model tests depend on.
+    # 1.333x matches the reserve some model tests depend on.
     op_support_count=int(PROFILER_DEFAULT_OP_SUPPORT_COUNT * 1.333),
     is_command_binary_exe=False,
 ):

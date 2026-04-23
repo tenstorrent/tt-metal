@@ -140,7 +140,7 @@ COUNTER_TYPE_NAMES = {
     110: "THREAD_INSTRUCTIONS_0",
     111: "THREAD_INSTRUCTIONS_1",
     112: "THREAD_INSTRUCTIONS_2",
-    # TDMA_UNPACK grant counters (write/port info)
+    # TDMA_UNPACK grant counters
     113: "SRCB_WRITE_ACTUAL",
     114: "SRCA_WRITE_NOT_BLOCKED_OVR",
     115: "SRCA_WRITE_ACTUAL",
@@ -149,7 +149,7 @@ COUNTER_TYPE_NAMES = {
     118: "SRCB_WRITE_THREAD0",
     119: "SRCA_WRITE_THREAD1",
     120: "SRCB_WRITE_THREAD1",
-    # TDMA_PACK additional req counters (WH only, PACK_COUNT=4)
+    # TDMA_PACK additional req counters (WH only)
     121: "PACKER_DEST_READ_1",
     122: "PACKER_DEST_READ_2",
     123: "PACKER_DEST_READ_3",
@@ -265,7 +265,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "Unpacker-to-Math Data Flow Median (%)",
     "Unpacker-to-Math Data Flow Max (%)",
     "Unpacker-to-Math Data Flow Avg (%)",
-    # INSTRN_THREAD: Thread stall rates
+    # INSTRN_THREAD thread stall rates
     "Thread 0 Stall Rate Min (%)",
     "Thread 0 Stall Rate Median (%)",
     "Thread 0 Stall Rate Max (%)",
@@ -278,7 +278,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "Thread 2 Stall Rate Median (%)",
     "Thread 2 Stall Rate Max (%)",
     "Thread 2 Stall Rate Avg (%)",
-    # INSTRN_THREAD: Pipeline wait metrics
+    # INSTRN_THREAD pipeline wait metrics
     "SrcA Valid Wait Min (%)",
     "SrcA Valid Wait Median (%)",
     "SrcA Valid Wait Max (%)",
@@ -307,7 +307,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "Unpack Idle Wait T0 Median (%)",
     "Unpack Idle Wait T0 Max (%)",
     "Unpack Idle Wait T0 Avg (%)",
-    # INSTRN_THREAD: Semaphore wait metrics
+    # INSTRN_THREAD semaphore waits
     "Semaphore Zero Wait T0 Min (%)",
     "Semaphore Zero Wait T0 Median (%)",
     "Semaphore Zero Wait T0 Max (%)",
@@ -332,12 +332,12 @@ PERF_COUNTER_CSV_HEADERS = [
     "Semaphore Full Wait T2 Median (%)",
     "Semaphore Full Wait T2 Max (%)",
     "Semaphore Full Wait T2 Avg (%)",
-    # TDMA_UNPACK: Data hazard stalls
+    # TDMA_UNPACK data hazard stalls
     "Data Hazard Stall Rate Min (%)",
     "Data Hazard Stall Rate Median (%)",
     "Data Hazard Stall Rate Max (%)",
     "Data Hazard Stall Rate Avg (%)",
-    # TDMA_UNPACK: Fidelity metrics
+    # TDMA_UNPACK fidelity metrics
     "Fidelity Stall Rate Min (%)",
     "Fidelity Stall Rate Median (%)",
     "Fidelity Stall Rate Max (%)",
@@ -350,7 +350,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "Avg HF Cycles Per Instrn Median",
     "Avg HF Cycles Per Instrn Max",
     "Avg HF Cycles Per Instrn Avg",
-    # L1 Bank 0: utilization metrics
+    # L1 Bank 0 utilization
     "L1 Unpacker Port Util Min (%)",
     "L1 Unpacker Port Util Median (%)",
     "L1 Unpacker Port Util Max (%)",
@@ -444,7 +444,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "T2 Instrn Issue Rate Median",
     "T2 Instrn Issue Rate Max",
     "T2 Instrn Issue Rate Avg",
-    # === NEW: Per-type instruction issue efficiency ===
+    # === Per-type instruction issue efficiency ===
     "CFG Instrn Avail Rate T0 Min (%)",
     "CFG Instrn Avail Rate T0 Median (%)",
     "CFG Instrn Avail Rate T0 Max (%)",
@@ -473,8 +473,8 @@ PERF_COUNTER_CSV_HEADERS = [
     "PACK Instrn Avail Rate T2 Median (%)",
     "PACK Instrn Avail Rate T2 Max (%)",
     "PACK Instrn Avail Rate T2 Avg (%)",
-    # === NEW: Stall breakdown (% of total stalls per thread) ===
-    # === NEW: Write port blocking ===
+    # === Stall breakdown ===
+    # === Write port blocking ===
     "SrcB Write Port Blocked Rate Min (%)",
     "SrcB Write Port Blocked Rate Median (%)",
     "SrcB Write Port Blocked Rate Max (%)",
@@ -487,7 +487,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "SrcB Write Actual Efficiency Median (%)",
     "SrcB Write Actual Efficiency Max (%)",
     "SrcB Write Actual Efficiency Avg (%)",
-    # === NEW: Packer engine granularity (WH) ===
+    # === Packer engine granularity ===
     "Packer Engine 0 Util Min (%)",
     "Packer Engine 0 Util Median (%)",
     "Packer Engine 0 Util Max (%)",
@@ -500,7 +500,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "Packer Engine 2 Util Median (%)",
     "Packer Engine 2 Util Max (%)",
     "Packer Engine 2 Util Avg (%)",
-    # === NEW: Low priority waits ===
+    # === Low priority waits ===
     "MMIO Idle Wait T0 Min (%)",
     "MMIO Idle Wait T0 Median (%)",
     "MMIO Idle Wait T0 Max (%)",
@@ -517,7 +517,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "MOVE Idle Wait T0 Median (%)",
     "MOVE Idle Wait T0 Max (%)",
     "MOVE Idle Wait T0 Avg (%)",
-    # === NEW: RISC Core L1 util (BH only) ===
+    # === RISC Core L1 util ===
     "RISC Core L1 Util Min (%)",
     "RISC Core L1 Util Median (%)",
     "RISC Core L1 Util Max (%)",
@@ -748,7 +748,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "Dest Read Backpressure",
         "Math Dest Write Port Stall Rate",
         "Math Scoreboard Stall Rate",
-        # NEW: Per-type instruction issue efficiency
+        # Per-type instruction issue efficiency
         "CFG Instrn Avail Rate T0",
         "SYNC Instrn Avail Rate T0",
         "THCON Instrn Avail Rate T0",
@@ -756,15 +756,15 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "MATH Instrn Avail Rate T1",
         "UNPACK Instrn Avail Rate T0",
         "PACK Instrn Avail Rate T2",
-        # NEW: Write port blocking
+        # Write port blocking
         "SrcB Write Port Blocked Rate",
         "SrcA Write Actual Efficiency",
         "SrcB Write Actual Efficiency",
-        # NEW: Packer engine granularity
+        # Packer engine granularity
         "Packer Engine 0 Util",
         "Packer Engine 1 Util",
         "Packer Engine 2 Util",
-        # NEW: Low priority waits
+        # Low priority waits
         "MMIO Idle Wait T0",
         "SFPU Idle Wait T1",
         "THCON Idle Wait T0",
@@ -1274,7 +1274,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     if has_counter("L1_1_RISC_CORE"):
         per_op_stats["RISC Core L1 Util"] = compute_util_metric("L1_1_RISC_CORE")
 
-    # === L1 composite metrics (multi-counter) ===
+    # === L1 composite metrics ===
     if has_counter("L1_0_UNPACKER_0") and has_counter("L1_0_NOC_RING0_OUTGOING_0"):
         # L1 Total Bandwidth Util: sum of all 8 port reqs / (8 * ref_cnt)
         packer_key = "L1_0_UNIFIED_PACKER" if has_counter("L1_0_UNIFIED_PACKER") else "L1_0_UNPACKER_1_ECC_PACK1"
@@ -1548,7 +1548,7 @@ def compute_device_only_metrics(
         axis=1,
     )
 
-    # New metrics: Thread stall rates and IPC
+    # Thread stall rates
     for t in range(3):
         stall_col = f"value_THREAD_STALLS_{t}"
         ref_col = f"ref_cnt_THREAD_STALLS_{t}"
@@ -1912,7 +1912,7 @@ def compute_device_only_metrics(
         safe_util("value_L1_1_RISC_CORE", "ref_cnt_L1_1_RISC_CORE"), axis=1
     )
 
-    # === L1 composite metrics (multi-counter) ===
+    # === L1 composite metrics ===
     def l1_total_bw(x):
         """Sum of all 8 L1_0 port req counts / (8 * ref_cnt)."""
         ports = [
@@ -2024,7 +2024,7 @@ def compute_device_only_metrics(
 
     eff_pivot["TDMA vs NOC L1 Share"] = eff_pivot.apply(tdma_vs_noc_share, axis=1)
 
-    # === New composite metrics ===
+    # === Composite metrics ===
 
     # Stall Cause Overlap Factor per thread
     for t in [0, 1, 2]:
@@ -2129,7 +2129,6 @@ def compute_device_only_metrics(
         "Dest Read Backpressure",
         "Math Dest Write Port Stall Rate",
         "Math Scoreboard Stall Rate",
-        # NEW metrics
         "CFG Instrn Avail Rate T0",
         "SYNC Instrn Avail Rate T0",
         "THCON Instrn Avail Rate T0",

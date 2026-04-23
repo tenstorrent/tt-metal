@@ -439,16 +439,8 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         uint32_t counter_sel = counters[i].second;
         uint32_t expected_mode = counter_sel << PERF_CNT_BANK_SELECT_SHIFT | PERF_CNT_CONTINUOUS_MODE;
         cntl_reg[1] = expected_mode;
-        // Wait for the mode register write (counter_sel mux change) to take
-        // effect before reading the output registers. The original #33109
-        // implementation used this readback poll + 50 NOPs. We briefly replaced
-        // it with two dummy volatile reads as an implicit fence, which produced
-        // identical counter values — but volatile reads have no formal RISC-V
-        // spec guarantee for MMIO ordering. The explicit readback poll is
-        // correct by construction: it completes only when the hardware confirms
-        // the new mux select value, ensuring the output registers reflect the
-        // selected counter bank. The 50 NOPs were dropped since the readback
-        // alone is sufficient (the mux settles within the poll cycle).
+        // Readback poll: completes once the hardware acks the new mux select, so
+        // the output registers reflect this counter. Required for correct MMIO ordering.
         while (cntl_reg[1] != expected_mode);
         uint32_t ref_cnt_val = read_reg[0];
         uint32_t counter_val = read_reg[1];
