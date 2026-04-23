@@ -80,7 +80,6 @@ void kernel_main() {
             compute_kernel_lib::BinaryInputBlockShape::single(),
             compute_kernel_lib::sfpu_chain(
                 compute_kernel_lib::Rsqrt<compute_kernel_lib::Legacy::On, compute_kernel_lib::Approx::Exact>{}),
-            compute_kernel_lib::NoAccumulation{},
             compute_kernel_lib::BinaryInputExtras{.base = 1},
             compute_kernel_lib::BinaryInputExtras{.base = 0});
 
@@ -182,7 +181,6 @@ void kernel_main() {
                     cb_out,
                     compute_kernel_lib::BinaryInputBlockShape::of(1, block_size),
                     compute_kernel_lib::NoOp{},
-                    compute_kernel_lib::NoAccumulation{},
                     compute_kernel_lib::BinaryInputExtras{.base = 0},
                     compute_kernel_lib::BinaryInputExtras{.base = col_tile});
             }

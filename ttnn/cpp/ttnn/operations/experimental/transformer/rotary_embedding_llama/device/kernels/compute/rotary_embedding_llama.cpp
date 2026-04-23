@@ -89,7 +89,6 @@ void kernel_main() {
                     sin_interm_cb,
                     compute_kernel_lib::BinaryInputBlockShape::of(1, Wt),
                     compute_kernel_lib::NoOp{},
-                    compute_kernel_lib::NoAccumulation{},
                     compute_kernel_lib::BinaryInputExtras{.base = 0},
                     compute_kernel_lib::BinaryInputExtras{.base = sin_cos_row_cnt * Wt});
                 cb_pop_front(rotated_in_interm_cb, Wt);
@@ -109,7 +108,6 @@ void kernel_main() {
                     cos_interm_cb,
                     compute_kernel_lib::BinaryInputBlockShape::of(1, Wt),
                     compute_kernel_lib::NoOp{},
-                    compute_kernel_lib::NoAccumulation{},
                     compute_kernel_lib::BinaryInputExtras{.base = 0},
                     compute_kernel_lib::BinaryInputExtras{.base = sin_cos_row_cnt * Wt});
                 cb_pop_front(in_cb, Wt);  // Done with input

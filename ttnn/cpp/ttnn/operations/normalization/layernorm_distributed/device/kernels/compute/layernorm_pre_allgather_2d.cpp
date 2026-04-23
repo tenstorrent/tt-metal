@@ -16,9 +16,6 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
-
 void kernel_main() {
     using namespace compute_kernel_lib;
 
@@ -27,8 +24,6 @@ void kernel_main() {
     constexpr uint32_t blk = get_compile_time_arg_val(2);
     constexpr uint32_t num_cores_y = get_compile_time_arg_val(3);
     bool is_merge_core = get_arg_val<uint32_t>(0);
-
-    constexpr uint32_t onetile = 1;
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
@@ -47,12 +42,7 @@ void kernel_main() {
          * One init+reconfig per call.
          */
         square<BinaryInputPolicy::CumulativeWaitNoPop, BinaryOutputPolicy::Bulk>(
-            cb_inp,
-            cb_x2,
-            BinaryInputBlockShape::of(1, Wt),
-            NoOp{},
-            NoAccumulation{},
-            BinaryInputExtras{.wait_step = blk});
+            cb_inp, cb_x2, BinaryInputBlockShape::of(1, Wt), NoOp{}, BinaryInputExtras{.wait_step = blk});
 
         /*
          * sum(x**2)
@@ -65,41 +55,21 @@ void kernel_main() {
         cb_pop_front(cb_reduce, 1);
     }
 
-    // if merge core, we need to do a final sum on the tile in cb_x2 and then write the result to cb_out_final.
-    // Raw path: single-tile scalar-broadcast reduction by accumulating num_cores_y adds into DST[0].
-    // binary_op's current API produces one output per iter; this is an accumulate-into-one pattern.
+    // Merge core: sum num_cores_y partial E(x²) tiles into a single tile via hardware
+    // acc_to_dest. A streams cb_x2_merge[0..num_cores_y); B stays at cb_zero[0] (additive
+    // zero-partner). Helper emits one output tile and manages reserve/push; A policy
+    // WaitUpfrontPopAtEnd covers the upfront wait and bulk pop.
     if (is_merge_core) {
         constexpr uint32_t cb_x2_merge = tt::CBIndex::c_15;
         constexpr uint32_t cb_out_final = tt::CBIndex::c_14;
-        constexpr int dst0 = 0;
 
-        // Wait for all num_cores_y tiles
-        cb_wait_front(cb_x2_merge, num_cores_y);
+        binary_op_init_common(cb_x2_merge, cb_zero, cb_out_final);
         cb_wait_front(cb_zero, 1);
 
-        // Reserve output space
-        cb_reserve_back(cb_out_final, onetile);
-
-        // Initialize accumulation
-        binary_op_init_common(cb_x2_merge, cb_zero, cb_out_final);
-        reconfig_data_format(cb_x2_merge, cb_zero);
-        pack_reconfig_data_format(cb_out_final);
-        add_tiles_init(cb_x2_merge, cb_zero, true);
-
-        // Acquire registers
-        ACQ();
-
-        // Add all 8 tiles together
-        for (uint32_t i = 0; i < num_cores_y; i++) {
-            add_tiles(cb_x2_merge, cb_zero, i, 0, dst0);
-        }
-
-        // Pack result
-        pack_tile(dst0, cb_out_final);
-        REL();
-
-        // Push output and pop input
-        cb_push_back(cb_out_final, onetile);
-        cb_pop_front(cb_x2_merge, num_cores_y);
+        add<BroadcastDim::NONE,
+            BinaryInputPolicy::WaitUpfrontPopAtEnd,
+            BinaryInputPolicy::NoWaitNoPop,
+            BinaryOutputPolicy::AccumulateInDest>(
+            cb_x2_merge, cb_zero, cb_out_final, BinaryInputBlockShape::of(1, num_cores_y));
     }
 }

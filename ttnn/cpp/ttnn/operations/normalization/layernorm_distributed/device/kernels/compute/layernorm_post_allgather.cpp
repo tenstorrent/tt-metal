@@ -179,7 +179,6 @@ void kernel_main() {
             cb_mean_squared,
             compute_kernel_lib::BinaryInputBlockShape::single(),
             compute_kernel_lib::NoOp{},
-            compute_kernel_lib::NoAccumulation{},
             compute_kernel_lib::BinaryInputExtras{.base = 1});
 
         // Stage 3 — cb_var = cb_stats_reduced[0] - cb_mean_squared

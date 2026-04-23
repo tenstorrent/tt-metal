@@ -145,7 +145,6 @@ void kernel_main() {
             compute_kernel_lib::BinaryInputBlockShape::single(),
             compute_kernel_lib::sfpu_chain(
                 compute_kernel_lib::Rsqrt<compute_kernel_lib::Legacy::On, compute_kernel_lib::Approx::Exact>{}),
-            compute_kernel_lib::NoAccumulation{},
             compute_kernel_lib::BinaryInputExtras{.base = 1},
             compute_kernel_lib::BinaryInputExtras{.base = 0});
 

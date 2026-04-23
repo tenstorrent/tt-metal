@@ -179,13 +179,21 @@ enum class BinaryInputPolicy {
  *
  * Controls when to reserve and push output tiles:
  * - PerTile: Reserve/push one tile at a time (streaming)
- * - PerChunk: Reserve/push chunk of tiles at a time (DEST_LIMIT tiles)
- * - Bulk: Reserve all upfront, push all at end
+ * - PerChunk: Reserve/push chunk of tiles at a time (DEST_LIMIT tiles). Reserve happens AFTER
+ *   input pops, so ocb may alias an input CB when chunk_cap >= total_tiles_a (single chunk).
+ * - Bulk: Reserve all upfront, push all at end (no in-place — upfront reserve locks ocb slot).
+ * - AccumulateInDest: Fold all input tiles into DST[0] via hardware `acc_to_dest` and emit a
+ *   single output tile. Semantics per iter: `DST[0] = DST[0] + op(A[i], B[b_extras.base])`;
+ *   B stays fixed across iterations, A streams through total_tiles_a tiles. Exactly one
+ *   pack_tile/cb_reserve_back/cb_push_back at the end. Requires BroadcastDim::NONE and a
+ *   non-per-tile input A policy (one DST cycle covers the whole block). Typical use: the
+ *   merge-core reduction pattern (sum N partial stats into one tile with cb_zero as B).
  */
 enum class BinaryOutputPolicy {
-    PerTile,   // Reserve/push one tile at a time
-    PerChunk,  // Reserve/push chunk of tiles at a time
-    Bulk       // Reserve all upfront, push all at end
+    PerTile,           // Reserve/push one tile at a time
+    PerChunk,          // Reserve/push chunk of tiles at a time
+    Bulk,              // Reserve all upfront, push all at end
+    AccumulateInDest,  // Fold all tiles into DST[0], emit 1 output tile (hardware acc_to_dest)
 };
 
 // =============================================================================
@@ -228,10 +236,6 @@ struct BinaryInputExtras {
     uint32_t wait_step = 0;
 };
 
-struct BinaryAccumulate {
-    uint32_t cb_accumulator, dst_index = 0;
-};
-
 // =============================================================================
 // Low-Level LLK Wrappers
 // =============================================================================
@@ -242,9 +246,12 @@ struct BinaryAccumulate {
  * Configures math and unpack pipelines. Called automatically by binary_op() when
  * init=true (default). Call manually only when init=false and you need explicit
  * control over initialization timing.
+ *
+ * @param acc_to_dest  If true, math op accumulates into DST[dst_idx] instead of
+ *                     overwriting (DST += A + B). Only valid for NONE broadcast.
  */
 template <BinaryOpType op_type, BroadcastDim bcast_dim>
-ALWI void binary_init(uint32_t icb_a, uint32_t icb_b);
+ALWI void binary_init(uint32_t icb_a, uint32_t icb_b, bool acc_to_dest = false);
 
 /**
  * @brief Execute a single binary tile operation
@@ -288,7 +295,6 @@ ALWI void binary_exec(uint32_t icb_a, uint32_t icb_b, uint32_t itile_a, uint32_t
  * @param ocb    Output circular buffer
  * @param shape  Tile grid dimensions — use BinaryInputBlockShape::of(Ht, Wt)
  * @param post_op  Post-operation callback receiving dst_idx (default: NoOp)
- * @param accum  Accumulation config (default: NoAccumulation)
  */
 template <
     BinaryOpType op_type,
@@ -298,15 +304,13 @@ template <
     BinaryOutputPolicy output_policy = BinaryOutputPolicy::PerTile,
     BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::INPUT_AND_OUTPUT,
     bool init = true,
-    typename PostOp = NoOp,
-    typename AccumT = NoAccumulation>
+    typename PostOp = NoOp>
 ALWI void binary_op(
     uint32_t icb_a,
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
     PostOp post_op = {},
-    AccumT accum = {},
     BinaryInputExtras a_extras = {},
     BinaryInputExtras b_extras = {});
 
@@ -322,15 +326,13 @@ template <
     BinaryOutputPolicy output_policy = BinaryOutputPolicy::PerTile,
     BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::INPUT_AND_OUTPUT,
     bool init = true,
-    typename PostOp = NoOp,
-    typename AccumT = NoAccumulation>
+    typename PostOp = NoOp>
 ALWI void add(
     uint32_t icb_a,
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
     PostOp post_op = {},
-    AccumT accum = {},
     BinaryInputExtras a_extras = {},
     BinaryInputExtras b_extras = {});
 
@@ -342,15 +344,13 @@ template <
     BinaryOutputPolicy output_policy = BinaryOutputPolicy::PerTile,
     BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::INPUT_AND_OUTPUT,
     bool init = true,
-    typename PostOp = NoOp,
-    typename AccumT = NoAccumulation>
+    typename PostOp = NoOp>
 ALWI void sub(
     uint32_t icb_a,
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
     PostOp post_op = {},
-    AccumT accum = {},
     BinaryInputExtras a_extras = {},
     BinaryInputExtras b_extras = {});
 
@@ -362,15 +362,13 @@ template <
     BinaryOutputPolicy output_policy = BinaryOutputPolicy::PerTile,
     BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::INPUT_AND_OUTPUT,
     bool init = true,
-    typename PostOp = NoOp,
-    typename AccumT = NoAccumulation>
+    typename PostOp = NoOp>
 ALWI void mul(
     uint32_t icb_a,
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
     PostOp post_op = {},
-    AccumT accum = {},
     BinaryInputExtras a_extras = {},
     BinaryInputExtras b_extras = {});
 
@@ -380,15 +378,9 @@ template <
     BinaryOutputPolicy output_policy = BinaryOutputPolicy::PerTile,
     BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::INPUT_AND_OUTPUT,
     bool init = true,
-    typename PostOp = NoOp,
-    typename AccumT = NoAccumulation>
+    typename PostOp = NoOp>
 ALWI void square(
-    uint32_t icb,
-    uint32_t ocb,
-    BinaryInputBlockShape shape,
-    PostOp post_op = {},
-    AccumT accum = {},
-    BinaryInputExtras extras = {});
+    uint32_t icb, uint32_t ocb, BinaryInputBlockShape shape, PostOp post_op = {}, BinaryInputExtras extras = {});
 
 // =============================================================================
 // Dest-Reuse PostOp

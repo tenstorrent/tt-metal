@@ -39,12 +39,7 @@ void kernel_main() {
          * shape.cols = Wt and wait_step = blk. One init+reconfig per call.
          */
         square<BinaryInputPolicy::CumulativeWaitNoPop, BinaryOutputPolicy::Bulk>(
-            cb_inp,
-            cb_x2,
-            BinaryInputBlockShape::of(1, Wt),
-            NoOp{},
-            NoAccumulation{},
-            BinaryInputExtras{.wait_step = blk});
+            cb_inp, cb_x2, BinaryInputBlockShape::of(1, Wt), NoOp{}, BinaryInputExtras{.wait_step = blk});
 
         /*
          * sum(x**2)

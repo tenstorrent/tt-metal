@@ -67,6 +67,9 @@ constexpr bool pops_caller_managed(BinaryInputPolicy p) { return p == BinaryInpu
 constexpr bool output_per_tile(BinaryOutputPolicy p) { return p == BinaryOutputPolicy::PerTile; }
 constexpr bool output_per_chunk(BinaryOutputPolicy p) { return p == BinaryOutputPolicy::PerChunk; }
 constexpr bool output_bulk(BinaryOutputPolicy p) { return p == BinaryOutputPolicy::Bulk; }
+constexpr bool output_accumulate_in_dest(BinaryOutputPolicy p) {
+    return p == BinaryOutputPolicy::AccumulateInDest;
+}
 
 template <BinaryOpType op_type>
 constexpr EltwiseBinaryType map_to_eltwise_type() {
@@ -87,20 +90,6 @@ ALWI constexpr uint32_t get_b_tile_count(uint32_t Ht, uint32_t Wt) {
            : bcast_dim == BroadcastDim::ROW  ? Wt
            : bcast_dim == BroadcastDim::COL  ? Ht
                                              : Ht * Wt;
-}
-
-template <typename AccumT>
-ALWI constexpr bool is_accumulator_enabled() {
-    return !std::is_same_v<AccumT, NoAccumulation>;
-}
-
-template <typename AccumT>
-ALWI constexpr uint32_t get_binary_dst_index(AccumT accum) {
-    if constexpr (is_accumulator_enabled<AccumT>()) {
-        return accum.dst_index;
-    } else {
-        return 0;
-    }
 }
 
 namespace detail {
@@ -250,15 +239,17 @@ ALWI void DestReuseOp<CB, OpType, ReuseType, Slot, Policy, Reconfig>::exec(uint3
 // =============================================================================
 
 template <BinaryOpType op_type, BroadcastDim bcast_dim>
-ALWI void binary_init(uint32_t icb_a, uint32_t icb_b) {
+ALWI void binary_init(uint32_t icb_a, uint32_t icb_b, bool acc_to_dest) {
     constexpr EltwiseBinaryType elt_type = map_to_eltwise_type<op_type>();
     constexpr BroadcastType bcast_type = map_to_broadcast_type<bcast_dim>();
 
     // MUL uses configured MATH_FIDELITY; ADD/SUB always use LoFi (matches eltwise_binary.h)
     if constexpr (op_type == BinaryOpType::MUL) {
-        MATH((llk_math_eltwise_binary_init_with_operands<elt_type, bcast_type, MATH_FIDELITY>(icb_a, icb_b)));
+        MATH((llk_math_eltwise_binary_init_with_operands<elt_type, bcast_type, MATH_FIDELITY>(
+            icb_a, icb_b, acc_to_dest)));
     } else {
-        MATH((llk_math_eltwise_binary_init_with_operands<elt_type, bcast_type, MathFidelity::LoFi>(icb_a, icb_b)));
+        MATH((llk_math_eltwise_binary_init_with_operands<elt_type, bcast_type, MathFidelity::LoFi>(
+            icb_a, icb_b, acc_to_dest)));
     }
     UNPACK((llk_unpack_AB_init<bcast_type>(icb_a, icb_b)));
 }
@@ -290,15 +281,13 @@ template <
     BinaryOutputPolicy output_policy,
     BinaryDataFormatReconfig reconfig,
     bool init,
-    typename PostOp,
-    typename AccumT>
+    typename PostOp>
 ALWI void binary_op(
     uint32_t icb_a,
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
     PostOp post_op,
-    AccumT accum,
     BinaryInputExtras a_extras,
     BinaryInputExtras b_extras) {
     static_assert(
@@ -308,6 +297,16 @@ ALWI void binary_op(
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
     constexpr bool is_square = (op_type == BinaryOpType::SQUARE);
+    constexpr bool is_acc_dest = output_accumulate_in_dest(output_policy);
+
+    // AccumulateInDest needs: NONE broadcast (hardware requirement for acc_to_dest),
+    // non-per-tile A policy (one DST cycle spans the whole block).
+    static_assert(
+        !is_acc_dest || bcast_dim == BroadcastDim::NONE,
+        "AccumulateInDest requires BroadcastDim::NONE (hardware acc_to_dest only supports non-broadcast math).");
+    static_assert(
+        !is_acc_dest || !waits_per_tile(input_a_policy),
+        "AccumulateInDest requires a non-per-tile input A policy (one acquire/commit covers the whole block).");
 
     const uint32_t Ht = shape.rows;
     const uint32_t Wt = shape.cols;
@@ -328,8 +327,9 @@ ALWI void binary_op(
 
     // Initialization: done once here unless PostOp modifies the unpack pipeline,
     // in which case it is re-done per tile (see binary_exec site below).
+    // AccumulateInDest requires acc_to_dest=true so every binary_exec folds into DST[dst_idx].
     if constexpr (init && !detail::post_op_needs_reinit_v<PostOp>) {
-        binary_init<op_type, bcast_dim>(icb_a, icb_b);
+        binary_init<op_type, bcast_dim>(icb_a, icb_b, is_acc_dest);
     }
 
     // Same-CB flag: when icb_a == icb_b, skip all duplicate wait/pop for icb_b.
@@ -353,13 +353,14 @@ ALWI void binary_op(
         // CumulativeWaitNoPop on B is handled per-chunk (same as A).
     }
 
-    // Upfront output reserve
+    // Upfront output reserve (Bulk only — PerChunk reserves after input pops so
+    // ocb can alias an input CB when chunk_cap >= total_tiles_a).
     if constexpr (output_bulk(output_policy)) {
         cb_reserve_back(ocb, total_tiles_a);
     }
 
-    const uint32_t base_dst = get_binary_dst_index(accum);
-    const uint32_t effective_dest_limit = dest_limit - base_dst;
+    const uint32_t base_dst = 0;
+    const uint32_t effective_dest_limit = dest_limit;
     // For CumulativeWaitNoPop the caller's wait_step caps chunk size so the
     // helper walks the full block in wait_step-sized groups (matching the
     // hand-rolled outer loop that wait_step replaces). Pick the min of A/B's
@@ -372,9 +373,11 @@ ALWI void binary_op(
         (cumulative_step_a && cumulative_step_b) ? ((cumulative_step_a < cumulative_step_b) ? cumulative_step_a
                                                                                             : cumulative_step_b)
                                                  : (cumulative_step_a ? cumulative_step_a : cumulative_step_b);
-    const uint32_t chunk_cap = cumulative_step > 0 && cumulative_step < effective_dest_limit
-                                   ? cumulative_step
-                                   : effective_dest_limit;
+    // AccumulateInDest collapses the whole block into a single DST cycle.
+    const uint32_t chunk_cap = is_acc_dest ? total_tiles_a
+                                           : (cumulative_step > 0 && cumulative_step < effective_dest_limit
+                                                  ? cumulative_step
+                                                  : effective_dest_limit);
     uint32_t tiles_processed = 0;
 
     for (uint32_t ht = 0; ht < Ht; ++ht) {
@@ -399,24 +402,10 @@ ALWI void binary_op(
                 if (!same_cb) cb_wait_front(icb_b, b_extras.base + wt_base + chunk_size);
             }
 
-            if constexpr (output_per_chunk(output_policy)) {
-                cb_reserve_back(ocb, chunk_size);
-            }
-
             // Per-tile path: each tile gets its own acquire/commit/wait/release cycle
             // Per-chunk path: one acquire/commit/wait/release cycle for the whole chunk
             if constexpr (!waits_per_tile(input_a_policy)) {
                 tile_regs_acquire();
-            }
-
-            // Accumulator reload if needed
-            if constexpr (is_accumulator_enabled<AccumT>()) {
-                if constexpr (!waits_per_tile(input_a_policy)) {
-                    cb_wait_front(accum.cb_accumulator, 1);
-                    copy_tile(accum.cb_accumulator, 0, accum.dst_index);
-                    cb_pop_front(accum.cb_accumulator, 1);
-                    binary_init<op_type, bcast_dim>(icb_a, icb_b);
-                }
             }
 
             for (uint32_t wt = 0; wt < chunk_size; ++wt) {
@@ -465,6 +454,13 @@ ALWI void binary_op(
                     }
                 }
 
+                // AccumulateInDest overrides: every iter folds into DST[base_dst] and
+                // reads B at a fixed index (B does not stream with A).
+                if constexpr (is_acc_dest) {
+                    dst_idx = base_dst;
+                    tile_b = b_extras.base;
+                }
+
                 // Per-tile: acquire DEST for this tile
                 if constexpr (waits_per_tile(input_a_policy)) {
                     tile_regs_acquire();
@@ -472,7 +468,7 @@ ALWI void binary_op(
 
                 // Per-tile reinit when PostOp modifies the unpack pipeline (e.g. DestReuseMul).
                 if constexpr (init && detail::post_op_needs_reinit_v<PostOp>) {
-                    binary_init<op_type, bcast_dim>(icb_a, icb_b);
+                    binary_init<op_type, bcast_dim>(icb_a, icb_b, is_acc_dest);
                 }
 
                 // Execute (unified LLK call)
@@ -485,18 +481,20 @@ ALWI void binary_op(
                     detail::apply_post_chain_batched(post_op, dst_idx, 1u);
                 }
 
-                // Per-tile input_b pop — decoupled from input_a's policy.
-                // For NONE broadcast, pop B after each tile regardless of A's streaming mode.
-                // COL broadcast pops once per row (see end of ht loop), not per tile.
-                if constexpr (!is_square && pops_per_tile(input_b_policy)) {
-                    if constexpr (bcast_dim == BroadcastDim::NONE) {
-                        if (!same_cb) cb_pop_front(icb_b, onetile);
-                    }
-                }
-
-                // Per-tile streaming: commit, wait, pack, release — complete handshake per tile
+                // Per-tile streaming: commit, POP INPUTS (before reserve), wait, pack, release
                 if constexpr (waits_per_tile(input_a_policy)) {
                     tile_regs_commit();
+
+                    // Pops first (enables ocb == icb_a/icb_b in-place for PerTile output).
+                    if constexpr (pops_per_tile(input_a_policy)) {
+                        cb_pop_front(icb_a, onetile);
+                    }
+                    if constexpr (!is_square && pops_per_tile(input_b_policy)) {
+                        if constexpr (bcast_dim == BroadcastDim::NONE) {
+                            if (!same_cb) cb_pop_front(icb_b, onetile);
+                        }
+                    }
+
                     tile_regs_wait();
 
                     if constexpr (output_per_tile(output_policy)) {
@@ -509,10 +507,6 @@ ALWI void binary_op(
                         pack_tile(base_dst, ocb, tiles_processed);
                     }
 
-                    if constexpr (pops_per_tile(input_a_policy)) {
-                        cb_pop_front(icb_a, onetile);
-                    }
-
                     tile_regs_release();
                     tiles_processed++;
                 }
@@ -520,16 +514,32 @@ ALWI void binary_op(
 
             // Chunk-scoped chain post-op: once-init, chunk_size-exec over [base_dst, base_dst + chunk_size).
             // Fires only for chain PostOp in per-chunk / bulk / upfront / caller-managed policies.
+            // AccumulateInDest folded everything into DST[base_dst], so post_op applies to 1 slot.
             if constexpr (detail::is_sfpu_chain_v<PostOp> && !waits_per_tile(input_a_policy)) {
-                detail::apply_post_chain_batched(post_op, base_dst, chunk_size);
+                const uint32_t post_op_count = is_acc_dest ? 1u : chunk_size;
+                detail::apply_post_chain_batched(post_op, base_dst, post_op_count);
             }
 
-            // Per-chunk commit/pack/pop
+            // Per-chunk commit → pop inputs (before reserving ocb) → wait → pack → push
             if constexpr (!waits_per_tile(input_a_policy)) {
                 tile_regs_commit();
+
+                // Pops first — enables ocb==icb aliasing when PerChunk output with chunk_cap >= total.
+                if constexpr (pops_per_chunk(input_a_policy)) {
+                    cb_pop_front(icb_a, chunk_size);
+                }
+                if constexpr (!is_square && pops_per_chunk(input_b_policy)) {
+                    if constexpr (bcast_dim == BroadcastDim::NONE) {
+                        if (!same_cb) cb_pop_front(icb_b, chunk_size);
+                    } else if constexpr (bcast_dim == BroadcastDim::COL) {
+                        if (!same_cb) cb_pop_front(icb_b, onetile);
+                    }
+                }
+
                 tile_regs_wait();
 
                 if constexpr (output_per_chunk(output_policy)) {
+                    cb_reserve_back(ocb, chunk_size);
                     for (uint32_t wt = 0; wt < chunk_size; ++wt) {
                         pack_tile(base_dst + wt, ocb, wt);
                     }
@@ -538,6 +548,11 @@ ALWI void binary_op(
                     for (uint32_t wt = 0; wt < chunk_size; ++wt) {
                         pack_tile(base_dst + wt, ocb, tiles_processed + wt);
                     }
+                } else if constexpr (is_acc_dest) {
+                    // All input tiles were folded into DST[base_dst]; emit exactly one output tile.
+                    cb_reserve_back(ocb, onetile);
+                    pack_tile(base_dst, ocb);
+                    cb_push_back(ocb, onetile);
                 } else {
                     for (uint32_t wt = 0; wt < chunk_size; ++wt) {
                         cb_reserve_back(ocb, onetile);
@@ -547,21 +562,7 @@ ALWI void binary_op(
                 }
 
                 tiles_processed += chunk_size;
-            }
 
-            if constexpr (pops_per_chunk(input_a_policy)) {
-                cb_pop_front(icb_a, chunk_size);
-            }
-            if constexpr (!is_square && pops_per_chunk(input_b_policy)) {
-                if constexpr (bcast_dim == BroadcastDim::NONE) {
-                    if (!same_cb) cb_pop_front(icb_b, chunk_size);
-                } else if constexpr (bcast_dim == BroadcastDim::COL) {
-                    if (!same_cb) cb_pop_front(icb_b, onetile);
-                }
-            }
-
-            // Per-chunk: release after all tiles packed
-            if constexpr (!waits_per_tile(input_a_policy)) {
                 tile_regs_release();
             }
         }
@@ -608,15 +609,13 @@ template <
     BinaryOutputPolicy output_policy,
     BinaryDataFormatReconfig reconfig,
     bool init,
-    typename PostOp,
-    typename AccumT>
+    typename PostOp>
 ALWI void add(
     uint32_t icb_a,
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
     PostOp post_op,
-    AccumT accum,
     BinaryInputExtras a_extras,
     BinaryInputExtras b_extras) {
     binary_op<
@@ -627,8 +626,7 @@ ALWI void add(
         output_policy,
         reconfig,
         init,
-        PostOp,
-        AccumT>(icb_a, icb_b, ocb, shape, post_op, accum, a_extras, b_extras);
+        PostOp>(icb_a, icb_b, ocb, shape, post_op, a_extras, b_extras);
 }
 
 template <
@@ -638,15 +636,13 @@ template <
     BinaryOutputPolicy output_policy,
     BinaryDataFormatReconfig reconfig,
     bool init,
-    typename PostOp,
-    typename AccumT>
+    typename PostOp>
 ALWI void sub(
     uint32_t icb_a,
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
     PostOp post_op,
-    AccumT accum,
     BinaryInputExtras a_extras,
     BinaryInputExtras b_extras) {
     binary_op<
@@ -657,8 +653,7 @@ ALWI void sub(
         output_policy,
         reconfig,
         init,
-        PostOp,
-        AccumT>(icb_a, icb_b, ocb, shape, post_op, accum, a_extras, b_extras);
+        PostOp>(icb_a, icb_b, ocb, shape, post_op, a_extras, b_extras);
 }
 
 template <
@@ -668,15 +663,13 @@ template <
     BinaryOutputPolicy output_policy,
     BinaryDataFormatReconfig reconfig,
     bool init,
-    typename PostOp,
-    typename AccumT>
+    typename PostOp>
 ALWI void mul(
     uint32_t icb_a,
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
     PostOp post_op,
-    AccumT accum,
     BinaryInputExtras a_extras,
     BinaryInputExtras b_extras) {
     binary_op<
@@ -687,8 +680,7 @@ ALWI void mul(
         output_policy,
         reconfig,
         init,
-        PostOp,
-        AccumT>(icb_a, icb_b, ocb, shape, post_op, accum, a_extras, b_extras);
+        PostOp>(icb_a, icb_b, ocb, shape, post_op, a_extras, b_extras);
 }
 
 template <
@@ -696,14 +688,12 @@ template <
     BinaryOutputPolicy output_policy,
     BinaryDataFormatReconfig reconfig,
     bool init,
-    typename PostOp,
-    typename AccumT>
+    typename PostOp>
 ALWI void square(
     uint32_t icb,
     uint32_t ocb,
     BinaryInputBlockShape shape,
     PostOp post_op,
-    AccumT accum,
     BinaryInputExtras extras) {
     binary_op<
         BinaryOpType::SQUARE,
@@ -713,8 +703,7 @@ ALWI void square(
         output_policy,
         reconfig,
         init,
-        PostOp,
-        AccumT>(icb, icb, ocb, shape, post_op, accum, extras, extras);
+        PostOp>(icb, icb, ocb, shape, post_op, extras, extras);
 }
 
 }  // namespace compute_kernel_lib
