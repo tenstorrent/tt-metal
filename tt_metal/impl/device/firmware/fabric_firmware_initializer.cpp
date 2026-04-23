@@ -1188,12 +1188,24 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
 
     // PHASE 2: Configure ALL devices now that probing is complete.
     // configure_fabric() switches ETH channels from base UMD firmware to fabric firmware.
-    // Doing this after all probes guarantees that non-MMIO relay reads in PHASE 1 always
-    // go through base UMD firmware (which services the relay read protocol), not fabric
-    // firmware (which does not).
+    // configure_fabric_cores() performs ERISC0 soft reset (assert_risc_reset_at_core /
+    // deassert_risc_reset_at_core) which is a relay read for non-MMIO devices.  If MMIO
+    // relay ERISCs are already running fabric firmware, those relay reads time out.
+    //
+    // FIX J2: configure non-MMIO devices FIRST (while the MMIO ETH relay is still base
+    // UMD firmware and can service relay reads), then configure MMIO devices.
+    // This is the same ordering discipline as PHASE 1 probe reads.
     size_t configured_count = 0;
+    // Pass 1: non-MMIO devices (relay-dependent — must run before MMIO ETH switches fw)
     for (auto* dev : compiled_devices) {
-        if (dev) {
+        if (dev && cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
+            dev->configure_fabric(probe_dead_channels_map[dev->id()]);
+            configured_count++;
+        }
+    }
+    // Pass 2: MMIO devices (PCIe-direct — safe to configure after non-MMIO relay ops complete)
+    for (auto* dev : compiled_devices) {
+        if (dev && cluster_.get_associated_mmio_device(dev->id()) == dev->id()) {
             dev->configure_fabric(probe_dead_channels_map[dev->id()]);
             configured_count++;
         }
