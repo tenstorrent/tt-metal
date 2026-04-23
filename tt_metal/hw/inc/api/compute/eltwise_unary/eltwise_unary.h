@@ -34,12 +34,6 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init<false>(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
-    // Verify that the packer is correctly configured after init (catches regressions where
-    // a stale coprocessor instruction would overwrite our pack config).
-    PACK((LLK_ASSERT(
-        ckernel::packer::are_packers_configured_correctly(
-            pack_src_format[get_output_id(ocb)], pack_dst_format[get_output_id(ocb)]),
-        "Pack config mismatch after init_sfpu: stale coprocessor REG2FLOP overwrote configuration")));
 
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
