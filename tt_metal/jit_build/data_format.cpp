@@ -19,7 +19,7 @@ static const std::set<DataFormat> ALL_VALID_FORMATS = {
     DataFormat::Bfp8,      DataFormat::Bfp8_b,   DataFormat::Bfp4,      DataFormat::Bfp4_b,  DataFormat::Bfp2,
     DataFormat::Bfp2_b,    DataFormat::Float16,  DataFormat::Float16_b, DataFormat::Float32, DataFormat::RawUInt32,
     DataFormat::RawUInt16, DataFormat::RawUInt8, DataFormat::Tf32,      DataFormat::Lf8,     DataFormat::Fp8_e4m3,
-    DataFormat::MxFp4,     DataFormat::Int8,     DataFormat::Int16,    DataFormat::Int32,    DataFormat::UInt8,    
+    DataFormat::MxFp4,     DataFormat::Int8,     DataFormat::Int16,     DataFormat::Int32,   DataFormat::UInt8,
     DataFormat::UInt32,    DataFormat::UInt16,
 };
 
