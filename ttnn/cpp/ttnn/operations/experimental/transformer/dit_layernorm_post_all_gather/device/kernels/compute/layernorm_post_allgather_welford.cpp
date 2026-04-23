@@ -18,6 +18,7 @@
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_math.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
@@ -67,21 +68,21 @@ void kernel_main() {
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
 
         // Compute 1/sqrt(var + eps) into cb_recip_sqrt_var
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_stats_reduced, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
-
-        add_tiles_init(cb_stats_reduced, cb_eps);
-        rsqrt_tile_init<true>();
-        tile_regs_acquire();
-        tile_regs_wait();
-        // stats_reduced tile 1 holds variance (after combine_welford_partials)
-        add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
-        rsqrt_tile<true>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        tile_regs_commit();
-        tile_regs_release();
-        cb_push_back(cb_recip_sqrt_var, 1);
+        // recip_sqrt_var = rsqrt(cb_stats_reduced[1] + cb_eps[0])
+        // stats_reduced tile 1 holds variance (after combine_welford_partials).
+        compute_kernel_lib::add<
+            compute_kernel_lib::BroadcastDim::NONE,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+            cb_stats_reduced,
+            cb_eps,
+            cb_recip_sqrt_var,
+            compute_kernel_lib::BinaryInputBlockShape::single(),
+            compute_kernel_lib::sfpu_chain(
+                compute_kernel_lib::Rsqrt<compute_kernel_lib::Legacy::On, compute_kernel_lib::Approx::Exact>{}),
+            compute_kernel_lib::NoAccumulation{},
+            compute_kernel_lib::BinaryInputExtras{.base = 1},
+            compute_kernel_lib::BinaryInputExtras{.base = 0});
 
         // Process tiles across width in blocks
         for (uint32_t col_tile = 0; col_tile < Wt; col_tile += block_size) {
