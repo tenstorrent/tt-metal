@@ -1783,11 +1783,30 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
                                 number_of_connections);
                         }
 
-                        log_warning(
-                            tt::LogFabric,
-                            "TopologyMapper FIX K: Could not force MMIO chip(s) into {}x{} mesh even with "
-                            "required constraints — MMIO chip(s) remain excluded. "
-                            "RelayMux initialisation will likely crash.",
+                        // FIX P (#42429): Throw instead of continuing with excluded MMIO chips.
+                        //
+                        // When MMIO chips cannot be forced into the mesh (because all their
+                        // ETH channels are in base-UMD relay state due to a prior crash), the
+                        // fabric cluster omits them.  Proceeding causes a TT_FATAL crash deep
+                        // inside RelayMux::GenerateStaticConfigs / DispatchTopology when dispatch
+                        // init looks up the MMIO chip ID in the (smaller) control-plane mapping.
+                        //
+                        // Throw a recoverable exception here instead so that gtest marks the
+                        // test as FAILED (not CRASH), the process stays alive for the next test,
+                        // and the hardware-state information is preserved for diagnosis.
+                        //
+                        // Root cause on machine tt-metal-ci-vm-t3k-01: ALL non-MMIO fabric
+                        // ETH channels were in 0x49706550 base-UMD relay state from a prior
+                        // crashed session.  The MMIO chips appeared disconnected so TopologyMapper
+                        // excluded them.  Hardware requires a reset (or the zero-writes done by
+                        // terminate_stale_erisc_routers to edm_status_address must propagate
+                        // so the next session sees a clean 0).
+                        TT_THROW(
+                            "TopologyMapper FIX P (#42429): Could not force MMIO chip(s) into {}x{} mesh even "
+                            "with required constraints — MMIO chip(s) remain excluded, and proceeding would crash "
+                            "inside RelayMux. This hardware is in a degraded state (all non-MMIO ETH channels "
+                            "are in base-UMD relay state from a prior crashed session). Hardware requires a "
+                            "reset or must wait for edm_status_address zero-writes to take effect.",
                             mesh_shape[0],
                             mesh_shape[1]);
                     }
