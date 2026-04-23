@@ -146,3 +146,4 @@ setup_ttnn_test_target(unit_tests_ttnn_emitc)
 
 add_subdirectory(multiprocess)
 add_subdirectory(udm)
+add_subdirectory(kernel_lib)
