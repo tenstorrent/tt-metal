@@ -411,30 +411,6 @@ constexpr uint32_t launch_msg_buffer_num_entries = 8;
 // a dummy entry.
 constexpr uint32_t go_message_num_entries = 9;
 
-// On-chip periodic perf-counter sampler (ttnvtop Phase 2.1). Brisc writes a
-// snapshot of the active perf counters into this ring every ~100 us by
-// polling in its idle-wait loop. Host reads the whole region in a single L1
-// block read and diffs successive entries. 64 slots * 16B = 1 KiB payload.
-constexpr uint32_t util_sampler_ring_size = 64;
-
-struct util_sampler_entry_t {
-    uint32_t wall_clock_l;
-    uint32_t wall_clock_h;
-    uint32_t fpu_out_l;  // ref_cnt accumulated since last counter arm
-    uint32_t fpu_out_h;  // req_cnt (FPU busy cycles)
-};
-static_assert(sizeof(util_sampler_entry_t) == 16);
-
-struct util_sampler_msg_t {
-    // Magic + version so the host can detect that firmware supports this
-    // region. If magic != 'TTUS' the host falls back to direct register reads.
-    volatile uint32_t magic;          // 'TTUS' when firmware supports periodic sampling
-    volatile uint32_t version;        // 1
-    volatile uint32_t head;           // next slot brisc will write (monotonic, wraps)
-    volatile uint32_t period_cycles;  // sampler period in AICLK cycles (= 100000 default)
-    volatile util_sampler_entry_t ring[util_sampler_ring_size];
-};
-
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct subordinate_sync_msg_t subordinate_sync;
@@ -452,14 +428,12 @@ struct mailboxes_t {
     uint32_t aerisc_run_flag;  // 1: run active ethernet firmware, 0: return to base firmware (active erisc)
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip
         profiler_msg_t profiler;
-    struct util_sampler_msg_t util_sampler;
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().
 static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
-static_assert(sizeof(util_sampler_msg_t) == 16 + util_sampler_ring_size * sizeof(util_sampler_entry_t));
 
 struct eth_word_t {
     volatile uint32_t bytes_sent;
