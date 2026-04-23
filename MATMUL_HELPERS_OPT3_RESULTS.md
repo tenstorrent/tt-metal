@@ -38,6 +38,8 @@ For each explicit `MatmulMultiCoreReuseMultiCast{,1D}ProgramConfig` in a model:
 | sentence-BERT | WH | total matmul device time (Tracy) | 13,385,817 ns | 10,515,489 ns | **-21.4%** | ff2+qkv reshape (4,2)+rmo; ff1+self_out flag-only | `0a421bb6a56` + threshold `7a89d6a8f55` |
 | Falcon7b | WH | prefill seq=1024 device-kernel sps | 3120 | 3742 | **+19.9%** | mm_h_to_4h `(1,8)`, mm_4h_to_h `(1,6)` — both legacy-compatible h=1 | `0fbd77527c2` |
 | sentence-BERT | BH | device-kernel sps | 976.5 | 991.7 | +1.56% — below 5% bar, **reverted** | attempted ff2+qkv (4,2)+rmo pattern | (no commit; structural win was the auto-tuner fix, not the config change) |
+| SDXL UNet 1024x1024 | BH | device-kernel duration | 79.04 ms | 79.25 ms | +0.26% slower — **reverted** | 11 legacy-compatible subblock upgrades across FF2/TM/ATTN_QKV/ATTN_OUT/RESNET_CONV | (no commit) |
+| ResNet50 | BH | device-kernel sps (batch 32) | 12975.5 | — | n/a | single explicit mcast config at `per_core_M=1, per_core_N=1` — already at max; no manual migration target | (no commit) |
 | BGE-large | WH | — | pending | pending | pending | self_out `(1,4)→(2,4)` legacy — only candidate (rest capped by `fp32_dest_acc_en=True` DST=4) | pending; blocked on HF weights |
 | demos/bert | WH | device-kernel sps | 252 (declared) | pending | pending | qkv `(1,6)→(4,2)+rmo`; query_by_key (non-mcast) `(1,6)→(4,2)` | blocked — `@skipif(is_wormhole_b0())` |
 
@@ -81,6 +83,24 @@ These have explicit configs and WH-feasibility possibility but need weights / ta
 | Qwen 2.5/3 VL | `demos/qwen25_vl/`, `demos/qwen3_vl/` | TBD | Likely multi-chip, needs check |
 | metal_BERT_large_11 | `demos/metal_BERT_large_11/` | TBD | Legacy BERT implementation |
 | gemma4 | `demos/gemma4/tt/experts/decode.py` | TBD | Likely multi-chip |
+
+### Cross-arch hypothesis from the negative BH results
+
+Two independent BH migrations (sentence-BERT, SDXL UNet 1024x1024) applied the same WH-pattern
+subblock reshape with legacy-compatible `(h, w)` choices and got measurably ~0% delta (+1.56%
+and -0.26% respectively). Both passed PCC, neither cleared the 5% bar. The WH equivalents of
+these patterns landed -21.4% (sentence-BERT upstream) and +19.9% (Falcon7b).
+
+The most plausible explanation is that BH's matmul kernel time on these shapes is not
+dominated by pack-phase overhead in the way WH's is — so reshaping subblocks to increase DST
+fill doesn't translate to wall-clock savings. Candidate structural differences: BH has more
+cores per die, different NoC topology, potentially different LLK pipeline behavior that
+already amortizes pack overhead.
+
+**Action item**: before doing more BH-side manual migrations, empirically measure *where* the
+time actually goes on one BH model (Tracy breakdown per op-kind / per-phase). Without that
+decomposition we're guessing at which lever matters, and the data so far says this lever
+doesn't.
 
 ### Deferred (weights require ~1.3 GB HF download, below priority)
 
