@@ -66,17 +66,12 @@ void kernel_main() {
 
     // ---- Phase 1: generate and push mask tile(s) ----
     using mask_t = MASK_ELEM_UINT;
+    constexpr uint32_t TILE = 32;
     if constexpr (has_right_pad) {
-        cb_right_mask.reserve_back(1);
-        generate_mask_tile<mask_t, W_mod32, TILE>(
-            reinterpret_cast<mask_t*>(cb_right_mask.get_write_ptr()), static_cast<mask_t>(MASK_VALUE));
-        cb_right_mask.push_back(1);
+        push_right_mask_tile<mask_t, W_mod32, TILE>(cb_right_mask, static_cast<mask_t>(MASK_VALUE));
     }
     if (has_bottom_pad_core) {
-        cb_bot_mask.reserve_back(1);
-        generate_mask_tile<mask_t, TILE, H_mod32>(
-            reinterpret_cast<mask_t*>(cb_bot_mask.get_write_ptr()), static_cast<mask_t>(MASK_VALUE));
-        cb_bot_mask.push_back(1);
+        push_bottom_mask_tile<mask_t, H_mod32, TILE>(cb_bot_mask, static_cast<mask_t>(MASK_VALUE));
     }
 
     // ---- Phase 2: write-back loop ----

@@ -13,15 +13,15 @@
  *
  *   Right phase  (num_right > 0 only when has_right_pad):
  *     for each i in [start_right, start_right + num_right):
- *       slice = i / R;  row = i % R
+ *       slice = i / right_slice_stride;  row = i % right_slice_stride
  *       tile_id = slice * H_tiles * W_tiles + row * W_tiles + (W_tiles - 1)
- *     where R = (H_tiles - 1) if has_bottom_pad else H_tiles.
+ *     where right_slice_stride = (H_tiles - 1) if has_bottom_pad else H_tiles.
  *
  *   Bottom phase (num_bottom > 0 only when has_bottom_pad):
  *     for each j in [start_bottom, start_bottom + num_bottom):
- *       slice = j / C;  col = j % C
+ *       slice = j / bottom_slice_stride;  col = j % bottom_slice_stride
  *       tile_id = slice * H_tiles * W_tiles + (H_tiles - 1) * W_tiles + col
- *     where C = (W_tiles - 1) if has_right_pad else W_tiles.
+ *     where bottom_slice_stride = (W_tiles - 1) if has_right_pad else W_tiles.
  *
  *   Corner phase (num_corner > 0 only when has_right_pad && has_bottom_pad):
  *     for each k in [start_corner, start_corner + num_corner):
@@ -64,14 +64,14 @@ void kernel_main() {
     constexpr uint32_t elem_size = get_compile_time_arg_val(7);
     constexpr uint32_t cb_tile_in_idx = get_compile_time_arg_val(9);
 
-    // Per-phase strides (meaningful only when the corresponding phase is active).
+    // Per-phase slice strides (meaningful only when the corresponding phase is active).
     // Clamped to >= 1 so the compiler does not see a constexpr divide-by-zero in
     // the dead-code branches (when H_tiles==1 or W_tiles==1 the host sets the
     // matching num_* to 0 and the loop below never executes).
-    constexpr uint32_t R =
-        (has_right_pad != 0u) ? ((has_bottom_pad != 0u) ? ((H_tiles > 1u) ? (H_tiles - 1u) : 1u) : H_tiles) : 1u;
-    constexpr uint32_t C =
-        (has_bottom_pad != 0u) ? ((has_right_pad != 0u) ? ((W_tiles > 1u) ? (W_tiles - 1u) : 1u) : W_tiles) : 1u;
+    constexpr uint32_t right_slice_stride =
+        has_right_pad ? (has_bottom_pad ? ((H_tiles > 1u) ? (H_tiles - 1u) : 1u) : H_tiles) : 1u;
+    constexpr uint32_t bottom_slice_stride =
+        has_bottom_pad ? (has_right_pad ? ((W_tiles > 1u) ? (W_tiles - 1u) : 1u) : W_tiles) : 1u;
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_tile_in_idx);
 
@@ -90,35 +90,45 @@ void kernel_main() {
     experimental::CircularBuffer cb_tile_in(cb_tile_in_idx);
 
     // ---- Right phase ----
-    if constexpr (has_right_pad != 0u) {
+    // Maintain (slice, row) incrementally instead of dividing every iteration
+    // — RV32IM division is slow. Startup division runs at most once.
+    if constexpr (has_right_pad) {
+        uint32_t slice = num_right ? start_right / right_slice_stride : 0u;
+        uint32_t row = num_right ? start_right - slice * right_slice_stride : 0u;
         for (uint32_t i = 0; i < num_right; ++i) {
-            const uint32_t g = start_right + i;
-            const uint32_t slice = g / R;
-            const uint32_t row = g - slice * R;
             const uint32_t tile_id = slice * H_tiles * W_tiles + row * W_tiles + (W_tiles - 1u);
             cb_tile_in.reserve_back(1);
             noc.async_read(s, cb_tile_in, tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
             noc.async_read_barrier();
             cb_tile_in.push_back(1);
+            ++row;
+            if (row == right_slice_stride) {
+                row = 0;
+                ++slice;
+            }
         }
     }
 
     // ---- Bottom phase ----
-    if constexpr (has_bottom_pad != 0u) {
+    if constexpr (has_bottom_pad) {
+        uint32_t slice = num_bottom ? start_bottom / bottom_slice_stride : 0u;
+        uint32_t col = num_bottom ? start_bottom - slice * bottom_slice_stride : 0u;
         for (uint32_t j = 0; j < num_bottom; ++j) {
-            const uint32_t g = start_bottom + j;
-            const uint32_t slice = g / C;
-            const uint32_t col = g - slice * C;
             const uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + col;
             cb_tile_in.reserve_back(1);
             noc.async_read(s, cb_tile_in, tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
             noc.async_read_barrier();
             cb_tile_in.push_back(1);
+            ++col;
+            if (col == bottom_slice_stride) {
+                col = 0;
+                ++slice;
+            }
         }
     }
 
     // ---- Corner phase ----
-    if constexpr (has_right_pad != 0u && has_bottom_pad != 0u) {
+    if constexpr (has_right_pad && has_bottom_pad) {
         for (uint32_t k = 0; k < num_corner; ++k) {
             const uint32_t slice = start_corner + k;
             const uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + (W_tiles - 1u);

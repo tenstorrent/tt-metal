@@ -7,8 +7,10 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <algorithm>
 #include <bit>
+#include <fmt/format.h>
 
 namespace ttnn::prim {
 
@@ -45,8 +47,8 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
     const uint32_t W_tiles = tt::div_up(width, tile_width);
     const uint32_t H_mod32 = height % tile_height;
     const uint32_t W_mod32 = width % tile_width;
-    const uint32_t has_right_pad = W_mod32 != 0;
-    const uint32_t has_bottom_pad = H_mod32 != 0;
+    const bool has_right_pad = W_mod32 != 0;
+    const bool has_bottom_pad = H_mod32 != 0;
 
     const bool is_float_type =
         (input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32);
@@ -58,24 +60,23 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
     const bool need_fp32_dest_acc = is_fp32 || is_uint32 || is_int32;
     // Float types: raw bit pattern of fill_value for fill_tile_bitcast.
     // Integer types: packed native bit pattern for fill_tile_int.
-    const uint32_t fill_bits =
-        is_float_type ? std::bit_cast<uint32_t>(fill_value) : detail::pack_fill_value(input_tensor.dtype(), fill_value);
+    const uint32_t fill_bits = detail::pack_fill_value_for_dtype(input_tensor.dtype(), fill_value);
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Unified border-tile split across all slices.
-    //   R = rows per slice in the right block (H_tiles-1 if both pads, else H_tiles).
-    //   C = cols per slice in the bottom block (W_tiles-1 if both pads, else W_tiles).
+    //   right_slice_stride  = rows per slice in the right block (H_tiles-1 if both pads, else H_tiles).
+    //   bottom_slice_stride = cols per slice in the bottom block (W_tiles-1 if both pads, else W_tiles).
     // The global tile-index space is three contiguous blocks:
     //   [0, T_right)                 – right-column border tiles
     //   [T_right, T_right+T_bottom)  – bottom-row border tiles (incl. corner if !has_right_pad)
     //   [..., total_work)            – corner tiles (only when has_right_pad && has_bottom_pad)
-    const uint32_t R = has_right_pad ? (has_bottom_pad ? (H_tiles - 1u) : H_tiles) : 0u;
-    const uint32_t C = has_bottom_pad ? (has_right_pad ? (W_tiles - 1u) : W_tiles) : 0u;
-    const uint32_t T_right = has_right_pad ? (N_slices * R) : 0u;
-    const uint32_t T_bottom = has_bottom_pad ? (N_slices * C) : 0u;
+    const uint32_t right_slice_stride = has_right_pad ? (has_bottom_pad ? (H_tiles - 1u) : H_tiles) : 0u;
+    const uint32_t bottom_slice_stride = has_bottom_pad ? (has_right_pad ? (W_tiles - 1u) : W_tiles) : 0u;
+    const uint32_t T_right = has_right_pad ? (N_slices * right_slice_stride) : 0u;
+    const uint32_t T_bottom = has_bottom_pad ? (N_slices * bottom_slice_stride) : 0u;
     const uint32_t T_corner = (has_right_pad && has_bottom_pad) ? N_slices : 0u;
     const uint32_t total_work = T_right + T_bottom + T_corner;
 
@@ -128,7 +129,7 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
     kernel_defines["MASK_VALUE"] = is_fp32 ? "0x3F800000u" : is_float_type ? "0x3F80u" : "1u";
     kernel_defines["FILL_PAD_DATA_FMT"] = detail::get_where_data_fmt(input_tensor.dtype());
     if (!is_float_type) {
-        kernel_defines["FILL_PAD_FILL_DATA_FMT"] = detail::get_fill_int_fmt(input_tensor.dtype());
+        kernel_defines["FILL_PAD_FILL_DATA_FMT"] = fmt::format("DataFormat::{}", cb_data_format);
     }
     kernel_defines["FILL_PAD_FILL_FN"] = is_float_type ? "fill_tile_bitcast" : "fill_tile_int<FILL_PAD_FILL_DATA_FMT>";
     kernel_defines["FILL_PAD_FILL_ARG"] = "fill_bits";
@@ -229,33 +230,34 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
         const CoreCoord& core = cores[i];
         const uint32_t num_work = (i < g1_numcores) ? num_work_per_core_group_1 : num_work_per_core_group_2;
 
-        // Intersect [work_start, work_start + num_work) with the three global blocks.
+        // Intersect this core's work range with each phase block and return the
+        // block-relative (start, count) pair of tiles assigned to this core.
         const uint32_t work_end = work_start + num_work;
-        auto intersect = [work_start, work_end](
-                             uint32_t block_start, uint32_t block_size, uint32_t& out_start, uint32_t& out_num) {
-            if (block_size == 0u) {
-                out_start = 0u;
-                out_num = 0u;
-                return;
-            }
-            const uint32_t block_end = block_start + block_size;
-            const uint32_t lo = std::max(work_start, block_start);
-            const uint32_t hi = std::min(work_end, block_end);
-            if (lo >= hi) {
-                out_start = 0u;
-                out_num = 0u;
-            } else {
-                out_start = lo - block_start;
-                out_num = hi - lo;
-            }
-        };
+        auto clip_to_phase_block =
+            [work_start, work_end](uint32_t block_start, uint32_t block_size, uint32_t& out_start, uint32_t& out_num) {
+                if (block_size == 0u) {
+                    out_start = 0u;
+                    out_num = 0u;
+                    return;
+                }
+                const uint32_t block_end = block_start + block_size;
+                const uint32_t lo = std::max(work_start, block_start);
+                const uint32_t hi = std::min(work_end, block_end);
+                if (lo >= hi) {
+                    out_start = 0u;
+                    out_num = 0u;
+                } else {
+                    out_start = lo - block_start;
+                    out_num = hi - lo;
+                }
+            };
 
         uint32_t start_right = 0, num_right = 0;
         uint32_t start_bottom = 0, num_bottom = 0;
         uint32_t start_corner = 0, num_corner = 0;
-        intersect(0u, T_right, start_right, num_right);
-        intersect(T_right, T_bottom, start_bottom, num_bottom);
-        intersect(T_right + T_bottom, T_corner, start_corner, num_corner);
+        clip_to_phase_block(0u, T_right, start_right, num_right);
+        clip_to_phase_block(T_right, T_bottom, start_bottom, num_bottom);
+        clip_to_phase_block(T_right + T_bottom, T_corner, start_corner, num_corner);
 
         const std::vector<uint32_t> rt_args = {
             static_cast<uint32_t>(tens_buffer->address()),
@@ -342,8 +344,8 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
     const uint32_t W_tiles_tensor = tt::div_up(width, tile_width);
     const uint32_t W_mod32 = width % tile_width;
     const uint32_t H_mod32 = height % tile_height;
-    const uint32_t has_right_pad = W_mod32 != 0;
-    const uint32_t has_bottom_pad = H_mod32 != 0;
+    const bool has_right_pad = W_mod32 != 0;
+    const bool has_bottom_pad = H_mod32 != 0;
 
     // ---- Shard geometry ----
     const auto layout = input_tensor.memory_config().memory_layout();
@@ -368,8 +370,8 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
     struct ShardCoreInfo {
         CoreCoord coord;
         uint32_t shard_H_tiles;
-        uint32_t rp;  // has_right_pad for this core (CT binary selector)
-        uint32_t bp;  // has_bottom_pad for this core (CT binary selector for compute)
+        uint32_t has_right_pad;   // per-core right-edge flag (CT binary selector)
+        uint32_t has_bottom_pad;  // per-core bottom-edge flag (CT binary selector for compute)
         uint32_t num_work;
         uint32_t local_valid_w;    // min(pages_per_shard_x, W_tiles_tensor - w_start)
         uint32_t local_right_col;  // local_valid_w - 1; right-border tile's column within this shard
@@ -403,32 +405,34 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
         }
 
         const uint32_t shard_h = std::min(pages_per_shard_y, H_tiles - h_start);
-        const uint32_t core_rp = (has_right_pad && w_start + pages_per_shard_x >= W_tiles_tensor) ? 1u : 0u;
-        const uint32_t core_bp = (has_bottom_pad && h_start + pages_per_shard_y >= H_tiles) ? 1u : 0u;
-        const uint32_t nw = core_bp ? 1u : (core_rp ? shard_h : 0u);
+        const uint32_t core_has_right_pad = (has_right_pad && w_start + pages_per_shard_x >= W_tiles_tensor) ? 1u : 0u;
+        const uint32_t core_has_bottom_pad = (has_bottom_pad && h_start + pages_per_shard_y >= H_tiles) ? 1u : 0u;
+        const uint32_t nw = core_has_bottom_pad ? 1u : (core_has_right_pad ? shard_h : 0u);
         const uint32_t local_valid_w = std::min(pages_per_shard_x, W_tiles_tensor - w_start);
         const uint32_t local_right_col = local_valid_w - 1u;
 
-        active.push_back({all_shard_cores[i], shard_h, core_rp, core_bp, nw, local_valid_w, local_right_col});
+        active.push_back(
+            {all_shard_cores[i], shard_h, core_has_right_pad, core_has_bottom_pad, nw, local_valid_w, local_right_col});
     }
 
     TT_FATAL(!active.empty(), "FillPadL1ShardedProgramFactory: no active shard cores");
 
     // ---- Build kernel groups ----
-    // Reader/writer: binary key = rp (has_right_pad); has_bottom_pad_core is RT.
-    // Compute: binary key = (rp, bp, H_tiles, effective_W).
-    //   For bp=0 (Mode A), H_tiles is unused — all bp=0 cores share a binary with H=pages_per_shard_y.
-    //   For bp=1 (Mode B), H_tiles drives right_rows = H_tiles - 1; use actual shard height.
+    // Reader/writer: binary key = has_right_pad; has_bottom_pad_core is RT.
+    // Compute: binary key = (has_right_pad, has_bottom_pad, H_tiles, effective_W).
+    //   For has_bottom_pad=0 (Mode A), H_tiles is unused — all such cores share a binary
+    //   with H=pages_per_shard_y.
+    //   For has_bottom_pad=1 (Mode B), H_tiles drives right_rows = H_tiles - 1; use actual shard height.
     //   effective_W = local_valid_w; equals pages_per_shard_x for fully-packed shards, less for
     //   partially-filled rightmost shards (W_tiles_tensor % pages_per_shard_x != 0).
     struct ComputeKey {
-        uint32_t rp, bp, H, effective_W;
+        uint32_t has_right_pad, has_bottom_pad, H, effective_W;
         bool operator<(const ComputeKey& o) const {
-            if (rp != o.rp) {
-                return rp < o.rp;
+            if (has_right_pad != o.has_right_pad) {
+                return has_right_pad < o.has_right_pad;
             }
-            if (bp != o.bp) {
-                return bp < o.bp;
+            if (has_bottom_pad != o.has_bottom_pad) {
+                return has_bottom_pad < o.has_bottom_pad;
             }
             if (H != o.H) {
                 return H < o.H;
@@ -441,9 +445,9 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
     std::map<ComputeKey, std::vector<CoreRange>> compute_ranges;
 
     for (const auto& ci : active) {
-        rw_ranges[ci.rp].emplace_back(ci.coord, ci.coord);
-        const uint32_t key_H = ci.bp ? ci.shard_H_tiles : pages_per_shard_y;
-        compute_ranges[{ci.rp, ci.bp, key_H, ci.local_valid_w}].emplace_back(ci.coord, ci.coord);
+        rw_ranges[ci.has_right_pad].emplace_back(ci.coord, ci.coord);
+        const uint32_t key_H = ci.has_bottom_pad ? ci.shard_H_tiles : pages_per_shard_y;
+        compute_ranges[{ci.has_right_pad, ci.has_bottom_pad, key_H, ci.local_valid_w}].emplace_back(ci.coord, ci.coord);
     }
 
     // All-active CoreRangeSet for CB creation.
@@ -459,8 +463,7 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
     const bool is_uint32 = (input_tensor.dtype() == DataType::UINT32);
     const bool is_int32 = (input_tensor.dtype() == DataType::INT32);
     const bool need_fp32_dest_acc = is_fp32 || is_uint32 || is_int32;
-    const uint32_t fill_bits =
-        is_float_type ? std::bit_cast<uint32_t>(fill_value) : detail::pack_fill_value(input_tensor.dtype(), fill_value);
+    const uint32_t fill_bits = detail::pack_fill_value_for_dtype(input_tensor.dtype(), fill_value);
 
     // ---- CB indices ----
     constexpr uint32_t cb_data_in_idx = tt::CBIndex::c_0;
@@ -500,7 +503,7 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
     kernel_defines["MASK_VALUE"] = is_fp32 ? "0x3F800000u" : is_float_type ? "0x3F80u" : "1u";
     kernel_defines["FILL_PAD_DATA_FMT"] = detail::get_where_data_fmt(input_tensor.dtype());
     if (!is_float_type) {
-        kernel_defines["FILL_PAD_FILL_DATA_FMT"] = detail::get_fill_int_fmt(input_tensor.dtype());
+        kernel_defines["FILL_PAD_FILL_DATA_FMT"] = fmt::format("DataFormat::{}", cb_data_format);
     }
     kernel_defines["FILL_PAD_FILL_FN"] = is_float_type ? "fill_tile_bitcast" : "fill_tile_int<FILL_PAD_FILL_DATA_FMT>";
     kernel_defines["FILL_PAD_FILL_ARG"] = "fill_bits";
@@ -508,16 +511,16 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
     // ---- Reader kernels (one per has_right_pad value) ----
     // CT: [0] W_tiles, [1] has_right_pad, [2] elem_size, [3] cb_data_in
     std::array<tt::tt_metal::KernelHandle, 2> reader_kernel_ids = {0, 0};
-    for (uint32_t rp = 0; rp <= 1; ++rp) {
-        if (rw_ranges[rp].empty()) {
+    for (uint32_t rp_idx = 0; rp_idx <= 1; ++rp_idx) {
+        if (rw_ranges[rp_idx].empty()) {
             continue;
         }
         const std::vector<uint32_t> reader_ct = {
-            W_tiles, rp, input_element_size_bytes, static_cast<uint32_t>(cb_data_in_idx)};
-        reader_kernel_ids[rp] = tt::tt_metal::CreateKernel(
+            W_tiles, rp_idx, input_element_size_bytes, static_cast<uint32_t>(cb_data_in_idx)};
+        reader_kernel_ids[rp_idx] = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_sharded_reader.cpp",
-            CoreRangeSet(rw_ranges[rp]),
+            CoreRangeSet(rw_ranges[rp_idx]),
             tt::tt_metal::ReaderDataMovementConfig(reader_ct, kernel_defines));
     }
 
@@ -525,22 +528,22 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
     // CT: [0] W_tiles, [1] has_right_pad, [2] W_mod32, [3] H_mod32,
     //     [4] cb_right_mask, [5] cb_bot_mask, [6] cb_data_out
     std::array<tt::tt_metal::KernelHandle, 2> writer_kernel_ids = {0, 0};
-    for (uint32_t rp = 0; rp <= 1; ++rp) {
-        if (rw_ranges[rp].empty()) {
+    for (uint32_t rp_idx = 0; rp_idx <= 1; ++rp_idx) {
+        if (rw_ranges[rp_idx].empty()) {
             continue;
         }
         const std::vector<uint32_t> writer_ct = {
             W_tiles,
-            rp,
+            rp_idx,
             W_mod32,
             H_mod32,
             static_cast<uint32_t>(cb_right_mask_idx),
             static_cast<uint32_t>(cb_bot_mask_idx),
             static_cast<uint32_t>(cb_data_out_idx)};
-        writer_kernel_ids[rp] = tt::tt_metal::CreateKernel(
+        writer_kernel_ids[rp_idx] = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_sharded_writer.cpp",
-            CoreRangeSet(rw_ranges[rp]),
+            CoreRangeSet(rw_ranges[rp_idx]),
             tt::tt_metal::WriterDataMovementConfig(writer_ct, kernel_defines));
     }
 
@@ -553,7 +556,7 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
         unpack_to_dest_mode[cb_bot_mask_idx] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
-    // ---- Compute kernels (one per (rp, bp, H_tiles, effective_W) group) ----
+    // ---- Compute kernels (one per (has_right_pad, has_bottom_pad, H_tiles, effective_W) group) ----
     // CT: [0] W_tiles (= effective_W for this group), [1] H_tiles, [2] has_right_pad, [3] has_bottom_pad,
     //     [4] elem_size, [5] fill_bits, [6] cb_data_in, [7] cb_right_mask,
     //     [8] cb_bot_mask, [9] cb_data_out
@@ -563,8 +566,8 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
         const std::vector<uint32_t> compute_ct = {
             key.effective_W,
             key.H,
-            key.rp,
-            key.bp,
+            key.has_right_pad,
+            key.has_bottom_pad,
             input_element_size_bytes,
             fill_bits,
             static_cast<uint32_t>(cb_data_in_idx),
@@ -589,21 +592,22 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
     //            [4] local_right_col
     const uint32_t buf_addr = static_cast<uint32_t>(tens_buffer->address());
     std::vector<CoreCoord> active_coords;
-    std::vector<uint32_t> active_rp;
+    std::vector<uint32_t> active_has_right_pad;
 
     for (const auto& ci : active) {
-        const std::vector<uint32_t> rt = {buf_addr, ci.shard_H_tiles, ci.bp, ci.num_work, ci.local_right_col};
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_ids[ci.rp], ci.coord, rt);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_ids[ci.rp], ci.coord, rt);
+        const std::vector<uint32_t> rt = {
+            buf_addr, ci.shard_H_tiles, ci.has_bottom_pad, ci.num_work, ci.local_right_col};
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_ids[ci.has_right_pad], ci.coord, rt);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_ids[ci.has_right_pad], ci.coord, rt);
 
         // Compute RT: (num_right, num_bottom, num_corner) per the unified phase layout.
         // The sharded reader/writer push tiles in the same order (right, bottom, corner),
         // so these counts let the shared compute kernel process them in lock-step.
         uint32_t num_right = 0, num_bottom = 0, num_corner = 0;
-        if (ci.bp == 0u) {
-            // Mode A: right-column tiles only (only cores with rp=1 have work).
-            num_right = ci.rp ? ci.shard_H_tiles : 0u;
-        } else if (ci.rp) {
+        if (ci.has_bottom_pad == 0u) {
+            // Mode A: right-column tiles only (only cores with has_right_pad=1 have work).
+            num_right = ci.has_right_pad ? ci.shard_H_tiles : 0u;
+        } else if (ci.has_right_pad) {
             // Mode B with right pad: right strip (H-1) + bottom non-corner (local_valid_w-1) + corner.
             num_right = ci.shard_H_tiles - 1u;
             num_bottom = ci.local_valid_w - 1u;  // = local_right_col
@@ -612,14 +616,14 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
             // Mode B, bottom pad only: full bottom row of this shard.
             num_bottom = ci.local_valid_w;
         }
-        const uint32_t key_H = ci.bp ? ci.shard_H_tiles : pages_per_shard_y;
+        const uint32_t key_H = ci.has_bottom_pad ? ci.shard_H_tiles : pages_per_shard_y;
         tt::tt_metal::SetRuntimeArgs(
             program,
-            compute_kernel_map.at({ci.rp, ci.bp, key_H, ci.local_valid_w}),
+            compute_kernel_map.at({ci.has_right_pad, ci.has_bottom_pad, key_H, ci.local_valid_w}),
             ci.coord,
             {num_right, num_bottom, num_corner});
         active_coords.push_back(ci.coord);
-        active_rp.push_back(ci.rp);
+        active_has_right_pad.push_back(ci.has_right_pad);
     }
 
     return cached_program_t{
@@ -629,7 +633,7 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
             .writer_kernel_ids = writer_kernel_ids,
             .compute_kernel_ids = std::move(compute_kernel_ids_vec),
             .active_cores = std::move(active_coords),
-            .active_core_rp = std::move(active_rp),
+            .active_core_has_right_pad = std::move(active_has_right_pad),
         }};
 }
 
@@ -643,14 +647,14 @@ void FillPadL1ShardedProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program = cached_program.program;
     const auto& sv = cached_program.shared_variables;
 
-    for (uint32_t rp = 0; rp <= 1; ++rp) {
-        if (sv.reader_kernel_ids[rp] == 0) {
+    for (uint32_t rp_idx = 0; rp_idx <= 1; ++rp_idx) {
+        if (sv.reader_kernel_ids[rp_idx] == 0) {
             continue;
         }
-        auto& rrt = GetRuntimeArgs(program, sv.reader_kernel_ids[rp]);
-        auto& wrt = GetRuntimeArgs(program, sv.writer_kernel_ids[rp]);
+        auto& rrt = GetRuntimeArgs(program, sv.reader_kernel_ids[rp_idx]);
+        auto& wrt = GetRuntimeArgs(program, sv.writer_kernel_ids[rp_idx]);
         for (uint32_t i = 0; i < sv.active_cores.size(); ++i) {
-            if (sv.active_core_rp[i] != rp) {
+            if (sv.active_core_has_right_pad[i] != rp_idx) {
                 continue;
             }
             const CoreCoord& core = sv.active_cores[i];

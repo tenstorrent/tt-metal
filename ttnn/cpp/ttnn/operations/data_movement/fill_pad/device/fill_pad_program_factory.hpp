@@ -19,41 +19,46 @@ inline const std::map<ttnn::DataType, uint32_t> data_type_to_size = {
     {ttnn::DataType::INT32, 4},
 };
 
-// Packs fill_value into the uint32 bit pattern expected by the reader/compute kernels.
-// For 2-byte types both halves of the 32-bit word carry the same 16-bit value;
-// for 4-byte types the full 32-bit pattern is used.
-inline uint32_t pack_fill_value(ttnn::DataType dtype, float fill_value) {
+// Packs `fill_value` into the uint32 bit pattern expected by the reader/compute kernels.
+// Width is deduced from the parameter type: 4-byte types take their raw bit pattern,
+// 2-byte integer types are duplicated across both halves of the 32-bit word.
+template <typename T>
+inline uint32_t pack_fill_value(T fill_value) {
+    static_assert(sizeof(T) == 2 || sizeof(T) == 4, "pack_fill_value: unsupported size");
+    if constexpr (sizeof(T) == 4) {
+        return std::bit_cast<uint32_t>(fill_value);
+    } else {
+        using U16 = std::uint16_t;
+        const uint32_t v = static_cast<uint32_t>(std::bit_cast<U16>(fill_value));
+        return (v << 16) | v;
+    }
+}
+
+// Dtype-directed wrapper used by both program factories. Chooses the native
+// fill type per dtype and packs it.
+// Float DataTypes (FLOAT32, BFLOAT16) keep the full float32 bit pattern — the
+// compute kernel reconstructs it via fill_tile_bitcast and the downstream
+// packer handles the bf16 narrowing.
+inline uint32_t pack_fill_value_for_dtype(ttnn::DataType dtype, float fill_value) {
     switch (dtype) {
-        case ttnn::DataType::BFLOAT16: {
-            const uint16_t bits = static_cast<uint16_t>(std::bit_cast<uint32_t>(fill_value) >> 16);
-            return (static_cast<uint32_t>(bits) << 16) | bits;
-        }
-        case ttnn::DataType::UINT16: {
-            const uint16_t bits = static_cast<uint16_t>(static_cast<int32_t>(fill_value) & 0xFFFF);
-            return (static_cast<uint32_t>(bits) << 16) | bits;
-        }
-        case ttnn::DataType::FLOAT32: return std::bit_cast<uint32_t>(fill_value);
-        default:  // UINT32, INT32
-            return static_cast<uint32_t>(static_cast<int32_t>(fill_value));
+        case ttnn::DataType::FLOAT32:
+        case ttnn::DataType::BFLOAT16: return pack_fill_value(fill_value);
+        case ttnn::DataType::UINT16: return pack_fill_value(static_cast<uint16_t>(fill_value));
+        case ttnn::DataType::UINT32: return pack_fill_value(static_cast<uint32_t>(fill_value));
+        case ttnn::DataType::INT32: return pack_fill_value(static_cast<int32_t>(fill_value));
+        default: TT_THROW("fill_pad: unsupported dtype"); return 0u;
     }
 }
 
 // DataFormat string for where_tile<> template parameter.
+// 2-byte types (BFLOAT16, UINT16) both collapse to Float16_b because that's the only
+// 2-byte where_tile<> SFPU variant exposed by the LLKs (matches the ternary_op pattern).
 inline std::string get_where_data_fmt(ttnn::DataType dtype) {
     switch (dtype) {
         case ttnn::DataType::FLOAT32: return "DataFormat::Float32";
         case ttnn::DataType::UINT32: return "DataFormat::UInt32";
         case ttnn::DataType::INT32: return "DataFormat::Int32";
         default: return "DataFormat::Float16_b";  // BFLOAT16, UINT16
-    }
-}
-
-// DataFormat string for fill_tile_int<> template parameter (integer types only).
-inline std::string get_fill_int_fmt(ttnn::DataType dtype) {
-    switch (dtype) {
-        case ttnn::DataType::UINT32: return "DataFormat::UInt32";
-        case ttnn::DataType::INT32: return "DataFormat::Int32";
-        default: return "DataFormat::UInt16";  // UINT16
     }
 }
 
@@ -97,7 +102,8 @@ struct FillPadL1ShardedSharedVariables {
     std::array<tt::tt_metal::KernelHandle, 2> writer_kernel_ids = {0, 0};
     std::vector<tt::tt_metal::KernelHandle> compute_kernel_ids;
     std::vector<CoreCoord> active_cores;
-    std::vector<uint32_t> active_core_rp;  // has_right_pad per active core (for override_runtime_arguments)
+    // has_right_pad per active core (for override_runtime_arguments)
+    std::vector<uint32_t> active_core_has_right_pad;
 };
 
 // Handles all L1-sharded tensors (HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED).
