@@ -515,6 +515,13 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
         for (auto* dev : active_devices) {
             if (dead_relay_devices.count(dev->id()) == 0) {
                 dispatch_devices.push_back(dev);
+            } else if (dev->is_mmio_capable()) {
+                // FIX R (#42429): MMIO-capable devices write dispatch kernels via PCIe, not the
+                // ETH relay path.  Dead ETH channels do not affect MMIO writes, so dispatch kernel
+                // init is safe and MUST run — skipping it leaves stale CQ state from a prior
+                // process run, causing TT_FATAL "Unexpected values for event in completion queue"
+                // on the first CQ read.
+                dispatch_devices.push_back(dev);
             } else {
                 log_warning(
                     tt::LogMetal,
