@@ -68,10 +68,9 @@ void bind_post_combine_reduce(nb::module_& mod) {
         &ttnn::operations::experimental::deepseek_prefill::post_combine_reduce::post_combine_reduce,
         nb::arg("combine_output").noconvert(),
         nb::arg("weights").noconvert(),
-        nb::kw_only(),
-        nb::arg("expert_dim") = 3,
         nb::arg("indices") = nb::none(),
         nb::arg("expert_dispatch_table") = nb::none(),
+        nb::arg("expert_dim") = 3,
         nb::arg("output_memory_config") = nb::none());
 }
 

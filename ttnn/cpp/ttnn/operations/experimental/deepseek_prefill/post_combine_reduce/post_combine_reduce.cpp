@@ -16,15 +16,15 @@ namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce 
 ttnn::Tensor post_combine_reduce(
     const ttnn::Tensor& combine_output,
     const ttnn::Tensor& weights,
-    uint32_t expert_dim,
     const std::optional<ttnn::Tensor>& indices,
     const std::optional<ttnn::Tensor>& expert_dispatch_table,
+    uint32_t expert_dim,
     const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config) {
     // Use default L1 memory config if not specified
     auto memory_config = output_memory_config.value_or(ttnn::L1_MEMORY_CONFIG);
 
     return ttnn::prim::post_combine_reduce(
-        combine_output, weights, expert_dim, indices, expert_dispatch_table, memory_config);
+        combine_output, weights, indices, expert_dispatch_table, expert_dim, memory_config);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce
