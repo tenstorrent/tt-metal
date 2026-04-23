@@ -195,9 +195,10 @@ void kernel_main() {
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
     constexpr uint32_t intermed_cb = tt::CBIndex::c_2;
-    constexpr uint32_t out_cb = tt::CBIndex::c_5;
 
-#ifdef REDUCE_ACCUMULATOR
+#ifndef REDUCE_ACCUMULATOR
+    constexpr uint32_t out_cb = tt::CBIndex::c_5;
+#else
     constexpr uint32_t reduce_cb = tt::CBIndex::c_5;
     constexpr uint32_t combined_cb = tt::CBIndex::c_6;
 #endif
