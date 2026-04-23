@@ -138,8 +138,8 @@ jobs:
 
       - name: Normalize master JSON arguments and recompute hashes
         run: |
-          python3 model_tracer/generic_ops_tracer.py \
-            --normalize-args model_tracer/traced_operations/ttnn_operations_master.json
+          python3 model_tracer/normalize_for_validation.py \
+            model_tracer/traced_operations/ttnn_operations_master.json
 
       - name: Run config hash preflight
         run: |
@@ -520,12 +520,12 @@ jobs:
           # differences (old vs new placement strings, metadata keys) are
           # canonicalized before comparison.  Also recomputes config_hash.
           echo "Normalizing master trace arguments..."
-          python3 model_tracer/generic_ops_tracer.py \
-            --normalize-args model_tracer/traced_operations/ttnn_operations_master.json
+          python3 model_tracer/normalize_for_validation.py \
+            model_tracer/traced_operations/ttnn_operations_master.json
 
           echo "Normalizing sweep trace arguments..."
           for stf in "${sweep_trace_files[@]}"; do
-            python3 model_tracer/generic_ops_tracer.py --normalize-args "$stf"
+            python3 model_tracer/normalize_for_validation.py "$stf"
           done
 
           set +e
