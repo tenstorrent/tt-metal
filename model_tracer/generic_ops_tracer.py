@@ -425,8 +425,18 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
         if mesh_device_info:
             enhanced_machine_info.update(mesh_device_info)
 
-        # Note: tensor_placements are now stored per-tensor in the arguments
-        # instead of globally in machine_info, to avoid ambiguity
+        # Build global tensor_placements from per-tensor placement data so that
+        # _compute_config_hash produces the same mesh_config as legacy master traces.
+        # Without this, sweep traces get mesh_config=None while master traces
+        # (stored with old format) get a populated mesh_config, causing hash mismatch.
+        _tensor_placements = []
+        for _arg_val in arguments.values():
+            tp = _arg_val.get("tensor_placement") if isinstance(_arg_val, dict) else None
+            if tp and isinstance(tp, dict):
+                _tensor_placements.append(tp)
+                break  # only need the first tensor's placement for the global key
+        if _tensor_placements:
+            enhanced_machine_info["tensor_placements"] = _tensor_placements
 
         # Strip Python object memory addresses (e.g. global_semaphore at 0x...)
         # from argument values so they don't pollute deduplication or storage
@@ -481,6 +491,24 @@ def _strip_object_addresses(value):
     return value
 
 
+def _canonicalize_placement_str(placement_str):
+    """Canonicalize a placement string to a stable representation.
+
+    Handles both old format ``"PlacementShard(0)"`` and new format
+    ``"['PlacementShard(0)', 'PlacementShard(0)']"``.  Returns a sorted
+    list of canonical entries like ``["PlacementShard(0)"]`` or
+    ``["PlacementReplicate"]``.
+    """
+    entries = re.findall(r"Placement(?:Shard\((?:dim=)?-?\d+\)|Replicate(?:\(\))?)", str(placement_str))
+    # Normalize PlacementShard(dim=N) → PlacementShard(N)
+    canonical = []
+    for e in entries:
+        e = re.sub(r"PlacementShard\(dim=(-?\d+)\)", r"PlacementShard(\1)", e)
+        e = e.replace("PlacementReplicate()", "PlacementReplicate")
+        canonical.append(e)
+    return canonical or [str(placement_str)]
+
+
 def _normalize_for_hash(obj):
     """
     Normalize arguments in-place for stable config_hash computation.
@@ -497,6 +525,31 @@ def _normalize_for_hash(obj):
         # shard_spec: canonicalize None/null → string "None"
         if "shard_spec" in obj and obj["shard_spec"] is None:
             obj["shard_spec"] = "None"
+
+        # Canonicalize tensor_placement dicts so old and new format produce
+        # the same hash.  Old format has "PlacementShard(0)", new format has
+        # "['PlacementShard(0)', 'PlacementShard(0)']".
+        if "tensor_placement" in obj and isinstance(obj["tensor_placement"], dict):
+            tp = obj["tensor_placement"]
+            if "placement" in tp:
+                tp["placement"] = _canonicalize_placement_str(tp["placement"])
+            # Canonicalize shape fields: parse strings to lists
+            for shape_key in ("distribution_shape", "mesh_device_shape"):
+                val = tp.get(shape_key)
+                if isinstance(val, str):
+                    try:
+                        tp[shape_key] = json.loads(val)
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+
+        # Strip metadata keys that don't represent functional op arguments
+        for meta_key in ("original_dtype", "original_shape", "storage_type"):
+            obj.pop(meta_key, None)
+
+        # Strip output/return-value tensors (captured by master trace but not
+        # sweep; they're not input configuration)
+        for output_key in ("output_tensor", "indices_tensor", "attention_sink"):
+            obj.pop(output_key, None)
 
         for k in list(obj.keys()):
             v = obj[k]
@@ -536,7 +589,9 @@ def _extract_hardware_and_mesh(machine_info):
                         placement_str = placement.get("placement", "")
                         shard_dim = None
                         if "PlacementShard" in placement_str:
-                            match = re.search(r"PlacementShard\((\d+)\)", placement_str)
+                            # Handle both old format PlacementShard(0) and
+                            # new format PlacementShard(dim=0) / list format
+                            match = re.search(r"PlacementShard\((?:dim=)?(\d+)\)", placement_str)
                             if match:
                                 shard_dim = int(match.group(1))
                         mesh_config = {
@@ -1132,6 +1187,31 @@ def fix_memory_config_in_json(json_file):
         return 0
 
 
+def normalize_arguments_for_validation(json_file):
+    """Normalize raw arguments in a master/sweep JSON so both sides match.
+
+    Applies the same canonicalizations that ``_normalize_for_hash`` uses for
+    hashing, but directly on the stored arguments so the validator's argument
+    comparison passes without any validator-side normalization.
+
+    Must be called on **both** master and sweep JSON before validation.
+    """
+    print(f"🔧 Normalizing arguments in {os.path.basename(json_file)}...")
+
+    with open(json_file, "r") as f:
+        data = json.load(f)
+
+    for _op_name, op_data in data.get("operations", {}).items():
+        for config in op_data.get("configurations", []):
+            args = config.get("arguments", {})
+            _normalize_for_hash(args)
+
+    with open(json_file, "w") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+
+    print(f"✅ Arguments normalized in {os.path.basename(json_file)}")
+
+
 def recompute_config_hashes(json_file):
     """
     Recompute config_hash for every configuration in a master JSON file
@@ -1201,6 +1281,13 @@ Examples (Import existing traces):
         help="Process existing trace directory and add to master JSON (skips test execution). "
         "Useful for importing traces collected on other machines with --store flag.",
     )
+    parser.add_argument(
+        "--normalize-args",
+        type=str,
+        metavar="JSON_FILE",
+        help="Normalize arguments and recompute config hashes in a master JSON file "
+        "(for validation preparation). Exits after processing.",
+    )
 
     # Handle explicit separator
     if "--" in sys.argv:
@@ -1210,6 +1297,16 @@ Examples (Import existing traces):
         args = parser.parse_args(tracer_argv)
     else:
         args, extra_args = parser.parse_known_args()
+
+    # Handle --normalize-args (standalone operation, exits immediately)
+    if hasattr(args, "normalize_args") and args.normalize_args:
+        json_path = args.normalize_args
+        if not os.path.isfile(json_path):
+            print(f"❌ Error: File not found: {json_path}")
+            return 1
+        normalize_arguments_for_validation(json_path)
+        recompute_config_hashes(json_path)
+        return 0
 
     # Either test_path or load must be provided
     if not args.test_path and not args.load:
