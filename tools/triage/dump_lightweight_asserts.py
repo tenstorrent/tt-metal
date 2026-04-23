@@ -17,7 +17,7 @@ Owner:
 
 import os
 from dataclasses import dataclass
-from triage import ScriptConfig, log_check_risc, run_script, triage_field
+from triage import ScriptConfig, log_check_risc, log_warning_risc, run_script, triage_field, verbose_skips_enabled
 from callstack_provider import (
     KernelCallstackWithMessage,
     format_callstack_with_message,
@@ -152,12 +152,16 @@ def dump_lightweight_asserts(
 ) -> LightweightAssertInfo | None:
     try:
         if not dispatcher_data.risc_enabled(risc_name):
+            if verbose_skips_enabled():
+                log_warning_risc(risc_name, location, "skip: risc_enabled() = False")
             return None
 
         risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
 
         # We don't care about cores that are in reset
         if risc_debug.is_in_reset():
+            if verbose_skips_enabled():
+                log_warning_risc(risc_name, location, "skip: core is in reset")
             return None
 
         # Define two instructions
@@ -174,10 +178,25 @@ def dump_lightweight_asserts(
             # instructions without the kernel ELF, so bail out cleanly instead of letting
             # elfs_cache[None] raise a TypeError from os.path.exists.
             if dispatcher_core_data.kernel_path is None or dispatcher_core_data.kernel_offset is None:
+                # Not gated — a running, non-reset core with an enabled risc but no
+                # kernel metadata is suspicious and worth flagging every time.
+                log_warning_risc(
+                    risc_name,
+                    location,
+                    f"skip: no kernel metadata from Inspector "
+                    f"(pc=0x{pc:08x} in private memory, kernel_path={dispatcher_core_data.kernel_path!r}, "
+                    f"kernel_offset={dispatcher_core_data.kernel_offset!r}) — cannot resolve private-memory "
+                    f"instruction, so no assert callstack is produced for this core.",
+                )
                 return None
             elf = callstack_provider.elfs_cache[dispatcher_core_data.kernel_path].elf
             text_section = elf.get_section_by_name(".text")
             if text_section is None:
+                log_warning_risc(
+                    risc_name,
+                    location,
+                    f"skip: no .text section in kernel ELF {dispatcher_core_data.kernel_path!r}",
+                )
                 return None
             data: bytes = text_section.data()
             address: int = dispatcher_core_data.kernel_offset
@@ -198,6 +217,15 @@ def dump_lightweight_asserts(
         if previous_instruction == ebreak_instruction:
             rewind_pc_for_ebreak = True
         elif current_instruction != ebreak_instruction and current_instruction != while_true_instruction:
+            if verbose_skips_enabled():
+                log_warning_risc(
+                    risc_name,
+                    location,
+                    f"skip: no ebreak/while(true) at pc=0x{pc:08x} "
+                    f"(current_instruction=0x{(current_instruction or 0):08x}, "
+                    f"previous_instruction=0x{(previous_instruction or 0):08x}) — "
+                    f"core is not parked on an assert",
+                )
             return None
 
         callstack_data = callstack_provider.get_cached_callstacks(
@@ -246,8 +274,16 @@ def dump_lightweight_asserts(
             risc_name,
             location,
             False,
-            f"[warning]Failed to dump lightweight asserts: {e}[/]",
+            f"[warning]Failed to dump lightweight asserts ({type(e).__name__}): {e}[/]",
         )
+        if verbose_skips_enabled():
+            import traceback
+
+            log_warning_risc(
+                risc_name,
+                location,
+                f"dump_lightweight_asserts traceback:\n{traceback.format_exc()}",
+            )
         return None
 
 

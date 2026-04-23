@@ -572,6 +572,19 @@ def log_warning_risc(risc_name: str, location: OnChipCoordinate, message: str) -
     log_warning_location(location, f"{risc_name}: {message}")
 
 
+def verbose_skips_enabled() -> bool:
+    """Triage per-core skip-diagnostic verbosity toggle.
+
+    Enabled via TT_TRIAGE_VERBOSE_SKIPS=1. Off by default because a healthy chip
+    produces dozens of "boring" skip reasons per run (DONE cores, cores not in an
+    ebreak/spin loop, etc.). Off → we still log the *interesting* skips (failed
+    halts, unexpected exceptions, missing kernel metadata on a running core).
+    On → we log every single skip with its reason + full exception tracebacks,
+    so CI logs on a hung chip tell us exactly which core we bailed on and why.
+    """
+    return os.environ.get("TT_TRIAGE_VERBOSE_SKIPS", "0") not in ("", "0", "false", "False")
+
+
 def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
     from dataclasses import fields, is_dataclass
 
