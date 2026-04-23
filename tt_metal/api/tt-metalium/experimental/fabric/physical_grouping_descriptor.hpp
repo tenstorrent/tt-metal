@@ -118,6 +118,14 @@ public:
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
+    // Run get_valid_groupings_for_mgd for every MGD in order and merge into one map. Instance map keys
+    // are prefixed "mgd{i}_" (i = 0, 1, …) so two MGDs that both use e.g. "M0" do not collide.
+    // MESH and higher-layer (FABRIC, etc.) results are all merged; total grouping count per type is
+    // the sum over all MGDs of what each would have returned on its own.
+    ValidGroupingsMap get_valid_groupings_for_mgds(
+        const std::vector<const MeshGraphDescriptor*>& mesh_graph_descriptors,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
+
     // Find any valid mapping of a grouping to a physical system descriptor
     // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
     // Returns empty set if no valid mapping exists

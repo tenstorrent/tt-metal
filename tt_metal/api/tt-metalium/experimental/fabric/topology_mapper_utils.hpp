@@ -392,6 +392,19 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor);
 
 /**
+ * @brief Build a physical multi-mesh adjacency graph using multiple MGDs (one PSD, one PGD)
+ *
+ * For each MGD, collects valid MESH groupings (same as the single-MGD build), then runs a
+ * single find_all_in_psd over the concatenation so mesh partitions are found jointly on the PSD.
+ * MGD order is the vector order. Within each MGD, MESH instance keys are processed in sorted order
+ * for deterministic groupings ordering.
+ */
+PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const std::vector<const tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors);
+
+/**
  * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor
  *
  * Builds a complete flat adjacency map including all connections

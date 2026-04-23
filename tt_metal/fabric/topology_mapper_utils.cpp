@@ -526,6 +526,87 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const std::vector<const tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors) {
+    using namespace ::tt::tt_fabric;
+
+    TT_FATAL(
+        !mesh_graph_descriptors.empty(),
+        "build_physical_multi_mesh_adjacency_graph: at least one MeshGraphDescriptor is required");
+
+    log_info(tt::LogFabric, "Building flat adjacency map from PSD (multi-MGD)");
+
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(build_flat_adjacency_map_from_psd(physical_system_descriptor));
+
+    log_info(
+        tt::LogFabric,
+        "Getting valid groupings for {} MGD(s) and PGD (concatenated MESH groupings)",
+        mesh_graph_descriptors.size());
+
+    std::vector<GroupingInfo> all_mesh_grouping_infos;
+
+    for (size_t mgd_i = 0; mgd_i < mesh_graph_descriptors.size(); ++mgd_i) {
+        const MeshGraphDescriptor* mgd_ptr = mesh_graph_descriptors[mgd_i];
+        TT_FATAL(mgd_ptr != nullptr, "Null MeshGraphDescriptor at index {}", mgd_i);
+
+        const MeshGraphDescriptor& mesh_graph_descriptor = *mgd_ptr;
+        log_info(tt::LogFabric, "MGD [{}]: get_valid_groupings_for_mgd from descriptor", mgd_i);
+
+        auto valid_groupings_map =
+            physical_grouping_descriptor.get_valid_groupings_for_mgd(mesh_graph_descriptor, physical_system_descriptor);
+
+        log_info(
+            tt::LogFabric,
+            "MGD [{}]: got {} top-level type(s) in valid groupings map",
+            mgd_i,
+            valid_groupings_map.size());
+
+        TT_FATAL(
+            valid_groupings_map.contains("MESH"), "Internal error: MESH grouping not found in valid groupings map");
+        TT_FATAL(
+            !valid_groupings_map.at("MESH").empty(),
+            "Internal error: Physical grouping descriptor was not able to find mesh groupings for MGD at index {}",
+            mgd_i);
+
+        std::vector<std::string> mesh_instance_names;
+        for (const auto& [instance_name, _] : valid_groupings_map.at("MESH")) {
+            mesh_instance_names.push_back(instance_name);
+        }
+        std::sort(mesh_instance_names.begin(), mesh_instance_names.end());
+
+        for (const std::string& name : mesh_instance_names) {
+            for (const auto& grouping : valid_groupings_map.at("MESH").at(name)) {
+                log_info(
+                    tt::LogFabric, "MGD [{}] mesh grouping from PGD: {} (instance {})", mgd_i, grouping.name, name);
+                all_mesh_grouping_infos.push_back(grouping);
+            }
+        }
+    }
+
+    log_info(tt::LogFabric, "Total mesh groupings collected for find_all_in_psd: {}", all_mesh_grouping_infos.size());
+
+    std::vector<std::string> errors;
+    auto all_mesh_groupings = physical_grouping_descriptor.find_all_in_psd(
+        all_mesh_grouping_infos, physical_system_descriptor, flat_graph, errors);
+
+    log_info(
+        tt::LogFabric,
+        "Found {} mesh grouping mapping(s) in PSD (errors: {})",
+        all_mesh_groupings.size(),
+        errors.size());
+
+    PhysicalMultiMeshGraph result;
+    if (all_mesh_groupings.empty()) {
+        log_warning(tt::LogFabric, "No mesh groupings found in PSD (multi-MGD) - returning empty graph");
+        return result;
+    }
+
+    result = build_hierarchical_from_flat_graph(flat_graph, all_mesh_groupings);
+    return result;
+}
+
+PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     // Build flat adjacency map from PhysicalSystemDescriptor
     PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor);
