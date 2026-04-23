@@ -33,8 +33,10 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     const uint32_t grid_dim = static_cast<uint32_t>(std::min(device_grid.x - 1, device_grid.y));
 
     // Tile counts from padded_shape (always tile-aligned, matches DRAM layout)
-    const uint32_t M_tiles = input.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-    const uint32_t K_tiles = input.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t tile_height = input.tensor_spec().tile().get_height();
+    const uint32_t tile_width = input.tensor_spec().tile().get_width();
+    const uint32_t M_tiles = input.padded_shape()[-2] / tile_height;
+    const uint32_t K_tiles = input.padded_shape()[-1] / tile_width;
     const uint32_t K_half = K_tiles / 2;
 
     const uint32_t padded_M_tiles = tt::round_up(M_tiles, grid_dim);
