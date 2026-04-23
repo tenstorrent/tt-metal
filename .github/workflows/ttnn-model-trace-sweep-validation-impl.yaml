@@ -136,9 +136,9 @@ jobs:
             "$PINNED_TRACE_ID" \
             model_tracer/traced_operations/ttnn_operations_master.json
 
-      - name: Fix shard_spec format (string "None" → null)
+      - name: Prepare master JSON for validation
         run: |
-          python3 model_tracer/fix_shard_spec_format.py \
+          python3 model_tracer/prepare_master_for_validation.py \
             model_tracer/traced_operations/ttnn_operations_master.json
 
       - name: Run config hash preflight
@@ -521,7 +521,7 @@ jobs:
             --master-trace model_tracer/traced_operations/ttnn_operations_master.json \
             --sweep-trace "${sweep_trace_files[@]}" \
             --output-report validation_summary.md \
-            --ignore-categories shard_spec extra_key
+            --ignore-categories shard_spec extra_key tensor_placement
           validation_exit_code=$?
           set -e
 

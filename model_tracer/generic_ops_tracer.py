@@ -1233,6 +1233,17 @@ def recompute_config_hashes(json_file):
             executions = config.get("executions", [])
             if executions and isinstance(executions[0], dict):
                 machine_info = executions[0].get("machine_info")
+
+            # Populate tensor_placements from arguments if not already present.
+            # DB-reconstructed machine_info may lack tensor_placements, but the
+            # original hash was computed with them (from convert_json_to_master_format).
+            if machine_info is not None and "tensor_placements" not in machine_info:
+                for _arg_val in op_args.values():
+                    _tp = _arg_val.get("tensor_placement") if isinstance(_arg_val, dict) else None
+                    if _tp and isinstance(_tp, dict):
+                        machine_info["tensor_placements"] = [_tp]
+                        break
+
             new_hash = _compute_config_hash(op_name, op_args, machine_info)
 
             if new_hash != old_hash:
