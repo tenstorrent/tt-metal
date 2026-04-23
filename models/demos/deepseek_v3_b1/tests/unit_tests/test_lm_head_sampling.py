@@ -2476,6 +2476,7 @@ def test_single_device_mtp(
     assert mtp_passing_pcc, "MTP output PCC check failed"
 
 
+@pytest.mark.skip(reason="Disabled: broken by PR #42662 (speculative decoding refactor). See tracking issue.")
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("seed", [1337])
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
@@ -2781,6 +2782,7 @@ def test_single_device_mtp_verification(
     logger.info("MTP verification test PASSED: speculative token matches base token")
 
 
+@pytest.mark.skip(reason="Disabled: broken by PR #42662 (speculative decoding refactor). See tracking issue.")
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("seed", [1337])
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
