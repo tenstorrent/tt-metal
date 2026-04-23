@@ -237,6 +237,20 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             self._pinned_cache_keys.add(full_key)
         return tensor
 
+    def _load_stacked_expert_tensor(self, stacked_full_key: str, expert_idx: int) -> torch.Tensor:
+        if stacked_full_key in self._cache:
+            return self._cache[stacked_full_key][expert_idx]
+
+        filename = self._full_to_file[stacked_full_key]
+        filepath = self._model_path / filename
+        if not filepath.exists():
+            raise KeyError(
+                f"Attempted to load weight {stacked_full_key} from file {filepath} but the file does not exist."
+            )
+
+        handle = self._get_handle(filename)
+        return handle.get_slice(stacked_full_key)[expert_idx]
+
     def _passes_layer_filter(self, full_key: str) -> bool:
         if self._num_layers is None:
             return True
@@ -278,11 +292,9 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         """
         full_key = self._full_key(key)
         if full_key in self._cache:
-            if (
-                full_key in self._full_to_file
-                and self._passes_layer_filter(full_key)
-                and self._exposes_physical_key(full_key)
-            ):
+            if full_key not in self._full_to_file:
+                return self._cache[full_key]
+            if self._passes_layer_filter(full_key) and self._exposes_physical_key(full_key):
                 self._pinned_cache_keys.add(full_key)
                 return self._cache[full_key]
         if (
@@ -299,8 +311,7 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         stacked_full_key, expert_idx = alias
         if expert_idx >= self._get_stacked_num_experts(stacked_full_key):
             raise KeyError(key)
-        stacked_tensor = self._load_tensor(stacked_full_key, pin_cache=False)
-        tensor = stacked_tensor[expert_idx]
+        tensor = self._load_stacked_expert_tensor(stacked_full_key, expert_idx)
         self._cache[full_key] = tensor
         return tensor
 

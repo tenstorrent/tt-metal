@@ -549,8 +549,8 @@ def test_evict_alias_releases_unpinned_stacked_tensor(tmp_path: Path):
     expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
 
     assert torch.equal(state[expert_key], stacked_tensor[1])
-    assert stacked_key in state._cache
     assert expert_key in state._cache
+    assert stacked_key not in state._cache
 
     state.evict(expert_key)
 
