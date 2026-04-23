@@ -14,7 +14,7 @@ template <typename Callable, typename... Args>
 inline void _llk_math_eltwise_unary_sfpu_params_(
     Callable&& sfpu_func, std::uint32_t dst_index, int vector_mode = static_cast<int>(VectorMode::RC), Args&&... args)
 {
-    _llk_math_eltwise_unary_sfpu_start_<DST_SYNC_MODE>(dst_index);
+    _llk_math_eltwise_unary_sfpu_start_(dst_index);
 
     VectorMode mode = static_cast<VectorMode>(vector_mode);
 
