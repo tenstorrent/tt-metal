@@ -116,8 +116,6 @@ class TtnnYoloV11:
         x = untilize_tile_for_conv2d_dram(x)
         x = self.conv3(self.device, x)
         x = self.c3k2_2(self.device, x)
-        # Large tensors can OOM when untilized to ROW_MAJOR in L1.
-        # Keep small tensors in L1 for perf; move only large tensors to DRAM.
         x4_row_major_bytes = x.shape[0] * x.shape[1] * x.shape[2] * x.shape[3] * 2
         x4_mem_config = (
             ttnn.L1_MEMORY_CONFIG
@@ -175,21 +173,13 @@ class TtnnYoloV11:
         )
         ttnn.deallocate(x4)
         x = self.c3k2_6(self.device, x)
-        x16_bytes = x.shape[0] * x.shape[1] * x.shape[2] * x.shape[3] * 2
-        x16_mem_config = (
-            ttnn.L1_MEMORY_CONFIG if x16_bytes <= L1_ROW_MAJOR_SAFE_THRESHOLD_BYTES else ttnn.DRAM_MEMORY_CONFIG
-        )
-        x16 = ttnn.clone(x, memory_config=x16_mem_config)
+        x16 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = untilize_tile_for_conv2d_dram(x)
         x = self.conv7(self.device, x)
         x = sharded_concat_2(x, x13)
         ttnn.deallocate(x13)
         x = self.c3k2_7(self.device, x)
-        x19_bytes = x.shape[0] * x.shape[1] * x.shape[2] * x.shape[3] * 2
-        x19_mem_config = (
-            ttnn.L1_MEMORY_CONFIG if x19_bytes <= L1_ROW_MAJOR_SAFE_THRESHOLD_BYTES else ttnn.DRAM_MEMORY_CONFIG
-        )
-        x19 = ttnn.clone(x, memory_config=x19_mem_config)
+        x19 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = untilize_tile_for_conv2d_dram(x)
         x = self.conv8(self.device, x)
         x = sharded_concat_2(x, x10)
