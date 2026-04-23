@@ -99,32 +99,6 @@ def _get_hardware_from_master_json(master_json: dict):
     return None
 
 
-def _get_mesh_device_shape_from_master_json(master_json: dict) -> str:
-    """Extract the mesh_device_shape from machine_info in the master JSON.
-
-    Returns a string like "4x8" for Galaxy or "1x2" for N300, or empty string
-    if no mesh shape is found.  The sweep modules use ``MESH_DEVICE_SHAPE`` env
-    var to create the correct mesh device topology at runtime.
-    """
-    for op_data in master_json.get("operations", {}).values():
-        for cfg in op_data.get("configurations", []):
-            for execution in cfg.get("executions", []):
-                mi = execution.get("machine_info") or {}
-                if isinstance(mi, list):
-                    mi = mi[0] if mi else {}
-                mesh_shape = mi.get("mesh_device_shape")
-                if mesh_shape:
-                    if isinstance(mesh_shape, str):
-                        import ast
-                        try:
-                            mesh_shape = ast.literal_eval(mesh_shape)
-                        except (ValueError, SyntaxError):
-                            continue
-                    if isinstance(mesh_shape, (list, tuple)) and len(mesh_shape) == 2:
-                        return f"{mesh_shape[0]}x{mesh_shape[1]}"
-    return ""
-
-
 def _get_trace_ids_by_hardware(trace_ids: list[int], registry: dict) -> dict:
     """Group trace IDs by the normalized hardware tuple declared in the workflow manifest."""
     trace_ids_by_hardware = defaultdict(list)
@@ -159,8 +133,6 @@ def compute_validation_matrix(
     if not trace_ids:
         print("No trace_run_ids found in reconstructed master JSON", file=sys.stderr)
         sys.exit(1)
-
-    mesh_device_shape = _get_mesh_device_shape_from_master_json(master_json)
 
     with open(manifest_path, "r", encoding="utf-8") as file:
         manifest = yaml.safe_load(file) or {}
@@ -225,7 +197,6 @@ def compute_validation_matrix(
                     "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
                     "trace_ids": trace_id_list,
                     "hardware_group": hardware_label,
-                    "mesh_device_shape": mesh_device_shape,
                 }
             )
 
@@ -249,7 +220,6 @@ def compute_pinned_validation_matrix(
         master_json = json.load(file)
 
     hardware_group = _get_hardware_from_master_json(master_json)
-    mesh_device_shape = _get_mesh_device_shape_from_master_json(master_json)
 
     generation_manifest = _load_generation_manifest(vectors_dir)
     vector_modules = _modules_from_manifest_or_dir(vectors_dir, generation_manifest)
@@ -300,7 +270,6 @@ def compute_pinned_validation_matrix(
                     "vectors_artifact_name": "sweeps-vectors-pinned",
                     "trace_ids": [pinned_trace_run_id],
                     "hardware_group": hardware_label,
-                    "mesh_device_shape": mesh_device_shape,
                 }
             )
 

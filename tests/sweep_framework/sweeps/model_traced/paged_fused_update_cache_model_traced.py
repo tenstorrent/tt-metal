@@ -19,7 +19,7 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
@@ -67,32 +67,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape, l1_small_size=65536)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=65536, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=65536, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
-
-
-# CI sets TT_METAL_OPERATION_TIMEOUT_SECONDS=5 for hang detection.
-# paged_fused_update_cache needs extra time for large KV cache tensors (1024-2048 pages),
-# especially on multi-device setups.
-os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = "60"
-
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 def run(
     input_a_shape,
