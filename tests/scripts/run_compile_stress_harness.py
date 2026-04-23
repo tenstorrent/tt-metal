@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import random
+from contextlib import ExitStack
 import shutil
 import statistics
 import subprocess
@@ -23,7 +24,6 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO
 
 
 # Env vars that would route MetalContext off the mock path; we strip them from
@@ -51,14 +51,13 @@ class ClientSpec:
 class SpawnedClient:
     spec: ClientSpec
     proc: subprocess.Popen
-    stdout_fh: IO[str]
-    stderr_fh: IO[str]
+    _log_files: ExitStack
 
     def wait(self) -> int:
-        rc = self.proc.wait()
-        self.stdout_fh.close()
-        self.stderr_fh.close()
-        return rc
+        try:
+            return self.proc.wait()
+        finally:
+            self._log_files.close()
 
 
 @dataclass
@@ -256,10 +255,11 @@ def spawn_client(test_binary: Path, spec: ClientSpec, env: dict[str, str]) -> Sp
         "--gtest_filter=*TensixCompileStress*",
         "--gtest_color=no",
     ]
-    stdout_fh = open(spec.stdout_log, "w")
-    stderr_fh = open(spec.stderr_log, "w")
-    proc = subprocess.Popen(cmd, env=env, stdout=stdout_fh, stderr=stderr_fh)
-    return SpawnedClient(spec=spec, proc=proc, stdout_fh=stdout_fh, stderr_fh=stderr_fh)
+    with ExitStack() as log_files:
+        stdout_fh = log_files.enter_context(open(spec.stdout_log, "w"))
+        stderr_fh = log_files.enter_context(open(spec.stderr_log, "w"))
+        proc = subprocess.Popen(cmd, env=env, stdout=stdout_fh, stderr=stderr_fh)
+        return SpawnedClient(spec=spec, proc=proc, _log_files=log_files.pop_all())
 
 
 def wait_all(clients: list[SpawnedClient]) -> list[int]:
