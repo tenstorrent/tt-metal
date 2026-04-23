@@ -17,7 +17,6 @@
 #include "stream_io_map.h"
 #include "tensix.h"
 #include "tensix_neo_reg.h"
-#include "api/debug/assert.h"
 
 #define NOC_X(x) NOC_0_X(noc_index, noc_size_x, (x))
 #define NOC_Y(y) NOC_0_Y(noc_index, noc_size_y, (y))
@@ -315,6 +314,10 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
     // No-op for non-DM cores on Quasar
 }
 #endif  // ARCH_QUASAR && !COMPILE_FOR_DM
+
+// Included here (rather than at the top of the file) so that assert_and_hang()
+// sees flush_l2_cache_line() in scope on ARCH_QUASAR + COMPILE_FOR_DM builds.
+#include "api/debug/assert.h"
 
 template <bool enable = true>
 inline __attribute__((always_inline)) void set_l1_data_cache() {
