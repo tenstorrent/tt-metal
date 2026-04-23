@@ -1775,6 +1775,10 @@ void sdpa_inner_loop(
             q_start_tile = q_chunk * Sq_chunk_t;
             if (is_causal) {
                 q_high_tile = q_start_tile + Sq_chunk_t;
+                // Also used by the chain-participant skip inside the K loop (matches RING's
+                // causal_k_limit): chain cores walk the full K range for CB sync but pop &
+                // continue past here instead of doing masked-out matmul/softmax cycles.
+                causal_k_limit = (q_high_tile + Sk_chunk_t - 1) / Sk_chunk_t;
             } else {
                 q_high_tile = Skt;
             }
@@ -1836,7 +1840,8 @@ void sdpa_inner_loop(
 
             KV_chunks_processed_in_iter++;
 
-            if (sdpa_type == RING && k_chunk >= causal_k_limit && is_causal) {
+            if (is_causal && k_chunk >= causal_k_limit &&
+                (sdpa_type == RING || (sdpa_type == STANDARD && is_chain_participant))) {
                 cb_wait_front(cb_k_in, k_chunk_tiles);
                 cb_wait_front(cb_v_in, v_chunk_tiles);
                 cb_pop_front(cb_k_in, k_chunk_tiles);
