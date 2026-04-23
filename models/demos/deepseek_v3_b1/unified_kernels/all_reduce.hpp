@@ -140,9 +140,6 @@ template <typename CTArgs>
 class WriterSingleLink {
 public:
     void operator()(const SenderArgs& args) { impl(args); }
-    void open_connections(const SenderArgs& args, bool reset_header_pool = true) {
-        open_connections_impl(args, reset_header_pool);
-    }
 
 private:
     // This writer only sends chunk indices:
@@ -162,25 +159,9 @@ private:
         }
     }
 
-    static constexpr bool use_posted_transport_writes = true;
-    static constexpr uint32_t max_header_ring_size = 2;
-    static constexpr uint32_t packets_to_send = packets_to_send_for_writer();
-    // A single packet never reuses a header, so the second header only pays setup cost with no flush savings.
-    static constexpr uint32_t header_ring_size = packets_to_send <= 1u ? 1u : max_header_ring_size;
-
-    static constexpr uint32_t regular_payload_bytes = CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
-    static constexpr uint32_t last_payload_bytes = CTArgs::last_chunk_tiles * CTArgs::page_size_bytes;
-
+    void impl([[maybe_unused]] const SenderArgs& args) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-    uint64_t dst_noc_base = 0;
-    uint64_t remote_sem_noc = 0;
-    uint64_t local_ready_noc_addr = 0;
-    tt::tt_fabric::WorkerToFabricEdmSender connection;
-    std::array<volatile tt_l1_ptr PACKET_HEADER_TYPE*, header_ring_size> headers = {};
-#endif
-
-    void open_connections_impl([[maybe_unused]] const SenderArgs& args, [[maybe_unused]] bool reset_header_pool) {
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+        constexpr uint32_t packets_to_send = packets_to_send_for_writer();
         if constexpr (CTArgs::link_index >= CTArgs::num_links || packets_to_send == 0) {
             return;
         }
@@ -190,6 +171,7 @@ private:
         const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t link_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
 
+        uint64_t local_ready_noc_addr = 0;
         if constexpr (CTArgs::signal_local_ready) {
             const uint32_t local_ready_dest_noc_x = get_arg_val<uint32_t>(arg_idx++);
             const uint32_t local_ready_dest_noc_y = get_arg_val<uint32_t>(arg_idx++);
@@ -198,31 +180,8 @@ private:
                 safe_get_noc_addr(local_ready_dest_noc_x, local_ready_dest_noc_y, local_ready_sem_bank, 0);
         }
 
-        connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-        connection.open_start();
-        if (reset_header_pool) {
-            PacketHeaderPool::reset();
-        }
-
-        dst_noc_base = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.intermediate_buffer_address, 0);
-        remote_sem_noc = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, link_sem_bank_addr, 0);
-        const auto connection_direction = get_next_hop_router_direction(dst_mesh_id, dst_chip_id);
-        for (uint32_t i = 0; i < header_ring_size; ++i) {
-            headers[i] = PacketHeaderPool::allocate_header();
-            fabric_set_single_hop_unicast_route_from_direction(
-                headers[i], connection_direction, dst_chip_id, dst_mesh_id);
-            headers[i]->to_noc_fused_unicast_write_atomic_inc(
-                {dst_noc_base, remote_sem_noc, 1, false}, regular_payload_bytes);
-        }
-        connection.open_finish();
-#endif
-    }
-
-    void impl([[maybe_unused]] const SenderArgs& args) {
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        if constexpr (CTArgs::link_index >= CTArgs::num_links || packets_to_send == 0) {
-            return;
-        }
+        auto connection =
+            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
 
         // Ensure local data is available in the CB before signaling or sending.
         if constexpr (CTArgs::skip_local_push) {
@@ -242,7 +201,35 @@ private:
             noc_semaphore_inc(local_ready_noc_addr, 1);
         }
 
+        constexpr bool use_posted_transport_writes = true;
+
+        connection.open_start();
+        constexpr uint32_t max_header_ring_size = 2;
+        // A single packet never reuses a header, so the second header only pays setup cost with no flush savings.
+        constexpr uint32_t header_ring_size = packets_to_send <= 1u ? 1u : max_header_ring_size;
+
+        constexpr uint32_t regular_payload_bytes = CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
+        constexpr uint32_t last_payload_bytes = CTArgs::last_chunk_tiles * CTArgs::page_size_bytes;
+
+        PacketHeaderPool::reset();
+
+        uint64_t dst_noc_base =
+            safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.intermediate_buffer_address, 0);
+        uint64_t remote_sem_noc = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, link_sem_bank_addr, 0);
+        const auto connection_direction = get_next_hop_router_direction(dst_mesh_id, dst_chip_id);
+
+        std::array<volatile tt_l1_ptr PACKET_HEADER_TYPE*, header_ring_size> headers = {};
+        for (uint32_t i = 0; i < header_ring_size; ++i) {
+            headers[i] = PacketHeaderPool::allocate_header();
+            fabric_set_single_hop_unicast_route_from_direction(
+                headers[i], connection_direction, dst_chip_id, dst_mesh_id);
+            headers[i]->to_noc_fused_unicast_write_atomic_inc(
+                {dst_noc_base, remote_sem_noc, 1, false}, regular_payload_bytes);
+        }
+
         const uint32_t src_base_addr = get_read_ptr(CTArgs::local_data_cb_id);
+
+        connection.open_finish();
 
         connection.setup_stateful_send_cmd_bufs<use_posted_transport_writes>();
 
