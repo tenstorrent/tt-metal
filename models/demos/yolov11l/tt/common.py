@@ -93,9 +93,11 @@ class Yolov11Conv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             reshard_if_not_optimal=True if self.reshard else False,
             activation=activation_param,
+            reallocate_halo_output=True,
         )
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
