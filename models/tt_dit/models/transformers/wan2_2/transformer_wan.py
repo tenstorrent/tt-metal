@@ -163,7 +163,7 @@ class WanTransformerBlock(Module):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
-        context_mask: ttnn.Tensor | None = None,
+        cross_attn_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured D on TP
@@ -212,7 +212,7 @@ class WanTransformerBlock(Module):
             spatial_1BND=spatial_normed_1BND,
             N=N,
             prompt_1BLP=prompt_1BLP,
-            attn_mask=context_mask,
+            cross_attn_mask=cross_attn_mask,
         )
         spatial_1BND = spatial_1BND + attn_output_1BND
 
