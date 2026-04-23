@@ -267,6 +267,6 @@ struct ttsl::json::from_json_t<ttnn::operations::unary::BasicUnaryWithParam<T>> 
     auto operator()(const nlohmann::json& json_object) const {
         return ttnn::operations::unary::BasicUnaryWithParam<T>{
             from_json<ttnn::operations::unary::UnaryOpType>(json_object["op_type"]),
-            from_json<std::vector<T>>(json_object["params"])};
+            from_json<std::vector<T>>(json_object["param"])};
     }
 };
