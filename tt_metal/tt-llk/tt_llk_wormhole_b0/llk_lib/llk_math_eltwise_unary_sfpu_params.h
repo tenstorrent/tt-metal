@@ -14,10 +14,8 @@ template <typename Callable, typename... Args>
 inline void _llk_math_eltwise_unary_sfpu_params_(
     Callable&& sfpu_func, std::uint32_t dst_index, int vector_mode = static_cast<int>(VectorMode::RC), Args&&... args)
 {
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    math::set_addr_mod_base();
+    _llk_math_eltwise_unary_sfpu_start_(dst_index);
 
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     VectorMode mode = static_cast<VectorMode>(vector_mode);
 
     if (mode == VectorMode::R)
@@ -27,14 +25,12 @@ inline void _llk_math_eltwise_unary_sfpu_params_(
         for (int face = 0; face < 2; face++)
         {
             std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+            // Move to the next face
+            _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
         }
-        // Skip the next 2 faces
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        // Skip next two faces
+        _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
+        _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
     }
     else if (mode == VectorMode::C)
     {
@@ -43,10 +39,8 @@ inline void _llk_math_eltwise_unary_sfpu_params_(
         for (int face = 0; face < 2; face++)
         {
             std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+            _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
+            _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
         }
     }
     else if (mode == VectorMode::RC)
@@ -56,16 +50,13 @@ inline void _llk_math_eltwise_unary_sfpu_params_(
         for (int face = 0; face < 4; face++)
         {
             std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+            // Move to the next face
+            _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
         }
     }
     else
     {
         std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
     }
-    math::clear_dst_reg_addr();
-
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
-    math::clear_addr_mod_base();
+    _llk_math_eltwise_unary_sfpu_done_();
 }

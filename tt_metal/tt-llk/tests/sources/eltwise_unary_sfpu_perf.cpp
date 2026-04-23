@@ -207,8 +207,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile, formats.math, formats.math);
                         }
 
-                        test_utils::call_unary_sfpu_operation<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, FAST_MODE, STABLE_SORT>(
-                            block_tile, formats.math);
+                        test_utils::call_unary_sfpu_operation<
+                            DST_SYNC_MODE,
+                            is_fp32_dest_acc_en,
+                            SFPU_UNARY_OPERATION,
+                            APPROX_MODE,
+                            is_fp32_dest_acc_en,
+                            ITERATIONS,
+                            FAST_MODE,
+                            STABLE_SORT>(block_tile, formats.math);
                     }
                 }
             }
@@ -234,8 +241,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             block_tile, formats.math, formats.math);
 
                         // Start SFPU operation
-                        test_utils::call_unary_sfpu_operation<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, FAST_MODE, STABLE_SORT>(
-                            block_tile, formats.math);
+                        test_utils::call_unary_sfpu_operation<
+                            DST_SYNC_MODE,
+                            is_fp32_dest_acc_en,
+                            SFPU_UNARY_OPERATION,
+                            APPROX_MODE,
+                            is_fp32_dest_acc_en,
+                            ITERATIONS,
+                            FAST_MODE,
+                            STABLE_SORT>(block_tile, formats.math);
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
