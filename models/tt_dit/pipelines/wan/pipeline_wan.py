@@ -170,6 +170,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         target_height: int = 0,
         target_width: int = 0,
         t_chunk_size: int = 0,
+        run_warmup: bool = True,
     ):
         super().__init__()
 
@@ -333,8 +334,13 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             1, self.vae.config.z_dim, 1, 1, 1
         )
 
+        # persistent latent buffers to enable safe tracing.
+        self.latent_buffer = None
+        self.condition_buffer = None
+
         # TODO: Reset buffers for change in resolution. Also reinitialize trace
-        self.warmup_buffers(height=target_height, width=target_width)
+        if run_warmup:
+            self.warmup_buffers(height=target_height, width=target_width)
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         prompt_1BLP = tt_model.prepare_text_conditioning(prompt_embeds)
@@ -344,9 +350,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ttnn.copy(prompt_1BLP, buffer)
         return buffer
 
-    def warmup_buffers(self, height, width):
+    def warmup_buffers(self, height, width, image_prompt=None):
         self.run_single_prompt(
             prompt="warmup",
+            image_prompt=image_prompt,
             height=height,
             width=width,
             num_frames=81,
@@ -704,6 +711,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         """
         Adapter function to enable I2V. For base T2V, just return the latents.
         """
+        if latents.dtype == ttnn.float32:
+            latents = ttnn.typecast(latents, ttnn.bfloat16)
         return latents
 
     def prepare_latents(
@@ -911,6 +920,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         latent_frames, latent_height, latent_width = latents.shape[2], latents.shape[3], latents.shape[4]
         prepared_prompts = [False, False]
 
+        sp_axis = self.transformer_states[0].model.parallel_config.sequence_parallel.mesh_axis
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 warmup_t2 = i == 1 and len(timesteps) == 2  # Ensure transformer_2 is also warmed up
@@ -933,6 +943,16 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
                     if cond_latents is not None:
                         cond_latents, _ = ts.model.preprocess_spatial_input_host(cond_latents)
+                        cond_latents = tensor.from_torch(
+                            cond_latents,
+                            device=self.mesh_device,
+                            mesh_axes=[None, None, sp_axis, None],
+                            dtype=ttnn.bfloat16,
+                        )
+                        if self.condition_buffer is None:
+                            self.condition_buffer = cond_latents
+                        else:
+                            ttnn.copy(cond_latents, self.condition_buffer)
 
                     rope_cos_1HND, rope_sin_1HND, trans_mat = ts.model.get_rope_features(latents)
                     rope_args = {
@@ -941,13 +961,18 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                         "trans_mat": trans_mat,
                     }
 
-                    sp_axis = ts.model.parallel_config.sequence_parallel.mesh_axis
                     permuted_latent_tt = tensor.from_torch(
                         permuted_latent,
                         device=self.mesh_device,
                         mesh_axes=[None, None, sp_axis, None],
-                        dtype=ttnn.float32,
+                        dtype=ts.model.output_dtype,
                     )
+
+                # setup/update latent and condition buffers
+                if self.latent_buffer is None:
+                    self.latent_buffer = permuted_latent_tt
+                else:
+                    ttnn.copy(permuted_latent_tt, self.latent_buffer)
 
                 if self.config.expand_timesteps:
                     # seq_len: num_latent_frames * latent_height//2 * latent_width//2
@@ -957,8 +982,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 else:
                     timestep = t.expand(latents.shape[0])
 
-                permuted_model_input = self.get_model_input(permuted_latent_tt, cond_latents)
-                permuted_model_input = ttnn.typecast(permuted_model_input, ttnn.bfloat16)
+                permuted_model_input = self.get_model_input(self.latent_buffer, self.condition_buffer)
 
                 assert timestep.ndim == 1, "Wan2.2-T2V/I2V requires a 1D timestep tensor"
                 timestep = float32_tensor(
@@ -967,7 +991,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
                 permuted_noise_pred_tt = ts.model.combined_step(
                     do_classifier_free_guidance=self.do_classifier_free_guidance,
-                    spatial_1BNI=permuted_model_input,
+                    spatial_1BNI=ttnn.typecast(permuted_model_input, ttnn.bfloat16),
                     prompt_1BLP=ts.prompt_buffer,
                     negative_prompt_1BLP=ts.negative_prompt_buffer,
                     N=patchified_seqlen,
@@ -980,7 +1004,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
                 permuted_latent_tt = self._solver.step(
                     step=i,
-                    latent=permuted_latent_tt,
+                    latent=self.latent_buffer,
                     velocity_pred=permuted_noise_pred_tt,
                 )
 
@@ -988,7 +1012,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         self._current_timestep = None
 
-        sp_axis = ts.model.parallel_config.sequence_parallel.mesh_axis
         permuted_latent_tt = ts.model.ccl_manager.all_gather_persistent_buffer(
             permuted_latent_tt, dim=2, mesh_axis=sp_axis
         )
