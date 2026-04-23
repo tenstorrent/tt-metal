@@ -34,7 +34,7 @@ TIMEOUT = 300
 # The sample suite below still exercises the operation shape/layout path; the
 # traced configurations will be wired in a follow-up once a proper golden exists.
 loader = MasterConfigLoader()
-_model_traced_params = None  # reserved for future enablement
+_model_traced_params = loader.get_suite_parameters("transformer::paged_scaled_dot_product_attention_decode")
 
 parameters = {
     "model_traced_sample": {
@@ -59,7 +59,8 @@ parameters = {
     },
 }
 
-# Intentionally do not attach a "model_traced" suite yet.
+if _model_traced_params:
+    parameters["model_traced"] = _model_traced_params
 
 
 def mesh_device_fixture():
