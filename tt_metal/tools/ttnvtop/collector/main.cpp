@@ -105,9 +105,10 @@ constexpr uint64_t kRegFpu2 = kRiscvDebugBase + 0x020;
 // cycle counter.
 constexpr uint64_t kPerfWindowStart = kRiscvDebugBase + 0x120;
 constexpr size_t kPerfWindowSize = 0x1F8 + 4 - 0x120;
-constexpr size_t kOffFpuOutH = 0x124 - 0x120;  // 0x04 — "FPU busy" cycles (req_cnt)
-constexpr size_t kOffWallL = 0x1F0 - 0x120;    // 0xD0 — low half of 64-bit wall clock
-constexpr size_t kOffWallH = 0x1F8 - 0x120;    // 0xD8 — high half
+constexpr size_t kOffFpuOutL = 0x120 - 0x120;  // 0x00 — ref_cnt (cycles since last arm)
+constexpr size_t kOffFpuOutH = 0x124 - 0x120;  // 0x04 — req_cnt (FPU busy cycles since last arm)
+// WALL_CLOCK_{L,H} at +0xD0/+0xD8 are in the same read window but no longer
+// used in ratio mode — retained in the window for future extensions.
 
 // EWMA smoothing for compute_busy. alpha = 2/(N+1) for N-sample horizon.
 // N=10 gives a ~1s smoothing window at 10 Hz publish rate.
@@ -227,16 +228,13 @@ struct CoreState {
     uint8_t last_dispatched = 0;
 
     // Phase 2.0 perf-counter state. We arm the FPU counter from host at
-    // startup (continuous mode, bank=FPU_COUNTER, rising edge on start) so it
-    // free-runs until someone stops it. Tracks a 64-bit wall-clock and the
-    // 32-bit FPU_OUT_H counter; we extend that 32-bit value across wraps by
-    // tracking previous and adding 2^32 on decrement.
-    bool perf_primed = false;
+    // startup; user kernels that call StartPerfCounters reset it, but because
+    // both OUT_L (ref_cnt) and OUT_H (req_cnt) reset together, their *ratio*
+    // remains a valid instantaneous busy% estimate regardless of resets.
+    // So we just read the ratio directly on every tick and EWMA-smooth it.
     bool counter_armed = false;
-    uint64_t last_wall_clock = 0;
-    uint32_t last_fpu_out_h = 0;
-    uint64_t fpu_out_h_extended = 0;  // tracks wraps
     double compute_busy_ewma = 0.0;   // [0..1]
+    uint32_t last_fpu_out_l = 0;      // debug: last raw OUT_L we saw
 };
 
 struct ChipState {
@@ -404,6 +402,32 @@ int main(int argc, char* argv[]) {
         }
         std::cerr << "ttnvtop-collector: chip " << chip.chip_id << " armed FPU counter on " << armed << "/"
                   << chip.cores.size() << " cores.\n";
+
+        // Verify the arm actually took effect: read FPU_OUT_L twice on the
+        // first worker core. If it advances, the counter is genuinely running;
+        // if it stays at zero, the arm write hit a dead end (likely: remote
+        // chips routed through ETH tunnel, which may not honor writes into
+        // RISCV_DEBUG_REG MMIO space).
+        if (!chip.cores.empty()) {
+            auto* dev = chip.cores[0].device;
+            auto coord = chip.cores[0].translated;
+            std::vector<uint8_t> probe_buf(kPerfWindowSize);
+            uint32_t l0 = 0, l1 = 0;
+            try {
+                dev->read_from_device(probe_buf.data(), coord, kPerfWindowStart, kPerfWindowSize);
+                std::memcpy(&l0, probe_buf.data() + kOffFpuOutL, sizeof(l0));
+                // give it a moment to accumulate
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                dev->read_from_device(probe_buf.data(), coord, kPerfWindowStart, kPerfWindowSize);
+                std::memcpy(&l1, probe_buf.data() + kOffFpuOutL, sizeof(l1));
+            } catch (const std::exception&) {
+            }
+            const bool ticking = (l1 != l0);
+            std::cerr << "ttnvtop-collector: chip " << chip.chip_id << " FPU_OUT_L probe @ core(" << chip.cores[0].noc_x
+                      << "," << chip.cores[0].noc_y << "): " << l0 << " -> " << l1 << " ("
+                      << (ticking ? "counter RUNNING" : "counter STUCK — arm likely did not land") << ")\n";
+        }
+
         chips.push_back(std::move(chip));
     }
 
@@ -449,22 +473,21 @@ int main(int argc, char* argv[]) {
                         now_bit = (signal == static_cast<uint8_t>(RUN_MSG_GO)) ? 1 : 0;
                     }
 
-                    // Perf counters (Phase 2.0). Free-running; deltas give
-                    // busy%. Negative deltas mean the kernel called
-                    // StartPerfCounters and reset — skip those ticks.
+                    // Perf counters (Phase 2.0, ratio mode). Both FPU_OUT_L
+                    // (ref_cnt) and FPU_OUT_H (req_cnt) reset together when
+                    // anyone rising-edges the counter. Their ratio is a valid
+                    // instantaneous busy% estimate *regardless* of resets,
+                    // so we don't care whether kernels call StartPerfCounters.
                     bool have_perf = false;
-                    uint64_t wall_now = 0;
-                    uint32_t fpu_out_h_now = 0;  // 32-bit FPU busy counter snapshot
+                    uint32_t fpu_out_l_now = 0;
+                    uint32_t fpu_out_h_now = 0;
                     try {
                         c.device->read_from_device(perf_buf.data(), c.translated, kPerfWindowStart, kPerfWindowSize);
                         have_perf = true;
                     } catch (const std::exception&) {
                     }
                     if (have_perf) {
-                        uint32_t wl = 0, wh = 0;
-                        std::memcpy(&wl, perf_buf.data() + kOffWallL, sizeof(wl));
-                        std::memcpy(&wh, perf_buf.data() + kOffWallH, sizeof(wh));
-                        wall_now = (static_cast<uint64_t>(wh) << 32) | wl;
+                        std::memcpy(&fpu_out_l_now, perf_buf.data() + kOffFpuOutL, sizeof(fpu_out_l_now));
                         std::memcpy(&fpu_out_h_now, perf_buf.data() + kOffFpuOutH, sizeof(fpu_out_h_now));
                     }
 
@@ -479,27 +502,15 @@ int main(int argc, char* argv[]) {
                             c.last_dispatched = now_bit;
                         }
                         if (have_perf) {
-                            if (c.perf_primed) {
-                                const uint64_t wall_d = wall_now - c.last_wall_clock;
-                                // FPU_OUT_H is a 32-bit counter. Compute the
-                                // delta via 32-bit arithmetic (handles a single
-                                // wrap naturally) then sanity-check against wall
-                                // delta. If fpu_d > wall_d we must be seeing a
-                                // kernel-side reset (StartPerfCounters) or a
-                                // multi-wrap skip; drop that tick and keep old
-                                // EWMA (which will decay as we collect valid
-                                // samples).
-                                const uint64_t fpu_d = static_cast<uint64_t>(fpu_out_h_now - c.last_fpu_out_h);
-                                const bool wall_ok = wall_d > 0 && wall_d < (1ull << 40);
-                                if (wall_ok && fpu_d <= wall_d) {
-                                    const double inst = static_cast<double>(fpu_d) / static_cast<double>(wall_d);
-                                    c.compute_busy_ewma =
-                                        kComputeEwmaAlpha * inst + (1.0 - kComputeEwmaAlpha) * c.compute_busy_ewma;
-                                }
+                            // Require enough ref cycles to avoid dividing by a
+                            // just-reset counter. 10k cycles ≈ 10 µs at 1 GHz.
+                            if (fpu_out_l_now > 10000u && fpu_out_h_now <= fpu_out_l_now) {
+                                const double inst =
+                                    static_cast<double>(fpu_out_h_now) / static_cast<double>(fpu_out_l_now);
+                                c.compute_busy_ewma =
+                                    kComputeEwmaAlpha * inst + (1.0 - kComputeEwmaAlpha) * c.compute_busy_ewma;
                             }
-                            c.last_wall_clock = wall_now;
-                            c.last_fpu_out_h = fpu_out_h_now;
-                            c.perf_primed = true;
+                            c.last_fpu_out_l = fpu_out_l_now;
                         }
                     }
                 }
