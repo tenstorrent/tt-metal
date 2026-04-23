@@ -120,13 +120,9 @@ class BgeM3Model(LightweightModule):
         attention_mask: ttnn.Tensor | None,
     ) -> ttnn.Tensor | None:
         """
-        Normalize mask to additive [B, 1, 1, S] with {0.0, -100000.0}.
-
-        Always returns an additive mask tensor (an all-zeros additive mask is a no-op for
-        SDPA). The previous "no-op early return" used a device->host sync (``.item()``)
-        which both stalls the pipeline and breaks ``ttnn.begin_trace_capture`` because it
-        records control flow based on tensor data. Removing it keeps the forward pass
-        trace-safe with no numerical change.
+        Return additive [B, 1, 1, S] with ``{0.0, -100000.0}`` (all-zero additive mask is a
+        no-op for SDPA). We avoid a host sync / ``.item()`` early return so the path stays
+        trace-safe (``ttnn.begin_trace_capture``) with unchanged numerics.
         """
         self._require_rank2(input_ids, "input_ids")
         seq_len = input_ids.shape[1]

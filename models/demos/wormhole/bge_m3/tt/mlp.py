@@ -111,8 +111,7 @@ class BgeM3MLP(LightweightModule):
         batch_size, _, seq_len, _ = hidden_states.shape
         core_grid = bge_m3_matmul_core_grid(self.config.mesh_device, int(seq_len), int(batch_size))
 
-        # Fused Wi + GELU in the matmul kernel (bias + activation) removes a standalone Unary GELU pass
-        # and the extra intermediate buffer vs wi -> gelu -> wo.
+        # ``activation="gelu"`` fuses GELU into the Wi matmul (no separate unary GELU or extra buffer).
         activated = ttnn.linear(
             hidden_states,
             self.wi_weight,
@@ -149,7 +148,6 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
 
     to_set: dict[str, object] = {}
 
-    # Default numerics and memory for bring-up.
     if config.wi_dtype is None:
         to_set["wi_dtype"] = ttnn.bfloat16
     if config.wo_dtype is None:
@@ -253,7 +251,7 @@ def _load_input_device_tensor(x: ttnn.Tensor | LazyWeight, config: BgeM3MLPConfi
             x,
             device=config.wi_weight.device,
             memory_config=mem_cfg,
-            mesh_mapper_config=None,  # replicated
+            mesh_mapper_config=None,
             layout=ttnn.TILE_LAYOUT,
         )
         return resolved_x.get_device_weight()

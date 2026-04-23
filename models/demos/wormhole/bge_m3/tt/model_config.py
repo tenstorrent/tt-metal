@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-
 import os
 
 from ttnn.device import is_blackhole as ttnn_is_blackhole
@@ -12,12 +11,9 @@ import ttnn
 
 class ModelArgs:
     """
-    BGE-M3 TTv2 model loading contract.
+    BGE-M3 model loading contract (HF checkpoint, tokenizer, and tensor layout).
 
-    Canonical flow:
-        args = ModelArgsTTv2(...)
-        state_dict = args.load_state_dict()
-        model = args.load_model(state_dict=state_dict)
+    Typical usage passes this object into the TT encoder after ``load_state_dict``.
     """
 
     def __init__(
