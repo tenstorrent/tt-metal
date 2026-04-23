@@ -151,7 +151,8 @@ void kernel_main() {
     uint64_t mcast_sem_noc_addr = 0;
     uint32_t sender_wait_count = 1;
 
-    if constexpr (!is_causal) {
+#if defined(SDPA_KV_CHAIN_ENABLED)
+    {
         is_chain_participant = get_arg_val<uint32_t>(argidx++);
         is_injector = get_arg_val<uint32_t>(argidx++);
         is_sink = get_arg_val<uint32_t>(argidx++);
@@ -198,6 +199,7 @@ void kernel_main() {
             }
         }
     }
+#endif
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
     // valid_Skt_bound = min(offset_tiles + valid_Sqt, valid_Skt); cap at valid_Skt for callers that pass
@@ -452,19 +454,26 @@ void kernel_main() {
                     // per-head slot count rather than the whole-range _gq.
                     bool should_forward = false;
                     bool should_receive = false;
-                    if constexpr (!is_causal) {
-                        should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
-                                         (q_iter_local < next_core_q_chunks);
-                        should_receive =
-                            is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
-                    }
+#if defined(SDPA_KV_CHAIN_ENABLED)
+                    should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
+                                     (q_iter_local < next_core_q_chunks);
+                    should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+#endif
 
                     // loop while k_low < q_high. Ring proxy UP caps K loop at k_num_chunks/2 to
                     // mirror the ring_joint non-diag iter that sees only half of K per Q.
+                    // Under SDPA_KV_CHAIN_ENABLED, chain cores loop the full k_num_chunks regardless
+                    // of Q position so injector + receivers walk matching K ranges — lightweight_causal
+                    // mask zeroes out the extra columns past q_high_idx.
 #if defined(SDPA_RING_PROXY_UP)
                     const uint32_t k_chunk_end = k_num_chunks / 2;
 #else
+#if defined(SDPA_KV_CHAIN_ENABLED)
+                    const uint32_t k_chunk_end =
+                        is_chain_participant ? k_num_chunks : ((q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t);
+#else
                     const uint32_t k_chunk_end = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
+#endif
 #endif
                     for (uint32_t k_chunk = 0; k_chunk < k_chunk_end; ++k_chunk) {
                         const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);

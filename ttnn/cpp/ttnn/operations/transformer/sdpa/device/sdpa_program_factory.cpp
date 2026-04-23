@@ -474,6 +474,13 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     const bool lightweight_causal = is_causal && !use_provided_mask && sliding_window_size.value_or(0) == 0;
     const bool lightweight_mask = (use_streaming_compute && use_padded_mask) || lightweight_causal;
+
+    // KV chain forwarding is active for non-causal SDPA, and for the flat-work causal path when
+    // the lightweight causal mask is in use.  Chain participants over-read K past each Q's
+    // logical q_high; the lightweight causal mask zeroes those softmax columns, keeping output
+    // correct.  Without lightweight_causal we have no mechanism to kill the phantom columns, so
+    // stay on the per-Q truncated-K (no-chain) path.  See RingSDPA_SingleChip_CausalChain_Plan.md.
+    const bool chain_enabled = !is_chunked && (!is_causal || (flatten_work && lightweight_causal));
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
@@ -606,13 +613,13 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // chunk_start_idx_args.next_compile_time_args_offset()).
     reader_compile_time_args.push_back(static_cast<uint32_t>(flat_zigzag));
 
-    // Create semaphores for KV chain forwarding BEFORE kernel compilation (non-causal only)
+    // Create semaphores for KV chain forwarding BEFORE kernel compilation (when chain_enabled)
     // This must happen before CreateKernel so the actual semaphore IDs are in the compile-time args
     uint32_t sender_semaphore_id = 0;
     uint32_t receiver_semaphore_id = 0;
     uint32_t valid_semaphore_id = 0;
 
-    if (!is_causal) {
+    if (chain_enabled) {
         sender_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
         receiver_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
         valid_semaphore_id = CreateSemaphore(program, core_grid, VALID);
@@ -723,6 +730,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         defines["SDPA_RING_PROXY_UP"] = "1";
     } else if (is_proxy_down) {
         defines["SDPA_RING_PROXY_DOWN"] = "1";
+    }
+    if (chain_enabled) {
+        defines["SDPA_KV_CHAIN_ENABLED"] = "1";
     }
 
     log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
@@ -908,7 +918,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     std::vector<std::vector<HeadSegmentRef>> head_segments;
     uint32_t mcast_chains = 0;
 
-    if (!is_causal && !is_chunked) {
+    if (chain_enabled) {
         head_segments.resize(total_heads);
 
         // DOWN proxy maps only the heavy Q half; decompose against the effective size so that
@@ -1537,8 +1547,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             global_q_count,
         };
 
-        // Add chain metadata for non-causal case
-        if (!is_causal) {
+        // Add chain metadata when chain forwarding is enabled (non-causal, or flat-work causal)
+        if (chain_enabled) {
             reader_args.push_back(static_cast<uint32_t>(chain.participates));
             reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
             reader_args.push_back(static_cast<uint32_t>(chain.is_sink));
@@ -1589,7 +1599,11 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
              static_cast<uint32_t>(flexible_chunked ? 1 : 0),
              chunked_q_chunk_offset,
              global_q_start,
-             global_q_count});
+             global_q_count,
+             // is_chain_participant — only meaningful under SDPA_KV_CHAIN_ENABLED (else ignored).
+             // Chain cores must loop the full k_num_chunks to stay in sync with reader/writer, which
+             // over-read K under causal + chain; lightweight_causal_mask zeroes out the extra columns.
+             static_cast<uint32_t>(chain_enabled ? chain.participates : 0u)});
     }
 
     return cached_program_t{

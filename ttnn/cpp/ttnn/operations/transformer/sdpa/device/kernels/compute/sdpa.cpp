@@ -72,6 +72,11 @@ void kernel_main() {
     const uint32_t global_q_count = get_arg_val<uint32_t>(11);
 #endif
 
+    // is_chain_participant — runtime arg appended by the program factory for every core
+    // (value is host-gated: chain_enabled ? chain.participates : 0).  Only consulted by
+    // sdpa_inner_loop when SDPA_KV_CHAIN_ENABLED is defined; on non-chain builds it's ignored.
+    const uint32_t is_chain_participant = get_arg_val<uint32_t>(12);
+
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
@@ -240,7 +245,8 @@ void kernel_main() {
                 cb_sum_B,
                 cb_exp_max_diff,
                 cb_out,
-                lw_mask);
+                lw_mask,
+                /*is_chain_participant=*/is_chain_participant != 0);
 #else
             for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
                 for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {

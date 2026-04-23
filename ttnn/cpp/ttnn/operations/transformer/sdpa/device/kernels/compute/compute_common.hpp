@@ -1727,7 +1727,8 @@ void sdpa_inner_loop(
     const bool is_causal = false,
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
-    const bool is_last_ring_iter = true) {
+    const bool is_last_ring_iter = true,
+    const bool is_chain_participant = false) {
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
@@ -1805,8 +1806,16 @@ void sdpa_inner_loop(
             // iter_k_chunk_end == k_num_chunks, so iter_k_chunk_end / 2 == k_num_chunks / 2.
             k_chunk_end = iter_k_chunk_end / 2;
 #else
+#if defined(SDPA_KV_CHAIN_ENABLED)
+            // Chain participants loop the full k_num_chunks (iter_k_chunk_end) so reader + writer
+            // + compute stay in sync with the chain's K forwarding; lightweight_causal_mask zeroes
+            // out softmax contributions past each Q's true q_high.  Alone cores (not chain
+            // participants) keep the per-Q truncated K loop.
+            k_chunk_end = is_chain_participant ? iter_k_chunk_end : ((q_high_tile + Sk_chunk_t - 1) / Sk_chunk_t);
+#else
             // loop while k_low < q_high => (k_chunk * Sk_chunk_t) < q_high_tile.
             k_chunk_end = (q_high_tile + Sk_chunk_t - 1) / Sk_chunk_t;
+#endif
 #endif
         } else {  // RING or JOINT.
             k_chunk_end = iter_k_chunk_end;
@@ -2215,7 +2224,8 @@ void sdpa_standard(
     const uint32_t cb_sum_B,
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_out,
-    const LightweightMaskContext& lw_mask = {}) {
+    const LightweightMaskContext& lw_mask = {},
+    const bool is_chain_participant = false) {
     sdpa_inner_loop<
         STANDARD,
         cb_qk_im,
@@ -2290,7 +2300,11 @@ void sdpa_standard(
         0,  // cb_prev_out (not used)
         cb_out,
         lw_mask,
-        is_causal);
+        is_causal,
+        /*is_balanced=*/false,
+        /*use_zigzag_balancing=*/false,
+        /*is_last_ring_iter=*/true,
+        is_chain_participant);
 }
 
 /**
