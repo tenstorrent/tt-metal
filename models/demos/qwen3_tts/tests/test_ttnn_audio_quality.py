@@ -26,8 +26,7 @@ import torch
 # Helpers
 # ---------------------------------------------------------------------------
 
-# REF_AUDIO = "/tmp/jim_audio.wav"
-REF_AUDIO = "/home/ubuntu/tt-ign/tt-metal/models/demos/qwen3_tts/demo/jim_reference.wav"
+REF_AUDIO = "/tmp/jim_audio.wav"
 REF_TEXT = "Jason, can you put up the high level overview slides"
 # Text must be long enough that text_lens > codec_lens (~49 for 4s ref at 12Hz).
 # The combined ref_text + target_text tokenizes to ~58 tokens (> 49), ensuring
