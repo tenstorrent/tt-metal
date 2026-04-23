@@ -86,7 +86,11 @@ namespace ckernel { namespace sfpu {
 // Optional — only if LUT/constant pre-loading is needed (e.g., gelu)
 inline void _init_{op}_();
 
-// Inner row processor: processes SFP_ROWS rows via TTI_SFPLOAD / ops / TTI_SFPSTORE
+// Inner row processor — ONLY include when the per-row body is ≥2 instructions.
+// Typical body: TTI_SFPLOAD → one or more compute ops → TTI_SFPSTORE.
+// If the loop body is a single TTI_ call (e.g., a pure SFPSTORE with no preceding
+// SFPLOAD), omit this wrapper and inline the instruction directly in the loop.
+// A one-line wrapper is never justified — the writer playbook forbids it.
 [template <...>]
 inline void _calculate_{op}_sfp_rows_([runtime_args]);
 
@@ -95,7 +99,7 @@ inline void _calculate_{op}_sfp_rows_([runtime_args]);
 inline void _calculate_{op}_(const int iterations [, runtime_args]) {
     #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++) {
-        _calculate_{op}_sfp_rows_(...);
+        _calculate_{op}_sfp_rows_(...);   // or inline single instruction here
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>();
     }
 }
@@ -104,7 +108,8 @@ inline void _calculate_{op}_(const int iterations [, runtime_args]) {
 ```
 
 Record the universal conventions:
-- **NO SFPI.** Quasar does **not** use the SFPI C++ DSL. Do not use `sfpi::vFloat`, `sfpi::vUInt`, `sfpi::vInt`, `sfpi::dst_reg[...]`, `sfpi::l_reg[...]`, `v_if` / `v_elseif` / `v_endif`, `v_and`, `lut` / `lut2` / `lut2_sign`, `sfpi::sFloat16b`, or any `#include "sfpi.h"`. These are Blackhole-only. Quasar kernels are written in **raw `TTI_` / `TT_` macros** operating on `p_sfpu::LREG*` / `p_sfpu::LCONST_*` symbols directly. If the reference uses SFPI, treat every SFPI construct as a semantic description to translate, not code to copy.
+- **NO SFPI DSL.** Quasar does **not** use the SFPI C++ DSL types. Do not use `sfpi::vFloat`, `sfpi::vUInt`, `sfpi::vInt`, `sfpi::dst_reg[...]`, `sfpi::l_reg[...]`, `v_if` / `v_elseif` / `v_endif`, `v_and`, `lut` / `lut2` / `lut2_sign`, `sfpi::sFloat16b`. These are Blackhole-only DSL constructs. Quasar kernels are written in **raw `TTI_` / `TT_` macros** operating on `p_sfpu::LREG*` / `p_sfpu::LCONST_*` symbols directly. If the reference uses SFPI, treat every SFPI construct as a semantic description to translate, not code to copy.
+  **Exception — `sfpi::SFPLOADI_MOD0_*` constants ARE available on Quasar**: `sfpi_constants.h` (in `namespace sfpi`) is always reachable via `ckernel_sfpu.h` → `sfpi.h` → `sfpi_constants.h`. The writer MUST use these named constants for `TTI_SFPLOADI` / `TT_SFPLOADI` mode operands — never raw hex. "No SFPI on Quasar" means no C++ DSL types, not no sfpi-namespace constants.
 - Includes: `ckernel_trisc_common.h`, `cmath_common.h`, optional `ckernel_ops.h`; sibling kernels for composition (e.g., silu includes `ckernel_sfpu_sigmoid.h`). **Never** `#include "sfpi.h"`.
 - Namespace: `namespace ckernel { namespace sfpu { ... } }` (Blackhole uses `ckernel::sfpu` — do **not** copy that form).
 - Address mode: `ADDR_MOD_7`, pre-configured by `_eltwise_unary_sfpu_configure_addrmod_()`. Never invent a new addrmod.
@@ -273,7 +278,13 @@ If you cannot translate a specific SFPI construct with an entry in this table, f
 // Optional — include only if LUT/constant pre-loading is needed
 inline void _init_{op}_();
 
-// Inner row processor
+// Inner row processor — ONLY include when the per-row body is ≥2 instructions
+// (the typical case: SFPLOAD → compute → SFPSTORE).
+// If the entire per-row body is a single TTI_ call, omit this helper and inline
+// that instruction directly in the outer loop. The writer's "no single-instruction
+// wrappers" rule takes precedence — do NOT spec a _sfp_rows_ function whose body
+// would be one instruction. Explicitly state in §6a whether the wrapper is needed
+// and why.
 [template <...>]
 inline void _calculate_{op}_sfp_rows_([runtime_args]);
 
@@ -375,6 +386,7 @@ Copy the infrastructure rules that gate test combinations:
 - Float32 → Float16 on Quasar requires `dest_acc=Yes`.
 - Non-Float32 → Float32 on Quasar requires `dest_acc=Yes`.
 - Integer and float formats cannot be mixed in input→output.
+- **SFPU tests use `unpack_to_dest=True` — exclude mixed-bitwidth `dest_acc` combinations.** Non-32-bit formats must pair with `dest_acc=No`; 32-bit formats must pair with `dest_acc=Yes`. The combinations (non-32-bit + `dest_acc=Yes`) and (32-bit + `dest_acc=No`) require the FPU/datacopy path and must not appear in the **Recommended Test Formats** section of the analysis. The tester enforces this via the `_is_invalid_quasar_combination` filter.
 - Any operation-specific constraints you identified.
 
 ---

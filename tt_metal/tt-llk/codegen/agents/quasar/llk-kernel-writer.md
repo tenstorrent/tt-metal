@@ -360,7 +360,7 @@ These rules apply across all kernel types:
    TTI_UNPACR(SrcA, 0, 0, 0, 0, p_unpacr::RAREFYB_DISABLE, 0, p_unpacr::UNP_ZEROSRC_SET_DVALID, 0, 0);
    ```
 
-3. **SFPLOADI: Use named constants, NEVER magic numbers**: The `TTI_SFPLOADI` / `TT_SFPLOADI` mode parameter (second argument) MUST use `sfpi::SFPLOADI_MOD0_*` named constants, never raw integers. These constants are available on ALL architectures (Quasar, Blackhole, Wormhole) — even though Quasar does not have the full sfpi C++ wrapper (no `sfpi::vFloat`, no `sfpi::dst_reg`), it DOES have the `sfpi::SFPLOADI_MOD0_*` constants.
+3. **SFPLOADI: Use named constants, NEVER magic numbers**: The `TTI_SFPLOADI` / `TT_SFPLOADI` mode parameter (second argument) MUST use `sfpi::SFPLOADI_MOD0_*` named constants, never raw integers. These constants are defined in `tests/sfpi/include/sfpi_constants.h` (inside `namespace sfpi`) which is always on the include path, and are pulled into every kernel translation unit via `ckernel_sfpu.h` → `sfpi.h` → `sfpi_constants.h`.
    ```cpp
    // WRONG: magic numbers
    TTI_SFPLOADI(p_sfpu::LREG1, 0, (value >> 16));
@@ -376,7 +376,7 @@ These rules apply across all kernel types:
    ```
    Available constants: `SFPLOADI_MOD0_FLOATB` (0), `SFPLOADI_MOD0_FLOATA` (1), `SFPLOADI_MOD0_USHORT` (2), `SFPLOADI_MOD0_SHORT` (4), `SFPLOADI_MOD0_UPPER` (8), `SFPLOADI_MOD0_LOWER` (10).
 
-   **If the arch research says "Quasar doesn't have sfpi", that refers to the sfpi C++ wrapper types — NOT these constants. Use them anyway.**
+   **The "no SFPI on Quasar" rule refers to the C++ DSL types only** (`sfpi::vFloat`, `sfpi::dst_reg`, `v_if`, `lut2`, etc.) — NOT the `sfpi::SFPLOADI_MOD0_*` mode constants. If a tester or refiner agent claims these constants are unavailable on Quasar and proposes replacing them with raw hex, that diagnosis is wrong — reject it and re-examine the actual compile error.
 
 4. **Namespace and includes**: already set by the scaffold from `kernel_template.py`. Do not modify.
 

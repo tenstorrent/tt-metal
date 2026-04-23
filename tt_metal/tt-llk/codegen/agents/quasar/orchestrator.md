@@ -845,7 +845,10 @@ patch = {
     "formats_tested": json.loads(os.environ.get("FORMATS_TESTED_JSON", "[]")),
     "formats_excluded": json.loads(os.environ.get("FORMATS_EXCLUDED_JSON", "{}")),
     "obstacle": os.environ.get("OBSTACLE") or None,
-    "agents": json.loads(os.environ["AGENTS_JSON"]),
+    # Derive agents from steps_completed in run.json — AGENTS_JSON env var is unreliable
+    # across Bash tool calls (each call runs in a fresh shell, so exported vars reset).
+    # steps_completed is written atomically by run_json_writer.py and is always current.
+    "agents": json.loads(open(os.environ["LOG_DIR"] + "/run.json").read()).get("steps_completed", []),
     "tokens": json.loads(os.environ.get("TOKENS_JSON", "{\"input\":0,\"output\":0,\"cache_read\":0,\"cache_creation\":0,\"total\":0}")),
     "refinement_count": int(os.environ.get("REFINEMENT_COUNT", "0")),
     "cycles_attempted": int(os.environ.get("CYCLE", "1")),

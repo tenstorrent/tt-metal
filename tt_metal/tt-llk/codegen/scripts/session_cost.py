@@ -133,6 +133,20 @@ def _discover_session(preferred_pid: str | None) -> tuple[str, Path, Path] | Non
                 jsonl, subs = _build_paths(sid, cwd)
                 return sid, jsonl, subs
 
+    # PID matching fails when the bash Bash-tool shell's PPID doesn't match the
+    # claude CLI PID stored in the session file.  Fall back to CWD matching:
+    # prefer the most recently started session whose cwd equals the current
+    # working directory.  This correctly disambiguates concurrent sessions for
+    # different projects.
+    current_cwd = os.getcwd()
+    cwd_matches = [c for c in candidates if c[2] == current_cwd]
+    if cwd_matches:
+        cwd_matches.sort(key=lambda x: x[0], reverse=True)
+        _, sid, cwd, _ = cwd_matches[0]
+        jsonl, subs = _build_paths(sid, cwd)
+        return sid, jsonl, subs
+
+    # Last resort: most recently started session across all projects.
     if candidates:
         candidates.sort(key=lambda x: x[0], reverse=True)
         _, sid, cwd, _ = candidates[0]
