@@ -12,7 +12,7 @@ from models.common.utility_functions import torch_random, run_for_wormhole_b0
 
 def assert_quality(expected_tensor, actual_tensor):
     # fill_implicit_tile_padding is bit-exact for integer dtypes and deterministic for float paths.
-    # For float outputs we use tight ULP checks (with nonfinite support); for integers we require exact equality.
+    # For float outputs we use tight ULP checks (with nonfinite support); for integers we require equality.
     if actual_tensor.dtype == torch.float32 or actual_tensor.dtype == torch.bfloat16:
         assert_with_ulp(expected_tensor, actual_tensor, ulp_threshold=1, allow_nonfinite=True)
     else:
