@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,14 +58,14 @@ void kernel_main() {
     constexpr uint32_t cb_bot_mask_idx = get_compile_time_arg_val(8);
     constexpr uint32_t cb_data_out_idx = get_compile_time_arg_val(9);
 
-    // Per-phase strides (meaningful only when the corresponding phase is active).
+    // Per-phase slice strides (meaningful only when the corresponding phase is active).
     // Clamped to >= 1 so the compiler does not see a constexpr divide-by-zero in
     // the dead-code branches (when H_tiles==1 or W_tiles==1 the host sets the
     // matching num_* to 0 and the loop below never executes).
-    constexpr uint32_t R =
-        (has_right_pad != 0u) ? ((has_bottom_pad != 0u) ? ((H_tiles > 1u) ? (H_tiles - 1u) : 1u) : H_tiles) : 1u;
-    constexpr uint32_t C =
-        (has_bottom_pad != 0u) ? ((has_right_pad != 0u) ? ((W_tiles > 1u) ? (W_tiles - 1u) : 1u) : W_tiles) : 1u;
+    constexpr uint32_t right_slice_stride =
+        has_right_pad ? (has_bottom_pad ? ((H_tiles > 1u) ? (H_tiles - 1u) : 1u) : H_tiles) : 1u;
+    constexpr uint32_t bottom_slice_stride =
+        has_bottom_pad ? (has_right_pad ? ((W_tiles > 1u) ? (W_tiles - 1u) : 1u) : W_tiles) : 1u;
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_data_out_idx);
 
@@ -87,52 +87,56 @@ void kernel_main() {
 
     // ---- Phase 1: generate and push mask tile(s) ----
     using mask_t = MASK_ELEM_UINT;
+    constexpr uint32_t TILE = 32;
     if constexpr (has_right_pad) {
-        cb_right_mask.reserve_back(1);
-        generate_mask_tile<mask_t, W_mod32, TILE>(
-            reinterpret_cast<mask_t*>(cb_right_mask.get_write_ptr()), static_cast<mask_t>(MASK_VALUE));
-        cb_right_mask.push_back(1);
+        push_right_mask_tile<mask_t, W_mod32, TILE>(cb_right_mask, static_cast<mask_t>(MASK_VALUE));
     }
     if constexpr (has_bottom_pad) {
-        cb_bot_mask.reserve_back(1);
-        generate_mask_tile<mask_t, TILE, H_mod32>(
-            reinterpret_cast<mask_t*>(cb_bot_mask.get_write_ptr()), static_cast<mask_t>(MASK_VALUE));
-        cb_bot_mask.push_back(1);
+        push_bottom_mask_tile<mask_t, H_mod32, TILE>(cb_bot_mask, static_cast<mask_t>(MASK_VALUE));
     }
 
     // ---- Phase 2: write-back loop ----
     // Tiles arrive in the same order as the reader pushes them (right, bottom, corner).
 
-    // Right phase
-    if constexpr (has_right_pad != 0u) {
+    // Right phase. Maintain (slice, row) incrementally instead of dividing every iteration
+    // — RV32IM division is slow. Startup division runs at most once per kernel invocation.
+    if constexpr (has_right_pad) {
+        uint32_t slice = num_right ? start_right / right_slice_stride : 0u;
+        uint32_t row = num_right ? start_right - slice * right_slice_stride : 0u;
         for (uint32_t i = 0; i < num_right; ++i) {
-            const uint32_t g = start_right + i;
-            const uint32_t slice = g / R;
-            const uint32_t row = g - slice * R;
             const uint32_t tile_id = slice * H_tiles * W_tiles + row * W_tiles + (W_tiles - 1u);
             cb_data_out.wait_front(1);
             noc.async_write(cb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
             noc.async_writes_flushed();
             cb_data_out.pop_front(1);
+            ++row;
+            if (row == right_slice_stride) {
+                row = 0;
+                ++slice;
+            }
         }
     }
 
-    // Bottom phase
-    if constexpr (has_bottom_pad != 0u) {
+    // Bottom phase. Same incremental pattern as the right phase.
+    if constexpr (has_bottom_pad) {
+        uint32_t slice = num_bottom ? start_bottom / bottom_slice_stride : 0u;
+        uint32_t col = num_bottom ? start_bottom - slice * bottom_slice_stride : 0u;
         for (uint32_t j = 0; j < num_bottom; ++j) {
-            const uint32_t g = start_bottom + j;
-            const uint32_t slice = g / C;
-            const uint32_t col = g - slice * C;
             const uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + col;
             cb_data_out.wait_front(1);
             noc.async_write(cb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
             noc.async_writes_flushed();
             cb_data_out.pop_front(1);
+            ++col;
+            if (col == bottom_slice_stride) {
+                col = 0;
+                ++slice;
+            }
         }
     }
 
     // Corner phase
-    if constexpr (has_right_pad != 0u && has_bottom_pad != 0u) {
+    if constexpr (has_right_pad && has_bottom_pad) {
         for (uint32_t k = 0; k < num_corner; ++k) {
             const uint32_t slice = start_corner + k;
             const uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + (W_tiles - 1u);
