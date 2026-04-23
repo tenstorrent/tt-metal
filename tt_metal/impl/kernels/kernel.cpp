@@ -971,8 +971,7 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device, const std::string&
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     if (config_.is_legacy_kernel) {
-        for (std::size_t i = 0; i < this->dm_processors_.size(); ++i) {
-            const DataMovementProcessor& processor = this->dm_processors_[i];
+        for (const auto processor : this->dm_processors_) {
             const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(processor);
             auto load_type =
                 MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id)
@@ -1070,8 +1069,7 @@ void QuasarComputeKernel::read_binaries(IDevice* device, const std::string& bina
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    for (std::size_t i = 0; i < this->compute_processors_.size(); ++i) {
-        const QuasarComputeProcessor& processor = this->compute_processors_[i];
+    for (const auto processor : this->compute_processors_) {
         const int trisc_id = static_cast<std::underlying_type_t<QuasarComputeProcessor>>(processor);
         auto load_type = MetalContext::instance()
                              .hal()
