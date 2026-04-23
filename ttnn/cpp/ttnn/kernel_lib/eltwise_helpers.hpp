@@ -226,8 +226,9 @@ ALWI void chain_pop_b_upfront(const SfpuChain<First, Rest...>& chain, EltwiseTil
 // =============================================================================
 
 enum class DestReuseInputPolicy {
-    WaitAndPop,  // standalone: wait 1, binary_dest_reuse, pop 1 per tile
-    NoWaitPop,   // paired with Load<WaitNoPop>: no wait, binary_dest_reuse, pop 1 per tile
+    WaitAndPop,   // standalone: wait 1, binary_dest_reuse, pop 1 per tile
+    NoWaitPop,    // paired with Load<WaitNoPop>: no wait, binary_dest_reuse, pop 1 per tile
+    NoWaitNoPop,  // broadcast: tile pre-waited externally, no wait, no pop (external pop)
 };
 
 /**
@@ -274,7 +275,9 @@ struct DestReuseOp {
         }
         binary_dest_reuse_tiles_init<BinOp, ReuseType>(Cb);
         binary_dest_reuse_tiles<BinOp, ReuseType>(Cb, 0, dst_idx);
-        cb_pop_front(Cb, 1);
+        if constexpr (Policy != DestReuseInputPolicy::NoWaitNoPop) {
+            cb_pop_front(Cb, 1);
+        }
     }
 };
 
