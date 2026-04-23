@@ -980,6 +980,16 @@ def test_ring_joint_attention_create_perf_table(model_name):
     if ring_size < 2:
         pytest.skip(f"Ring joint attention requires at least 2 devices, got {ring_size}")
 
+    # TT_METAL_RING_ITER_ONLY: env-var measurement hook.
+    # - Unset: full production run (all ring iters + AllGather); math util is full-ring.
+    # - Set to N: only ring iter N executes, AllGather is skipped; math util is per-iter.
+    # The env var is inherited by the subprocess launched via run_device_profiler.
+    ring_iter_only_env = os.environ.get("TT_METAL_RING_ITER_ONLY")
+    ring_iter_only_enabled = ring_iter_only_env is not None
+    target_ring_iter = int(ring_iter_only_env) if ring_iter_only_enabled else None
+    if ring_iter_only_enabled and (target_ring_iter < 0 or target_ring_iter >= ring_size):
+        pytest.fail(f"TT_METAL_RING_ITER_ONLY={target_ring_iter} is out of range for ring_size={ring_size}")
+
     # Generate test configs for this model
     test_configs, test_config_ids = generate_test_configs(mesh_config, model_configs)
     sweep_configs = [
@@ -1082,12 +1092,31 @@ def test_ring_joint_attention_create_perf_table(model_name):
             wasted_q_slots = max(0, total_q_slots - local_q_num_chunks)
             slot_waste_pct = (wasted_q_slots / total_q_slots) * 100 if total_q_slots > 0 else 0
 
-            # Math utilization
+            # Math utilization — formula depends on TT_METAL_RING_ITER_ONLY.
+            # Unset: full-ring workload (local_Q × global_K, causal if is_causal).
+            # Set to iter 0: local_Q × local_K/V with causal mask (when is_causal).
+            # Set to iter > 0: local_Q × local_K/V, never causal. Balanced+causal halves work per
+            #   device (ring rotates K/V, and receiver skips half the chunks for load balance).
             effective_cores = measured_core_count - measured_core_count % 10
             heads_per_device = local_nhq
-            utilization = compute_ring_joint_utilization(
-                local_seq_len, s, d_q, d_v, heads_per_device, duration_ns, effective_cores, is_causal
-            )
+            if not ring_iter_only_enabled:
+                utilization = compute_ring_joint_utilization(
+                    local_seq_len, s, d_q, d_v, heads_per_device, duration_ns, effective_cores, is_causal
+                )
+            else:
+                iter_is_causal = is_causal if target_ring_iter == 0 else False
+                utilization = compute_ring_joint_utilization(
+                    local_seq_len,
+                    local_seq_len,
+                    d_q,
+                    d_v,
+                    heads_per_device,
+                    duration_ns,
+                    effective_cores,
+                    iter_is_causal,
+                )
+                if target_ring_iter > 0 and is_causal and is_balanced:
+                    utilization /= 2  # balanced iter > 0 does half the work
 
             ring_efficiency = (cores_used * 100.0) / total_cores
 
@@ -1136,16 +1165,35 @@ def test_ring_joint_attention_create_perf_table(model_name):
     valid_results = [r for r in perf_results if r["duration_ns"] is not None]
     valid_results.sort(key=lambda x: x["duration_ns"])
 
-    mm_flops = compute_sdpa_flops(s, s, d_q, d_v, nhq, is_causal)
+    # MM FLOPs + header: branch on measurement mode.
+    if not ring_iter_only_enabled:
+        # Production: per-device local_Q × global_K/V, summed across ring devices.
+        mm_flops = compute_sdpa_flops(s, s, d_q, d_v, nhq, is_causal)
+        mode_label = "FULL RING"
+        flops_label = "all devices"
+        workload_q = f"{s // ring_size}"
+        workload_kv = f"{s}"
+        workload_extra = " (via ring)"
+    else:
+        iter_is_causal = is_causal if target_ring_iter == 0 else False
+        per_device_iter_flops = compute_sdpa_flops(local_seq_len, local_seq_len, d_q, d_v, local_nhq, iter_is_causal)
+        if target_ring_iter > 0 and is_causal and is_balanced:
+            per_device_iter_flops //= 2
+        mm_flops = per_device_iter_flops * ring_size
+        mode_label = f"RING_ITER={target_ring_iter} ONLY"
+        flops_label = f"all devices, iter-{target_ring_iter} only"
+        workload_q = f"{s // ring_size}"
+        workload_kv = f"{s // ring_size}"
+        workload_extra = f" (local only, causal={iter_is_causal})"
 
     # Print summary table
     print(f"\n{'='*190}")
     print(
-        f"Ring Joint Attention Performance Sweep ({model_name.upper()}): b={b}, nh={nhq} (global), s={s}, d_q={d_q}, d_v={d_v}, causal={is_causal}"
+        f"Ring Joint Attention Performance Sweep ({model_name.upper()}) [{mode_label}]: b={b}, nh={nhq} (global), s={s}, d_q={d_q}, d_v={d_v}, causal={is_causal}"
     )
     print(f"Architecture: {mesh_config.arch_type}, Ring size: {ring_size} devices, TP size: {mesh_config.tp_size}")
-    print(f"Total MM FLOPs (all devices): {mm_flops:,} ({mm_flops/1e9:.2f} GFLOPs)")
-    print(f"Per-device workload: Q={s // ring_size} tokens, K/V={s} tokens (via ring), {local_nhq} heads")
+    print(f"Total MM FLOPs ({flops_label}): {mm_flops:,} ({mm_flops/1e9:.2f} GFLOPs)")
+    print(f"Per-device workload: Q={workload_q} tokens, K/V={workload_kv} tokens{workload_extra}, {local_nhq} heads")
     print(f"Core Allocation: {total_compute_cores} compute + {ccl_cores} CCL = {total_cores} total cores")
     print(f"{'='*190}")
     header = "| Rank | q_chunk | k_chunk | Duration (ms) | Compute Used | Compute Idle | Compute Util | CCL Cores | Ring Eff | Iters/Core | Pad Waste | Slot Waste | FPU Util (%)  | Math Util |"
