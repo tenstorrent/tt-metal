@@ -372,8 +372,6 @@ struct SfpuChain<> {
     static constexpr uint32_t stride = 1;
     ALWI void apply(uint32_t = 0) const {}
     ALWI void apply_no_load_init(uint32_t = 0) const {}
-    ALWI void apply_batched_with_stride(uint32_t, uint32_t, uint32_t) const {}
-    ALWI void apply_batched_with_stride_no_load_init(uint32_t, uint32_t, uint32_t) const {}
     ALWI void init_any_load() const {}
     ALWI void reset_tile_idx() const {}
     ALWI void wait_upfront(uint32_t) const {}
@@ -410,41 +408,6 @@ struct SfpuChain<First, Rest...> {
             first.apply(offset);
         }
         rest.apply_no_load_init(offset);
-    }
-
-    // Batched dispatch: run each op's init() once, then exec() iter_count times
-    // at offsets [base_dst, base_dst + chain_stride, base_dst + 2*chain_stride, ...).
-    // `chain_stride` is the OUTER chain's stride (max_dst + 1) — passed down
-    // explicitly so the recursion into `rest` doesn't shrink the stride as
-    // elements are peeled off. Public entry points below wrap this in the
-    // chain's own stride.
-    ALWI void apply_batched_with_stride(uint32_t base_dst, uint32_t iter_count, uint32_t chain_stride) const {
-        first.init();
-        for (uint32_t k = 0; k < iter_count; ++k) {
-            first.exec(base_dst + k * chain_stride);
-        }
-        rest.apply_batched_with_stride(base_dst, iter_count, chain_stride);
-    }
-
-    // Batched + hoist: skip init() on Load elements (hoisted before chunk loop),
-    // full init+exec×iter_count on everything else.
-    ALWI void apply_batched_with_stride_no_load_init(
-        uint32_t base_dst, uint32_t iter_count, uint32_t chain_stride) const {
-        if constexpr (!is_load_op_v<First>) {
-            first.init();
-        }
-        for (uint32_t k = 0; k < iter_count; ++k) {
-            first.exec(base_dst + k * chain_stride);
-        }
-        rest.apply_batched_with_stride_no_load_init(base_dst, iter_count, chain_stride);
-    }
-
-    // Public batching entry points — use the chain's own stride.
-    ALWI void apply_batched(uint32_t base_dst, uint32_t iter_count) const {
-        apply_batched_with_stride(base_dst, iter_count, stride);
-    }
-    ALWI void apply_batched_no_load_init(uint32_t base_dst, uint32_t iter_count) const {
-        apply_batched_with_stride_no_load_init(base_dst, iter_count, stride);
     }
 
     // Call init() on the first Load found (walking the chain). Used to perform
@@ -628,28 +591,6 @@ struct upfront_cb_info<T, std::void_t<decltype(T::is_upfront), decltype(T::cb)>>
     static constexpr uint32_t cb = T::cb;
 };
 
-// Batch-safe: can this CB-input op run K execs back-to-back within one
-// tile_regs_acquire window without reading the same tile twice?
-//
-// Only `WaitUpfrontPopAtEnd` qualifies. It pre-waits N tiles at the pipeline
-// boundary and exec() self-advances a local tile counter — so K execs read
-// K distinct tiles from a stable pre-waited block.
-//
-// `WaitAndPop` and `NoWaitPop` technically advance (each exec pops 1), but
-// they introduce complications when multiple chain elements read the same
-// CB (fan-in / shared-tile patterns): one exec's pop changes what the next
-// exec sees, and the per-exec wait/pop granularity makes reasoning about
-// paired WaitNoPop siblings fragile. We prefer explicit intent — callers
-// who want batching use WaitUpfrontPopAtEnd.
-//
-// `WaitNoPop` / `NoWaitNoPop` read the same tile every exec (fan-out intent)
-// and never batch.
-template <typename T, typename = void>
-struct cb_input_advances : std::true_type {};  // non-CB ops trivially advance
-
-template <typename T>
-struct cb_input_advances<T, std::void_t<decltype(T::is_upfront)>> : std::bool_constant<T::is_upfront> {};
-
 // Does any upfront CB-input element in Chain reference TargetCB?
 template <uint32_t TargetCB, typename Chain>
 struct chain_has_upfront_cb : std::false_type {};
@@ -683,27 +624,6 @@ struct chain_has_duplicate_upfront_cbs<SfpuChain<First, Rest...>>
 template <typename Chain>
 inline constexpr bool chain_has_duplicate_upfront_cbs_v =
     detail::chain_has_duplicate_upfront_cbs<std::remove_cv_t<std::remove_reference_t<Chain>>>::value;
-
-namespace detail {
-
-// All CB-input elements in Chain advance per exec (safe for batching).
-template <typename Chain>
-struct chain_all_advance : std::true_type {};
-template <typename... Ops>
-struct chain_all_advance<SfpuChain<Ops...>> : std::bool_constant<(cb_input_advances<Ops>::value && ...)> {};
-
-}  // namespace detail
-
-/** @brief True when sfpu_pipeline can safely batch multiple chain iterations
- *  into a single DEST acquire cycle. Requires every CB-input op (Load /
- *  DestReuseOp) to use the WaitUpfrontPopAtEnd policy — that's the only
- *  policy that advances via an internal counter (not via per-exec pop) and
- *  pre-waits N tiles as a stable pre-waited block. Per-tile wait/pop policies
- *  (WaitAndPop, NoWaitPop) and non-advancing policies (WaitNoPop, NoWaitNoPop)
- *  all fall through to iter=1. */
-template <typename Chain>
-inline constexpr bool chain_supports_batching_v =
-    detail::chain_all_advance<std::remove_cv_t<std::remove_reference_t<Chain>>>::value;
 
 // =============================================================================
 // Pipeline Function Declaration

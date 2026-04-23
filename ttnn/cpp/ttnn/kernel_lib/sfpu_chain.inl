@@ -99,23 +99,25 @@ ALWI void sfpu_pipeline(
         cb_reserve_back(ocb, num_tiles);
     }
 
-    // Batching: pack as many chain iterations into a single acquire cycle as
-    // the DEST register bank allows. Per iteration the chain uses `stride`
-    // slots (= max_dst + 1), so at most DEST_AUTO_LIMIT / stride iterations
-    // fit. A stride-1 chain runs DEST_AUTO_LIMIT tiles per acquire; a
-    // multi-slot chain runs fewer. Structurally mirrors apply_post_chain_batched
-    // in binary_op_helpers but stride-aware for multi-slot chains.
+    // Pack amortization: run as many chain iterations as the DEST register
+    // bank can hold inside one tile_regs_acquire/commit/wait/release window,
+    // then pack them as a burst. Per iteration the chain uses `stride` slots
+    // (= max_dst + 1), so DEST_AUTO_LIMIT / stride iterations fit.
     //
-    // Batching is gated on chain_supports_batching_v — only chains where every
-    // CB-input op is WaitUpfrontPopAtEnd qualify. Per-tile wait/pop policies
-    // (WaitAndPop, NoWaitPop) introduce complications when the same CB is
-    // consumed by multiple chain elements (fan-in, shared tiles): each exec's
-    // pop mutates what its paired op sees. WaitUpfrontPopAtEnd is the
-    // explicit "I want batching" signal — bulk-wait once at the pipeline
-    // boundary, exec() advances an internal counter. Anything else falls back
-    // to iter=1, behaviourally identical to the old per-tile pipeline.
+    // Semantics per iteration are the full chain.apply(k * stride) — each
+    // op's init and exec fire exactly as in per-tile mode, just writing to a
+    // slot block offset by k*stride. All policies (WaitUpfrontPopAtEnd,
+    // WaitAndPop, fan-in / fan-out) behave identically to the per-tile path;
+    // the only difference is the DEST acquire boundary moves out.
+    //
+    // Deferred: per-op init amortization ("init once, exec K times") — the
+    // pattern binary_op_helpers uses for its post-chain. Adding it requires
+    // analysis of each chain element's init/exec interaction and is tracked
+    // as future work. The current shape leaves the door open: chain.apply
+    // already accepts an offset, so swapping the inner loop for a batched
+    // variant is a localized change.
     constexpr uint32_t stride = Chain::stride;
-    constexpr uint32_t iter_per_chunk = chain_supports_batching_v<Chain> ? (DEST_AUTO_LIMIT / stride) : 1u;
+    constexpr uint32_t iter_per_chunk = DEST_AUTO_LIMIT / stride;
     static_assert(iter_per_chunk >= 1, "chain stride exceeds DEST capacity");
 
     const uint32_t pack_base = static_cast<uint32_t>(pack_slot);
@@ -124,10 +126,13 @@ ALWI void sfpu_pipeline(
         const uint32_t this_chunk = (base + iter_per_chunk <= num_tiles) ? iter_per_chunk : (num_tiles - base);
 
         tile_regs_acquire();
-        if constexpr (hoist_load_init) {
-            chain.apply_batched_no_load_init(0u, this_chunk);
-        } else {
-            chain.apply_batched(0u, this_chunk);
+        for (uint32_t k = 0; k < this_chunk; ++k) {
+            const uint32_t dst_offset = k * stride;
+            if constexpr (hoist_load_init) {
+                chain.apply_no_load_init(dst_offset);
+            } else {
+                chain.apply(dst_offset);
+            }
         }
         tile_regs_commit();
         tile_regs_wait();
