@@ -27,7 +27,8 @@ class GRPOMonitor(TrainerCallback):
     def on_step_end(self, trainer, step, **kwargs):
         reward = kwargs["reward_mean"]
         length = kwargs["mean_completion_len"]
-        print(f"Step {step} | Reward: {reward:.4f} | Len: {length:.2f} tokens")
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{timestamp}] Step {step} | Reward: {reward:.4f} | Len: {length:.2f} tokens")
         with open(self.file_path, mode="a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([step, reward, length])
