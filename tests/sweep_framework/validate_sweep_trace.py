@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re as _re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,143 +40,11 @@ IGNORED_KEYS = frozenset(
         "sweep_source_hash",
         "device_ids",
         "mesh_device",
-        "output_tensor",  # master trace records return values, sweep does not
-        "indices_tensor",  # topk output tensor — master records it, sweep doesn't capture
-        "attention_sink",  # optional named tensor kwarg in SDPA — sweep doesn't produce it
-    }
-)
-
-# Infrastructure kwargs that the sweep framework intentionally filters out
-# (handled separately via output_memory_config, etc.).  Only stripped at the
-# top level of the arguments dict — NOT inside tensor arg sub-dicts.
-TOP_LEVEL_INFRA_KWARGS = frozenset(
-    {
-        "memory_config",
-        "dtype",
-        "layout",
-        "compute_kernel_config",
     }
 )
 
 
-def _normalize_tensor_placement(tp: dict) -> dict:
-    """Normalize tensor_placement to a canonical form.
-
-    The C++ tensor topology may report distribution as 1-D ``[32]`` or 2-D
-    ``[4, 8]`` depending on how the mesh mapper was constructed, even when the
-    functional behaviour is identical.  Collapse to a single product so that
-    ``[4, 8]`` and ``[32]`` compare equal, and reduce placement lists to a
-    canonical ``shard``/``replicate`` per-dimension tag.
-    """
-    result = dict(tp)
-
-    # Normalize distribution_shape → product
-    ds = result.get("distribution_shape")
-    if isinstance(ds, str):
-        import ast as _ast
-        try:
-            ds = _ast.literal_eval(ds)
-        except Exception:
-            ds = None
-    if isinstance(ds, (list, tuple)) and ds:
-        product = 1
-        for d in ds:
-            product *= int(d)
-        result["distribution_shape"] = product
-    elif isinstance(ds, int):
-        result["distribution_shape"] = ds
-
-    # Normalize mesh_device_shape → product (same reason)
-    ms = result.get("mesh_device_shape")
-    if isinstance(ms, str):
-        import ast as _ast
-        try:
-            ms = _ast.literal_eval(ms)
-        except Exception:
-            ms = None
-    if isinstance(ms, (list, tuple)) and ms:
-        product = 1
-        for d in ms:
-            product *= int(d)
-        result["mesh_device_shape"] = product
-    elif isinstance(ms, int):
-        result["mesh_device_shape"] = ms
-
-    # Normalize placement list → first element's type only.
-    # Multi-device meshes may report 1-element ``["replicate"]`` vs 2-element
-    # ``["replicate", "shard"]`` depending on mesh dimensionality.  The second
-    # entry is a per-dimension shard annotation that doesn't affect functional
-    # equivalence.  Reduce to the first (primary) placement tag.
-    pl = result.get("placement", "")
-    if isinstance(pl, str):
-        tags: list[str] = []
-        # Only look at the primary placement (first entry)
-        if "PlacementReplicate" in pl:
-            tags.append("replicate")
-        elif "PlacementShard" in pl:
-            tags.append("shard")
-        result["placement"] = tags
-    elif isinstance(pl, list):
-        if pl:
-            first = str(pl[0])
-            if "Replicate" in first:
-                result["placement"] = ["replicate"]
-            elif "Shard" in first:
-                result["placement"] = ["shard"]
-            else:
-                result["placement"] = [first]
-        else:
-            result["placement"] = []
-
-    return result
-
-
-def _normalize_original_shape(shape: list) -> list:
-    """Strip leading dimensions of 1 from original_shape.
-
-    Model traces may record 4-D shapes like ``[1, 1, 131072, 64]`` for tensors
-    that the sweep recreates as 2-D ``[131072, 64]``.  Stripping leading 1s
-    makes them compare equal.
-    """
-    while len(shape) > 1 and shape[0] == 1:
-        shape = shape[1:]
-    return shape
-
-
-# ---------------------------------------------------------------------------
-# Named-kwarg to positional-arg mapping for ops that record kwargs in master
-# but positional args in sweep (or vice versa).
-# ---------------------------------------------------------------------------
-
-# Maps op_name -> ordered list of named kwargs that correspond to arg1, arg2, arg3, ...
-_NAMED_TO_POSITIONAL: dict[str, list[str]] = {
-    "ttnn.topk": ["k", "dim"],
-    "ttnn.slice": ["starts", "ends", "steps"],
-    "ttnn.scatter": ["dim", "index", "src"],
-}
-
-
-def _unify_named_positional_args(args: dict, op_name: str) -> dict:
-    """Rewrite named kwargs to positional arg keys when a mapping is known.
-
-    If the config uses named kwargs (e.g. ``k``, ``dim``) that correspond to
-    positional slots (``arg1``, ``arg2``), rewrite them to positional keys so
-    both master and sweep use the same key names.
-    """
-    mapping = _NAMED_TO_POSITIONAL.get(op_name)
-    if not mapping:
-        return args
-
-    result = dict(args)
-    for idx, named_key in enumerate(mapping, start=1):
-        positional_key = f"arg{idx}"
-        # If the named key is present but the positional key is not, rename it
-        if named_key in result and positional_key not in result:
-            result[positional_key] = result.pop(named_key)
-    return result
-
-
-def normalize(obj: Any, *, _parent_key: str = "", _depth: int = 0, _op_name: str = "") -> Any:
+def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     """Recursively normalize a config dict for comparison.
 
     Strips keys that are expected to vary between a master trace (from the
@@ -185,23 +52,9 @@ def normalize(obj: Any, *, _parent_key: str = "", _depth: int = 0, _op_name: str
     meaningful configuration difference.
     """
     if isinstance(obj, dict):
-        # Normalize tensor_placement dicts before general processing
-        if _parent_key == "tensor_placement" or (
-            "distribution_shape" in obj and "placement" in obj
-        ):
-            obj = _normalize_tensor_placement(obj)
-
-        # At the top level, unify named kwargs → positional args
-        if _depth == 0 and _op_name:
-            obj = _unify_named_positional_args(obj, _op_name)
-
         result = {}
         for k, v in sorted(obj.items()):
             if k in IGNORED_KEYS:
-                continue
-            # At the top level of the arguments dict, strip infrastructure kwargs
-            # that the sweep framework intentionally handles separately
-            if _depth == 0 and k in TOP_LEVEL_INFRA_KWARGS:
                 continue
             # memory_config.hash is a device pointer — always differs between runs; skip numeric values only
             if k == "hash" and isinstance(v, (int, float)):
@@ -209,27 +62,10 @@ def normalize(obj: Any, *, _parent_key: str = "", _depth: int = 0, _op_name: str
             # sub_core_grids: None is noise
             if k == "sub_core_grids" and v is None:
                 continue
-            # Strip keys with None or default-zero values — treat missing vs None/0 as equivalent
-            # (kwargs with default values may appear in one trace but be absent in the other)
-            if v is None or v == 0 or v == 0.0:
-                continue
-            # Ignore original_shape — it's metadata that varies with mesh device
-            # count and doesn't represent a functional argument difference
-            if k == "original_shape":
-                continue
-            # Ignore original_dtype — metadata about the source torch tensor dtype,
-            # not a functional argument (e.g. scatter index is always int32 on device
-            # regardless of the original torch dtype)
-            if k == "original_dtype":
-                continue
-            # Normalize storage_type — HOST vs DEVICE is an artifact of tensor creation
-            # path, not a functional op argument difference
-            if k == "storage_type":
-                continue
-            result[k] = normalize(v, _parent_key=k, _depth=_depth + 1, _op_name=_op_name)
+            result[k] = normalize(v, _parent_key=k)
         return result
     if isinstance(obj, list):
-        return [normalize(item, _parent_key=_parent_key, _depth=_depth + 1, _op_name=_op_name) for item in obj]
+        return [normalize(item, _parent_key=_parent_key) for item in obj]
     return obj
 
 
@@ -355,29 +191,6 @@ class ValidationReport:
 # ---------------------------------------------------------------------------
 
 
-_POSITIONAL_ARG_RE = _re.compile(r"^arg\d+$")
-
-
-def _reconcile_extra_positional_args(master: dict, sweep: dict) -> None:
-    """Remove positional arg keys (arg2, arg3, ...) present in only one side.
-
-    For ops like reshape the master trace may record extra positional args
-    (e.g. padded output shape in arg2) that the sweep trace does not capture.
-    These are optional metadata, not functional differences.  Mutates both
-    dicts in place.
-    """
-    if not isinstance(master, dict) or not isinstance(sweep, dict):
-        return
-    master_only = set(master.keys()) - set(sweep.keys())
-    sweep_only = set(sweep.keys()) - set(master.keys())
-    for k in master_only:
-        if _POSITIONAL_ARG_RE.match(k):
-            del master[k]
-    for k in sweep_only:
-        if _POSITIONAL_ARG_RE.match(k):
-            del sweep[k]
-
-
 def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
     """Join master and sweep traces by config_hash / sweep_source_hash."""
     report = ValidationReport()
@@ -437,29 +250,32 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             sweep_args = cfg.get("arguments", {})
             sweep_config_hash = cfg.get("config_hash")
 
-            norm_master = normalize(master_args, _op_name=master_op)
-            norm_sweep = normalize(sweep_args, _op_name=op_name)
-
-            # Category 4: For reshape (and similar), extra positional args
-            # (arg2, arg3, ...) that exist only in master are optional metadata
-            # (e.g. padded output shape). Remove them before comparison.
-            _reconcile_extra_positional_args(norm_master, norm_sweep)
+            norm_master = normalize(master_args)
+            norm_sweep = normalize(sweep_args)
 
             if norm_master == norm_sweep:
-                # Arguments match — count as match regardless of config_hash divergence.
-                # Hash mismatches occur because tensor_placement mesh shape (2D [4,8] vs
-                # 1D [32]) is baked into the hash but normalized away for comparison.
-                # The functional configuration is identical.
-                report.results.append(
-                    ConfigResult(
-                        config_hash=source_hash,
-                        op_name=op_name,
-                        master_config_id=master_cid,
-                        sweep_config_id=sweep_cid,
-                        status="match",
-                        sweep_config_hash=sweep_config_hash if (sweep_config_hash and sweep_config_hash != source_hash) else None,
+                # Arguments match — check if config_hash computation also agrees
+                if sweep_config_hash and sweep_config_hash != source_hash:
+                    report.results.append(
+                        ConfigResult(
+                            config_hash=source_hash,
+                            op_name=op_name,
+                            master_config_id=master_cid,
+                            sweep_config_id=sweep_cid,
+                            status="hash_mismatch",
+                            sweep_config_hash=sweep_config_hash,
+                        )
                     )
-                )
+                else:
+                    report.results.append(
+                        ConfigResult(
+                            config_hash=source_hash,
+                            op_name=op_name,
+                            master_config_id=master_cid,
+                            sweep_config_id=sweep_cid,
+                            status="match",
+                        )
+                    )
             else:
                 diffs = deep_diff(norm_master, norm_sweep)
                 report.results.append(
@@ -704,14 +520,13 @@ def main() -> int:
         )
         return 1
 
-    # Count matches that have hash divergence (informational only)
-    hash_divergent = [r for r in report.matched if r.sweep_config_hash is not None]
-    if hash_divergent:
+    if report.hash_mismatch:
         print(
-            f"INFO: {len(hash_divergent)} of {len(report.matched)} matches have "
-            f"config_hash divergence (functionally identical, hash computation differs)",
+            f"FAIL: {len(report.hash_mismatch)} config(s) have matching arguments "
+            f"but different config_hash (hash computation divergence)",
             file=sys.stderr,
         )
+        return 1
 
     if args.pass_threshold is not None and report.coverage < args.pass_threshold:
         print(
