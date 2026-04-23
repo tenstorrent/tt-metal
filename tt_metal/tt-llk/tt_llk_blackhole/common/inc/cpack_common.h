@@ -861,4 +861,35 @@ __attribute__((noinline)) bool are_packers_configured_correctly(
     return isDataFormatCorrect && isFaceRDimCorrect;
 }
 
+// Lightweight inline check of THCON in_data_format — safe to call from hot kernel init
+// paths where the non-inline are_packers_configured_correctly() risks RISC-V stack
+// overflow (it allocates std::array on the stack and calls two non-inline functions).
+//
+// Reads only the first word of THCON (one register access) and checks in_data_format
+// [bits 3:0] against the expected pack_src_format.  Handles the Fp8_e4m3 gasket
+// special case (hardware uses Float16 as in_data_format for Fp8 output).
+//
+// Intended for use inside LLK_ASSERT() in init paths.
+// THCON word 2 layout (cfg_reg_array[1][64+: ...]):
+//   bits [3:0]   = uncompress, add_l1_dest_addr_offset, disable_pack_zero_flag, reserved
+//   bits [7:4]   = out_data_format  (THCON_SEC0_REG1_Out_data_format = cfg_reg_array[1][68+:4])
+//   bits [11:8]  = in_data_format   (THCON_SEC0_REG1_In_data_format  = cfg_reg_array[1][72+:4])
+FORCE_INLINE bool pack_src_format_matches_thcon(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format)
+{
+    // Do NOT tensix_sync() here — the point of this check is to verify that the
+    // configuration written by init_sfpu survived without being overwritten by a
+    // stale coprocessor instruction.  If we sync first we drain any stale writes,
+    // masking the very corruption this check is meant to detect.
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    const std::uint32_t word2              = cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2];
+    const std::uint32_t actual_in_fmt      = (word2 >> 8) & DATA_FORMAT_CONFIG_MASK;
+    const std::uint32_t actual_out_fmt     = (word2 >> 4) & DATA_FORMAT_CONFIG_MASK;
+    // Fp8_e4m3 special case: hardware gasket feeds Float16 into the packer for L1 output.
+    const std::uint32_t expected_in_fmt  = ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3))
+                                               ? masked_data_format(to_underlying(DataFormat::Float16))
+                                               : masked_data_format(pack_src_format);
+    const std::uint32_t expected_out_fmt = masked_data_format(pack_dst_format);
+    return actual_in_fmt == expected_in_fmt && actual_out_fmt == expected_out_fmt;
+}
+
 } // namespace ckernel::packer
