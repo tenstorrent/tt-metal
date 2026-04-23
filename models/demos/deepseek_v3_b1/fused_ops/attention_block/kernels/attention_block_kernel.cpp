@@ -1731,8 +1731,9 @@ void kernel_main() {
         if constexpr (Core::is_allreduce_sender_core) {
             DeviceZoneScopedN("CCL_SENDER_WRITER");
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+            PacketHeaderPool::reset();
             deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceWriterCTArgs> ccl_writer;
-            ccl_writer.open_connections(ccl_sender_args);
+            ccl_writer.open_connections(ccl_sender_args, false);
             deepseek_b1_ops::AllGather::TransportSender<AllGatherTransportCT> allgather_sender;
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("ccl_sync_semaphore2_addr"));
