@@ -109,8 +109,16 @@ static void run_pack_relu_test(IDevice* dev, uint32_t relu_config, const std::fu
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 1.0f, 0xCAFE);
     detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-    SetRuntimeArgs(program, reader, core, {dram_buffer_src_addr, 0, num_tiles});
-    SetRuntimeArgs(program, writer, core, {dram_buffer_dst_addr, 0, num_tiles});
+    SetRuntimeArgs(
+        program,
+        reader,
+        core,
+        {dram_buffer_src_addr, 0, num_tiles, static_cast<uint32_t>(src_dram_buffer->aligned_page_size())});
+    SetRuntimeArgs(
+        program,
+        writer,
+        core,
+        {dram_buffer_dst_addr, 0, num_tiles, static_cast<uint32_t>(dst_dram_buffer->aligned_page_size())});
     SetRuntimeArgs(program, compute, core, {relu_config});
 
     detail::LaunchProgram(dev, program, true);

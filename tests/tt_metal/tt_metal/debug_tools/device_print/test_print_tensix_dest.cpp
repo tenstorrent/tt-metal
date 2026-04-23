@@ -233,6 +233,7 @@ static std::vector<uint32_t> get_dram_kernel_runtime_arguments(const DramBuffer&
         static_cast<uint32_t>(dram_buffer->address()),
         static_cast<uint32_t>(0),
         static_cast<uint32_t>(num_tiles),
+        static_cast<uint32_t>(dram_buffer->get_reference_buffer()->aligned_page_size()),
     };
 }
 

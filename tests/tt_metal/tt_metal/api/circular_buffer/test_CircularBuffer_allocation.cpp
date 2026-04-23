@@ -548,6 +548,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
                 (uint32_t)src_dram_buffer->address(),
                 0,
                 (uint32_t)num_tiles,
+                (uint32_t)src_dram_buffer->aligned_page_size(),
             });
         SetRuntimeArgs(
             program_,
@@ -557,6 +558,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
                 (uint32_t)dst_dram_buffer->address(),
                 0,
                 (uint32_t)num_tiles,
+                (uint32_t)dst_dram_buffer->aligned_page_size(),
             });
 
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(

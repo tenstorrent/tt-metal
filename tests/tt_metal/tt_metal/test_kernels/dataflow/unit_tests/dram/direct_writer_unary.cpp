@@ -17,6 +17,11 @@ void kernel_main() {
     uint32_t dst_addr  = get_arg_val<uint32_t>(0); // global base address
     uint32_t dst_bank_id = get_arg_val<uint32_t>(1); // data is in one bank
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
+    // See direct_reader_unary.cpp for why this is separate from the DFB
+    // entry size: the DRAM allocator may round page_size up to NoC DRAM
+    // alignment, so DRAM stride can exceed native tile size. Callers pass
+    // Buffer::aligned_page_size() here.
+    uint32_t dram_page_stride = get_arg_val<uint32_t>(3);
 
     uint32_t ublock_size_tiles = 1;
 
@@ -34,7 +39,7 @@ void kernel_main() {
         experimental::DataflowBuffer dfb(cb_id);
         uint32_t ublock_size_bytes = dfb.get_entry_size();
 
-        uint32_t tlocal_dst_addr = dst_addr + (consumer_idx * ublock_size_bytes);
+        uint32_t tlocal_dst_addr = dst_addr + (consumer_idx * dram_page_stride);
 
         for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
 #ifdef ARCH_QUASAR
@@ -45,7 +50,7 @@ void kernel_main() {
             noc.async_write_barrier();
             dfb.pop_front(ublock_size_tiles);
 #endif
-            tlocal_dst_addr += dfb.get_stride_size();
+            tlocal_dst_addr += dram_page_stride;
         }
 
         dfb.finish();
@@ -64,7 +69,7 @@ void kernel_main() {
             noc.async_write(cb, dst_dram, ublock_size_bytes, {}, {.bank_id = dst_bank_id, .addr = dst_addr});
             noc.async_write_barrier();
             cb.pop_front(ublock_size_tiles);
-            dst_addr += ublock_size_bytes;
+            dst_addr += dram_page_stride;
         }
     }
 #endif

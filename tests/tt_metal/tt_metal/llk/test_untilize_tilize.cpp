@@ -667,8 +667,16 @@ static void run_quasar_tilize_untilize_test(
     }
     detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-    SetRuntimeArgs(program, reader, core, {dram_buffer_src_addr, (uint32_t)0, num_tiles});
-    SetRuntimeArgs(program, writer, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles});
+    SetRuntimeArgs(
+        program,
+        reader,
+        core,
+        {dram_buffer_src_addr, (uint32_t)0, num_tiles, (uint32_t)src_dram_buffer->aligned_page_size()});
+    SetRuntimeArgs(
+        program,
+        writer,
+        core,
+        {dram_buffer_dst_addr, (uint32_t)0, num_tiles, (uint32_t)dst_dram_buffer->aligned_page_size()});
 
     detail::LaunchProgram(dev, program, true);
 

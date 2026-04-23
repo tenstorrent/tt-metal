@@ -321,12 +321,18 @@ static void run_dump_cb(DevicePrintFixture* fixture, const std::shared_ptr<distr
         *s.program,
         reader,
         s.core,
-        {static_cast<uint32_t>(s.input_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+        {static_cast<uint32_t>(s.input_dram->address()),
+         0u,
+         static_cast<uint32_t>(NUM_TILES),
+         static_cast<uint32_t>(s.input_dram->get_reference_buffer()->aligned_page_size())});
     SetRuntimeArgs(
         *s.program,
         writer,
         s.core,
-        {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+        {static_cast<uint32_t>(s.output_dram->address()),
+         0u,
+         static_cast<uint32_t>(NUM_TILES),
+         static_cast<uint32_t>(s.output_dram->get_reference_buffer()->aligned_page_size())});
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
@@ -374,12 +380,18 @@ static void run_dump_l1(DevicePrintFixture* fixture, const std::shared_ptr<distr
         *s.program,
         reader,
         s.core,
-        {static_cast<uint32_t>(s.input_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+        {static_cast<uint32_t>(s.input_dram->address()),
+         0u,
+         static_cast<uint32_t>(NUM_TILES),
+         static_cast<uint32_t>(s.input_dram->get_reference_buffer()->aligned_page_size())});
     SetRuntimeArgs(
         *s.program,
         writer,
         s.core,
-        {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+        {static_cast<uint32_t>(s.output_dram->address()),
+         0u,
+         static_cast<uint32_t>(NUM_TILES),
+         static_cast<uint32_t>(s.output_dram->get_reference_buffer()->aligned_page_size())});
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
@@ -427,12 +439,18 @@ static void run_dump_typed(DevicePrintFixture* fixture, const std::shared_ptr<di
         *s.program,
         reader,
         s.core,
-        {static_cast<uint32_t>(s.input_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+        {static_cast<uint32_t>(s.input_dram->address()),
+         0u,
+         static_cast<uint32_t>(NUM_TILES),
+         static_cast<uint32_t>(s.input_dram->get_reference_buffer()->aligned_page_size())});
     SetRuntimeArgs(
         *s.program,
         writer,
         s.core,
-        {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+        {static_cast<uint32_t>(s.output_dram->address()),
+         0u,
+         static_cast<uint32_t>(NUM_TILES),
+         static_cast<uint32_t>(s.output_dram->get_reference_buffer()->aligned_page_size())});
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
