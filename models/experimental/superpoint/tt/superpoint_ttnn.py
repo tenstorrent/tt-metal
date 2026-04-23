@@ -361,7 +361,21 @@ class TtSuperPoint:
 
         if _os.environ.get("SP_TRACE_NMS", "0") == "1":
             s_pooled = self._device_fold_and_nms(s_sm, b, enc_h, enc_w)
-            return s_sm, s_pooled, d_norm
+            # Pack descriptor + NMS map into a single row-major tensor so the
+            # hot-loop D2H collapses to one ttnn.to_torch — each from_device
+            # carries ~9 ms of Python-dispatch overhead independent of
+            # payload size, so combining saves one per iter.
+            DRAM = ttnn.DRAM_MEMORY_CONFIG
+            d_norm_rm = ttnn.to_layout(d_norm, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+            ttnn.deallocate(d_norm)
+            d_flat = ttnn.reshape(
+                d_norm_rm, [1, 1, b * enc_h * enc_w * DESCRIPTOR_DIM, 1], memory_config=DRAM
+            )
+            ttnn.deallocate(d_norm_rm)
+            combined = ttnn.concat([s_pooled, d_flat], dim=2, memory_config=DRAM)
+            ttnn.deallocate(s_pooled)
+            ttnn.deallocate(d_flat)
+            return s_sm, combined
         return s_sm, d_norm
 
     def _get_nms_zero_pad(self, b: int) -> ttnn.Tensor:
