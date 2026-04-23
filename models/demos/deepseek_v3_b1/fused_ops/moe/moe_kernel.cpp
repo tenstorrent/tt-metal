@@ -968,6 +968,17 @@ void kernel_main() {
         }
 #endif
 
+#if defined(COMPILE_FOR_BRISC) && defined(ENABLE_FORWARD)
+        if constexpr (persistent_mode != 0) {
+            constexpr bool is_forward_entry = get_named_compile_time_arg_val("forward_is_entry_column") == 1;
+            if constexpr (is_forward_entry && Core::is_sender_core) {
+                auto next_iter_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_sem_addr);
+                noc_semaphore_wait(next_iter_sem, 1);
+                noc_semaphore_set(next_iter_sem, 0);
+            }
+        }
+#endif
+
 #if defined(RECONFIG_MOE_CBS) && !defined(UCK_CHLKC_MATH)
         {
             constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
@@ -1101,7 +1112,7 @@ void kernel_main() {
 #endif
 
         if constexpr (Core::is_sender_core) {
-            // DPRINT << "MOE: entering residual_mcast\n";
+            DPRINT << "MOE: entering residual_mcast\n";
         }
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
         {
@@ -1109,7 +1120,7 @@ void kernel_main() {
             residual_mcast(moe.routed.residual_mcast_args);
         }
         if constexpr (Core::is_sender_core) {
-            // DPRINT << "MOE: residual_mcast done, entering rmsnorm\n";
+            DPRINT << "MOE: residual_mcast done, entering rmsnorm\n";
         }
 
         // 0b. RMSNorm: normalize input on sender core (residual_mcast_src → rmsnorm_output)
@@ -1123,7 +1134,7 @@ void kernel_main() {
             rmsnorm(moe.routed.rmsnorm_args);
         }
         if constexpr (Core::is_sender_core) {
-            // DPRINT << "MOE: rmsnorm done, entering rmsnorm_mcast\n";
+            DPRINT << "MOE: rmsnorm done, entering rmsnorm_mcast\n";
         }
 
         // 1. RMSNorm Mcast: Broadcast normalized input from sender core to all receiver cores
@@ -1132,7 +1143,7 @@ void kernel_main() {
             mcast(moe.routed.mcast_args);
         }
         if constexpr (Core::is_sender_core) {
-            // DPRINT << "MOE: rmsnorm_mcast done\n";
+            DPRINT << "MOE: rmsnorm_mcast done\n";
         }
 
 #if defined(ENABLE_BCAST) || defined(ENABLE_FORWARD)
@@ -1149,7 +1160,7 @@ void kernel_main() {
 #endif
 
         if constexpr (Core::is_sender_core) {
-            // DPRINT << "MOE: CB25 popped, entering gate_mm\n";
+            DPRINT << "MOE: CB25 popped, entering gate_mm\n";
         }
 #ifdef ENABLE_ROUTING
         // 2. Matmul + Activation: Routing matmul on gate_mm cores
@@ -1253,7 +1264,7 @@ void kernel_main() {
         }
 
         if constexpr (Core::is_sender_core) {
-            // DPRINT << "MOE: entering expert matmuls (gate_proj)\n";
+            DPRINT << "MOE: entering expert matmuls (gate_proj)\n";
         }
         // 6. gate_proj: DRAM Streaming Matmul + SiLU (PopIn0=false, keep input for up_proj)
         {
@@ -1387,7 +1398,7 @@ void kernel_main() {
         }
 
         if constexpr (Core::is_sender_core) {
-            // DPRINT << "MOE: entering eltwise_add\n";
+            DPRINT << "MOE: entering eltwise_add\n";
         }
         // 12. Eltwise Add: down_proj + shared_expert_output
         {
@@ -1408,7 +1419,7 @@ void kernel_main() {
         }
 
         if constexpr (Core::is_sender_core) {
-            // DPRINT << "MOE: entering reduce_to_all\n";
+            DPRINT << "MOE: entering reduce_to_all\n";
         }
         // 13. ReduceToAllB1: Multi-device all-reduce across 4x2 mesh
         //     Every device gets the full sum of all 8 devices' outputs
@@ -1452,7 +1463,7 @@ void kernel_main() {
 
         if constexpr (persistent_mode == 0) {
             if (iteration >= num_iterations) {
-                // DPRINT << "MOE: completed " << iteration << " iterations, exiting\n";
+                DPRINT << "MOE: completed " << iteration << " iterations, exiting\n";
                 break;
             }
         }
@@ -1466,6 +1477,6 @@ void kernel_main() {
     noc_async_atomic_barrier();
 #endif
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
-    // DPRINT << "MOE: kernel done\n";
+    DPRINT << "MOE: kernel done\n";
 #endif
 }

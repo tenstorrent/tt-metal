@@ -164,6 +164,7 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr = nullptr;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr_2 = nullptr;
 
+    DPRINT << "use_fabric: " << (uint32_t)use_fabric << "\n";
     if constexpr (use_fabric) {
         // Safe to use downstream_enc here: Fabric being enabled means that a socket will be used for downstream
         // communication
@@ -174,9 +175,11 @@ void kernel_main() {
 
         downstream_fabric_connection.open();
         downstream_fabric_connection_2.open();
+        DPRINT << "Downstream fabric connections opened\n";
 
         fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
+        DPRINT << "Fabric routes set for downstream packet headers\n";
     }
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
@@ -266,6 +269,8 @@ void kernel_main() {
         socket_barrier(sender_socket);
     }
 
+    DPRINT << "h2d_recv_embed: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0]
+           << ") exiting main loop, updated socket config and waiting at barrier" << ENDL();
     noc_async_write_barrier();
     noc_async_read_barrier();
 

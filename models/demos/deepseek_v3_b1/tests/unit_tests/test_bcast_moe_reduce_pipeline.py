@@ -52,18 +52,32 @@ def create_fabric_router_config(max_payload_size):
 
 def _dispatch_merged_programs(all_entries, mesh_device):
     """Merge (device_coord, program) entries by device and dispatch in a single generic_op."""
+    print(
+        f"[_dispatch_merged] {len(all_entries)} entries:" f" {[(str(dc), id(p)) for dc, p in all_entries]}",
+        flush=True,
+    )
     dummy_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device
     )
     groups = _group_by_device(all_entries)
     mesh_program_descriptor = ttnn.MeshProgramDescriptor()
     for device_coord, progs in groups:
+        print(
+            f"[_dispatch_merged] device={device_coord} num_progs={len(progs)}"
+            f" kernel_counts={[len(p.kernels) for p in progs]}",
+            flush=True,
+        )
         if len(progs) > 1:
             progs = _combine_overlapping_programs(progs)
             merged = ttnn.merge_program_descriptors(progs) if len(progs) > 1 else progs[0]
         else:
             merged = progs[0]
+        print(
+            f"[_dispatch_merged] device={device_coord} merged: {len(merged.kernels)} kernels",
+            flush=True,
+        )
         mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = merged
+    print(f"[_dispatch_merged] dispatching generic_op...", flush=True)
     return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 
 
@@ -147,18 +161,29 @@ def test_bcast_moe_reduce_pipeline(
     mesh_rows, mesh_cols = mesh_device.shape
     device_coords = [ttnn.MeshCoordinate(r, c) for r in range(int(mesh_rows)) for c in range(int(mesh_cols))]
 
-    # Determine exit/entry column from pipeline config.
-    exit_column = None
+    # Determine forward entry / reduce exit columns from the pipeline config.
+    # Stage 1 is the MoE compute stage:
+    #   entry_node_coord → forward entry column (receives data from stage 0)
+    #   exit_node_coord  → reduce exit column (sends reduced output downstream)
+    entry_column = 0
+    reduce_exit_column = 0
     if len(pipeline_config) > 1:
-        entry_node = pipeline_config[0].exit_node_coord
         try:
-            exit_column = int(entry_node[1])
+            entry_column = int(pipeline_config[1].entry_node_coord[1])
         except Exception:
-            exit_column = 0
-    if exit_column is None:
-        exit_column = 0
-    pipeline_column_coords = [ttnn.MeshCoordinate(r, exit_column) for r in range(int(mesh_rows))]
-    logger.info(f"exit_column={exit_column}, pipeline_column_coords={len(pipeline_column_coords)} devices")
+            entry_column = 0
+        try:
+            reduce_exit_column = int(pipeline_config[1].exit_node_coord[1])
+        except Exception:
+            reduce_exit_column = 0
+    exit_column = entry_column
+    entry_column_coords = [ttnn.MeshCoordinate(r, entry_column) for r in range(int(mesh_rows))]
+    exit_column_coords = [ttnn.MeshCoordinate(r, reduce_exit_column) for r in range(int(mesh_rows))]
+    pipeline_column_coords = exit_column_coords
+    logger.info(
+        f"entry_column={entry_column}, reduce_exit_column={reduce_exit_column}, "
+        f"entry_devices={len(entry_column_coords)}, exit_devices={len(exit_column_coords)}"
+    )
 
     # -- MoE tensor setup (needed before PipelineBlock to get correct reduce shard size) --
     result_scores = None
@@ -258,16 +283,26 @@ def test_bcast_moe_reduce_pipeline(
         ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
         print(f"[TEST] stage0: generate_blitz_decode_pipeline done", flush=True)
 
-        d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in pipeline_column_coords]
-        print(f"[TEST] stage0: d2d_cores={[(str(c.device_coord),str(c.core_coord)) for c in d2d_cores]}", flush=True)
+        fwd_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in entry_column_coords]
+        bwd_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in exit_column_coords]
+        print(
+            f"[TEST] stage0: fwd_d2d_cores(col {entry_column})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in fwd_d2d_cores]}",
+            flush=True,
+        )
+        print(
+            f"[TEST] stage0: bwd_d2d_cores(col {reduce_exit_column})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in bwd_d2d_cores]}",
+            flush=True,
+        )
 
         print(f"[TEST] stage0: creating exit_socket_interface (PSI)...", flush=True)
         _t0 = _time.time()
         exit_socket_interface = ParallelSocketInterface(
             embedding_size_bytes,
             embedding_fifo_size,
-            send_core_coords=d2d_cores,
-            recv_core_coords=d2d_cores,
+            send_core_coords=fwd_d2d_cores,
+            recv_core_coords=fwd_d2d_cores,
             sender_mesh=MeshWrapper(mesh_device),
             receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1),
         )
@@ -278,21 +313,21 @@ def test_bcast_moe_reduce_pipeline(
         entry_socket_interface = ParallelSocketInterface(
             embedding_size_bytes,
             embedding_fifo_size,
-            send_core_coords=d2d_cores,
-            recv_core_coords=d2d_cores,
+            send_core_coords=bwd_d2d_cores,
+            recv_core_coords=bwd_d2d_cores,
             sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
             receiver_mesh=MeshWrapper(mesh_device),
             receiver_use_reader_config=True,
         )
         print(f"[TEST] stage0: entry_socket_interface done in {_time.time()-_t0:.3f}s", flush=True)
 
-        print(f"[TEST] stage0: creating H2D/D2H/HostInterface for {len(pipeline_column_coords)} devices...")
+        print(f"[TEST] stage0: creating H2D/D2H/HostInterface for {len(exit_column_coords)} devices...")
         _t0 = _time.time()
         h2d_sockets = []
         d2h_sockets = []
         host_ios = []
 
-        for dc_idx, dc in enumerate(pipeline_column_coords):
+        for dc_idx, dc in enumerate(exit_column_coords):
             _t_dc = _time.time()
             h2d = ttnn.H2DSocket(
                 mesh_device,
@@ -312,7 +347,7 @@ def test_bcast_moe_reduce_pipeline(
                 token_size_bytes,
                 embedding_size_bytes,
                 core_to_core_socket_buffer_size=embedding_fifo_size,
-                h2d_downstream_core=ttnn.MeshCoreCoord(dc, pipeline_core),
+                h2d_downstream_core=ttnn.MeshCoreCoord(entry_column_coords[dc_idx], pipeline_core),
                 d2h_upstream_core=ttnn.MeshCoreCoord(dc, pipeline_core),
                 embedding_tensor=embedding_tensor,
             )
@@ -334,15 +369,14 @@ def test_bcast_moe_reduce_pipeline(
             all_entries.extend(hio._build_programs())
         exit_progs = exit_socket_interface.build_programs()
         combined_progs = entry_socket_interface.build_programs(base_programs=exit_progs)
+        all_entries.extend(exit_progs)
         all_entries.extend(combined_progs)
         stage0_program_entries = all_entries
         print(
             f"[TEST] stage0: programs built (dispatch deferred until after tensor alloc), elapsed={_time.time()-_t0_total:.3f}s",
             flush=True,
         )
-        logger.info(
-            f"[rank=0] parallel stage 0 programs built ({len(pipeline_column_coords)} channels), dispatch deferred"
-        )
+        logger.info(f"[rank=0] parallel stage 0 programs built ({len(exit_column_coords)} channels), dispatch deferred")
     elif is_stage1:
         import time as _time
 
@@ -360,8 +394,8 @@ def test_bcast_moe_reduce_pipeline(
             entry_downstream_core=moe_sender_core,
             exit_upstream_cores=shard_cores_list,
             exit_upstream_page_size=reduce_payload_per_shard,
-            entry_device_coords=pipeline_column_coords,
-            exit_device_coords=pipeline_column_coords,
+            entry_device_coords=entry_column_coords,
+            exit_device_coords=exit_column_coords,
         )
         print(f"[TEST] stage1: PipelineBlock done in {_time.time()-_t0_total:.3f}s", flush=True)
         logger.info(
@@ -386,8 +420,8 @@ def test_bcast_moe_reduce_pipeline(
             downstream_d2d_socket_page_size=embedding_size_bytes,
             pipeline_device_coords=device_coords,
             pipeline_exit_core_coord=pipeline_core,
-            entry_device_coords=pipeline_column_coords,
-            exit_device_coords=pipeline_column_coords,
+            entry_device_coords=exit_column_coords,
+            exit_device_coords=exit_column_coords,
         )
         print(f"[TEST] stage{my_mesh_id}: PipelineBlock done in {_time.time()-_t0_total:.3f}s", flush=True)
 
@@ -404,16 +438,17 @@ def test_bcast_moe_reduce_pipeline(
         forward_sockets = [None] * num_devices
         downstream_sockets = [None] * num_devices
         for idx, row_idx in enumerate(range(int(mesh_rows))):
-            chip_id = row_idx * int(mesh_cols) + exit_column
-            forward_sockets[chip_id] = raw_fwd[idx]
-            downstream_sockets[chip_id] = raw_ds[idx]
+            fwd_chip_id = row_idx * int(mesh_cols) + entry_column
+            ds_chip_id = row_idx * int(mesh_cols) + reduce_exit_column
+            forward_sockets[fwd_chip_id] = raw_fwd[idx]
+            downstream_sockets[ds_chip_id] = raw_ds[idx]
         logger.info(
             f"[rank={my_mesh_id}] {len(raw_fwd)} forward sockets mapped to "
             f"{sum(1 for s in forward_sockets if s is not None)}/{num_devices} devices, "
             f"{len(raw_ds)} downstream socket groups"
         )
         for idx, row_idx in enumerate(range(int(mesh_rows))):
-            chip_id = row_idx * int(mesh_cols) + exit_column
+            chip_id = row_idx * int(mesh_cols) + reduce_exit_column
             ds = downstream_sockets[chip_id]
             if ds is not None:
                 if isinstance(ds, list):
@@ -600,6 +635,7 @@ def test_bcast_moe_reduce_pipeline(
             is_torus=is_torus,
             downstream_sockets=downstream_sockets,
             exit_column=exit_column,
+            reduce_exit_column=reduce_exit_column,
         )
         logger.info("[rank=1] MoE + reduce-to-all completed")
 
@@ -763,7 +799,7 @@ def test_bcast_moe_reduce_pipeline(
         # Only exit-column devices hold the reduced output; non-exit devices
         # are all zeros by design. Compare the golden against each exit-column
         # device's output.
-        exit_chip_ids = [row * int(mesh_cols) + exit_column for row in range(int(mesh_rows))]
+        exit_chip_ids = [row * int(mesh_cols) + reduce_exit_column for row in range(int(mesh_rows))]
         logger.info(f"[rank=1] validating output on exit-column devices: chip_ids={exit_chip_ids}")
 
         all_passing = True
@@ -878,18 +914,28 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
     mesh_rows, mesh_cols = mesh_device.shape
     device_coords = [ttnn.MeshCoordinate(r, c) for r in range(int(mesh_rows)) for c in range(int(mesh_cols))]
 
-    # Determine exit/entry column from pipeline config.
-    exit_column = None
+    # Determine forward entry / reduce exit columns from the pipeline config.
+    # Stage 1 is the MoE compute stage:
+    #   entry_node_coord → forward entry column (receives data from stage 0)
+    #   exit_node_coord  → reduce exit column (sends reduced output downstream)
+    entry_column = 0
+    reduce_exit_column = 0
     if len(pipeline_config) > 1:
-        entry_node = pipeline_config[0].exit_node_coord
         try:
-            exit_column = int(entry_node[1])
+            entry_column = int(pipeline_config[1].entry_node_coord[1])
         except Exception:
-            exit_column = 0
-    if exit_column is None:
-        exit_column = 0
-    pipeline_column_coords = [ttnn.MeshCoordinate(r, exit_column) for r in range(int(mesh_rows))]
-    logger.info(f"exit_column={exit_column}, pipeline_column_coords={len(pipeline_column_coords)} devices")
+            entry_column = 0
+        try:
+            reduce_exit_column = int(pipeline_config[1].exit_node_coord[1])
+        except Exception:
+            reduce_exit_column = 0
+    exit_column = entry_column
+    entry_column_coords = [ttnn.MeshCoordinate(r, entry_column) for r in range(int(mesh_rows))]
+    exit_column_coords = [ttnn.MeshCoordinate(r, reduce_exit_column) for r in range(int(mesh_rows))]
+    logger.info(
+        f"entry_column={entry_column}, reduce_exit_column={reduce_exit_column}, "
+        f"entry_devices={len(entry_column_coords)}, exit_devices={len(exit_column_coords)}"
+    )
 
     # -- MoE tensor setup (needed before PipelineBlock to get correct reduce shard size) --
     result_scores = None
@@ -989,16 +1035,26 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
         ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
         print(f"[TEST] stage0: generate_blitz_decode_pipeline done", flush=True)
 
-        d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in pipeline_column_coords]
-        print(f"[TEST] stage0: d2d_cores={[(str(c.device_coord),str(c.core_coord)) for c in d2d_cores]}", flush=True)
+        fwd_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in entry_column_coords]
+        bwd_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in exit_column_coords]
+        print(
+            f"[TEST] stage0: fwd_d2d_cores(col {entry_column})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in fwd_d2d_cores]}",
+            flush=True,
+        )
+        print(
+            f"[TEST] stage0: bwd_d2d_cores(col {reduce_exit_column})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in bwd_d2d_cores]}",
+            flush=True,
+        )
 
         print(f"[TEST] stage0: creating exit_socket_interface (PSI)...", flush=True)
         _t0 = _time.time()
         exit_socket_interface = ParallelSocketInterface(
             embedding_size_bytes,
             embedding_fifo_size,
-            send_core_coords=d2d_cores,
-            recv_core_coords=d2d_cores,
+            send_core_coords=fwd_d2d_cores,
+            recv_core_coords=fwd_d2d_cores,
             sender_mesh=MeshWrapper(mesh_device),
             receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1),
         )
@@ -1009,21 +1065,21 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
         entry_socket_interface = ParallelSocketInterface(
             embedding_size_bytes,
             embedding_fifo_size,
-            send_core_coords=d2d_cores,
-            recv_core_coords=d2d_cores,
+            send_core_coords=bwd_d2d_cores,
+            recv_core_coords=bwd_d2d_cores,
             sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
             receiver_mesh=MeshWrapper(mesh_device),
             receiver_use_reader_config=True,
         )
         print(f"[TEST] stage0: entry_socket_interface done in {_time.time()-_t0:.3f}s", flush=True)
 
-        print(f"[TEST] stage0: creating H2D/D2H/HostInterface for {len(pipeline_column_coords)} devices...")
+        print(f"[TEST] stage0: creating H2D/D2H/HostInterface for {len(exit_column_coords)} devices...")
         _t0 = _time.time()
         h2d_sockets = []
         d2h_sockets = []
         host_ios = []
 
-        for dc_idx, dc in enumerate(pipeline_column_coords):
+        for dc_idx, dc in enumerate(exit_column_coords):
             _t_dc = _time.time()
             h2d = ttnn.H2DSocket(
                 mesh_device,
@@ -1043,7 +1099,7 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
                 token_size_bytes,
                 embedding_size_bytes,
                 core_to_core_socket_buffer_size=embedding_fifo_size,
-                h2d_downstream_core=ttnn.MeshCoreCoord(dc, pipeline_core),
+                h2d_downstream_core=ttnn.MeshCoreCoord(entry_column_coords[dc_idx], pipeline_core),
                 d2h_upstream_core=ttnn.MeshCoreCoord(dc, pipeline_core),
                 embedding_tensor=embedding_tensor,
             )
@@ -1065,15 +1121,14 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
             all_entries.extend(hio._build_programs())
         exit_progs = exit_socket_interface.build_programs()
         combined_progs = entry_socket_interface.build_programs(base_programs=exit_progs)
+        all_entries.extend(exit_progs)
         all_entries.extend(combined_progs)
         stage0_program_entries = all_entries
         print(
             f"[TEST] stage0: programs built (dispatch deferred until after tensor alloc), elapsed={_time.time()-_t0_total:.3f}s",
             flush=True,
         )
-        logger.info(
-            f"[rank=0] parallel stage 0 programs built ({len(pipeline_column_coords)} channels), dispatch deferred"
-        )
+        logger.info(f"[rank=0] parallel stage 0 programs built ({len(exit_column_coords)} channels), dispatch deferred")
     elif is_stage1:
         import time as _time
 
@@ -1091,8 +1146,8 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
             entry_downstream_core=moe_sender_core,
             exit_upstream_cores=shard_cores_list,
             exit_upstream_page_size=reduce_payload_per_shard,
-            entry_device_coords=pipeline_column_coords,
-            exit_device_coords=pipeline_column_coords,
+            entry_device_coords=entry_column_coords,
+            exit_device_coords=exit_column_coords,
         )
         print(f"[TEST] stage1: PipelineBlock done in {_time.time()-_t0_total:.3f}s", flush=True)
         logger.info(
@@ -1117,8 +1172,8 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
             downstream_d2d_socket_page_size=embedding_size_bytes,
             pipeline_device_coords=device_coords,
             pipeline_exit_core_coord=pipeline_core,
-            entry_device_coords=pipeline_column_coords,
-            exit_device_coords=pipeline_column_coords,
+            entry_device_coords=exit_column_coords,
+            exit_device_coords=exit_column_coords,
         )
         print(f"[TEST] stage{my_mesh_id}: PipelineBlock done in {_time.time()-_t0_total:.3f}s", flush=True)
 
@@ -1135,16 +1190,17 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
         forward_sockets = [None] * num_devices
         downstream_sockets = [None] * num_devices
         for idx, row_idx in enumerate(range(int(mesh_rows))):
-            chip_id = row_idx * int(mesh_cols) + exit_column
-            forward_sockets[chip_id] = raw_fwd[idx]
-            downstream_sockets[chip_id] = raw_ds[idx]
+            fwd_chip_id = row_idx * int(mesh_cols) + entry_column
+            ds_chip_id = row_idx * int(mesh_cols) + reduce_exit_column
+            forward_sockets[fwd_chip_id] = raw_fwd[idx]
+            downstream_sockets[ds_chip_id] = raw_ds[idx]
         logger.info(
             f"[rank={my_mesh_id}] {len(raw_fwd)} forward sockets mapped to "
             f"{sum(1 for s in forward_sockets if s is not None)}/{num_devices} devices, "
             f"{len(raw_ds)} downstream socket groups"
         )
         for idx, row_idx in enumerate(range(int(mesh_rows))):
-            chip_id = row_idx * int(mesh_cols) + exit_column
+            chip_id = row_idx * int(mesh_cols) + reduce_exit_column
             ds = downstream_sockets[chip_id]
             if ds is not None:
                 if isinstance(ds, list):
@@ -1254,6 +1310,8 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
         reduce_available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
         reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, reduce_available_cores, 0) for _ in range(4)]
 
+        persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, reduce_available_cores, 1)
+
         moe_semaphores = MoeOp.create_semaphores(mesh_device)
         logger.info(f"[rank={my_mesh_id}] semaphores created")
 
@@ -1309,6 +1367,7 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
             sdpa_out_interm_buffer=sdpa_out_interm_buffer,
             num_iterations=1,
             persistent_mode=True,
+            persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             reduce_intermediate_tensors=reduce_intermediate_tensors,
             reduce_output_tensor=reduce_output_tensor,
             reduce_semaphores=reduce_semaphores,
@@ -1320,6 +1379,7 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
             is_torus=is_torus,
             downstream_sockets=downstream_sockets,
             exit_column=exit_column,
+            reduce_exit_column=reduce_exit_column,
         )
         logger.info("[rank=1] MoE + reduce-to-all completed")
 

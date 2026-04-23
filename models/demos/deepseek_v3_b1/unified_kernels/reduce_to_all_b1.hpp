@@ -386,37 +386,7 @@ struct ReduceToAllB1 {
             // ================================================================
             constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
-                if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
-                    size_t p_idx = 0;
-                    uint32_t wait_sem_addr = get_arg_val<uint32_t>(p_idx++);
-                    uint32_t dst_noc_x = get_arg_val<uint32_t>(p_idx++);
-                    uint32_t dst_noc_y = get_arg_val<uint32_t>(p_idx++);
-                    uint32_t dst_mesh_id = get_arg_val<uint32_t>(p_idx++);
-                    uint32_t dst_chip_id = get_arg_val<uint32_t>(p_idx++);
-                    uint32_t dst_sem_addr = get_arg_val<uint32_t>(p_idx++);
-
-                    volatile tt_l1_ptr uint32_t* wait_sem_ptr =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wait_sem_addr);
-                    noc_semaphore_wait_min(wait_sem_ptr, 1);
-                    unified_kernels::semaphore_dec(wait_sem_ptr);
-
-                    constexpr uint32_t pkt_hdr_bytes_p = sizeof(PACKET_HEADER_TYPE);
-                    PacketHeaderPool::reset();
-                    auto route_id = PacketHeaderPool::allocate_header_n(1);
-                    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::header_table[route_id].first;
-                    set_unicast_route(hdr, static_cast<uint16_t>(dst_chip_id), static_cast<uint16_t>(dst_mesh_id), 1);
-                    hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                        get_noc_addr(dst_noc_x, dst_noc_y, dst_sem_addr), 1});
-
-                    auto sender =
-                        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(p_idx);
-                    sender.open();
-                    sender.wait_for_empty_write_slot();
-                    sender.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), pkt_hdr_bytes_p);
-                    sender.close();
-                    noc_async_full_barrier();
-                    return;
-                }
+                DPRINT << "fabric core\n";
                 const uint32_t buf_base = get_write_ptr(CTArgs::packet_cb);
                 const uint32_t r1_base = buf_base;
                 const uint32_t r2_base = buf_base + CTArgs::r2_buffer_offset;
@@ -489,6 +459,71 @@ struct ReduceToAllB1 {
                 } else {
                     DPRINT << "RD(exit)\n";
                 }
+
+                // Persistent next-iteration signal. On exit devices, all reduce
+                // workers bump this FC's wait_sem directly after finishing their
+                // iteration. The FC waits for total_num_workers increments, then
+                // signals the entry device's sender_core.
+                //
+                // Two modes (selected by dst_sem_addr at runtime):
+                //   dst_sem_addr != 0  → cross-chip: fabric atomic_inc to entry
+                //                        device, plus optional local_dst release.
+                //   dst_sem_addr == 0  → local-only: entry == exit on same chip,
+                //                        just do a local NoC inc via local_dst.
+                if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
+                    DPRINT << "persistent: waiting for workers\n";
+                    uint32_t wait_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+                    uint32_t dst_noc_x = get_arg_val<uint32_t>(arg_idx++);
+                    uint32_t dst_noc_y = get_arg_val<uint32_t>(arg_idx++);
+                    uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+                    uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
+                    uint32_t dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+                    uint32_t local_dst_noc_x = get_arg_val<uint32_t>(arg_idx++);
+                    uint32_t local_dst_noc_y = get_arg_val<uint32_t>(arg_idx++);
+                    uint32_t local_dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+
+                    volatile tt_l1_ptr uint32_t* wait_sem_ptr =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wait_sem_addr);
+                    noc_semaphore_wait_min(wait_sem_ptr, CTArgs::total_num_workers);
+                    noc_semaphore_set(wait_sem_ptr, 0);
+                    DPRINT << "persistent: all workers signaled\n";
+
+                    if (dst_sem_addr != 0) {
+                        // Cross-chip mode: optional local release first, then
+                        // fabric atomic_inc to remote entry device.
+                        if (local_dst_sem_addr != 0) {
+                            uint64_t local_sem_noc = get_noc_addr(local_dst_noc_x, local_dst_noc_y, local_dst_sem_addr);
+                            noc_semaphore_inc(local_sem_noc, 1);
+                            noc_async_atomic_barrier();
+                        }
+
+                        constexpr uint32_t pkt_hdr_bytes_p = sizeof(PACKET_HEADER_TYPE);
+                        PacketHeaderPool::reset();
+                        auto route_id = PacketHeaderPool::allocate_header_n(1);
+                        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::header_table[route_id].first;
+                        set_unicast_route(
+                            hdr, static_cast<uint16_t>(dst_chip_id), static_cast<uint16_t>(dst_mesh_id), 1);
+                        hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            get_noc_addr(dst_noc_x, dst_noc_y, dst_sem_addr), 1});
+                        auto persistent_sender =
+                            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
+                                arg_idx);
+                        persistent_sender.open();
+                        persistent_sender.wait_for_empty_write_slot();
+                        persistent_sender.send_payload_flush_blocking_from_address(
+                            reinterpret_cast<uint32_t>(hdr), pkt_hdr_bytes_p);
+                        persistent_sender.close();
+                        noc_async_full_barrier();
+                        DPRINT << "persistent: cross-chip signal sent\n";
+                    } else {
+                        // Local-only mode: entry == exit on same chip.
+                        DPRINT << "persistent: local signal\n";
+                        uint64_t local_sem_noc = get_noc_addr(local_dst_noc_x, local_dst_noc_y, local_dst_sem_addr);
+                        noc_semaphore_inc(local_sem_noc, 1);
+                        noc_async_atomic_barrier();
+                    }
+                }
+
                 return;
             }
 
@@ -589,6 +624,13 @@ struct ReduceToAllB1 {
                     cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 }
                 DPRINT << "WR3d(send)\n";
+
+                if (args.persistent_enable != 0) {
+                    uint64_t fc_sem = get_noc_addr(
+                        args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
+                    noc_semaphore_inc(fc_sem, 1);
+                    noc_async_atomic_barrier();
+                }
             } else {
                 // Exit column: copy column sum to reload for TRISC R3 computation,
                 // then wait for global sum and write output
@@ -650,9 +692,10 @@ struct ReduceToAllB1 {
                                 sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
                             noc_async_write(src_addr, fifo_dst, CTArgs::socket_page_size);
                             noc_async_writes_flushed();
-
+                            DPRINT << "WSW\n";
                             socket_push_pages(sender_socket, 1);
                             socket_notify_receiver(sender_socket);
+                            DPRINT << "WSN\n";
                             noc_async_write_barrier();
                             DPRINT << "WSP\n";
                             socket_barrier(sender_socket);
@@ -660,19 +703,9 @@ struct ReduceToAllB1 {
                             update_socket_config(sender_socket);
                         }
                         if (args.persistent_enable != 0) {
-                            volatile tt_l1_ptr uint32_t* agg_sem_ptr =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
-                            noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
-                            noc_semaphore_set(agg_sem_ptr, 0);
-
                             uint64_t fc_sem = get_noc_addr(
                                 args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
                             noc_semaphore_inc(fc_sem, 1);
-                            noc_async_write_barrier();
-                        } else if (args.agg_sem_l1_addr != 0) {
-                            uint64_t agg_sem_noc =
-                                get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
-                            noc_semaphore_inc(agg_sem_noc, 1);
                             noc_async_atomic_barrier();
                         }
                     }
@@ -690,6 +723,7 @@ struct ReduceToAllB1 {
             // ================================================================
             // TRISC — 3-round add_tiles (same as reduce_to_one_b1)
             // ================================================================
+            DPRINT << "TRISC start\n";
             if constexpr (CTArgs::is_fabric_core) {
                 return;
             }

@@ -118,20 +118,32 @@ struct Forward {
     private:
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
+            DPRINT << "forward op: socket_config_addr=" << (uint32_t)args.socket_config_addr
+                   << " socket_page_size=" << (uint32_t)args.socket_page_size
+                   << " socket_num_pages=" << (uint32_t)args.socket_num_pages << "\n";
+            DPRINT << "FORWARD: entry_column=" << CTArgs::is_entry_column << "\n";
+            DPRINT << "forward is worker_core=" << (uint32_t)IsWorkerCore << "\n";
             if constexpr (IsWorkerCore && CTArgs::is_entry_column) {
                 static_assert(noc_mode == DM_DYNAMIC_NOC);
+                DPRINT << "forward op (entry): BRISC socket read into residual tensor\n";
                 SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
+                DPRINT << "socket created\n";
                 set_receiver_socket_page_size(recv, args.socket_page_size);
+                DPRINT << "socket page size set\n";
                 socket_wait_for_pages(recv, args.socket_num_pages);
+                DPRINT << "socket pages available\n";
                 cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                DPRINT << "socket read: reserved " << (uint32_t)CTArgs::num_pages_to_read << " pages in cb\n";
                 invalidate_l1_cache();
                 noc_async_read(
                     get_noc_addr(recv.read_ptr), get_write_ptr(CTArgs::cb0_id), args.socket_page_size, 1 - noc_index);
                 noc_async_read_barrier(1 - noc_index);
+                DPRINT << "socket read done, pushing to CB\n";
                 cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
 
                 socket_pop_pages(recv, args.socket_num_pages);
                 socket_notify_sender(recv, 1 - noc_index);
+                DPRINT << "socket read complete, popped pages and notified sender\n";
                 update_socket_config(recv);
                 DPRINT << "end of forward op (entry)\n";
             } else if constexpr (IsWorkerCore && !CTArgs::is_entry_column) {
@@ -139,12 +151,15 @@ struct Forward {
             }
 
 #elif defined(COMPILE_FOR_NCRISC)
+            DPRINT << "forward op is worker core: " << (uint32_t)IsWorkerCore << "\n";
+            DPRINT << "forward op is entry column: " << CTArgs::is_entry_column << "\n";
             if constexpr (IsWorkerCore && CTArgs::is_entry_column) {
                 // Wait for BRISC's socket-staged payload in cb0. cb0 is bound to a
                 // separate persistent staging region (sdpa_out_interm scratch in
                 // op.py:_overlap_cbs_with_sdpa_buffer) — *not* the residual tensor.
                 // This mirrors main's Broadcast, where bcast_pkt_cb aliases the
                 // standalone bcast_input_tensor (≠ residual_mcast_src tensor).
+                DPRINT << "forward op (entry): NCRISC waiting for data in cb\n";
                 cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                 const uint32_t src = get_read_ptr(CTArgs::cb0_id);
                 constexpr uint32_t tensor_size_bytes = CTArgs::tensor_page_size * CTArgs::num_pages_to_read;

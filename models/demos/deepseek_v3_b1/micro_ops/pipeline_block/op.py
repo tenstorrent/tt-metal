@@ -519,9 +519,13 @@ class PipelineBlock:
         for si in self.entry_socket_interface:
             entry_entries.extend(si.build_programs())
 
-        all_entries = []
+        exit_entries = []
         for si in self.exit_socket_interface:
-            all_entries.extend(si.build_programs(base_programs=entry_entries))
+            exit_entries.extend(si.build_programs(base_programs=entry_entries))
+
+        exit_device_set = {str(dc) for dc, _ in exit_entries}
+        all_entries = [(dc, prog) for dc, prog in entry_entries if str(dc) not in exit_device_set]
+        all_entries.extend(exit_entries)
 
         dummy_tensor = ttnn.allocate_tensor_on_device(
             ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device

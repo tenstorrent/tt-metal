@@ -373,6 +373,15 @@ class HostInterface:
         if self.d2h_upstream_core is not None:
             my_upstream_fabric_node_id = self.mesh_device.get_fabric_node_id(self.d2h_upstream_core.device_coord)
 
+        print(
+            f"[HIO _build_programs] h2d_core={self.h2d_mesh_core_coord} d2h_core={self.d2h_mesh_core_coord}"
+            f" h2d_downstream={self.h2d_downstream_core} d2h_upstream={self.d2h_upstream_core}"
+            f" h2d_fab={h2d_fabric_node_id} d2h_fab={d2h_fabric_node_id}"
+            f" downstream_fab={my_downstream_fabric_node_id} upstream_fab={my_upstream_fabric_node_id}"
+            f" inter_mesh={self.inter_mesh_downstream}",
+            flush=True,
+        )
+
         h2d_kernel = None
         h2d_cb_descriptors = None
         d2h_kernel = None
@@ -402,6 +411,12 @@ class HostInterface:
             self.h2d_socket
             and self.d2h_socket
             and self.h2d_mesh_core_coord.device_coord == self.d2h_mesh_core_coord.device_coord
+        )
+
+        print(
+            f"[HIO _build_programs] h2d_uses_fabric={h2d_uses_fabric} d2h_uses_fabric={d2h_uses_fabric}"
+            f" same_device={same_device} loopback={self.loopback_mode}",
+            flush=True,
         )
 
         h2d_program = None
@@ -442,6 +457,11 @@ class HostInterface:
                 self.h2d_mesh_core_coord.core_coord.y
             ]
             if h2d_uses_fabric:
+                print(
+                    f"[HIO _build_programs] H2D fabric: src={h2d_fabric_node_id} dst={my_downstream_fabric_node_id}"
+                    f" core={self.h2d_mesh_core_coord.core_coord} num_links={self.num_fwd_links}",
+                    flush=True,
+                )
                 for idx in range(self.num_fwd_links):
                     fwd_fabric_args = ttnn.setup_fabric_connection(
                         h2d_fabric_node_id,
@@ -450,6 +470,7 @@ class HostInterface:
                         h2d_program,
                         self.h2d_mesh_core_coord.core_coord,
                     )
+                    print(f"[HIO _build_programs] H2D fabric link {idx}: args={fwd_fabric_args}", flush=True)
                     h2d_rt_args_ref.extend(fwd_fabric_args)
 
         if self.d2h_socket and d2h_program is not None:
@@ -462,6 +483,11 @@ class HostInterface:
             ]
 
             if d2h_uses_fabric:
+                print(
+                    f"[HIO _build_programs] D2H fabric: src={d2h_fabric_node_id} dst={my_upstream_fabric_node_id}"
+                    f" core={self.d2h_mesh_core_coord.core_coord} num_links={self.num_bwd_links}",
+                    flush=True,
+                )
                 for idx in range(self.num_bwd_links):
                     bwd_fabric_args = ttnn.setup_fabric_connection(
                         d2h_fabric_node_id,
@@ -470,6 +496,7 @@ class HostInterface:
                         d2h_program,
                         self.d2h_mesh_core_coord.core_coord,
                     )
+                    print(f"[HIO _build_programs] D2H fabric link {idx}: args={bwd_fabric_args}", flush=True)
                     d2h_rt_args_ref.extend(bwd_fabric_args)
 
         entries = []
@@ -477,6 +504,10 @@ class HostInterface:
             entries.append((self.h2d_mesh_core_coord.device_coord, h2d_program))
         if self.d2h_socket and d2h_program is not None and not same_device:
             entries.append((self.d2h_mesh_core_coord.device_coord, d2h_program))
+        print(
+            f"[HIO _build_programs] returning {len(entries)} entries:" f" {[(str(dc), id(p)) for dc, p in entries]}",
+            flush=True,
+        )
         return entries
 
     def run(self):
