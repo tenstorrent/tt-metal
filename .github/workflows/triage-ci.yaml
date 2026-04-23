@@ -23,6 +23,10 @@ on:
         description: "LLM backend for issue drafting: 'cursor' (default) or 'copilot' (uses AUTO_TRIAGE_TOKEN, no extra quota)"
         type: string
         default: "cursor"
+      workflow-filter:
+        description: "Only analyze workflows whose name contains this string (empty = all)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -37,6 +41,7 @@ jobs:
       target-repo: ${{ inputs.target-repo }}
       max-issues: ${{ fromJSON(inputs.max-issues) }}
       llm-backend: ${{ inputs.llm-backend }}
+      workflow-filter: ${{ inputs.workflow-filter }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
