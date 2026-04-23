@@ -833,24 +833,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
 
 
 def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cores):
-    """Compute all perf counter metrics from the perf_counter_df DataFrame.
-
-    Parameters
-    ----------
-    perf_counter_df : pd.DataFrame
-        DataFrame with columns including "counter type", "value", "ref cnt",
-        "run_host_id", "trace_id_count", "core_x", "core_y".
-    device_arch : str
-        Device architecture string (e.g. "wormhole_b0", "blackhole").
-    total_compute_cores : int
-        Number of compute cores on the device.
-
-    Returns
-    -------
-    dict with two keys:
-        "per_op_stats" : dict mapping metric_base_name -> {"min": dict, "median": dict, "max": dict, "avg": dict}
-        "per_op_counts" : dict mapping count_name -> dict
-    """
+    """Compute per-op perf counter metrics and return {per_op_stats, per_op_counts}."""
 
     per_op_stats = {}
     per_op_counts = {}
@@ -1388,28 +1371,7 @@ def compute_device_only_metrics(
     perf_counter_df: pd.DataFrame,
     device_arch: str,
 ) -> Tuple[Dict[str, Dict], List[Dict]]:
-    """Compute device-only efficiency metrics from perf counter data.
-
-    This creates a pivot table from the raw counter dataframe, derives ~40
-    efficiency/utilization metrics via per-row lambda functions, aggregates
-    them per-op (min/median/max/avg), and builds the summary rows for
-    ``print_efficiency_metrics_summary``.
-
-    Parameters
-    ----------
-    perf_counter_df : pd.DataFrame
-        Raw perf counter data with columns ``run_host_id``, ``trace_id_count``,
-        ``core_x``, ``core_y``, ``counter type``, ``value``, ``ref cnt``.
-    device_arch : str
-        Device architecture string (e.g. ``"wormhole_b0"``, ``"blackhole"``).
-
-    Returns
-    -------
-    tuple of (agg_metrics, eff_summary_rows)
-        agg_metrics : dict mapping metric_name -> {min/median/max/avg dicts}
-        eff_summary_rows : list of row dicts suitable for
-            ``pd.DataFrame(eff_summary_rows)`` → ``print_efficiency_metrics_summary``
-    """
+    """Compute device-only efficiency metrics; returns (agg_metrics, eff_summary_rows)."""
 
     efficiency_records = []
     for _, row in perf_counter_df.iterrows():

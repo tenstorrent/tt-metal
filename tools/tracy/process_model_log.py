@@ -109,11 +109,7 @@ def merge_pass_csv(pass1_csv_path, pass2_csv_path):
 
 
 def requires_multi_pass_profile(capture_perf_counters_groups):
-    """Check if both L1 banks are requested, requiring two-pass execution.
-
-    L1_0 and L1_1 share a hardware mux and cannot be captured simultaneously.
-    When both are requested, we run the profiler twice and merge the results.
-    """
+    """True if both L1_0 and L1_1 are requested (they share a mux and need two passes)."""
     if not capture_perf_counters_groups:
         return False
     groups_lower = [g.lower() for g in capture_perf_counters_groups]
