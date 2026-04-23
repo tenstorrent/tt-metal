@@ -113,6 +113,30 @@ constexpr uint64_t kAddrFpuOutH = kRiscvDebugBase + 0x124;  // 4 B, adjacent to 
 constexpr uint64_t kAddrWallL = kRiscvDebugBase + 0x1F0;    // 4 B
 constexpr uint64_t kAddrWallH = kRiscvDebugBase + 0x1F8;    // 4 B, +8 from WALL_L
 
+// Phase 2.1 on-chip sampler. When brisc is running the Phase 2.1 firmware,
+// it writes a ring of perf-counter snapshots into mailboxes->util_sampler
+// every ~100 us. We detect presence by reading the magic field at startup;
+// if present, we pull the ring instead of polling the debug registers — one
+// PCIe read per tick instead of four, and the samples were taken on-chip at
+// a rate independent of our host poll rate.
+constexpr uint32_t kUtilSamplerMagic = 0x53555454u;  // 'TTUS' little-endian
+constexpr uint32_t kUtilSamplerRingSize = 64;
+struct UtilSamplerEntry {
+    uint32_t wall_clock_l;
+    uint32_t wall_clock_h;
+    uint32_t fpu_out_l;
+    uint32_t fpu_out_h;
+};
+static_assert(sizeof(UtilSamplerEntry) == 16);
+struct UtilSamplerHeader {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t head;
+    uint32_t period_cycles;
+};
+static_assert(sizeof(UtilSamplerHeader) == 16);
+constexpr size_t kUtilSamplerTotal = sizeof(UtilSamplerHeader) + kUtilSamplerRingSize * sizeof(UtilSamplerEntry);
+
 // EWMA smoothing for compute_busy. alpha = 2/(N+1) for N-sample horizon.
 // N=10 gives a ~1s smoothing window at 10 Hz publish rate.
 constexpr double kComputeEwmaAlpha = 2.0 / (10.0 + 1.0);
@@ -242,6 +266,11 @@ struct CoreState {
     uint64_t last_wall_clock = 0;
     uint32_t last_fpu_out_h = 0;
     double compute_busy_ewma = 0.0;  // [0..1]
+
+    // Phase 2.1 on-chip sampler state.
+    bool ring_available = false;     // firmware has Phase 2.1 hook active
+    uint64_t util_sampler_addr = 0;  // L1 address of mailboxes->util_sampler
+    uint32_t last_ring_head = 0;     // last head index we read from the ring
 };
 
 struct ChipState {
@@ -394,7 +423,12 @@ int main(int argc, char* argv[]) {
         // Populate static per-core fields once, and arm the FPU perf counter
         // so it runs continuously. Kernels that call StartPerfCounters will
         // transiently reset it; the sampler's delta guard drops those ticks.
+        // Also probe for Phase 2.1 firmware: if mailboxes->util_sampler.magic
+        // is 'TTUS' we switch to ring-based sampling for that core.
+        constexpr uint64_t kMailboxBaseAddr = static_cast<uint64_t>(MEM_MAILBOX_BASE);
+        constexpr size_t kUtilSamplerOffset = offsetof(mailboxes_t, util_sampler);
         int armed = 0;
+        int rings_live = 0;
         for (size_t i = 0; i < chip.cores.size(); ++i) {
             auto& v = chip.publisher.cores()[i];
             v.noc_x = static_cast<uint8_t>(chip.cores[i].noc_x);
@@ -406,8 +440,23 @@ int main(int argc, char* argv[]) {
             if (chip.cores[i].counter_armed) {
                 ++armed;
             }
+            // Probe for Phase 2.1 sampler magic. If firmware isn't the
+            // Phase 2.1 build, magic reads as stale L1 garbage / 0 and we
+            // fall back to direct-register polling on this core.
+            chip.cores[i].util_sampler_addr = kMailboxBaseAddr + kUtilSamplerOffset;
+            uint32_t probe_magic = 0;
+            try {
+                chip.cores[i].device->read_from_device(
+                    &probe_magic, chip.cores[i].translated, chip.cores[i].util_sampler_addr, sizeof(probe_magic));
+            } catch (const std::exception&) {
+            }
+            if (probe_magic == kUtilSamplerMagic) {
+                chip.cores[i].ring_available = true;
+                ++rings_live;
+            }
         }
         std::cerr << "ttnvtop-collector: chip " << chip.chip_id << " armed FPU counter on " << armed << "/"
+                  << chip.cores.size() << " cores; Phase 2.1 ring detected on " << rings_live << "/"
                   << chip.cores.size() << " cores.\n";
 
         // Verify the arm actually took effect: read FPU_OUT_L twice on the
@@ -475,54 +524,89 @@ int main(int argc, char* argv[]) {
                         now_bit = (signal == static_cast<uint8_t>(RUN_MSG_GO)) ? 1 : 0;
                     }
 
-                    // Perf counters (Phase 2.0). busy% = delta(OUT_H) / delta(WALL_CLOCK).
-                    //
-                    // We use four separate 4-byte reads per core per tick
-                    // (OUT_L, OUT_H, WALL_L, WALL_H). The 220-byte block-read
-                    // approach did not survive UMD's ETH tunnel on remote
-                    // chips: past the first 4 bytes the returned buffer
-                    // either aliased (OUT_H == OUT_L) or read all-ones
-                    // (WALL_CLOCK). Four small reads land correctly on
-                    // both local and remote.
+                    // Perf counters. Two acquisition paths:
+                    //   (A) Phase 2.1 ring: brisc firmware has been writing
+                    //       samples to mailboxes->util_sampler.ring. We read
+                    //       the whole region (1056 B) in one L1 block read,
+                    //       extract the most recent entry, and use that as
+                    //       "now". One PCIe read per core instead of four.
+                    //   (B) Phase 2.0 fallback: old firmware / no ring.
+                    //       Direct register reads of OUT_L, OUT_H, WALL_L,
+                    //       WALL_H. Four small reads per core.
                     bool have_perf = false;
                     uint32_t fpu_out_l_now = 0;
                     uint32_t fpu_out_h_now = 0;
-                    uint32_t wall_l_now = 0;
-                    uint32_t wall_h_now = 0;
                     uint64_t wall_now = 0;
+                    // Probe magic each tick so the collector self-heals: if a
+                    // workload loads Phase 2.1 firmware after the collector
+                    // starts, the ring pops into existence and we switch
+                    // seamlessly.
+                    uint32_t probe_magic = 0;
                     try {
-                        c.device->read_from_device(&fpu_out_l_now, c.translated, kAddrFpuOutL, sizeof(fpu_out_l_now));
-                        c.device->read_from_device(&fpu_out_h_now, c.translated, kAddrFpuOutH, sizeof(fpu_out_h_now));
-                        c.device->read_from_device(&wall_l_now, c.translated, kAddrWallL, sizeof(wall_l_now));
-                        c.device->read_from_device(&wall_h_now, c.translated, kAddrWallH, sizeof(wall_h_now));
-                        have_perf = true;
+                        c.device->read_from_device(
+                            &probe_magic, c.translated, c.util_sampler_addr, sizeof(probe_magic));
                     } catch (const std::exception&) {
                     }
-                    if (have_perf) {
-                        wall_now = (static_cast<uint64_t>(wall_h_now) << 32) | wall_l_now;
-                        // Periodic live probe: dump raw counter values for
-                        // core (1,1) on each chip once per second so we can
-                        // tell "counter stopped" from "counter ticking but
-                        // OUT_H reads 0" from "everything working, workload
-                        // really has no FPU activity here".
-                        if (c.noc_x == 1 && c.noc_y == 1) {
-                            static std::atomic<uint64_t> last_probe_us{0};
-                            const auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                                                    std::chrono::steady_clock::now().time_since_epoch())
-                                                    .count();
-                            const uint64_t lp = last_probe_us.load(std::memory_order_relaxed);
-                            if (static_cast<uint64_t>(now_us) - lp > 1'000'000) {
-                                last_probe_us.store(now_us, std::memory_order_relaxed);
-                                std::fprintf(
-                                    stderr,
-                                    "[live-probe] core(1,1) is_remote=%d "
-                                    "wall=0x%016lx out_l=0x%08x out_h=0x%08x\n",
-                                    c.is_remote ? 1 : 0,
-                                    wall_now,
-                                    fpu_out_l_now,
-                                    fpu_out_h_now);
-                                std::fflush(stderr);
+                    const bool ring_live = (probe_magic == kUtilSamplerMagic);
+                    c.ring_available = ring_live;
+                    if (ring_live) {
+                        uint8_t ring_buf[kUtilSamplerTotal];
+                        try {
+                            c.device->read_from_device(ring_buf, c.translated, c.util_sampler_addr, kUtilSamplerTotal);
+                            UtilSamplerHeader hdr;
+                            std::memcpy(&hdr, ring_buf, sizeof(hdr));
+                            if (hdr.magic == kUtilSamplerMagic && hdr.head > 0) {
+                                const uint32_t slot = (hdr.head - 1) & (kUtilSamplerRingSize - 1);
+                                UtilSamplerEntry e;
+                                std::memcpy(
+                                    &e,
+                                    ring_buf + sizeof(UtilSamplerHeader) + slot * sizeof(UtilSamplerEntry),
+                                    sizeof(e));
+                                fpu_out_l_now = e.fpu_out_l;
+                                fpu_out_h_now = e.fpu_out_h;
+                                wall_now = (static_cast<uint64_t>(e.wall_clock_h) << 32) | e.wall_clock_l;
+                                have_perf = true;
                             }
+                        } catch (const std::exception&) {
+                        }
+                    }
+                    if (!have_perf) {
+                        uint32_t wl = 0, wh = 0;
+                        try {
+                            c.device->read_from_device(
+                                &fpu_out_l_now, c.translated, kAddrFpuOutL, sizeof(fpu_out_l_now));
+                            c.device->read_from_device(
+                                &fpu_out_h_now, c.translated, kAddrFpuOutH, sizeof(fpu_out_h_now));
+                            c.device->read_from_device(&wl, c.translated, kAddrWallL, sizeof(wl));
+                            c.device->read_from_device(&wh, c.translated, kAddrWallH, sizeof(wh));
+                            wall_now = (static_cast<uint64_t>(wh) << 32) | wl;
+                            have_perf = true;
+                        } catch (const std::exception&) {
+                        }
+                    }
+                    if (have_perf && c.noc_x == 1 && c.noc_y == 1) {
+                        // Periodic live probe: dump raw counter values for
+                        // core (1,1) on each chip once per second. Also
+                        // reports which acquisition path was used so we can
+                        // verify the Phase 2.1 ring is wired up when firmware
+                        // supports it.
+                        static std::atomic<uint64_t> last_probe_us{0};
+                        const auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                                std::chrono::steady_clock::now().time_since_epoch())
+                                                .count();
+                        const uint64_t lp = last_probe_us.load(std::memory_order_relaxed);
+                        if (static_cast<uint64_t>(now_us) - lp > 1'000'000) {
+                            last_probe_us.store(now_us, std::memory_order_relaxed);
+                            std::fprintf(
+                                stderr,
+                                "[live-probe] core(1,1) is_remote=%d src=%s "
+                                "wall=0x%016lx out_l=0x%08x out_h=0x%08x\n",
+                                c.is_remote ? 1 : 0,
+                                c.ring_available ? "ring" : "regs",
+                                wall_now,
+                                fpu_out_l_now,
+                                fpu_out_h_now);
+                            std::fflush(stderr);
                         }
                     }
 
