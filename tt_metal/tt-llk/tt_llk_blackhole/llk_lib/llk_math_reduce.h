@@ -29,30 +29,35 @@ inline void reduce_row_perform_transpose()
 {
     if (enforce_fp32_accumulation)
     {
-        // BH Issue #449 W/A: SFPU-staged 2-pass transpose (v4: Phase 1 lo-only).
-        // Phase 1: SFPU extracts lo16 only to LO16_STAGE (16 ops; was 24 in v3).
-        //   Hi16 does NOT need staging — Phase 2 hi reads hi16 directly from the fp32 face
-        //   via MOVD2B(Fp32=0) with dst_32bit_addr_en=1 (routes read_dst16b through
-        //   read_dst32b(adj_row) >> 16 → pure hi16 regardless of tile offset D).
-        // Phase 2 hi: dst_32bit_addr_en=1, MOVD2B reads hi16 from face (dst=0),
-        //   TRNSPSRCB, MOVB2D writes transposed hi16 back to face via adj_row (lo16=0 as
-        //   side effect of write_dst32b(adj_row, data<<16)). No HI16_STAGE scratch.
-        // Phase 2 lo: dst_32bit_addr_en=0, unchanged — transposes LO16_STAGE scratch.
-        // Phase 3: SFPLOAD INT32 from face (reads face hi16+0 via adj_row via read_dst32b,
-        //   no dst_32bit_addr_en dependency) + SFPLOAD LO16_ONLY from LO16_STAGE
-        //   (preserves LReg hi16) + SFPSTORE INT32 = 24 ops (unchanged count).
-        // Total SFPU: 40 ops (-8 vs 48 in v3). Uses only dest_32b_lo=0 in MOV* (avoids
-        // BH Issue #449 HW bug, which affects dest_32b_lo=1).
+        // BH Issue #449 W/A: SFPU-staged 2-pass transpose of fp32 face data.
+        //
+        // Face fp32 values occupy two physical DEST rows per logical row via Adj32
+        // mapping: hi16 at DstBits[Adj32(R)], lo16 at DstBits[Adj32(R)+8]. BH Issue
+        // #449 blocks MOV* with dest_32b_lo=1; this W/A transposes hi and lo halves
+        // separately using only dest_32b_lo=0 paths.
+        //
+        // Phase 1 (SFPU, dbg=1): extract lo16 of each face row to LO16_STAGE scratch
+        //   via SFPLOAD INT32 + SFPSTORE LO16_ONLY. (hi16 does not need staging —
+        //   Phase 2 hi reads it directly from the face.)
+        // Phase 2 hi (MATH, dbg=1): MOVD2B reads hi16 from face via adj_row
+        //   (dst_32bit_addr_en=1 routes Dst16b through Adj32), TRNSPSRCB transposes,
+        //   MOVB2D writes transposed hi16 back to face hi16 rows. Face lo16 is
+        //   zeroed as a side-effect of write_dst32b(adj_row, data<<16).
+        // Phase 2 lo (MATH, dbg=0): transpose LO16_STAGE scratch in place.
+        // Phase 3 (SFPU, dbg=0): SFPLOAD HI16_ONLY from scratch + SFPSTORE HI16_ONLY
+        //   to face lo16 rows via pre-recorded replay templates (slots 0, 2). Dst16b
+        //   half-writes use Adj16=identity so they target single physical rows (face
+        //   lo16 physical rows {8,9,12,13,24,25,28,29} for D=0) without disturbing
+        //   the hi16 Phase 2 hi wrote.
+        //
+        // Uses only dest_32b_lo=0 in MOV* (avoids #449 HW bug). Fp32_enabled stays
+        // at 1 — MOV* use_dst32b path goes through Adj32 regardless of dbg bit.
+        // Assumes D=0: for D≠0 the face lo16 physical rows are at Adj32(D+R)+8
+        // which doesn't scale linearly; runtime DstRWC setup would be required
+        // for general D.
         constexpr std::uint32_t LO16_STAGE = 144;
 
-        // v6: cfg_rmw(Fp32=0) dropped. The BH HW bug (#449) only affects MOV* with
-        // dest_32b_lo=1. Since we only use dest_32b_lo=0 (DEST_NORM), keeping Fp32=1
-        // is safe. dst_32bit_addr_en=1 toggle around Phase 2 hi is still needed to
-        // make ttsim's MOVD2B/MOVB2D route through Adj32 (ttsim models Adj16=identity
-        // in Fp32=0 mode, but our MOV*s run with Fp32 unchanged which may differ).
-
-        // Phase 1: SFPU extracts lo16 only (hi16 read directly from face by Phase 2 hi).
-        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+        // Phase 1
         _llk_math_dbg_feature_disable_(); // dst_32bit_addr_en = 1
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
 #pragma GCC unroll 4
@@ -68,10 +73,7 @@ inline void reduce_row_perform_transpose()
             }
         }
 
-        // Phase 2 hi: enable dst_32bit_addr_en=1 so MOVD2B/MOVB2D route through
-        // read_dst32b/write_dst32b(adj_row). Reads hi16 from face (dst=0), transposes,
-        // writes transposed hi16 back to face. (Face lo16 gets zeroed as side effect.)
-
+        // Phase 2 hi
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
@@ -80,14 +82,13 @@ inline void reduce_row_perform_transpose()
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-        // Restore dst_32bit_addr_en=0 before Phase 2 lo (which needs direct physical
-        // addressing for LO16_STAGE scratch access).
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
+        // EXPERIMENT: drop STALL_MATH,WAIT_SFPU + STALL_CFG,MATH before enable.
+        // tensix_sync() inside _llk_math_dbg_feature_enable_() drains tensix from
+        // the RISCV side, which should cover both SFPU drain and CFG ordering.
         _llk_math_dbg_feature_enable_(); // dst_32bit_addr_en = 0
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
 
-        // Phase 2 lo: unchanged — transposes LO16_STAGE scratch in place.
+        // Phase 2 lo
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
         TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
@@ -96,12 +97,8 @@ inline void reduce_row_perform_transpose()
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 12);
 
-        // Phase 3: write transposed lo16 to face lo16 rows via SFPSTORE HI16_ONLY.
-        // Two recorded 2-op templates (slot 0: dst_base=8; slot 2: dst_base=16), each
-        // replayed 4×. ADDR_MOD_7 on SFPSTORE advances SFPU DstRWC by 2 per iter.
-        // Slot 0 covers dst={8,10,12,14} with DstRWC 0..6; slot 2 covers dst={24,26,28,30}
-        // with DstRWC 8..14. Src base=LO16_STAGE gives src=144..158.
-        // 8 replay triggers vs previous 16 inline ops.
+        // Phase 3 (slot 0: dst_base=8 covering {8,10,12,14}; slot 2: dst_base=16
+        // covering {24,26,28,30}; ADDR_MOD_7 on SFPSTORE advances SFPU DstRWC by 2).
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 #pragma GCC unroll 4
         for (std::uint32_t i = 0; i < 4; i++)
