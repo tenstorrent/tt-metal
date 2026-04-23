@@ -191,72 +191,22 @@ static vector<uint32_t> run_mxfp4_typecast(
 			.compile_args = {num_tiles, /*use_dfbs=*/true}});
 
 	tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_input_dfb, reader, compute);
-	tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_output_dfb, compute, writer);
-	
-	// print uint32_t in bytes
-	// int byte_counter = 0;
-	// for(uint32_t val: src_vec) {
-	// 	// log_info(tt::LogTest, "src_vec[{}] value: 0x{:02X}", byte_counter++, (val & 0xFF000000) >> 24);
-	// 	// log_info(tt::LogTest, "src_vec[{}] value: 0x{:02X}", byte_counter++, (val & 0x00FF0000) >> 16);
-	// 	// log_info(tt::LogTest, "src_vec[{}] value: 0x{:02X}", byte_counter++, (val & 0x0000FF00) >> 8);
-	// 	// log_info(tt::LogTest, "src_vec[{}] value: 0x{:02X}", byte_counter++, (val & 0x000000FF));
-	// }
-	detail::WriteToBuffer(src_buffer, src_vec);
-	// Pass aligned DRAM page stride so the reader/writer advance the DRAM
-	// pointer by the allocator's aligned_page_size (576 for MxFp4 on Quasar
-	// due to 64B DRAM alignment) while the DFB streams native 544-byte tiles.
-	uint32_t src_dram_stride = static_cast<uint32_t>(src_buffer->aligned_page_size());
-	uint32_t dst_dram_stride = static_cast<uint32_t>(dst_buffer->aligned_page_size());
-	SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles, src_dram_stride});
-	SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles, dst_dram_stride});
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_output_dfb, compute, writer);
 
-	detail::LaunchProgram(dev, program, /*wait_for_completion=*/true);
+    detail::WriteToBuffer(src_buffer, src_vec);
+    // Pass aligned DRAM page stride so the reader/writer advance the DRAM
+    // pointer by the allocator's aligned_page_size (576 for MxFp4 on Quasar
+    // due to 64B DRAM alignment) while the DFB streams native 544-byte tiles.
+    uint32_t src_dram_stride = static_cast<uint32_t>(src_buffer->aligned_page_size());
+    uint32_t dst_dram_stride = static_cast<uint32_t>(dst_buffer->aligned_page_size());
+    SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles, src_dram_stride});
+    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles, dst_dram_stride});
 
-	// === L1 post-mortem for MxFp4 multi-tile debug ===
-	// From the DFB log: input DFB is at L1 base 0xBA800 (763776), 2 × 544 B = 1088 B.
-	//                  output DFB is at L1 base 0xBAC40 (764864), 2 × 2048 B = 4096 B.
-	// After LaunchProgram the kernels have finished — read both DFB regions from
-	// worker-core L1 and dump tile-1 regions so we can see whether (a) the reader
-	// delivered tile-1's MxFp4 bytes to the input DFB, and (b) the compute+packer
-	// produced nonzero BF16 for tile-1 in the output DFB.
-	{
-		constexpr uint32_t kInputDFBBase = 763776;
-		constexpr uint32_t kInputTileSize = 544;
-		constexpr uint32_t kOutputDFBBase = 764864;
-		constexpr uint32_t kOutputTileSize = 2048;
+    detail::LaunchProgram(dev, program, /*wait_for_completion=*/true);
 
-		std::vector<uint32_t> in_l1_words, out_l1_words;
-		detail::ReadFromDeviceL1(dev, core, kInputDFBBase, num_tiles * kInputTileSize, in_l1_words);
-		detail::ReadFromDeviceL1(dev, core, kOutputDFBBase, num_tiles * kOutputTileSize, out_l1_words);
-
-		auto dump_bytes = [](const char* label, const std::vector<uint32_t>& words, size_t byte_offset, size_t n) {
-			std::ostringstream oss;
-			oss << label << " bytes [" << byte_offset << ".." << (byte_offset + n - 1) << "]:" << std::hex << std::uppercase;
-			const uint8_t* p = reinterpret_cast<const uint8_t*>(words.data());
-			for (size_t i = 0; i < n; ++i) {
-				oss << ' ' << std::setw(2) << std::setfill('0') << static_cast<int>(p[byte_offset + i]);
-			}
-			log_info(tt::LogTest, "{}", oss.str());
-		};
-
-		// Input DFB: dump tile 0 scales, tile 0 data[0..31], tile 1 scales, tile 1 data[0..31],
-		// and probe 32 bytes BEFORE tile 1's expected offset and 32 bytes PAST tile 1 end —
-		// to localize where the 32-byte shift starts.
-		dump_bytes("INPUT L1 tile0 scales[0..31]", in_l1_words, /*byte_offset=*/0, /*n=*/32);
-		dump_bytes("INPUT L1 tile0 data[0..31]  ", in_l1_words, /*byte_offset=*/32, /*n=*/32);
-		dump_bytes("INPUT L1 tile0 data[480..511]", in_l1_words, /*byte_offset=*/32 + 480, /*n=*/32); // last 32 data bytes of tile 0
-		dump_bytes("INPUT L1 tile1 scales[0..31]", in_l1_words, /*byte_offset=*/kInputTileSize, /*n=*/32);
-		dump_bytes("INPUT L1 tile1 data[0..31]  ", in_l1_words, /*byte_offset=*/kInputTileSize + 32, /*n=*/32);
-		dump_bytes("INPUT L1 tile1 data[32..63] ", in_l1_words, /*byte_offset=*/kInputTileSize + 64, /*n=*/32);
-
-		// Output DFB: dump first 32 bytes of tile 0 and tile 1 so we can compare.
-		dump_bytes("OUTPUT L1 tile0[0..31]", out_l1_words, /*byte_offset=*/0, /*n=*/32);
-		dump_bytes("OUTPUT L1 tile1[0..31]", out_l1_words, /*byte_offset=*/kOutputTileSize, /*n=*/32);
-	}
-
-	vector<uint32_t> result_vec;
-	detail::ReadFromBuffer(dst_buffer, result_vec);
-	return result_vec;
+    vector<uint32_t> result_vec;
+    detail::ReadFromBuffer(dst_buffer, result_vec);
+    return result_vec;
 }
 
 // Data generators follow the fp8_typecast tests' convention: generate
