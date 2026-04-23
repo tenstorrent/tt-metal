@@ -206,7 +206,7 @@ class UnsafeAllocationTracker:
                     continue
                 for name, val in local_items:
                     stats["locals"] += 1
-                    _scan_value(val, loc, name, depth=5)
+                    _scan_value(val, loc, name, depth=10)
                 frame = frame.f_back
 
         lines: list[str] = [
@@ -242,6 +242,6 @@ class UnsafeAllocationTracker:
             lines.append(
                 "Hint: these may be program cache buffers (tracked by default; disable with"
                 " TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=1), or held deeper than the"
-                " referrer search depth (currently 5 levels)."
+                " referrer search depth (currently 10 levels)."
             )
         return "\n".join(lines)

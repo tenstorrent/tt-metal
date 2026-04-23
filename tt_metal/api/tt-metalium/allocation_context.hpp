@@ -5,6 +5,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 namespace tt::tt_metal {
 
@@ -12,12 +13,13 @@ namespace tt::tt_metal {
 // Guards push a context string (e.g. op name + compile args) before dispatching;
 // the allocator records whatever context is on top of the stack at allocation time.
 //
-// Only the top entry is checked for suppression markers — this is intentional:
-// corruptible_allocation_scope only suppresses its own direct allocations, NOT
-// program-cache misses from ops dispatched inside it (those push their own context on top).
+// Suppression markers can be checked against the entire active stack so
+// outer scopes (for example corruptible_allocation_scope) can suppress
+// allocations from nested operation contexts as well.
 void push_allocation_context(std::string ctx);
 void pop_allocation_context();
 const std::string& current_allocation_context();
+bool allocation_context_contains(std::string_view ctx);
 
 // RAII guard that pushes/pops a context string on the thread-local allocation context stack.
 // While this guard is alive, any tracked allocation records the context for later reporting.

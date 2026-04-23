@@ -18,6 +18,7 @@
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/allocation_context.hpp>
 #include <tracy/Tracy.hpp>
 #include "ttnn/graph/graph_serialization.hpp"
 
@@ -78,6 +79,7 @@ Tensor create_device_tensor(
     const TensorSpec& tensor_spec,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     std::optional<TensorTopology> tensor_topology) {
+    tt::tt_metal::AllocationContextGuard guard("ttnn.allocate_tensor_on_device");
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
         tensor_spec.logical_shape(),
@@ -132,6 +134,7 @@ Tensor to_device(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> mem_config,
     std::optional<QueueId> cq_id) {
+    AllocationContextGuard guard("ttnn.to_device");
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         TT_ASSERT(input_tensor.device() == mesh_device, "Currently do not support moving between devices");
