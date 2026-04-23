@@ -238,11 +238,11 @@ def _mlp_grid(device):
 # Fused matmul helpers (minimal_matmul: MatmulMultiCoreReuseMultiCast + bias)
 # --------------------------------------------------------------------------- #
 _COMPUTE_CFG = None
+_COMPUTE_CFG_LOFI = None
 
 
 def _fused_compute_config(device: Any) -> Any:
-    """HiFi2 + fp32 accumulator + L1 packer — the recommended config for
-    fused-bias matmuls per tt_dit/layers/linear.py."""
+    """HiFi2 + fp32 accumulator + L1 packer — recommended for fused-bias matmuls."""
     global _COMPUTE_CFG
     if _COMPUTE_CFG is not None:
         return _COMPUTE_CFG
@@ -254,6 +254,22 @@ def _fused_compute_config(device: Any) -> Any:
         packer_l1_acc=True,
     )
     return _COMPUTE_CFG
+
+
+def _fused_compute_config_lofi(device: Any) -> Any:
+    """LoFi + bf16 accumulator — for BFP4 MLP weights that are compute-bound
+    after bandwidth was reduced; LoFi cuts per-cycle cost at a small precision trade."""
+    global _COMPUTE_CFG_LOFI
+    if _COMPUTE_CFG_LOFI is not None:
+        return _COMPUTE_CFG_LOFI
+    _COMPUTE_CFG_LOFI = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    return _COMPUTE_CFG_LOFI
 
 
 # Pre-computed MinimalMatmulConfig table for our ViT shapes on Blackhole 13×10.
@@ -340,20 +356,21 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
     )
     hidden = hidden + attn_out
 
-    # --- MLP: fc1 with fused GELU, fc2 with fused bias ---
+    # --- MLP: fc1/fc2 use LoFi+bf16dest (BFP4 weights are compute-bound after BFP4 bandwidth cut) ---
+    lofi = _fused_compute_config_lofi(dev)
     h = ttnn.layer_norm(hidden, weight=block_params["norm2"]["weight"], bias=block_params["norm2"]["bias"])
     h = ttnn.experimental.minimal_matmul(
         h, block_params["mlp"]["fc1_w"],
         bias_tensor=block_params["mlp"]["fc1_b"],
         config=_mm_cfg(192, 1280, 5120, dev),
-        compute_kernel_config=ckcfg,
+        compute_kernel_config=lofi,
         fused_activation=(ttnn.UnaryOpType.GELU, False),
     )
     h = ttnn.experimental.minimal_matmul(
         h, block_params["mlp"]["fc2_w"],
         bias_tensor=block_params["mlp"]["fc2_b"],
         config=_mm_cfg(192, 5120, 1280, dev),
-        compute_kernel_config=ckcfg,
+        compute_kernel_config=lofi,
     )
     hidden = hidden + h
     return hidden
