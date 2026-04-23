@@ -323,9 +323,15 @@ def _assert_experts_convert_weights_uses_stacked_inputs(
     )
 
     assert requested_names == ["gate_proj.weight", "down_proj.weight", "up_proj.weight"]
-    assert torch.equal(sharded_tensors["w1_experts.input_tensor_b"], expected_tensors["gate_proj"].unsqueeze(0))
-    assert torch.equal(sharded_tensors["w2_experts.input_tensor_b"], expected_tensors["down_proj"].unsqueeze(0))
-    assert torch.equal(sharded_tensors["w3_experts.input_tensor_b"], expected_tensors["up_proj"].unsqueeze(0))
+    assert torch.equal(
+        sharded_tensors["w1_experts.input_tensor_b"], expected_tensors["gate_proj"].unsqueeze(0).transpose(-1, -2)
+    )
+    assert torch.equal(
+        sharded_tensors["w2_experts.input_tensor_b"], expected_tensors["down_proj"].unsqueeze(0).transpose(-1, -2)
+    )
+    assert torch.equal(
+        sharded_tensors["w3_experts.input_tensor_b"], expected_tensors["up_proj"].unsqueeze(0).transpose(-1, -2)
+    )
 
 
 def test_bspm_state_dict_applies_overrides_to_stacked_expert_weights():

@@ -466,6 +466,27 @@ def test_stacked_expert_alias_contains_rejects_out_of_range_experts(tmp_path: Pa
         _ = state[missing_expert_key]
 
 
+def test_cached_stacked_expert_alias_respects_layer_filter(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_tensor = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_tensor}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state = load_state_dict(model_dir, "")
+    expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
+
+    assert torch.equal(state[expert_key], stacked_tensor[1])
+    filtered_view = state.view_with_prefix("", num_layers=2)
+
+    assert expert_key not in filtered_view
+    with pytest.raises(KeyError):
+        _ = filtered_view[expert_key]
+
+
 def test_lazy_state_dict_rejects_mixed_expert_checkpoint(tmp_path: Path):
     model_dir = tmp_path / "model"
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -549,8 +570,8 @@ def test_evict_alias_releases_unpinned_stacked_tensor(tmp_path: Path):
     expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
 
     assert torch.equal(state[expert_key], stacked_tensor[1])
-    assert stacked_key in state._cache
     assert expert_key in state._cache
+    assert stacked_key not in state._cache
 
     state.evict(expert_key)
 

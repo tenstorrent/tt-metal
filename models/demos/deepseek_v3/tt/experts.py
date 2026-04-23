@@ -113,7 +113,7 @@ class Experts(AbstractModule):
             ttnn_name: {
                 "input_tensor_b": shard_and_save(
                     output_path / f"{ttnn_name}.input_tensor_b",
-                    _load_expert_weight(hf_name).unsqueeze(0).contiguous(),
+                    _load_expert_weight(hf_name).unsqueeze(0).transpose(-1, -2).contiguous(),
                     shard_dims=(1, 1),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat8_b if hf_name == "down_proj" else ttnn.bfloat4_b,
@@ -164,19 +164,16 @@ class Experts(AbstractModule):
             "mesh_device": MeshDeviceStub(mesh_device.shape),
             "w1_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                transpose_b=True,
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "w2_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                transpose_b=True,
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "w3_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                transpose_b=True,
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
