@@ -144,6 +144,65 @@ bool get_exp_approx_mode(const std::optional<ttnn::operations::transformer::SDPA
     return true;
 }
 
+// Flat work distribution: single (batch, head, q_chunk) linear space split evenly across cores.
+// Mirrors the kernel-side `proxy_q_range(q_num_chunks, proxy).q_num_effective` so host and kernels
+// agree on the per-head slot count. Zigzag sub-mode engages for causal + even q_num_chunks and
+// distributes in pairs so light/heavy Q chunks balance after linear_to_zigzag remap.
+struct FlatWorkDistribution {
+    uint32_t q_num_effective = 0;
+    uint32_t total_q_chunks = 0;
+    uint32_t base_chunks_per_core = 0;
+    uint32_t cores_doing_extra = 0;
+    uint32_t extra_chunks_per_core = 0;
+    bool zigzag = false;
+
+    struct CoreRange {
+        uint32_t start;
+        uint32_t count;
+    };
+
+    // Per-core [start, start+count) slice of the flat space, clamped to total_q_chunks.
+    CoreRange core_range(uint32_t core_idx) const {
+        uint32_t start =
+            core_idx * base_chunks_per_core + std::min(core_idx, cores_doing_extra) * extra_chunks_per_core;
+        uint32_t count = base_chunks_per_core + ((core_idx < cores_doing_extra) ? extra_chunks_per_core : 0u);
+        if (start >= total_q_chunks) {
+            return {total_q_chunks, 0};
+        }
+        if (start + count > total_q_chunks) {
+            count = total_q_chunks - start;
+        }
+        return {start, count};
+    }
+
+    // Upper bound on per-core count — used to size the Q CB in flatten mode.
+    uint32_t max_chunks_per_core() const {
+        return base_chunks_per_core + (cores_doing_extra > 0 ? extra_chunks_per_core : 0);
+    }
+};
+
+FlatWorkDistribution compute_flat_distribution(
+    uint32_t B, uint32_t NQH, uint32_t q_num_chunks, uint32_t num_cores, bool is_causal, bool is_proxy_down) {
+    FlatWorkDistribution fd{};
+    fd.q_num_effective = is_proxy_down ? (q_num_chunks / 2) : q_num_chunks;
+    fd.total_q_chunks = B * NQH * fd.q_num_effective;
+    fd.zigzag = is_causal && (q_num_chunks % 2 == 0);
+    if (num_cores == 0) {
+        return fd;
+    }
+    if (fd.zigzag) {
+        const uint32_t total_pairs = fd.total_q_chunks / 2;
+        fd.base_chunks_per_core = (total_pairs / num_cores) * 2;
+        fd.cores_doing_extra = total_pairs % num_cores;
+        fd.extra_chunks_per_core = 2;
+    } else {
+        fd.base_chunks_per_core = fd.total_q_chunks / num_cores;
+        fd.cores_doing_extra = fd.total_q_chunks % num_cores;
+        fd.extra_chunks_per_core = 1;
+    }
+    return fd;
+}
+
 // Chunked prefill parameters collected from page table layout.
 struct ChunkedParams {
     uint32_t chunked_q_chunk_offset = 0;
@@ -421,34 +480,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
     const uint32_t q_per_core = (q_num_chunks + q_parallel_factor - 1) / q_parallel_factor;
 
-    // Flat-distribution per-core assignments (only used when flatten_work is true).
-    // Evenly split total_q_chunks across cores. With zigzag sub-mode (causal + even num_q_chunks),
-    // distribute in pairs so every core gets balanced light/heavy work after linear_to_zigzag remap.
-    // DOWN proxy: only the heavy Q half is assigned to cores; UP / none: all Q chunks assigned. This
-    // mirrors proxy_q_range(q_num_chunks, proxy).q_num_effective kernel-side so host and kernels
-    // agree on the per-head slot count.
-    const uint32_t q_num_effective = is_proxy_down ? (q_num_chunks / 2) : q_num_chunks;
-    const uint32_t total_q_chunks = B * NQH * q_num_effective;
-    const bool flat_zigzag = flatten_work && is_causal && (q_num_chunks % 2 == 0);
-    uint32_t base_chunks_per_core = 0;
-    uint32_t cores_doing_extra = 0;
-    uint32_t extra_chunks_per_core = 0;
-    if (flat_zigzag) {
-        const uint32_t total_pairs = total_q_chunks / 2;
-        base_chunks_per_core = (num_cores == 0) ? 0 : (total_pairs / num_cores) * 2;
-        cores_doing_extra = (num_cores == 0) ? 0 : (total_pairs % num_cores);
-        extra_chunks_per_core = (num_cores == 0) ? 0 : 2;
-    } else {
-        base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
-        cores_doing_extra = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
-        extra_chunks_per_core = (num_cores == 0) ? 0 : 1;
-    }
-    // Upper bound per-core flat count — used to size the Q CB in flatten mode.
-    const uint32_t max_flat_chunks_per_core =
-        base_chunks_per_core + (cores_doing_extra > 0 ? extra_chunks_per_core : 0);
+    // Flat-distribution per-core assignments (only used when flatten_work is true). Host and kernels
+    // agree on (q_num_effective, zigzag) via this helper + kernel-side proxy_q_range. DOWN proxy:
+    // only the heavy Q half is assigned; UP / none: all Q chunks assigned.
+    const FlatWorkDistribution flat_dist =
+        compute_flat_distribution(B, NQH, q_num_chunks, num_cores, is_causal && flatten_work, is_proxy_down);
 
     const uint32_t q_buffer_factor_hier = (q_per_core > 1) ? 2 : 1;
-    const uint32_t q_buffer_factor_flat = (max_flat_chunks_per_core > 1) ? 2 : 1;
+    const uint32_t q_buffer_factor_flat = (flat_dist.max_chunks_per_core() > 1) ? 2 : 1;
     const uint32_t q_buffer_factor = flatten_work ? q_buffer_factor_flat : q_buffer_factor_hier;
 
     log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
@@ -614,7 +653,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         .append_to(reader_compile_time_args);
     // Flat-distribution zigzag sub-mode (tail arg; kernel reads via
     // chunk_start_idx_args.next_compile_time_args_offset()).
-    reader_compile_time_args.push_back(static_cast<uint32_t>(flat_zigzag));
+    reader_compile_time_args.push_back(static_cast<uint32_t>(flat_dist.zigzag));
 
     // Create semaphores for KV chain forwarding BEFORE kernel compilation (when chain_enabled)
     // This must happen before CreateKernel so the actual semaphore IDs are in the compile-time args
@@ -667,7 +706,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     // Flat-distribution zigzag sub-mode (tail arg; kernel reads via out_args.next_compile_time_args_offset()).
-    writer_compile_time_args.push_back(static_cast<uint32_t>(flat_zigzag));
+    writer_compile_time_args.push_back(static_cast<uint32_t>(flat_dist.zigzag));
 
     const bool uniform_dataformat = check_uniform_dataformat(
         input_tensor_q, input_tensor_k, input_tensor_v, output_tensor, attn_mask, use_streaming_compute);
@@ -707,7 +746,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_streaming_compute,  // arg 30
         valid_Skt,                             // arg 31: unpadded K tile count for streaming padded_k_tiles
         (std::uint32_t)uniform_dataformat,     // arg 32: skip reconfig when all formats match
-        (std::uint32_t)flat_zigzag,            // arg 33: flat-distribution zigzag sub-mode (see SDPA_FLAT_WORK)
+        (std::uint32_t)flat_dist.zigzag,       // arg 33: flat-distribution zigzag sub-mode (see SDPA_FLAT_WORK)
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
@@ -725,7 +764,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
     // Flat work distribution gate. The zigzag sub-mode is passed as a compile-time arg
-    // (flat_zigzag) to reader/writer/compute below, mirroring ring_joint_sdpa's pattern.
+    // (flat_dist.zigzag) to reader/writer/compute below, mirroring ring_joint_sdpa's pattern.
     if (flatten_work) {
         defines["SDPA_FLAT_WORK"] = "1";
     }
@@ -742,7 +781,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(
         tt::LogOp,
         "SDPA_FLAT_WORK: {}",
-        flatten_work ? (flat_zigzag ? "1 (zigzag)" : "1 (linear)") : "0 (hierarchical)");
+        flatten_work ? (flat_dist.zigzag ? "1 (zigzag)" : "1 (linear)") : "0 (hierarchical)");
     log_debug(tt::LogOp, "SDPA_RING_PROXY: {}", is_proxy_up ? "up" : is_proxy_down ? "down" : "none");
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
@@ -924,13 +963,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     if (chain_enabled) {
         head_segments.resize(total_heads);
 
-        // q_num_effective is defined alongside total_q_chunks above; it matches
-        // proxy_q_range(...).q_num_effective in the kernel helper, so (nb, nq) here agree with the
-        // decomposition the reader/writer/compute kernels run.
-
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");
         log_debug(tt::LogOp, "Total heads (B * NQH): {}", total_heads);
-        log_debug(tt::LogOp, "Q chunks per head (effective): {}", q_num_effective);
+        log_debug(tt::LogOp, "Q chunks per head (effective): {}", flat_dist.q_num_effective);
         log_debug(tt::LogOp, "Grid size: {}x{} = {} cores", grid_size.x, grid_size.y, num_cores);
 
         // First pass: Record work distribution for each core
@@ -942,27 +977,18 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             work.physical_core = device->worker_core_from_logical_core(core);
 
             if (flatten_work) {
-                // Flat distribution: each core owns [global_q_start, global_q_start + global_q_count)
-                // in B*NQH*q_num_effective space.  Decompose into per-(batch, head) segments matching
-                // the reader's decompose_flat_q_index(_, q_num_effective, NQH, flat_use_zigzag=false).
-                uint32_t core_flat_start =
-                    i * base_chunks_per_core + std::min(i, cores_doing_extra) * extra_chunks_per_core;
-                uint32_t core_flat_count =
-                    base_chunks_per_core + ((i < cores_doing_extra) ? extra_chunks_per_core : 0u);
-                if (core_flat_start >= total_q_chunks) {
-                    core_flat_start = total_q_chunks;
-                    core_flat_count = 0;
-                } else if (core_flat_start + core_flat_count > total_q_chunks) {
-                    core_flat_count = total_q_chunks - core_flat_start;
-                }
+                // Flat distribution: each core owns [core_range.start, core_range.start + count) in
+                // B * NQH * flat_dist.q_num_effective space. Decompose into per-(batch, head) segments
+                // matching the reader's decompose_flat_q_index(_, q_num_effective, NQH, zigzag=false).
+                const auto core_range = flat_dist.core_range(i);
 
-                uint32_t remaining = core_flat_count;
-                uint32_t flat_chunk = core_flat_start;
+                uint32_t remaining = core_range.count;
+                uint32_t flat_chunk = core_range.start;
                 while (remaining > 0) {
-                    const uint32_t nb = flat_chunk / (NQH * q_num_effective);
-                    const uint32_t nq = (flat_chunk / q_num_effective) % NQH;
-                    const uint32_t q_chunk_idx = flat_chunk % q_num_effective;
-                    const uint32_t chunk_capacity_in_head = q_num_effective - q_chunk_idx;
+                    const uint32_t nb = flat_chunk / (NQH * flat_dist.q_num_effective);
+                    const uint32_t nq = (flat_chunk / flat_dist.q_num_effective) % NQH;
+                    const uint32_t q_chunk_idx = flat_chunk % flat_dist.q_num_effective;
+                    const uint32_t chunk_capacity_in_head = flat_dist.q_num_effective - q_chunk_idx;
                     const uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
 
                     work.head_work.push_back(CoreHeadWork{
@@ -1501,14 +1527,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         uint32_t global_q_start = 0;
         uint32_t global_q_count = 0;
         if (flatten_work) {
-            global_q_start = i * base_chunks_per_core + std::min(i, cores_doing_extra) * extra_chunks_per_core;
-            global_q_count = base_chunks_per_core + ((i < cores_doing_extra) ? extra_chunks_per_core : 0u);
-            if (global_q_start >= total_q_chunks) {
-                global_q_start = total_q_chunks;
-                global_q_count = 0;
-            } else if (global_q_start + global_q_count > total_q_chunks) {
-                global_q_count = total_q_chunks - global_q_start;
-            }
+            const auto core_range = flat_dist.core_range(i);
+            global_q_start = core_range.start;
+            global_q_count = core_range.count;
         }
 
         // log the above
