@@ -213,6 +213,9 @@ public:
 
         struct shared_variables_t {
             [[no_unique_address]] resource_t resources{};
+            // Resolved buffer bindings for the fast cache-hit path.
+            // Non-empty when the factory used emplace_runtime_args() with Buffer* args.
+            tt::tt_metal::ResolvedBindings resolved_bindings;
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -244,8 +247,10 @@ public:
 
                 auto desc = invoke_create_descriptor(attrs, tensor_args, tensor_return_value, resources);
                 tt::tt_metal::Program program{desc};
+                auto resolved = tt::tt_metal::resolve_bindings(program, desc);
                 mesh_workload.add_program(range, std::move(program));
-                shared_variables[range] = shared_variables_t{.resources = std::move(resources)};
+                shared_variables[range] =
+                    shared_variables_t{.resources = std::move(resources), .resolved_bindings = std::move(resolved)};
             }
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
@@ -257,8 +262,16 @@ public:
             tensor_return_value_t& tensor_return_value) {
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 auto& sv = cached_workload.shared_variables.at(coordinate_range);
-                auto desc = invoke_create_descriptor(attrs, tensor_args, tensor_return_value, sv.resources);
-                tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+                if (!sv.resolved_bindings.empty()) {
+                    // Fast path: factory declared buffer args via emplace_runtime_args().
+                    // Patch the cached program directly — no create_descriptor() call.
+                    tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings);
+                } else {
+                    // Slow path: full descriptor rebuild + bulk copy.
+                    // Used by factories that have not yet adopted emplace_runtime_args().
+                    auto desc = invoke_create_descriptor(attrs, tensor_args, tensor_return_value, sv.resources);
+                    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+                }
             }
         }
     };

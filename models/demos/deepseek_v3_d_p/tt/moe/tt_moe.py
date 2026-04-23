@@ -474,7 +474,7 @@ class TtMoe(LightweightModule):
         # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
         routed_output = self.reduce_module(
             combined_output,
-            weights=weights,
+            weights=scores,
             indices=indices,
             expert_dispatch_table=self.tt_expert_dispatch_table,
         )
