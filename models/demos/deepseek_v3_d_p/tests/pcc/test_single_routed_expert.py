@@ -22,21 +22,20 @@ from tests.ttnn.utils_for_testing import comp_pcc
 @pytest.mark.parametrize(
     "use_routed_matmul",
     [
-        # pytest.param(False, id="stock-matmul"),
-        pytest.param(True, id="routed-matmul-fake-maxiter-1000"),
+        pytest.param(False, id="stock-matmul"),
+        pytest.param(True, id="routed-matmul"),
     ],
 )
 @pytest.mark.parametrize(
     "num_tokens, emb_dim, hidden_dim",
     [
         (1024, 7168, 2048),  # DeepSeek V3 dims, 1K tokens
-        (1600, 7168, 2048),  # DeepSeek V3 dims, 1.6K tokens
         (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens
-        (3200, 7168, 2048),  # DeepSeek V3 dims, 3.2K tokens
+        (4096, 7168, 2048),  # DeepSeek V3 dims, 4K tokens
         (8192, 7168, 2048),  # DeepSeek V3 dims, 8K tokens
-        (24576, 7168, 2048),  # DeepSeek V3 dims, 25K tokens
+        (25000, 7168, 2048),  # DeepSeek V3 dims, 25K tokens
     ],
-    ids=["ds-v3-1k", "ds-v3-1.6k", "ds-v3-2k", "ds-v3-3.2k", "ds-v3-8k", "ds-v3-25k"],
+    ids=["ds-v3-1k", "ds-v3-2k", "ds-v3-4k", "ds-v3-8k", "ds-v3-25k"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -62,6 +61,10 @@ def test_single_routed_expert(
 
     Perfect for profiling the core FFN computation without any mesh complexity.
     """
+    # Stock matmul only supports up to 4K tokens; 8K and 25K require routed-matmul.
+    if not use_routed_matmul and num_tokens > 4096:
+        pytest.skip("stock-matmul is only validated up to 4K tokens")
+
     experts_per_chip = 1
 
     signpost(f"SingleRoutedExpert {num_tokens=} {emb_dim=} {hidden_dim=}")

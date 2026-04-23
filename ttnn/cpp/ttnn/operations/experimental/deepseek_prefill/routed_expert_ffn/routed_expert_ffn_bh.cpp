@@ -8,7 +8,6 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
@@ -84,26 +83,28 @@ ttnn::Tensor routed_expert_ffn_bh(
     ttnn::Tensor gate_result;
     ttnn::Tensor up_result;
     if (use_routed) {
-        // SiLU is applied as a separate op after the matmul (not fused). The fused
-        // activation path on the routed matmul was measurably slower than running
-        // matmul + standalone silu.
         gate_result = routed_matmul(
-            /*a=*/x,
-            /*b=*/gate_proj,
-            /*max_expert_iter=*/max_expert_iter.value(),
-            /*curr_expert_iter=*/curr_expert_iter,
+            /*input_tensor_a=*/x,
+            /*input_tensor_b=*/gate_proj,
+            /*memory_config=*/gate_up_mem,
+            /*dtype=*/std::nullopt,
             /*program_config=*/gate_up_config,
-            /*compute_kernel_config=*/compute_kernel_config.value(),
-            /*output_memory_config=*/gate_up_mem);
-        gate_result = ttnn::silu(gate_result);
+            /*activation=*/std::string("silu"),
+            /*compute_kernel_config=*/compute_kernel_config,
+            /*optional_output_tensor=*/std::nullopt,
+            /*max_expert_iter=*/max_expert_iter,
+            /*curr_expert_iter=*/curr_expert_iter);
         up_result = routed_matmul(
-            /*a=*/x,
-            /*b=*/up_proj,
-            /*max_expert_iter=*/max_expert_iter.value(),
-            /*curr_expert_iter=*/curr_expert_iter,
+            /*input_tensor_a=*/x,
+            /*input_tensor_b=*/up_proj,
+            /*memory_config=*/gate_up_mem,
+            /*dtype=*/std::nullopt,
             /*program_config=*/gate_up_config,
-            /*compute_kernel_config=*/compute_kernel_config.value(),
-            /*output_memory_config=*/gate_up_mem);
+            /*activation=*/std::nullopt,
+            /*compute_kernel_config=*/compute_kernel_config,
+            /*optional_output_tensor=*/std::nullopt,
+            /*max_expert_iter=*/max_expert_iter,
+            /*curr_expert_iter=*/curr_expert_iter);
     } else {
         gate_result = ttnn::matmul(
             /*input_tensor_a=*/x,
@@ -179,17 +180,19 @@ ttnn::Tensor routed_expert_ffn_bh(
 
     ttnn::Tensor result;
     if (use_routed) {
-        // output_memory_config omitted — the device op inherits it from the
+        // memory_config omitted — the device op inherits it from the
         // caller-provided optional_output_tensor, or defaults to DRAM interleaved.
         result = routed_matmul(
-            /*a=*/activated,
-            /*b=*/down_proj,
-            /*max_expert_iter=*/max_expert_iter.value(),
-            /*curr_expert_iter=*/curr_expert_iter,
+            /*input_tensor_a=*/activated,
+            /*input_tensor_b=*/down_proj,
+            /*memory_config=*/std::nullopt,
+            /*dtype=*/std::nullopt,
             /*program_config=*/down_config,
-            /*compute_kernel_config=*/compute_kernel_config.value(),
-            /*output_memory_config=*/std::nullopt,
-            /*optional_output_tensor=*/std::move(output));
+            /*activation=*/std::nullopt,
+            /*compute_kernel_config=*/compute_kernel_config,
+            /*optional_output_tensor=*/std::move(output),
+            /*max_expert_iter=*/max_expert_iter,
+            /*curr_expert_iter=*/curr_expert_iter);
     } else {
         result = ttnn::matmul(
             /*input_tensor_a=*/activated,
