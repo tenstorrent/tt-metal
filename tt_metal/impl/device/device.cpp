@@ -850,7 +850,29 @@ void Device::quiesce_and_restart_fabric_workers() {
 
     log_info(tt::LogMetal, "quiesce_and_restart_fabric_workers: Device {} entering Phase 3 (re-configure + re-launch)", this->id());
 
-    tt::tt_fabric::configure_fabric_cores(this);
+    // FIX N (#42429): For non-MMIO devices, skip soft reset in configure_fabric_cores.
+    //
+    // assert_risc_reset on a non-MMIO ETH channel resets the entire ETH core including
+    // the NOC router.  The subsequent deassert_risc_reset write must be delivered via
+    // the UMD relay — through that same NOC which is now in reset — causing
+    // RemoteCommunicationLegacyFirmware::wait_for_non_mmio_flush to time out and
+    // permanently damaging the relay endpoint, making ALL subsequent non-MMIO writes fail.
+    //
+    // After Phase 2.5 the ETH channels are in TERMINATED state.  TERMINATED firmware
+    // sits in a halt loop that polls for launch messages — identical to base-UMD relay
+    // firmware's behavior.  write_launch_msg_to_core (issued by configure_fabric_cores
+    // after the L1 clear) is sufficient to restart the fabric router without soft reset.
+    // FIX M confirmed this mechanism works: base-UMD → fabric firmware transition via
+    // write_launch_msg_to_core alone succeeded in CI run #24830129500.
+    {
+        std::unordered_set<uint32_t> quiesce_skip_reset_chans;
+        if (!this->is_mmio_capable()) {
+            for (const auto& [chan, unused_direction] : active_channels) {
+                quiesce_skip_reset_chans.insert(chan);
+            }
+        }
+        tt::tt_fabric::configure_fabric_cores(this, {}, quiesce_skip_reset_chans);
+    }
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
 
