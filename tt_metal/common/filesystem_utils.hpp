@@ -8,7 +8,6 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <optional>
 #include <system_error>
 #include <thread>
@@ -213,66 +212,6 @@ bool retry_on_estale_ec(Operation operation, std::error_code& ec) {
     return false;
 }
 
-// Safe fstream open with ESTALE retry.
-//
-// Before each attempt the stream is closed (if open) and cleared so it can be
-// reopened cleanly.  errno is zeroed immediately before the open call; if the
-// open fails, ec is populated from errno (falling back to EIO when errno is 0).
-//
-// Returns true when the stream is successfully opened; on failure ec holds the
-// error from the last attempt.
-//
-// Overload with explicit open mode:
-template <typename Stream>
-bool safe_open(Stream& stream, const std::filesystem::path& path, std::ios::openmode mode, std::error_code& ec) {
-    return retry_on_estale_ec(
-        [&](std::error_code& inner_ec) {
-            if (stream.is_open()) {
-                stream.close();
-            }
-            stream.clear();
-            errno = 0;
-            stream.open(path, mode);
-            if (!stream.is_open()) {
-                const int open_errno = errno;
-                if (open_errno != 0) {
-                    inner_ec.assign(open_errno, std::system_category());
-                } else {
-                    inner_ec = std::make_error_code(std::errc::io_error);
-                }
-                return false;
-            }
-            return true;
-        },
-        ec);
-}
-
-// Overload that uses the stream's own default open mode (std::ios::in for
-// ifstream, std::ios::out for ofstream, etc.).
-template <typename Stream>
-bool safe_open(Stream& stream, const std::filesystem::path& path, std::error_code& ec) {
-    return retry_on_estale_ec(
-        [&](std::error_code& inner_ec) {
-            if (stream.is_open()) {
-                stream.close();
-            }
-            stream.clear();
-            errno = 0;
-            stream.open(path);
-            if (!stream.is_open()) {
-                const int open_errno = errno;
-                if (open_errno != 0) {
-                    inner_ec.assign(open_errno, std::system_category());
-                } else {
-                    inner_ec = std::make_error_code(std::errc::io_error);
-                }
-                return false;
-            }
-            return true;
-        },
-        ec);
-}
-
 // Flush all pending writes on the filesystem containing `path` to stable storage.
 // On Linux, uses syncfs() scoped to that filesystem; elsewhere falls back to sync().
 // Call this at batch boundaries (e.g. after merging build artifacts) rather than
@@ -375,44 +314,4 @@ void wait_for_pending_sync();
 // Does NOT remove the root of the path if it has no parent (path is at filesystem root).
 size_t remove_empty_parent_directories(const std::filesystem::path& path);
 
-// Rewrite `path` by replacing a leading directory prefix.
-//
-// Each argument is split into components after std::filesystem::path::lexically_normal()
-// (lexical normalization only; symlinks are not resolved). If `path`'s component sequence
-// begins with `source_prefix`'s components, sets `mapped_path` to `target_prefix` followed
-// by any remaining components of `path` after `source_prefix`, and returns true.
-//
-// Example: path=/scratch/job-9/kernels/foo.cpp, source_prefix=/scratch/job-9,
-//          target_prefix=/nfs/cache/job-9  ->  mapped_path=/nfs/cache/job-9/kernels/foo.cpp
-//          (returns true).
-// Example: path=/scratch/other/kernels/foo.cpp with the same source/target prefixes
-//          ->  returns false (path does not start with source_prefix).
-//
-// Returns false if `path` does not start with `source_prefix` as a path prefix (by
-// components).
-//
-// Typical use: translate absolute paths between equivalent roots (e.g. scratch vs cache,
-// host A vs host B) when the relative tail should stay the same.
-bool map_path_prefix(
-    const std::filesystem::path& path,
-    const std::filesystem::path& source_prefix,
-    const std::filesystem::path& target_prefix,
-    std::filesystem::path& mapped_path);
-
-// If `path` lies under `base`, set `relative_path` to the suffix (components of `path`
-// after `base`) and return true.
-//
-// Matching is lexical: both paths are normalized with lexically_normal() and compared
-// component-by-component. Symlinks are not resolved, so two paths that refer to the same
-// file via different symlink routes may not match.
-//
-// Example: path=/data/proj/build/out.o, base=/data/proj  ->  relative_path=build/out.o
-//          (returns true).
-// Example: path=/data/proj, base=/data/proj  ->  returns false (suffix would be empty).
-// Example: path=/data/other/file.txt, base=/data/proj  ->  returns false (not under base).
-//
-// Returns false if `path` does not start with `base` as a prefix (by components), or if
-// the computed relative path would be empty (i.e. `path` equals `base` after normalization).
-bool make_relative_if_under(
-    const std::filesystem::path& path, const std::filesystem::path& base, std::filesystem::path& relative_path);
 }  // namespace tt::filesystem
