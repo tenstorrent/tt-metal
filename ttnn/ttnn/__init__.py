@@ -158,13 +158,12 @@ _TRACE_ALLOC_TRACKING = (
 @contextlib.contextmanager
 def corruptible_allocation_scope(mesh_device):
     """
-    Suppress unsafe-allocation tracking for allocations made directly in this scope.
+    Suppress unsafe-allocation tracking for allocations made while this scope is active.
     Use for tensors that intentionally persist across replays (e.g. input buffers
     for a second trace that are overwritten before use).
 
-    Note: this does NOT suppress tracking of program-cache buffer allocations from
-    ops dispatched inside this scope.  If an op has a cache miss here, that allocation
-    is tracked normally — the scope only covers its own direct allocations.
+    This suppresses tracking for nested op allocations too, including program-cache
+    misses while the scope is active.
     """
     _push_allocation_context("corruptible_allocation_scope")
     try:
