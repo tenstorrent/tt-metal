@@ -18,6 +18,8 @@ from models.demos.yolov11l.tt.ttnn_yolov11_detect import TtnnDetect
 from models.demos.yolov11l.tt.ttnn_yolov11_sppf import TtnnSPPF
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
+L1_ROW_MAJOR_SAFE_THRESHOLD_BYTES = 4 * 1024 * 1024
+
 
 class TtnnYoloV11:
     def __init__(self, device, parameters):
@@ -61,7 +63,6 @@ class TtnnYoloV11:
             reshard=True,
             use_block_sharded=c3k2_6_fits_block,
             cv1_config_override={"act_block_h": 32} if c3k2_6_fits_block else None,
-            
         )
         self.conv7 = TtnnConv(
             device,
@@ -115,7 +116,15 @@ class TtnnYoloV11:
         x = untilize_tile_for_conv2d_dram(x)
         x = self.conv3(self.device, x)
         x = self.c3k2_2(self.device, x)
-        x4 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        # Large tensors can OOM when untilized to ROW_MAJOR in L1.
+        # Keep small tensors in L1 for perf; move only large tensors to DRAM.
+        x4_row_major_bytes = x.shape[0] * x.shape[1] * x.shape[2] * x.shape[3] * 2
+        x4_mem_config = (
+            ttnn.L1_MEMORY_CONFIG
+            if x4_row_major_bytes <= L1_ROW_MAJOR_SAFE_THRESHOLD_BYTES
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
+        x4 = ttnn.clone(x, memory_config=x4_mem_config)
         x = untilize_tile_for_conv2d_dram(x)
         x = self.conv5(self.device, x)
         x = self.c3k2_3(self.device, x)
@@ -162,16 +171,25 @@ class TtnnYoloV11:
         x = sharded_concat(
             [x, x4],
             to_interleaved=False,
+            prefer_l1_concat=True,
         )
         ttnn.deallocate(x4)
         x = self.c3k2_6(self.device, x)
-        x16 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x16_bytes = x.shape[0] * x.shape[1] * x.shape[2] * x.shape[3] * 2
+        x16_mem_config = (
+            ttnn.L1_MEMORY_CONFIG if x16_bytes <= L1_ROW_MAJOR_SAFE_THRESHOLD_BYTES else ttnn.DRAM_MEMORY_CONFIG
+        )
+        x16 = ttnn.clone(x, memory_config=x16_mem_config)
         x = untilize_tile_for_conv2d_dram(x)
         x = self.conv7(self.device, x)
         x = sharded_concat_2(x, x13)
         ttnn.deallocate(x13)
         x = self.c3k2_7(self.device, x)
-        x19 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x19_bytes = x.shape[0] * x.shape[1] * x.shape[2] * x.shape[3] * 2
+        x19_mem_config = (
+            ttnn.L1_MEMORY_CONFIG if x19_bytes <= L1_ROW_MAJOR_SAFE_THRESHOLD_BYTES else ttnn.DRAM_MEMORY_CONFIG
+        )
+        x19 = ttnn.clone(x, memory_config=x19_mem_config)
         x = untilize_tile_for_conv2d_dram(x)
         x = self.conv8(self.device, x)
         x = sharded_concat_2(x, x10)

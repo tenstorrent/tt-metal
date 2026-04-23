@@ -19,10 +19,12 @@ class TtnnC3k2:
         reshard=False,
         use_block_sharded=False,
         cv1_config_override=None,
+        cv2_l1_fallback_threshold_bytes=512 * 1024,
     ):
         self.is_bk_enabled = is_bk_enabled
         self.reshard = reshard
         self.parameter = parameter
+        self.cv2_l1_fallback_threshold_bytes = cv2_l1_fallback_threshold_bytes
         n_inner = len(conv_pt.m)
 
         if is_bk_enabled:
@@ -91,20 +93,27 @@ class TtnnC3k2:
                 branches[i] = t
 
         if use_shard_concat:
-            x = sharded_concat(branches, to_interleaved=False)
+            x = sharded_concat(branches, to_interleaved=False, prefer_l1_concat=True)
         else:
             interleaved = [ttnn.sharded_to_interleaved(t, ttnn.L1_MEMORY_CONFIG) for t in branches]
             x = ttnn.concat(tuple(interleaved), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # Spill concat to DRAM before freeing branches: deallocating y1/y2/chain first can free storage still aliased by
-        # the sharded concat output and corrupt the tensor, leading to conv2d reshape "different volumes" later.
-        if use_shard_concat:
+        tensor_bytes = x.shape[0] * x.shape[1] * x.shape[2] * x.shape[3] * 2
+        keep_cv2_input_in_l1 = tensor_bytes <= self.cv2_l1_fallback_threshold_bytes
+
+        # Break potential aliasing between concat output and branch buffers before branch deallocation.
+        # For small tensors keep cv2 input in L1; large tensors still fall back to DRAM to avoid L1 pressure.
+        if keep_cv2_input_in_l1:
             if x.is_sharded():
+                x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            else:
+                x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            x = ttnn.clone(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            if use_shard_concat and x.is_sharded():
                 x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
             else:
                 x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        else:
-            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
         deallocate_tensors(*branches)
         x = self.cv2(device, x)
