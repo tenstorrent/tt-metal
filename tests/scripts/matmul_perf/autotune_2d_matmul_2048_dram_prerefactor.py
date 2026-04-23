@@ -1,16 +1,26 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Baseline pair for autotune_2d_matmul_1024.py. Same shape + no program_config,
-but the hand-tuned MatmulMultiCoreReuseMultiCastProgramConfig(row_major_output=False,
-out_subblock (1, 1), in0_block_w=1) is supplied explicitly so it mimics the
-pre-auto-tuner path. Measures the delta the auto-tuner unlocks on shapes that
-used to go through the legacy auto-config picks.
+"""Pre-refactor-equivalent baseline for autotune_2d_matmul_2048_dram.py.
+
+Replicates what create_simple_matmul_program_config's all_dram_interleaved
+branch would have emitted BEFORE the auto-tuner migration:
+- per_core_M = per_core_N = 8 (same as post-refactor — full grid utilization)
+- in0_block_w = 8 (same)
+- out_subblock (4, 2) — legacy SUBBLOCK_HW_CHOICES first-fit (volume 8,
+  fp32-constraint-safe, no per_core_N_eq_subblock_w constraint for
+  create_simple_matmul's 2D branch since it had no constraint)
+- row_major_output = False
+
+NOTE: pre-refactor also had the hardcoded `out_subblock_h = 1` override
+at line 1277 when out_subblock_w != per_core_N (which was the case here:
+out_subblock_w=2 != per_core_N=8). So the actual pre-refactor pick was
+(1, 2). That's what this script uses.
 
 Run:
 
     unset TT_METAL_DPRINT_CORES
-    python -m tracy -r -v tests/scripts/matmul_perf/autotune_2d_matmul_1024_baseline.py
+    python -m tracy -r -v tests/scripts/matmul_perf/autotune_2d_matmul_2048_dram_prerefactor.py
 """
 
 from __future__ import annotations
@@ -31,7 +41,7 @@ from _perf_harness import (  # noqa: E402
 )
 
 
-SCRIPT_LABEL = "autotune_2d_matmul_1024_baseline"
+SCRIPT_LABEL = "autotune_2d_matmul_2048_dram_prerefactor"
 
 
 def build_inputs(device):
@@ -41,13 +51,13 @@ def build_inputs(device):
     grid_x = min(grid.x, 8)
     grid_y = min(grid.y, 8)
 
-    per_core_M = 4
-    per_core_N = 4
-    in0_block_w = 1
+    per_core_M = 8
+    per_core_N = 8
+    in0_block_w = 8
 
-    m_size = per_core_M * grid_y * 32
-    n_size = per_core_N * grid_x * 32
-    k_size = 1024
+    m_size = 2048
+    n_size = 2048
+    k_size = 2048
 
     torch_a = torch.randn([1, 1, m_size, k_size]).to(torch.bfloat16)
     torch_b = torch.randn([1, 1, k_size, n_size]).to(torch.bfloat16)
@@ -59,7 +69,7 @@ def build_inputs(device):
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=in0_block_w,
         out_subblock_h=1,
-        out_subblock_w=1,
+        out_subblock_w=2,
         out_block_h=per_core_M,
         out_block_w=per_core_N,
         per_core_M=per_core_M,
@@ -67,6 +77,7 @@ def build_inputs(device):
         transpose_mcast=False,
         fused_activation=None,
         fuse_batch=False,
+        row_major_output=False,
     )
     return a, b, program_config
 
@@ -83,7 +94,7 @@ def main():
                 a,
                 b,
                 program_config=program_config,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=compute_config,
             )
 
