@@ -206,6 +206,7 @@ inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx, [[m
         _llk_math_eltwise_unary_broadcast_mop_config_<BROADCAST_TYPE, true>(tile_shape);
     }
 
+    TTI_STALLWAIT(p_stall::STALL_MATH, 0, p_stall::WAIT_SFPU, p_stall::SRCB_VLD); // TEN-4367 - SrcB sync workaround
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
