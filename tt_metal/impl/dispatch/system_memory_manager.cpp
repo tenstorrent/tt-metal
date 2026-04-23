@@ -657,15 +657,55 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     const uint32_t prefetch_q_rd_ptr =
         ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
 
+    // Compute queue bounds once, shared by lambdas below.
+    const uint32_t prefetch_q_base =
+        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+    const uint32_t prefetch_q_limit = prefetch_q_base + (ctx.dispatch_mem_map().prefetch_q_entries() *
+                                                         sizeof(DispatchSettings::prefetch_q_entry_type));
+    const uint32_t entry_size = sizeof(DispatchSettings::prefetch_q_entry_type);
+
+    // Returns true iff the fetch queue is full (no free slot for the host to write).
+    //
+    // Firmware rd_ptr semantics: after consuming slot X the firmware
+    //   1. Clears slot X to 0
+    //   2. Writes address(X) to PREFETCH_Q_RD_PTR_ADDR  <-- host caches this as fences
+    //   3. Advances its read pointer to X+1
+    //
+    // So firmware is currently spinning on slot
+    //   firmware_current = (fences + entry_size) mod queue_size
+    //
+    // Initial sentinel: fences == prefetch_q_limit means "firmware has consumed nothing".
+    //   firmware_current = base (wraps from limit)
+    //   Queue is full only when ptrs == limit  (host filled all N slots)
+    //
+    // Real fences value (fences != limit): firmware is waiting at firmware_current.
+    //   Queue is full when ptrs == firmware_current.
+    //   Note: ptrs == fences is NOT full — slot fences is already free (firmware cleared it).
+    auto is_fetch_q_full = [&]() -> bool {
+        const uint32_t fences = this->prefetch_q_dev_fences[cq_id];
+        const uint32_t ptrs   = this->prefetch_q_dev_ptrs[cq_id];
+        if (fences == prefetch_q_limit) {
+            // Sentinel: firmware has not yet consumed any entry.
+            // Full iff host has written all N slots (ptrs wrapped to limit).
+            return ptrs == prefetch_q_limit;
+        }
+        // Real fences value: firmware is at firmware_current.
+        uint32_t firmware_current = fences + entry_size;
+        if (firmware_current >= prefetch_q_limit) {
+            firmware_current = prefetch_q_base;
+        }
+        return ptrs == firmware_current;
+    };
+
     // Helper to wait for fetch queue space, if needed
     uint32_t fence;
     auto wait_for_fetch_q_space = [&]() {
-        if (this->prefetch_q_dev_ptrs[cq_id] != this->prefetch_q_dev_fences[cq_id]) {
+        if (!is_fetch_q_full()) {
             return;
         }
         ZoneScopedN("wait_for_fetch_q_space");
 
-        // Body of the operation
+        // Body of the operation: refresh fences from hardware
         auto fetch_operation_body = [&]() {
             ctx.get_cluster().read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
             this->prefetch_q_dev_fences[cq_id] = fence;
@@ -673,11 +713,25 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
         // Condition to check if should continue waiting
         auto fetch_wait_condition = [&]() -> bool {
-            return this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id];
+            return is_fetch_q_full();
         };
 
-        // Handler for timeout
-        auto fetch_on_timeout = [this]() {
+        // Handler for timeout — log diagnostic state before throwing
+        auto fetch_on_timeout = [&]() {
+            uint32_t firmware_current = this->prefetch_q_dev_fences[cq_id] + entry_size;
+            if (firmware_current >= prefetch_q_limit) {
+                firmware_current = prefetch_q_base;
+            }
+            log_warning(
+                tt::LogDispatch,
+                "fetch_queue_reserve_back timeout: cq_id={} ptrs=0x{:08x} fences=0x{:08x} "
+                "firmware_current=0x{:08x} base=0x{:08x} limit=0x{:08x}",
+                (int)cq_id,
+                this->prefetch_q_dev_ptrs[cq_id],
+                this->prefetch_q_dev_fences[cq_id],
+                firmware_current,
+                prefetch_q_base,
+                prefetch_q_limit);
             tt::tt_metal::MetalContext::instance(this->context_id).on_dispatch_timeout_detected();
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
@@ -692,17 +746,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     };
 
     wait_for_fetch_q_space();
-    // Wrap FetchQ if possible
-    uint32_t prefetch_q_base =
-        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
-    uint32_t prefetch_q_limit = prefetch_q_base + (ctx.dispatch_mem_map().prefetch_q_entries() *
-                                                   sizeof(DispatchSettings::prefetch_q_entry_type));
+    // Wrap the write pointer back to base when it reaches the limit sentinel.
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
-        // Wrap the write pointer back to base. No second space-check needed:
-        // if fences == base, firmware already consumed slot base and advanced to
-        // base+1, so slot base IS free (false-positive "full" would deadlock).
-        // if fences != base, ptrs(base) != fences so wait_for_fetch_q_space()
-        // would return immediately anyway.
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
     }
 }
