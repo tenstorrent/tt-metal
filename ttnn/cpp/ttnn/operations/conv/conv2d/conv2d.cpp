@@ -261,7 +261,6 @@ Result conv2d_L1(
             .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec().value().grid,
             .snap_to_tile = true,
-            .padding_mode = conv_config.padding_mode,
         };
 
         if (parallel_config.shard_scheme != TensorMemoryLayout::WIDTH_SHARDED ||

@@ -13,7 +13,6 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
@@ -147,40 +146,6 @@ bool l1_buffer_read_write(const std::shared_ptr<distributed::MeshDevice>& mesh_d
     return l1_buffer_read(mesh_device, test_config, write_info);
 }
 
-template <typename T>
-std::shared_ptr<Buffer> make_height_sharded_l1_buffer(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const L1Config<T>& test_config) {
-    auto* device = mesh_device->get_devices()[0];
-    return CreateBuffer(tt::tt_metal::ShardedBufferConfig{
-        .device = device,
-        .size = test_config.size_bytes,
-        .page_size = test_config.page_size_bytes,
-        .buffer_type = test_config.buffer_type,
-        .buffer_layout = test_config.buffer_layout,
-        .shard_parameters = test_config.shard_spec()});
-}
-
-template <typename T>
-std::vector<uint32_t> expected_host_after_filtered_write(
-    const std::shared_ptr<Buffer>& buffer,
-    const L1Config<T>& test_config,
-    uint32_t sentinel_value,
-    uint32_t new_value,
-    const CoreRangeSet& filter) {
-    const auto mapping = buffer->get_buffer_page_mapping();
-    const uint32_t words_per_page = test_config.page_size_bytes / sizeof(uint32_t);
-    const uint32_t num_u32 = test_config.size_bytes / sizeof(uint32_t);
-    std::vector<uint32_t> expected(num_u32, sentinel_value);
-    for (auto it = mapping->begin(); it != mapping->end(); ++it) {
-        const auto mp = *it;
-        const CoreCoord& core = mapping->all_cores.at(mp.core_id);
-        const uint32_t v = (filter.empty() || !filter.contains(core)) ? sentinel_value : new_value;
-        const size_t base = static_cast<size_t>(mp.host_page) * words_per_page;
-        std::fill(expected.begin() + base, expected.begin() + base + words_per_page, v);
-    }
-    return expected;
-}
-
 }  // end namespace local_test_functions
 
 TEST_F(MeshDeviceFixture, TestInterleavedReadWrite) {
@@ -196,84 +161,6 @@ TEST_F(MeshDeviceFixture, TestHeightShardReadWrite) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         L1Config test_config(*this);
         EXPECT_TRUE(local_test_functions::l1_buffer_read_write(this->devices_.at(id), test_config));
-    }
-}
-
-TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_WritesOnlyFilteredCores) {
-    constexpr uint32_t k_sentinel = 0x11111111u;
-    constexpr uint32_t k_new = 0x22222222u;
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        L1Config test_config(*this);
-        auto mesh_device = this->devices_.at(id);
-        auto buffer = local_test_functions::make_height_sharded_l1_buffer(mesh_device, test_config);
-        const uint32_t num_u32 = test_config.size_bytes / sizeof(uint32_t);
-        std::vector<uint32_t> sentinel(num_u32, k_sentinel);
-        std::vector<uint32_t> newest(num_u32, k_new);
-        tt::tt_metal::detail::WriteToBuffer(buffer, sentinel);
-        CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-        tt::tt_metal::experimental::core_subset_write::WriteToBuffer(
-            *buffer,
-            tt::stl::Span<const uint8_t>(
-                reinterpret_cast<const uint8_t*>(newest.data()), newest.size() * sizeof(uint32_t)),
-            filter);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_devices()[0]->id());
-        std::vector<uint32_t> output;
-        tt::tt_metal::detail::ReadFromBuffer(buffer, output);
-        auto expected =
-            local_test_functions::expected_host_after_filtered_write(buffer, test_config, k_sentinel, k_new, filter);
-        EXPECT_EQ(output, expected);
-    }
-}
-
-TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_EmptyFilterIsNoop) {
-    constexpr uint32_t k_sentinel = 0xABCDEF01u;
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        L1Config test_config(*this);
-        auto mesh_device = this->devices_.at(id);
-        auto buffer = local_test_functions::make_height_sharded_l1_buffer(mesh_device, test_config);
-        const uint32_t num_u32 = test_config.size_bytes / sizeof(uint32_t);
-        std::vector<uint32_t> sentinel(num_u32, k_sentinel);
-        std::vector<uint32_t> newest(num_u32, 0x99999999u);
-        tt::tt_metal::detail::WriteToBuffer(buffer, sentinel);
-        CoreRangeSet empty_filter;
-        tt::tt_metal::experimental::core_subset_write::WriteToBuffer(
-            *buffer,
-            tt::stl::Span<const uint8_t>(
-                reinterpret_cast<const uint8_t*>(newest.data()), newest.size() * sizeof(uint32_t)),
-            empty_filter);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_devices()[0]->id());
-        std::vector<uint32_t> output;
-        tt::tt_metal::detail::ReadFromBuffer(buffer, output);
-        EXPECT_EQ(output, sentinel);
-    }
-}
-
-TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_FullFilterMatchesUnfiltered) {
-    constexpr uint32_t k_pattern = 0x50505050u;
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        L1Config test_config(*this);
-        auto mesh_device = this->devices_.at(id);
-        auto buffer_a = local_test_functions::make_height_sharded_l1_buffer(mesh_device, test_config);
-        auto buffer_b = local_test_functions::make_height_sharded_l1_buffer(mesh_device, test_config);
-        const uint32_t num_u32 = test_config.size_bytes / sizeof(uint32_t);
-        std::vector<uint32_t> data(num_u32, k_pattern);
-        tt::tt_metal::detail::WriteToBuffer(
-            *buffer_a,
-            tt::stl::Span<const uint8_t>(
-                reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(uint32_t)));
-        std::vector<uint32_t> sentinel(num_u32, 0x01010101u);
-        tt::tt_metal::detail::WriteToBuffer(buffer_b, sentinel);
-        CoreRangeSet full_filter = test_config.shard_spec().grid();
-        tt::tt_metal::experimental::core_subset_write::WriteToBuffer(
-            *buffer_b,
-            tt::stl::Span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(uint32_t)),
-            full_filter);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_devices()[0]->id());
-        std::vector<uint32_t> out_a;
-        std::vector<uint32_t> out_b;
-        tt::tt_metal::detail::ReadFromBuffer(buffer_a, out_a);
-        tt::tt_metal::detail::ReadFromBuffer(buffer_b, out_b);
-        EXPECT_EQ(out_a, out_b);
     }
 }
 

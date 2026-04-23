@@ -145,38 +145,33 @@ template <typename CTArgs>
 class TransportSender {
 public:
     void operator()(const TransportArgs& args) { impl(args); }
-    void open_connections(const TransportArgs& args, bool reset_header_pool = true) {
-        open_connections_impl(args, reset_header_pool);
-    }
 
 private:
     static constexpr uint32_t max_header_ring_size = 2;
     static constexpr uint32_t header_ring_size = CTArgs::num_chunks <= 1 ? 1u : max_header_ring_size;
-    static constexpr bool use_posted_transport_writes = true;
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-    uint64_t dest_output_noc = 0;
-    uint64_t dest_recv_sem_noc = 0;
-    tt::tt_fabric::WorkerToFabricEdmSender connection;
-    std::array<volatile tt_l1_ptr PACKET_HEADER_TYPE*, header_ring_size> headers = {};
-#endif
-    void open_connections_impl([[maybe_unused]] const TransportArgs& args, [[maybe_unused]] bool reset_header_pool) {
+
+    void impl([[maybe_unused]] const TransportArgs& args) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
         static_assert(CTArgs::num_links == 1, "All-gather TransportSender is single-link only");
+
         size_t arg_idx = size_t(args.per_core_rta_start_idx);
         const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
 
-        connection =
+        constexpr bool use_posted_transport_writes = true;
+
+        auto connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+
+        const uint64_t dest_output_noc =
+            safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.dest_output_base_addr, 0);
+        const uint64_t dest_recv_sem_noc =
+            safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.dest_recv_sem_addr, 0);
+
         const auto connection_direction = get_next_hop_router_direction(dst_mesh_id, dst_chip_id);
+        std::array<volatile PACKET_HEADER_TYPE*, header_ring_size> headers = {};
         connection.open_start();
-        if (reset_header_pool) {
-            PacketHeaderPool::reset();
-        }
-
-        dest_output_noc = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.dest_output_base_addr, 0);
-        dest_recv_sem_noc = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.dest_recv_sem_addr, 0);
-
+        PacketHeaderPool::reset();
         for (uint32_t i = 0; i < header_ring_size; ++i) {
             headers[i] = PacketHeaderPool::allocate_header();
             fabric_set_single_hop_unicast_route_from_direction(
@@ -185,11 +180,6 @@ private:
                 {dest_output_noc, dest_recv_sem_noc, /* placeholder inc_value */ 1, false}, CTArgs::chunk_size_bytes);
         }
         connection.open_finish();
-#endif
-    }
-    void impl([[maybe_unused]] const TransportArgs& args) {
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-
         connection.setup_stateful_send_cmd_bufs<use_posted_transport_writes>();
 
         volatile tt_l1_ptr uint32_t* handoff_sem_ptr =
