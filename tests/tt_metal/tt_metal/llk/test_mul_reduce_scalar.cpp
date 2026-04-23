@@ -179,15 +179,7 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
 using namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar;
 
 // Test fixture that automatically skips if not on Blackhole
-class MulReduceScalarTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {
-protected:
-    void SetUp() override {
-        LLKMeshDeviceSingleCardFixture::SetUp();
-        if (this->arch_ != tt::ARCH::BLACKHOLE) {
-            GTEST_SKIP() << "Test only runs on Blackhole architecture";
-        }
-    }
-};
+class MulReduceScalarTest : public LLKBlackholeSingleCardFixture, public testing::WithParamInterface<int> {};
 
 // Single parametrized test
 TEST_P(MulReduceScalarTest, MulReduceScalar) {

@@ -792,7 +792,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
 }
 
 // Pack Untilize Int8 -> Int32 dest -> Int32 (via pack_untilize_block)
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt32) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt32) {
     std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -812,7 +812,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt32) {
 }
 
 // Pack Untilize Dst Int8 -> Int32 dest -> Int32 (tiles pre-loaded into dest via copy_tile)
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) {
     std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
