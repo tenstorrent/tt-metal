@@ -149,7 +149,6 @@ template <
     bool APPROX_MODE,
     bool is_fp32_dest_acc_en,
     int ITERATIONS,
-    DstSync DST_SYNC    = DST_SYNC_MODE,
     bool FAST_MODE      = false,
     bool STABLE_SORT    = false,
     bool CLAMP_NEGATIVE = false>
@@ -158,24 +157,24 @@ void call_unary_sfpu_operation(
 {
     if constexpr (OPERATION == SfpuType::abs)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_abs_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode, ITERATIONS);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_abs_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode, ITERATIONS);
     }
     else if constexpr (OPERATION == SfpuType::acosh)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_acosh_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_acosh_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::asinh)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_asinh_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_asinh_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::atanh)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_atanh_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_atanh_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::celu)
     {
         // Two _calculate_activation_ overloads (runtime params vs none) — cast so Callable deduces.
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(
+        _llk_math_eltwise_unary_sfpu_params_(
             static_cast<void (*)(std::uint32_t, std::uint32_t)>(&_calculate_activation_<APPROX_MODE, ActivationType::Celu, ITERATIONS>),
             dst_index,
             vector_mode,
@@ -184,21 +183,21 @@ void call_unary_sfpu_operation(
     }
     else if constexpr (OPERATION == SfpuType::cosine)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_cosine_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode, ITERATIONS);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_cosine_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode, ITERATIONS);
     }
     else if constexpr (OPERATION == SfpuType::elu)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_elu_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode, 1u /* alpha */);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_elu_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode, 1u /* alpha */);
     }
     else if constexpr (OPERATION == SfpuType::exp2)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_exp2_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_exp2_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
     }
     // VectorMode::RC: params drives 4 face iterations with 2×SETRWC between each —
     // the lambda processes 8 rows per face, giving 32 total.
     else if constexpr (OPERATION == SfpuType::exponential && APPROX_MODE && CLAMP_NEGATIVE)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(
+        _llk_math_eltwise_unary_sfpu_params_(
             _calculate_exponential_<APPROX_MODE, false /* scale_en */, 8, CLAMP_NEGATIVE>,
             dst_index,
             static_cast<int>(VectorMode::RC),
@@ -207,7 +206,7 @@ void call_unary_sfpu_operation(
     // Single call (else branch): _calculate_exponential_ handles 8 or 32 iterations internally.
     else if constexpr (OPERATION == SfpuType::exponential && APPROX_MODE)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(
+        _llk_math_eltwise_unary_sfpu_params_(
             _calculate_exponential_<APPROX_MODE, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE>,
             dst_index,
             vector_mode,
@@ -216,7 +215,7 @@ void call_unary_sfpu_operation(
     // Single call (else branch): non-approx mode, handles all iterations in one call.
     else if constexpr (OPERATION == SfpuType::exponential)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(
+        _llk_math_eltwise_unary_sfpu_params_(
             _calculate_exponential_<APPROX_MODE, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE>,
             dst_index,
             vector_mode,
@@ -226,7 +225,7 @@ void call_unary_sfpu_operation(
     {
         if (math_format == ckernel::to_underlying(DataFormat::Int32))
         {
-            _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(
+            _llk_math_eltwise_unary_sfpu_params_(
                 _calculate_fill_int_<APPROX_MODE, ckernel::InstrModLoadStore::INT32, ITERATIONS>,
                 dst_index,
                 vector_mode,
@@ -234,7 +233,7 @@ void call_unary_sfpu_operation(
         }
         else if (math_format == ckernel::to_underlying(DataFormat::UInt16))
         {
-            _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(
+            _llk_math_eltwise_unary_sfpu_params_(
                 _calculate_fill_int_<APPROX_MODE, ckernel::InstrModLoadStore::LO16, ITERATIONS>,
                 dst_index,
                 vector_mode,
@@ -242,7 +241,7 @@ void call_unary_sfpu_operation(
         }
         else if (math_format == ckernel::to_underlying(DataFormat::UInt32))
         {
-            _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(
+            _llk_math_eltwise_unary_sfpu_params_(
                 _calculate_fill_int_<APPROX_MODE, ckernel::InstrModLoadStore::INT32, ITERATIONS>,
                 dst_index,
                 vector_mode,
@@ -250,75 +249,75 @@ void call_unary_sfpu_operation(
         }
         else
         {
-            _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_fill_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode, fill_const_value);
+            _llk_math_eltwise_unary_sfpu_params_(_calculate_fill_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode, fill_const_value);
         }
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_gelu_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_gelu_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {
         // Zero-arg _calculate_activation_ vs param overload — cast so Callable deduces.
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(
+        _llk_math_eltwise_unary_sfpu_params_(
             static_cast<void (*)()>(&_calculate_activation_<APPROX_MODE, ckernel::ActivationType::Hardsigmoid, ITERATIONS>), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::log)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(
+        _llk_math_eltwise_unary_sfpu_params_(
             _calculate_log_<APPROX_MODE, false, ITERATIONS>, dst_index, vector_mode, ITERATIONS, 0u /* log_base_scale_factor */);
     }
     else if constexpr (OPERATION == SfpuType::log1p)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(calculate_log1p<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
+        _llk_math_eltwise_unary_sfpu_params_(calculate_log1p<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::negative)
     {
         if (math_format == ckernel::to_underlying(DataFormat::Int32))
         {
-            _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_negative_int_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
+            _llk_math_eltwise_unary_sfpu_params_(_calculate_negative_int_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
         }
         else
         {
-            _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_negative_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
+            _llk_math_eltwise_unary_sfpu_params_(_calculate_negative_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
         }
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_reciprocal_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en>, dst_index, vector_mode, ITERATIONS);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_reciprocal_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en>, dst_index, vector_mode, ITERATIONS);
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_rsqrt_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE>, dst_index, vector_mode, ITERATIONS);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_rsqrt_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE>, dst_index, vector_mode, ITERATIONS);
     }
     else if constexpr (OPERATION == SfpuType::silu)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_silu_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_silu_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::sine)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_sine_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode, ITERATIONS);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_sine_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode, ITERATIONS);
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_sqrt_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE>, dst_index, vector_mode, ITERATIONS);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_sqrt_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE>, dst_index, vector_mode, ITERATIONS);
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_calculate_square_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_square_<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::tanh)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(calculate_tanh<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
+        _llk_math_eltwise_unary_sfpu_params_(calculate_tanh<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::threshold)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(
+        _llk_math_eltwise_unary_sfpu_params_(
             _calculate_threshold_<APPROX_MODE, ITERATIONS, float>, dst_index, vector_mode, 5.0f /* threshold_value */, 10.0f /* replacement_value */);
     }
     else if constexpr (OPERATION == SfpuType::topk_local_sort)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(
+        _llk_math_eltwise_unary_sfpu_params_(
             _bitonic_topk_phases_steps<APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT>,
             dst_index,
             vector_mode,
@@ -330,12 +329,12 @@ void call_unary_sfpu_operation(
     }
     else if constexpr (OPERATION == SfpuType::topk_merge)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(
+        _llk_math_eltwise_unary_sfpu_params_(
             _bitonic_topk_merge<APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT>, dst_index, vector_mode, 5 /* m_iter */, 10 /* k */);
     }
     else if constexpr (OPERATION == SfpuType::topk_rebuild)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(
+        _llk_math_eltwise_unary_sfpu_params_(
             _bitonic_topk_rebuild<APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT>,
             dst_index,
             vector_mode,
@@ -348,11 +347,11 @@ void call_unary_sfpu_operation(
     else if constexpr (OPERATION == SfpuType::relu_max)
     {
         // Fourth template param T (threshold scalar type) — float vs uint32_t overloads.
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_relu_max_<sfpi::vFloat, APPROX_MODE, ITERATIONS, float>, dst_index, vector_mode, 5.0f /* threshold */);
+        _llk_math_eltwise_unary_sfpu_params_(_relu_max_<sfpi::vFloat, APPROX_MODE, ITERATIONS, float>, dst_index, vector_mode, 5.0f /* threshold */);
     }
     else if constexpr (OPERATION == SfpuType::relu_min)
     {
-        _llk_math_eltwise_unary_sfpu_params_<DST_SYNC>(_relu_min_<sfpi::vFloat, APPROX_MODE, ITERATIONS, float>, dst_index, vector_mode, 5.0f /* threshold */);
+        _llk_math_eltwise_unary_sfpu_params_(_relu_min_<sfpi::vFloat, APPROX_MODE, ITERATIONS, float>, dst_index, vector_mode, 5.0f /* threshold */);
     }
     else
     {
