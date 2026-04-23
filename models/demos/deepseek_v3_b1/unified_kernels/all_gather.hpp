@@ -315,9 +315,8 @@ public:
 
     // Active phase: cross-core write to scratch[0], R1 kickoff, self-copy,
     // R1->R2 bridge (wait on r2_src slot, copy to scratch[1], signal bit 2).
-    // On return the self-copy and scratch[1] writes are still in flight, and
-    // remote peers may still be posting into the output buffer. You must
-    // eventually pass the returned state to wait_for_completion().
+    // On return the remote peers may still be posting into the output buffer.
+    // You must eventually pass the returned state to wait_for_completion().
     template <bool barrier = true>
     static GatherCompletionState start([[maybe_unused]] const GatherArgs& args) {
         GatherCompletionState st{};
@@ -363,8 +362,7 @@ public:
         return st;
     }
 
-    // Drain: wait for every remaining ring slot, reset recv_sem, fence all
-    // outstanding local NOC ops.
+    // Drain: wait for every remaining ring slot, reset recv_sem
     template <bool barrier = false>
     static void wait_for_completion([[maybe_unused]] const GatherCompletionState& st) {
 #if defined(COMPILE_FOR_NCRISC)

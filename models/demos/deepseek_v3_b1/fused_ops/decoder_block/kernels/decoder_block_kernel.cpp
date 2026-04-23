@@ -2521,8 +2521,9 @@ void kernel_main() {
         if constexpr (Core::is_allreduce_sender_core) {
             DeviceZoneScopedN("CCL_SENDER_WRITER");
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+            PacketHeaderPool::reset();
             deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceWriterCTArgs> ccl_writer;
-            ccl_writer.open_connections(ccl_sender_args);
+            ccl_writer.open_connections(ccl_sender_args, false);
             deepseek_b1_ops::AllGather::TransportSender<AllGatherTransportCT> allgather_sender;
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("ccl_sync_semaphore2_addr"));
@@ -2937,14 +2938,11 @@ void kernel_main() {
     constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
     uint32_t iteration = 0;
     while (true) {
-<<<<<<< HEAD
-=======
         {
             DeviceZoneScopedN("MLA_CB_RECONFIG");
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);
             setup_mla_sharded_buffers();
         }
->>>>>>> 4e1e5bd0818 (Overlap CB reconfigs with CCL syncs/waits)
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (persistent_mode) {
             constexpr bool is_bcast_root = get_named_compile_time_arg_val("bcast_is_root") == 1;
