@@ -8,6 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <cmath>
+#include <numeric>
 
 namespace ttnn::prim {
 
@@ -128,15 +129,35 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
     if (operation_attributes.negate) {
+        // The reduce_h_neg kernel pushes ntiles tiles per inner-loop iteration
+        // via push_back(ntiles).  ntiles equals chunk_size for full chunks and
+        // (Wt_per_core % chunk_size) for a partial last chunk.  The CB FIFO
+        // write pointer only wraps when it exactly reaches fifo_limit, so the
+        // CB size must be a multiple of every push size that occurs.  Use the
+        // LCM of chunk_size and each partial-chunk size to guarantee clean
+        // wrapping.
+        uint32_t negate_cb_tiles = chunk_size;
+        auto align_to_partial = [&](uint32_t cols_per_core) {
+            uint32_t partial = cols_per_core % chunk_size;
+            if (partial > 0) {
+                negate_cb_tiles = std::lcm(negate_cb_tiles, partial);
+            }
+        };
+        align_to_partial(num_cols_per_core_group_1);
+        if (num_cols_per_core_group_2 > 0) {
+            align_to_partial(num_cols_per_core_group_2);
+        }
+
         uint32_t acc_cb_index = CBIndex::c_4;
         tt_metal::CircularBufferConfig cb_acc_config =
-            tt_metal::CircularBufferConfig(chunk_size * dst_single_tile_size, {{acc_cb_index, dst_cb_data_format}})
+            tt_metal::CircularBufferConfig(negate_cb_tiles * dst_single_tile_size, {{acc_cb_index, dst_cb_data_format}})
                 .set_page_size(acc_cb_index, dst_single_tile_size);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_acc_config);
 
         uint32_t ineg_cb_index = CBIndex::c_5;
         tt_metal::CircularBufferConfig cb_ineg_config =
-            tt_metal::CircularBufferConfig(chunk_size * dst_single_tile_size, {{ineg_cb_index, dst_cb_data_format}})
+            tt_metal::CircularBufferConfig(
+                negate_cb_tiles * dst_single_tile_size, {{ineg_cb_index, dst_cb_data_format}})
                 .set_page_size(ineg_cb_index, dst_single_tile_size);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_ineg_config);
     }
