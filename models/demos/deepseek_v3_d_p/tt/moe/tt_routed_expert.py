@@ -382,6 +382,13 @@ class TtRoutedExpert(LightweightModule):
         per-expert slices and write FFN results directly into the output buffer,
         avoiding extra allocations from unsqueeze/concat.
 
+        Early-stop behavior:
+            max_expert_iter_container (device tensor, optional): threaded through
+            to each routed matmul. The kernel reads it from DRAM per dispatch
+            and skips iterations where curr_expert_iter > max_expert_iter.  No
+            device-to-host sync - the loop dispatches every iteration and the
+            on-device guard decides execute vs. skip.
+
         Args:
             dispatched_buffer: Dispatched tokens
                 shape: (experts_per_chip, max_tokens, emb_dim)
@@ -393,15 +400,6 @@ class TtRoutedExpert(LightweightModule):
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
         """
         logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
-        # Read max_expert_iter from the container tensor if provided.
-        max_expert_iter = None
-        if max_expert_iter_container is not None:
-            t = (
-                ttnn.to_torch(max_expert_iter_container, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
-                if self.num_devices > 1
-                else ttnn.to_torch(max_expert_iter_container)
-            )
-            max_expert_iter = int(t.flatten()[0])
 
         # Convert input to activations dtype if needed
         if dispatched_buffer.dtype != self.activations_dtype:
@@ -427,12 +425,6 @@ class TtRoutedExpert(LightweightModule):
             expert_lengths[-1] = tokens.shape[1] - self.MAX_EXPERT_LENGTH * (expert_iters - 1)  # Handle any remainder
             start = 0
             for curr_expert_iter in range(expert_iters):
-                if max_expert_iter is not None and curr_expert_iter >= max_expert_iter:
-                    signpost(
-                        f"FFN iterations {curr_expert_iter+1}..{expert_iters}/{expert_iters} for Expert {local_expert+1} skipped"
-                    )
-                    break
-
                 signpost(f"FFN iteration {curr_expert_iter+1}/{expert_iters} for Expert {local_expert+1}")
                 expert_tokens = ttnn.narrow(tokens, dim=1, start=start, length=expert_lengths[curr_expert_iter])
                 expert_out = ttnn.narrow(out, dim=1, start=start, length=expert_lengths[curr_expert_iter])
@@ -544,6 +536,10 @@ class TtRoutedExpert(LightweightModule):
             expert_token_counts: Optional token counts per expert per chip
                 If provided, only processes tokens up to the count (currently unused,
                 all tokens are processed for simplicity)
+            max_expert_iter_container: Optional DRAM uint32 scalar tile.  When
+                provided, each routed matmul reads it on-device and skips
+                iterations where curr_expert_iter > max_expert_iter. Avoids
+                any device-to-host sync. Blackhole only.
 
         Returns:
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
