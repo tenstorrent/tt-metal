@@ -303,15 +303,17 @@ access to `trainer.model` and `trainer.config`.
 
 Model architecture parameters passed as a plain dict. In YAML configs, the
 transformer config can be provided inline under `transformer_config:` or as a
-path to a separate file via `transformer_config_path:` (resolved relative to
-the YAML file's directory). The external file must contain a top-level
+path to a separate file via `transformer_config_path:`. The path may use
+`${TT_METAL_RUNTIME_ROOT}` (recommended, matching other tt-train configs) or
+be a plain absolute/relative path; relative paths are resolved against the
+YAML file's directory. The external file must contain a top-level
 `transformer_config` mapping. See
 [`configs/model_configs/`](../../../configs/model_configs/) for available model
 config files.
 
 ```yaml
 # Option 1: reference an external model config file
-transformer_config_path: "../model_configs/llama3_2_1B.yaml"
+transformer_config_path: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama3_2_1B.yaml"
 
 # Option 2: inline (still supported)
 transformer_config:
