@@ -15,17 +15,21 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import yarn_get_mscale
 from models.demos.deepseek_v3.tt.rope import get_cos_sin_matrix, get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.demo.stage import (
-    ACTIVATION_FIFO_SIZE,
     ACTIVATION_PAGE_SIZE_BYTES,
+    ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
+    DEFAULT_ACTIVATION_FIFO_PAGES,
     PIPELINE_CORE_COORD,
     StageContext,
     StageKind,
+    activation_fifo_size_bytes,
 )
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, create_metadata_tensor
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert, SharedExpert
@@ -51,9 +55,12 @@ def create_decoder_block_tensors(
     reduce_root_coord=ttnn.MeshCoordinate(1, 1),
     *,
     weights: DeepSeekV3MoELayerWeights | DeepSeekV3DenseLayerWeights,
+    metadata: DeepseekMetadata | None = None,
+    num_slots: int = 64,
     is_moe: bool = True,
     validate_debug_tensors: bool = False,
     torch_input=None,
+    forward_metadata=False,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -70,6 +77,9 @@ def create_decoder_block_tensors(
     if not is_moe and not isinstance(weights, DeepSeekV3DenseLayerWeights):
         raise TypeError(f"is_moe=False requires DeepSeekV3DenseLayerWeights, got {type(weights).__name__}")
     torch.manual_seed(0)
+    if metadata is None:
+        metadata = DeepseekMetadata(position_id=position_id)
+    position_id = metadata.position_id
     num_devices = mesh_rows * mesh_cols
     device_grid_size = submesh.compute_with_storage_grid_size()
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
@@ -257,10 +267,17 @@ def create_decoder_block_tensors(
                 mesh_mapper=mesh_mapper,
             )
 
+    if forward_metadata:
+        padding = DeepseekMetadata.aligned_size_bytes() // dtype_size(ttnn.bfloat16)
+        padded_shape = (1, K + padding)
+        padded_input = torch.nn.functional.pad(torch_input, (0, padding), value=0)
+    else:
+        padded_shape = shape
+        padded_input = torch_input
     # Attention input/intermediate/output mesh tensors
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}), shape, ttnn.ShardOrientation.ROW_MAJOR
+        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}), padded_shape, ttnn.ShardOrientation.ROW_MAJOR
     )
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -268,9 +285,9 @@ def create_decoder_block_tensors(
     for row in range(mesh_rows):
         for col in range(mesh_cols):
             if row == sender_row and col == sender_col:
-                device_tensors.append(torch_input)
+                device_tensors.append(padded_input)
             else:
-                device_tensors.append(torch.zeros_like(torch_input))
+                device_tensors.append(torch.zeros_like(padded_input))
 
     input_tensor_mesh = ttnn.from_torch(
         torch.cat(device_tensors, dim=0),
@@ -339,7 +356,7 @@ def create_decoder_block_tensors(
     trans_mat_replicated = torch_trans_mat.repeat(1, 1, qrope_num_cores + kv_cache_branch_rope_crs.num_cores(), 1)
     ttnn_trans_mat = ttnn.from_torch(
         trans_mat_replicated,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=trans_mem,
@@ -347,23 +364,11 @@ def create_decoder_block_tensors(
         mesh_mapper=mesh_mapper,
     )
 
-    # Position IDs
-    pos_core_grid = ttnn.CoreRangeSet(
+    # Metadata / position IDs
+    metadata_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
     )
-    pos_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_position_ids = ttnn.from_torch(
-        torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32),
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=submesh,
-        memory_config=pos_mem,
-        mesh_mapper=mesh_mapper,
-    )
+    ttnn_metadata_tensor = create_metadata_tensor(submesh, metadata_core_grid, metadata)
 
     # KV cache (ND sharded DRAM)
     program_config = FlashMLADecode.ProgramConfig(k_chunk_size=128, exp_approx_mode=False)
@@ -377,8 +382,8 @@ def create_decoder_block_tensors(
     kv_mem = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=kv_nd_shard_spec)
     num_sp = mesh_rows
     dcs = program_config.device_chunk_size
-    torch_kv_cache = torch.zeros((1, 1, max_seq_len, kvpe_dim), dtype=torch.bfloat16)
-    torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
+    torch_kv_cache = torch.zeros((num_slots, 1, max_seq_len, kvpe_dim), dtype=torch.bfloat16)
+    torch_kv_cache[:, :, :position_id, :] = torch.randn(num_slots, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
     torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
     kv_cache_2d_mesh_mapper = ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(2, None))
     if position_id == 0:
@@ -634,7 +639,7 @@ def create_decoder_block_tensors(
         "ttnn_krope_sin": ttnn_krope_sin,
         "ttnn_kv_cache": ttnn_kv_cache,
         "ttnn_kv_cache_attn_ref": ttnn_kv_cache_attn_ref,
-        "ttnn_position_ids": ttnn_position_ids,
+        "ttnn_metadata_tensor": ttnn_metadata_tensor,
         "scale": scale,
         "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
         "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
@@ -668,6 +673,7 @@ def create_decoder_block_tensors(
         "num_gate_proj_cores": num_gate_proj_cores,
         "per_core_down_proj_N": per_core_down_proj_N,
         "mcast_grid": mcast_grid,
+        "forward_metadata": forward_metadata,
         # Intermediate CPU tensors (for golden-reference builders)
         "torch_input": torch_input,
         "torch_kv_cache": torch_kv_cache,
@@ -703,14 +709,18 @@ class DecoderStage(StageKind):
         *,
         weights: DeepSeekV3MoELayerWeights | DeepSeekV3DenseLayerWeights,
         layer_idx: int,
-        position_id: int,
+        metadata: DeepseekMetadata,
         max_seq_len: int,
+        num_slots: int,
         persistent_mode: bool,
         is_torus: bool,
         is_moe: bool,
         num_routed_experts: int,
         use_hardcoded_expert_index: bool,
         enable_routing: bool,
+        forward_metadata: bool = True,
+        upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         if not isinstance(weights, (DeepSeekV3MoELayerWeights, DeepSeekV3DenseLayerWeights)):
             raise ValueError(
@@ -723,14 +733,18 @@ class DecoderStage(StageKind):
 
         self._weights = weights
         self._layer_idx = layer_idx
-        self._position_id = position_id
+        self._metadata = metadata
         self._max_seq_len = max_seq_len
+        self._num_slots = num_slots
         self._persistent_mode = persistent_mode
         self._is_torus = is_torus
         self._is_moe = is_moe
         self._num_routed_experts = num_routed_experts
         self._use_hardcoded_expert_index = use_hardcoded_expert_index
         self._enable_routing = enable_routing
+        self._forward_metadata = forward_metadata
+        self._upstream_fifo_pages = upstream_fifo_pages
+        self._downstream_fifo_pages = downstream_fifo_pages
         self._num_links_bcast = 1
         self._num_links_allreduce = 2
         self._state: dict[str, Any] = {}
@@ -749,17 +763,30 @@ class DecoderStage(StageKind):
         reduce_root_coord = pipeline_config[my_stage_idx].exit_node_coord
 
         exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
+        assert (
+            ACTIVATION_PAGE_SIZE_BYTES % len(shard_cores_list) == 0
+        ), "ACTIVATION_PAGE_SIZE_BYTES must be divisible by len(shard_cores_list)"
+
+        exit_upstream_page_size = ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list)
+
+        if self._forward_metadata:
+            page_size = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+        else:
+            page_size = ACTIVATION_PAGE_SIZE_BYTES
+        upstream_fifo_size = activation_fifo_size_bytes(page_size, self._upstream_fifo_pages)
+        downstream_fifo_size = activation_fifo_size_bytes(page_size, self._downstream_fifo_pages)
 
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            upstream_d2d_socket_fifo_size=upstream_fifo_size,
+            downstream_d2d_socket_fifo_size=downstream_fifo_size,
+            upstream_d2d_socket_page_size=page_size,
+            downstream_d2d_socket_page_size=page_size,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=exit_upstream_cores,
-            exit_upstream_page_size=ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list),
+            exit_upstream_page_size=exit_upstream_page_size,
+            forward_metadata=self._forward_metadata,
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=pipeline_config,
@@ -800,7 +827,7 @@ class DecoderStage(StageKind):
             d["dkv_matmul_weights_overlapped"],
             d["dkv_rmsnorm_gamma_overlapped"],
             d["ttnn_kv_cache"],
-            d["ttnn_position_ids"],
+            d["ttnn_metadata_tensor"],
             d["scale"],
             d["sdpa_kv_cache_buffer"],
             d["sdpa_out_interm_buffer"],
@@ -848,6 +875,7 @@ class DecoderStage(StageKind):
             persistent_next_iter_semaphore=self._state.get("persistent_next_iter_semaphore"),
             persistent_mode=self._persistent_mode,
             is_torus=self._is_torus,
+            forward_metadata=self._forward_metadata,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -879,10 +907,13 @@ class DecoderStage(StageKind):
                 mesh_device.shape[1],
                 sender_coord[0],
                 sender_coord[1],
-                self._position_id,
+                self._metadata.position_id,
                 self._max_seq_len,
                 reduce_root_coord=reduce_root_coord,
                 weights=self._weights,
+                metadata=self._metadata,
+                num_slots=self._num_slots,
+                forward_metadata=self._forward_metadata,
             )
         else:
             d = create_decoder_block_tensors(
@@ -891,11 +922,14 @@ class DecoderStage(StageKind):
                 mesh_device.shape[1],
                 sender_coord[0],
                 sender_coord[1],
-                self._position_id,
+                self._metadata.position_id,
                 self._max_seq_len,
                 reduce_root_coord=reduce_root_coord,
                 weights=self._weights,
+                metadata=self._metadata,
+                num_slots=self._num_slots,
                 is_moe=False,
+                forward_metadata=self._forward_metadata,
             )
         ttnn.synchronize_device(mesh_device)
 
@@ -936,24 +970,32 @@ class MoEDecoderStage(DecoderStage):
         weights: DeepSeekV3MoELayerWeights,
         layer_idx: int = 4,
         num_routed_experts: int = 256,
-        position_id: int = 0,
-        max_seq_len: int = 32 * 1024,
+        metadata: DeepseekMetadata = DeepseekMetadata(),
+        max_seq_len: int = 128 * 1024,
+        num_slots: int = 64,
         persistent_mode: bool = True,
         use_hardcoded_expert_index: bool = False,
         enable_routing: bool = True,
         is_torus: bool = True,
+        forward_metadata: bool = False,
+        upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         super().__init__(
             weights=weights,
             layer_idx=layer_idx,
-            position_id=position_id,
+            metadata=metadata,
             max_seq_len=max_seq_len,
+            num_slots=num_slots,
             persistent_mode=persistent_mode,
             is_torus=is_torus,
             is_moe=True,
             num_routed_experts=num_routed_experts,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             enable_routing=enable_routing,
+            forward_metadata=forward_metadata,
+            upstream_fifo_pages=upstream_fifo_pages,
+            downstream_fifo_pages=downstream_fifo_pages,
         )
 
 
@@ -969,20 +1011,28 @@ class DenseDecoderStage(DecoderStage):
         *,
         weights: DeepSeekV3DenseLayerWeights,
         layer_idx: int = 0,
-        position_id: int = 0,
-        max_seq_len: int = 32 * 1024,
+        metadata: DeepseekMetadata = DeepseekMetadata(),
+        max_seq_len: int = 128 * 1024,
+        num_slots: int = 64,
         persistent_mode: bool = True,
         is_torus: bool = True,
+        forward_metadata: bool = False,
+        upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         super().__init__(
             weights=weights,
             layer_idx=layer_idx,
-            position_id=position_id,
+            metadata=metadata,
             max_seq_len=max_seq_len,
+            num_slots=num_slots,
             persistent_mode=persistent_mode,
             is_torus=is_torus,
             is_moe=False,
             num_routed_experts=0,
             use_hardcoded_expert_index=False,
             enable_routing=False,
+            forward_metadata=forward_metadata,
+            upstream_fifo_pages=upstream_fifo_pages,
+            downstream_fifo_pages=downstream_fifo_pages,
         )

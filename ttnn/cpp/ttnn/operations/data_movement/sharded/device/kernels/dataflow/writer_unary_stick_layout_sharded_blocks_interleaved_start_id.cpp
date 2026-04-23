@@ -22,7 +22,7 @@ void kernel_main() {
     cb_wait_front(cb_id_out0, block_height);
     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
     for (uint32_t h = 0; h < block_height; ++h) {
-        uint64_t dst_noc_addr = get_noc_addr(stick_id, s0);
+        uint64_t dst_noc_addr = s0.get_noc_addr(stick_id);
         noc_async_write(l1_read_addr, dst_noc_addr, block_width_bytes);
         stick_id++;
         l1_read_addr += padded_block_width_bytes;

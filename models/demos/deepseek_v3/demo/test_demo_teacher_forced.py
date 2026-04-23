@@ -18,7 +18,7 @@ from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 MODEL_PATH = Path(
     os.getenv(
         "DEEPSEEK_V3_HF_MODEL",
-        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized",
+        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked",
     )
 )
 CACHE_DIR = Path(
