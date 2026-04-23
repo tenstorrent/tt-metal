@@ -98,7 +98,9 @@ def _device_to_host_post_with_nms(tt_model, s_pooled, d_norm, b, h, w):
     """
     enc_h, enc_w = h // 8, w // 8
     descriptors_nhwc = ttnn.to_torch(d_norm).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
-    nms_scores = ttnn.to_torch(s_pooled).reshape(b, h, w).float()
+    # Leave nms_scores as bf16 — downstream keypoint extraction (nonzero /
+    # topk / indexing) all support bf16 and we save the ~1 ms fp32 copy.
+    nms_scores = ttnn.to_torch(s_pooled).reshape(b, h, w)
     # .float() on a non-contiguous bf16 tensor produces a contiguous fp32 copy
     # in one pass — the previous .contiguous().float() was a redundant
     # intermediate bf16 copy.
@@ -248,7 +250,9 @@ def test_superpoint_benchmark(device, height, width, input_kind):
                 for i in range(b):
                     kp, sc = tt_model._extract_keypoints_single(nms_scores[i : i + 1])
                     if kp.shape[0] > 0:
-                        _ = tt_model._sample_descriptors(kp[None], desc_host[i : i + 1], scale=8)
+                        # Cast keypoints to fp32 to match fp32 descriptor dtype
+                        # (grid_sample requires matching types).
+                        _ = tt_model._sample_descriptors(kp.float()[None], desc_host[i : i + 1], scale=8)
                 tp4 = time.perf_counter()
             else:
                 scores_host, desc_host = _device_to_host_post(tt_model, s, d_norm, b, height, width)
