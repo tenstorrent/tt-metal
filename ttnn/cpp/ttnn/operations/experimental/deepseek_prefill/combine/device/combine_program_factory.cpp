@@ -295,34 +295,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         read_batch_size,
     };
 
-    // Compute and append num_dispatch_groups (index 34, after read_batch_size at 33) from tensor dimensions.
-    // This decouples the combine kernel from the assumption that mesh_cols == num_dispatch_groups.
-    {
-        auto counter_shape = expert_token_counts.tensor_spec().logical_shape();
-        uint32_t num_routed_experts = counter_shape[-1];
-        TT_FATAL(operation_attributes.experts_per_chip > 0, "experts_per_chip must be > 0");
-        TT_FATAL(operation_attributes.dispatch_group_size > 0, "dispatch_group_size must be > 0");
-        TT_FATAL(num_routed_experts > 0, "num_routed_experts must be > 0");
-        uint32_t computed_ndg =
-            num_routed_experts / (operation_attributes.experts_per_chip * operation_attributes.dispatch_group_size);
-        TT_FATAL(
-            computed_ndg > 0 &&
-                computed_ndg * operation_attributes.experts_per_chip * operation_attributes.dispatch_group_size ==
-                    num_routed_experts,
-            "num_dispatch_groups computation failed: routed_experts={} experts_per_chip={} group_size={}",
-            num_routed_experts,
-            operation_attributes.experts_per_chip,
-            operation_attributes.dispatch_group_size);
-        compile_time_args.push_back(computed_ndg);
-
-        log_debug(
-            tt::LogOp,
-            "Combine: num_routed_experts={} computed num_dispatch_groups={}",
-            num_routed_experts,
-            computed_ndg);
-    }
-
-    // Append TensorAccessorArgs for all 4 tensors (starting at index 35, after num_dispatch_groups at 34)
+    // Append TensorAccessorArgs for all 4 tensors
     tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dispatched_metadata.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(expert_token_counts.buffer()).append_to(compile_time_args);

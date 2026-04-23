@@ -90,8 +90,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
         .padding = padding,
         .output_pad_hw = {output_padding[0], output_padding[1]},
         .dilation_hw = {dilation[0], dilation[1]},
-        .is_transpose = true,
-        .padding_mode = conv_config.padding_mode};
+        .is_transpose = true};
 
     // ConvTranspose2d is implemented via the Conv2d u_op with flipped weights.
     // The input tensor is first passed to the halo op that pads the input.
@@ -638,7 +637,6 @@ public:
         slice_halo_config.core_range_set = sliced_input_tensor_memory_config.shard_spec().value().grid;
         slice_halo_config.snap_to_tile = true;
         slice_halo_config.is_transpose = true;
-        slice_halo_config.padding_mode = conv_config.padding_mode;
         const uint32_t input_channels_alignment = get_input_channels_alignment(
             conv_config.shard_layout.value(),
             conv_config.output_layout,

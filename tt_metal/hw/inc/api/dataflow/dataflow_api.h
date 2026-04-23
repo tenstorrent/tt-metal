@@ -2283,8 +2283,9 @@ FORCE_INLINE void noc_semaphore_inc(
 // clang-format on
 template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc_multicast(
-    uint64_t addr, uint32_t incr, uint32_t num_dests, uint8_t noc_id = noc_index, uint8_t vc = NOC_MULTICAST_WRITE_VC) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC_MULTICAST, 0, addr, 0, vc, posted, noc_id);
+    uint64_t addr, uint32_t incr, uint32_t num_dests, uint8_t noc_id = noc_index) {
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::SEMAPHORE_INC_MULTICAST, 0, addr, 0, NOC_MULTICAST_WRITE_VC, posted, noc_id);
 
     WAYPOINT("NIMW");
     DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, addr, 4);
@@ -2293,7 +2294,7 @@ FORCE_INLINE void noc_semaphore_inc_multicast(
         noc_id,
         write_at_cmd_buf,
         addr,
-        vc,
+        NOC_MULTICAST_WRITE_VC,
         incr,
         31 /*wrap*/,
         false /*linked*/,
